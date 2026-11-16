@@ -5,10 +5,16 @@
     "bind": "loopback",
     "auth": { "mode": "token", "token": "${OPENCLAW_DEV_TOKEN}" }
   },
+  "update": { "checkOnStart": false },
   "discovery": { "mdns": { "mode": "off" } },
-  "browser": { "headless": true },
+  "memory": { "search": { "provider": "none" } },
+  "browser": {
+    "headless": true,
+    "profiles": { "openclaw": { "cdpPort": 19112 } }
+  },
   "models": {
     "mode": "replace",
+    "catalogRefresh": { "enabled": false },
     "providers": {
       "fake": {
         "baseUrl": "http://127.0.0.1:19102/v1",
@@ -28,7 +34,11 @@
       }
     }
   },
-  "tools": { "toolSearch": false, "profile": "coding" },
+  "tools": {
+    "toolSearch": false,
+    "profile": "coding",
+    "exec": { "mode": "ask" }
+  },
   "agents": {
     "ownership": "explicit",
     "defaults": {
@@ -40,7 +50,7 @@
       "atlas": {
         "name": "Atlas",
         "identity": { "name": "Atlas", "emoji": "🧭", "theme": "research assistant" },
-        "tools": { "exec": { "mode": "ask" } }
+        "tools": { "alsoAllow": ["browser"] }
       },
       "pixel": {
         "name": "Pixel",
