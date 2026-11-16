@@ -651,7 +651,7 @@ Possible warnings on a card: "This can't be undone", "This changes sign-in or se
 - **Apps are account-wide**, shared by every Bot. A second account for the same app uses "Add Another Account" with a label, and you refer to it by label ("Use my work Notion"). OAuth tokens stay on the vendor's backend, not on the computer. ([docs: computer][d-computer], seen)
 - **Phone-only device apps** (Calendar, Contacts read-only, Location, Alarms; iPhone also Reminders and Home) appear under Connect apps, "This iPhone", with "Allow", "Allowed" or "Denied". They work only in your own 1:1 chat while the app is open. Some plugins show "Connect on your computer" on the phone. ([docs: mobile][d-mobile], seen; [docs: computer][d-computer], seen)
 - **Mac apps (1.0):** Messages, Mail, Notes, Reminders, Calendar, Location and Contacts, each with its own "Allow". ([AIToolsReview][atr], reported)
-- **Bot email address:** "Get yourself an email address" in chat, or Connect apps, "Email", "Choose a name", "Create address". It is permanent, and there is no inbox view. ([docs: computer][d-computer], seen)
+- **Bot email address:** the account can claim one address at the vendor's mail domain, shared by its Bots. "Get yourself an email address" in chat, or Connect apps, "Email", "Choose a name", "Create address". It is permanent, and there is no inbox view. ([docs: computer][d-computer], seen)
 
 ---
 
