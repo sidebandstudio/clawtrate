@@ -293,7 +293,7 @@ Small grey lines that are not bubbles mark things the Bot did. The design post s
 | "This turn was stopped after 50 minutes so it would not hang. Send a message to pick up where it left off." | Grey note. | [learngrokbot: error messages][lgb-errors], reported |
 | "A background task was stopped after 3 tool calls in a row timed out; the computer may be unresponsive." | Grey note. | [learngrokbot: error messages][lgb-errors], reported |
 
-In the screenshots, these lines are right-aligned, in a smaller grey font, with the icon or avatar and the name in a slightly lighter grey. They sit between bubbles with normal spacing. ([learngrokbot: multiple Bots][lgb-multi], seen; [learngrokbot: routines][lgb-routines], seen)
+In the routine and price-watch crops these lines sit at the right; in the hand-off crop the "Messaged" line sits nearer the middle, so alignment against the full chat column is not established. They use a smaller grey font, with the icon or avatar and the name in a slightly lighter grey. They sit between bubbles with normal spacing. ([learngrokbot: multiple Bots][lgb-multi], seen; [learngrokbot: routines][lgb-routines], seen)
 
 ### 5.3 Cards in the transcript
 
