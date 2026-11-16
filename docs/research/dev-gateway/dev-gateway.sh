@@ -14,8 +14,9 @@
 #   - The state and config locations are resolved once, here, and passed to
 #     OpenClaw explicitly (OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH,
 #     OPENCLAW_PROFILE, plus --profile), so script and CLI cannot disagree.
-#   - The state folder must not exist, or must carry this script's marker file
-#     and contain no .env file and no credentials. Otherwise the script refuses.
+#   - Every start uses a new, empty state folder. If the folder already exists
+#     (or is a symlink) the script refuses and names the reset command; it never
+#     tries to decide whether old state is free of credentials.
 #   - Everything runs under `env -i` with five variables. `check-env` asks the
 #     running gateway itself, through the probe plugin, which variable names it has.
 set -euo pipefail
@@ -52,18 +53,13 @@ clean_env() {
 }
 oc() { (clean_env "$OPENCLAW_BIN" --profile "$PROFILE" "$@"); }
 
-# Refuse state we did not create, or state that could hold credentials.
-check_state() {
-  if [ -L "$STATE" ]; then echo "refusing: $STATE is a symlink" >&2; exit 3; fi
-  [ -e "$STATE" ] || return 0
-  if [ ! -f "$MARKER" ]; then
-    echo "refusing: $STATE exists and was not created by this script (no marker)" >&2; exit 3
-  fi
-  local found
-  found="$(find "$STATE" -maxdepth 4 \( -name '.env' -o -name '*.env' -o -name 'auth-profiles*.json' \
-    -o -path "$STATE/credentials/*" \) -print 2>/dev/null | head -5)"
-  if [ -n "$found" ]; then
-    echo "refusing: $STATE holds env or credential files:" >&2; echo "$found" >&2; exit 3
+# Never reuse state: OpenClaw keeps credentials in places this script cannot
+# vet (SQLite stores, .env files, linked folders), so only a new folder is safe.
+require_fresh_state() {
+  if [ -e "$STATE" ] || [ -L "$STATE" ]; then
+    echo "refusing: $STATE already exists. Start always uses a new, empty state folder." >&2
+    echo "If this script created it, remove it with: PROFILE=$PROFILE $0 reset" >&2
+    exit 3
   fi
 }
 
@@ -74,11 +70,11 @@ wait_gone() { # pid seconds
 
 case "${1:-}" in
   start)
-    check_state
+    require_fresh_state
     mkdir -p "$RUN_DIR"
     [ -s "$RUN_DIR/token" ] || openssl rand -hex 16 > "$RUN_DIR/token"
     chmod 600 "$RUN_DIR/token"
-    mkdir -p "$STATE"
+    mkdir "$STATE"
     chmod 700 "$STATE"
     : > "$MARKER"
     sed -e "s#<CHECKOUT>#$CHECKOUT#g" "$HERE/openclaw.dev.json" > "$CONFIG"
