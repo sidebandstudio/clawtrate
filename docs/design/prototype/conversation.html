@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: a scripted run</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/conversation.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/icons.js"></script>
+    <script src="js/prototype.js"></script>
+    <script src="js/components.js" defer></script>
+    <script src="js/samples.js" defer></script>
+    <script src="js/behaviors.js" defer></script>
+    <script src="js/run.js" defer></script>
+  </head>
+  <body>
+    <header class="proto-bar" id="proto-bar"></header>
+    <main class="proto-stage">
+      <div class="proto-frame">
+        <div class="app" id="root">
+          <div class="shell" data-panel="closed" data-view="detail">
+            <!-- The rail. run.js fills the list so the rows can follow the run. -->
+            <nav class="rail" aria-label="Bots">
+              <div class="rail-top">
+                <button type="button" class="icon-button rail-status" aria-label="Settings. Home gateway, connected.">
+                  <i data-icon="settings"></i>
+                  <span class="status-dot" data-status="connected"></span>
+                </button>
+                <button type="button" class="icon-button" aria-label="Search" title="Search (⌘K)"><i data-icon="search"></i></button>
+                <button type="button" class="icon-button" aria-label="New bot" title="New bot (⌘N)"><i data-icon="plus"></i></button>
+              </div>
+              <ul class="bot-list" id="rail-list"></ul>
+              <div class="rail-footer">
+                <button type="button" class="gateway-pill" aria-label="Home gateway, connected. Open gateway settings.">
+                  <span class="status-dot" data-status="connected"></span>
+                  <span class="gateway-pill-text"><strong>Home gateway</strong><span>Connected</span></span>
+                </button>
+                <button type="button" class="icon-button" data-variant="quiet" aria-label="Settings"><i data-icon="settings"></i></button>
+              </div>
+            </nav>
+
+            <section class="conversation" aria-label="Conversation">
+              <header class="conversation-header">
+                <div class="header-side">
+                  <button type="button" class="icon-button back-button" data-action="back" aria-label="Back to bots"><i data-icon="back"></i></button>
+                </div>
+                <button type="button" class="title-pill" aria-label="Otto, Weekly backup check. Show details.">
+                  <span class="avatar" data-bot="otto"></span>
+                  <span class="title-pill-name">Otto</span>
+                  <span class="title-pill-task">Weekly backup check</span>
+                </button>
+                <div class="header-side" data-side="end">
+                  <button type="button" class="icon-button" aria-label="Show work pane" title="Work pane (⌘\)"><i data-icon="panel"></i></button>
+                </div>
+              </header>
+              <div class="transcript" id="transcript" tabindex="0">
+                <div class="transcript-inner" id="transcript-inner"></div>
+              </div>
+              <div id="composer-slot"></div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

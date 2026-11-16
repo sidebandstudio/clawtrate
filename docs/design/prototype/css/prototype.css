@@ -177,3 +177,214 @@
   font-size: var(--text-md);
   color: var(--text-muted);
 }
+
+/* The gallery page */
+
+.proto-gallery {
+  position: fixed;
+  inset: 44px 0 0;
+  overflow: auto;
+  background: var(--bg);
+}
+
+[data-chrome="off"] .proto-gallery {
+  inset: 0;
+}
+
+.gallery {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 40px 24px 96px;
+}
+
+.gallery > header h1 {
+  margin: 0 0 6px;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.gallery > header p {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.gallery-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 20px;
+}
+
+.gallery-nav a {
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--bg-bubble);
+  color: var(--text);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+.spec-section {
+  margin-top: 56px;
+}
+
+.spec-section > header h2 {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.spec-section > header p {
+  max-width: 72ch;
+  margin: 0 0 12px;
+  color: var(--text-muted);
+}
+
+.spec {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 28px;
+  padding: 22px 0;
+  border-top: 1px solid var(--border);
+}
+
+.spec-label h3 {
+  margin: 4px 0 2px;
+  font-size: var(--text-md);
+  font-weight: 500;
+}
+
+.spec-label p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.spec-box {
+  min-width: 0;
+  max-width: 720px;
+  container: conversation / inline-size;
+}
+
+.spec-box > :first-child,
+.spec-box > .activity:first-child {
+  margin-top: 0;
+}
+
+.spec-box .status-line {
+  margin-top: 0;
+}
+
+.spec-box .composer {
+  padding: 0;
+}
+
+.spec-rail {
+  max-width: 280px;
+  padding: 8px 0 0;
+  border-radius: 18px;
+  background: var(--bg-rail);
+  --presence-surface: var(--bg-rail);
+}
+
+.spec-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 24px 30px;
+}
+
+.spec-row figure {
+  display: grid;
+  justify-items: center;
+  margin: 0;
+}
+
+.spec-row figcaption {
+  margin-top: 12px;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.spec-static .jump,
+.spec-static .banner {
+  position: static;
+  margin: 0;
+  transform: none;
+  animation: none;
+}
+
+[data-width="1100"] .spec-box:not(.spec-rail) {
+  max-width: 560px;
+}
+
+[data-width="800"] .spec-box:not(.spec-rail) {
+  max-width: 440px;
+}
+
+[data-width="phone"] .spec-box:not(.spec-rail) {
+  max-width: 358px;
+}
+
+[data-width="phone"] .spec,
+[data-input="touch"] .spec {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+[data-input="touch"] .gallery {
+  padding: 24px 16px 64px;
+}
+
+/* Without the bar, the gallery scrolls with the page, so it can be captured whole. */
+html[data-chrome="off"]:has(.proto-gallery),
+html[data-chrome="off"]:has(.proto-gallery) body {
+  height: auto;
+  overflow: visible;
+}
+
+[data-chrome="off"] .proto-gallery {
+  position: static;
+  overflow: visible;
+}
+
+/* Controls for the scripted run */
+
+.run-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+}
+
+.run-controls button {
+  height: 26px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: #26282b;
+  color: #f3f3f2;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.run-controls button:first-child {
+  background: #3ee6c1;
+  color: #04261f;
+  font-weight: 600;
+}
+
+.run-controls button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#run-caption {
+  max-width: 46vw;
+  overflow: hidden;
+  padding-left: 6px;
+  color: #b4b6b9;
+  text-overflow: ellipsis;
+}
