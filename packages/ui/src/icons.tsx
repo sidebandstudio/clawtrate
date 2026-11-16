@@ -72,3 +72,21 @@ export const PlugIcon = (props: IconProps) => (
     <path d="M5.75 1.75v3M10.25 1.75v3M3.75 4.75h8.5v2.5a4.25 4.25 0 0 1-8.5 0v-2.5ZM8 11.5v2.75" />
   </Icon>
 );
+
+export const CloseIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="m4 4 8 8M12 4l-8 8" />
+  </Icon>
+);
+
+export const BackIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M10 3.5 5.5 8l4.5 4.5" />
+  </Icon>
+);
+
+export const ArrowDownIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M8 3v10M4 9l4 4 4-4" />
+  </Icon>
+);

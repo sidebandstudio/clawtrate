@@ -1,8 +1,8 @@
 import type { Bot, Task, Transcript, TranscriptBlock, TranscriptItem } from "@clawtrate/core";
-import { Fragment, useEffect, useRef } from "react";
+import { Fragment, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Avatar } from "./Avatar.tsx";
 import { clockTime, fullDate, summarizeArguments } from "./format.ts";
-import { ChevronIcon, EyeIcon, PanelIcon } from "./icons.tsx";
+import { ArrowDownIcon, BackIcon, ChevronIcon, EyeIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 type ToolCall = Extract<TranscriptBlock, { kind: "tool-call" }>;
@@ -112,32 +112,126 @@ function Turn({ item, bot }: { item: TranscriptItem; bot: Bot | undefined }) {
   );
 }
 
+/** How close to the end counts as "reading the latest", in pixels. */
+const NEAR_BOTTOM_PX = 96;
+
+/**
+ * The scrolling transcript of one task. Mounted per task, so opening a task
+ * starts at its latest message. New output follows only a reader who is already
+ * at the end; anyone reading older messages keeps their place and gets a
+ * "Jump to latest" control instead.
+ */
+function TranscriptView({ transcript, bot }: { transcript: Transcript; bot: Bot | undefined }) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const itemCount = transcript.items.length;
+  const liveLength = transcript.live?.text.length ?? 0;
+  const contentSize = `${itemCount}:${liveLength}`;
+  const [atEnd, setAtEnd] = useState(true);
+  const [seenSize, setSeenSize] = useState(contentSize);
+  const newActivity = !atEnd && contentSize !== seenSize;
+
+  const onScroll = useCallback(() => {
+    const element = scroller.current;
+    if (!element) return;
+    const near = element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX;
+    setAtEnd(near);
+    if (near) setSeenSize(contentSize);
+  }, [contentSize]);
+
+  const jumpToLatest = useCallback(() => {
+    const element = scroller.current;
+    if (element) element.scrollTop = element.scrollHeight;
+    setAtEnd(true);
+    setSeenSize(contentSize);
+  }, [contentSize]);
+
+  // Follow new output while the reader is at the end.
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    if (atEnd && element) element.scrollTop = element.scrollHeight;
+  }, [contentSize, atEnd]);
+
+  return (
+    <div className="transcript-wrap">
+      <div className="transcript" ref={scroller} onScroll={onScroll} data-testid="transcript">
+        <div className="transcript-inner">
+          {transcript.items.map((item) => (
+            <Turn key={item.id} item={item} bot={bot} />
+          ))}
+          {transcript.live && (
+            <article className="turn" data-role="assistant" data-testid="live-turn">
+              <div className="turn-gutter">{bot && <Avatar bot={bot} size={28} />}</div>
+              <div className="turn-main">
+                <header className="turn-meta">
+                  <span className="turn-author">{bot?.name ?? "Bot"}</span>
+                  <span className="turn-time">working</span>
+                </header>
+                <div className="live-text">
+                  {transcript.live.text ? <Markdown text={transcript.live.text} /> : "Thinking"}
+                </div>
+              </div>
+            </article>
+          )}
+        </div>
+      </div>
+      {newActivity && (
+        <button
+          type="button"
+          className="jump-latest"
+          onClick={jumpToLatest}
+          data-testid="jump-latest"
+        >
+          <ArrowDownIcon />
+          Jump to latest
+        </button>
+      )}
+    </div>
+  );
+}
+
+function Placeholder({ title, body }: { title: string; body: string | null }) {
+  return (
+    <div className="transcript-wrap">
+      <div className="transcript" data-testid="transcript">
+        <div className="empty">
+          <div>
+            <h3>{title}</h3>
+            {body && <p>{body}</p>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Conversation({
   task,
   bot,
   transcript,
   panelOpen,
   onTogglePanel,
+  onBack,
 }: {
   task: Task | null;
   bot: Bot | undefined;
   transcript: Transcript | undefined;
   panelOpen: boolean;
   onTogglePanel: () => void;
+  onBack: () => void;
 }) {
-  const scroller = useRef<HTMLDivElement>(null);
   const itemCount = transcript?.items.length ?? 0;
-  const liveLength = transcript?.live?.text.length ?? 0;
-
-  // Start at the latest message when a task opens or grows.
-  useEffect(() => {
-    const element = scroller.current;
-    if (element) element.scrollTop = element.scrollHeight;
-  }, [task?.key, itemCount, liveLength]);
-
   return (
     <section className="conversation" aria-label="Conversation">
       <header className="pane-header conversation-header">
+        <button
+          type="button"
+          className="icon-button back-button"
+          onClick={onBack}
+          aria-label="Back to tasks"
+          title="Back to tasks"
+        >
+          <BackIcon />
+        </button>
         <div className="conversation-title">
           <h1>{task?.title ?? "No task selected"}</h1>
           {task && (
@@ -159,59 +253,31 @@ export function Conversation({
           <PanelIcon />
         </button>
       </header>
-      <div className="transcript" ref={scroller} data-testid="transcript">
-        {!task ? (
-          <div className="empty">
-            <div>
-              <h3>Pick a task</h3>
-              <p>Choose one of this bot&apos;s tasks to read the conversation.</p>
+      {!task ? (
+        <Placeholder
+          title="Pick a task"
+          body="Choose one of this bot's tasks to read the conversation."
+        />
+      ) : !transcript || (transcript.status === "loading" && itemCount === 0) ? (
+        <div className="transcript-wrap">
+          <div className="transcript" data-testid="transcript">
+            <div className="transcript-inner" aria-busy="true">
+              <div className="skeleton" style={{ width: "40%" }} />
+              <div className="skeleton" style={{ width: "85%" }} />
+              <div className="skeleton" style={{ width: "70%" }} />
             </div>
           </div>
-        ) : !transcript || (transcript.status === "loading" && itemCount === 0) ? (
-          <div className="transcript-inner" aria-busy="true">
-            <div className="skeleton" style={{ width: "40%" }} />
-            <div className="skeleton" style={{ width: "85%" }} />
-            <div className="skeleton" style={{ width: "70%" }} />
-          </div>
-        ) : transcript.status === "error" && itemCount === 0 ? (
-          <div className="empty">
-            <div>
-              <h3>Could not load this conversation</h3>
-              <p>{transcript.error}</p>
-            </div>
-          </div>
-        ) : itemCount === 0 && !transcript.live ? (
-          <div className="empty">
-            <div>
-              <h3>Nothing here yet</h3>
-              <p>This task has no messages.</p>
-            </div>
-          </div>
-        ) : (
-          <div className="transcript-inner">
-            {transcript.items.map((item) => (
-              <Turn key={item.id} item={item} bot={bot} />
-            ))}
-            {transcript.live && (
-              <article className="turn" data-role="assistant">
-                <div className="turn-gutter">{bot && <Avatar bot={bot} size={28} />}</div>
-                <div className="turn-main">
-                  <header className="turn-meta">
-                    <span className="turn-author">{bot?.name ?? "Bot"}</span>
-                    <span className="turn-time">working</span>
-                  </header>
-                  <div className="live-text">
-                    {transcript.live.text ? <Markdown text={transcript.live.text} /> : "Thinking"}
-                  </div>
-                </div>
-              </article>
-            )}
-          </div>
-        )}
-      </div>
+        </div>
+      ) : transcript.status === "error" && itemCount === 0 ? (
+        <Placeholder title="Could not load this conversation" body={transcript.error} />
+      ) : itemCount === 0 && !transcript.live ? (
+        <Placeholder title="Nothing here yet" body="This task has no messages." />
+      ) : (
+        <TranscriptView key={task.key} transcript={transcript} bot={bot} />
+      )}
       <footer className="read-only-bar">
         <EyeIcon />
-        Read-only connection. Sending messages arrives in a later version.
+        <span>Read-only connection. Sending messages arrives in a later version.</span>
       </footer>
     </section>
   );

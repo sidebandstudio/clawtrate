@@ -1,4 +1,4 @@
-import type { Bot, ClawtrateState, ConnectionState, Task } from "@clawtrate/core";
+import type { Bot, ClawtrateState, ConnectionState, DiscoveryState, Task } from "@clawtrate/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import logoUrl from "./assets/logo-mark.png";
 import { Avatar } from "./Avatar.tsx";
@@ -6,8 +6,9 @@ import { useCommand } from "./bridge.tsx";
 import { PRODUCT_NAME } from "./ConnectScreen.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { gatewayLabel, shortTime } from "./format.ts";
-import { MoonIcon, PlugIcon, SunIcon } from "./icons.tsx";
+import { CloseIcon, MoonIcon, PlugIcon, SunIcon } from "./icons.tsx";
 import { readPreference, useTheme, writePreference } from "./preferences.ts";
+import { isUnread, markSeen, type SeenMap } from "./unread.ts";
 
 function statusLabel(connection: ConnectionState): string {
   switch (connection.status) {
@@ -24,6 +25,11 @@ function statusLabel(connection: ConnectionState): string {
     case "idle":
       return "Not connected";
   }
+}
+
+function botLabel(bot: Bot, tasks: Task[]): string {
+  const running = tasks.some((task) => task.status === "running");
+  return `${bot.name}, ${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}${running ? ", working" : ""}`;
 }
 
 function Rail({
@@ -45,11 +51,27 @@ function Rail({
     theme === "dark" ||
     (theme === "system" &&
       (globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false));
+  // Names are hidden when the rail is compact; a tooltip shows them on hover and focus.
+  const [tip, setTip] = useState<{ text: string; top: number; left: number } | null>(null);
+  const showTip = (event: { currentTarget: HTMLElement }, text: string) => {
+    if (!globalThis.matchMedia?.("(max-width: 979px)").matches) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    setTip({ text, top: rect.top + rect.height / 2, left: rect.right + 8 });
+  };
+  const hideTip = () => setTip(null);
+  const gatewayDetails = [
+    `${statusLabel(connection)}: ${gatewayLabel(connection.gatewayUrl)}`,
+    connection.serverVersion ? `OpenClaw ${connection.serverVersion}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
   return (
     <nav className="rail" aria-label="Bots">
-      <div className="brand">
-        <img src={logoUrl} alt="" />
-        <span className="brand-name">{PRODUCT_NAME}</span>
+      <div className="brand" title={PRODUCT_NAME}>
+        <img src={logoUrl} alt={PRODUCT_NAME} />
+        <span className="brand-name" aria-hidden="true">
+          {PRODUCT_NAME}
+        </span>
       </div>
       <div className="rail-section">Bots</div>
       <ul className="bot-list" data-testid="bot-list">
@@ -62,15 +84,20 @@ function Rail({
                 type="button"
                 className="bot"
                 aria-current={bot.id === selectedBotId}
+                aria-label={botLabel(bot, tasks)}
+                onMouseEnter={(event) => showTip(event, bot.name)}
+                onMouseLeave={hideTip}
+                onFocus={(event) => showTip(event, bot.name)}
+                onBlur={hideTip}
                 onClick={() => onSelect(bot.id)}
                 data-testid="bot"
               >
                 <Avatar bot={bot} badge />
-                <span style={{ minWidth: 0 }}>
+                <span className="bot-text" aria-hidden="true">
                   <span className="bot-name">{bot.name}</span>
                   <span className="bot-theme">{running ? "working" : (bot.theme ?? "")}</span>
                 </span>
-                <span className="bot-count" aria-label={`${tasks.length} tasks`}>
+                <span className="bot-count" aria-hidden="true">
                   {tasks.length}
                 </span>
               </button>
@@ -78,18 +105,25 @@ function Rail({
           );
         })}
       </ul>
+      {tip && (
+        <div
+          className="rail-tooltip"
+          role="tooltip"
+          style={{ top: tip.top, left: tip.left }}
+          data-testid="rail-tooltip"
+        >
+          {tip.text}
+        </div>
+      )}
       <div className="rail-footer">
         <div
           className="gateway-pill"
-          title={[
-            connection.gatewayUrl,
-            connection.serverVersion && `OpenClaw ${connection.serverVersion}`,
-          ]
-            .filter(Boolean)
-            .join("\n")}
+          title={gatewayDetails}
+          aria-label={gatewayDetails}
+          role="status"
         >
           <span className="status-dot" data-status={connection.status} />
-          <span className="gateway-pill-text">
+          <span className="gateway-pill-text" aria-hidden="true">
             <strong>{statusLabel(connection)}</strong>
             <span>{gatewayLabel(connection.gatewayUrl)}</span>
           </span>
@@ -121,11 +155,15 @@ function TaskList({
   bot,
   tasks,
   selectedKey,
+  seen,
+  discovery,
   onSelect,
 }: {
   bot: Bot | undefined;
   tasks: Task[];
   selectedKey: string | null;
+  seen: SeenMap;
+  discovery: DiscoveryState;
   onSelect: (key: string) => void;
 }) {
   // Relative times refresh once a minute.
@@ -139,7 +177,7 @@ function TaskList({
       <header className="pane-header">
         {bot && <Avatar bot={bot} size={26} />}
         <div className="pane-title">
-          <h2>{bot?.name ?? "No bot"}</h2>
+          <h2>{bot?.name ?? "No bots"}</h2>
           <p>
             {tasks.length} {tasks.length === 1 ? "task" : "tasks"}
             {bot?.theme ? ` · ${bot.theme}` : ""}
@@ -149,8 +187,14 @@ function TaskList({
       {tasks.length === 0 ? (
         <div className="empty">
           <div>
-            <h3>No tasks yet</h3>
-            <p>Conversations with {bot?.name ?? "this bot"} will be listed here.</p>
+            <h3>{bot ? "No tasks yet" : "No bots to show"}</h3>
+            <p>
+              {bot
+                ? `Conversations with ${bot.name} will be listed here.`
+                : discovery.status === "loading"
+                  ? "Loading this gateway's bots."
+                  : "This gateway has no bots yet."}
+            </p>
           </div>
         </div>
       ) : (
@@ -161,7 +205,7 @@ function TaskList({
                 type="button"
                 className="task"
                 aria-current={task.key === selectedKey}
-                data-unread={task.unread && task.key !== selectedKey}
+                data-unread={isUnread(task, seen) && task.key !== selectedKey}
                 onClick={() => onSelect(task.key)}
                 data-testid="task"
               >
@@ -184,62 +228,70 @@ function TaskList({
               </button>
             </li>
           ))}
+          {discovery.partial && <li className="list-note">Showing the most recent tasks only.</li>}
         </ul>
       )}
     </section>
   );
 }
 
-function WorkPanel({ task }: { task: Task | null }) {
+function WorkPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
-    <aside className="work-panel" aria-label="Work panel">
-      <div className="work-panel-inner">
-        <header className="pane-header">
-          <div className="pane-title">
-            <h2>Work</h2>
-            <p>{task ? task.title : "No task selected"}</p>
-          </div>
-        </header>
-        <div className="work-sections">
-          <section className="work-section">
-            <h3>Files</h3>
-            <div className="work-placeholder">Files this bot reads and writes for the task.</div>
-          </section>
-          <section className="work-section">
-            <h3>Plan</h3>
-            <div className="work-placeholder">The bot&apos;s plan and progress.</div>
-          </section>
-          <section className="work-section">
-            <h3>Tool calls</h3>
-            <div className="work-placeholder">Every raw tool call behind the conversation.</div>
-          </section>
+    <aside className="work-panel" aria-label="Work" aria-hidden={!open} data-testid="work-panel">
+      <header className="pane-header">
+        <div className="pane-title">
+          <h2>Work</h2>
         </div>
-      </div>
+        <button
+          type="button"
+          className="icon-button"
+          onClick={onClose}
+          aria-label="Close work panel"
+          title="Close (Esc)"
+          tabIndex={open ? 0 : -1}
+        >
+          <CloseIcon />
+        </button>
+      </header>
+      <p className="work-empty">Nothing here yet. Files the bot touches will appear here.</p>
     </aside>
   );
 }
 
-function Banner({ connection }: { connection: ConnectionState }) {
+/**
+ * One compact strip for connection and loading problems. It overlays the top of
+ * the conversation instead of pushing the layout down, and it mounts only when
+ * needed, so its countdown starts from the moment the problem appeared.
+ */
+function StatusStrip({
+  connection,
+  discovery,
+}: {
+  connection: ConnectionState;
+  discovery: DiscoveryState;
+}) {
   const send = useCommand();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (connection.status !== "reconnecting") return;
     const timer = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(timer);
-  }, [connection.status]);
-
-  if (connection.status === "connected") return null;
-  const seconds = connection.retryAt
-    ? Math.max(0, Math.ceil((connection.retryAt - now) / 1000))
-    : null;
-  const danger = connection.status === "error";
+  }, []);
+  const seconds =
+    connection.retryAt !== null ? Math.max(0, Math.ceil((connection.retryAt - now) / 1000)) : null;
+  let tone: "warn" | "danger" = "warn";
+  let text: string;
+  if (connection.status === "error") {
+    tone = "danger";
+    text = `Disconnected from ${gatewayLabel(connection.gatewayUrl)}. ${connection.error?.message ?? ""}`;
+  } else if (connection.status !== "connected") {
+    text = `Connection lost. Reconnecting${seconds ? ` in ${seconds}s` : "…"}`;
+  } else {
+    tone = "danger";
+    text = discovery.error ?? "Could not load this gateway's bots and tasks.";
+  }
   return (
-    <div className="banner" role="status" data-tone={danger ? "danger" : "warn"}>
-      <span>
-        {danger
-          ? `Disconnected from ${gatewayLabel(connection.gatewayUrl)}. ${connection.error?.message ?? ""}`
-          : `Connection lost. Reconnecting${seconds ? ` in ${seconds}s` : ""}… Showing the last known state.`}
-      </span>
+    <div className="status-strip" role="status" data-tone={tone} data-testid="status-strip">
+      <span className="status-strip-text">{text}</span>
       <button type="button" onClick={() => void send({ type: "retry" })}>
         Retry now
       </button>
@@ -247,12 +299,21 @@ function Banner({ connection }: { connection: ConnectionState }) {
   );
 }
 
-/** Remembers the last task opened for each bot, so switching bots returns to it. */
+const SEEN_KEY = "seen";
+
+/** Remembers the last task opened for each bot and what this viewer has read. */
 function useSelection(state: ClawtrateState) {
   const [botId, setBotId] = useState<string | null>(() => readPreference("bot"));
   const [taskByBot, setTaskByBot] = useState<Record<string, string>>(() => {
     try {
       return JSON.parse(readPreference("tasks") ?? "{}") as Record<string, string>;
+    } catch {
+      return {};
+    }
+  });
+  const [seen, setSeen] = useState<SeenMap>(() => {
+    try {
+      return JSON.parse(readPreference(SEEN_KEY) ?? "{}") as SeenMap;
     } catch {
       return {};
     }
@@ -266,48 +327,67 @@ function useSelection(state: ClawtrateState) {
   const remembered = bot ? taskByBot[bot.id] : undefined;
   const task = tasks.find((t) => t.key === remembered) ?? tasks[0] ?? null;
 
-  const selectBot = useCallback((id: string) => {
-    setBotId(id);
-    writePreference("bot", id);
-  }, []);
+  // Leaving a task marks it read as of its latest activity, so its dot only
+  // returns for activity that happens after this viewer saw it.
+  const markRead = useCallback(() => {
+    if (!task) return;
+    setSeen((current) => {
+      const next = markSeen(current, task);
+      if (next !== current) writePreference(SEEN_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, [task]);
+
+  const selectBot = useCallback(
+    (id: string) => {
+      markRead();
+      setBotId(id);
+      writePreference("bot", id);
+    },
+    [markRead],
+  );
 
   const selectTask = useCallback(
     (key: string) => {
       if (!bot) return;
+      markRead();
       setTaskByBot((current) => {
         const next = { ...current, [bot.id]: key };
         writePreference("tasks", JSON.stringify(next));
         return next;
       });
     },
-    [bot],
+    [bot, markRead],
   );
 
-  return { bot, tasks, task, selectBot, selectTask };
+  return { bot, tasks, task, seen, selectBot, selectTask };
 }
 
 export function Shell({ state }: { state: ClawtrateState }) {
   const send = useCommand();
-  const { bot, tasks, task, selectBot, selectTask } = useSelection(state);
+  const { bot, tasks, task, seen, selectBot, selectTask } = useSelection(state);
   const [panelOpen, setPanelOpen] = useState(() => readPreference("panel") === "open");
+  // At the narrowest widths the task list and the conversation take turns.
+  const [view, setView] = useState<"list" | "detail">("detail");
 
-  const togglePanel = useCallback(() => {
-    setPanelOpen((open) => {
-      writePreference("panel", open ? "closed" : "open");
-      return !open;
-    });
+  const setPanel = useCallback((open: boolean) => {
+    setPanelOpen(open);
+    writePreference("panel", open ? "open" : "closed");
   }, []);
+  const togglePanel = useCallback(() => setPanel(!panelOpen), [panelOpen, setPanel]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "\\") {
         event.preventDefault();
         togglePanel();
+      } else if (event.key === "Escape" && panelOpen) {
+        setPanel(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePanel]);
+  }, [togglePanel, panelOpen, setPanel]);
 
   // Keep exactly the selected task's transcript open on the host.
   const taskKey = task?.key ?? null;
@@ -317,25 +397,50 @@ export function Shell({ state }: { state: ClawtrateState }) {
     return () => void send({ type: "closeSession", key: taskKey });
   }, [taskKey, send]);
 
+  const showStrip = state.connection.status !== "connected" || state.discovery.status === "error";
+
   return (
-    <div className="shell" data-panel={panelOpen ? "open" : "closed"}>
-      <Banner connection={state.connection} />
+    <div className="shell" data-panel={panelOpen ? "open" : "closed"} data-view={view}>
       <Rail
         bots={state.bots}
         tasksByBot={state.tasksByBot}
         selectedBotId={bot?.id ?? null}
-        onSelect={selectBot}
+        onSelect={(id) => {
+          selectBot(id);
+          setView("list");
+        }}
         connection={state.connection}
       />
-      <TaskList bot={bot} tasks={tasks} selectedKey={taskKey} onSelect={selectTask} />
-      <Conversation
-        task={task}
+      <TaskList
         bot={bot}
-        transcript={taskKey ? state.transcripts[taskKey] : undefined}
-        panelOpen={panelOpen}
-        onTogglePanel={togglePanel}
+        tasks={tasks}
+        selectedKey={taskKey}
+        seen={seen}
+        discovery={state.discovery}
+        onSelect={(key) => {
+          selectTask(key);
+          setView("detail");
+        }}
       />
-      <WorkPanel task={task} />
+      <div className="main-pane">
+        {showStrip && <StatusStrip connection={state.connection} discovery={state.discovery} />}
+        <Conversation
+          task={task}
+          bot={bot}
+          transcript={taskKey ? state.transcripts[taskKey] : undefined}
+          panelOpen={panelOpen}
+          onTogglePanel={togglePanel}
+          onBack={() => setView("list")}
+        />
+        <button
+          type="button"
+          className="drawer-scrim"
+          aria-label="Close work panel"
+          tabIndex={-1}
+          onClick={() => setPanel(false)}
+        />
+        <WorkPanel open={panelOpen} onClose={() => setPanel(false)} />
+      </div>
     </div>
   );
 }
