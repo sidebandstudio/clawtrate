@@ -114,7 +114,7 @@ release in `docs/decisions.md`, and move both together.
 
 Every scope below was checked against the gateway's own policy table,
 `CORE_GATEWAY_METHOD_POLICY` in `<openclaw>/dist/core-method-policy-DkntKRY_.mjs`.
-It classifies all 520 core methods. Its base scopes match the schema `methods`
+It classifies all 519 core methods (`listCoreGatewayMethodNames`). Its base scopes match the schema `methods`
 map exactly, with no differences. "dynamic" means the gateway decides from the
 parameters. Those rules are in `<openclaw>/dist/method-scopes-BdXzw-yD.mjs`
 and `<openclaw>/dist/session-method-scopes-base-CuhU2F_D.mjs`, and each row
@@ -150,7 +150,10 @@ stand-ins for read and write on session-shaped methods
   `sessions.preview`, `sessions.files.list`/`get`/`assets`,
   `sessions.processes.list`, `chat.history`, `chat.startup`,
   `chat.metadata`, `chat.message.get`, `session.members.list`, `users.self`,
-  `users.prefs.get`, `themes.*` and a few others. The session's sharing
+  `users.prefs.get`, `themes.get` and `themes.list`; that is the complete
+  list (`SESSION_READ_METHODS`, lines 4-41). `themes.set` and
+  `themes.import` need `operator.write` with no substitute. The session's
+  sharing
   policy still applies.
 - `operator.sessions.write` admits, in place of `operator.write`:
   `chat.send`, `chat.abort`, `sessions.create`, `sessions.patch`,
@@ -390,6 +393,15 @@ connection and not atomically. See plugin P1.
   when `includeApprovals` is set. Pair it with
   `sessions.messages.unsubscribe`. `mode: "narration"` swaps token deltas
   for `session.narration` snapshots, which suits a sidebar.
+  **`includeApprovals: true` needs more than read.** For a non-admin
+  caller it requires `operator.approvals` and a paired device, otherwise
+  the call is rejected: "sessions.messages.subscribe includeApprovals
+  requires a paired device and gateway scope: operator.approvals"
+  (`<openclaw>/dist/sessions-subscriptions-BO608Xgc.mjs` lines 69-72;
+  `canReviewOperatorApproval` in
+  `<openclaw>/dist/operator-approval-authorization-C9wV2RU-.mjs`). Admin
+  bypasses this check. A read-only first connection must leave the flag
+  out.
 - History: `chat.history {sessionKey, agentId?, limit?, offset?, cursor?,
   messageId?, sessionId?, maxChars?, toolResultMaxChars?}`
   (`operator.read`) returns `{sessionKey, sessionId, messages[], nextOffset,
@@ -415,13 +427,29 @@ connection and not atomically. See plugin P1.
   `label`, `autoLabel`, `icon`, `color`, `category`, `boardFace`,
   `boardPresentation`, `pinned`, `archived`, `snoozedUntil`, `unread`,
   `model`, `agentRuntime`, `thinkingLevel`, `fastMode`, or a
-  `permissionMode` other than `"full"` (plus the key and `expected*`
-  guards). Any other field needs `operator.admin`: `reasoningLevel`,
-  `contextWindow`, `toolOverrides`, `execHost`, `execNode`, `execSecurity`,
-  `execAsk`, `sandboxMode`, `verboseLevel` and so on
-  (`resolveSessionsPatchRequiredScope`).
-- `sessions.delete` is `operator.admin` unless `archivedOnly: true`, which
-  makes it `operator.write`. `sessions.describe {key}` (`operator.read`)
+  `permissionMode` other than `"full"`. The only other fields allowed at
+  write are `key`, `agentId`, `expectedSessionId`,
+  `expectedLifecycleRevision`, `expectedPermissionMode` and
+  `expectedMarkedUnreadAt`. Any other field needs `operator.admin`:
+  - `reasoningLevel`, `contextWindow`, `toolOverrides`, `execHost`,
+    `execNode`, `execSecurity`, `execAsk`, `sandboxMode`, `verboseLevel`
+    and so on;
+  - the guards `expectedToolOverrides`, `expectedSandboxMode` and
+    `expectedNativeRuntimeConsent`. Adding one of these to a label-only
+    patch makes it admin.
+
+  Source: `SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS`,
+  `SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS` and
+  `resolveSessionsPatchRequiredScope`,
+  `<openclaw>/dist/session-method-scopes-base-CuhU2F_D.mjs` lines 68-110.
+- `sessions.delete` is `operator.write` only when `archivedOnly: true` and
+  every key is one of `key`, `agentId`, `deleteTranscript`,
+  `expectedSessionId` and `archivedOnly`. Anything else is
+  `operator.admin`, including the valid guards `expectedLifecycleRevision`,
+  `expectedSessionUpdatedAt` and `emitLifecycleHooks`
+  (`SESSIONS_DELETE_WRITE_SCOPE_FIELDS` and
+  `resolveSessionsDeleteRequiredScope`, same file, lines 94-100 and
+  116-118). `sessions.describe {key}` (`operator.read`)
   returns one full row (live).
 - **Status: available.**
 
@@ -739,8 +767,15 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
 - `node.list {}` and `node.describe {nodeId}` (`operator.read`; live: an
   empty list, since no node was paired). Pairing: `node.pair.list`,
   `node.pair.approve`, `node.pair.reject`, `node.pair.remove` and
-  `node.rename` (`operator.pairing`). Approving a node that declares
-  `system.run` or `browser.proxy` also needs `operator.admin`. Invoke with
+  `node.rename` (`operator.pairing`). `node.pair.approve` adds a check based
+  on the commands the node declares (`resolveNodePairApprovalScopes`,
+  `<openclaw>/dist/node-pairing-authz-_-5BGyuw.mjs` lines 4-12):
+  - no commands: `operator.pairing`;
+  - any commands: `operator.pairing` plus `operator.write`;
+  - any of `system.run.prepare`, `system.run`, `system.which`,
+    `system.execApprovals.get`, `system.execApprovals.set`,
+    `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir` or
+    `terminal.upload`: `operator.pairing` plus `operator.admin`. Invoke with
   `node.invoke {nodeId, command, params?, idempotencyKey}` (dynamic:
   `operator.write`, or `operator.admin` for the admin-only node commands,
   which are the browser proxy commands, `fs.listDir` and terminal upload
@@ -773,9 +808,13 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
   elevated}` (admin; live for `deny` and `exec.mode`).
 - Per session: `sessions.patch {permissionMode: read-only|guarded|workspace}`
   and `sessions.create {permissionMode}` are `operator.write` (live with
-  `permissionMode:"guarded"`). `permissionMode: "full"`, `toolOverrides`,
-  `execSecurity` and `execAsk` need `operator.admin` on both methods
-  (row 4).
+  `permissionMode:"guarded"`).
+  - `permissionMode: "full"` and `toolOverrides` need `operator.admin` on
+    both methods.
+  - `execSecurity`, `execAsk` and `execHost` exist only on
+    `sessions.patch`, where they need `operator.admin`. `sessions.create`
+    has a closed schema that rejects all three, even for admin (`schema`
+    `SessionsCreateParams`, row 4).
 - Host approvals: `exec.approvals.get`/`set` (admin).
 - **Status: available** for admin connections.
 
@@ -904,8 +943,9 @@ Caveats of the built-in route:
   UI falls back to `POST /screenshot` polling.
 - Built-in screencast sessions are keyed by `${profileName}:${targetId}`
   (`<openclaw>/dist/session-Dy6QNgnj.mjs` line 256). The resource is a tab
-  in a browser profile, not a chat session. The managed `openclaw` profile
-  is shared by every session that uses the browser tool.
+  in a browser profile, not a chat session. By default the managed
+  `openclaw` profile is shared by every session and every bot that uses the
+  browser tool. Plugin P4 gives each bot its own profile.
 
 **Canvas.** `hello-ok.pluginSurfaceUrls.canvas` is a scoped hosted URL
 (live: present). Renew it with `plugin.surface.refresh`
@@ -926,60 +966,91 @@ embed the hosted canvas URL in a web view.
 - Cloud-worker desktops have `desktop.observe` and `desktop.launch`
   (admin), with the takeover semantics above. **Unverified live.**
 
-**Answer to the milestone question: (a) is true, demonstrated on the probe
-gateway.** An ordinary plugin, linked into one profile, gave a client holding
-only `operator.read` and `operator.write` a live view of the bot's browser
-tab, and control of it. The client never had `operator.admin`. The prototype
-is `docs/research/dev-gateway/computer-plugin/` (no dependencies). The design
-and its limits are in section 3, plugin P4.
+**Answer to the milestone question: (a) is true, demonstrated again with the
+fixed prototype on the probe gateway.** An ordinary plugin, loaded into one
+profile, gave a client holding only `operator.read` and `operator.write` a
+live view of the bot's browser and control of a tab. The client never had
+`operator.admin`. The prototype is `docs/research/dev-gateway/computer-plugin/`
+(no dependencies, offline tests in `test.mjs`). The design and its exact
+limits are in section 3, plugin P4.
 
-Live result on a fresh profile. The viewer's `hello-ok.auth.scopes` was
-`["operator.read","operator.write"]`, and `browser.request` was refused with
-`MISSING_SCOPE`.
+**Isolation model: one browser per bot.** Each configured bot gets its own
+managed browser profile (`browser.profiles.bot-atlas`, `bot-pixel`, each with
+its own debugging port).
+- The plugin's `before_tool_call` hook rewrites every `browser` call from
+  that bot to use the bot's profile.
+- It blocks node, target and dashboard routing for the bot, and blocks any
+  other agent that names the bot's profile.
+- A session may view or control exactly the tabs in its own bot's browser,
+  as listed live by that browser's CDP endpoint. Nothing is inferred from
+  tool results.
+- All sessions of the same bot share that bot's browser and its view.
+- Tabs an operator opens in the bot's profile through `browser.request` are
+  part of that browser and are viewable by the bot's sessions.
 
-1. The bot Atlas ran `browser {action:"open", url:"https://example.com"}`.
-   The plugin's `after_tool_call` hook recorded tab `6422995A…` for session
-   `agent:atlas:main`. `clawtrate-computer.tabs` listed it.
-2. `clawtrate-computer.view.open {sessionKey, targetId}` returned a
-   one-use ticket. A WebSocket to
-   `/clawtrate-computer/stream?ticket=…` received `{type:"ready"}` and then
-   binary frames in the built-in format (4-byte length, JSON header, JPEG).
-   23 frames arrived; a static page repaints only on change. Reusing the
-   ticket was rejected.
-3. A slow bot call (`act` with `wait 4000 ms`) was running when the user
-   called `clawtrate-computer.control.take`. The plugin answered `draining`,
-   waited for the call to finish, and granted control 3.3 s later,
-   reporting `drained: true`.
-4. While the user held control, the bot's next `browser` call was blocked
-   by the plugin hook. The bot received a tool error, "The user has control
-   of a browser tab …". The run itself completed normally.
-5. `clawtrate-computer.input` with `scroll` and `click` (CDP
-   `Input.dispatchMouseEvent`) worked. 22 new frames followed, and the
-   frame header's `scrollY` moved from 0 to 243.
-6. `view.open` for the same tab from another session of the same bot was
-   refused: "tab is not attached to this session".
-7. After `control.release`, the bot's `browser` call succeeded again.
-8. Control was taken again, then the viewer dropped its gateway connection
-   without releasing. The stream closed with `4006 authority_revoked` after
-   18.5 s, once renewals stopped. The lease was still `granted` 21.5 s
-   after the disconnect, and was gone (`null`) at the next check.
+Live result on a fresh profile, under a temporary `HOME` started by
+`dev-gateway.sh`. Two non-admin viewer devices, A and B: each had
+`hello-ok.auth.scopes` `["operator.read","operator.write"]`, and
+`browser.request` was refused with `MISSING_SCOPE`.
+
+1. **Pinning is host-authoritative.**
+   - Atlas ran `browser open https://example.com`, then
+     `browser open https://example.org` with `profile: "bot-pixel"` in the
+     call. Pixel ran `browser open https://example.net`.
+   - The browser tool's own results reported `browserTab.profile` as
+     `bot-atlas`, `bot-atlas` and `bot-pixel`. Atlas's browser (port 19113)
+     held example.com and example.org; Pixel's (port 19114) held
+     example.net. The shared `openclaw` profile was never started.
+   - Atlas's call with `target: "node"` was blocked by the hook.
+2. **Operator tabs.** An admin `browser.request POST /tabs/open` with
+   `query.profile: "bot-atlas"` opened a tab, and it appeared in
+   `clawtrate-computer.tabs` for Atlas's session.
+3. **Cross-bot refusal.** `view.open` on Atlas's tab from Pixel's session
+   was refused: "tab is not in this bot's browser".
+4. **Frames.** A one-use ticket from `view.open` opened
+   `/clawtrate-computer/stream`. Frames used the built-in binary layout and
+   header, `{url, cssWidth, cssHeight, scrollX, scrollY, ts}`. The first
+   was a valid 756×469 JPEG; 24 frames arrived over the run.
+5. **Takeover during a short call.** A 4 s bot browser call was running.
+   `control.take` emitted the `draining` event and blocked new bot calls.
+   It responded once, `{state:"granted", generation}`, 3.9 s later, after
+   the call finished.
+6. **Bot blocked.** While the user held control, the bot's next `browser`
+   call returned the tool error "The user has control of this bot's
+   browser".
+7. **Lease holder.** Viewer B's `control.release` was refused, both without
+   a generation and with A's generation copied: "only the current holder
+   can release, with its generation". B's `control.take` was refused:
+   "already held".
+8. **Input.** `input` with `scroll` and `click`, carrying A's generation,
+   worked. 22 new frames followed, and `scrollY` moved from 0 to 243.
+9. **Release.** After `control.release` by A, the bot's next `browser` call
+   succeeded.
+10. **Fail closed.** A 25 s bot call was running when the user tried to take
+    control. The take responded `{state:"busy", reason:"the bot is still
+    acting in this browser", runningCalls:1}` after the 15 s drain budget,
+    and left no lease. After the call finished, a retry was granted.
+11. **Disconnect.** The holder dropped its gateway connection without
+    releasing. The stream closed with `4006 authority_revoked` 17.6 s
+    later, once renewals stopped. Viewer B saw the lease as `null` 22.6 s
+    after the disconnect.
 
 What the user must approve, compared with the built-in route:
 
-- With the plugin, the client pairs as `operator.read` plus
-  `operator.write`. The gateway owner installs the plugin once and sets its
-  `cdpUrl`. No admin grant goes to the device.
-- Without the plugin, the client must request `operator.admin`. On first
-  pairing, include it in `connect.params.scopes`. Later, use
-  `device.scopes.requestUpgrade`, listing the current scopes plus
+- **With the plugin:** the client pairs as `operator.read` plus
+  `operator.write`. The gateway owner configures one browser profile per
+  bot and the plugin's `bots` map. No admin grant goes to the device.
+- **Without the plugin:** the client must request `operator.admin`. On
+  first pairing, include it in `connect.params.scopes`; later, use
+  `device.scopes.requestUpgrade` with the current scopes plus
   `operator.admin`. The owner approves the pending request with
   `device.pair.approve` or `openclaw devices approve <requestId>`. The
   client then calls `browser.request {method:"POST", path:"/screencast"}`.
-  That grant also covers `config.*`, agent edits and every other admin
+  That grant also covers config writes, agent edits and every other admin
   method.
 
-**Status: partial** in the gateway. **Available with plugin P4** for the
-bot's own managed-browser tabs, within the limits listed under P4.
+**Status: partial** in the gateway. **Available with plugin P4**, for bots
+configured with their own browser profile, within the limits under P4.
 
 ## 3. Plugin API
 
@@ -1050,6 +1121,10 @@ Registrars used or checked (types in
   State written by the `after_tool_call` hook was not visible to the
   gateway-method handler until it moved to a `globalThis` slot (live). The
   same slot survives plugin replacement. Plan for both.
+- **Service ids are global.** Two plugins that both registered a service
+  with id `events` collided ("service already registered: events"), and the
+  second plugin's service did not start (live). Prefix service ids with the
+  plugin id.
 
 Verified live against the probe gateway, with the plugin installed into
 that profile only:
@@ -1122,53 +1197,101 @@ demonstrated on the probe gateway; everything else is **unverified**.
 - Sending to Expo's push service is an outbound call from the gateway host;
   make it opt-in. Nothing in P3 was demonstrated: **unverified**.
 
-**P4, `clawtrate-computer` (row 18).** Live view and user takeover for the
-bot's own managed-browser tab, without `operator.admin`. The prototype is
-`docs/research/dev-gateway/computer-plugin/index.js`. Steps 1–7 are
-**shown** (row 18); everything else is noted where it occurs.
+**P4, `clawtrate-computer` (row 18).** Live view and user takeover of a
+bot's own browser, without `operator.admin`. The prototype is
+`docs/research/dev-gateway/computer-plugin/index.js`, with offline tests in
+`test.mjs` beside it (`node test.mjs`, no gateway needed). Everything in the
+table was **shown** live (row 18) unless marked.
+
+Plugin config (`plugins.entries.clawtrate-computer.config`), with each
+profile also declared under `browser.profiles` with the same port:
+
+```json
+{ "bots": { "atlas": { "profile": "bot-atlas", "cdpUrl": "http://127.0.0.1:19113" },
+            "pixel": { "profile": "bot-pixel", "cdpUrl": "http://127.0.0.1:19114" } },
+  "drainTimeoutMs": 15000 }
+```
 
 Entry points and authority:
 
-| Step | Entry point (source) | Authority |
+| Step | Entry point | Authority and checks |
 | --- | --- | --- |
-| Learn which session uses which tab | `api.on("after_tool_call")` for `toolName === "browser"`; read `targetId` from `result` (shown) | Hook context's `sessionKey`, from the host |
-| List, view, take, release, renew, input | `api.registerGatewayMethod("clawtrate-computer.*", …, { scope: "operator.write", sessionAccess: { mode: "write", requiredTool: "browser" } })` | Host checks session access and the session's browser tool policy; the plugin then checks that the tab is attached to that session |
-| Stream | `api.registerHttpRoute({ path: "/clawtrate-computer/stream", auth: "plugin", handleUpgrade })`, with a hand-written WebSocket handshake | One-use 60 s ticket from `view.open`; the stream closes when `view.renew` stops for 20 s |
-| Frames and input | CDP over the tab's `webSocketDebuggerUrl` from `GET <cdpUrl>/json/list`: `Page.startScreencast`, `Page.screencastFrameAck`, `Input.dispatchMouseEvent`, `Input.insertText` (Node's global `WebSocket`) | Loopback CDP, which has no authentication of its own |
-| Browser location | `api.pluginConfig.cdpUrl`, set by the owner to the port pinned at `browser.profiles.openclaw.cdpPort` | Owner config |
-| Block the bot while the user drives | `api.on("before_tool_call")` returning `{block: true, blockReason}` for `browser` (shown) | Applies to every agent session's tool calls |
-| Let running calls finish | `before_tool_call`/`after_tool_call` keep an in-flight count; `control.take` returns only after it reaches zero or 15 s pass (shown with one running call) | n/a |
-| Events | `ctx.gatewayEvents.emit("control", …)` gives `plugin.clawtrate-computer.control {targetId, holder, state}` (shown) | Scope `operator.read`: every reader sees it, not only that session |
+| Give each bot its own browser | `api.on("before_tool_call")` for `toolName === "browser"`: returns `{params: {...params, profile: <bot profile>}}`. It blocks node/target/dashboard routing for the bot, and blocks other agents that name a bot profile | Hook context's `agentId`, from the host. The browser tool's own result reported the pinned profile (live) |
+| List, view, take, release, renew, input | `api.registerGatewayMethod("clawtrate-computer.*", …, { scope: "operator.write", sessionAccess: { mode: "write", requiredTool: "browser" } })` | The host checks the session, sharing and the session's browser tool policy. The plugin maps `sessionAccessAuthority.target.agentId` to that bot's browser and requires the tab to be in its live CDP target list |
+| Stream | `api.registerHttpRoute({ path: "/clawtrate-computer/stream", auth: "plugin", handleUpgrade })` with a hand-written WebSocket handshake | One-use, 60 s, 192-bit ticket from `view.open`, deleted before any await. The stream closes when `view.renew` stops for 20 s, when the retained session authority fails, or when the tab goes away |
+| Frames and input | CDP over the target's debugger URL: `Page.startScreencast`, `Page.screencastFrameAck`, `Input.dispatchMouseEvent`, `Input.insertText` (Node's global `fetch` and `WebSocket`) | Each `cdpUrl` must be the literal `http://127.0.0.1:<port>` or `http://[::1]:<port>`, or the config is rejected. Discovery uses `redirect: "error"`. A target is used only if its `webSocketDebuggerUrl` is exactly `ws://<same host>:<same port>/devtools/page/<id>` |
+| Block the bot while the user drives | the same `before_tool_call` hook returns `{block: true, blockReason}` while any lease exists on that bot's profile | Only that bot's browser calls are affected, from all its sessions |
+| Track running bot calls | `before_tool_call` records `toolCallId`; `after_tool_call` removes it. A browser call without a `toolCallId` is refused | Keyed by the host's tool call id |
+| Events | `ctx.gatewayEvents.emit("control", …)` gives `plugin.clawtrate-computer.control {profile, targetId, holder, state}`, with states `draining`, `granted`, `busy`, `released`, `expired`, `revoked` and `tab-closed` | Scope `operator.read`: every reader sees it, not only that bot's sessions |
 
-Limits and open points:
+Contract:
 
-- **Keyed by tab.** Leases, tickets and view authorization use the CDP
-  `targetId`. A session can view or control a tab only after its own
-  `browser` tool calls touched that tab. Tabs opened by an operator, or
-  before the plugin loaded, attach to no session. The map lives in memory
-  and is lost on restart.
-- **Coarse block (v1).** Bot calls refer to tabs by handles such as `t1`
-  that a plugin cannot resolve, so while any lease exists the hook blocks
-  every bot `browser` call on the profile, from every session. A tab-exact
-  block needs the browser plugin's handle mapping, which is private.
+- **`control.take {sessionKey, targetId}`.**
+  - It emits a `draining` event at once and blocks new bot calls on the
+    bot's profile. It sends **one** response after the wait: `{state:
+    "granted", generation, renewWithinMs}` or `{state: "busy", reason,
+    runningCalls}`.
+  - There is no `draining` response; show that state locally, or from the
+    event.
+  - If a bot browser call is still running after `drainTimeoutMs` (default
+    15 s), the take **fails closed**: no lease remains, and the client should
+    say "the bot is still acting" and let the user retry. It returns
+    `CONFLICT` if anyone holds or is taking the tab.
+- **`control.release`, `input` and `view.renew`.** These need the holder's
+  connection and the lease's `generation`, an unguessable 128-bit id. Other
+  viewers get `FORBIDDEN`. Input, release and expiry run one at a time on
+  each lease. Input rechecks that the lease is still the same one, still
+  granted and still authorized after connecting and before every CDP
+  command. Input that started under a lease cannot land after that lease
+  ends (offline test C-03b).
+- **`input {kind: "click"|"scroll"|"text", x?, y?, deltaY?, text?}`.**
+  Scroll uses a CDP wheel event.
+- **Frames.** They use the built-in screencast's binary layout and header,
+  `{url, cssWidth, cssHeight, scrollX, scrollY, ts}`, so one decoder serves
+  both. Text messages are `ready` and `meta`. Close codes are `4004
+  target_closed`, `4006 authority_revoked` and `1000` on close.
+
+Limits:
+
+- **Isolation is per bot, not per session.** Sessions of the same bot share
+  its browser, and so share what they can view and take. Tabs opened in the
+  bot's profile by an operator through `browser.request` are part of that
+  browser, and are viewable by the bot's sessions (live).
+- **The block is per bot, not per tab.** While a user holds one tab, all of
+  that bot's browser calls are refused. Bot calls name tabs by handles such
+  as `t1` that a plugin cannot resolve.
+- **Unconfigured bots** keep using the shared `openclaw` profile and get no
+  view.
 - **Operators are not blocked.** `browser.request` (admin) and
   `browser.dashboard.request` (write) are gateway methods, and no hook
-  reaches them, so an admin client or a dashboard widget can still drive
-  the tab during a lease. Clawtrate itself should route all of its browser
-  input through P4.
-- **Not bound to the connection.** Plugins receive no
-  connection-closed signal, and `sessionAccessAuthority.retain()` did not
-  abort when the viewer disconnected (live). Streams and leases therefore
-  expire through renewal. The client calls `view.renew` about every 5 s, and
-  each renewal re-runs the host's session access check.
+  reaches them, so an admin client or a dashboard widget can still drive a
+  bot's browser during a lease. The bot itself might reach the browser by
+  other means the hook does not cover, such as `exec`. That is not
+  verified either way.
+- **A stuck call keeps takeover unavailable.** A bot call that never
+  produces `after_tool_call` keeps that bot's takeover busy until the
+  gateway restarts. The plugin cannot cancel the call. `agent_end` would
+  give run-level cleanup, but user-installed plugins need
+  `hooks.allowConversationAccess` to use it
+  (`<openclaw>/dist/registry-Ctt4xQAS.mjs` lines 2597-2607 and 2830).
+  Whether `after_tool_call` fires for an aborted run is **unverified**.
+- **Not bound to the connection.** Plugins receive no connection-closed
+  signal, and `sessionAccessAuthority.retain()` did not abort when the
+  viewer disconnected (live). Streams and leases therefore expire through
+  renewal: call `view.renew` about every 5 s. Each renewal re-runs the
+  host's session access check.
 - **Policy bypass.** Frames and input go straight over CDP, so they skip
   the browser plugin's navigation checks: a user click can follow a link
-  the bot could not open. The built-in stream also retires on navigation
-  and rechecks the URL; the prototype only reports `meta` on navigation.
-  Both points are open design items.
-- Not demonstrated: the `computer` tool and node-routed browsers,
-  multi-viewer contention (a second taker gets `CONFLICT` in code), and
-  `text` input.
+  the bot could not open. The prototype reports `meta` on navigation; it
+  does not retire the stream or recheck the URL as the built-in stream
+  does.
+- **Config is trusted.** The owner's `bots` map decides which profile
+  belongs to which bot. Each profile's `cdpPort` in `browser.profiles` must
+  match the plugin's `cdpUrl`; the plugin does not read the browser config.
+- **Not demonstrated live:** `text` input, the `computer` tool,
+  node-routed browsers, an unconfigured agent naming a bot profile (covered
+  only by the offline test), and two viewers taking at the same moment
+  (the second gets `CONFLICT` in code and in the offline test).
 
 **P5, `clawtrate-tool-rules` (row 8, partial for non-exec tools).**
 
@@ -1189,42 +1312,38 @@ committed under `docs/research/dev-gateway/`:
 
 | File | Purpose |
 | --- | --- |
-| `dev-gateway.sh` | `start`, `stop` and `env`: runs the fake model and the gateway under a controlled environment, records real PIDs, and stops with a kill-after-timeout. |
+| `dev-gateway.sh` | `start`, `check-env`, `stop` and `reset`. Refuses unsafe profile names and state it did not create, runs everything under a controlled environment, records real PIDs, and stops with a kill-after-timeout. |
 | `fake-openai.mjs` | Scripted fake model provider: OpenAI Chat Completions streaming on loopback, no dependencies. |
-| `openclaw.dev.json` | Gateway config template, described below. |
+| `openclaw.dev.json` | Gateway config template, described below. It loads the two plugins below from the checkout. |
 | `seed.mjs` | Creates bots and tasks, waits for every run, and verifies the transcripts; exits non-zero on any failure. |
 | `fake-coding-mcp.mjs` | Stand-in coding-agent MCP server (section 5). |
-| `probe-plugin/` | Minimal plugin proving methods, events and routes (section 3). |
-| `computer-plugin/` | Prototype of plugin P4: browser view and takeover without admin (section 3). |
+| `probe-plugin/` | Minimal plugin proving methods, events and routes (section 3). Also reports the gateway's environment variable names for `check-env`. |
+| `computer-plugin/` | Prototype of plugin P4: browser view and takeover without admin (section 3), with offline tests. |
 
 Profile and port: the project uses `--dev` (state in `~/.openclaw-dev`, port
-19001). The commands below use a named profile, `<dev>`, so they run
-anywhere. `dev-gateway.sh` takes `PROFILE=<name>`; for `--dev`, change the
-port in the template and the `--profile` flag in the script.
+19001). The launcher deliberately refuses that profile: it accepts only names
+matching `^[a-z0-9]+(-[a-z0-9]+)*-(dev|probe)$`, such as `clawtrate-dev`, and
+never `default` in any letter case. The template's gateway port is 19101.
+Another port needs a change in the template, `PORT` in the script, and the
+`cdpPort` values.
 
 ```bash
-# 1. Start: writes ~/.openclaw-<dev>/openclaw.json from the template,
-#    generates a dev-only token, starts the fake model and the gateway
-PROFILE=<dev> docs/research/dev-gateway/dev-gateway.sh start
+# 1. Start: refuses unsafe names and unowned or credential-bearing state,
+#    creates a fresh profile from the template, starts the fake model and the gateway
+PROFILE=clawtrate-dev docs/research/dev-gateway/dev-gateway.sh start
 
-# 2. Check what the gateway can see in its environment (names only)
-PROFILE=<dev> docs/research/dev-gateway/dev-gateway.sh env
-#   DO_NOT_TRACK HOME OPENCLAW_DEV_TOKEN PATH TMPDIR
+# 2. Ask the running gateway which environment variable names it really has
+PROFILE=clawtrate-dev docs/research/dev-gateway/dev-gateway.sh check-env
+#   ... "ok: the gateway sees only the launcher's variables"
 
 # 3. Seed and verify (needs @openclaw/gateway-client@2026.10.6 installed)
 OPENCLAW_DEV_URL=ws://127.0.0.1:19101 \
-OPENCLAW_DEV_TOKEN="$(cat "${TMPDIR:-/tmp}/openclaw-<dev>-run/token")" \
+OPENCLAW_DEV_TOKEN="$(cat "${TMPDIR:-/tmp}/openclaw-clawtrate-dev-run/token")" \
   node docs/research/dev-gateway/seed.mjs
 
-# 4. Optional plugins: run the CLI under the same clean environment
-env -i HOME="$HOME" PATH=/usr/bin:/bin DO_NOT_TRACK=1 \
-  "$(command -v openclaw)" --profile <dev> plugins install --link "$PWD/docs/research/dev-gateway/computer-plugin" --force
-env -i HOME="$HOME" PATH=/usr/bin:/bin DO_NOT_TRACK=1 \
-  "$(command -v openclaw)" --profile <dev> config set plugins.entries.clawtrate-computer.config.cdpUrl '"http://127.0.0.1:19112"' --strict-json
-
-# 5. Stop and reset
-PROFILE=<dev> docs/research/dev-gateway/dev-gateway.sh stop
-rm -rf ~/.openclaw-<dev>
+# 4. Stop, then delete the profile the launcher created
+PROFILE=clawtrate-dev docs/research/dev-gateway/dev-gateway.sh stop
+PROFILE=clawtrate-dev docs/research/dev-gateway/dev-gateway.sh reset
 ```
 
 ### Isolation: what the template does and what it does not
@@ -1232,15 +1351,63 @@ rm -rf ~/.openclaw-<dev>
 The development gateway must not reach a real model or a hosted service with
 the developer's credentials. Model routing alone does not guarantee that.
 
+- **Profile selection.** OpenClaw maps `--profile <name>` to
+  `~/.openclaw-<name>`, but `default`, in any letter case, maps to the real
+  `~/.openclaw` (`resolveProfileStateDir`,
+  `<openclaw>/dist/profile-utils-BsmgdpgZ.mjs`).
+  - The launcher validates the name before it touches any file. It then
+    resolves the state folder once, and passes `OPENCLAW_STATE_DIR`,
+    `OPENCLAW_CONFIG_PATH` and `OPENCLAW_PROFILE` explicitly with
+    `--profile`, so the script and the CLI cannot disagree.
+    `applyCliProfileEnv` keeps explicit values that do not point at the
+    default profile (`<openclaw>/dist/profile-D1GpjMFM.mjs` lines 83-96).
+  - Live, under a temporary `HOME`: `default`, `Default`, `DEFAULT`, `dev`,
+    an empty name, `roster`, `../roster-probe`, a name with `/../` and
+    `Roster-Probe` were all refused (exit 2), and the temporary `HOME` was
+    still empty afterwards.
+- **State reuse.** At startup OpenClaw loads `<state>/.env` and
+  `<config dir>/.env`. It also loads `~/.config/openclaw/gateway.env` unless
+  the state folder is explicit and not the default
+  (`resolveGlobalDotEnvFiles`, `<openclaw>/dist/dotenv-global-CNTZ1AEX.mjs`
+  lines 118-135; `createTrustedGatewayEnvLoader`,
+  `<openclaw>/dist/pre-bootstrap-fvJUb9k2.mjs` lines 336-358).
+  - `env -i` alone therefore does not keep credentials out. The launcher
+    refuses a state folder that is a symlink, that lacks its own marker
+    file `.clawtrate-dev-gateway`, or that holds any `.env`, `*.env`,
+    `auth-profiles*.json` or `credentials/*` file. `reset` deletes only a
+    marked folder.
+  - Live, under a temporary `HOME` with a synthetic profile:
+    - an unmarked folder holding a planted `.env` and a credentials
+      fixture: refused;
+    - the same folder marked: refused, listing both files;
+    - marked with only the credentials fixture: refused;
+    - marked with only a `.env`: refused;
+    - a symlinked state folder: refused.
+
+    All exited 3.
 - **Environment.** OpenClaw resolves provider credentials from environment
   variables per provider (`resolveEnvApiKey` in
-  `<openclaw>/dist/model-auth-env-dEPoNA3I.mjs`). A gateway started from a
-  developer shell would inherit keys such as `OPENAI_API_KEY` or
-  `ANTHROPIC_*`. `dev-gateway.sh` starts the fake model and the gateway with
-  `env -i` and passes only `HOME`, `PATH`, `TMPDIR`, `DO_NOT_TRACK=1` and
-  `OPENCLAW_DEV_TOKEN`. Live: `dev-gateway.sh env` printed exactly those
-  five names. Run every `openclaw --profile <dev>` CLI call the same way,
-  because the CLI can talk to the running gateway and load providers too.
+  `<openclaw>/dist/model-auth-env-dEPoNA3I.mjs`).
+  - The launcher starts the fake model and the gateway with `env -i`. It
+    passes `HOME`, `PATH`, `TMPDIR`, `DO_NOT_TRACK=1`,
+    `OPENCLAW_DEV_TOKEN` and the three `OPENCLAW_*` location variables.
+  - `check-env` asks the running gateway, after OpenClaw's own loaders,
+    for its variable names, through the admin-only probe-plugin method
+    `clawtrate-probe.envNames` and `openclaw gateway call` with
+    `--expect-url ws://127.0.0.1:19101`. It fails on any name outside an
+    allowlist.
+  - Live: the gateway reported the launcher's names plus six it adds
+    itself, none carrying a value in: `OPENCLAW_CLI`,
+    `OPENCLAW_GATEWAY_PORT` and `OPENCLAW_PATH_BOOTSTRAPPED` from OpenClaw,
+    `PWD` and `SHLVL` from the bash wrapper, and `__CF_USER_TEXT_ENCODING`
+    from macOS.
+  - To prove the check sees loader-injected values: a `.env` holding
+    `FAKE_PLANTED_KEY` was put into the marked state folder, and the
+    gateway was started directly, bypassing the launcher's refusal.
+    `check-env` reported "UNEXPECTED variables in the gateway:
+    FAKE_PLANTED_KEY" and exited 4.
+  - Run every `openclaw` CLI call for the dev profile the same way: the
+    script's `oc` helper does.
 - **Memory embeddings.** Memory search is on by default and defaults to the
   `openai` embeddings provider whatever `models.mode` says
   (`DEFAULT_MEMORY_EMBEDDING_PROVIDER` and `produceMemorySearchConfig` in
@@ -1250,11 +1417,10 @@ the developer's credentials. Model routing alone does not guarantee that.
   provider `none`, and `memory.search` returned a hit with
   `searchMode: "fts-only"`).
 - **Models.** `models.mode: "replace"` with the single `fake` provider means
-  agent turns and utility calls go to the fake. Live: every run in this
-  round was answered with the fake's scripted text, and runs failed when the
-  fake was stopped. The template also sets
-  `models.catalogRefresh.enabled: false`, which stops the hosted model
-  catalog fetch.
+  agent turns and utility calls go to the fake. Live: every run was answered
+  with the fake's scripted text, and runs failed when the fake was stopped.
+  The template also sets `models.catalogRefresh.enabled: false`, which stops
+  the hosted model catalog fetch.
 - **Other network traffic.**
   - `update.checkOnStart: false` stops the update check and the anonymous
     update ping.
@@ -1270,9 +1436,12 @@ the developer's credentials. Model routing alone does not guarantee that.
   asked for approval for `uname -s` (`security: "allowlist",
   ask: "on-miss"`). Without approval-capable clients, such requests are
   denied as `no-route`. Pixel also denies `exec` outright.
-- **Browser.** The template sets `browser.headless: true` and pins the
-  managed profile's debugging port (`browser.profiles.openclaw.cdpPort:
-  19112`), so plugin P4 can be configured with it.
+- **Browser.** The template sets `browser.headless: true` and declares one
+  profile per bot (`bot-atlas` on 19113, `bot-pixel` on 19114) beside the
+  shared `openclaw` profile (19112), for plugin P4.
+- **Plugins.** They are loaded from the checkout through `plugins.load.paths`
+  and `plugins.entries`. OpenClaw logs that it "can't verify where this
+  plugin came from"; that is expected for local paths.
 
 ### Other facts the recipe depends on (live unless noted)
 
@@ -1404,9 +1573,10 @@ whatever server name the owner chooses in `mcp.servers`.
     - schedule changes;
     - the built-in browser view;
     - `chat.inject`;
-    - choosing a node, and per-session tool overrides or exec settings
-      (`sessions.patch`/`sessions.create` with `execNode`, `execHost`,
-      `toolOverrides`, `execSecurity` or `execAsk`).
+    - choosing a node and per-session tool overrides (`execNode`,
+      `toolOverrides` on `sessions.patch` or `sessions.create`);
+    - per-session exec settings (`execHost`, `execSecurity`, `execAsk`,
+      which exist only on `sessions.patch`).
 
     A phone holding admin can do anything to the gateway, including config
     writes.
@@ -1456,13 +1626,17 @@ whatever server name the owner chooses in `mcp.servers`.
   not a wrapping shell.
 - **Mobile push** depends on a plugin plus a third-party push service
   (row 16). The official relay is closed to other apps.
-- **Browser takeover.** Built in, agent and user input race. P4 blocks the
-  bots, but not other operators calling `browser.request`. Its frames and
+- **Browser takeover.** Built in, agent and user input race. P4 gives each
+  bot its own browser and blocks that bot while the user holds control. It
+  refuses takeover outright while the bot is still acting, and a stuck
+  call keeps takeover unavailable. It does not block other operators
+  calling `browser.request`. Its frames and
   input go over raw CDP and skip the browser plugin's navigation policy.
   The loopback CDP port is unauthenticated, so any local process on the
   gateway host can already drive the managed browser.
 - **Plugin runtime quirks.** The host loads a plugin module more than once,
-  and module state is not shared between those loads. Several runtime
+  and module state is not shared between those loads. Service ids are
+  global across plugins. Several runtime
   helpers, including in-process gateway requests, are reserved for bundled
   or official plugins. Plugin designs must be proven on the pinned gateway,
   not inferred from the SDK docs.
