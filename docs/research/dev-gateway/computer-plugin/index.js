@@ -1,65 +1,88 @@
 // clawtrate-computer: research prototype.
 //
-// Shows the bot's managed-browser tab to a non-admin client and lets the user
-// take control of that tab. Uses only entry points available to an ordinary
-// user-installed plugin:
-//   - api.registerGatewayMethod with sessionAccess (operator.write, browser tool)
-//   - api.registerHttpRoute with handleUpgrade (auth: "plugin", ticket checked here)
-//   - api.on("before_tool_call") / api.on("after_tool_call")
-//   - api.pluginConfig.cdpUrl, the managed profile's loopback CDP endpoint
-//   - Node's global WebSocket and fetch, to talk CDP directly
-// No dependencies. Not production code.
+// Gives a non-admin client a live view of a bot's browser and lets the user
+// take control of a tab. Isolation model: one managed browser profile per bot.
+// The plugin pins every `browser` tool call of a configured bot to that bot's
+// profile (before_tool_call params rewrite) and blocks any other agent from
+// naming it. Which tabs a caller may view therefore follows from which bot the
+// caller's session belongs to, checked by the host, plus the live target list
+// of that bot's own CDP endpoint. Nothing is inferred from tool results.
+//
+// Entry points (all available to an ordinary user-installed plugin):
+//   api.registerGatewayMethod with sessionAccess (operator.write, browser tool)
+//   api.registerHttpRoute with handleUpgrade (auth: "plugin", ticket checked here)
+//   api.on("before_tool_call") / api.on("after_tool_call")
+//   api.registerService (ctx.gatewayEvents.emit)
+//   api.pluginConfig: { bots: { <agentId>: { profile, cdpUrl } }, drainTimeoutMs? }
+//   Node's global fetch and WebSocket, for CDP on literal loopback only
+// No dependencies. Not production code. Tests: node test.mjs
 
 import crypto from "node:crypto";
 
 const PLUGIN = "clawtrate-computer";
 const TICKET_TTL_MS = 60_000;
-const DRAIN_TIMEOUT_MS = 15_000;
-// A plugin is not told when a gateway connection ends, so viewers must renew
-// over their authenticated connection; unrenewed streams and leases expire.
+const DEFAULT_DRAIN_TIMEOUT_MS = 15_000;
+// A plugin is not told when a gateway connection ends, so viewers renew over
+// their authenticated connection; unrenewed streams and leases expire.
 const RENEW_TIMEOUT_MS = 20_000;
 
-// The host can load this module more than once (for example one instance for
-// gateway methods and another for agent hooks), so shared state lives on one
-// process-wide slot rather than in module scope.
-const STATE = (globalThis[Symbol.for("clawtrate-computer.state")] ??= {});
-// It also survives plugin replacement, so fill in each field separately.
-/** targetId -> Set<sessionKey> that opened or used the tab through the browser tool. */
-STATE.owners ??= new Map();
-/** targetId -> { holderConnId, sessionKey, state: "draining" | "granted", since, renewedAt } */
-STATE.leases ??= new Map();
-/** browser tool calls currently running, keyed by toolCallId */
-STATE.inflight ??= new Map();
-/** ticket -> { targetId, sessionKey, expiresAt, retained, streamId } */
-STATE.tickets ??= new Map();
-/** streamId -> { targetId, sessionKey, renewedAt } */
-STATE.streams ??= new Map();
-const { owners, leases, inflight, tickets, streams } = STATE;
-let cdpBase = "http://127.0.0.1:19112";
-let emit = () => {};
+// The host can load this module more than once (one instance served the agent
+// hooks, another the gateway methods, live), so shared state lives on one
+// process-wide slot. Tests reset it through STATE_KEY.
+export const STATE_KEY = Symbol.for("clawtrate-computer.state.v2");
+const STATE = (globalThis[STATE_KEY] ??= {});
+STATE.inflight ??= new Map(); // toolCallId -> { profile, runId, startedAt }
+STATE.leases ??= new Map(); // leaseKey(profile, targetId) -> lease
+STATE.tickets ??= new Map(); // ticket -> { bot, targetId, streamId, expiresAt, retained }
+STATE.streams ??= new Map(); // streamId -> { bot, targetId, renewedAt }
 
-const err = (respond, code, message) => respond(false, undefined, { code, message });
+const leaseKey = (profile, targetId) => `${profile}\n${targetId}`;
 
-function targetsIn(value, out = new Set()) {
-  if (!value || typeof value !== "object") return out;
-  for (const [k, v] of Object.entries(value)) {
-    if ((k === "targetId" || k === "nativeTargetId") && typeof v === "string" && /^[A-F0-9]{16,}$/i.test(v)) out.add(v);
-    else if (v && typeof v === "object") targetsIn(v, out);
+/** Accept only a literal loopback HTTP origin: http://127.0.0.1:<port> or http://[::1]:<port>. */
+export function parseCdpUrl(raw) {
+  const m = /^http:\/\/(127\.0\.0\.1|\[::1\]):([0-9]{1,5})\/?$/.exec(String(raw ?? ""));
+  if (!m) throw new Error(`cdpUrl must be http://127.0.0.1:<port> or http://[::1]:<port>, got ${JSON.stringify(raw)}`);
+  const port = Number(m[2]);
+  if (port < 1 || port > 65535) throw new Error("cdpUrl port out of range");
+  return { host: m[1], port, base: `http://${m[1]}:${port}` };
+}
+
+/** Parse and validate the plugin config. Throws on anything unexpected. */
+export function parseConfig(raw = {}) {
+  const bots = new Map();
+  const profiles = new Set();
+  for (const [agentId, entry] of Object.entries(raw.bots ?? {})) {
+    const profile = String(entry?.profile ?? "");
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(profile)) throw new Error(`bad profile for ${agentId}`);
+    if (profiles.has(profile)) throw new Error(`profile ${profile} is assigned to two bots`);
+    profiles.add(profile);
+    bots.set(agentId, { agentId, profile, ...parseCdpUrl(entry?.cdpUrl) });
+  }
+  const drain = Number(raw.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS);
+  const drainTimeoutMs = Number.isFinite(drain) ? Math.min(Math.max(drain, 10), 60_000) : DEFAULT_DRAIN_TIMEOUT_MS;
+  return { bots, profiles, drainTimeoutMs };
+}
+
+/** Live page targets of one bot's browser. Refuses redirects and foreign WebSocket endpoints. */
+export async function cdpTargets(bot) {
+  const res = await fetch(`${bot.base}/json/list`, { redirect: "error" });
+  if (!res.ok) throw new Error(`CDP list failed: ${res.status}`);
+  const list = await res.json();
+  const out = [];
+  for (const t of Array.isArray(list) ? list : []) {
+    if (t?.type !== "page" || typeof t.id !== "string") continue;
+    // The debugger URL must be this endpoint, this target.
+    if (t.webSocketDebuggerUrl !== `ws://${bot.host}:${bot.port}/devtools/page/${t.id}`) continue;
+    out.push({ id: t.id, url: String(t.url ?? ""), title: String(t.title ?? ""), ws: t.webSocketDebuggerUrl });
   }
   return out;
 }
 
-async function cdpTargets() {
-  const res = await fetch(`${cdpBase}/json/list`);
-  if (!res.ok) throw new Error(`CDP list failed: ${res.status}`);
-  return (await res.json()).filter((t) => t.type === "page");
-}
-
-/** Minimal CDP client over one page target. */
-async function openCdp(targetId) {
-  const target = (await cdpTargets()).find((t) => t.id === targetId);
+/** Minimal CDP client over one validated page target. */
+export async function openCdp(bot, targetId) {
+  const target = (await cdpTargets(bot)).find((t) => t.id === targetId);
   if (!target) throw new Error("target not found");
-  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  const ws = new WebSocket(target.ws);
   await new Promise((resolve, reject) => {
     ws.addEventListener("open", resolve, { once: true });
     ws.addEventListener("error", () => reject(new Error("CDP connect failed")), { once: true });
@@ -67,6 +90,7 @@ async function openCdp(targetId) {
   let id = 0;
   const pending = new Map();
   const listeners = new Set();
+  const closeListeners = new Set();
   ws.addEventListener("message", (ev) => {
     const msg = JSON.parse(typeof ev.data === "string" ? ev.data : Buffer.from(ev.data).toString());
     if (msg.id && pending.has(msg.id)) {
@@ -74,6 +98,11 @@ async function openCdp(targetId) {
       pending.delete(msg.id);
       msg.error ? p.reject(new Error(msg.error.message)) : p.resolve(msg.result);
     } else if (msg.method) for (const l of listeners) l(msg);
+  });
+  ws.addEventListener("close", () => {
+    for (const p of pending.values()) p.reject(new Error("CDP closed"));
+    pending.clear();
+    for (const l of closeListeners) l();
   });
   return {
     target,
@@ -84,8 +113,16 @@ async function openCdp(targetId) {
         ws.send(JSON.stringify({ id: n, method, params }));
       }),
     on: (fn) => listeners.add(fn),
+    onClose: (fn) => closeListeners.add(fn),
     close: () => ws.close(),
   };
+}
+
+/** Run fn after everything already queued on this lease (input, release, expiry). */
+function exclusive(lease, fn) {
+  const run = lease.queue.then(fn, fn);
+  lease.queue = run.catch(() => {});
+  return run;
 }
 
 // --- minimal server-side WebSocket framing (server frames are unmasked) ---
@@ -101,12 +138,15 @@ function wsAccept(req, socket) {
 }
 function wsFrame(opcode, payload) {
   const len = payload.length;
-  const head = len < 126 ? Buffer.from([0x80 | opcode, len]) : len < 65536 ? Buffer.alloc(4) : Buffer.alloc(10);
-  if (len >= 126 && len < 65536) {
+  let head;
+  if (len < 126) head = Buffer.from([0x80 | opcode, len]);
+  else if (len < 65536) {
+    head = Buffer.alloc(4);
     head[0] = 0x80 | opcode;
     head[1] = 126;
     head.writeUInt16BE(len, 2);
-  } else if (len >= 65536) {
+  } else {
+    head = Buffer.alloc(10);
     head[0] = 0x80 | opcode;
     head[1] = 127;
     head.writeBigUInt64BE(BigInt(len), 2);
@@ -121,34 +161,26 @@ const wsClose = (socket, code, reason) => {
   socket.end(wsFrame(0x8, b));
 };
 
-/** Shared admission for every method: session access is checked by the host; the tab check is ours. */
-function admitTab(opts) {
-  const { params, respond, sessionAccessAuthority } = opts;
-  const sessionKey = sessionAccessAuthority?.target?.sessionKey;
-  const targetId = typeof params.targetId === "string" ? params.targetId : "";
-  if (!sessionKey) return err(respond, "FORBIDDEN", "session access required"), null;
-  if (!owners.get(targetId)?.has(sessionKey)) return err(respond, "FORBIDDEN", "tab is not attached to this session"), null;
-  return { sessionKey, targetId };
-}
-
 export default {
   id: PLUGIN,
   name: "Clawtrate computer",
-  description: "Research prototype: live view and user takeover of a bot's browser tab.",
+  description: "Research prototype: live view and user takeover of a bot's own browser profile.",
   register(api) {
-    if (typeof api.pluginConfig?.cdpUrl === "string") cdpBase = api.pluginConfig.cdpUrl.replace(/\/$/, "");
+    const cfg = parseConfig(api.pluginConfig ?? {});
+    const { bots, profiles, drainTimeoutMs } = cfg;
+    const { inflight, leases, tickets, streams } = STATE;
+    let emit = () => {};
+    const err = (respond, code, message) => respond(false, undefined, { code, message });
 
+    // Service ids are global across plugins, so make this one unique.
     api.registerService({
-      id: "events",
+      id: "clawtrate-computer-events",
       start(ctx) {
         emit = ctx.gatewayEvents ? (n, p) => ctx.gatewayEvents.emit(n, p, { scope: "operator.read" }) : () => {};
-        // Expire leases whose holder stopped renewing (closed app, lost network).
+        // Expire leases whose holder stopped renewing; serialized with input.
         STATE.leaseTimer = setInterval(() => {
-          for (const [targetId, lease] of leases) {
-            if (Date.now() - lease.renewedAt > RENEW_TIMEOUT_MS) {
-              leases.delete(targetId);
-              emit("control", { targetId, holder: "bot", state: "expired" });
-            }
+          for (const [key, lease] of leases) {
+            if (Date.now() - lease.renewedAt > RENEW_TIMEOUT_MS) endLease(key, lease, "expired");
           }
         }, 2_000);
       },
@@ -158,39 +190,84 @@ export default {
       },
     });
 
-    // Learn which session uses which tab, and count running browser calls.
+    function endLease(key, lease, state) {
+      lease.ending = true;
+      return exclusive(lease, () => {
+        if (leases.get(key) === lease) leases.delete(key);
+        lease.retained?.release?.();
+        emit("control", { profile: lease.profile, targetId: lease.targetId, holder: "bot", state });
+      });
+    }
+
+    // Pin each configured bot's browser calls to its own profile, refuse calls
+    // that could leave it, block while a user holds control, and track running
+    // calls by their host toolCallId.
     api.on("before_tool_call", (event, ctx) => {
       if (event.toolName !== "browser") return;
-      // Conservative v1: tab handles like "t1" cannot be resolved by a plugin,
-      // so any granted lease blocks every bot browser call on this profile.
-      for (const [targetId, lease] of leases) {
-        if (lease.state === "granted" || lease.state === "draining") {
-          return { block: true, blockReason: `The user has control of a browser tab (${targetId.slice(0, 8)}). Wait until they release it.` };
+      const params = event.params ?? {};
+      const bot = bots.get(ctx?.agentId);
+      if (!bot) {
+        if (typeof params.profile === "string" && profiles.has(params.profile)) {
+          return { block: true, blockReason: "That browser profile belongs to another bot." };
+        }
+        return;
+      }
+      if (params.node !== undefined || params.target !== undefined || params.dashboard !== undefined) {
+        return { block: true, blockReason: "This bot's browser is pinned to its own profile; node, target and dashboard routing are not allowed." };
+      }
+      if (typeof event.toolCallId !== "string" || !event.toolCallId) {
+        return { block: true, blockReason: "Browser call without a tool call id cannot be tracked; refused." };
+      }
+      for (const lease of leases.values()) {
+        if (lease.profile === bot.profile) {
+          return { block: true, blockReason: "The user has control of this bot's browser. Wait until they release it." };
         }
       }
-      inflight.set(event.toolCallId ?? crypto.randomUUID(), { sessionKey: ctx.sessionKey, startedAt: Date.now() });
+      inflight.set(event.toolCallId, { profile: bot.profile, runId: event.runId ?? ctx?.runId, startedAt: Date.now() });
+      return { params: { ...params, profile: bot.profile } };
     });
-    api.on("after_tool_call", (event, ctx) => {
-      if (event.toolName !== "browser") return;
-      inflight.delete(event.toolCallId);
-      if (!ctx.sessionKey) return;
-      for (const t of targetsIn(event.result)) {
-        if (!owners.has(t)) owners.set(t, new Set());
-        owners.get(t).add(ctx.sessionKey);
-      }
+    api.on("after_tool_call", (event) => {
+      if (event.toolName === "browser" && typeof event.toolCallId === "string") inflight.delete(event.toolCallId);
     });
+
+    /** The host checked session access and browser tool policy; map the session to its bot. */
+    function admitBot(opts) {
+      const auth = opts.sessionAccessAuthority;
+      const bot = bots.get(auth?.target?.agentId);
+      if (!auth?.target?.sessionKey || !bot) return err(opts.respond, "FORBIDDEN", "this session's bot has no browser view"), null;
+      return { auth, bot };
+    }
+    async function admitTab(opts) {
+      const admitted = admitBot(opts);
+      if (!admitted) return null;
+      const targetId = typeof opts.params.targetId === "string" ? opts.params.targetId : "";
+      const tabs = await cdpTargets(admitted.bot).catch(() => null);
+      if (!tabs) return err(opts.respond, "UNAVAILABLE", "the bot's browser is not running"), null;
+      const tab = tabs.find((t) => t.id === targetId);
+      if (!tab) return err(opts.respond, "FORBIDDEN", "tab is not in this bot's browser"), null;
+      return { ...admitted, targetId, tab, key: leaseKey(admitted.bot.profile, targetId) };
+    }
+    const holderOf = (opts) => (typeof opts.client?.connId === "string" && opts.client.connId) || null;
+    function currentLease(opts, admitted) {
+      const lease = leases.get(admitted.key);
+      const holder = holderOf(opts);
+      if (!lease || !holder || lease.holderConnId !== holder || lease.generation !== opts.params.generation) return null;
+      return lease;
+    }
 
     const sessionScoped = { scope: "operator.write", sessionAccess: { mode: "write", requiredTool: "browser" } };
 
     api.registerGatewayMethod(
       `${PLUGIN}.tabs`,
-      async ({ respond, sessionAccessAuthority }) => {
-        const sessionKey = sessionAccessAuthority?.target?.sessionKey;
-        const live = await cdpTargets().catch(() => []);
-        respond(true, {
-          tabs: live
-            .filter((t) => owners.get(t.id)?.has(sessionKey))
-            .map((t) => ({ targetId: t.id, url: t.url, title: t.title, lease: leases.get(t.id)?.state ?? null })),
+      async (opts) => {
+        const admitted = admitBot(opts);
+        if (!admitted) return;
+        const tabs = await cdpTargets(admitted.bot).catch(() => []);
+        const live = new Set(tabs.map((t) => t.id));
+        for (const [key, lease] of leases) if (lease.profile === admitted.bot.profile && !live.has(lease.targetId)) endLease(key, lease, "tab-closed");
+        opts.respond(true, {
+          profile: admitted.bot.profile,
+          tabs: tabs.map((t) => ({ targetId: t.id, url: t.url, title: t.title, lease: leases.get(leaseKey(admitted.bot.profile, t.id))?.state ?? null })),
         });
       },
       sessionScoped,
@@ -198,65 +275,88 @@ export default {
 
     api.registerGatewayMethod(
       `${PLUGIN}.view.open`,
-      (opts) => {
-        const admitted = admitTab(opts);
+      async (opts) => {
+        const admitted = await admitTab(opts);
         if (!admitted) return;
         const ticket = crypto.randomBytes(24).toString("hex");
         const streamId = crypto.randomUUID();
-        streams.set(streamId, { ...admitted, renewedAt: Date.now() });
-        tickets.set(ticket, { ...admitted, streamId, expiresAt: Date.now() + TICKET_TTL_MS, retained: opts.sessionAccessAuthority.retain() });
+        streams.set(streamId, { bot: admitted.bot, targetId: admitted.targetId, renewedAt: Date.now() });
+        tickets.set(ticket, { bot: admitted.bot, targetId: admitted.targetId, streamId, expiresAt: Date.now() + TICKET_TTL_MS, retained: admitted.auth.retain() });
         opts.respond(true, { wsPath: `/${PLUGIN}/stream?ticket=${ticket}`, streamId, renewWithinMs: RENEW_TIMEOUT_MS, expiresAtMs: Date.now() + TICKET_TTL_MS, targetId: admitted.targetId });
       },
       sessionScoped,
     );
 
-    // Renews a stream and, for the holder, the control lease. Session access
-    // is re-checked by the host on every call, so revocation takes effect at
-    // the next renewal at the latest.
+    // Renews a stream and, for the holder, the lease. The host re-checks
+    // session access on every call, so revocation applies by the next renewal.
     api.registerGatewayMethod(
       `${PLUGIN}.view.renew`,
-      (opts) => {
-        const admitted = admitTab(opts);
+      async (opts) => {
+        const admitted = await admitTab(opts);
         if (!admitted) return;
         const stream = streams.get(opts.params.streamId);
-        if (!stream || stream.targetId !== admitted.targetId || stream.sessionKey !== admitted.sessionKey) return err(opts.respond, "NOT_FOUND", "unknown stream");
+        if (!stream || stream.targetId !== admitted.targetId || stream.bot.profile !== admitted.bot.profile) return err(opts.respond, "NOT_FOUND", "unknown stream");
         stream.renewedAt = Date.now();
-        const lease = leases.get(admitted.targetId);
-        if (lease && lease.holderConnId === (opts.client?.connId ?? "unknown")) lease.renewedAt = Date.now();
-        opts.respond(true, { ok: true, renewWithinMs: RENEW_TIMEOUT_MS });
+        const lease = currentLease(opts, admitted);
+        if (lease) lease.renewedAt = Date.now();
+        opts.respond(true, { ok: true, renewWithinMs: RENEW_TIMEOUT_MS, leaseRenewed: Boolean(lease) });
       },
       sessionScoped,
     );
 
+    // Takes control of one tab. New bot calls on this bot's profile are blocked
+    // at once; running calls must finish within drainTimeoutMs, otherwise the
+    // take fails closed with state "busy" and nothing is granted.
     api.registerGatewayMethod(
       `${PLUGIN}.control.take`,
       async (opts) => {
-        const admitted = admitTab(opts);
+        const admitted = await admitTab(opts);
         if (!admitted) return;
-        const connId = opts.client?.connId ?? "unknown";
-        const held = leases.get(admitted.targetId);
-        if (held && held.holderConnId !== connId) return err(opts.respond, "CONFLICT", "another viewer holds control");
-        leases.set(admitted.targetId, { holderConnId: connId, sessionKey: admitted.sessionKey, state: "draining", since: Date.now(), renewedAt: Date.now() });
-        emit("control", { targetId: admitted.targetId, holder: "user", state: "draining" });
-        // New bot calls are already blocked; let running ones finish or time out.
-        const deadline = Date.now() + DRAIN_TIMEOUT_MS;
-        while (inflight.size > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
-        const lease = leases.get(admitted.targetId);
-        if (!lease || lease.holderConnId !== connId) return err(opts.respond, "CONFLICT", "lease was released while draining");
+        const holder = holderOf(opts);
+        if (!holder) return err(opts.respond, "FORBIDDEN", "no connection identity");
+        if (leases.has(admitted.key)) return err(opts.respond, "CONFLICT", "control of this tab is already held or being taken");
+        const lease = {
+          generation: crypto.randomBytes(16).toString("hex"),
+          holderConnId: holder,
+          profile: admitted.bot.profile,
+          targetId: admitted.targetId,
+          bot: admitted.bot,
+          state: "draining",
+          renewedAt: Date.now(),
+          retained: admitted.auth.retain(),
+          queue: Promise.resolve(),
+        };
+        leases.set(admitted.key, lease);
+        emit("control", { profile: lease.profile, targetId: lease.targetId, holder: "user", state: "draining" });
+        const busy = () => [...inflight.values()].filter((c) => c.profile === lease.profile).length;
+        const deadline = Date.now() + drainTimeoutMs;
+        while (busy() > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+        if (leases.get(admitted.key) !== lease || lease.ending) return err(opts.respond, "CONFLICT", "lease ended while draining");
+        if (busy() > 0) {
+          await endLease(admitted.key, lease, "busy");
+          return opts.respond(true, { state: "busy", reason: "the bot is still acting in this browser", runningCalls: busy() });
+        }
+        try {
+          lease.retained.assertCurrent();
+        } catch {
+          await endLease(admitted.key, lease, "revoked");
+          return err(opts.respond, "FORBIDDEN", "session access ended");
+        }
         lease.state = "granted";
-        emit("control", { targetId: admitted.targetId, holder: "user", state: "granted", drainedInflight: inflight.size === 0 });
-        opts.respond(true, { state: "granted", drained: inflight.size === 0 });
+        emit("control", { profile: lease.profile, targetId: lease.targetId, holder: "user", state: "granted" });
+        opts.respond(true, { state: "granted", generation: lease.generation, renewWithinMs: RENEW_TIMEOUT_MS });
       },
       sessionScoped,
     );
 
     api.registerGatewayMethod(
       `${PLUGIN}.control.release`,
-      (opts) => {
-        const admitted = admitTab(opts);
+      async (opts) => {
+        const admitted = await admitTab(opts);
         if (!admitted) return;
-        leases.delete(admitted.targetId);
-        emit("control", { targetId: admitted.targetId, holder: "bot", state: "released" });
+        const lease = currentLease(opts, admitted);
+        if (!lease) return err(opts.respond, "FORBIDDEN", "only the current holder can release, with its generation");
+        await endLease(admitted.key, lease, "released");
         opts.respond(true, { state: "released" });
       },
       sessionScoped,
@@ -265,28 +365,41 @@ export default {
     api.registerGatewayMethod(
       `${PLUGIN}.input`,
       async (opts) => {
-        const admitted = admitTab(opts);
+        const admitted = await admitTab(opts);
         if (!admitted) return;
-        const lease = leases.get(admitted.targetId);
-        if (lease?.state !== "granted" || lease.holderConnId !== (opts.client?.connId ?? "unknown")) {
-          return err(opts.respond, "FORBIDDEN", "take control first");
-        }
-        lease.renewedAt = Date.now();
+        const lease = currentLease(opts, admitted);
+        if (!lease || lease.state !== "granted") return err(opts.respond, "FORBIDDEN", "take control first");
         const { kind, x, y, text, deltaY } = opts.params;
-        const cdp = await openCdp(admitted.targetId);
+        if (!["click", "scroll", "text"].includes(kind)) return err(opts.respond, "INVALID_REQUEST", "kind must be click, scroll or text");
+        // Re-check holder, lease and session authority before every command.
+        const stillHeld = () => {
+          if (leases.get(admitted.key) !== lease || lease.ending || lease.state !== "granted") throw new Error("lease ended");
+          lease.retained.assertCurrent();
+        };
         try {
-          if (kind === "click") {
-            for (const type of ["mousePressed", "mouseReleased"]) {
-              await cdp.send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
+          await exclusive(lease, async () => {
+            stillHeld();
+            const cdp = await openCdp(lease.bot, lease.targetId);
+            try {
+              const send = async (method, p) => {
+                stillHeld();
+                await cdp.send(method, p);
+              };
+              if (kind === "click") {
+                for (const type of ["mousePressed", "mouseReleased"]) await send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
+              } else if (kind === "scroll") {
+                await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: x ?? 10, y: y ?? 10, deltaX: 0, deltaY: deltaY ?? 300 });
+              } else {
+                await send("Input.insertText", { text: String(text ?? "") });
+              }
+            } finally {
+              cdp.close();
             }
-          } else if (kind === "scroll") {
-            await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: x ?? 10, y: y ?? 10, deltaX: 0, deltaY: deltaY ?? 300 });
-          } else if (kind === "text") {
-            await cdp.send("Input.insertText", { text: String(text ?? "") });
-          } else return err(opts.respond, "INVALID_REQUEST", "kind must be click, scroll or text");
+          });
+          lease.renewedAt = Date.now();
           opts.respond(true, { ok: true });
-        } finally {
-          cdp.close();
+        } catch (e) {
+          err(opts.respond, "CONFLICT", `input not delivered: ${e?.message ?? e}`);
         }
       },
       sessionScoped,
@@ -311,6 +424,7 @@ export default {
         if (!wsAccept(req, socket)) return true;
         let cdp;
         let stopped = false;
+        let url = "";
         const watchdog = setInterval(() => {
           const stream = streams.get(grant.streamId);
           if (!stream || Date.now() - stream.renewedAt > RENEW_TIMEOUT_MS) stop(4006, "authority_revoked");
@@ -332,9 +446,11 @@ export default {
           if ((chunk[0] & 0x0f) === 0x8) stop(1000, "closed");
         });
         try {
-          cdp = await openCdp(grant.targetId);
-          wsText(socket, { type: "ready", targetId: grant.targetId, url: cdp.target.url, title: cdp.target.title });
-          cdp.on(async (msg) => {
+          cdp = await openCdp(grant.bot, grant.targetId);
+          url = cdp.target.url;
+          cdp.onClose(() => stop(4004, "target_closed"));
+          wsText(socket, { type: "ready", targetId: grant.targetId, url, title: cdp.target.title });
+          cdp.on((msg) => {
             if (msg.method === "Page.screencastFrame") {
               const { data, metadata, sessionId } = msg.params;
               cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
@@ -343,12 +459,18 @@ export default {
               } catch {
                 return stop(4006, "authority_revoked");
               }
-              const header = Buffer.from(JSON.stringify({ cssWidth: metadata.deviceWidth, cssHeight: metadata.deviceHeight, scrollX: metadata.scrollOffsetX, scrollY: metadata.scrollOffsetY, ts: metadata.timestamp }));
+              // Same header fields as the built-in screencast, so one decoder serves both.
+              const header = Buffer.from(
+                JSON.stringify({ url, cssWidth: metadata.deviceWidth, cssHeight: metadata.deviceHeight, scrollX: metadata.scrollOffsetX, scrollY: metadata.scrollOffsetY, ts: metadata.timestamp }),
+              );
               const len = Buffer.alloc(4);
               len.writeUInt32BE(header.length, 0);
               if (socket.writableLength < 4 * 1024 * 1024) socket.write(wsFrame(0x2, Buffer.concat([len, header, Buffer.from(data, "base64")])));
             } else if (msg.method === "Page.frameNavigated" && !msg.params.frame.parentId) {
-              wsText(socket, { type: "meta", url: msg.params.frame.url });
+              url = String(msg.params.frame.url ?? "");
+              wsText(socket, { type: "meta", url });
+            } else if (msg.method === "Inspector.detached" || msg.method === "Target.targetDestroyed") {
+              stop(4004, "target_closed");
             }
           });
           await cdp.send("Page.enable");

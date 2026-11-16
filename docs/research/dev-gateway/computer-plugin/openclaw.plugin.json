@@ -1,12 +1,26 @@
 {
   "id": "clawtrate-computer",
   "name": "Clawtrate computer",
-  "description": "Research prototype: live view and user takeover of a bot's browser tab.",
+  "description": "Research prototype: live view and user takeover of a bot's own browser profile.",
   "categories": ["developer-tools"],
   "activation": { "onStartup": true },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": { "cdpUrl": { "type": "string" } }
+    "properties": {
+      "bots": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profile", "cdpUrl"],
+          "properties": {
+            "profile": { "type": "string" },
+            "cdpUrl": { "type": "string" }
+          }
+        }
+      },
+      "drainTimeoutMs": { "type": "integer", "minimum": 10, "maximum": 60000 }
+    }
   }
 }
