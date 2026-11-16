@@ -676,6 +676,247 @@ These exist in Grok Bot but depend on vendor services. Clawtrate builders should
 
 ---
 
+## What users say is missing
+
+Each complaint below has its evidence, then a concrete requirement for Clawtrate's fine-grained control. The requirement ids (`FC-01` and up) are reused in `docs/parity.md`.
+
+### FC-01. No model picker
+
+- **Complaint:** Grok Bot picks the model for each task, does not show which model handled a request, and does not plan to add a picker. Reviewers list this as a main downside, and some users said cheaper routing made Bots "quite stupid at times". ([docs: FAQ][d-faq], seen; [Lindy][lindy], reported; [CellCog][cellcog], reported; [aibuilderclub][aibc], reported)
+- **Requirement:** each Bot has a model and a reasoning-effort setting, visible in the chat header and editable in the Bot's settings. Every turn records the model and effort it ran with, shown on hover over the turn and in its raw details. Changing the model mid-conversation applies from the next turn, and a grey event line records the change.
+
+### FC-02. One shared computer and one login set for all Bots
+
+- **Complaint:** all Bots share one computer, its files, browser sessions, Vault, connectors and command-line credentials. The docs say twice not to treat Bots as a security boundary. One user built separate Chrome profiles per Bot to keep logins apart, and they reset daily. Two Bots writing the same file lose one edit with no warning. ([docs: computer][d-computer], seen; [CellCog][cellcog], reported; [aibuilderclub][aibc], reported)
+- **Requirement:** each Bot has a chosen machine (a gateway node, or the gateway host) shown in its header and settings, and the user can change it. The Bot's computer panel names the machine. Where the gateway supports it, each Bot gets its own browser profile and workspace folder, and the settings page shows which credentials, connectors and folders a Bot can reach. When two Bots share a machine or profile, the UI says so.
+
+### FC-03. Memory cannot be inspected, edited or cleared
+
+- **Complaint:** there is no memory screen. You ask the Bot what it remembers. Users ask for a list with dates and the Bot that saved each item, plus edit, delete, pin, export and import. A shared fact was duplicated six times. Team learning edits are undocumented. ([docs: bots][d-bots], seen; [forum: memory][f-memory], reported; [forum: instructions][f-instructions], reported; [AIToolsReview][atr], reported)
+- **Requirement:** a memory viewer per Bot and a shared-memory viewer. Each item shows its text, scope (this Bot or all Bots), date and the Bot or chat that saved it. The user can edit, delete, pin and add items, and the change takes effect on the next turn. "Saved to memory" event lines in the chat link to the item. Memory can be exported to and imported from a plain markdown file. A "Clear memory" action asks for confirmation and says what stays, such as files and routines.
+
+### FC-04. Instructions are invisible
+
+- **Complaint:** personal Bots lost their description and instructions field in late September. Users cannot see or check a Bot's role, and staff say telling the Bot in chat is unreliable. ([forum: description][f-description], reported; [forum: instructions][f-instructions], reported)
+- **Requirement:** each Bot has a visible, editable instructions field (the role brief) in its settings, separate from memory. Chat-driven changes to it show as an event line and a diff the user can accept or undo.
+
+### FC-05. Hidden tool calls and an opaque system
+
+- **Complaint:** Grok Bot hides thinking steps and tool calls, so users cannot tell whether a Bot used a tool correctly. Errors such as exhausted credits or broken scrapers surface as calm "nothing new" reports. ([Brian Lovin on X][lovin], reported; [aibuilderclub][aibc], reported; [x.ai design post][x-design], seen)
+- **Requirement:** keep Grok Bot's calm default, an animated avatar with a short status phrase, but every turn has a collapsible activity block. Collapsed, it reads like "Worked for 1m 12s · 7 steps", plus "· 1 failed" when a step failed. Expanded, it lists each step in plain words. Every step, card and event line has a "raw" view with the exact tool name, arguments, result, timing and errors. Failed steps stay visible when the block is collapsed.
+
+### FC-06. One unbounded conversation per Bot
+
+- **Complaint:** each Bot is one thread that never resets. Long threads cost more on every reply, and a second request waits while the Bot is busy. Users ask for new chats per Bot, compaction, a context meter and parallel threads with shared memory. ([forum: compaction][f-compact], reported; [forum: parallel threads][f-parallel], reported; [forum: task cards][f-taskcards], reported; [forum: memory and usage][f-memusage], reported)
+- **Requirement:** a Bot owns many tasks (threads). Tasks share the Bot's instructions, memory, skills and routines but not their transcripts. The user can start a task, rename, archive and delete it. Each task shows a context-size meter and has a "Compact" action. Tasks can run in parallel where the gateway allows. Each task has a status: working, waiting for you, blocked, done, failed.
+
+### FC-07. Quota burn without attribution
+
+- **Complaint:** heavy users used 42 percent of the weekly allowance on the first day, or a whole week in a day. Every reply, routine run and Bot-to-Bot message spends usage, and long chats cost more per turn. Users ask for usage per Bot, per routine and per session, a token breakdown, and caps. ([CellCog][cellcog], reported; [aibuilderclub][aibc], reported; [forum: hung chats][f-hung], reported; [forum: memory and usage][f-memusage], reported)
+- **Requirement:** usage (tokens, and cost where the provider reports it) is shown per turn, per task, per Bot, per routine run and for Bot-to-Bot messages, with a breakdown into history, memory, tools and output where the gateway reports it. Each Bot and each routine can have a daily or weekly budget. At 80 percent the user is warned, and at 100 percent the Bot pauses and says so in its chat.
+
+### FC-08. Stuck computers and stuck Bots
+
+- **Complaint:** computers "bricked" for days, the fix was a reset that can lose work, chats stopped showing new messages, and a hung Bot meant cloning and deleting it. There is no stop button. ([CellCog][cellcog], reported; [forum: stuck][f-stuck], reported; [forum: hung chats][f-hung], reported; [docs: chat][d-chat], seen)
+- **Requirement:** a visible Stop button while a Bot works, which ends the turn, its subagents and the processes it started, and reports what was stopped. The computer panel shows the machine's connection and health. "Restart this Bot's session" works without resetting other Bots. When the transcript and the gateway disagree, the client re-syncs on its own and says so.
+
+### FC-09. Approvals are account-wide and coarse
+
+- **Complaint:** Custom Rules apply to all Bots. There are 20 per type, free text only, and with no per-tool permission list. Group chats cannot show approval cards. A rule that is too broad stops too much. ([docs: approvals][d-approvals], seen; [learngrokbot: approvals][lgb-approvals], reported; [docs: chat][d-chat], seen)
+- **Requirement:** per-Bot tool permissions (allow, ask, deny for each tool or tool group) plus per-Bot approval rules, on top of global rules. "Always allow" offers a scope (this Bot or all Bots) and a duration (one hour, one day, until revoked). Approval cards work in group chats and show which Bot is asking. A permissions page lists every standing approval with its scope, when it was granted and a revoke button.
+
+### FC-10. Bot-to-Bot messaging cannot be controlled
+
+- **Complaint:** no switch stops Bots messaging each other. Every message costs usage, and parallel handoffs create duplicate work. ([docs: chat][d-chat], seen; [learngrokbot: multiple Bots][lgb-multi], reported)
+- **Requirement:** per-Bot settings for who it may message and who may message it (off, ask me, allowed), with Bot-to-Bot messages counted separately in usage. The "Messaged" card expands inline to show exactly what was sent and what came back, and links to the receiving Bot's task.
+
+### FC-11. Proactive check-ins cannot be turned off
+
+- **Complaint:** turning off notifications only mutes alerts. Stopping check-ins needs support. Bots "invent relevance to justify running". ([docs: initiative][d-initiative], seen; [aibuilderclub][aibc], reported)
+- **Requirement:** a per-Bot "Proactive check-ins" switch, separate from notifications, with a frequency choice.
+
+### FC-12. Desktop notification control by chat only
+
+- **Complaint:** on desktop you must ask the Bot to change its notification setting. There are no quiet hours. ([docs: settings][d-settings], seen)
+- **Requirement:** a notifications switch for each Bot and task on desktop and iOS, plus quiet hours.
+
+### FC-13. Routines are hard to inspect
+
+- **Complaint:** desktop showed only a routine's name, schedule and switch for a while. Test and run history were removed, and Edit just starts a chat. Users could not see webhook or trigger configuration. ([forum: instructions][f-instructions], reported; [learngrokbot: changelog][lgb-changelog], reported)
+- **Requirement:** a routine page shows the full instruction, trigger configuration, next run, an editable form (as well as chat editing), "Test run" and a run history in which each run links to its transcript and usage.
+
+### FC-14. Deleting a Bot leaves things behind
+
+- **Complaint:** deleting a Bot removes its chat, memory and routines, but files and browser sessions stay on the shared computer. ([docs: bots][d-bots], seen; [alexop.dev][alexop], reported)
+- **Requirement:** the delete dialog lists what will be removed and what will remain (files, sessions, connectors) and offers to remove the Bot's workspace too.
+
+### FC-15. Silent failures
+
+- **Complaint:** exhausted credits, redesigned sites and lost file edits produce calm reports instead of errors. ([aibuilderclub][aibc], reported)
+- **Requirement:** a tool error always appears as a failed step in the activity block. A turn with failed steps cannot render as a plain success: its collapsed summary shows the failure count.
+
+---
+
+## Open-source alternatives: what their UIs do better
+
+All three are self-hosted Grok Bot alternatives. I read their READMEs and product pages, not their code.
+
+### Rakazo ([github.com/elie222/rakazo][rakazo])
+
+Apache-2.0, web, Electron and Expo clients against one server. Its layout is the closest to Grok Bot's: Bots in a sidebar, chat in the middle and a right-hand panel for the computer and routines. ([Rakazo README][rakazo], seen; [Bitdoze][bitdoze], reported)
+
+What it does better in the UI:
+
+- **A full routine editor in the side panel.** The screenshot shows a "Routine" panel with an "Active" switch, "Delete" and "Test run" at the top, editable "Name" and "Instruction" fields, "When to run" with a timezone label ("America/New_York") and dropdowns ("Weekdays" at "7:00 AM"), "Add trigger", "Save", and a "Run history" list of dated runs, each with a chevron. Grok Bot edits routines only through chat. ([Rakazo README][rakazo], seen in screenshot)
+- **A choice of private or shared computer** per Bot, where Grok Bot always shares one. ([Rakazo README][rakazo], seen)
+- **Any model with your own keys**, chosen at onboarding. ([Rakazo README][rakazo], seen)
+- A notification bell and a sidebar toggle in the sidebar's top row, next to search and +. ([Rakazo README][rakazo], seen in screenshot)
+- **"Take control" and "Teach a task" sit in the computer view's title bar**, always visible, rather than appearing only on a card when the Bot asks. ([Rakazo README][rakazo], seen in screenshot)
+- On desktop, a first-launch choice between "This computer" and "Existing instance", and a "Quit and Stop Bots" menu item. ([Rakazo README][rakazo], seen)
+
+### OpenMausBot ([mausbot.com][openmausbot], source at [github.com/milind-soni/OpenMausBot][openmausbot-src])
+
+Apache-2.0 Electron app styled like a messaging client, running agents through CLIs installed on your machine. ([OpenMausBot site][openmausbot], seen; [Bitdoze][bitdoze], reported)
+
+What it does better in the UI:
+
+- **A per-Bot model menu in the chat header** showing the current model, with model switching mid-conversation. Group chats can mix engines. ([OpenMausBot site][openmausbot], seen)
+- **Routines on a calendar.** A "Routines" view with "Day", "3 days" and "Week" toggles, a date navigator ("Today", "August 2026") and a filter by Bot. The empty state reads "Put your MAUS team on a rhythm" with "Create your first routine". Every run becomes a separate task with its own result. ([OpenMausBot site][openmausbot], seen in video thumbnail)
+- **"Advanced mode"** in Settings that shows "the full picture of what your agents are doing". The default stays simple. ([OpenMausBot site][openmausbot], seen)
+- **A Keys screen** with write-only credentials and a "Ready" status per provider. ([OpenMausBot site][openmausbot], seen)
+- Bot rows show a status or schedule line, for example "Waiting on your yes" or "Every 30 minutes". ([OpenMausBot site][openmausbot], seen)
+
+### OpenSuperBot ([github.com/wolfqing/OpenSuperBot][opensuperbot])
+
+MIT, one container per teammate with Chromium and noVNC. ([OpenSuperBot README][opensuperbot], seen)
+
+What it does better in the UI (from its README and two screenshots I examined):
+
+- **A model chip in the chat header**, for example "● DeepSeek · deepseek-flash", per teammate, with an "AI" section holding one connection per provider. ([OpenSuperBot README][opensuperbot], seen)
+- **A collapsible activity card per turn.** Each step streams live into one card, which collapses to a line like "WORKED 2 steps · 26.0s" when the turn ends. A stop button ends the turn. ([OpenSuperBot README][opensuperbot], seen)
+- **Uniform reports:** each turn opens with check-mark lines, such as "✓ Web → sources reviewed · 6 pages", then a sentence about what needs you. ([OpenSuperBot README][opensuperbot], seen)
+- **"NEEDS YOU" hold cards** with an amber left border: a title ("send the 4 queued drafts"), a monospace destination chip ("email → replies@globex.com"), "Approve" and "Discard", and "Always allow…" at the right. Standing approvals last an hour, a day or until revoked. Money and bookings always ask. ([OpenSuperBot README][opensuperbot], seen)
+- **A computer panel that lists the Bot's permissions and memory**: the live screen at the top, a note on where it runs, a "COMMANDS" checkbox ("Allow commands, in a sandbox…"), "ROUTINES" with play, pause and delete buttons per routine, "ALLOWED WITHOUT ASKING", "STANDING RULES" ("No standing rules yet. Tell it 'from now on…' in the thread.") and "RECENT ACTIONS" (each action with a check mark, the tool name in monospace, the time and who triggered it). ([OpenSuperBot README][opensuperbot], seen in screenshot)
+- **Memory as a file you can see:** rules said in chat are written to `MEMORY.md` and the diff is posted as a chip. Each rule in the panel has a remove button. ([OpenSuperBot README][opensuperbot], seen)
+- **A per-teammate daily token budget**, with today's usage shown in the panel. ([OpenSuperBot README][opensuperbot], seen)
+- **Peer-to-peer handoffs off by default** until you allow a direction. ([OpenSuperBot README][opensuperbot], seen)
+- **An amber pending count** on each sidebar row and in the browser tab title. ([OpenSuperBot README][opensuperbot], seen)
+- Animated avatars with distinct motions: bob while working, hop when waiting on you, shake when stuck, smile when finished while you were away. ([OpenSuperBot README][opensuperbot], seen)
+
+The README itself concedes Grok Bot's zero-setup polish, its iOS app and its teach-by-demonstration. ([OpenSuperBot README][opensuperbot], seen)
+
+---
+
+## Reference images
+
+The images live in the private reference folder `.orchestrator/refs/` next to the checkout and are never committed. Each one is described here, so builders do not need to open them. "Seen" means I looked at the image myself. "From caption" means I took the description from the source's own caption.
+
+### Grok Bot desktop (first-hand screenshots from learngrokbot.com, desktop around 0.68.1, dark theme)
+
+The source for each file is `https://learngrokbot.com/assets/shots/<name>`, where `<name>` is the file name without the `lgb-` prefix.
+
+| File | What it shows |
+|---|---|
+| `lgb-what-is-grok-bot-app.png` | Seen. Full desktop window: chat on the left two thirds, details panel on the right third. Floating Bot-name pill at the top center of the chat, a blue user bubble at the right, grey Bot bubbles with a markdown pricing table, a grey right-aligned "Created routine ⏱ Monday pricing check" line, and the composer with + at the left, the placeholder "Message Demo Price Watch", and mic and waveform buttons at the right. The panel has share and close buttons, a large blue avatar, the name, "Add a label", the tabs Details, Library and Computer (Computer selected), a 16:9 screen thumbnail with an "Open" pill, and "Demo Price Watch's screen". |
+| `lgb-home-bot-at-work.png` | Seen. The working state: a user bubble, two short progress bubbles from the Bot, then the Bot's small avatar beside grey "Clicking around" text (first word dimmer), and the empty composer. |
+| `lgb-multiple-bots-messaged-lines.png` | Seen. Bot-to-Bot messaging: Bot bubble, right-aligned grey "Messaged ● Demo Price Watch" line, Bot bubble, "Message from ● Demo Price Watch" line, then a Bot bubble relaying the answer with a link. |
+| `lgb-chief-of-staff-hand-off.jpg` | From caption (image from a Riley Brown video). A primary Bot's chat with "Messaged <blurred name>" between two bubbles. |
+| `lgb-multiple-bots-main-bot-star.png` | Seen. Top of the sidebar: a large pink avatar with an orange star badge, a blurred name, then rows for Demo Price Watch (preview "Monday check is set for 9:00…") and Demo Research with a grey "News watch" label chip and preview "Stopped — I won't create or s…". |
+| `lgb-multiple-bots-replace-menu.jpg` | Seen (image from a Riley Brown video). The primary Bot's right-click menu: Pin, Move to ›, Mark as Unread, Rename Bot, Copy conversation ID, Hide from sidebar, Replace with different Bot, with icons and separators. |
+| `lgb-multiple-bots-group-chat-first-hand.png` | Seen. A group chat: centered title pill (blurred user name, then "Demo Research, Demo Meeting Prep"), a grey user bubble at the right, the Bot names above their replies in green and red, and each Bot's avatar at the bottom left of its reply. |
+| `lgb-first-bot-new-chat.png` | Seen. Search and + buttons at the top of the sidebar, a "To: Start a chat with…" field, and a dropdown with "Create new Bot" and "Create group chat". |
+| `lgb-first-bot-type-a-name.png` | From caption. The To: field with "Demo Research" typed and one row, `Create "Demo Research" Bot`. |
+| `lgb-first-bot-first-questions.png` | Seen. A new Bot's first chat: timestamp, greeting bubble, a folded answered question card ("B Tracking news or competitors ✓"), the Bot's reply, and an open card "Who or what should I watch?" with options A to D, an X and "Type your own answer". |
+| `lgb-first-bot-details-panel.png` | Seen. The details panel: share and close buttons, a large green avatar, "Demo Research", "Add a label", Details, Library and Computer tabs, and a "Routines" row "AI coding assistants weekday digest / Paused" with a switch. |
+| `lgb-first-bot-first-reply.png` | From caption. Three Bot bubbles, then a file card "linear-prep.md, 2.4kB". |
+| `lgb-first-bot-voice-buttons.png` | From caption. The right end of the composer: round microphone and waveform buttons. |
+| `lgb-routines-created-chip.png` | Seen. A Bot bubble, a right-aligned grey "Created routine ⏱ AI coding assistants weekday digest" line, then another Bot bubble with bold "8:00 AM PT". |
+| `lgb-routines-panel.png` | From caption. Routine panel: "Instruction" paragraph, "When to run" with a clock and "Weekdays at 8:00 AM". |
+| `lgb-routines-edit-button.png` | From caption. The foot of the routine panel: "Pause", "Edit" and a bin icon. |
+| `lgb-routines-list.png` | From caption. Details tab with two routines, one "Paused" with its switch off, one "Every Tuesday at 3:38 PM" with its switch on. |
+| `lgb-approvals-card.png` | Seen. Approval card: "Allow Demo Meeting Prep to run a command?", orange "Needs approval" tag, one-line summary, "View the full request ›", and "Always allow" (white), "Allow once" (dark) and "Deny" (text, right). |
+| `lgb-approvals-full-request.png` | Seen. The same card expanded: an inset with the reason, the command in monospace, a "Hide" button and a copy icon. |
+| `lgb-approvals-denied.png` | From caption. The card after Deny: a "Denied" tag, no buttons, "Demo Meeting Prep won't do this." |
+| `lgb-approvals-always-allowed.jpg` | From caption. "Action approved" with a green "Always allowed" tag and the rule added to Auto-review settings. |
+| `lgb-approvals-expired.jpg` | From caption. "Approval expired" with a grey "Expired" tag, no buttons, and "You can manage Auto-review in Settings". |
+| `lgb-approvals-rules-settings.png` | From caption. Settings, General, Bot: the Auto-review switch, the "When Grok Bot wants to" box, the "It should" menu, a greyed "Add Rule" and the note about built-in checks. |
+| `lgb-approvals-rules-list.jpg` | From caption. Rules list with "Action" and "Behavior" columns, a padlock on the first row, and pencil and bin icons on the others. |
+| `lgb-approvals-own-computer.png` | From caption. Settings, Computer: a device name field with "Save" and "Remove", and "Execution on this computer" set to "Ask every time". |
+| `lgb-shared-computer-open-computer.png` | From caption. Details panel on the Computer tab: the screen thumbnail with "Open" and "Demo Price Watch's screen". |
+| `lgb-shared-computer-full-screen.png` | From caption. The Bot's Chrome window filling the app window, with "Exit fullscreen" at the top right. |
+| `lgb-shared-computer-take-over-card-first-hand.png` | Seen. The "Computer" card: "Sign in to GitHub, then hand the screen back.", a grey explanation, a dark preview tile with a monitor icon, and "Take over" (white), "I'm done" (outlined) and "Skip" (text). |
+| `lgb-shared-computer-hand-back-first-hand.png` | Seen. Takeover: a bar at the top with "Skip this step" and "I'm done, continue", a collapse icon at the top right, and GitHub's sign-in page in Chrome below. |
+| `lgb-shared-computer-secure-form.png` | From caption. Secure Form dialog "Sign in to GitHub" with username and password fields, "Never shown to your Bot. Filled directly to github.com." and "Continue". |
+| `lgb-logins-and-captchas-secure-form-card.png` | From caption. The in-chat Secure Form card: GitHub logo, "Sign in to GitHub", "Secure Form", "Open". |
+| `lgb-logins-and-captchas-route-traffic.png` | From caption. Settings, Computer, Network: "Route traffic through this computer", "167 routed this session", switch on. |
+| `lgb-skills-teach-menu.png` | From caption. The composer's + menu: "Attach files" and "Teach a task" with a red record icon. |
+| `lgb-skills-recording.png` | From caption. Recording: a red outline around the Bot's desktop, "Demo Meeting Prep is watching and learning", a square stop button and a timer at 1:08. |
+| `lgb-skills-review.png` | From caption. The automatic "The recording is finished. Learn the task from it." message with a "Learn from demonstration" chip, and the Bot's numbered steps ending "Want a dry run?". |
+| `lgb-skills-slash-menu.png` | From caption. "/check" in the composer, with rows tagged "Skill" and "Action". |
+| `lgb-skills-skill-page.png` | From caption. Skill page with a "Private skill" tag, "Publish", "Delete Skill", the Name, Description and Instructions fields, and "Save". |
+| `lgb-chief-of-staff-primary-bot-dialog.png` | From caption. "Introducing Primary Bot" dialog with a starred avatar, a description, "Use an existing Bot" and "Create Primary Bot". |
+| `lgb-gmail-draft-card.jpg` | Seen. "New email" card with a "Ready to send" tag, From, To, Cc and Subject rows, a blurred body, "Show less", "Disable drafts for this Bot", "Discard" and "Send email". |
+| `lgb-slack-draft-card.jpg` | From caption. "Slack message" card with Workspace, To and Thread rows and "Send message". |
+| `lgb-plugins-connect-apps-button.png` | From caption. The sidebar footer's wide "Connect apps" button with three app icons. |
+| `lgb-plugins-connect-apps-dialog.png` | From caption. The Connect Apps window: "Search across apps and skills", category chips, "Recommended for you" with "Add" buttons, and 1Password with "Connect". |
+| `lgb-plugins-manage-states.png` | From caption. Installed plugins with "1 connector, 3 skills" lines, two "Authenticate" buttons and a green "Connected". |
+| `lgb-plugins-accounts-block.png` | From caption. Google Calendar plugin page: "Share" and "Uninstall", an "Accounts" row "default" with an orange "Needs auth" and "Authenticate", and "Add Another Account". |
+| `lgb-usage-limits-banners.png` | Seen. Two stacked dark banners with a gauge icon: "You're at 90% of your weekly usage limit. It resets in 6 days." with "Get More Usage", and "Weekly usage limit reached. It resets in 6 days." with "Increase limits" and "Upgrade to Pro+", each with an X. |
+| `lgb-usage-running-out-meter.png` | From caption. The "Weekly usage limit" card with a thin bar, "Resets in 1 day" and "2%". |
+| `lgb-usage-limits-on-demand-menu.png` | From caption. Usage & Billing with the weekly card and the "On-demand monthly limit" card, whose menu offers None, Fixed and Unlimited. |
+| `lgb-not-responding-weekly-usage.png` | From caption. The account menu with "Weekly usage 2%" at the top and a side panel with on-demand spend and "Change limit". |
+| `lgb-not-responding-banner.png` | From caption. Dark red banner: warning triangle, "Bot failed to respond", "Something went wrong while generating the reply. Try again.", round close button. |
+| `lgb-not-responding-updates.png` | From caption. Settings, Updates: Update Track, Automatic Updates, Version 0.68.1, "Check for Updates", and "Update Grok Bot's Computer". |
+| `lgb-cant-reach-computer-notice.png` | From caption. "Can't reach your computer" notice at the top of an empty sidebar with "Retry" and "Recover computer". |
+| `lgb-cant-reach-computer-reconnecting.png` | Seen (light theme). A "Reconnecting" pill with a spinner over a grey "Showing saved messages" notice. |
+| `lgb-cant-reach-computer-updating.png` | Seen. "Updating Grok Bot's Computer": seven steps with check, spinner and empty-circle states, a 43% bar, an "Update still running" box, and "Continue in Background" and "Keep waiting". |
+| `lgb-cant-reach-computer-reset-failed.png` | From caption. "Reset failed" with "Dismiss" and a red "Retry Reset". |
+| `lgb-setup-welcome.png` | From caption. Desktop welcome: mark, tagline, "Sign in". |
+| `lgb-setup-browser-sign-in.png` | From caption. Browser page "Start using Grok Bot" with "Sign in with Grok", "Sign in with Cursor" and "Create an account". |
+| `lgb-setup-get-started.png` | From caption. "Get Started with Grok Bot" with three plan columns. |
+| `lgb-setup-computer.jpg` | From caption (image from a Nate Herk video). "Setting up Grok Bot's computer" with the mark. |
+| `lgb-setup-intro.jpg` | From caption (image from a Nate Herk video). "What do you use every day?" with a search box, twelve app tiles, "Next" and "Back". |
+| `lgb-teams-setup-card.jpg` | From caption. Team Bot setup card "Add plugins", "Step 1 of 5", with "Skip" and "Add more plugins". |
+| `lgb-teams-publish-card.jpg` | From caption. "Step 5 of 5" card with "Publish to team" and "View details". |
+| `lgb-use-cases-template-review.jpg` | From caption. Template import dialog with expandable "Context" and "Routines" rows and "Add Bot". |
+
+### Grok Bot desktop (another user's screenshots, alexop.dev)
+
+| File | Source | What it shows |
+|---|---|---|
+| `alexop-sidebar.png` | https://alexop.dev/posts/how-i-use-grok-bot/ (image `_astro/sidebar.EA4vH3hz.png`) | Seen. A tall, narrow dark sidebar (about 1:2.3). Search and + circle buttons at the top right. Six pinned Bots in a 3×2 grid of large avatars with names below; the first has a pumpkin stem and an orange star badge, and the selected one ("dr eggbot") has a lighter rounded background. Then the sections "fitness" and "dev stuff" with rows: avatar, name and a grey preview. German UI text. |
+| `alexop-chief-of-staff.png` | same page (image `_astro/chief-of-staff-writeup.Bp_6eWE1.png`) | Seen. A 1:1 chat in dark theme: centered "Today 8:52 AM", an orange right-aligned user bubble (the Bot's color), three grey Bot bubbles, a file card "grokbot-setup-overview.md / 37kB" with a document icon, a long answer bubble with bold names, and hover actions (emoji, reply, more) to the right of the last bubble. |
+
+### Grok Bot iPhone and iPad (official App Store screenshots)
+
+Source: the App Store listing at https://apps.apple.com/us/app/grok-bot/id6794501026, with the image URLs taken from the public lookup at https://itunes.apple.com/lookup?id=6794501026 (fields `screenshotUrls` and `ipadScreenshotUrls`). All are seen.
+
+| File | What it shows |
+|---|---|
+| `appstore-iphone-ss1.jpg` | "Your AI agents for everyday work". Light welcome screen: "Grok Bot", "Your team of always-on Bots that finish the work.", black "Log in", grey "Sign up", and floating avatars. |
+| `appstore-iphone-ss2.jpg` | "Connect it to your tools". The "Plugins" screen as a sheet over home: back chevron, "Search plugins" with a filter button, "Featured" with "View all", rows for Gmail, Google Calendar and Google Drive with green "✓ Added" pills, Granola with "Add", then "Team plugins" with Loom and 1Password. |
+| `appstore-iphone-ss3.jpg` | "Give each bot a role". The "Create New Bot" sheet: close X, a large orange cloud avatar, a name field "Personal Shopper", eight shapes, eleven colors and a black "Create" button. |
+| `appstore-iphone-ss4.jpg` | "Message it like an assistant". Chat with "Chief of staff": back chevron, avatar and name pill, monitor icon at the top right, "Today 8:00 AM", a black user bubble and two grey Bot bubbles reporting handoffs ("3 invoices went to Expense Manager… 1 bug report routed to Bug Triager."), and the composer with + and a mic. |
+| `appstore-iphone-ss5.jpg` | "Use many bots at once". Home: account avatar at the top left, search and +, three pinned avatars (Chief of Staff with a star, EA, Inbox Manager), and a list of seven Bots with timestamps and one-line status previews ("Outreach drafts queued for approval.", "Receipts coded — one needs a look."). |
+| `appstore-iphone-ss6.jpg` | "They come back with finished tasks". Chat: an approval request in prose, link cards for "Q3 board deck v4" and "v5" (docs.google.com), a thumbs-up reaction badge under a card, and short replies "Pulled and added" and "Sent". Composer placeholder "Ask Chief of staff". |
+| `appstore-ipad-ss1.jpg` | "Your team of always-on agents that finish the work". iPad welcome with a ring of avatars around "Grok Bot" and "Log In or Sign Up". |
+| `appstore-ipad-ss2.jpg` | "Work with many at once". iPad split view: sidebar at about a third of the width with search, +, pinned tiles, a Bot list and the account email at the bottom; chat with a sidebar toggle, the "Chief of staff" pill, a monitor icon, alternating black and grey bubbles, link cards and reactions. |
+| `appstore-ipad-ss3.jpg` | "Signs in to your tools". Full-screen computer view: black background, X and Bot name at the top left, "?" and "…" at the top right, the letterboxed screen showing a "Sign in to Acme CRM" window, and clipboard and keyboard icons at the bottom corners. |
+| `appstore-ipad-ss4.jpg` | "Comes back finished". iPad chat with "Inbox Manager", including a "New Email" draft card tagged "Answered" after sending. |
+
+### Open-source alternatives
+
+| File | Source | What it shows |
+|---|---|---|
+| `alt-rakazo-routines.png` | https://github.com/elie222/rakazo/raw/main/docs/screenshots/readme/routines.png | Seen. Three columns: sidebar (Personal section, Bots with avatars, times and previews, "Connect apps" at the bottom), chat (purple user bubbles), and a "Routine" panel with Active, Delete, Test run, Name, Instruction, When to run, Add trigger, Save and Run history. |
+| `alt-rakazo-computer.png` | https://github.com/elie222/rakazo/raw/main/docs/screenshots/readme/computer.png | Seen. Full-window computer view titled "Team Computer" with "Take control", "Teach a task", a more menu and a close button in the title bar, and a live Chrome window below. |
+| `alt-rakazo-groups.png` | https://github.com/elie222/rakazo/raw/main/docs/screenshots/readme/groups.png | Seen. Group chat "Launch team" with a cluster avatar in the header pill. Each Bot reply has a small avatar and the Bot's name in its color above the bubble, and user bubbles are grey on the right. The sidebar has search, a bell, a sidebar toggle and + at the top. |
+| `alt-opensuperbot-thread.png` | https://github.com/wolfqing/OpenSuperBot/raw/main/assets/screenshot-thread.png | Seen. A thread with a model chip in the header, a ✓ report card, a "WORKED 2 steps · 26.0s" collapsed row, a browser screenshot, a "NEEDS YOU" amber card with Approve, Discard and "Always allow…", and a "CREATED ROUTINE" card. |
+| `alt-opensuperbot-panel.png` | https://github.com/wolfqing/OpenSuperBot/raw/main/assets/screenshot-panel.png | Seen. The same thread with "Scout's computer" panel: live screen, COMMANDS checkbox, ROUTINES with play, pause and delete, ALLOWED WITHOUT ASKING, STANDING RULES and RECENT ACTIONS. |
+| `alt-openmausbot-calendar.jpg` | https://pbs.twimg.com/amplify_video_thumb/2088312958732636160/img/2oUtjj7MTSkBdrhY?format=jpg&name=small (linked from mausbot.com) | Seen. "Routines" view with Day, 3 days and Week toggles, a date navigator and an empty state "Put your MAUS team on a rhythm" with "Create your first routine". |
+
+---
+
 ## Reference link list
 
 [d-overview]: https://docs.x.ai/grok-bot/overview
