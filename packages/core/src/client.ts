@@ -14,11 +14,13 @@ import {
   type GatewayBrowserDeviceTokenStore,
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
-import type { ClawtrateHost } from "./host.ts";
+import type { ApprovalInstructions, ClawtrateHost } from "./host.ts";
 import {
   asRecord,
   groupTasks,
+  isExcludedSessionKey,
   isSessionRemoval,
+  isTaskSession,
   liveTextFromChatMessage,
   mapAgents,
   mapHistory,
@@ -34,10 +36,11 @@ import {
   initialState,
   type ClawtrateState,
   type ConnectionState,
+  type DiscoveryState,
   type Transcript,
 } from "./types.ts";
 
-/** This slice reads only. Request nothing beyond what it uses. */
+/** This slice reads only. Every connect requests exactly these scopes, nothing more. */
 export const REQUESTED_SCOPES = ["operator.read"] as const;
 /**
  * Client capabilities advertised in `connect`. Empty on purpose: this slice does
@@ -48,8 +51,12 @@ export const CLIENT_CAPS: readonly string[] = [];
 export const CLIENT_ID = "gateway-client";
 export const CLIENT_MODE = "ui";
 
+/** One page of the task list. Pages are read until the gateway reports no more. */
+export const SESSION_PAGE_SIZE = 200;
+/** A ceiling so a huge gateway cannot make one reconnect read forever. */
+export const MAX_SESSION_PAGES = 50;
 const SESSION_LIST_PARAMS = {
-  limit: 200,
+  limit: SESSION_PAGE_SIZE,
   includeDerivedTitles: true,
   includeLastMessage: true,
   excludeCron: true,
@@ -64,7 +71,20 @@ export type ConnectionSettings = { url: string; token: string | null };
 
 export type ConnectOptions = { url: string; token?: string | null };
 
+export type ClientOptions = {
+  /**
+   * Gateways this client may open. Checked before every connection, including
+   * a saved one resumed at start and every retry.
+   */
+  allowGatewayUrl?: (url: string) => boolean;
+  /** Reconnect backoff. Tests shorten it. */
+  reconnect?: { initialMs: number; maxMs: number };
+};
+
 type Plan = GatewayBrowserDeviceAuthPlan;
+
+/** A device token record. The grant is kept for reference; it never sets the requested scopes. */
+type StoredDeviceToken = { token: string; grantedScopes: string[] };
 
 function isRetryableNetworkFailure(error: Error): boolean {
   return !(error instanceof GatewayProtocolRequestError);
@@ -78,10 +98,25 @@ export function validateGatewayUrl(raw: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
+export function defaultApprovalInstructions(_url: string, requestId: string): ApprovalInstructions {
+  return {
+    command: `openclaw devices approve ${requestId}`,
+    note: "The gateway's owner runs this on the machine where the gateway runs.",
+  };
+}
+
+export class GatewayNotAllowedError extends Error {
+  constructor(url: string) {
+    super(`This host is not allowed to connect to ${url}.`);
+    this.name = "GatewayNotAllowedError";
+  }
+}
+
 export class ClawtrateClient {
   readonly store: Store<ClawtrateState> = createStore(initialState);
 
   private readonly host: ClawtrateHost;
+  private readonly options: ClientOptions;
   private readonly lifecycle: GatewayBrowserDeviceAuthLifecycle;
   private readonly tokenStore: GatewayBrowserDeviceTokenStore;
   private protocol: GatewayProtocolClient<Plan> | null = null;
@@ -89,23 +124,30 @@ export class ClawtrateClient {
   private identity: { deviceId: string; publicKey: string } | null = null;
   /** Bumped for every new connection so late responses from an old one are dropped. */
   private generation = 0;
+  /** True once the current connection has reached hello at least once. */
+  private everConnected = false;
   private rows = new Map<string, RawRecord>();
-  private readonly openSessions = new Set<string>();
+  /** Open transcripts, counted, so several viewers can share one. */
+  private readonly openSessions = new Map<string, number>();
   private readonly streams = new GatewayChatStreamProjection();
   private readonly historyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapping = false;
   private changedDuringBootstrap = false;
 
-  constructor(host: ClawtrateHost) {
+  constructor(host: ClawtrateHost, options: ClientOptions = {}) {
     this.host = host;
+    this.options = options;
     this.tokenStore = {
+      // The lifecycle uses the record's scopes for reconnects. Report the
+      // scopes this client requests, so a broader grant is never asked for.
       load: async ({ deviceId, role }) => {
-        const raw = await host.storage.get(this.tokenKey(deviceId, role));
-        return raw ? (JSON.parse(raw) as { token: string; scopes: string[] }) : null;
+        const record = await this.loadToken(deviceId, role);
+        return record ? { token: record.token, scopes: [...REQUESTED_SCOPES] } : null;
       },
       store: async ({ deviceId, role, token, scopes }) => {
-        await host.storage.set(this.tokenKey(deviceId, role), JSON.stringify({ token, scopes }));
+        const record: StoredDeviceToken = { token, grantedScopes: scopes };
+        await host.storage.set(this.tokenKey(deviceId, role), JSON.stringify(record));
       },
       clear: async ({ deviceId, role }) => {
         await host.storage.delete(this.tokenKey(deviceId, role));
@@ -125,19 +167,24 @@ export class ClawtrateClient {
     return this.store.get();
   }
 
-  /** Resume the saved gateway, if any. */
+  /** The gateway saved from an earlier run, if any. */
+  async savedSettings(): Promise<ConnectionSettings | null> {
+    const raw = await this.host.storage.get(SETTINGS_KEY);
+    return raw ? (JSON.parse(raw) as ConnectionSettings) : null;
+  }
+
+  /** Resume the saved gateway, if any and if allowed. */
   async start(): Promise<void> {
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
-    const raw = await this.host.storage.get(SETTINGS_KEY);
-    if (!raw) return;
-    this.settings = JSON.parse(raw) as ConnectionSettings;
-    await this.open();
+    this.settings = await this.savedSettings();
+    if (this.settings) await this.open();
   }
 
   /** Connect to a gateway. A token is only needed until this device is paired. */
   async connect(options: ConnectOptions): Promise<void> {
     const url = validateGatewayUrl(options.url);
+    if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
     const token = options.token?.trim() || null;
     this.settings = { url, token };
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
@@ -148,6 +195,7 @@ export class ClawtrateClient {
   async disconnect(): Promise<void> {
     this.close();
     this.settings = null;
+    this.rows = new Map();
     await this.host.storage.delete(SETTINGS_KEY);
     this.store.set({
       ...initialState,
@@ -155,9 +203,16 @@ export class ClawtrateClient {
     });
   }
 
-  /** Reconnect immediately, for example right after a pairing request was approved. */
+  /**
+   * The user's retry. While connected it reloads bots and tasks; otherwise it
+   * reconnects at once, keeping what is already on screen.
+   */
   async retryNow(): Promise<void> {
     if (!this.settings) return;
+    if (this.protocol?.connected && this.state.connection.status === "connected") {
+      await this.bootstrap(this.generation);
+      return;
+    }
     await this.open();
   }
 
@@ -166,25 +221,23 @@ export class ClawtrateClient {
     this.close();
   }
 
+  /** Open a transcript. Calls are counted; the last matching close releases it. */
   openSession(key: string): void {
-    this.openSessions.add(key);
-    this.setTranscript(
-      key,
-      (current) =>
-        current ?? {
-          sessionKey: key,
-          status: "loading",
-          items: [],
-          error: null,
-          hasMore: false,
-          live: null,
-        },
-    );
+    const count = this.openSessions.get(key) ?? 0;
+    this.openSessions.set(key, count + 1);
+    if (count > 0) return;
+    this.setTranscript(key, (current) => current ?? this.emptyTranscript(key));
     if (this.state.connection.status === "connected") void this.loadTranscript(key, true);
   }
 
   closeSession(key: string): void {
-    if (!this.openSessions.delete(key)) return;
+    const count = this.openSessions.get(key);
+    if (!count) return;
+    if (count > 1) {
+      this.openSessions.set(key, count - 1);
+      return;
+    }
+    this.openSessions.delete(key);
     const timer = this.historyTimers.get(key);
     if (timer) clearTimeout(timer);
     this.historyTimers.delete(key);
@@ -198,7 +251,16 @@ export class ClawtrateClient {
     });
   }
 
+  /** How many viewers hold a transcript open. */
+  sessionInterest(key: string): number {
+    return this.openSessions.get(key) ?? 0;
+  }
+
   // Connection lifecycle -------------------------------------------------------
+
+  private isAllowed(url: string): boolean {
+    return this.options.allowGatewayUrl ? this.options.allowGatewayUrl(url) : true;
+  }
 
   private async open(): Promise<void> {
     this.close();
@@ -206,21 +268,50 @@ export class ClawtrateClient {
     if (!settings) return;
     const generation = ++this.generation;
     const identity = await this.loadIdentity();
-    const paired = (await this.tokenStore.load(this.tokenParams(identity.deviceId))) !== null;
-    this.rows = new Map();
-    this.store.set({
-      ...initialState,
+    if (generation !== this.generation) return;
+
+    if (!this.isAllowed(settings.url)) {
+      this.rows = new Map();
+      this.store.set({
+        ...initialState,
+        connection: {
+          ...initialConnectionState,
+          status: "error",
+          gatewayUrl: settings.url,
+          deviceId: identity.deviceId,
+          error: {
+            code: "GATEWAY_NOT_ALLOWED",
+            message: new GatewayNotAllowedError(settings.url).message,
+            hint: null,
+          },
+        },
+      });
+      return;
+    }
+
+    const paired = (await this.loadToken(identity.deviceId, "operator")) !== null;
+    if (generation !== this.generation) return;
+    // Reopening the same gateway keeps what is on screen until fresh data arrives.
+    const sameGateway = this.state.connection.gatewayUrl === settings.url;
+    const hasData = sameGateway && this.state.bots.length > 0;
+    if (!sameGateway) this.rows = new Map();
+    this.everConnected = hasData;
+    this.store.update((state) => ({
+      ...(sameGateway ? state : initialState),
       connection: {
         ...initialConnectionState,
-        status: "connecting",
+        status: hasData ? "reconnecting" : "connecting",
         gatewayUrl: settings.url,
         deviceId: identity.deviceId,
         paired,
+        serverVersion: sameGateway ? state.connection.serverVersion : null,
       },
-      transcripts: Object.fromEntries(
-        [...this.openSessions].map((key) => [key, this.emptyTranscript(key)]),
-      ),
-    });
+      transcripts: sameGateway
+        ? state.transcripts
+        : Object.fromEntries(
+            [...this.openSessions.keys()].map((key) => [key, this.emptyTranscript(key)]),
+          ),
+    }));
 
     const client = {
       id: CLIENT_ID,
@@ -229,6 +320,7 @@ export class ClawtrateClient {
       platform: this.host.client.platform,
       mode: CLIENT_MODE,
     } as const;
+    const reconnect = this.options.reconnect ?? { initialMs: 1000, maxMs: 30_000 };
 
     this.protocol = new GatewayProtocolClient<Plan>({
       createSocket: (handlers) => {
@@ -245,10 +337,10 @@ export class ClawtrateClient {
       },
       createRequestId: () => this.randomId(),
       buildConnectPlan: async ({ nonce, challengeTs }) => {
-        const stored = await this.tokenStore.load(this.tokenParams(identity.deviceId));
+        const stored = await this.loadToken(identity.deviceId, "operator");
         // Once paired, the device token is the credential; the bootstrap token is no longer sent.
         const bootstrap = stored ? null : settings.token;
-        return this.lifecycle.buildPlan({
+        const plan = await this.lifecycle.buildPlan({
           client,
           role: "operator",
           defaultScopes: REQUESTED_SCOPES,
@@ -256,6 +348,11 @@ export class ClawtrateClient {
           nonce,
           challengeTs: challengeTs ?? null,
         });
+        // The signed payload covers these scopes, so check them before sending.
+        if (plan.scopes.join(",") !== REQUESTED_SCOPES.join(",")) {
+          throw new Error(`refusing to request scopes ${plan.scopes.join(", ")}`);
+        }
+        return plan;
       },
       buildConnectParams: (plan) => ({
         minProtocol: PROTOCOL_VERSION,
@@ -281,7 +378,8 @@ export class ClawtrateClient {
         if (generation !== this.generation) return;
         this.handleHello(hello, generation);
       },
-      onConnectFailure: async (error) => this.handleConnectFailure(error, identity.deviceId),
+      onConnectFailure: async (error) =>
+        this.handleConnectFailure(error, identity.deviceId, settings.url),
       resolveClose: (context) => ({
         retry: true,
         notify: true,
@@ -293,9 +391,10 @@ export class ClawtrateClient {
         if (generation !== this.generation) return;
         this.streams.clear();
         const status = this.state.connection.status;
-        if (status === "connected") this.setConnection({ status: "reconnecting" });
-        else if (status !== "pairing" && status !== "error")
-          this.setConnection({ status: "connecting" });
+        if (status !== "pairing" && status !== "error") {
+          // Once this gateway has answered, every later drop is a reconnect, not a first connect.
+          this.setConnection({ status: this.everConnected ? "reconnecting" : "connecting" });
+        }
         this.clearLiveText();
       },
       onReconnectScheduled: (delayMs) => {
@@ -321,7 +420,7 @@ export class ClawtrateClient {
       },
       onCallbackError: (label, error) => this.log("error", `${label}: ${String(error)}`),
       handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
-      reconnect: { initialMs: 1000, multiplier: 2, maxMs: 30_000 },
+      reconnect: { initialMs: reconnect.initialMs, multiplier: 2, maxMs: reconnect.maxMs },
     });
     this.protocol.start();
   }
@@ -337,7 +436,7 @@ export class ClawtrateClient {
     this.historyTimers.clear();
   }
 
-  private handleConnectFailure(error: GatewayProtocolRequestError, deviceId: string) {
+  private handleConnectFailure(error: GatewayProtocolRequestError, deviceId: string, url: string) {
     const details = asRecord(error.details) ?? {};
     const code = typeof details.code === "string" ? details.code : error.gatewayCode;
     const hint = typeof details.remediationHint === "string" ? details.remediationHint : null;
@@ -347,6 +446,10 @@ export class ClawtrateClient {
       const scopes = Array.isArray(details.requestedScopes)
         ? details.requestedScopes.filter((s): s is string => typeof s === "string")
         : [...REQUESTED_SCOPES];
+      const instructions = (this.host.approvalInstructions ?? defaultApprovalInstructions)(
+        url,
+        requestId,
+      );
       this.setConnection({
         status: "pairing",
         error: null,
@@ -354,7 +457,8 @@ export class ClawtrateClient {
           requestId,
           deviceId: typeof details.deviceId === "string" ? details.deviceId : deviceId,
           message: hint ?? "Approve this device from the gateway's pending pairing requests.",
-          approveCommand: `openclaw devices approve ${requestId}`,
+          approveCommand: instructions.command,
+          approveNote: instructions.note,
           requestedScopes: scopes,
         },
       });
@@ -378,7 +482,7 @@ export class ClawtrateClient {
 
     const pause = shouldPauseGatewayReconnect({ details: error.details });
     this.setConnection({
-      status: pause ? "error" : "connecting",
+      status: pause ? "error" : this.everConnected ? "reconnecting" : "connecting",
       pairing: null,
       error: { code, message: error.message, hint },
     });
@@ -390,6 +494,7 @@ export class ClawtrateClient {
   }
 
   private handleHello(hello: HelloOk, generation: number): void {
+    this.everConnected = true;
     this.setConnection({
       status: "connected",
       serverVersion: hello.server.version,
@@ -403,32 +508,84 @@ export class ClawtrateClient {
     void this.bootstrap(generation);
   }
 
-  /** Every successful connect is a fresh projection: re-list, re-subscribe, reload open transcripts. */
+  private setDiscovery(patch: Partial<DiscoveryState>): void {
+    this.store.update((state) => ({ ...state, discovery: { ...state.discovery, ...patch } }));
+  }
+
+  /**
+   * Every successful connect is a fresh projection: re-list, re-subscribe, reload
+   * open transcripts. Bots and tasks load independently, so one failing read
+   * keeps the other's result and any data shown before it.
+   */
   private async bootstrap(generation: number): Promise<void> {
     this.bootstrapping = true;
     this.changedDuringBootstrap = false;
-    try {
-      const [agents, subscribed] = await Promise.all([
-        this.request("agents.list", {}),
-        this.request("sessions.subscribe", SESSION_LIST_PARAMS),
-      ]);
-      if (generation !== this.generation) return;
-      this.store.update((state) => ({ ...state, bots: mapAgents(agents) }));
-      this.replaceRows(asRecord(subscribed)?.list);
-      this.bootstrapping = false;
+    this.setDiscovery({ status: "loading", error: null });
+    const [agents, sessions] = await Promise.allSettled([
+      this.request("agents.list", {}),
+      this.loadAllSessions(generation, "sessions.subscribe"),
+    ]);
+    this.bootstrapping = false;
+    if (generation !== this.generation) return;
+
+    const failures: string[] = [];
+    if (agents.status === "fulfilled") {
+      this.store.update((state) => ({ ...state, bots: mapAgents(agents.value) }));
+    } else {
+      failures.push(`bots: ${errorMessage(agents.reason)}`);
+    }
+    if (sessions.status === "fulfilled") {
+      this.replaceRows(sessions.value.rows);
       if (this.changedDuringBootstrap) await this.refreshSessions(generation);
-      for (const key of this.openSessions) void this.loadTranscript(key, true);
-    } catch (error) {
-      this.log("error", `bootstrap failed: ${String(error)}`);
-    } finally {
-      this.bootstrapping = false;
+    } else {
+      failures.push(`tasks: ${errorMessage(sessions.reason)}`);
+    }
+    if (generation !== this.generation) return;
+    for (const key of this.openSessions.keys()) void this.loadTranscript(key, true);
+
+    if (failures.length > 0) {
+      this.log("error", `discovery failed: ${failures.join("; ")}`);
+      this.setDiscovery({ status: "error", error: `Could not load ${failures.join("; ")}` });
+    } else {
+      this.setDiscovery({
+        status: "ready",
+        error: null,
+        partial: sessions.status === "fulfilled" && sessions.value.partial,
+      });
     }
   }
 
   // Sessions -------------------------------------------------------------------
 
-  private replaceRows(list: unknown): void {
-    this.rows = new Map(sessionRowsFromList(list).map((row) => [sessionRowKey(row)!, row]));
+  /**
+   * Read the whole filtered task list, one page at a time. The first page comes
+   * from `sessions.subscribe` at bootstrap and from `sessions.list` on refresh.
+   */
+  private async loadAllSessions(
+    generation: number,
+    firstMethod: "sessions.subscribe" | "sessions.list",
+  ): Promise<{ rows: RawRecord[]; partial: boolean }> {
+    const first = asRecord(await this.request(firstMethod, SESSION_LIST_PARAMS));
+    let page = firstMethod === "sessions.subscribe" ? asRecord(first?.list) : first;
+    const rows = new Map<string, RawRecord>();
+    for (let pages = 1; ; pages += 1) {
+      for (const row of sessionRowsFromList(page)) rows.set(sessionRowKey(row)!, row);
+      const nextOffset = page?.nextOffset;
+      const more = page?.hasMore === true && typeof nextOffset === "number";
+      if (!more) return { rows: [...rows.values()], partial: false };
+      if (pages >= MAX_SESSION_PAGES || generation !== this.generation) {
+        return { rows: [...rows.values()], partial: true };
+      }
+      page = asRecord(
+        await this.request("sessions.list", { ...SESSION_LIST_PARAMS, offset: nextOffset }),
+      );
+    }
+  }
+
+  private replaceRows(rows: RawRecord[]): void {
+    this.rows = new Map(
+      rows.filter((row) => isTaskSession(row)).map((row) => [sessionRowKey(row)!, row]),
+    );
     this.publishTasks();
   }
 
@@ -439,8 +596,10 @@ export class ClawtrateClient {
 
   private async refreshSessions(generation: number): Promise<void> {
     try {
-      const list = await this.request("sessions.list", SESSION_LIST_PARAMS);
-      if (generation === this.generation) this.replaceRows(list);
+      const { rows, partial } = await this.loadAllSessions(generation, "sessions.list");
+      if (generation !== this.generation) return;
+      this.replaceRows(rows);
+      this.setDiscovery({ partial });
     } catch (error) {
       this.log("warn", `sessions.list failed: ${String(error)}`);
     }
@@ -454,6 +613,12 @@ export class ClawtrateClient {
     }, 250);
   }
 
+  /**
+   * Apply a `sessions.changed` event with the same membership rules as the list.
+   * A known row is merged and re-checked. An unknown row whose key is not ruled
+   * out cannot prove membership from the payload, so the filtered list is
+   * re-read instead of inserting it.
+   */
   private handleSessionsChanged(payload: unknown, generation: number): void {
     if (this.bootstrapping) this.changedDuringBootstrap = true;
     const row = sessionChangeRow(payload);
@@ -463,13 +628,17 @@ export class ClawtrateClient {
       return;
     }
     if (isSessionRemoval(payload)) {
-      this.rows.delete(key);
-    } else if (this.rows.has(key) || typeof row.agentId === "string") {
-      this.rows.set(key, mergeSessionRow(this.rows.get(key), row));
-    } else {
-      this.scheduleRefresh(generation);
+      if (this.rows.delete(key)) this.publishTasks();
       return;
     }
+    const cached = this.rows.get(key);
+    if (!cached) {
+      if (!isExcludedSessionKey(key)) this.scheduleRefresh(generation);
+      return;
+    }
+    const merged = mergeSessionRow(cached, row);
+    if (isTaskSession(merged)) this.rows.set(key, merged);
+    else this.rows.delete(key);
     this.publishTasks();
   }
 
@@ -525,7 +694,7 @@ export class ClawtrateClient {
       this.setTranscript(key, (current) => ({
         ...(current ?? this.emptyTranscript(key)),
         status: "error",
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
       }));
     }
   }
@@ -612,6 +781,15 @@ export class ClawtrateClient {
     return this.identity;
   }
 
+  private async loadToken(deviceId: string, role: string): Promise<StoredDeviceToken | null> {
+    const raw = await this.host.storage.get(this.tokenKey(deviceId, role));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredDeviceToken> & { scopes?: string[] };
+    if (typeof parsed.token !== "string") return null;
+    // Earlier builds stored the grant as `scopes`.
+    return { token: parsed.token, grantedScopes: parsed.grantedScopes ?? parsed.scopes ?? [] };
+  }
+
   private tokenParams(deviceId: string) {
     return { clientId: CLIENT_ID, deviceId, role: "operator" };
   }
@@ -636,4 +814,8 @@ export class ClawtrateClient {
   private log(level: "debug" | "info" | "warn" | "error", message: string): void {
     this.host.log?.(level, message);
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

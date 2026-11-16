@@ -133,11 +133,33 @@ function taskStatus(row: RawRecord): TaskStatus {
   return "idle";
 }
 
+/**
+ * Whether a session belongs in the task list. Mirrors the gateway's own
+ * `excludeCron` and `excludeSubagents` filters (2026.10.6), so rows that arrive
+ * through `sessions.changed` follow the same rules as the initial snapshot.
+ * Only the key and fields present on the row are consulted.
+ */
+export function isTaskSession(row: RawRecord): boolean {
+  const key = sessionRowKey(row);
+  if (!key) return false;
+  if (row.archived === true) return false;
+  const lower = key.toLowerCase();
+  if (/^(?:cron:|agent::*[^:]+:+cron:+[^:])/u.test(lower)) return false;
+  const rest = /^agent:[^:]+:(.*)$/u.exec(lower)?.[1] ?? "";
+  if (lower.startsWith("subagent:") || rest.startsWith("subagent:")) return false;
+  if (str(row.spawnedBy) && !rest.startsWith("dashboard:") && !str(row.category)) return false;
+  return true;
+}
+
+/** Whether a key alone rules a session out, before any row data is known. */
+export function isExcludedSessionKey(key: string): boolean {
+  return !isTaskSession({ key });
+}
+
 /** One session row to a task, or null for rows the sidebar should not show. */
 export function mapSessionRow(row: RawRecord): Task | null {
   const key = sessionRowKey(row);
-  if (!key) return null;
-  if (row.archived === true) return null;
+  if (!key || !isTaskSession(row)) return null;
   const botId = str(row.agentId) ?? botIdFromSessionKey(key);
   if (!botId) return null;
   const suffix = key.split(":").slice(2).join(":") || key;

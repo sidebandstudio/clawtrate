@@ -77,35 +77,58 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
 export type BridgePolicy = {
   /** Connection details for the development gateway, when the host has them. */
   devGateway?: { url: string; token: string | null } | null;
-  /** Refuse gateway URLs the host does not allow, for example in token-free dev mode. */
-  allowGatewayUrl?: (url: string) => boolean;
 };
 
-export async function applyBridgeCommand(
+/**
+ * One viewer's side of the bridge: a renderer window or a browser tab. It
+ * remembers which transcripts this viewer opened, so closing a task in one tab
+ * never closes it for another, and `dispose()` releases everything the viewer
+ * held when its window or socket goes away.
+ */
+export type BridgeSession = {
+  apply(command: BridgeCommand): Promise<void>;
+  dispose(): void;
+};
+
+export function createBridgeSession(
   client: ClawtrateClient,
-  command: BridgeCommand,
   policy: BridgePolicy = {},
-): Promise<void> {
-  switch (command.type) {
-    case "connect":
-      if (policy.allowGatewayUrl && !policy.allowGatewayUrl(command.url)) {
-        throw new Error("This host only connects to the development gateway.");
+): BridgeSession {
+  const open = new Set<string>();
+  let disposed = false;
+  return {
+    async apply(command) {
+      if (disposed) throw new Error("this viewer has disconnected");
+      switch (command.type) {
+        case "connect":
+          return client.connect({ url: command.url, token: command.token ?? null });
+        case "connectDevGateway":
+          if (!policy.devGateway) {
+            throw new Error("No development gateway is configured on this host.");
+          }
+          return client.connect(policy.devGateway);
+        case "disconnect":
+          return client.disconnect();
+        case "retry":
+          return client.retryNow();
+        case "openSession":
+          if (!open.has(command.key)) {
+            open.add(command.key);
+            client.openSession(command.key);
+          }
+          return;
+        case "closeSession":
+          if (open.delete(command.key)) client.closeSession(command.key);
+          return;
       }
-      return client.connect({ url: command.url, token: command.token ?? null });
-    case "connectDevGateway":
-      if (!policy.devGateway) throw new Error("No development gateway is configured on this host.");
-      return client.connect(policy.devGateway);
-    case "disconnect":
-      return client.disconnect();
-    case "retry":
-      return client.retryNow();
-    case "openSession":
-      client.openSession(command.key);
-      return;
-    case "closeSession":
-      client.closeSession(command.key);
-      return;
-  }
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const key of open) client.closeSession(key);
+      open.clear();
+    },
+  };
 }
 
 /**

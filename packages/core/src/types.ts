@@ -17,8 +17,10 @@ export type PairingRequest = {
   requestId: string;
   deviceId: string;
   message: string;
-  /** Command an operator runs on the gateway host to approve this request. */
+  /** What the person approving runs. The host chooses it, because it knows which gateway this is. */
   approveCommand: string;
+  /** Where and by whom the command is run, when that is not obvious. */
+  approveNote: string | null;
   requestedScopes: string[];
 };
 
@@ -96,8 +98,18 @@ export type Transcript = {
   live: { runId: string; text: string } | null;
 };
 
+/** Loading bots and tasks after each connect, separate from the socket's own state. */
+export type DiscoveryState = {
+  status: "idle" | "loading" | "ready" | "error";
+  /** Set when a read failed; data from earlier successful reads is kept. */
+  error: string | null;
+  /** True when the gateway reported more tasks than the client loaded. */
+  partial: boolean;
+};
+
 export type ClawtrateState = {
   connection: ConnectionState;
+  discovery: DiscoveryState;
   bots: Bot[];
   tasksByBot: Record<string, Task[]>;
   transcripts: Record<string, Transcript>;
@@ -116,8 +128,15 @@ export const initialConnectionState: ConnectionState = {
   paired: false,
 };
 
+export const initialDiscoveryState: DiscoveryState = {
+  status: "idle",
+  error: null,
+  partial: false,
+};
+
 export const initialState: ClawtrateState = {
   connection: initialConnectionState,
+  discovery: initialDiscoveryState,
   bots: [],
   tasksByBot: {},
   transcripts: {},

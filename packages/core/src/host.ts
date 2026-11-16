@@ -40,6 +40,8 @@ export type ClientIdentity = {
   platform: string;
 };
 
+export type ApprovalInstructions = { command: string; note: string | null };
+
 export type ClawtrateHost = {
   createWebSocket: WebSocketFactory;
   storage: KeyValueStore;
@@ -48,4 +50,9 @@ export type ClawtrateHost = {
   now?: () => number;
   randomId?: () => string;
   log?: (level: "debug" | "info" | "warn" | "error", message: string) => void;
+  /**
+   * How to approve a pairing request on this gateway. The host knows whether the
+   * gateway is the local development one; core falls back to the generic command.
+   */
+  approvalInstructions?: (gatewayUrl: string, requestId: string) => ApprovalInstructions;
 };

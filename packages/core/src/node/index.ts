@@ -116,6 +116,7 @@ export type NodeHostOptions = {
   dataDir: string;
   client: ClientIdentity;
   log?: ClawtrateHost["log"];
+  approvalInstructions?: ClawtrateHost["approvalInstructions"];
 };
 
 export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
@@ -125,5 +126,6 @@ export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
     signer: createFileSigner(join(options.dataDir, "device-key.pem")),
     client: options.client,
     ...(options.log ? { log: options.log } : {}),
+    ...(options.approvalInstructions ? { approvalInstructions: options.approvalInstructions } : {}),
   };
 }

@@ -8,8 +8,13 @@ export {
   CLIENT_ID,
   CLIENT_MODE,
   ClawtrateClient,
+  defaultApprovalInstructions,
+  GatewayNotAllowedError,
+  MAX_SESSION_PAGES,
   REQUESTED_SCOPES,
+  SESSION_PAGE_SIZE,
   validateGatewayUrl,
+  type ClientOptions,
   type ConnectOptions,
   type ConnectionSettings,
 } from "./client.ts";
