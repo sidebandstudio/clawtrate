@@ -49,7 +49,7 @@ The page connects within a few seconds of approval. From then on, the device use
 The gateway connection, the device key and pairing all live in the preview host process, not in the browser. That is why a plain `http://` page on another machine can pair at all. Useful flags (pnpm passes them through):
 
 - `pnpm preview:web --dev-gateway` connects to the development gateway at startup.
-- `pnpm preview:web --no-access-token` turns the access token off. It is only accepted with the development gateway, and the host then refuses to connect anywhere else.
+- `pnpm preview:web --no-access-token` turns the access token off. It is only accepted with the development gateway. The host then opens nothing but the development gateway, and refuses to start if its data directory remembers another one; use a separate `--data-dir` for development.
 - `--port`, `--host` and `--data-dir` change where it listens and where it keeps the device identity.
 
 ### 3. Run the desktop app
