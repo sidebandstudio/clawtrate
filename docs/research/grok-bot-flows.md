@@ -2,7 +2,7 @@
 
 This is the reference Clawtrate's builders work from. It describes how Grok Bot behaves on desktop and iOS, from public material only, as of 16 November 2026. `docs/parity.md` turns each verifiable behavior here into a checklist row.
 
-Grok Bot is the personal agent app from SpaceXSI (formerly xAI). It runs on Cursor's infrastructure. It went into beta on 11 August 2026, and 1.0 shipped on 2 November 2026. The desktop app was at version 0.79.x on 11 November, and the iPhone app at 1.26.0 on 14 November.
+Grok Bot is the personal agent app from SpaceXSI (formerly xAI). It runs on Cursor's infrastructure. It went into beta on 11 August 2026 ([x.ai launch][x-launch], seen). SpaceXSI announced 1.0 on 2 November 2026 ([x.ai 1.0][x-10], seen). The numbered 1.0.0 and 1.0.1 desktop releases are dated 11 November, and one reviewer's installed desktop app was still on 0.79.3 that day, so not every installation had 1.0 yet ([Flavio Copes 1.0][flavio-10], reported). The iPhone app was at 1.26.0 on 14 November ([App Store][appstore], seen).
 
 ## How to read this document
 
@@ -24,7 +24,7 @@ The most useful sources were:
 
 Many SEO pages about Grok Bot contradict the docs, for example on whether each Bot has its own computer or whether Android exists. I used them only where nothing better existed, and I say so.
 
-Two naming notes. The product calls its agents "Bots", with a capital B. The docs call the main Bot both "primary Bot" and "Main Bot".
+Two naming notes. The product calls its agents "Bots", with a capital B ([docs: bots][d-bots], seen). The docs call the main Bot the "primary Bot" ([docs: bots][d-bots], seen), and the independent guide and older release notes call it the "Main Bot" ([learngrokbot: multiple Bots][lgb-multi], reported).
 
 ---
 
@@ -40,7 +40,7 @@ Two naming notes. The product calls its agents "Bots", with a capital B. The doc
 6. The app sets up the cloud computer. The window shows the Grok Bot mark and one line, "Setting up Grok Bot's computer", which can also read "Starting your computer". This can take several minutes, and there is nothing to click. A later changelog entry says the app now opens while the computer is still starting, instead of waiting behind this full-window screen. ([learngrokbot: setup][lgb-setup], reported; [changelog][x-changelog], reported)
 7. A short intro follows, a few screens about Bots and their computer, ending on "What do you use every day?". That screen has a search box, a grid of twelve app tiles (Workspace, Slack, HubSpot, Canva and others) that you can tick, and "Next" and "Back". Ticking an app does not connect it. It only shapes which Bots the app suggests. ([learngrokbot: setup][lgb-setup], reported from caption)
 8. Setup creates the first Bot, named "Grok Bot", and opens its chat. The composer reads "Message Grok Bot". Earlier versions showed a "Create your first Bot" form here instead. ([docs: get started][d-start], seen; [learngrokbot: setup][lgb-setup], reported)
-9. The first Bot speaks first. "Working on it" shows for five to ten seconds, then a greeting and a question card arrive. (See section 5.3 for question cards.) ([learngrokbot: first Bot][lgb-first-bot], seen in screenshot)
+9. The first Bot speaks first. "Working on it" shows first; the guide says it lasts five to ten seconds ([learngrokbot: first Bot][lgb-first-bot], reported). Then a greeting and a question card arrive ([learngrokbot: first Bot][lgb-first-bot], seen in screenshot). (See section 5.3 for question cards.)
 10. If no primary Bot is set, a dialog titled "Introducing Primary Bot" appears. It shows a Bot picture with a small orange star and reads, in substance, that the primary Bot works proactively, is your go-to for everyday tasks, unblocks your work and checks in when it needs you. It has two buttons: "Use an existing Bot", which opens a searchable list of Bots and a "Confirm" button, and "Create Primary Bot". ([learngrokbot: chief of staff][lgb-cos], reported from caption; [docs: bots][d-bots], seen; [Flavio Copes][flavio], reported)
 11. The docs suggest starter templates (Morning briefing, Inbox manager, Competitive intelligence, Travel coordinator) and prebuilt marketplace Bots (Overheard, Tradbot, Meeting Recap Deck, Pitch Deck Coach). ([docs: get started][d-start], seen)
 12. Importing memory from another assistant is optional: Settings, General, "Import Memory to Grok Bot", "Start Import". You copy a prompt into the other assistant, paste its answer into a second box and choose "Add to Memory". The import goes to the primary Bot. ([docs: bots][d-bots], seen; [docs: settings][d-settings], seen)
@@ -50,7 +50,7 @@ Two naming notes. The product calls its agents "Bots", with a capital B. The doc
 - The iPhone welcome screen in the App Store shows the Grok Bot wordmark centered, the line "Your team of always-on Bots that finish the work.", a black full-width "Log in" button and a light grey "Sign up" button. Five Bot avatars float around the edges. ([App Store][appstore], seen)
 - The phone sign-in labels include "Continue with Google", "Sign in with Apple", "Continue with email", "Enter your verification code" and "Use the browser instead". Linking a Grok subscription uses "Link Grok Account" and then "Finished Linking? Refresh My Status". ([docs: mobile][d-mobile], seen)
 - The phone asks for notification permission during first run. ([docs: settings][d-settings], seen)
-- A subscription link to SuperGrok or X Premium+ has to be made on a computer first. ([learngrokbot: setup][lgb-setup], reported)
+- Linking a SuperGrok or X Premium+ subscription: the guide, verified 6 October, said the link had to be made on a computer first ([learngrokbot: setup][lgb-setup], reported). The current docs describe linking on the phone: "Link Grok Account" on the access screen, sign in to Grok in the browser, then "Finished Linking? Refresh My Status". A link made on desktop also works on the phone ([docs: mobile][d-mobile], seen; [docs: get started][d-start], seen).
 - While the computer starts, the phone home screen shows "Starting your computer…". ([docs: troubleshooting][d-trouble], seen)
 
 ### Empty and error states in onboarding
@@ -89,7 +89,7 @@ From a first-hand sidebar screenshot (dark theme, about 280 points wide) and the
 
 ### Ordering
 
-- Pinned Bots stay at the top. Below them, sections appear in the order you made them. ([docs: bots][d-bots], seen)
+- Pinned Bots stay at the top ([docs: bots][d-bots], seen). The order of sections is not documented. (no public material found)
 - No source documents the sort order inside a section or in the unsectioned list. The App Store iPhone list is sorted newest activity first: 8:41 AM, 8:22 AM, 8:05 AM, Yesterday, Tuesday. (inferred from [App Store][appstore])
 - `Cmd/Ctrl+1` to `9` jump to sidebar Bots; `Alt+Up/Down` and `Control+Tab` move between Bots. ([docs: chat][d-chat], seen)
 
@@ -155,9 +155,9 @@ The description field existed until late September 2026. The old right-click ite
 
 ## 4. Starting a conversation, and how work is organized under a Bot
 
-### 4.1 One continuous conversation per Bot
+### 4.1 One continuous primary conversation per Bot
 
-This is the most important structural fact for Clawtrate. **In Grok Bot, a Bot is a single, never-ending chat.** There are no separate threads or tasks under a Bot.
+This is the most important structural fact for Clawtrate. **In Grok Bot, a Bot has one continuous primary conversation, without a general list of independent user tasks.** ([forum: threads][f-threads], reported; [forum: compaction][f-compact], reported) There are narrower exceptions, listed below: reply threads on single messages, routine runs that open in their own chat, and a Tasks tab for coding-agent runs.
 
 - The design post says Grok Bot is organized around Bots rather than conversations, because "chats are disposable" and you come back to the same Bot tomorrow. ([x.ai design post][x-design], seen)
 - Staff confirm there is one continuous conversation per Bot. Starting a "New chat" with the same Bot opens a group chat named like "Bot + me", not a fresh session. A second request waits while the Bot is busy. ([forum: compaction][f-compact], reported; [forum: parallel threads][f-parallel], reported)
@@ -169,6 +169,21 @@ This is the most important structural fact for Clawtrate. **In Grok Bot, a Bot i
 - The details panel has a "Tasks" tab that lists Cursor Cloud Agents a Bot started, under "Coding", with the states "Working", "Run failed" and "Status unavailable". A finished agent shows "Working" again when a follow-up starts. ([changelog][x-changelog], reported)
 - A Bot can start a "Project" when asked: a Cloud Agent that plans the work and runs its own agents. ([changelog][x-changelog], reported)
 
+#### Clawtrate design proposal: tasks under each Bot
+
+Not Grok Bot evidence. Clawtrate's intended behavior; the gateway capability map decides how tasks map onto gateway sessions.
+
+- **Structure.** A Bot owns a list of tasks. Every Bot has at least one task; a new Bot starts with one called "Main". Tasks share the Bot's instructions, memory, skills, routines and permissions. Each task has its own transcript, context and run state, and a task never shows another task's messages.
+- **Desktop sidebar.** A Bot row has a disclosure control. Expanded, the Bot's tasks are listed under it, indented, each with a title, a status and the time of its last activity. Collapsed, the Bot row shows the most urgent status of its tasks, in this order: waiting for you, failed or blocked, working, unread, idle.
+- **iOS.** Tapping a Bot on the home screen opens that Bot's task list; tapping a task opens its chat. The back control returns to the task list. On iPad, the task list appears under the Bot in the sidebar, as on desktop.
+- **Task statuses:** working, waiting for you, blocked, failed, done (unread result), idle. They follow the run states in section 5.6.
+- **New task.** "New task" on the Bot row (desktop) or in the task list (iOS) creates an empty task, selects it and focuses the composer. A message sent there runs in the new task.
+- **Rename.** Desktop: double-click the task title, or its menu's "Rename". iOS: touch and hold, "Rename". The new title shows in the sidebar and task header.
+- **Archive.** "Archive" moves a task into a collapsed "Archived" group under its Bot. Its history is kept and it can be restored. Archiving a task with an active run asks "Stop and archive" or "Cancel".
+- **Delete.** "Delete" asks for confirmation, then removes the task's transcript. An active run is stopped first. Memory saved during the task stays, because memory belongs to the Bot.
+- **Routine runs** each create a task marked with the routine's name.
+- **Context meter and Compact.** The task header shows context use as tokens used out of the model's context window when the gateway reports both, and "Context: unavailable" otherwise. "Compact" replaces older turns with a summary; the transcript keeps them, folded under a "Compacted 24 turns" line that expands to show them.
+
 ### 4.2 Desktop chat layout
 
 From a first-hand screenshot of a 1:1 chat with the details panel open (dark theme):
@@ -179,11 +194,11 @@ From a first-hand screenshot of a 1:1 chat with the details panel open (dark the
 - **Your messages** are right-aligned rounded bubbles filled with the Bot's color (blue for a blue Bot, orange for an orange one), with white text. "Settings, Appearance, Accent" can switch this from "Bot color" to "Black". ([learngrokbot: what is][lgb-what], seen; [alexop.dev][alexop], seen; [docs: settings][d-settings], seen)
 - **The Bot's messages** are left-aligned dark grey rounded bubbles. Consecutive messages stack as separate bubbles with a small gap. In a 1:1 chat there is no avatar or name beside each bubble. Bubbles are at most about three quarters of the column's width. Markdown tables render inside the bubble, and wide tables can extend into the empty space beside the message. ([learngrokbot: what is][lgb-what], seen; [Flavio Copes][flavio], reported)
 - Hovering a Bot message shows three small icon actions to its right: react (smiley), reply (curved arrow) and more (three dots). The more menu has "Download" or "Download all" for media, "Copy request ID" for errors, and other actions. ([alexop.dev][alexop], seen; [docs: files][d-files], seen)
-- **Composer:** a full-width rounded pill at the bottom. A round "+" button sits on the left, and the placeholder reads "Message &lt;Bot name&gt;". At the right, a round microphone button ("Start voice input") and a round white waveform button ("Start voice chat"). The waveform shows only when the composer is empty; once you type, a round send arrow replaces it. ([learngrokbot: first Bot][lgb-first-bot], seen; [learngrokbot: what is][lgb-what], seen)
+- **Composer:** a full-width rounded pill at the bottom. A round "+" button sits on the left, and the placeholder reads "Message &lt;Bot name&gt;". At the right, a round microphone button ("Start voice input") and a round white waveform button ("Start voice chat"). ([learngrokbot: first Bot][lgb-first-bot], seen; [learngrokbot: what is][lgb-what], seen) The waveform shows only when the composer is empty; once you type, a round send arrow replaces it. ([learngrokbot: first Bot][lgb-first-bot], reported; the saved screenshots show only the empty composer)
 - The "+" menu opens upward with "Attach files" and "Teach a task" (with a red record dot). ([learngrokbot: skills][lgb-skills], reported from caption)
 - Composer shortcuts: `@` mentions a Bot, group, routine or app; `/` opens a skill list (it was removed in 0.68.1, per one user, and the docs say to ask for a skill by name); `>` at line start makes a block quote; `Enter` sends, `Shift+Enter` adds a new line, `Cmd/Ctrl+Enter` sends from anywhere; `Cmd/Ctrl+D` starts dictation; `Cmd/Ctrl+/` lists all shortcuts; `Cmd/Ctrl+F` finds in chat; `Cmd/Ctrl+I` focuses the prompt; `Cmd/Ctrl+L` adds selected text to chat; `Cmd/Ctrl+K` opens search across Bots, groups, messages, files, links, routines and settings; `Cmd/Ctrl+Shift+F` searches Bots. ([docs: chat][d-chat], seen; [Flavio Copes][flavio], reported; [forum: instructions][f-instructions], reported)
 - The `/` menu, when present, lists matching rows with a right-aligned tag. Typing "/check" showed "Check Cursor changelog" tagged "Skill" and "Check for Updates" tagged "Action". A sent skill appears as a chip in your bubble. ([learngrokbot: skills][lgb-skills], reported from caption)
-- Drafts are kept per conversation. ([docs: mobile][d-mobile], seen)
+- On the phone, an unsent draft is kept per conversation ([docs: mobile][d-mobile], seen). Desktop draft persistence is not documented. (no public material found)
 - Attachments: up to 20 per message, images 25 MB each and 200 MB total, documents 250 MB, video 1 GB. An oversized file is flagged and dropped. While files upload, your message shows a "Sending…" bar that fills. ([docs: files][d-files], seen; [changelog][x-changelog], reported)
 - A failed send shows "Failed to send" with "Resend" and "Delete". On the phone, a divider reads "SEND AFTER RECONNECT". ([learngrokbot: changelog][lgb-changelog], reported; [learngrokbot: error messages][lgb-errors], reported)
 
@@ -191,8 +206,8 @@ From a first-hand screenshot of a 1:1 chat with the details panel open (dark the
 
 - It opens on the right when you click the Bot's name. A share button (upload icon) and a close button (X) sit at the top right. Below them, centered: a large avatar about a fifth of the panel's width, the name in bold, "Add a label" (or the label) in grey, then a segmented control with three tabs, "Details", "Library" and "Computer". ([learngrokbot: first Bot][lgb-first-bot], seen)
 - **Details** lists "Routines". Each routine is a rounded row with its name, a second line with its schedule or "Paused", and a switch on the right. The empty state reads "Ask in chat to set a routine". On Team Bots, "Details" also shows "About" (the description). Meetings appear under "Upcoming", and "Suggested" can hold "Add to meeting" or "Review learnings". ([docs: routines][d-routines], seen; [docs: meetings][d-meetings], seen; [docs: team Bots][d-team], seen)
-- **Library** lists what the Bot made (section 9.5).
-- **Computer** shows a 16:9 live thumbnail of the Bot's screen with a dark "Open" pill (expand icon) centered over it, and the caption "&lt;Bot&gt;'s screen". (Section 7.)
+- **Library** lists what the Bot made and sent (section 9.5). ([docs: files][d-files], seen)
+- **Computer** shows a 16:9 live thumbnail of the Bot's screen with a dark "Open" pill (expand icon) centered over it, and the caption "&lt;Bot&gt;'s screen". (Section 7.) ([learngrokbot: what is][lgb-what], seen)
 - A "Tasks" tab appears when the Bot has launched cloud agents. ([changelog][x-changelog], reported)
 - An older layout had "Details / Media / Computer", and "Media" became "Library" in v0.62.0. ([forum: description][f-description], reported; [learngrokbot: changelog][lgb-changelog], reported)
 
@@ -201,7 +216,8 @@ From a first-hand screenshot of a 1:1 chat with the details panel open (dark the
 - Create with "New chat", `Cmd/Ctrl+Shift+N` or `Cmd/Ctrl+K` and then "New group chat". On the phone, "+" and then "New Group Chat". Add two to six Bots in the "To:" field. The generated name begins with your own name and then lists the Bots, and you can rename it with right-click, "Rename chat". ([docs: chat][d-chat], seen; [learngrokbot: multiple Bots][lgb-multi], seen)
 - The group header is a centered pill with the group's name. Each Bot reply has the Bot's name above it in small text in that Bot's color, and the Bot's small avatar sits at the bottom left of its last bubble. Your messages are right-aligned in a neutral grey, since a group has no single Bot color. ([learngrokbot: multiple Bots][lgb-multi], seen)
 - Bots decide among themselves who answers. `@Bot` targets one Bot, `@everyone` all of them, and "Reply" answers one Bot. ([docs: chat][d-chat], seen)
-- Groups do not show approval requests, secret or login requests, or email and Slack drafts. A Bot that needs your OK says the step is blocked and asks you to open its own chat. Groups have no voice chat and no per-Bot notification switch. ([docs: chat][d-chat], seen; [learngrokbot: multiple Bots][lgb-multi], reported)
+- **The sources conflict on approvals in groups.** The collaboration page says approval requests, secret and login requests, and email and Slack drafts do not appear in a group ([docs: chat][d-chat], seen). The independent guide, dated to the 12 September build, says a Bot that needs your OK says the step is blocked and asks you to open its own chat ([learngrokbot: multiple Bots][lgb-multi], reported). But the approvals page describes group approval cards: only the person whose message the Bot is answering can approve, others see who the card waits on, and "Always allow" is not offered ([docs: approvals][d-approvals], seen). Which one is current is unresolved.
+- Groups have no voice chat and no per-Bot notification switch. ([docs: chat][d-chat], seen)
 
 ---
 
@@ -216,8 +232,8 @@ The owner named this as a detail he likes. The public evidence, in order of stre
 - The team rejected the standard three animated dots, because they cannot tell working apart from stuck.
 - They tried a short written description of the current action, and users then wanted every step, mostly for reassurance.
 - The final design makes the Bot's avatar the first signal. The avatar shows the lifecycle state through motion: calm and a little curious at rest, it acknowledges incoming work, speeds up while working, changes its motion when waiting or needing help, and settles when finished. The named states are idle, thinking, working, waiting, blocked and done.
-- If you want to know what the Bot is doing, you hover to see its current action. Step details sit behind that hover and are not shown by default.
-- The post's mock step log shows what those steps look like: "Searching the web", "Environment ready 387ms", "Edited math.ts +14 −10", "Ran focused tests npm test", "Thought briefly", "Read AGENTS.md", "Ran full suite 212 passed", "Committed fix: clamp NaN". Each step is a short verb phrase with an optional grey detail: a duration, a diff count, a command or a result.
+- If you want to know what the Bot is doing, you can hover to see its **current action**. The post does not say which element you hover, and it does not describe a hover-accessible step log or any view of raw tool calls.
+- An illustration in the post lists steps: "Searching the web", "Environment ready 387ms", "Edited math.ts +14 −10", "Ran focused tests npm test", "Thought briefly", "Read AGENTS.md", "Ran full suite 212 passed", "Committed fix: clamp NaN". Each step is a short verb phrase followed by a detail: a duration, a command or a result in muted text, or a diff count given as + and − figures. The post does not say where in the shipped app such a list appears.
 
 **What a first-hand screenshot shows** ([learngrokbot: home][lgb-home], seen):
 
@@ -227,7 +243,8 @@ The owner named this as a detail he likes. The public evidence, in order of stre
 **What the official changelog says** ([changelog][x-changelog], reported):
 
 - The status line shows up right after you send, even for quick replies.
-- The status is a short phrase in your language, in the app and in Slack. Examples: "Thinking it through", "Working on your computer", "Working on it" and "Thinking". The Bot's name is not put in front. For a greeting, thanks or small talk, it says "is on it" or "is working on it".
+- The status is a short phrase in your language, in the app and in Slack. Examples: "Thinking it through", "Working on your computer", "Working on it" and "Thinking". The Bot's name is not put in front.
+- Greetings and small talk changed over time. An earlier entry made the status for a greeting, thanks or small talk read "is on it" or "is working on it". A later entry replaced that with a status that names the work, and a still later fix keeps a line such as "Thinking it through" showing while the Bot replies. The entries are undated in the excerpts; their order comes from the page order.
 - Specific statuses ("Working on your computer") show at once. Generic ones ("Working on it", "Thinking") wait a moment before appearing, so a fast reply never flashes a generic status.
 - While a Bot works with nothing to report, a 1:1 chat shows just its animated avatar.
 - Animated avatars in the sidebar and in a chat's activity line were made to move more smoothly.
@@ -243,7 +260,7 @@ The owner named this as a detail he likes. The public evidence, in order of stre
 
 1. You send. Within a moment, a working line appears under the conversation: the Bot's animated avatar and a short status phrase in grey, with a shimmer.
 2. The Bot narrates progress as separate short chat bubbles. These are written by the model, not generated by the UI.
-3. Tool calls, browser steps and shell commands are not listed by default. Hovering the working line (desktop) shows the current action. No source shows an expandable step log in a shipped screenshot.
+3. Tool calls, browser steps and shell commands are not listed by default. On desktop, hovering shows the current action, but which element is the hover target is not established. No source shows an expandable step log or raw tool calls in a shipped screenshot, and no touch equivalent of the hover is documented for iOS.
 4. When the Bot finishes, the working line disappears and the answer bubble or a card appears. A Bot no longer sends a message that only says it is done (1.0.1).
 5. Meanwhile the sidebar avatar animates, and the row shows a working state.
 
@@ -270,9 +287,10 @@ In the screenshots, these lines are right-aligned, in a smaller grey font, with 
 
 ### 5.3 Cards in the transcript
 
-Cards are full-width-ish rounded panels, darker than bubbles, with a title at the top left, an optional status tag at the top right and buttons at the bottom. ([learngrokbot: approvals][lgb-approvals], seen; [learngrokbot: gmail][lgb-gmail], seen)
+Cards are wide rounded panels with a title at the top left, an optional status tag at the top right and buttons at the bottom. In the captured question and approval cards the fill is a dark grey close to that of the Bot's bubbles; the email draft card puts its fields in a near-black inset. ([learngrokbot: approvals][lgb-approvals], seen; [learngrokbot: gmail][lgb-gmail], seen; [learngrokbot: first Bot][lgb-first-bot], seen)
 
-- **Question card:** a title such as "Who or what should I watch?" with an X at the top right. It lists two to five lettered options (A, B, C, D) as rows, each with a grey letter badge, and an option can have a second grey line ("Type the names yourself"). A "Type your own answer" field sits at the bottom. Once answered, the card folds to one line showing the chosen letter and text, with a check mark on the right. The Bot no longer repeats the question as a separate message. ([learngrokbot: first Bot][lgb-first-bot], seen; [changelog][x-changelog], reported)
+- **Question card:** a title such as "Who or what should I watch?" with an X at the top right. The captured example lists four lettered options (A to D) as rows, each with a grey letter badge, and an option can have a second grey line ("Type the names yourself"). Other option counts are not documented. A "Type your own answer" field sits at the bottom. ([learngrokbot: first Bot][lgb-first-bot], seen)
+- **Answered question card:** the card keeps its title ("What should I help with most?") and shrinks to a single dimmed row below it with the chosen letter and text ("B Tracking news or competitors") and a check mark at the right. The other options and the free-text field are gone. ([learngrokbot: first Bot][lgb-first-bot], seen) The Bot no longer repeats the question as a separate message. ([changelog][x-changelog], reported)
 - A multiple-choice variant says "Choose all that apply". ([alexop.dev][alexop], reported)
 - **File card:** a rounded panel with a document icon on the left, the file name and its size below ("grokbot-setup-overview.md", "37kB"). Clicking it opens a preview with "Download file". ([alexop.dev][alexop], seen; [learngrokbot: first Bot][lgb-first-bot], reported)
 - **Link card:** an app icon, the title and the domain ("Q3 board deck v4", "docs.google.com"). Hover shows a preview, and private Notion, GitHub and Slack links show their real titles. ([App Store][appstore], seen; [docs: files][d-files], seen; [changelog][x-changelog], reported)
@@ -285,7 +303,7 @@ Cards are full-width-ish rounded panels, darker than bubbles, with a title at th
 ### 5.4 Steering, stopping and progress controls
 
 - You can send more instructions while a Bot works. A new direct message redirects the current turn and outranks background work. ([docs: chat][d-chat], seen)
-- **There is no documented stop button.** To end work, you send a direct message such as "Stop now". Stopping does not undo completed actions. ([docs: chat][d-chat], seen; [docs: troubleshooting][d-trouble], seen)
+- **No per-turn Stop control was established by the examined material.** The docs tell you to end work by sending a direct message such as "Stop now". Stopping does not undo completed actions. ([docs: chat][d-chat], seen; [docs: troubleshooting][d-trouble], seen)
 - Stop cascades: it ends the Bot's background subagents (whose pending approval cards then expire), the other Bots it handed work to, the Cloud Agents it started, and anything still running on its computer. A Bot stuck on an unresponsive step ends within about 30 seconds of a stop or a new message. An email "Send" that a stop cut off still goes out. ([changelog][x-changelog], reported; [learngrokbot: changelog][lgb-changelog], reported)
 - Sending a new message closes any open approval card in that chat. ([docs: approvals][d-approvals], seen)
 - No progress bar, percentage or elapsed timer exists for a Bot turn. The only progress UI is the working line and the narrated bubbles. ([docs: chat][d-chat], seen; inferred)
@@ -302,23 +320,59 @@ Cards are full-width-ish rounded panels, darker than bubbles, with a title at th
 - When chats, pages, skills, routines or plugins fail to load, the app shows the error with "Try again" and keeps what it last loaded. ([changelog][x-changelog], reported)
 - A display bug: a chat can stop showing new messages while the sidebar preview updates. The workaround is to click another Bot and come back. ([forum: stuck][f-stuck], reported)
 
+### 5.6 Clawtrate design proposal: the working view
+
+This subsection is not Grok Bot evidence. It is Clawtrate's intended behavior, written so a test can check it. Grok Bot's quiet presentation (state avatar, short phrase, progress messages) is the collapsed state; the detail shows when the user expands it. Pixel values, colors and timing curves are left to the design specification.
+
+**Run states.** Each turn of a task is a run with one state at a time: `queued`, `running`, `waiting` (a card needs the user), `stopping`, and the terminal states `completed`, `stopped` and `failed`. Transitions:
+
+| From | Trigger | To |
+|---|---|---|
+| (none) | User sends while the task has no active run | `running` |
+| (none) | User sends with "Queue after this turn" while a run is active | `queued` |
+| `queued` | The active run reaches a terminal state | `running` |
+| `running` | An approval, question, Secure Form or Computer card from this run is pending | `waiting` |
+| `waiting` | The last pending card of this run is answered, expires or is dismissed | `running` |
+| `running` or `waiting` | User presses Stop | `stopping` |
+| `stopping` | The gateway confirms the run ended | `stopped` |
+| `running` | The gateway reports the run finished normally | `completed` |
+| any non-terminal | The gateway reports the run ended with an error, or the run exceeds Clawtrate's turn limit | `failed` |
+
+**Status line (collapsed view).** While a run is non-terminal, a status line sits at the bottom of the task's transcript: the Bot's avatar and a short phrase. The phrase is the plain-language summary of the step that is currently running ("Reading the pricing pages"). When no step is running, a generic phrase ("Thinking") appears. Clawtrate's choice: the generic phrase appears only if no specific step has started within 1 second of the run starting; specific phrases appear as soon as their step starts. Nothing delays the reply itself. In `waiting` the phrase is "Waiting for you"; in `stopping` it is "Stopping…". Progress messages, cards and Messaged cards that arrive during the run render above the status line, and the status line stays put. **The status line is removed only when the run reaches a terminal state**, never because a bubble or card arrived.
+
+**Activity block.** Every run that used at least one tool has one activity block, placed in the transcript where the run's first step began. Collapsed, it is one line. While the run is non-terminal it reads like "Working · 3 steps". At the end it reads "Worked for 1m 12s · 7 steps", "Stopped after 40s · 4 steps" or "Failed after 12s · 2 steps". When any step failed, it adds "· 1 failed" (FC-15). Clicking or tapping the line expands the block into a list of step cards; doing it again collapses it. The block keeps its expanded or collapsed state while new steps arrive and when the user scrolls away and back. Failed step cards stay visible under the collapsed line, so a failure can never hide behind a success summary.
+
+**Step cards.** Each tool call, reasoning segment the gateway exposes, Bot-to-Bot message and approval is one step card. Collapsed, a step card is one line: a kind icon, the plain-language summary, a short detail (target, duration, result count) and a status (running, done, failed, waiting). Clicking or tapping one step card expands only that card. It shows the inputs and the result in readable form, plus a "Raw" control that reveals the exact tool name, arguments, result, timing, error and the gateway's identifiers, each copyable (FC-05). While one card is expanded, other cards keep updating, new cards keep appending, and nothing above the expanded card moves. A running step's card shows output as it arrives, where the gateway streams it.
+
+**Hover and touch.** On desktop, hovering the status line shows the current step's full summary in a tooltip (Grok Bot parity), and hovering a step card shows its full summary when truncated. On iOS and iPadOS, tapping the status line expands the activity block and scrolls the running step into view; tapping a step card expands it; touch and hold on a step card offers "Copy result" and "Copy raw".
+
+**Avatar motion.** The avatar has one distinct appearance per state: idle (no run), thinking (run active, no tool step running), working (a tool step running), waiting (a card pending), blocked (the gateway or node is unreachable, or the run cannot proceed without a settings change) and done (terminal `completed` and not yet seen; it returns to idle when the user opens the task). The current state is exposed to accessibility as text, for example "Demo Research, working".
+
+**Reduced motion.** When the system's reduce-motion setting is on, the avatar does not animate; each state uses a static variant and the text state label stays visible. The phrase shimmer is replaced by plain text. Spinners become a static running glyph. Expanding and collapsing happen without animation. The information shown is the same in both modes.
+
+**Composer while a run is active.** Send stays available. Pressing Enter or Send delivers the message into the current run as a steer, and the sent bubble carries a small "Steer" label. Next to Send, a Stop button appears for as long as the run is non-terminal. The Send button's menu offers "Queue after this turn" and "Start as new task". A queued message shows a "Queued" chip with "Send now" (turns it into a steer) and "Cancel".
+
+**Stop.** Stop moves the run to `stopping`. When the gateway confirms, the status line disappears and a grey note lists what was stopped: helper runs, delegated Bots' runs and processes the run started on its machine. The note also says that completed actions are not undone, and that work already handed to T3 Code continues there. Stop never removes completed steps or results from the transcript.
+
+**Streaming text.** Reply text streams into its bubble as the gateway emits it. The bubble is marked as streaming until the message completes.
+
 ---
 
 ## 6. Bot-to-bot messaging and handoffs
 
-The owner likes the card that shows when one Bot has messaged another. **In Grok Bot it is a grey event line, not an expandable card.** It opens a read-only view of the exchange in place of the chat. Clawtrate's target, an inline card that expands to show what was sent, is an improvement, not parity.
+The owner likes the card that shows when one Bot has messaged another. **In Grok Bot it is a grey event line, not an expandable card** ([learngrokbot: multiple Bots][lgb-multi], seen). According to the guide, which documents desktop 0.68.1 in early October, clicking the name opens a read-only view of the exchange in place of the chat ([learngrokbot: multiple Bots][lgb-multi], reported). Clawtrate's target, an inline card that expands to show what was sent, is an improvement, not parity (section 6.1).
 
 ### What you see in the sending Bot's chat
 
 From a first-hand screenshot ([learngrokbot: multiple Bots][lgb-multi], seen):
 
 1. The Bot's bubble: "Asking Demo Price Watch for Linear Basic pricing now."
-2. A right-aligned grey line: "Messaged", then the receiving Bot's small avatar (about the size of a capital letter) in its color, then its name in a lighter grey.
+2. A grey line: "Messaged", then the receiving Bot's small avatar (about the size of a capital letter) in its color, then its name in a lighter grey. In this crop the line sits to the right, under the bubbles; how it aligns with the full chat column is not visible.
 3. The Bot's bubble: "Asked Demo Price Watch — I'll pass along what they say when they reply."
-4. Later, a right-aligned grey line: "Message from", the same avatar and name.
+4. Later, a grey line in the same position: "Message from", the same avatar and name.
 5. The Bot's bubble relays the answer in its own words: "Demo Price Watch says Linear Basic is $10 per user/month, billed yearly (linear.app/pricing)."
 
-The same pattern appears in a primary Bot's chat: "I'll have…", "Messaged &lt;Bot&gt;", "I asked… I'll pass along what they change once it's done." ([learngrokbot: chief of staff][lgb-cos], seen; image credited to a Riley Brown video) Another user's chat shows "Messaged Finances" and "Messaged Instagram · Social Media", with the Bot name in bold. ([alexop.dev][alexop], reported)
+The same pattern appears in a primary Bot's chat: "I'll have…", "Messaged &lt;blurred name&gt;", "I asked… I'll pass along what they change once it's done." In that crop the "Messaged" line sits nearer the middle. ([learngrokbot: chief of staff][lgb-cos], seen; image credited to a Riley Brown video) Another user's chat shows "Messaged Finances" and "Messaged Instagram · Social Media", with the Bot name in bold. ([alexop.dev][alexop], reported)
 
 ### Opening the exchange
 
@@ -331,7 +385,7 @@ The same pattern appears in a primary Bot's chat: "I'll have…", "Messaged &lt;
 
 - A Bot sends another Bot an asynchronous message. The receiver wakes, does the work and may reply later. ([docs: chat][d-chat], seen)
 - You can ask for a handoff by naming the other Bot in plain words, or by typing `@` and picking it. Bots also message each other on their own when they judge the job needs it. ([learngrokbot: multiple Bots][lgb-multi], reported)
-- Handoff messages are text only. A Bot that needs another to see an image must send the image itself. ([docs: chat][d-chat], seen)
+- Bot-to-group handoff messages are text only, so a Bot should send an image directly to another Bot when that Bot must inspect it. Whether direct Bot-to-Bot messages carry other attachments is not documented. ([docs: chat][d-chat], seen)
 - **There is no switch to stop Bots messaging each other.** You tell them in chat and ask them to remember the rule. ([docs: chat][d-chat], seen)
 - Every Bot-to-Bot message counts as a reply against usage. One user measured 8 percent of a month's usage as Bot-to-Bot traffic. ([docs: chat][d-chat], seen; [alexop.dev][alexop], reported)
 - When one Bot wakes another, the second Bot's questions come to the chat where you asked. ([changelog][x-changelog], reported)
@@ -342,11 +396,37 @@ The same pattern appears in a primary Bot's chat: "I'll have…", "Messaged &lt;
 
 ### Handoff to coding agents (the T3 Code equivalent)
 
-- Bots hand coding work to Cursor Cloud Agents and attach the results to their reply. The Cloud Agent shows as a card in the conversation, with the files cited in the agent's final report. On the phone, the card shows the files once the run is "Done", "Error" or "Expired", ordered images, then videos, then other files, with "Retry", "View PR" and "Open in Cursor". ([docs: how it works][d-how], seen; [docs: files][d-files], seen)
-- The details panel's "Tasks" tab lists these runs (section 4.1).
+- Bots hand coding work to Cursor Cloud Agents and attach the results to their reply. The Cloud Agent shows as a card in the conversation, with the files cited in the agent's final report. On the phone, the card shows the files once the run is "Done", "Error" or "Expired", ordered images, then videos, then other files. "Retry" reloads a file that failed to load; it does not rerun the agent. "View PR" appears only if the run opened a pull request and has not expired. "Open in Cursor" opens the run in the coding app. ([docs: how it works][d-how], seen; [docs: files][d-files], seen)
+- The details panel's "Tasks" tab lists these runs (section 4.1). ([changelog][x-changelog], reported)
 - A daily routine shown by one user has the Bot pick stale posts and a Cursor cloud agent open a PR, then the Bot posts a one-line summary. ([Flavio Copes][flavio], reported)
 
-This is the slot where Clawtrate shows "Messaged T3 Code". Grok Bot's Cloud Agent card is the nearest existing pattern: a card with a status, files and a link out to the coding app.
+My reading, not evidence: this is the slot where Clawtrate shows "Messaged T3 Code", and Grok Bot's Cloud Agent card is the nearest existing pattern, a card with a status, files and a link out to the coding app. (inferred)
+
+
+### 6.1 Clawtrate design proposal: the expanding Messaged card
+
+Not Grok Bot evidence. Public material does not show Grok Bot's opened exchange, so this is Clawtrate's own design. Event names come from the gateway capability map; this document does not invent them.
+
+- **Recognition.** A Messaged card is drawn for each tool event in which the Bot sends a message to another Bot through the gateway's agent-to-agent messaging. One card is drawn per message sent.
+- **Placement.** The card sits in the transcript at the point where the message was sent, and stays visible when the run's activity block is collapsed. The same message also appears as a step card inside the activity block.
+- **Collapsed.** One line: "Messaged", the recipient's avatar and name, the first line of the message (truncated), and a state: Sending, Sent, Working (the recipient has an active run for it), Replied or Failed.
+- **State transitions.** Sending when the send tool call starts; Sent when the call returns successfully; Working when the recipient's run for this message starts; Replied when the reply event arrives; Failed when the send call returns an error or the recipient's run fails. If the sending Bot is stopped before the call returned, the state becomes "Not sent" or "Unknown", whichever the gateway reports.
+- **Expanded.** Clicking or tapping the card expands it in place to show the exact text sent, any attachments, the time sent, and then the reply text and time. While the recipient is working, the expanded card shows the recipient's live status line. The card has "Open in &lt;Bot&gt;", which goes to the recipient's task for this message, and "Raw", which shows the tool call. Collapsing returns the card to one line; nothing else in the transcript moves.
+- **Return.** From the recipient's task, Back (iOS) or the history-back action (desktop) returns to the sender's task at the same scroll position, with the card still expanded.
+- **Receiving side.** The recipient's task starts with a "Message from &lt;Bot&gt;" card that expands the same way and links back to the sender with "Open in &lt;Bot&gt;".
+- **"Open full exchange"** in the expanded card opens a read-only view of every message between the two Bots in this task, with a close control that returns to the card (Grok Bot's behavior, kept as a secondary path).
+
+### 6.2 Clawtrate design proposal: the Messaged T3 Code card
+
+Not Grok Bot evidence. This follows the coordinator's ruling: **the client draws this card only from the Bot's own tool events on the gateway.** The client never connects to T3 Code, never reads its state, and never cancels or steers anything inside it.
+
+- **Recognition.** A Messaged T3 Code card is drawn for each tool event in which the Bot sends work to T3 Code. The tool and event names come from the gateway capability map.
+- **Identity.** The card uses the text label "T3 Code" with an original generic coding-agent icon. It never uses a third-party logo.
+- **Collapsed.** One line: the icon, "Messaged T3 Code", the first line of what was sent, and a state: Sending (the tool call has started), Sent (the call returned and its result says the work was accepted), Done (a tool result carries a final result), or Failed (the call returned an error).
+- **Expanded.** It shows the exact text sent, taken from the tool call's arguments, and any target fields those arguments contain (a project, thread or branch, shown only if present). Below that, the reply or result text from the tool result, and the time of each. A link appears only if the tool result carries one. "Raw" shows the tool call and result.
+- **Waiting.** After Sent, the card changes again only if the Bot receives a later tool event about the same work, for example a follow-up tool that returns the result. Each such event updates the card. Without one, the card stays at Sent.
+- **Failure.** On a tool error, the card shows Failed and the error text when expanded.
+- **When the Bot is stopped.** Stopping the Bot stops its run on the gateway. If the work had already been sent, the card keeps its state and adds the line "Work already sent to T3 Code continues there." If the stop came before the call returned, the card shows what the gateway reports for the call (not sent, or unknown).
 
 ---
 
@@ -364,7 +444,7 @@ This is the slot where Clawtrate shows "Messaged T3 Code". Grok Bot's Cloud Agen
 The official design post explains the layout ([x.ai design post][x-design], seen):
 
 1. **Status:** a computer icon in the title bar turns purple while the computer is active.
-2. **Preview:** opening it reveals a pinned side panel where you can follow along without leaving the conversation. This is the "Computer" tab of the details panel.
+2. **Preview:** opening it reveals a pinned side panel where you can follow along without leaving the conversation. That this panel is the "Computer" tab of the details panel is my mapping across sources, not something the post says. (inferred)
 3. **Takeover:** full screen. You take control, then hand it back.
 
 The team rejected a floating window (it covered the chat), side by side (it encouraged watching), a modal (it treated the workspace as an interruption) and full screen by default (it pushed the chat out). The more prominent the computer, the more people felt they had to supervise it. The wallpaper on the Bot's desktop changes through the day, lighter in the morning and darker at night, so the Bot's machine never looks like your own desktop.
@@ -380,7 +460,7 @@ The team rejected a floating window (it covered the chat), side by side (it enco
 
 - "Open" fills the app window with the Bot's desktop. A small "Exit fullscreen" control sits at the top right. You see clicks, typing, navigation and current status as they happen. ([learngrokbot: shared computer][lgb-computer], reported; [docs: computer][d-computer], seen)
 - Full screen opens in "Watching" mode until you press "Take control". It shows the live view at once, without a second "Connecting" screen. ([changelog][x-changelog], reported)
-- When a Bot needs you (password, two-factor code, CAPTCHA, passkey, SSO, bank card check, a QR code or approval on another device), it posts a **Computer card**. The card is titled "Computer", with a bold line saying what it needs ("Sign in to GitHub, then hand the screen back.") and a grey note that the sign-in happens in the browser on the Bot's computer and stays signed in there. Under that is a dark 16:9 preview tile with a small monitor icon, then three buttons: "Take over" (white, primary), "I'm done" (outlined) and "Skip" (plain text, right). The Bot's sidebar row starts "Waiting for you", and the card's status shows "Action needed". ([learngrokbot: shared computer][lgb-computer], seen; [docs: troubleshooting][d-trouble], seen)
+- When a Bot needs you (password, two-factor code, CAPTCHA, passkey, SSO, bank card check, a QR code or approval on another device), it posts a **Computer card**. The card is titled "Computer", with a regular-weight white line saying what it needs ("Sign in to GitHub, then hand the screen back.") and a grey note that the sign-in happens in the browser on the Bot's computer and stays signed in there. Under that is a dark 16:9 preview tile with a small monitor icon, then three buttons: "Take over" (white, primary), "I'm done" (outlined) and "Skip" (plain text, right). The Bot's sidebar row starts "Waiting for you", and the card's status shows "Action needed". ([learngrokbot: shared computer][lgb-computer], seen; [docs: troubleshooting][d-trouble], seen)
 - After "Take over", the computer opens full screen with a bar across the top holding "Skip this step" (dark) and "I'm done, continue" (white). A collapse icon sits at the top right. ([learngrokbot: shared computer][lgb-computer], seen)
 - When you press "I'm done", the chat card changes to "Done", and the Bot continues. The docs also say to tell the Bot to continue. ([learngrokbot: shared computer][lgb-computer], reported; [docs: approvals][d-approvals], seen)
 - Recording for "Teach a task" uses the same full-screen view: a red outline around the desktop, a bar reading "&lt;Bot&gt; is watching and learning", a square stop button and a timer at the top right. The record button is red, "Start recording", with an X beside it. (Section 9.2.) ([learngrokbot: skills][lgb-skills], reported from caption)
@@ -388,9 +468,20 @@ The team rejected a floating window (it covered the chat), side by side (it enco
 
 ### Files, terminal, downloads and artifacts
 
-- There is no file browser or terminal panel in the app. The computer has a browser, command line and file system, but you see them only through the screen view. Durable files belong in `/workspace`. Temporary folders, installed packages, `node_modules` and virtual environments are not kept. ([docs: computer][d-computer], seen; [docs: files][d-files], seen)
+- No file browser or terminal panel was visible in any examined screen, and none is documented; the computer's browser, command line and file system are seen only through the screen view. (inferred from [docs: computer][d-computer] and the screenshots) Durable files belong in `/workspace`. Temporary folders, installed packages, `node_modules` and virtual environments are not kept. ([docs: computer][d-computer], seen; [docs: files][d-files], seen)
 - Files reach you as cards in the chat and in the Library (section 9.5). ([docs: files][d-files], seen)
 - When disk space is low, the Bot names the largest items once and deletes only after you say yes. ([docs: computer][d-computer], seen)
+
+### Clawtrate design proposal: files and the computer beside the conversation
+
+Not Grok Bot evidence. Clawtrate's intended behavior.
+
+- **Desktop work pane.** The right-hand pane beside the conversation has the tabs Details, Files and Computer. Opening any of them never replaces or hides the conversation.
+- **Files tab.** It lists the files in the task's workspace on its machine as a folder tree, with name, size and modified time, sortable by name or time. Files created or changed by the current run carry a "changed" marker and update live. Selecting a file opens its preview inside the pane (text, code, markdown, images, PDF, and the media viewer for video). A file without a supported preview shows its details and "Download". Every file has "Download", which saves the file's exact bytes under its own name, and "Show in chat", which scrolls to the message or step that produced it. If the listing or a preview fails, the pane shows the error with "Try again" and keeps what it last loaded.
+- **Computer tab.** It works as in Grok Bot (preview, "Open", Watching, "Take control", "I'm done"), and also names the machine the Bot runs on and its connection state (FC-02, FC-08).
+- **iPhone.** Files and Computer are sections of the task's info screen, opened from the header. A file opens full screen with "Share" and "Save to Files"; Back returns to the chat at the same position. The computer opens full screen, starts in Watching, and has "Take control" and "I'm done". These mobile screens are Clawtrate additions, not observed Grok Bot behavior.
+- **iPad.** The work pane is a side column next to the conversation, as on desktop.
+- **Leaving.** Closing the pane, leaving the computer view or quitting the client never stops gateway work. When the client returns, it reconnects and shows the run's current state.
 
 ### Your own computer
 
@@ -403,7 +494,9 @@ The team rejected a floating window (it covered the chat), side by side (it enco
 
 - States: "Reconnecting", "Couldn't Reach Grok Bot's Computer" (with "Retry"), "Unreachable" on the computer card, "Can't reach New Bot's screen". A notice at the top of an empty sidebar reads "Can't reach your computer", with "Retry" and "Recover computer". ([docs: troubleshooting][d-trouble], seen; [learngrokbot: can't reach computer][lgb-cantreach], reported)
 - Settings, Updates (or Computer), "Grok Bot's Computer" has "Update Grok Bot's Computer" ("Your computer is on the latest version") and "Reset Grok Bot's Computer" ("Start fresh if the computer gets stuck. It's rebuilt from your last saved snapshot, so very recent changes may be lost."), with a red "Reset" button. ([learngrokbot: not responding][lgb-notresp], reported from caption)
-- The update window, "Updating Grok Bot's Computer", lists seven steps with circle icons: "Getting ready", "Backing up your data", "Recreating Grok Bot's computer", "Transferring your data", "Starting Grok Bot's computer", "Cleaning up" and "Reconnecting". Done steps get a check mark, the active one a spinner and grey text turns white. A progress bar with a percentage ("43%") sits under the list, then a box "Update still running" explaining that large transfers take minutes, then "Continue in Background" and a white "Keep waiting". The recovery window, "Recovering Grok Bot's Computer", has four steps and only "Continue in Background". Failure shows "Reset failed" with "Dismiss" and a red "Retry Reset". ([learngrokbot: can't reach computer][lgb-cantreach], seen)
+- The update window, "Updating Grok Bot's Computer", lists seven steps with circle icons: "Getting ready", "Backing up your data", "Recreating Grok Bot's computer", "Transferring your data", "Starting Grok Bot's computer", "Cleaning up" and "Reconnecting". Done steps get a check mark, the active one a spinner and grey text turns white. A progress bar with a percentage ("43%") sits under the list, then a box "Update still running" explaining that large transfers take minutes, then "Continue in Background" and a white "Keep waiting". ([learngrokbot: can't reach computer][lgb-cantreach], seen)
+- The recovery window, "Recovering Grok Bot's Computer", has four steps ("Getting ready", "Recreating Grok Bot's computer", "Starting Grok Bot's computer", "Reconnecting"), a bar at "75%" and only "Continue in Background". ([learngrokbot: can't reach computer][lgb-cantreach], seen)
+- A failed reset shows a dialog "Reset failed": "The reset couldn't finish. Grok Bot's computer may be in a partial state — retry to run the reset again.", with "Dismiss" and a red "Retry Reset". The docs also name "Retry Recovery" for a failed recovery. ([learngrokbot: can't reach computer][lgb-cantreach], seen; [docs: computer][d-computer], seen)
 - The escalation order is Retry, quit and relaunch, Update, Recover, then Reset. ([docs: computer][d-computer], seen)
 - Users reported "bricked" computers for days in August. Staff fixed them by resetting the computer, which can lose unsynced work. ([CellCog][cellcog], reported; [forum: broken][f-broke], reported)
 
@@ -438,9 +531,9 @@ Variants ([docs: approvals][d-approvals], seen):
 | Terminal command | "Allow", "Skip", "Manage settings" (opens Auto-review settings) |
 | Paused by an Ask-first rule | "Allow", "Not now", "Edit rule" (opens Custom Rules) |
 | No rule to offer | "Allow" instead of "Allow once"; no "Always allow" |
-| Personal account use by a Team Bot | "Allow once", "Always allow" (menu: "Always allow for your messages to this Bot", and one for every Team Bot), "Skip" |
+| Personal account use by a Team Bot ([docs: team Bots][d-team], seen) | "Allow once", "Always allow" (menu: "Always allow for your messages to this Bot" and "Always allow for your messages to every Team Bot"), "Skip" |
 | Slack thread ("Review an action") | "Allow once", "Deny", "View details". Only the requester can answer. |
-| Group chat | Only the person the Bot is answering can approve. Others see who it waits on. No "Always allow". |
+| Group chat | Only the person the Bot is answering can approve. Others see who it waits on. No "Always allow". (This conflicts with the collaboration page; see section 4.4.) |
 | Phone | Tap the card to see the full request and all buttons. |
 
 Possible warnings on a card: "This can't be undone", "This changes sign-in or security settings", "This shares your data outside this chat". ([docs: approvals][d-approvals], seen)
@@ -465,21 +558,21 @@ Possible warnings on a card: "This can't be undone", "This changes sign-in or se
 
 ### 8.6 Smarter approvals (1.0)
 
-- Bots better recognize when you have already authorized an action and when they must ask, so they interrupt less. They respect each user's permissions and check whether information suits a public channel. Shipped in v0.75.5. ([x.ai 1.0][x-10], seen)
+- The 1.0 announcement says Bots better recognize when you have already authorized an action and when they must ask, so they interrupt less, and that they respect each user's permissions and check whether information suits a public channel. ([x.ai 1.0][x-10], seen) The announcement links the change to changelog entry v0.75.5; the version attribution is the changelog's. ([changelog][x-changelog], reported)
 - Specific changes from the changelog ([changelog][x-changelog], reported):
   - Background work you start in your own words no longer needs approval to start.
   - Before an action it cannot undo (sending, posting, buying, deleting), a Bot checks your own messages for approval.
   - Cards name the Bot and quote its instruction.
   - Cards show when an Ask-first rule paused the action, or when "Always allow" added a rule, with "Edit rule".
   - Approval cards say in one sentence what the Bot wants, with the detail behind "View the full request" (v0.56.0).
-- The 1.0 launch image shows a voice call in which the Bot flags sensitive financials on slide 6 and offers to send the deck without that slide. ([x.ai 1.0][x-10], seen)
+- The alt text of one 1.0 launch image describes a call in which a user asks the Bot to send a deck, and the Bot flags sensitive financials on slide 6 and offers to send it without that slide. I read the alt text, not the image. ([x.ai 1.0][x-10], seen)
 
 ### 8.7 Secrets and logins
 
 - Sign-in order: a login saved in Vault, then a connected password manager (1Password), then a Secure Form. Vault and Secure Form values are filled in without the model seeing them. ([docs: approvals][d-approvals], seen)
 - The **Secure Form card** in chat shows the site's logo, "Sign in to GitHub", "Secure Form" beneath it and an "Open" button at the right. "Open" shows a dialog titled "Sign in to GitHub" / "Secure Form" with "Username or email address" and "Password", the line "Never shown to your Bot. Filled directly to github.com." and "Continue". A checkbox "Securely save to Bot's vault" decides whether it is saved. ([learngrokbot: logins][lgb-logins], reported from caption; [learngrokbot: shared computer][lgb-computer], reported from caption; [Flavio Copes][flavio], reported)
 - The **secure secret card** for API keys has a masked field and "Save securely". Afterwards it says "Saved" and "Saved securely and kept private". Saved values are write-only and never shown again. ([docs: vault][d-vault], seen)
-- Vault (Settings, Vault) holds logins, cards and contact info. Everything in it is available to every Bot on the account, and you cannot limit an item to one Bot. ([docs: vault][d-vault], seen)
+- Vault (Settings, Vault) holds logins, cards and contact info. Everything in it is available to every personal Bot on the account, and you cannot limit an item to one Bot. Team Bots cannot use your personal Vault; they have their own "Secrets" and "Bot's accounts". ([docs: vault][d-vault], seen)
 - Phone permission card: "Grok Bot needs permission" with "Allow", or "Open Settings" if denied before. The Bot waits up to five minutes. ([docs: mobile][d-mobile], seen)
 
 ---
@@ -524,7 +617,7 @@ Possible warnings on a card: "This can't be undone", "This changes sign-in or se
 ### 9.5 How finished work is surfaced
 
 - Files, images, links and tool results appear as cards in the conversation. Opening a card previews supported formats, from where you can save, open the source or give feedback. ([docs: files][d-files], seen)
-- **Library** (details, "Library" tab; on the phone, tap the Bot's name, then "Library"): Pages, files and apps the Bot made, plus images, videos and links it sent. It does not list things you uploaded or files from Cloud Agents. Items are grouped under "Today", "This week" and "Older", five at a time, with "Show more". Desktop filters: "All", "Pages", "Media", "Links", "Files", "Apps" and "Pinned". The row menu has "Pin"/"Unpin", "Open" and "Share…". A "Pinned" section syncs across devices. ([docs: files][d-files], seen)
+- **Library on desktop** (details, "Library" tab): Pages, files and apps the Bot made, plus images, videos and links it sent. The files page says it does not list things you uploaded or files from Cloud Agents. ([docs: files][d-files], seen) **On the phone** (tap the Bot's name, then "Library"), the mobile page says it lists the pages, images, videos, files and links in the conversation, "including ones you sent". ([docs: mobile][d-mobile], seen) The two pages conflict on uploads. On desktop, items are grouped under "Today", "This week" and "Older", five at a time, with "Show more". Desktop filters: "All", "Pages", "Media", "Links", "Files", "Apps" and "Pinned". The row menu has "Pin"/"Unpin", "Open" and "Share…". A "Pinned" section syncs across devices. ([docs: files][d-files], seen)
 - **Pages** are interactive documents (reports, memos, dashboards). A Page card has the title and "Open". On desktop, the Page fills the window with a smaller chat panel beside it, labelled "Message about &lt;Page title&gt;". The Bot edits the same Page for everyone who can view it. Filters on the Page change only your view. Sharing options are "People you invite" ("Only you" on personal accounts), your team, or "Anyone with the link" on pages.grok.bot. ([docs: files][d-files], seen)
 - **Media viewer:** click a thumbnail for full screen, arrow keys or thumbnails to move, a download button at the top, Escape to close. Video plays at 2×, 1.5×, 1× or 0.5×. Right-click offers "Copy image", "Save image…" and "Save video…". ([docs: files][d-files], seen)
 - A Bot no longer sends a message that only says it is done. The Bot is expected to summarize what it did in a few lines. ([Flavio Copes 1.0][flavio-10], reported)
@@ -552,6 +645,7 @@ Possible warnings on a card: "This can't be undone", "This changes sign-in or se
 - **Plugin page:** the logo, "View Source", "Share" and "Add" (or "Uninstall"), the description, "Apps" (rows like "slack, Connector") and "Accounts". An account row named "default" shows "Needs auth" in orange with "Authenticate", and below it "Add Another Account". ([learngrokbot: plugins][lgb-plugins], reported from caption; [learngrokbot: slack][lgb-slack], reported from caption)
 - **States:** "Added" (installed, not signed in), "Needs auth", "Disconnected", "Disabled by team admin", "Connected" (green). Actions: "Authenticate" ("Authorize" on phone), "Reconnect", "Reopen" (about 10 minutes to finish), "Remove". "Manage plugins and skills" lists installed plugins with a line such as "1 connector, 3 skills". ([docs: computer][d-computer], seen; [docs: troubleshooting][d-trouble], seen; [learngrokbot: plugins][lgb-plugins], reported from caption)
 - **Connect flow:** "Add", the provider's OAuth page in the browser ("Choose an account to continue to Grok"), the permissions page, then a page reading "Authorization complete! You can close this tab." ([learngrokbot: plugins][lgb-plugins], reported from caption; [learngrokbot: gmail][lgb-gmail], reported from caption)
+- Individual app tools can be switched on or off from the connected count in Connect apps. ([docs: settings][d-settings], seen)
 - `@` in the composer attaches an app to a task. You can ask a Bot to add an app ("Add the Linear app"), and its tools work from your next message. ([docs: computer][d-computer], seen)
 - **Custom connector** (desktop): "Add a custom connector" at the bottom of Connect apps. "Name" and "Type": "Remote HTTPS" ("Server URL", optional "HTTP headers", OAuth "Client ID", and a "Client Secret" that appears after a Client ID) or "Command" ("Command" plus "Arguments"). Then "Add plugin". Bots can add MCP servers by URL or command themselves, and private-network ones need your approval. ([docs: computer][d-computer], seen)
 - **Apps are account-wide**, shared by every Bot. A second account for the same app uses "Add Another Account" with a label, and you refer to it by label ("Use my work Notion"). OAuth tokens stay on the vendor's backend, not on the computer. ([docs: computer][d-computer], seen)
@@ -614,7 +708,7 @@ From the App Store screenshots ([App Store][appstore], seen) and the mobile docs
 - Touch and hold a message: "Select Text", then "Add to Chat" or copy. ([docs: mobile][d-mobile], seen)
 - Touch and hold a Library row: "Open", "Share", "Copy Link", "Open in Web". ([docs: mobile][d-mobile], seen)
 - Touch and hold an image: "Copy Image" or "Save to Photos". ([docs: files][d-files], seen)
-- Long press a Bot to duplicate it. Swipe a conversation row for quick pin and hide. Swipe a routine to delete it. Swipe an account to remove it. ([App Store][appstore], seen in version notes; [docs: mobile][d-mobile], seen; [docs: FAQ][d-faq], seen)
+- Long press a Bot to duplicate it ([App Store][appstore], seen in version notes). "Conversation actions" give quick access to pin and hide, but the docs do not say which gesture opens them ([docs: mobile][d-mobile], seen; the gesture is not established). Swipe a routine to delete it ([docs: mobile][d-mobile], seen). Swipe an account to remove it ([docs: FAQ][d-faq], seen).
 - Tap an approval card to see the full request and buttons. ([docs: approvals][d-approvals], seen)
 - Haptics have their own setting, and the 1.13.0 notes mention livelier reactions and better haptics. ([App Store][appstore], seen)
 
@@ -632,12 +726,12 @@ From the App Store screenshots ([App Store][appstore], seen) and the mobile docs
 
 ([docs: mobile][d-mobile], seen; [Flavio Copes][flavio], reported)
 
-- Updating or recovering the computer (Reset is available).
-- Testing a routine, editing schedules, full run history.
-- Teach a task.
+- Updating or recovering the computer, and reconnecting the phone when the computer won't connect (Reset is available under "Bot Computer").
+- Testing a routine. Editing works on the phone through "Edit routine", which drafts a chat message, and the phone shows "Run history" (the 20 most recent runs are kept).
+- Teach a task and "some advanced desktop controls".
 - Renaming a Page.
 - Custom connectors, and some plugins ("Connect on your computer").
-- 1Password setup ("1Password can only be set up on a Mac").
+- 1Password, only for accounts the new integration has not reached yet: those phones say "1Password can only be set up on a Mac". Otherwise it can be connected from the phone. ([docs: computer][d-computer], seen)
 - Execution on the phone itself: phones cannot be a computer.
 - Yearly, Teams or Enterprise purchases, and turning on on-demand usage.
 - A shorter language list.
@@ -664,13 +758,16 @@ These exist in Grok Bot but depend on vendor services. Clawtrate builders should
 | Topic | Disagreement | What to build from |
 |---|---|---|
 | Own computer per Bot | The marketing page says "Every Bot has its own computer". The docs say one computer per user, shared, with one screen per Bot. | The docs. Clawtrate goes further and lets each Bot pick its machine. |
-| Bot creation | Docs and App Store: a "Create New Bot" dialog with name, shape and color. learngrokbot (October): a "To:" field with `Create "<name>" Bot`. | Both, as in section 3: the dialog is current; the To: row is a quick path. |
+| Bot creation | Docs and App Store (current): a "Create New Bot" dialog with name, shape and color. learngrokbot (early October): a "To:" field with `Create "<name>" Bot`. These are dated presentations; whether both exist today is unverified. | Clawtrate's own choice: it offers both, the dialog as the main path and the To: row as a shortcut. |
 | Description and instructions | Older guides and some reviews describe a name, title and description that acts as the system prompt. Since late September, personal Bots have no description or instructions field. | Current behavior; Clawtrate restores a visible, editable field. |
-| Tool steps | Docs: "the chat shows each step" and "tool activity". Users and the design post: tool calls are hidden, with the current action on hover. | The design post and the user reports. |
+| Tool steps | Docs: "the chat shows each step" and "tool activity". Users: tool calls are hidden. Design post: the current action can be seen on hover; no hover step log or raw view is established. | The design post and the user reports. |
 | Routine visibility on desktop | Docs: Instruction, When to run, Webhook, Test. One forum user (October): only the name, schedule and switch; Test and Run history were removed. | The docs, which are newer. |
 | `/` skill menu | learngrokbot and Flavio: `/` opens skills. Docs: ask for a skill by name. A forum user: 0.68.1 removed `/`. | Unclear; Clawtrate keeps `/`. |
 | Bot limit | Design post: about 50. Flavio: 50 Bots and group chats combined. Changelog: cap lifted on 1 September. | Treat as soft. |
-| 1.0 date | Official page: 2 November. Some blogs: 11 November (1.0.1). | 2 November. |
+| 1.0 date | The announcement is dated 2 November. The numbered 1.0.0 and 1.0.1 desktop releases are dated 11 November. | 2 November for the announcement, 11 November for the client release. |
+| Approvals in group chats | The collaboration page says approval requests do not appear in groups. The approvals page describes group approval cards with requester-only controls. | Unresolved. Clawtrate shows approvals in groups either way (FC-09). |
+| Library contents | The files page excludes your uploads; the mobile page includes items you sent. | Unresolved; possibly a platform difference. |
+| Sign-in linking on the phone | The guide (6 October) said linking needed a computer; the current docs describe linking on the phone. | The current docs. |
 | Platforms | AIToolsReview (14 November) says "no Android". The docs and Google Play show Android since 2 September. | The docs. |
 | Models | Docs: "no model picker", the model can vary per request. 9to5Mac and Lindy report routing to third-party models. | No picker; model unknown. |
 
@@ -713,32 +810,32 @@ Each complaint below has its evidence, then a concrete requirement for Clawtrate
 ### FC-07. Quota burn without attribution
 
 - **Complaint:** heavy users used 42 percent of the weekly allowance on the first day, or a whole week in a day. Every reply, routine run and Bot-to-Bot message spends usage, and long chats cost more per turn. Users ask for usage per Bot, per routine and per session, a token breakdown, and caps. ([CellCog][cellcog], reported; [aibuilderclub][aibc], reported; [forum: hung chats][f-hung], reported; [forum: memory and usage][f-memusage], reported)
-- **Requirement:** usage (tokens, and cost where the provider reports it) is shown per turn, per task, per Bot, per routine run and for Bot-to-Bot messages, with a breakdown into history, memory, tools and output where the gateway reports it. Each Bot and each routine can have a daily or weekly budget. At 80 percent the user is warned, and at 100 percent the Bot pauses and says so in its chat.
+- **Requirement:** usage is shown per turn, per task, per Bot, per routine run and for Bot-to-Bot messages, as input, output and cached tokens, plus cost in the provider's currency when the provider reports it. A breakdown into history, memory, tools and output appears where the gateway reports it. Any figure the gateway does not report shows as "unavailable", never as zero. Each Bot and each routine can have a daily or weekly token budget. At 80 percent of a budget the user is warned, and at 100 percent new runs of that Bot or routine do not start, and its chat says why, until the period resets or the budget is raised. These budgets are separate from provider limits, which are shown as the gateway reports them.
 
 ### FC-08. Stuck computers and stuck Bots
 
-- **Complaint:** computers "bricked" for days, the fix was a reset that can lose work, chats stopped showing new messages, and a hung Bot meant cloning and deleting it. There is no stop button. ([CellCog][cellcog], reported; [forum: stuck][f-stuck], reported; [forum: hung chats][f-hung], reported; [docs: chat][d-chat], seen)
+- **Complaint:** computers "bricked" for days, the fix was a reset that can lose work, chats stopped showing new messages, and a hung Bot meant cloning and deleting it. No per-turn Stop control was established by the examined material. ([CellCog][cellcog], reported; [forum: stuck][f-stuck], reported; [forum: hung chats][f-hung], reported; [docs: chat][d-chat], seen)
 - **Requirement:** a visible Stop button while a Bot works, which ends the turn, its subagents and the processes it started, and reports what was stopped. The computer panel shows the machine's connection and health. "Restart this Bot's session" works without resetting other Bots. When the transcript and the gateway disagree, the client re-syncs on its own and says so.
 
 ### FC-09. Approvals are account-wide and coarse
 
-- **Complaint:** Custom Rules apply to all Bots. There are 20 per type, free text only, and with no per-tool permission list. Group chats cannot show approval cards. A rule that is too broad stops too much. ([docs: approvals][d-approvals], seen; [learngrokbot: approvals][lgb-approvals], reported; [docs: chat][d-chat], seen)
-- **Requirement:** per-Bot tool permissions (allow, ask, deny for each tool or tool group) plus per-Bot approval rules, on top of global rules. "Always allow" offers a scope (this Bot or all Bots) and a duration (one hour, one day, until revoked). Approval cards work in group chats and show which Bot is asking. A permissions page lists every standing approval with its scope, when it was granted and a revoke button.
+- **Complaint:** Custom Rules apply to all Bots. There are 20 per type, in free text. Individual app tools can be switched on or off in Connect apps ([docs: settings][d-settings], seen), but no per-Bot allow, ask or deny control per tool was established. Group approvals are disputed between two doc pages (section 4.4). A rule that is too broad stops too much. ([docs: approvals][d-approvals], seen; [learngrokbot: approvals][lgb-approvals], reported; [docs: chat][d-chat], seen)
+- **Requirement:** per-Bot tool permissions (allow, ask, deny for each tool or tool group) plus per-Bot approval rules, on top of global rules. Precedence: a per-Bot deny always wins; then ask; then a standing allow that is in scope and unexpired; then the default review. Turning the automatic review off never bypasses a per-Bot ask or deny; it only makes unmatched actions ask. Something the user said earlier in the conversation is considered by the review and never overrides ask or deny. Every approval card offers Deny. "Always allow" offers a scope (this Bot or all Bots) and a duration (one hour, one day, until revoked). Approval cards work in group chats and show which Bot is asking. A permissions page lists every standing approval with its scope, when it was granted and a revoke button.
 
 ### FC-10. Bot-to-Bot messaging cannot be controlled
 
 - **Complaint:** no switch stops Bots messaging each other. Every message costs usage, and parallel handoffs create duplicate work. ([docs: chat][d-chat], seen; [learngrokbot: multiple Bots][lgb-multi], reported)
-- **Requirement:** per-Bot settings for who it may message and who may message it (off, ask me, allowed), with Bot-to-Bot messages counted separately in usage. The "Messaged" card expands inline to show exactly what was sent and what came back, and links to the receiving Bot's task.
+- **Requirement:** for each Bot, an outgoing and an incoming policy, each set to off, ask me or allowed, with per-peer exceptions (for example, allowed to message Research only). The gateway or client blocks messages the policy forbids, and "ask me" pauses the send behind an approval card. Bot-to-Bot messages are counted separately in usage. The "Messaged" card expands inline to show exactly what was sent and what came back, and links to the receiving Bot's task.
 
 ### FC-11. Proactive check-ins cannot be turned off
 
 - **Complaint:** turning off notifications only mutes alerts. Stopping check-ins needs support. Bots "invent relevance to justify running". ([docs: initiative][d-initiative], seen; [aibuilderclub][aibc], reported)
-- **Requirement:** a per-Bot "Proactive check-ins" switch, separate from notifications, with a frequency choice.
+- **Requirement:** a per-Bot "Proactive check-ins" setting with the choices Off, Daily and As needed, separate from notifications. Off means the Bot generates no unprompted check-ins at all; muting notifications does not change it.
 
 ### FC-12. Desktop notification control by chat only
 
 - **Complaint:** on desktop you must ask the Bot to change its notification setting. There are no quiet hours. ([docs: settings][d-settings], seen)
-- **Requirement:** a notifications switch for each Bot and task on desktop and iOS, plus quiet hours.
+- **Requirement:** a notifications switch for each Bot, and an override for each task (inherit, on, off), on desktop and iOS. Quiet hours have a start and end time in the user's time zone and can span midnight. During quiet hours no notification is shown; items that need the user are delivered when quiet hours end, and the in-app badges still update.
 
 ### FC-13. Routines are hard to inspect
 
@@ -759,7 +856,7 @@ Each complaint below has its evidence, then a concrete requirement for Clawtrate
 
 ## Open-source alternatives: what their UIs do better
 
-All three are self-hosted Grok Bot alternatives. I read their READMEs and product pages, not their code.
+All three are self-hosted Grok Bot alternatives ([Rakazo README][rakazo], seen; [OpenMausBot site][openmausbot], seen; [OpenSuperBot README][opensuperbot], seen). I read their READMEs and product pages, not their code.
 
 ### Rakazo ([github.com/elie222/rakazo][rakazo])
 
@@ -795,7 +892,7 @@ What it does better in the UI (from its README and two screenshots I examined):
 - **A model chip in the chat header**, for example "● DeepSeek · deepseek-flash", per teammate, with an "AI" section holding one connection per provider. ([OpenSuperBot README][opensuperbot], seen)
 - **A collapsible activity card per turn.** Each step streams live into one card, which collapses to a line like "WORKED 2 steps · 26.0s" when the turn ends. A stop button ends the turn. ([OpenSuperBot README][opensuperbot], seen)
 - **Uniform reports:** each turn opens with check-mark lines, such as "✓ Web → sources reviewed · 6 pages", then a sentence about what needs you. ([OpenSuperBot README][opensuperbot], seen)
-- **"NEEDS YOU" hold cards** with an amber left border: a title ("send the 4 queued drafts"), a monospace destination chip ("email → replies@globex.com"), "Approve" and "Discard", and "Always allow…" at the right. Standing approvals last an hour, a day or until revoked. Money and bookings always ask. ([OpenSuperBot README][opensuperbot], seen)
+- **"NEEDS YOU" hold cards** with an amber left border: a title ("send the 4 queued drafts"), a monospace destination chip ("email → replies@example.com" here; the screenshot shows a sample company address), "Approve" and "Discard", and "Always allow…" at the right. Standing approvals last an hour, a day or until revoked. Money and bookings always ask. ([OpenSuperBot README][opensuperbot], seen)
 - **A computer panel that lists the Bot's permissions and memory**: the live screen at the top, a note on where it runs, a "COMMANDS" checkbox ("Allow commands, in a sandbox…"), "ROUTINES" with play, pause and delete buttons per routine, "ALLOWED WITHOUT ASKING", "STANDING RULES" ("No standing rules yet. Tell it 'from now on…' in the thread.") and "RECENT ACTIONS" (each action with a check mark, the tool name in monospace, the time and who triggered it). ([OpenSuperBot README][opensuperbot], seen in screenshot)
 - **Memory as a file you can see:** rules said in chat are written to `MEMORY.md` and the diff is posted as a chip. Each rule in the panel has a remove button. ([OpenSuperBot README][opensuperbot], seen)
 - **A per-teammate daily token budget**, with today's usage shown in the panel. ([OpenSuperBot README][opensuperbot], seen)
@@ -809,7 +906,7 @@ The README itself concedes Grok Bot's zero-setup polish, its iOS app and its tea
 
 ## Reference images
 
-The images live in the private reference folder `.orchestrator/refs/` next to the checkout and are never committed. Each one is described here, so builders do not need to open them. "Seen" means I looked at the image myself. "From caption" means I took the description from the source's own caption.
+The images are kept in a private folder outside the repository, which is not published. The public source URLs below are the portable references. Each one is described here, so builders do not need to open them. "Seen" means I looked at the image myself. "From caption" means I took the description from the source's own caption.
 
 ### Grok Bot desktop (first-hand screenshots from learngrokbot.com, desktop around 0.68.1, dark theme)
 
@@ -820,7 +917,7 @@ The source for each file is `https://learngrokbot.com/assets/shots/<name>`, wher
 | `lgb-what-is-grok-bot-app.png` | Seen. Full desktop window: chat on the left two thirds, details panel on the right third. Floating Bot-name pill at the top center of the chat, a blue user bubble at the right, grey Bot bubbles with a markdown pricing table, a grey right-aligned "Created routine ⏱ Monday pricing check" line, and the composer with + at the left, the placeholder "Message Demo Price Watch", and mic and waveform buttons at the right. The panel has share and close buttons, a large blue avatar, the name, "Add a label", the tabs Details, Library and Computer (Computer selected), a 16:9 screen thumbnail with an "Open" pill, and "Demo Price Watch's screen". |
 | `lgb-home-bot-at-work.png` | Seen. The working state: a user bubble, two short progress bubbles from the Bot, then the Bot's small avatar beside grey "Clicking around" text (first word dimmer), and the empty composer. |
 | `lgb-multiple-bots-messaged-lines.png` | Seen. Bot-to-Bot messaging: Bot bubble, right-aligned grey "Messaged ● Demo Price Watch" line, Bot bubble, "Message from ● Demo Price Watch" line, then a Bot bubble relaying the answer with a link. |
-| `lgb-chief-of-staff-hand-off.jpg` | From caption (image from a Riley Brown video). A primary Bot's chat with "Messaged &lt;blurred name&gt;" between two bubbles. |
+| `lgb-chief-of-staff-hand-off.jpg` | Seen (image from a Riley Brown video). A primary Bot's chat: a bubble starting "I'll have", a grey "Messaged" line with a blurred name nearer the middle of the crop, and a bubble "I asked … I'll pass along what they change once it's done." |
 | `lgb-multiple-bots-main-bot-star.png` | Seen. Top of the sidebar: a large pink avatar with an orange star badge, a blurred name, then rows for Demo Price Watch (preview "Monday check is set for 9:00…") and Demo Research with a grey "News watch" label chip and preview "Stopped — I won't create or s…". |
 | `lgb-multiple-bots-replace-menu.jpg` | Seen (image from a Riley Brown video). The primary Bot's right-click menu: Pin, Move to ›, Mark as Unread, Rename Bot, Copy conversation ID, Hide from sidebar, Replace with different Bot, with icons and separators. |
 | `lgb-multiple-bots-group-chat-first-hand.png` | Seen. A group chat: centered title pill (blurred user name, then "Demo Research, Demo Meeting Prep"), a grey user bubble at the right, the Bot names above their replies in green and red, and each Bot's avatar at the bottom left of its reply. |
@@ -870,7 +967,8 @@ The source for each file is `https://learngrokbot.com/assets/shots/<name>`, wher
 | `lgb-cant-reach-computer-notice.png` | From caption. "Can't reach your computer" notice at the top of an empty sidebar with "Retry" and "Recover computer". |
 | `lgb-cant-reach-computer-reconnecting.png` | Seen (light theme). A "Reconnecting" pill with a spinner over a grey "Showing saved messages" notice. |
 | `lgb-cant-reach-computer-updating.png` | Seen. "Updating Grok Bot's Computer": seven steps with check, spinner and empty-circle states, a 43% bar, an "Update still running" box, and "Continue in Background" and "Keep waiting". |
-| `lgb-cant-reach-computer-reset-failed.png` | From caption. "Reset failed" with "Dismiss" and a red "Retry Reset". |
+| `lgb-cant-reach-computer-reset-failed.png` | Seen. "Reset failed" dialog with the partial-state explanation, "Dismiss" and a red "Retry Reset". |
+| `lgb-cant-reach-computer-recovering.png` | Seen. "Recovering Grok Bot's Computer": four steps (three checked, "Reconnecting" with a spinner), a 75% bar and "Continue in Background". |
 | `lgb-setup-welcome.png` | From caption. Desktop welcome: mark, tagline, "Sign in". |
 | `lgb-setup-browser-sign-in.png` | From caption. Browser page "Start using Grok Bot" with "Sign in with Grok", "Sign in with Cursor" and "Create an account". |
 | `lgb-setup-get-started.png` | From caption. "Get Started with Grok Bot" with three plan columns. |
