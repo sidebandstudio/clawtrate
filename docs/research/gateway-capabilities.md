@@ -84,8 +84,9 @@ new methods. Methods added in 2026.11.x include `backup.recordOutcome`,
 `memory.search.owner`, `openclaw.setup.auto`, `projects.checkoutOptions`,
 `secrets.store.allowedHosts`, `secrets.store.import`, `skills.workshop.undo`,
 `ui.command.result` and `users.background.*`. Three methods changed scope:
-`projects.searchRemote` became `operator.write`, while `users.prefs.set` and
-`worktrees.list` changed level. Consequences:
+`projects.searchRemote` and `worktrees.list` rose from `operator.read` to
+`operator.write`, and `users.prefs.set` dropped from `operator.write` to
+`operator.read`. Consequences:
 
 - A newer client sending a newer optional field to an older gateway is
   rejected outright (shown above). This is the main break.
@@ -109,12 +110,92 @@ release in `docs/decisions.md`, and move both together.
 
 ## 2. Capability table
 
-Scopes are the method's base scope from the schema `methods` map unless noted.
-"dynamic" means the gateway decides per call. The full operator scope set is
-`operator.read`, `operator.write`, `operator.admin`, `operator.approvals`,
-`operator.questions`, `operator.pairing`, `operator.talk` and
-`operator.talk.secrets` (`<openclaw>/docs/gateway/protocol/handshake.md`).
-`sessions.github.publish` alone uses `operator.sessions.write`.
+### Scopes
+
+Every scope below was checked against the gateway's own policy table,
+`CORE_GATEWAY_METHOD_POLICY` in `<openclaw>/dist/core-method-policy-DkntKRY_.mjs`.
+It classifies all 520 core methods. Its base scopes match the schema `methods`
+map exactly, with no differences. "dynamic" means the gateway decides from the
+parameters. Those rules are in `<openclaw>/dist/method-scopes-BdXzw-yD.mjs`
+and `<openclaw>/dist/session-method-scopes-base-CuhU2F_D.mjs`, and each row
+below gives them.
+
+The closed operator scope set has **ten** scopes (`KNOWN_OPERATOR_SCOPES` in
+`<openclaw>/dist/operator-scopes-BO7_XQCg.mjs`): `operator.read`,
+`operator.write`, `operator.admin`, `operator.sessions.read`,
+`operator.sessions.write`, `operator.approvals`, `operator.questions`,
+`operator.pairing`, `operator.talk` and `operator.talk.secrets`.
+
+Implications (`operatorScopeSatisfied` in
+`<openclaw>/dist/operator-scope-compat-Ci6GBcmU.mjs`):
+
+- `operator.admin` satisfies every operator scope.
+- `operator.write` satisfies `operator.read`, `operator.talk`,
+  `operator.sessions.read` and `operator.sessions.write`.
+- `operator.read` and `operator.sessions.write` each satisfy
+  `operator.sessions.read`.
+- `operator.approvals`, `operator.questions`, `operator.pairing` and
+  `operator.talk.secrets` are satisfied only by themselves or by admin.
+
+**`operator.sessions.read` and `operator.sessions.write`** are narrower
+stand-ins for read and write on session-shaped methods
+(`SESSION_READ_METHODS` and `SESSION_WRITE_METHODS` in
+`session-method-scopes-base-CuhU2F_D.mjs`; admission in
+`authorizeOperatorScopesForRequiredScope`, `method-scopes-BdXzw-yD.mjs`):
+
+- `operator.sessions.read` admits, in place of `operator.read`:
+  `agents.list`, `agent.identity.get`, `models.list`, `sessions.list`,
+  `sessions.subscribe`, `sessions.messages.subscribe`/`unsubscribe`,
+  `sessions.describe`, `sessions.get`, `sessions.resolve`, `sessions.search`,
+  `sessions.preview`, `sessions.files.list`/`get`/`assets`,
+  `sessions.processes.list`, `chat.history`, `chat.startup`,
+  `chat.metadata`, `chat.message.get`, `session.members.list`, `users.self`,
+  `users.prefs.get`, `themes.*` and a few others. The session's sharing
+  policy still applies.
+- `operator.sessions.write` admits, in place of `operator.write`:
+  `chat.send`, `chat.abort`, `sessions.create`, `sessions.patch`,
+  `sessions.patchMany`, `sessions.fork`, `sessions.recover`,
+  `sessions.send`, `sessions.steer`, `sessions.abort`,
+  `sessions.processes.stop`, `sessions.goal.update`/`clear`, and
+  `question.*` in place of `operator.questions`. This holds only where the
+  parameters would not need admin, and "mutation owners must bind the
+  caller's own row". In practice it is for the caller's own sessions.
+  `sessions.github.publish` requires it directly. A plugin method can accept
+  it through `sessionAccess.allowOwnSessionScope`.
+- Neither one grants anything outside those lists. Clawtrate does not need
+  them for its own connection, but a shared or guest device could be paired
+  with only these.
+
+**What a connection with `operator.read` alone can do.** This is the
+client's first connection, so it matters.
+
+- It can read every bot, session, transcript and live stream:
+  `agents.list`, `agent.identity.get`, `agents.files.list`/`get`,
+  `agents.workspace.list`/`get`, `sessions.list`/`subscribe`/`describe`,
+  `sessions.messages.subscribe`, `chat.history`, `chat.message.get`,
+  `chat.metadata` and `artifacts.*`. It receives `chat`, `agent`,
+  `session.*` and `sessions.changed` events.
+- It can read models and tools (`models.list`, `tools.catalog`,
+  `tools.effective`), usage (`usage.status`, `usage.cost`,
+  `sessions.usage*`), schedules (`cron.list`, `cron.get`, `cron.status`,
+  `cron.runs`, `cron.history`), memory (`memory.status`, `memory.search`,
+  `memory.get`), nodes (`node.list`, `node.describe`), `computer.status`,
+  `canvas.document.view`/`preview`, `talk.catalog`, `talk.config` without
+  secrets, `tts.status`/`providers`/`personas`, `push.web.preferences.get`,
+  and `config.get`/`config.schema`/`config.schema.lookup`. Secrets come back
+  redacted in `config.get` (live: `__OPENCLAW_REDACTED__`).
+- It can call `device.scopes.requestUpgrade` and `device.scopes.waitUpgrade`.
+- It cannot send, abort, steer or create (`chat.send`, `chat.abort`,
+  `sessions.create` and `sessions.send` need write).
+- It cannot see or resolve approvals (`exec.approval.*`,
+  `plugin.approval.*`, `approval.*` need `operator.approvals`), list devices
+  (`device.pair.list` needs `operator.pairing`), or use talk.
+- It cannot get the Web Push key: `push.web.vapidPublicKey` needs write.
+  Nor can it touch any `browser.*` method or plugin method registered at
+  write.
+
+Live: a read-only device listed sessions and was refused `chat.send` with
+`MISSING_SCOPE`/`operator.write`.
 
 Status key: `available` means the gateway supports the flow today.
 `partial` means it works with a gap a client cannot close alone. `missing`
@@ -207,8 +288,13 @@ means a plugin is needed.
   stored scopes (live). Persist `deviceToken` with `auth.scopes`, keyed by
   device id and role.
 - **Scope upgrade.** Call `device.scopes.requestUpgrade {scopes}` on the
-  live socket (`operator.read`). `scopes` must include the connection's
-  current scopes; a strict superset is required. It returns `{requestId}`
+  live socket (`operator.read`). The requested list must cover the
+  connection's current scopes under the implication rules above; it does not
+  have to add anything. An equal list is accepted, and `[operator.write]`
+  covers a current `[operator.read]`. The handler checks this with
+  `roleScopesAllow` (`<openclaw>/dist/devices-mOg4_HQd.mjs` lines 63-70). A
+  configured operator role policy also caps the request (lines 54-61). It
+  returns `{requestId}`
   and creates a pending pairing request even on loopback. After approval
   through `device.pair.approve`, `device.scopes.waitUpgrade {requestId}`
   resolves to `{status:"approved", requestId, deviceToken, scopes}`, or to
@@ -252,8 +338,9 @@ means a plugin is needed.
   `agents.entries.<id>.description` and `identity.theme`; `theme` is
   returned by `agents.list`. Whether `agents.list` returns `description` is
   **unverified**: the probe bots had none set.
-- Changes arrive through `config.changed` (payload: path and hash only),
-  followed by a refetch.
+- Changes arrive through `config.changed`, payload `{path, hash, ts}`
+  (`<openclaw>/dist/server-reload-managed-*.mjs`, the `config.changed`
+  broadcast). It never carries config content. Refetch afterwards.
 - **Status: available.** Description is config-only.
 
 ### 3. Create, edit and delete a bot
@@ -262,8 +349,8 @@ means a plugin is needed.
 | --- | --- | --- |
 | name, emoji, avatar, workspace, model | `agents.create {name, workspace?, model?, emoji?, avatar?}` returns `{ok, agentId, name, workspace}`; `agents.update {agentId, name?, workspace?, model?: string\|null, agentRuntime?, emoji?, avatar?}` | `operator.admin` |
 | delete | `agents.delete {agentId, deleteFiles?}` returns `{ok, agentId, removedBindings, removed[], failed[]}`; files go to trash | `operator.admin` |
-| instructions / system prompt | workspace bootstrap files: `agents.files.list {agentId}`, `agents.files.get {agentId, name}`, `agents.files.set {agentId, name, content, expectedHash?, expectedMissing?}`. Allowed names: `AGENTS.md`, `SOUL.md`, `USER.md`, `BOOTSTRAP.md`, `MEMORY.md` (listed by `agents.files.list`) | read / `operator.admin` for set |
-| reasoning effort default, tools, exec policy, bot-to-bot targets, description | `config.patch {raw, baseHash}` with a merge patch under `agents.entries.<id>` (`thinkingDefault`, `reasoningDefault`, `tools.{profile, allow, deny, alsoAllow, exec.mode, agentToAgent.send}`, `description`, `identity.*`). `baseHash` comes from `config.get().hash`; without it the patch is refused ("config base hash required") | `operator.admin` (all of `config.*` is admin) |
+| instructions / system prompt | workspace bootstrap files: `agents.files.list {agentId}`, `agents.files.get {agentId, name}`, `agents.files.set {agentId, name, content, expectedHash?, expectedMissing?}`. `get` and `set` accept `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md` and `MEMORY.md` (`ALLOWED_FILE_NAMES`). `agents.files.list` omits `IDENTITY.md` on purpose (`CORE_FILE_NAMES`), and omits `BOOTSTRAP.md` after onboarding (`<openclaw>/dist/agents-DAPW-UCQ.mjs` lines 259-267, 383; names in `<openclaw>/dist/workspace-bootstrap-policy-BQw7Lpx1.mjs`). `TOOLS.md` is not accepted | `operator.read` for list and get; `operator.admin` for set |
+| reasoning effort default, tools, exec policy, bot-to-bot targets, description | `config.patch {raw, baseHash}` with a merge patch under `agents.entries.<id>` (`thinkingDefault`, `reasoningDefault`, `tools.{profile, allow, deny, alsoAllow, exec.mode, agentToAgent.send}`, `description`, `identity.*`). `baseHash` comes from `config.get().hash`; without it the patch is refused ("config base hash required") | `config.patch`, `config.set` and `config.apply` are `operator.admin`. `config.get`, `config.schema` and `config.schema.lookup` are `operator.read` |
 
 Live: `agents.create`, `agents.update`, `agents.delete`, `agents.files.set`
 and `config.patch` all succeeded. A patch setting `tools.deny: ["exec"]` on
@@ -316,10 +403,26 @@ connection and not atomically. See plugin P1.
   equals `__openclaw.id` (live).
 - Create, rename and archive: `sessions.create {agentId, label?, message?,
   model?, thinkingLevel?, permissionMode?, toolOverrides?, execNode?, cwd?,
-  attachments?, ...}` (dynamic scope) returns `{ok, key, sessionId, entry,
-  runStarted, runId?}` (live). For metadata use `sessions.patch` (dynamic)
-  and `sessions.delete` (dynamic). `sessions.describe {key}` returns one
-  full row (live).
+  attachments?, ...}` returns `{ok, key, sessionId, entry, runStarted,
+  runId?, runError?}` (live). The run starts but has not finished when this
+  returns: wait on `runId`, for example with `agent.wait {runId, timeoutMs}`
+  (`operator.write`), and check `runError`. Labels must be unique ("label
+  already in use", live). Scope is dynamic: `operator.write`, but
+  `operator.admin` if `execNode` or `toolOverrides` is present,
+  `permissionMode` is `"full"`, or the session is incognito
+  (`resolveSessionsCreateRequiredScope`).
+- `sessions.patch` is `operator.write` only when every field is one of:
+  `label`, `autoLabel`, `icon`, `color`, `category`, `boardFace`,
+  `boardPresentation`, `pinned`, `archived`, `snoozedUntil`, `unread`,
+  `model`, `agentRuntime`, `thinkingLevel`, `fastMode`, or a
+  `permissionMode` other than `"full"` (plus the key and `expected*`
+  guards). Any other field needs `operator.admin`: `reasoningLevel`,
+  `contextWindow`, `toolOverrides`, `execHost`, `execNode`, `execSecurity`,
+  `execAsk`, `sandboxMode`, `verboseLevel` and so on
+  (`resolveSessionsPatchRequiredScope`).
+- `sessions.delete` is `operator.admin` unless `archivedOnly: true`, which
+  makes it `operator.write`. `sessions.describe {key}` (`operator.read`)
+  returns one full row (live).
 - **Status: available.**
 
 ### 5. Send, attach, abort, queue, steer
@@ -347,9 +450,13 @@ connection and not atomically. See plugin P1.
   agentId?, clearQueued?}` (`operator.write`). Aborted runs end with
   `chat state:"aborted"` and `agent stream:"lifecycle" phase:"error"
   aborted:true` (live).
-- Steer: `sessions.steer` (`operator.write`; its params are not in the
-  published schema). Live: `{key, message}` returned
-  `{runId, status:"started", interruptedActiveRun:true}`. Separately,
+- Steer: `sessions.steer` (`operator.write`; not advertised, and its params
+  are not in the published schema) is a **"Deprecated alias for chat.send
+  queueMode interrupt"** (policy-table description,
+  `<openclaw>/dist/core-method-policy-DkntKRY_.mjs` line 1856). That is why
+  it interrupted, live: `{key, message}` returned
+  `{runId, status:"started", interruptedActiveRun:true}`. Do not use it;
+  use `chat.send` with an explicit `queueMode`. Separately,
   `chat.send` with `queueMode: "steer"` during a streaming text reply
   aborted the active run. The steer run then failed with
   `chat state:"error"`, `errorMessage: "Session reader operation is no
@@ -500,16 +607,23 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
   approval. The host approvals document is
   `exec.approvals.get` / `exec.approvals.set {file, baseHash}`
   (`operator.admin`). It has `defaults` and a per-agent `agents` map (live
-  `get`). Per-session settings go through `sessions.patch {execSecurity,
-  execAsk, permissionMode}`.
+  `get`). Per session, `sessions.patch {permissionMode}` is `operator.write`
+  except for `"full"`. `sessions.patch {execSecurity, execAsk}` needs
+  `operator.admin` (row 4).
 - **Important default:** with no exec policy configured, the probe gateway
   resolved `security: "full", ask: "off"`. The scripted model's `exec`
-  ran `uname -s` with no approval (live). A development gateway must set
-  an exec mode explicitly (section 4 does).
+  ran `uname -s` with no approval (live). Policy has to be global, because a
+  bot created later inherits only the global value. The section 4 template
+  sets `tools.exec.mode: "ask"`. Live: a bot created afterwards by
+  `agents.create`, with no override, requested approval for `uname -s` with
+  `security: "allowlist", ask: "on-miss"`.
 - Approval rules for tools other than exec, for example "ask before Pixel
   messages another bot" or "ask before browser navigation", have no config
   surface. A plugin `before_tool_call` hook can return `requireApproval`
   (source: `<openclaw>/docs/plugins/hooks/tool-policy.md`). See plugin P5.
+- Scope summary: every listing, event and resolve path needs
+  `operator.approvals`, which `operator.write` does not imply. Policy edits
+  need `operator.admin`.
 - **Status: available** for exec and plugin approvals; **partial** for
   per-bot rules on other tools.
 
@@ -527,8 +641,16 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
   - `schedule` is one of `{kind:"at", at}`, `{kind:"every", everyMs}`,
     `{kind:"cron", expr, tz?}`, `{kind:"on-exit", command}` or
     `{kind:"stream", command[]}`.
-  - `payload` is one of `{kind:"agentTurn", message, model?, thinking?,
-    toolsAllow?}`, `{kind:"systemEvent", text}` or `{kind:"command", argv}`.
+  - `payload` is one of four kinds:
+    - `{kind:"agentTurn", message, model?, fallbacks?, thinking?,
+      timeoutSeconds?, lightContext?, toolsAllow?}`;
+    - `{kind:"systemEvent", text, toolsAllow?}`;
+    - `{kind:"command", argv, cwd?, env?, input?, timeoutSeconds?,
+      outputMaxBytes?, toolsAllow?}`;
+    - `{kind:"script", script, timeoutSeconds?, toolBudget?, toolsAllow?,
+      toolsAllowIsDefault?}`.
+
+    Source: `schema` `definitions.CronAddParams.properties.payload`.
 - Live: add, list, run with `mode:"force"` (it returned the finished run
   inline: `{ok, enqueued, runId:"manual:<jobId>:<ms>:1",
   run{status:"ok", summary}}`), runs, update and remove all worked.
@@ -546,17 +668,28 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
   The gateway asked for `openclaw memory status --index --agent <id>`.
   `memory.get` requires "a provider-scoped memory reference" taken from
   search results; untested for that reason.
+- With `memory.search.provider: "none"` (the section 4 template),
+  `memory.status` reports provider `none` and `memory.search` uses local
+  full-text search only. Live: after `MEMORY.md` was written, search for a
+  word in it returned that file, with `searchMode: "fts-only"`.
 - Edit: memory is Markdown in the bot workspace. `MEMORY.md` is read and
   written through `agents.files.get`/`agents.files.set` (admin for set;
   live). Dated notes under `memory/` are refused by
   `agents.files.set` ("unsupported file"). They can be read through
   `agents.workspace.list {agentId, path?}` and
-  `agents.workspace.get {agentId, path}` (live for `MEMORY.md`). Bulk
-  repair tools exist under `doctor.memory.*` (admin) and
-  `migrations.memory.*`.
+  `agents.workspace.get {agentId, path}` (live for `MEMORY.md`). Maintenance
+  methods: `doctor.memory.status` and `doctor.memory.dreamDiary`
+  (`operator.read`), the other `doctor.memory.*` repair methods
+  (`operator.write`), and `migrations.memory.plan`/`apply`
+  (`operator.admin`).
 - Delete: there is no RPC to delete one memory item or file.
-- **Status: partial.** Read works. Editing covers only `MEMORY.md`, needs
-  admin, and does not update the index. See plugin P2.
+- A dated note written straight into `<workspace>/memory/` was **not**
+  returned by `memory.search` within 13 s (live). The docs say memory files
+  are watched and reindexed with a debounce
+  (`<openclaw>/docs/concepts/memory-builtin.md` line 154). Which paths are
+  watched, and how fast, is **unverified**.
+- **Status: partial.** Read works. Editing through RPC covers only
+  `MEMORY.md` and needs admin. There is no delete. See plugin P2.
 
 ### 11. Files and artifacts
 
@@ -589,9 +722,10 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
   (live). `chat.metadata {agentId?, sessionKey?, includeModels?}` returns
   the models plus the slash-command list (live). Events: `models.snapshot`
   and `chat.metadata.changed`.
-- Per session: `sessions.patch {key, model, thinkingLevel, fastMode,
-  reasoningLevel, contextWindow}` (dynamic scope; live with
-  `model:"fake/scripted", thinkingLevel:"high"`). Model refs are
+- Per session: `sessions.patch {key, model, thinkingLevel, fastMode}` is
+  `operator.write` (live with `model:"fake/scripted", thinkingLevel:"high"`).
+  `reasoningLevel` and `contextWindow` make the same call `operator.admin`
+  (row 4). Model refs are
   `provider/modelId`. The thinking levels a model offers come from its
   entry (live: off, minimal, low, medium, high, ultra).
 - Per bot: `agents.update {model}` (admin), plus `thinkingDefault`,
@@ -607,13 +741,19 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
   `node.pair.approve`, `node.pair.reject`, `node.pair.remove` and
   `node.rename` (`operator.pairing`). Approving a node that declares
   `system.run` or `browser.proxy` also needs `operator.admin`. Invoke with
-  `node.invoke {nodeId, command, params?, idempotencyKey}` (dynamic scope).
+  `node.invoke {nodeId, command, params?, idempotencyKey}` (dynamic:
+  `operator.write`, or `operator.admin` for the admin-only node commands,
+  which are the browser proxy commands, `fs.listDir` and terminal upload
+  (`NODE_ADMIN_ONLY_INVOKE_COMMANDS` in
+  `<openclaw>/dist/node-commands-Bxo-2Y4j.mjs`; dispatch in
+  `method-scopes-BdXzw-yD.mjs`).
   Events: `node.pair.requested`, `node.pair.resolved`, `node.presence`,
   `node.hostStats`, `node.runnerInventory.changed` and
   `node.invoke.request`.
 - Choosing where a bot's tools run:
   - per session, `sessions.patch {execHost, execNode}` and
-    `sessions.create {execNode}` (`schema`);
+    `sessions.create {execNode}` (`schema`). Both need **`operator.admin`**
+    (row 4);
   - per bot, `agents.entries.<id>.tools.exec.{host, node}` in config;
   - per browser call, `browser.request {target:"node", node:"<id>"}`.
 - **Status: available** by schema and docs. **Not exercised live**,
@@ -631,10 +771,11 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
   `agents.entries.<id>.tools.{profile, allow, alsoAllow, deny, exec.mode,
   exec.ask, exec.security, exec.host, exec.node, agentToAgent.send, fs,
   elevated}` (admin; live for `deny` and `exec.mode`).
-- Per session: `sessions.patch {toolOverrides, permissionMode:
-  read-only|guarded|workspace|full, execSecurity, execAsk}`, and
-  `sessions.create {permissionMode, toolOverrides}` (live with
-  `permissionMode:"guarded"`).
+- Per session: `sessions.patch {permissionMode: read-only|guarded|workspace}`
+  and `sessions.create {permissionMode}` are `operator.write` (live with
+  `permissionMode:"guarded"`). `permissionMode: "full"`, `toolOverrides`,
+  `execSecurity` and `execAsk` need `operator.admin` on both methods
+  (row 4).
 - Host approvals: `exec.approvals.get`/`set` (admin).
 - **Status: available** for admin connections.
 
@@ -663,8 +804,8 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
 
 - Web Push for browsers and PWAs: `push.web.vapidPublicKey` (live: it
   returned a key), `push.web.subscribe`, `push.web.unsubscribe`,
-  `push.web.test` and `push.web.preferences.get {endpoint}` / `set`
-  (`operator.write` or read). Payloads are generic, and a tap opens the
+  `push.web.test` and `push.web.preferences.set` are `operator.write`;
+  `push.web.preferences.get {endpoint}` is `operator.read`. Payloads are generic, and a tap opens the
   gateway's `/approve/<id>` page (`<openclaw>/docs/web/notifications.md`).
 - iOS: only the official OpenClaw iOS app gets APNs. It registers with a
   hosted relay using App Attest and a StoreKit receipt, then sends the relay
@@ -681,14 +822,21 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
 
 ### 17. Voice and talk (brief)
 
-- Scope is `operator.talk`; `operator.write` also satisfies it. Methods:
-  `talk.catalog` and `talk.config` (read, or `operator.talk.secrets` for
-  keys), `talk.mode {enabled, phase?}`, `talk.speak`, gateway-relayed
-  realtime audio through `talk.session.create`, `appendAudio`,
-  `cancelOutput`, `submitToolResult`, `steer` and `close`, client-owned
-  realtime through `talk.client.create`, `transcript`, `toolCall`, `steer`
-  and `close`, `talk.voice.get/set/complete`, and `tts.*`. Events:
-  `talk.event`, `talk.mode` and `talk.voice.change`.
+- Talk methods need `operator.talk`, which `operator.write` also satisfies:
+  `talk.mode {enabled, phase?}`, `talk.speak`, the gateway-relayed realtime
+  audio methods `talk.session.create`, `appendAudio`, `cancelOutput`,
+  `acknowledgeMark`, `submitToolResult`, `steer` and `close`, the
+  client-owned realtime methods `talk.client.create`, `transcript`,
+  `toolCall`, `steer` and `close`, and `talk.voice.get`/`set`/`complete`.
+- `talk.catalog` is `operator.read`. `talk.config` is dynamic: `operator.read`,
+  but with `includeSecrets: true` it needs both `operator.read` **and**
+  `operator.talk.secrets`; admin satisfies both (`method-scopes-BdXzw-yD.mjs`,
+  the `talk.config` branch).
+- TTS is not covered by `operator.talk`. `tts.status`, `tts.providers` and
+  `tts.personas` are `operator.read`. `tts.enable`, `tts.disable`,
+  `tts.convert`, `tts.setProvider`, `tts.setPersona` and `tts.speak` are
+  `operator.write` (policy table).
+- Events: `talk.event`, `talk.mode` and `talk.voice.change`.
 - Multi-agent gateways need `talk.agentId` in config. Without it,
   `talk.catalog` failed with `AGENT_SELECTION_REQUIRED` (live).
 - **Status: available** by schema. Not exercised beyond that error.
