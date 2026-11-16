@@ -93,6 +93,15 @@ From a first-hand sidebar screenshot (dark theme, about 280 points wide) and the
 - No source documents the sort order inside a section or in the unsectioned list. The App Store iPhone list is sorted newest activity first: 8:41 AM, 8:22 AM, 8:05 AM, Yesterday, Tuesday. (inferred from [App Store][appstore])
 - `Cmd/Ctrl+1` to `9` jump to sidebar Bots; `Alt+Up/Down` and `Control+Tab` move between Bots. ([docs: chat][d-chat], seen)
 
+#### Clawtrate design proposal: sort order
+
+Not Grok Bot evidence.
+
+- A sort control in the sidebar header (desktop, iPad), or next to search on the iPhone home screen, offers three orders. "Recent activity" is the default: the latest message or run event in any of the Bot's tasks, newest first. "Name" sorts A to Z, ignoring case. "Manual" uses the user's own order.
+- Pinned Bots always stay above the list, in their own manual order. Within each section, Bots follow the chosen order; sections keep their manual order.
+- In Manual, Bots are reordered by dragging a row (desktop, iPad), or on iPhone with "Edit order" in the sort control, which shows drag handles, then "Done". Dragging is available only in Manual. A new Bot goes to the end.
+- The chosen order and the manual positions persist across restarts. Switching to another order keeps the manual positions, and switching back restores them. Manual positions are stored where other clients of the same gateway can read them; if the gateway cannot store them, they are kept per client and the sort control says "This device only".
+
 ### Row context menu (right-click)
 
 A first-hand screenshot of the primary Bot's menu lists, top to bottom, with a separator after the third and fifth items: "Pin", "Move to" (submenu), "Mark as Unread", "Rename Bot", "Copy conversation ID", "Hide from sidebar", "Replace with different Bot". Other Bots show "Delete" where the primary Bot shows "Replace with different Bot". The menu loses "Edit Profile" and "Duplicate" from desktop 0.57.0. Double-clicking a name in the sidebar renames it inline. ([learngrokbot: multiple Bots][lgb-multi], seen, image credited to a Riley Brown video; [docs: bots][d-bots], seen; [learngrokbot: changelog][lgb-changelog], reported)
@@ -171,18 +180,19 @@ This is the most important structural fact for Clawtrate. **In Grok Bot, a Bot h
 
 #### Clawtrate design proposal: tasks under each Bot
 
-Not Grok Bot evidence. Clawtrate's intended behavior; the gateway capability map decides how tasks map onto gateway sessions.
+Not Grok Bot evidence. This is Clawtrate's intended behavior; the gateway capability map decides how tasks map onto gateway sessions.
 
-- **Structure.** A Bot owns a list of tasks. Every Bot has at least one task; a new Bot starts with one called "Main". Tasks share the Bot's instructions, memory, skills, routines and permissions. Each task has its own transcript, context and run state, and a task never shows another task's messages.
-- **Desktop sidebar.** A Bot row has a disclosure control. Expanded, the Bot's tasks are listed under it, indented, each with a title, a status and the time of its last activity. Collapsed, the Bot row shows the most urgent status of its tasks, in this order: waiting for you, failed or blocked, working, unread, idle.
-- **iOS.** Tapping a Bot on the home screen opens that Bot's task list; tapping a task opens its chat. The back control returns to the task list. On iPad, the task list appears under the Bot in the sidebar, as on desktop.
-- **Task statuses:** working, waiting for you, blocked, failed, done (unread result), idle. They follow the run states in section 5.6.
-- **New task.** "New task" on the Bot row (desktop) or in the task list (iOS) creates an empty task, selects it and focuses the composer. A message sent there runs in the new task.
-- **Rename.** Desktop: double-click the task title, or its menu's "Rename". iOS: touch and hold, "Rename". The new title shows in the sidebar and task header.
-- **Archive.** "Archive" moves a task into a collapsed "Archived" group under its Bot. Its history is kept and it can be restored. Archiving a task with an active run asks "Stop and archive" or "Cancel".
-- **Delete.** "Delete" asks for confirmation, then removes the task's transcript. An active run is stopped first. Memory saved during the task stays, because memory belongs to the Bot.
+- **Structure.** A Bot owns a list of tasks. Tasks share the Bot's instructions, memory, skills, routines and permissions. Each task has its own transcript, context and run state, and a task never shows another task's messages.
+- **Main task.** A new Bot starts with one task called "Main". **A Bot always has at least one task that is not archived:** archiving or deleting its last such task creates a new empty "Main" task at once, and that task is selected.
+- **Desktop and iPad sidebar.** A Bot row has a disclosure control, and its expanded or collapsed state persists across restarts. Expanded, the Bot's tasks are listed under it, indented. Each task shows its title, its status and the time of its last activity ("2m", "Yesterday"). Whether expanded or collapsed, the Bot row shows the most urgent status among its tasks, in this order: waiting for you, failed or blocked, working, unread, idle.
+- **iPhone.** The home screen lists Bots, with the same status priority on each row. Tapping a Bot opens its task list, with the Bot's avatar and name in the header and "New task". Tapping a task opens its chat. Back from the chat returns to the task list, and Back from the task list returns to the home screen. The phone has no sidebar.
+- **Task statuses:** working, waiting for you, blocked, failed, done (an unread result), done with failures (a completed run had a failed step), idle. They follow the run states in section 5.6.
+- **New task.** "New task" on the Bot row (desktop and iPad) or in the task list (iPhone) creates an empty task, selects it and focuses the composer. A message sent there runs in the new task.
+- **Rename.** On desktop, double-click the task title or choose "Rename" from its menu. On iPhone and iPad, touch and hold, then "Rename". The new title shows in the sidebar or task list and in the task header.
+- **Archive.** "Archive" moves a task into a collapsed "Archived" group under its Bot, with its history kept. "Restore" in that group brings it back. If the task has an active run, the dialog offers "Stop and archive" or "Cancel". Archiving cancels the task's queued messages; the dialog lists how many will be cancelled, and they never run.
+- **Delete.** "Delete" asks for confirmation, stops an active run first, cancels queued messages, and removes the task's transcript. Memory saved during the task stays, because memory belongs to the Bot.
 - **Routine runs** each create a task marked with the routine's name.
-- **Context meter and Compact.** The task header shows context use as tokens used out of the model's context window when the gateway reports both, and "Context: unavailable" otherwise. "Compact" replaces older turns with a summary; the transcript keeps them, folded under a "Compacted 24 turns" line that expands to show them.
+- **Context meter and Compact.** The task header shows context use as tokens used out of the model's context window when the gateway reports both, and "Context: unavailable" otherwise. "Compact" replaces older turns in the model's context with a summary. The transcript keeps them, folded under a "Compacted 24 turns" line that expands to show them.
 
 ### 4.2 Desktop chat layout
 
@@ -196,7 +206,7 @@ From a first-hand screenshot of a 1:1 chat with the details panel open (dark the
 - Hovering a Bot message shows three small icon actions to its right: react (smiley), reply (curved arrow) and more (three dots). The more menu has "Download" or "Download all" for media, "Copy request ID" for errors, and other actions. ([alexop.dev][alexop], seen; [docs: files][d-files], seen)
 - **Composer:** a full-width rounded pill at the bottom. A round "+" button sits on the left, and the placeholder reads "Message &lt;Bot name&gt;". At the right, a round microphone button ("Start voice input") and a round white waveform button ("Start voice chat"). ([learngrokbot: first Bot][lgb-first-bot], seen; [learngrokbot: what is][lgb-what], seen) The waveform shows only when the composer is empty; once you type, a round send arrow replaces it. ([learngrokbot: first Bot][lgb-first-bot], reported; the saved screenshots show only the empty composer)
 - The "+" menu opens upward with "Attach files" and "Teach a task" (with a red record dot). ([learngrokbot: skills][lgb-skills], reported from caption)
-- Composer shortcuts: `@` mentions a Bot, group, routine or app; `/` opens a skill list (it was removed in 0.68.1, per one user, and the docs say to ask for a skill by name); `>` at line start makes a block quote; `Enter` sends, `Shift+Enter` adds a new line, `Cmd/Ctrl+Enter` sends from anywhere; `Cmd/Ctrl+D` starts dictation; `Cmd/Ctrl+/` lists all shortcuts; `Cmd/Ctrl+F` finds in chat; `Cmd/Ctrl+I` focuses the prompt; `Cmd/Ctrl+L` adds selected text to chat; `Cmd/Ctrl+K` opens search across Bots, groups, messages, files, links, routines and settings; `Cmd/Ctrl+Shift+F` searches Bots. ([docs: chat][d-chat], seen; [Flavio Copes][flavio], reported; [forum: instructions][f-instructions], reported)
+- Composer shortcuts: `@` mentions a Bot, group, routine or app; `/` opens a skill list (it was removed in 0.68.1, per one user, and the docs say to ask for a skill by name); `>` at line start makes a block quote; `Enter` sends, `Shift+Enter` adds a new line, `Cmd/Ctrl+Enter` sends from anywhere; `Cmd/Ctrl+D` starts dictation; `Cmd/Ctrl+/` lists all shortcuts; `Cmd/Ctrl+F` finds in chat; `Cmd/Ctrl+I` focuses the prompt; `Cmd/Ctrl+L` adds selected text to chat; `Cmd/Ctrl+K` opens search across Bots, groups, messages, files, links, routines and settings; `Cmd/Ctrl+Shift+F` searches Bots. In the desktop search palette, when results say "Searched recent messages", "Search older" looks further back. ([docs: chat][d-chat], seen; [Flavio Copes][flavio], reported; [forum: instructions][f-instructions], reported)
 - The `/` menu, when present, lists matching rows with a right-aligned tag. Typing "/check" showed "Check Cursor changelog" tagged "Skill" and "Check for Updates" tagged "Action". A sent skill appears as a chip in your bubble. ([learngrokbot: skills][lgb-skills], reported from caption)
 - On the phone, an unsent draft is kept per conversation ([docs: mobile][d-mobile], seen). Desktop draft persistence is not documented. (no public material found)
 - Attachments: up to 20 per message, images 25 MB each and 200 MB total, documents 250 MB, video 1 GB. An oversized file is flagged and dropped. While files upload, your message shows a "Sending…" bar that fills. ([docs: files][d-files], seen; [changelog][x-changelog], reported)
@@ -322,39 +332,57 @@ Cards are wide rounded panels with a title at the top left, an optional status t
 
 ### 5.6 Clawtrate design proposal: the working view
 
-This subsection is not Grok Bot evidence. It is Clawtrate's intended behavior, written so a test can check it. Grok Bot's quiet presentation (state avatar, short phrase, progress messages) is the collapsed state; the detail shows when the user expands it. Pixel values, colors and timing curves are left to the design specification.
+Not Grok Bot evidence. This is Clawtrate's intended behavior, written so a test can check it. Grok Bot's quiet presentation (state avatar, short phrase, progress messages) is the collapsed state, and the detail shows when the user expands it. Exact appearance, sizes and timing curves belong to the design specification under `docs/design/`.
 
-**Run states.** Each turn of a task is a run with one state at a time: `queued`, `running`, `waiting` (a card needs the user), `stopping`, and the terminal states `completed`, `stopped` and `failed`. Transitions:
+**Run states.** Each turn of a task is a run with one state at a time. Non-terminal states: `queued`, `running`, `waiting` (a card from the run needs the user), `stopping`. Terminal states: `completed`, `stopped`, `failed`, `cancelled` (queued work removed before it started). A terminal state is final: later events for that run never change its state.
 
-| From | Trigger | To |
-|---|---|---|
-| (none) | User sends while the task has no active run | `running` |
-| (none) | User sends with "Queue after this turn" while a run is active | `queued` |
-| `queued` | The active run reaches a terminal state | `running` |
-| `running` | An approval, question, Secure Form or Computer card from this run is pending | `waiting` |
-| `waiting` | The last pending card of this run is answered, expires or is dismissed | `running` |
-| `running` or `waiting` | User presses Stop | `stopping` |
-| `stopping` | The gateway confirms the run ended | `stopped` |
-| `running` | The gateway reports the run finished normally | `completed` |
-| any non-terminal | The gateway reports the run ended with an error, or the run exceeds Clawtrate's turn limit | `failed` |
+| From | Event or action | To | What happens to pending cards and queued messages |
+|---|---|---|---|
+| (none) | User sends with no active run in the task | `running` | — |
+| (none) | User sends with "Queue after this turn", or sends while the active run is `stopping` | `queued` | The message shows a "Queued" chip. |
+| `queued` | The active run reaches a terminal state | `running` | The oldest queued message starts. |
+| `queued` | "Cancel" on the chip, or the task is archived or deleted | `cancelled` | The message never runs. |
+| `running` | A card from this run becomes pending (approval, question, Secure Form, Computer) | `waiting` | — |
+| `waiting` | The last pending card is answered, expires or is dismissed | `running` | — |
+| `waiting` | The user sends a steer message | `running` | Open approval cards close as "Closed by your message" (as in F-169). |
+| `waiting` | The gateway reports the run finished | `completed` | Pending cards close as "Closed: the run ended"; their actions are not taken. |
+| `running` or `waiting` | User presses Stop | `stopping` | Pending cards close as "Cancelled". |
+| `stopping` | The gateway confirms the run stopped | `stopped` | Queued messages then start in order. |
+| `stopping` | The gateway reports the run finished normally before the stop took effect | `completed` | The stop note says "Finished before Stop took effect". |
+| any non-terminal | The gateway reports an error, or the run exceeds Clawtrate's turn limit | `failed` | Pending cards close as "Closed: the run failed". |
 
-**Status line (collapsed view).** While a run is non-terminal, a status line sits at the bottom of the task's transcript: the Bot's avatar and a short phrase. The phrase is the plain-language summary of the step that is currently running ("Reading the pricing pages"). When no step is running, a generic phrase ("Thinking") appears. Clawtrate's choice: the generic phrase appears only if no specific step has started within 1 second of the run starting; specific phrases appear as soon as their step starts. Nothing delays the reply itself. In `waiting` the phrase is "Waiting for you"; in `stopping` it is "Stopping…". Progress messages, cards and Messaged cards that arrive during the run render above the status line, and the status line stays put. **The status line is removed only when the run reaches a terminal state**, never because a bubble or card arrived.
+**Status line (collapsed view).** Within 1 second of a send (Clawtrate's choice), a status line appears at the bottom of the task's transcript, with the Bot's avatar and a phrase. The phrase always has text. While a step is running, it is that step's plain-language summary ("Reading the pricing pages"). When no step is running, including before the first step and after a step finishes while the Bot is still thinking, it is "Thinking". In `waiting` it reads "Waiting for you" and in `stopping` it reads "Stopping…". Progress messages, cards and Messaged cards that arrive during the run render above the status line, and the status line stays put. **It is removed only when the run reaches a terminal state.**
 
-**Activity block.** Every run that used at least one tool has one activity block, placed in the transcript where the run's first step began. Collapsed, it is one line. While the run is non-terminal it reads like "Working · 3 steps". At the end it reads "Worked for 1m 12s · 7 steps", "Stopped after 40s · 4 steps" or "Failed after 12s · 2 steps". When any step failed, it adds "· 1 failed" (FC-15). Clicking or tapping the line expands the block into a list of step cards; doing it again collapses it. The block keeps its expanded or collapsed state while new steps arrive and when the user scrolls away and back. Failed step cards stay visible under the collapsed line, so a failure can never hide behind a success summary.
+**Activity block.** Every run with at least one step has one activity block. A step is a tool call, a reasoning segment the gateway exposes, a Bot-to-Bot message, a T3 Code handoff or an approval. A run with no step, for example a plain reply with no exposed reasoning, has no block; its status line reads "Thinking" until it ends. The block sits in the transcript where the run's first step began, and is collapsed by default. While the run is non-terminal, its collapsed line reads "Working · 3 steps". At the end it reads "Worked for 1m 12s · 7 steps", "Thought for 8s" (when every step was reasoning), "Stopped after 40s · 4 steps" or "Failed after 12s · 2 steps". When any step failed, it adds "· 1 failed" (FC-15). Clicking or tapping the line expands the block into its step cards, and doing it again collapses it. Its expanded or collapsed state is kept while new steps arrive, while the user scrolls away and back, and when the user switches to another task and returns. Failed step cards stay visible under the collapsed line.
 
-**Step cards.** Each tool call, reasoning segment the gateway exposes, Bot-to-Bot message and approval is one step card. Collapsed, a step card is one line: a kind icon, the plain-language summary, a short detail (target, duration, result count) and a status (running, done, failed, waiting). Clicking or tapping one step card expands only that card. It shows the inputs and the result in readable form, plus a "Raw" control that reveals the exact tool name, arguments, result, timing, error and the gateway's identifiers, each copyable (FC-05). While one card is expanded, other cards keep updating, new cards keep appending, and nothing above the expanded card moves. A running step's card shows output as it arrives, where the gateway streams it.
+**Run result.** A run that completed with at least one failed step never presents as a plain success. Its task status becomes "done with failures", the sidebar or task-list row carries a failure marker until the task is opened, and its notification reads "Finished with 1 failed step".
 
-**Hover and touch.** On desktop, hovering the status line shows the current step's full summary in a tooltip (Grok Bot parity), and hovering a step card shows its full summary when truncated. On iOS and iPadOS, tapping the status line expands the activity block and scrolls the running step into view; tapping a step card expands it; touch and hold on a step card offers "Copy result" and "Copy raw".
+**Step cards.** Collapsed, a step card is one line: an icon for its kind, a plain-language summary, a short detail (target, duration or result count) and a status (running, done, failed, waiting). On desktop, hovering a truncated summary shows it in full. Clicking or tapping a card expands only that card. It shows the inputs and the result in readable form; a running step shows its output as it arrives, where the gateway streams it. A "Raw" control shows what the gateway sent: for a tool call, the exact tool name, arguments, result, timing, error and identifiers; for a reasoning, approval or message step, the event as received with its identifiers, never invented tool fields. Each value can be copied. While one card is expanded, other cards keep updating, new cards keep appending, and nothing above the expanded card moves. On iPhone and iPad, touch and hold on a step card offers "Copy result", which copies the result text shown when expanded, and "Copy raw".
 
-**Avatar motion.** The avatar has one distinct appearance per state: idle (no run), thinking (run active, no tool step running), working (a tool step running), waiting (a card pending), blocked (the gateway or node is unreachable, or the run cannot proceed without a settings change) and done (terminal `completed` and not yet seen; it returns to idle when the user opens the task). The current state is exposed to accessibility as text, for example "Demo Research, working".
+**Hover and touch for the status line.** On desktop, hovering the status line shows the current step's full summary in a tooltip (Grok Bot parity). On iPhone and iPad, tapping the status line expands the activity block and scrolls the running step into view.
 
-**Reduced motion.** When the system's reduce-motion setting is on, the avatar does not animate; each state uses a static variant and the text state label stays visible. The phrase shimmer is replaced by plain text. Spinners become a static running glyph. Expanding and collapsing happen without animation. The information shown is the same in both modes.
+**Avatar.** Each state has one qualitative motion in normal mode and one static variant with reduced motion:
 
-**Composer while a run is active.** Send stays available. Pressing Enter or Send delivers the message into the current run as a steer, and the sent bubble carries a small "Steer" label. Next to Send, a Stop button appears for as long as the run is non-terminal. The Send button's menu offers "Queue after this turn" and "Start as new task". A queued message shows a "Queued" chip with "Send now" (turns it into a steer) and "Cancel".
+| State | Entered when | Motion | Static variant |
+|---|---|---|---|
+| idle | No non-terminal run in any of the Bot's tasks | Still, with an occasional blink | Eyes open, looking ahead |
+| thinking | A run is active and no tool step is running | Slow side-to-side sway, eyes drifting upward | Eyes turned upward |
+| working | A tool step is running | Steady, quick bob in place | Eyes forward, with a small motion mark beside the avatar |
+| waiting | A card from the Bot's runs is pending | Leans toward the viewer and pulses | Eyes on the viewer, with an attention badge |
+| blocked | The gateway or the Bot's machine is unreachable, or the run cannot proceed without a settings change | No motion, slumped, eyes half closed | Eyes half closed, with a warning badge |
+| done | A run completed and its task has not been opened since | One small settling nod, then still with smiling eyes | Smiling eyes |
 
-**Stop.** Stop moves the run to `stopping`. When the gateway confirms, the status line disappears and a grey note lists what was stopped: helper runs, delegated Bots' runs and processes the run started on its machine. The note also says that completed actions are not undone, and that work already handed to T3 Code continues there. Stop never removes completed steps or results from the transcript.
+When several states apply, the avatar shows the first in this order: waiting, blocked, working, thinking, done, idle. When waiting wins while the machine is unreachable, the warning badge from blocked is added. The state is exposed to accessibility as text, for example "Demo Research, working". Done returns to idle when the task is opened.
 
-**Streaming text.** Reply text streams into its bubble as the gateway emits it. The bubble is marked as streaming until the message completes.
+**Reduced motion.** When the system's reduce-motion setting is on, the avatar uses the static variants above, and the state label stays visible. The phrase shimmer becomes plain text and spinners become a static running glyph. Expanding and collapsing of every element (activity blocks, step cards, Messaged and T3 Code cards, sidebar task disclosure) and the opening and closing of the work pane and the computer view all happen without animation. Both modes show the same information.
+
+**Composer while a run is active.** Send stays available. Pressing Enter or Send delivers the message into the current run as a steer, and the sent bubble carries a small "Steer" label. While the run is `stopping`, a sent message is queued instead. Next to Send, a Stop button appears for as long as the run is `running` or `waiting`. The Send button's menu offers "Queue after this turn" and "Start as new task". A queued message shows a "Queued" chip with "Send now" (turns it into a steer) and "Cancel".
+
+**Stop.** Stop moves the run to `stopping`. When the gateway confirms, the status line disappears and a grey note lists what was stopped: helper runs, delegated Bots' runs and processes the run started on its machine. The note also says that completed actions are not undone, and that work already sent to T3 Code continues there. Stop never removes completed steps or results from the transcript.
+
+**Streaming text.** Reply text streams into its bubble as the gateway emits it. While it streams, the bubble carries a streaming marker; the marker goes away when the gateway reports the message complete. A message that ends because the run failed or stopped keeps its text and shows "Incomplete".
+
+**Dismissed question.** Closing a question card with its X sends the Bot a "dismissed" answer. The card folds to its title and a dimmed "Dismissed" row. If it was the run's last pending card, the run returns to `running`, and the Bot continues; it may finish or ask again.
 
 ---
 
@@ -405,28 +433,35 @@ My reading, not evidence: this is the slot where Clawtrate shows "Messaged T3 Co
 
 ### 6.1 Clawtrate design proposal: the expanding Messaged card
 
-Not Grok Bot evidence. Public material does not show Grok Bot's opened exchange, so this is Clawtrate's own design. Event names come from the gateway capability map; this document does not invent them.
+Not Grok Bot evidence. Public material does not show Grok Bot's opened exchange, so this is Clawtrate's own design. Event and field names come from the gateway capability map; this document does not invent them.
 
-- **Recognition.** A Messaged card is drawn for each tool event in which the Bot sends a message to another Bot through the gateway's agent-to-agent messaging. One card is drawn per message sent.
-- **Placement.** The card sits in the transcript at the point where the message was sent, and stays visible when the run's activity block is collapsed. The same message also appears as a step card inside the activity block.
-- **Collapsed.** One line: "Messaged", the recipient's avatar and name, the first line of the message (truncated), and a state: Sending, Sent, Working (the recipient has an active run for it), Replied or Failed.
-- **State transitions.** Sending when the send tool call starts; Sent when the call returns successfully; Working when the recipient's run for this message starts; Replied when the reply event arrives; Failed when the send call returns an error or the recipient's run fails. If the sending Bot is stopped before the call returned, the state becomes "Not sent" or "Unknown", whichever the gateway reports.
-- **Expanded.** Clicking or tapping the card expands it in place to show the exact text sent, any attachments, the time sent, and then the reply text and time. While the recipient is working, the expanded card shows the recipient's live status line. The card has "Open in &lt;Bot&gt;", which goes to the recipient's task for this message, and "Raw", which shows the tool call. Collapsing returns the card to one line; nothing else in the transcript moves.
-- **Return.** From the recipient's task, Back (iOS) or the history-back action (desktop) returns to the sender's task at the same scroll position, with the card still expanded.
-- **Receiving side.** The recipient's task starts with a "Message from &lt;Bot&gt;" card that expands the same way and links back to the sender with "Open in &lt;Bot&gt;".
-- **"Open full exchange"** in the expanded card opens a read-only view of every message between the two Bots in this task, with a close control that returns to the card (Grok Bot's behavior, kept as a secondary path).
+- **Recognition and correlation.** A Messaged card is drawn for each tool event in which the Bot sends a message to another Bot through the gateway's agent-to-agent messaging. Two events belong to the same card only when identifiers carried in the gateway's events say so. Replayed or duplicated events with the same identifiers update the existing card and never create a second one.
+- **Placement.** The card sits in the transcript at the point where the message was sent. It stays visible when the run's activity block is collapsed, and the same message also appears as a step card inside the block.
+- **Collapsed.** One line: "Messaged", the recipient's avatar and name, the first line of the message (truncated), and the card's state.
+- **States.** Non-terminal: Sending (the send call started), Waiting for approval (the sender's outgoing policy is "ask me", and an approval card is pending), Sent (the call returned successfully), Working (the recipient's run for this message started), Unknown (the sender was stopped and the gateway could not say whether the call completed). Terminal: Replied (the reply arrived), Failed (the send call returned an error, or the recipient's run failed), Blocked by policy (a messaging policy forbade it), Not sent (the user denied the approval, or the sender was stopped before the call returned and the gateway reports it was not sent), Recipient stopped (the recipient's run ended as stopped without a reply).
+- **Precedence.** A card moves only forward, in the order Sending, Waiting for approval, Sent, Working, then a terminal state. An event for an earlier state that arrives late never moves the card back; for example, a late send result does not turn Working or Replied back into Sent. Unknown can move to any state that a later correlated event reports. A terminal state is final.
+- **Expanded.** Clicking (desktop) or tapping (iPhone, iPad) the card expands it in place, and doing it again collapses it; nothing else in the transcript moves. Expanded, the card shows the exact text sent, any attachments, and the time sent, then the reply text and its time. While the recipient is working, it shows the recipient's live status line (avatar and phrase, as in section 5.6). The card has "Open in &lt;Bot&gt;", which goes to the recipient's task for this message, and "Raw", which shows the tool call as received. Touch and hold offers "Copy message" and "Copy raw".
+- **Return.** From the recipient's task, Back (iPhone) or the history-back action (desktop, iPad) returns to the sender's task at the same scroll position, with the card still expanded.
+- **Receiving side.** Clawtrate replaces Grok Bot's count-only grey line with a card. The recipient's task shows a "Message from &lt;Bot&gt;" card at the start of the run the message started. Collapsed, it shows the sender's avatar and name, the first line of the message, and the state of the recipient's own run (Working, Replied, Failed, Stopped). It expands the same way to show the full message, any attachments and the reply. Its "Open in &lt;Bot&gt;" goes to the sender's task, scrolled to the matching Messaged card.
+- **"Open full exchange"** in either expanded card opens a read-only view of every message between the two Bots in this task. Its close control returns to the card, still expanded. This is Grok Bot's behavior, kept as a secondary path.
+- **Motion.** Expanding and collapsing follow the reduced-motion rule in section 5.6.
 
 ### 6.2 Clawtrate design proposal: the Messaged T3 Code card
 
-Not Grok Bot evidence. This follows the coordinator's ruling: **the client draws this card only from the Bot's own tool events on the gateway.** The client never connects to T3 Code, never reads its state, and never cancels or steers anything inside it.
+Not Grok Bot evidence. This follows the coordinator's ruling: **the client draws this card only from the Bot's own tool events on the gateway.** The client never connects to T3 Code, never reads its state, and never cancels or steers anything inside it. No T3 Code setting or credential exists in the client.
 
 - **Recognition.** A Messaged T3 Code card is drawn for each tool event in which the Bot sends work to T3 Code. The tool and event names come from the gateway capability map.
+- **Correlation.** Two events belong to the same card only when identifiers carried in the gateway's tool events say so; the field names come from the capability map. With no such identifier, each call is its own card. Events are never matched by guessing from project or thread names, so two handoffs to the same project stay separate cards. Replayed or duplicated events, for example after a reconnect, update the existing card and never create a second one. Results that arrive out of order are applied to the card their identifiers name.
 - **Identity.** The card uses the text label "T3 Code" with an original generic coding-agent icon. It never uses a third-party logo.
-- **Collapsed.** One line: the icon, "Messaged T3 Code", the first line of what was sent, and a state: Sending (the tool call has started), Sent (the call returned and its result says the work was accepted), Done (a tool result carries a final result), or Failed (the call returned an error).
-- **Expanded.** It shows the exact text sent, taken from the tool call's arguments, and any target fields those arguments contain (a project, thread or branch, shown only if present). Below that, the reply or result text from the tool result, and the time of each. A link appears only if the tool result carries one. "Raw" shows the tool call and result.
-- **Waiting.** After Sent, the card changes again only if the Bot receives a later tool event about the same work, for example a follow-up tool that returns the result. Each such event updates the card. Without one, the card stays at Sent.
+- **Collapsed.** One line: the icon, "Messaged T3 Code", the first line of what was sent, and a state.
+- **States.** Sending (the tool call has started); Sent (the call returned and its result says the work was accepted); Done (a correlated tool result carries a final result); Failed (the call returned an error); Not sent or Unknown (the Bot was stopped before the call returned, as the gateway reports). States move only forward, Sending to Sent to Done or Failed, and a terminal state is final.
+- **Expanded.** Clicking (desktop) or tapping (iPhone, iPad) expands the card in place, and doing it again collapses it. Expanded, it shows the exact text sent, taken from the tool call's arguments, and any target fields those arguments contain (a project, thread or branch, shown only if present). Below that comes the result text from the tool result, and the time of each. Touch and hold offers "Copy sent text" and "Copy raw". "Raw" shows the tool call and result as received.
+- **Files and links.** Files appear on the card only when the gateway's tool result or a gateway attachment carries them; their names and contents come from the gateway. A link appears only if the tool result carries one, and it opens in the system browser only when the user selects it. The client never fetches anything from T3 Code in the background.
+- **Waiting.** After Sent, the card changes again only when a correlated later tool event arrives, for example a follow-up tool that returns the result. Without one, it stays at Sent.
 - **Failure.** On a tool error, the card shows Failed and the error text when expanded.
-- **When the Bot is stopped.** Stopping the Bot stops its run on the gateway. If the work had already been sent, the card keeps its state and adds the line "Work already sent to T3 Code continues there." If the stop came before the call returned, the card shows what the gateway reports for the call (not sent, or unknown).
+- **When the Bot is stopped.** Stopping the Bot stops its run on the gateway. If the work had already been sent, the card keeps its state and adds the line "Work already sent to T3 Code continues there."
+- **Coding index.** The Bot's details have a "Coding" section, separate from the Bot's task list. It lists every Messaged T3 Code card from all of the Bot's tasks, newest first, each with its state, the first line sent and the task it came from. Selecting one opens that task, scrolled to the card, expanded.
+- **Motion.** Expanding and collapsing follow the reduced-motion rule in section 5.6.
 
 ---
 
@@ -474,13 +509,17 @@ The team rejected a floating window (it covered the chat), side by side (it enco
 
 ### Clawtrate design proposal: files and the computer beside the conversation
 
-Not Grok Bot evidence. Clawtrate's intended behavior.
+Not Grok Bot evidence. This is Clawtrate's intended behavior.
 
-- **Desktop work pane.** The right-hand pane beside the conversation has the tabs Details, Files and Computer. Opening any of them never replaces or hides the conversation.
-- **Files tab.** It lists the files in the task's workspace on its machine as a folder tree, with name, size and modified time, sortable by name or time. Files created or changed by the current run carry a "changed" marker and update live. Selecting a file opens its preview inside the pane (text, code, markdown, images, PDF, and the media viewer for video). A file without a supported preview shows its details and "Download". Every file has "Download", which saves the file's exact bytes under its own name, and "Show in chat", which scrolls to the message or step that produced it. If the listing or a preview fails, the pane shows the error with "Try again" and keeps what it last loaded.
-- **Computer tab.** It works as in Grok Bot (preview, "Open", Watching, "Take control", "I'm done"), and also names the machine the Bot runs on and its connection state (FC-02, FC-08).
-- **iPhone.** Files and Computer are sections of the task's info screen, opened from the header. A file opens full screen with "Share" and "Save to Files"; Back returns to the chat at the same position. The computer opens full screen, starts in Watching, and has "Take control" and "I'm done". These mobile screens are Clawtrate additions, not observed Grok Bot behavior.
-- **iPad.** The work pane is a side column next to the conversation, as on desktop.
+- **Desktop and iPad work pane.** The right-hand pane beside the conversation has the tabs Details, Files and Computer. Opening any of them never replaces or hides the conversation. On iPad, the pane is a side column next to the conversation.
+- **Files listing.** The Files tab lists the files in the task's workspace on its machine as a folder tree. Each entry shows its name, size and modified time, and the list sorts by name or by modified time. While a run is active, the listing updates as files are created, changed or deleted, and files changed by the current run carry a "changed" marker.
+- **Preview.** Selecting a file opens its preview inside the pane: text, code, markdown, images and PDF, and the media viewer for audio and video. An open preview reloads when the file changes. A file without a supported preview shows its name, size, modified time and "Download".
+- **Download.** "Download" saves the file under its own name with identical bytes.
+- **Show in chat.** "Show in chat" scrolls the conversation to the message or step card that last produced or changed the file, and expands that step card.
+- **Errors.** If the listing or a preview fails, the pane shows the error and "Try again" and keeps what it last loaded. A successful retry replaces the error with the listing or preview.
+- **iPhone.** Files and Computer are sections of the task's info screen, which opens from the chat header. The Files section shows the same tree as a navigable list; tapping a folder opens it, and Back goes up a level. Tapping a file opens it full screen with "Share" and "Save to Files". "Save to Files" writes the file with identical bytes to the location the user chooses. Closing the preview returns to the list, and closing the info screen returns to the chat at the same scroll position.
+- **Computer tab.** On desktop it works as in Grok Bot (preview, "Open", Watching, "Take control", "I'm done"). It also names the machine the Bot runs on and its connection state (FC-02, FC-08).
+- **iPhone computer.** The computer opens full screen from the info screen or the header's computer icon. It starts in Watching, where touches are not sent to the machine and the screen keeps updating. "Take control" sends touches and typing to the machine, and "I'm done" returns to Watching. Closing returns to the chat at the same position. These mobile screens are Clawtrate additions, not observed Grok Bot behavior.
 - **Leaving.** Closing the pane, leaving the computer view or quitting the client never stops gateway work. When the client returns, it reconnects and shows the run's current state.
 
 ### Your own computer
@@ -573,7 +612,31 @@ Possible warnings on a card: "This can't be undone", "This changes sign-in or se
 - The **Secure Form card** in chat shows the site's logo, "Sign in to GitHub", "Secure Form" beneath it and an "Open" button at the right. "Open" shows a dialog titled "Sign in to GitHub" / "Secure Form" with "Username or email address" and "Password", the line "Never shown to your Bot. Filled directly to github.com." and "Continue". A checkbox "Securely save to Bot's vault" decides whether it is saved. ([learngrokbot: logins][lgb-logins], reported from caption; [learngrokbot: shared computer][lgb-computer], reported from caption; [Flavio Copes][flavio], reported)
 - The **secure secret card** for API keys has a masked field and "Save securely". Afterwards it says "Saved" and "Saved securely and kept private". Saved values are write-only and never shown again. ([docs: vault][d-vault], seen)
 - Vault (Settings, Vault) holds logins, cards and contact info. Everything in it is available to every personal Bot on the account, and you cannot limit an item to one Bot. Team Bots cannot use your personal Vault; they have their own "Secrets" and "Bot's accounts". ([docs: vault][d-vault], seen)
-- Phone permission card: "Grok Bot needs permission" with "Allow", or "Open Settings" if denied before. The Bot waits up to five minutes. ([docs: mobile][d-mobile], seen)
+- Phone permission card: "Grok Bot needs permission" with "Allow", or "Open Settings" if denied before. The Bot waits up to five minutes for "Allow". If you allow the app later, within an hour, the Bot can pick the request back up without being asked again. ([docs: mobile][d-mobile], seen)
+
+### 8.8 Clawtrate design proposal: permissions and approvals
+
+Not Grok Bot evidence. This is Clawtrate's intended behavior, following the coordinator's ruling on precedence.
+
+**Precedence, from strongest to weakest:**
+
+1. A denial configured on the gateway. It is a hard ceiling: nothing in the client can loosen it, and it never becomes an approvable card.
+2. A client `deny` that matches, whether set for this Bot or for all Bots.
+3. A client `ask` that matches.
+4. A standing allow (a rule or a grant) that is in scope and unexpired.
+5. The default review, whose verdict is honored (allow, ask or deny).
+
+With the automatic review off and nothing above matching, the result is ask. Words the user said earlier in the conversation are an input to the default review and nothing more: they never produce a pass by themselves, and never override an ask or a deny. When a grant expires or is revoked, it is removed from consideration and the order is evaluated again. That does not by itself force an ask; another matching rule or grant, or the review, still decides.
+
+**Blocked calls.** A call stopped by a deny never executes. It appears in the activity block as a failed step, "Blocked by policy", and the expanded step names the rule that decided it.
+
+**Audit log.** A Permissions page lists every reviewed action, newest first, with its time, Bot, task, one-line summary, verdict (allowed, asked, denied, blocked) and source: gateway rule, Bot rule, global rule, grant, default review, or the user's answer to a card. Each entry links to its step card.
+
+**Rule limits.** Each scope (all Bots, and each Bot) holds up to 20 allow rules and 20 ask rules, each up to 1,000 characters (Clawtrate's choices). Adding or editing a rule past these limits shows a message and saves nothing. When "Always allow" is chosen and that scope already has 20 allow rules, the oldest allow rule in that scope is removed and the card says "Replaced the oldest rule: '…'". The removed rule no longer applies.
+
+**Vault restriction.** A Bot that is not chosen for a Vault item treats the item as absent. For a sign-in, it uses the next source its permissions allow: a connected password manager, if that Bot may use it, then a Secure Form.
+
+**Phone permission requests.** A request to use a phone app shows a card with "Allow". If the user has not answered after 5 minutes, the card reads "Timed out", and the Bot continues without the phone app and says so. If the user allows the app within 1 hour of the request, the original request resumes once, and the card reads "Resumed". After 1 hour, allowing grants the permission for later requests only, and the original request does not run. These windows follow the documented Grok Bot behavior and are Clawtrate's choices.
 
 ---
 
@@ -618,7 +681,8 @@ Possible warnings on a card: "This can't be undone", "This changes sign-in or se
 
 - Files, images, links and tool results appear as cards in the conversation. Opening a card previews supported formats, from where you can save, open the source or give feedback. ([docs: files][d-files], seen)
 - **Library on desktop** (details, "Library" tab): Pages, files and apps the Bot made, plus images, videos and links it sent. The files page says it does not list things you uploaded or files from Cloud Agents. ([docs: files][d-files], seen) **On the phone** (tap the Bot's name, then "Library"), the mobile page says it lists the pages, images, videos, files and links in the conversation, "including ones you sent". ([docs: mobile][d-mobile], seen) The two pages conflict on uploads. On desktop, items are grouped under "Today", "This week" and "Older", five at a time, with "Show more". Desktop filters: "All", "Pages", "Media", "Links", "Files", "Apps" and "Pinned". The row menu has "Pin"/"Unpin", "Open" and "Share…". A "Pinned" section syncs across devices. ([docs: files][d-files], seen)
-- **Pages** are interactive documents (reports, memos, dashboards). A Page card has the title and "Open". On desktop, the Page fills the window with a smaller chat panel beside it, labelled "Message about &lt;Page title&gt;". The Bot edits the same Page for everyone who can view it. Filters on the Page change only your view. Sharing options are "People you invite" ("Only you" on personal accounts), your team, or "Anyone with the link" on pages.grok.bot. ([docs: files][d-files], seen)
+- **Library on the phone:** newest first under "Today", "This week" and "Older", with "Show more" to look further back and "Try Again" when it fails to load. A Page row you own shows "Private", "Team" or "Public", and touching and holding a Page row offers "Open", "Share", "Copy Link" and "Open in Web". Tapping an image views it full screen, a video plays, a file previews, and a link opens in the browser. ([docs: mobile][d-mobile], seen)
+- **Pages** are interactive documents (reports, memos, dashboards). A Page card has the title and "Open". On desktop, the Page fills the window with a smaller chat panel beside it, labelled "Message about &lt;Page title&gt;". The Bot edits the same Page for everyone who can view it. Filters on the Page change only your view. Sharing options are "People you invite" ("Only you" on personal accounts), your team, or "Anyone with the link" on pages.grok.bot. ([docs: files][d-files], seen) On the phone, tapping a Page card opens the Page, and changes are asked for in the conversation; renaming needs the desktop app. ([docs: mobile][d-mobile], seen) Clawtrate design proposal, not observed: on iPhone the Page opens full screen, its close control returns to the chat at the same position, and the Page shows the latest saved version.
 - **Media viewer:** click a thumbnail for full screen, arrow keys or thumbnails to move, a download button at the top, Escape to close. Video plays at 2×, 1.5×, 1× or 0.5×. Right-click offers "Copy image", "Save image…" and "Save video…". ([docs: files][d-files], seen)
 - A Bot no longer sends a message that only says it is done. The Bot is expected to summarize what it did in a few lines. ([Flavio Copes 1.0][flavio-10], reported)
 
@@ -629,6 +693,7 @@ Possible warnings on a card: "This can't be undone", "This changes sign-in or se
 - **What a Bot saves:** your preferences and working style, rules you give it, facts about you (name, time zone), and a dated log of work. Logins and cards belong in Vault. ([docs: bots][d-bots], seen)
 - **When:** it decides on its own and does not ask. Saves are not always mentioned in chat. The product page mockup shows a "Saved to memory" confirmation line. ([docs: bots][d-bots], seen; [x.ai product page][x-product], seen)
 - **Scope:** memory applies across all your chats with that Bot. Each Bot has its own memory, but some facts are shared by all Bots (name, time zone). Bots can also save shared facts and standing rules that apply to all Bots. In a group chat, a Bot may use what you told it privately, and others see its replies. ([docs: bots][d-bots], seen; [forum: memory][f-memory], reported)
+- Clawtrate design proposal for pinning, not Grok Bot evidence: a pinned memory item, Bot-scope or shared, is always part of the memory the Bot receives on its next turn. If pinned items would exceed the memory capacity the gateway reports, pinning another is refused with "Pinned memory is full". The capacity comes from the gateway capability map.
 - **View, correct, remove: there is no memory screen.** You ask in chat ("What do you remember about me?", "That's out of date…", "Forget that…"). To fully remove a shared fact, you ask the Bot that saved it. ([docs: bots][d-bots], seen)
 - Under the hood, memory is reported to be markdown files on the Bot's computer, a profile plus dated logs, with per-Bot snapshots under an agent-data folder. Only the newest few thousand characters are injected into each turn. One user found a shared fact duplicated six times by different Bots. ([forum: memory][f-memory], reported; [forum: memory and usage][f-memusage], reported; [forum: instructions][f-instructions], reported)
 - **Resets:** resetting a conversation keeps memory. Deleting a Bot erases its memory. Deleting the account erases all memory. ([docs: bots][d-bots], seen)
@@ -673,11 +738,24 @@ Brief, because Clawtrate is a personal client.
 
 Open from the account menu, "Settings", or `Cmd/Ctrl+,`. Panes: "General", "Computer", "Vault", "Usage & Billing", "Updates". ([docs: settings][d-settings], seen)
 
-- **General:** "Account" card (picture, name, email, "Add account", "Sign Out"; several accounts with "Switch account" and "Remove"). "Appearance": "Theme" (Follow System, Light, Dark), "Accent" (Bot color, Black), "Language", "Check Spelling While Typing". "System": "Microphone", "Use hardware acceleration". "Bot": "Timezone", the "Auto-review" switch and "Custom Rules". "Import": "Import Memory to Grok Bot". "Security Key": "Use hardware security keys". "Team Bots": "Clear connector preferences". ([docs: settings][d-settings], seen; [learngrokbot: sign-in][lgb-signin], reported from caption)
+- **General:** "Account" card (picture, name, email, "Add account", "Sign Out"; several accounts with "Switch account" and "Remove"). "Appearance": "Theme" (Follow System, Light, Dark), "Accent" (Bot color, Black), "Language", "Check Spelling While Typing". "System": "Microphone", "Use hardware acceleration". "Bot": "Timezone", the "Auto-review" switch and "Custom Rules". "Import": "Import Memory to Grok Bot". "Security Key": "Use hardware security keys", on by default on macOS and Windows and not yet supported on Linux ([docs: approvals][d-approvals], seen). "Team Bots": "Clear connector preferences". ([docs: settings][d-settings], seen; [learngrokbot: sign-in][lgb-signin], reported from caption)
 - **Computer:** "Your computer" and "Bot's computer" sections, "Manage devices", "Execution on this computer", "Route traffic through this computer", "Update Bot's Computer", "Reset Bot's Computer". ([docs: settings][d-settings], seen)
 - **Vault:** "New item", "New item → Import" from other password managers. ([docs: settings][d-settings], seen)
-- **Updates:** "Grok Bot Updates" with "Update Track" (Stable), "Automatic Updates" ("Automatically update your client while you're away"), the version with "You're up to date" and "Check for Updates" or "Restart to Update". ([docs: settings][d-settings], seen; [learngrokbot: platforms][lgb-platforms], reported from caption)
+- **Updates:** "Grok Bot Updates" with "Update Track" (Stable), "Automatic Updates" ("Automatically update your client while you're away"), the version with "You're up to date" and "Check for Updates" or "Restart to Update". Automatic updates install while the screen is locked or the screensaver is on, the computer has been idle for at least 10 minutes and the app is not busy. Linux `.deb` and `.rpm` installs update through the system package manager and show no switch. ([docs: settings][d-settings], seen; [learngrokbot: platforms][lgb-platforms], reported from caption)
 - There is no model setting anywhere. ([docs: settings][d-settings], seen)
+
+### Clawtrate design proposal: the Gateway pane and connection
+
+Not Grok Bot evidence. Clawtrate connects to a gateway instead of a vendor account.
+
+- **Gateway pane (Settings).** It shows the gateway URL, the connection state (Connected, Connecting, Offline, Disconnected, Pairing pending), this device's name as the gateway knows it, and the operator scopes granted. Errors show as "Pairing rejected", "Unreachable" or "Incompatible version".
+- **Reconnect** is available when the state is Offline or Disconnected. The state becomes Connecting, then Connected, or Offline with the error.
+- **Re-pair** sends a new pairing request, and the state becomes Pairing pending. When the gateway approves it, the new device authorization replaces the old one, which the client then stops using, and the state becomes Connected. If the request is rejected, the old authorization stays and the error shows.
+- **Disconnect** closes the connection and keeps the pairing; the state becomes Disconnected until Reconnect.
+- **Protocol compatibility.** During the connection handshake, the client compares the gateway's protocol version with the range it supports. If it is outside that range, the client sends no feature or mutation requests and shows a full-window notice naming both versions. "Retry" runs the handshake again, and "Choose another gateway" opens the gateway list.
+- **Several gateways.** "Add gateway" pairs another gateway. "Switch gateway" shows only that gateway's Bots, tasks and permissions. "Remove" deletes the client's stored data and credentials for that gateway.
+- **Language.** "Language" offers "System" and the languages the client ships translations for (Clawtrate's choice, listed in the client's localization files). Choosing one changes the interface at once and persists. "System" follows the device and falls back to English when the device's language is not shipped.
+- **Updates.** On macOS and Windows, "Automatic Updates" installs a downloaded update only while the screen is locked or the screensaver is on, the computer has been idle for at least 10 minutes, and no run is active. Linux packages show the version and "Updates are managed by your package manager", with no automatic-updates switch.
 
 ### Usage and quota
 
@@ -706,7 +784,7 @@ From the App Store screenshots ([App Store][appstore], seen) and the mobile docs
 ### Gestures
 
 - Touch and hold a message: "Select Text", then "Add to Chat" or copy. ([docs: mobile][d-mobile], seen)
-- Touch and hold a Library row: "Open", "Share", "Copy Link", "Open in Web". ([docs: mobile][d-mobile], seen)
+- Touch and hold a Page row in the Library: "Open", "Share", "Copy Link", "Open in Web". Other Library items open on tap. ([docs: mobile][d-mobile], seen)
 - Touch and hold an image: "Copy Image" or "Save to Photos". ([docs: files][d-files], seen)
 - Long press a Bot to duplicate it ([App Store][appstore], seen in version notes). "Conversation actions" give quick access to pin and hide, but the docs do not say which gesture opens them ([docs: mobile][d-mobile], seen; the gesture is not established). Swipe a routine to delete it ([docs: mobile][d-mobile], seen). Swipe an account to remove it ([docs: FAQ][d-faq], seen).
 - Tap an approval card to see the full request and buttons. ([docs: approvals][d-approvals], seen)
@@ -744,12 +822,21 @@ The phone can message Bots, watch or take over the computer, approve actions, an
 
 These exist in Grok Bot but depend on vendor services. Clawtrate builders should know them, but they are low priority.
 
-- **Voice chat:** "Start voice chat" (waveform, empty composer only). Status "Connecting…" (desktop) or "Calling…" (phone), then "Voice chat". Controls "Mute"/"Unmute", "Hang up", "Show transcript", "Show settings" ("Voice", "Speed" 0.5x–2x, "Language" with "Auto-detect"). One call at a time ("End the current voice chat?", "End and Chat"). Afterwards a "Voice chat" card with the length, and "How was the call?" with "Good" or "Bad". Errors: "Voice chat failed", "Connection lost", "No connection". ([docs: chat][d-chat], seen)
+- **Voice chat:** "Start voice chat" (waveform, empty composer only). Status "Connecting…" (desktop) or "Calling…" (phone), then "Voice chat". Controls "Mute"/"Unmute", "Hang up", "Show transcript", "Show settings" ("Voice", "Speed" 0.5x–2x, "Language" with "Auto-detect"). One call at a time ("End the current voice chat?", "End and Chat"). Afterwards a "Voice chat" card with the length, and "How was the call?" with "Good" or "Bad". If the connection drops, the app tries to reconnect on its own first, so a short drop usually picks back up. If it can't, the call ends with "Voice chat failed" and "Connection lost", "No connection" or "The call ended unexpectedly", with "Dismiss"; you then start a new call. ([docs: chat][d-chat], seen)
 - **Dictation:** "Start voice input" (`Cmd/Ctrl+D`, hold to talk), text lands in the composer. ([docs: chat][d-chat], seen)
 - **Voice memos from Bots:** "Play voice memo"/"Pause voice memo", expandable transcript that highlights each word in sync. ([docs: chat][d-chat], seen; [changelog][x-changelog], reported)
 - **Shopping:** product cards with "Why it fits", "Where to buy", "Buy now" or "Out of stock" with "Notify me". Order card with "Ship to", "Pay with", "Total", a pay button showing the total, "Cancel", then "Paid with". ([docs: chat][d-chat], seen)
 - **Phone calls** (US only): accept terms, "Call"/"Cancel", live transcript, "End call", "Take over" ("Connecting you…", "Transferred to you"), "Your answer" with "Send" or "Skip", then "Ended" with the length and a player. ([docs: chat][d-chat], seen)
 - **X:** read-only X search without sign-in, the X plugin for DMs and timeline, X Chat, and tagging @bot on X. ([docs: computer][d-computer], seen; [docs: chat][d-chat], seen)
+
+#### Clawtrate design proposal: voice
+
+Not Grok Bot evidence beyond the controls listed above.
+
+- **Reconnect.** If a call's connection drops, the client tries to reconnect the same call. A short drop resumes the same call, and at most one call is ever active. If reconnecting fails, the call ends with "Voice chat failed" and the reason; "Dismiss" closes the notice, and "Start voice chat" starts a new call.
+- **Voice settings.** "Voice" changes the voice from the Bot's next spoken reply in the current call. "Speed" changes playback speed at once. "Language", or "Auto-detect", applies from the user's next utterance. All three persist per Bot.
+- **Switching calls.** Starting a call while one is active asks "End the current voice chat?". "End and Chat" ends the old call, then connects the new one. "Cancel" leaves the old call running. At no point are two calls active.
+- **Voice memo highlighting.** When the gateway supplies word timings for a memo, the highlighted word at playback position t is the word whose interval contains t, within 100 ms (Clawtrate's choice). Pausing keeps the highlight, and seeking moves it to the word at the new position. Without word timings, no word is highlighted.
 
 ---
 
@@ -790,7 +877,7 @@ Each complaint below has its evidence, then a concrete requirement for Clawtrate
 ### FC-03. Memory cannot be inspected, edited or cleared
 
 - **Complaint:** there is no memory screen. You ask the Bot what it remembers. Users ask for a list with dates and the Bot that saved each item, plus edit, delete, pin, export and import. A shared fact was duplicated six times. Team learning edits are undocumented. ([docs: bots][d-bots], seen; [forum: memory][f-memory], reported; [forum: instructions][f-instructions], reported; [AIToolsReview][atr], reported)
-- **Requirement:** a memory viewer per Bot and a shared-memory viewer. Each item shows its text, scope (this Bot or all Bots), date and the Bot or chat that saved it. The user can edit, delete, pin and add items, and the change takes effect on the next turn. "Saved to memory" event lines in the chat link to the item. Memory can be exported to and imported from a plain markdown file. A "Clear memory" action asks for confirmation and says what stays, such as files and routines.
+- **Requirement:** a memory viewer per Bot and a shared-memory viewer. Each item shows its text, scope (this Bot or all Bots), date and the Bot or chat that saved it. The user can edit, delete, pin and add items in both viewers, and the change takes effect on the next turn. A pinned item is always included in the Bot's memory input, within the capacity the gateway reports (section 10). "Saved to memory" event lines in the chat link to the item. Memory can be exported to and imported from a plain markdown file. A "Clear memory" action asks for confirmation and says what stays, such as files and routines.
 
 ### FC-04. Instructions are invisible
 
@@ -800,7 +887,7 @@ Each complaint below has its evidence, then a concrete requirement for Clawtrate
 ### FC-05. Hidden tool calls and an opaque system
 
 - **Complaint:** Grok Bot hides thinking steps and tool calls, so users cannot tell whether a Bot used a tool correctly. Errors such as exhausted credits or broken scrapers surface as calm "nothing new" reports. ([Brian Lovin on X][lovin], reported; [aibuilderclub][aibc], reported; [x.ai design post][x-design], seen)
-- **Requirement:** keep Grok Bot's calm default, an animated avatar with a short status phrase, but every turn has a collapsible activity block. Collapsed, it reads like "Worked for 1m 12s · 7 steps", plus "· 1 failed" when a step failed. Expanded, it lists each step in plain words. Every step, card and event line has a "raw" view with the exact tool name, arguments, result, timing and errors. Failed steps stay visible when the block is collapsed.
+- **Requirement:** keep Grok Bot's calm default, an animated avatar with a short status phrase, but every run with at least one step (a tool call, exposed reasoning, a Bot-to-Bot message, a handoff or an approval) has a collapsible activity block (section 5.6). Collapsed, it reads like "Worked for 1m 12s · 7 steps", plus "· 1 failed" when a step failed. Expanded, it lists each step in plain words. Every step, card and event line has a "raw" view of what the gateway sent: for a tool call, the exact tool name, arguments, result, timing and errors. Failed steps stay visible when the block is collapsed.
 
 ### FC-06. One unbounded conversation per Bot
 
@@ -810,7 +897,7 @@ Each complaint below has its evidence, then a concrete requirement for Clawtrate
 ### FC-07. Quota burn without attribution
 
 - **Complaint:** heavy users used 42 percent of the weekly allowance on the first day, or a whole week in a day. Every reply, routine run and Bot-to-Bot message spends usage, and long chats cost more per turn. Users ask for usage per Bot, per routine and per session, a token breakdown, and caps. ([CellCog][cellcog], reported; [aibuilderclub][aibc], reported; [forum: hung chats][f-hung], reported; [forum: memory and usage][f-memusage], reported)
-- **Requirement:** usage is shown per turn, per task, per Bot, per routine run and for Bot-to-Bot messages, as input, output and cached tokens, plus cost in the provider's currency when the provider reports it. A breakdown into history, memory, tools and output appears where the gateway reports it. Any figure the gateway does not report shows as "unavailable", never as zero. Each Bot and each routine can have a daily or weekly token budget. At 80 percent of a budget the user is warned, and at 100 percent new runs of that Bot or routine do not start, and its chat says why, until the period resets or the budget is raised. These budgets are separate from provider limits, which are shown as the gateway reports them.
+- **Requirement:** usage is shown per turn, per task, per Bot, per routine run and for Bot-to-Bot messages, as input, output and cached tokens, plus cost in the provider's currency when the provider reports it. A breakdown into history, memory, tools and output appears where the gateway reports it. Any figure the gateway does not report shows as "unavailable", never as zero. Each Bot and each routine can have a daily or weekly token budget. At 80 percent of a budget the user is warned, and at 100 percent new runs of that Bot or routine do not start, and its chat says why, until the period resets or the budget is raised. A day starts at 00:00 and a week at 00:00 on Monday, in the user's time zone (Clawtrate's choices). Starts refused by a budget are not queued; the user retries them. Raising a budget above current use lets new runs start at once. These budgets are separate from provider limits, which are shown as the gateway reports them.
 
 ### FC-08. Stuck computers and stuck Bots
 
@@ -820,7 +907,7 @@ Each complaint below has its evidence, then a concrete requirement for Clawtrate
 ### FC-09. Approvals are account-wide and coarse
 
 - **Complaint:** Custom Rules apply to all Bots. There are 20 per type, in free text. Individual app tools can be switched on or off in Connect apps ([docs: settings][d-settings], seen), but no per-Bot allow, ask or deny control per tool was established. Group approvals are disputed between two doc pages (section 4.4). A rule that is too broad stops too much. ([docs: approvals][d-approvals], seen; [learngrokbot: approvals][lgb-approvals], reported; [docs: chat][d-chat], seen)
-- **Requirement:** per-Bot tool permissions (allow, ask, deny for each tool or tool group) plus per-Bot approval rules, on top of global rules. Precedence: a per-Bot deny always wins; then ask; then a standing allow that is in scope and unexpired; then the default review. Turning the automatic review off never bypasses a per-Bot ask or deny; it only makes unmatched actions ask. Something the user said earlier in the conversation is considered by the review and never overrides ask or deny. Every approval card offers Deny. "Always allow" offers a scope (this Bot or all Bots) and a duration (one hour, one day, until revoked). Approval cards work in group chats and show which Bot is asking. A permissions page lists every standing approval with its scope, when it was granted and a revoke button.
+- **Requirement:** per-Bot tool permissions (allow, ask, deny for each tool or tool group) plus per-Bot approval rules, on top of global rules. Precedence (section 8.8): a denial configured on the gateway is a hard ceiling; then a client deny; then ask; then a standing allow that is in scope and unexpired; then the default review. With the automatic review off and nothing matching, the result is ask. What the user said earlier is an input to the default review only. Every approval card offers Deny. "Always allow" offers a scope (this Bot or all Bots) and a duration (one hour, one day, until revoked). Approval cards work in group chats and show which Bot is asking. A permissions page lists every standing approval with its scope, when it was granted and a revoke button.
 
 ### FC-10. Bot-to-Bot messaging cannot be controlled
 
@@ -845,12 +932,12 @@ Each complaint below has its evidence, then a concrete requirement for Clawtrate
 ### FC-14. Deleting a Bot leaves things behind
 
 - **Complaint:** deleting a Bot removes its chat, memory and routines, but files and browser sessions stay on the shared computer. ([docs: bots][d-bots], seen; [alexop.dev][alexop], reported)
-- **Requirement:** the delete dialog lists what will be removed and what will remain (files, sessions, connectors) and offers to remove the Bot's workspace too.
+- **Requirement:** the delete dialog lists what will be removed and what will remain (files, sessions, connectors) and offers to remove the Bot's workspace folder too. **Deleting a Bot never deletes a folder another Bot uses.** If any other Bot uses the same workspace folder, the option is shown disabled with "Also used by &lt;Bot&gt;, &lt;Bot&gt;", and the folder and its files stay untouched for those Bots.
 
 ### FC-15. Silent failures
 
 - **Complaint:** exhausted credits, redesigned sites and lost file edits produce calm reports instead of errors. ([aibuilderclub][aibc], reported)
-- **Requirement:** a tool error always appears as a failed step in the activity block. A turn with failed steps cannot render as a plain success: its collapsed summary shows the failure count.
+- **Requirement:** a tool error always appears as a failed step in the activity block. A run with failed steps cannot render as a plain success: its collapsed summary shows the failure count, and its task status becomes "done with failures" (section 5.6).
 
 ---
 
