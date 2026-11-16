@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: pairing</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/icons.js"></script>
+    <script src="js/prototype.js"></script>
+  </head>
+  <body>
+    <header class="proto-bar" id="proto-bar"></header>
+    <main class="proto-stage">
+      <div class="proto-frame">
+        <div class="app" id="root">
+          <main class="connect">
+            <div class="connect-drag"></div>
+            <div class="connect-card">
+              <header class="connect-brand">
+                <span class="brand-mark" data-brand></span>
+              </header>
+              <section class="panel" aria-labelledby="pair-title" style="margin-top: 0">
+                <h2 id="pair-title">Approve this device</h2>
+                <p class="panel-lede">
+                  Home gateway has not seen this device before. Approve it once on the gateway's machine and Clawtrate connects by itself.
+                </p>
+                <div class="command">
+                  <code>openclaw devices approve 5d2a90c4</code>
+                  <button type="button" class="icon-button" data-variant="quiet" aria-label="Copy the approve command">
+                    <i data-icon="copy"></i>
+                  </button>
+                </div>
+                <p class="waiting" role="status">
+                  <span class="status-dot" data-status="pairing"></span>
+                  Waiting for approval
+                </p>
+                <ul class="scopes" aria-label="This device asks to" style="margin-top: 12px">
+                  <li><i data-icon="eye"></i>Read bots, tasks and conversations</li>
+                </ul>
+                <div class="actions">
+                  <button type="button" class="button" data-size="lg">Check now</button>
+                  <button type="button" class="button" data-variant="quiet" data-size="lg">Use another gateway</button>
+                </div>
+              </section>
+              <p class="connect-foot">Request 5d2a90c4 · this device a41c9e02</p>
+            </div>
+            <div class="ensemble" aria-hidden="true">
+              <span class="avatar" data-bot="extra3" style="--size: 132px; --sink: -0.3; --tilt: -8deg"></span>
+              <span class="avatar" data-bot="marlow" style="--size: 176px; --sink: -0.26; --tilt: 5deg"></span>
+              <span class="avatar" data-bot="extra1" style="--size: 118px; --sink: -0.2; --tilt: -4deg"></span>
+              <span class="avatar" data-bot="otto" style="--size: 204px; --sink: -0.3; --tilt: 3deg"></span>
+              <span class="avatar" data-bot="juniper" style="--size: 160px; --sink: -0.24; --tilt: -6deg"></span>
+              <span class="avatar" data-bot="extra2" style="--size: 124px; --sink: -0.26; --tilt: 7deg"></span>
+              <span class="avatar" data-bot="pip" style="--size: 186px; --sink: -0.28; --tilt: -3deg"></span>
+              <span class="avatar" data-bot="extra4" style="--size: 122px; --sink: -0.24; --tilt: 4deg"></span>
+            </div>
+          </main>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

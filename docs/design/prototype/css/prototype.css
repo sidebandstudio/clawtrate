@@ -1,0 +1,179 @@
+/* Chrome for the prototype pages only: the control bar and the frame the app
+   sits in. Nothing here is part of the product. */
+
+.proto-bar {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 44px;
+  padding: 0 14px;
+  overflow-x: auto;
+  background: #16181b;
+  color: #f3f3f2;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.proto-bar strong {
+  font-weight: 600;
+}
+
+.proto-bar a {
+  color: #b4b6b9;
+  text-decoration: none;
+}
+
+.proto-bar a:hover,
+.proto-bar a[aria-current="page"] {
+  color: #fff;
+}
+
+.proto-bar .gap {
+  flex: 1;
+}
+
+.proto-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #9d9fa2;
+}
+
+.proto-seg > span {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: #26282b;
+}
+
+.proto-seg button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #b4b6b9;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.proto-seg button[aria-pressed="true"] {
+  background: #f3f3f2;
+  color: #111213;
+}
+
+.proto-stage {
+  position: fixed;
+  inset: 44px 0 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  background: #d9d9d6;
+}
+
+[data-theme="dark"] .proto-stage {
+  background: #000;
+}
+
+.proto-frame {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+[data-width="1100"] .proto-frame {
+  width: 1100px;
+  max-height: 760px;
+}
+
+[data-width="800"] .proto-frame {
+  width: 800px;
+  max-height: 700px;
+}
+
+[data-width="phone"] .proto-frame {
+  width: 390px;
+  height: min(844px, 100% - 24px);
+  border-radius: 40px;
+}
+
+[data-width="1100"] .proto-frame,
+[data-width="800"] .proto-frame {
+  border-radius: 12px;
+}
+
+[data-width="1100"] .proto-frame,
+[data-width="800"] .proto-frame,
+[data-width="phone"] .proto-frame {
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.3);
+}
+
+/* With ?chrome=0 the page is the app alone, at the size of the window. */
+[data-chrome="off"] .proto-bar {
+  display: none;
+}
+
+[data-chrome="off"] .proto-stage {
+  inset: 0;
+}
+
+[data-chrome="off"] .proto-frame {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* The index page */
+
+.proto-index {
+  position: fixed;
+  inset: 44px 0 0;
+  overflow: auto;
+  padding: 48px 24px;
+  background: var(--bg);
+}
+
+.proto-index > div {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.proto-index h1 {
+  margin: 0 0 6px;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.proto-index p {
+  margin: 0 0 24px;
+  color: var(--text-muted);
+}
+
+.proto-index ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proto-index li a {
+  display: block;
+  margin-bottom: 6px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.proto-index li a span {
+  display: block;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}

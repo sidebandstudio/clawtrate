@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: connect</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/icons.js"></script>
+    <script src="js/prototype.js"></script>
+    <script>
+      // ?state=error shows a failed attempt, ?state=busy a connection in progress.
+      document.addEventListener("DOMContentLoaded", () => {
+        const state = window.CT.params.get("state");
+        const button = document.querySelector("[data-connect]");
+        if (state === "error") document.querySelector(".form-error").hidden = false;
+        if (state === "busy") {
+          button.textContent = "Connecting…";
+          button.disabled = true;
+        }
+        if (state) document.querySelector(".input").value = "ws://gateway.local:18789";
+      });
+    </script>
+  </head>
+  <body>
+    <header class="proto-bar" id="proto-bar"></header>
+    <main class="proto-stage">
+      <div class="proto-frame">
+        <div class="app" id="root">
+          <main class="connect">
+            <div class="connect-drag"></div>
+            <div class="connect-card">
+              <header class="connect-brand">
+                <span class="brand-mark" data-brand></span>
+                <h1>Clawtrate</h1>
+                <p>Your OpenClaw agents, orchestrated.</p>
+              </header>
+              <form class="panel" aria-label="Connect to your gateway" onsubmit="return false">
+                <label class="field">
+                  <span class="visually-hidden">Gateway address</span>
+                  <input class="input" type="text" placeholder="Gateway address" autocomplete="off" spellcheck="false" />
+                </label>
+                <label class="field">
+                  <span class="visually-hidden">Gateway token, needed for the first pairing only</span>
+                  <input class="input" type="password" placeholder="Token, for the first pairing only" autocomplete="off" />
+                </label>
+                <div class="form-error" role="alert" hidden>
+                  <strong>Could not connect</strong>
+                  Nothing answered at that address. Check it, and check that the gateway is running.
+                </div>
+                <div class="actions">
+                  <button type="submit" class="button" data-variant="primary" data-size="lg" data-connect>Connect</button>
+                  <button type="button" class="button" data-variant="quiet" data-size="lg">Use the development gateway</button>
+                </div>
+                <p class="field-hint">
+                  Clawtrate works with an OpenClaw gateway you already run. It asks for read access only, and the token is used once.
+                </p>
+              </form>
+            </div>
+            <div class="ensemble" aria-hidden="true">
+              <span class="avatar" data-bot="extra3" style="--size: 132px; --sink: -0.3; --tilt: -8deg"></span>
+              <span class="avatar" data-bot="marlow" style="--size: 176px; --sink: -0.26; --tilt: 5deg"></span>
+              <span class="avatar" data-bot="extra1" style="--size: 118px; --sink: -0.2; --tilt: -4deg"></span>
+              <span class="avatar" data-bot="otto" style="--size: 204px; --sink: -0.3; --tilt: 3deg"></span>
+              <span class="avatar" data-bot="juniper" style="--size: 160px; --sink: -0.24; --tilt: -6deg"></span>
+              <span class="avatar" data-bot="extra2" style="--size: 124px; --sink: -0.26; --tilt: 7deg"></span>
+              <span class="avatar" data-bot="pip" style="--size: 186px; --sink: -0.28; --tilt: -3deg"></span>
+              <span class="avatar" data-bot="extra4" style="--size: 122px; --sink: -0.24; --tilt: 4deg"></span>
+            </div>
+          </main>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
