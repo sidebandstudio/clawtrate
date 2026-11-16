@@ -1,0 +1,8 @@
+pnpm-lock.yaml
+node_modules
+dist
+out
+playwright-report
+test-results
+tools/dev-gateway/.run
+assets/brand/generated.json
