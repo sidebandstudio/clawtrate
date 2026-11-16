@@ -34,25 +34,39 @@ export function assertDevStateDir(path: string): void {
 }
 assertDevStateDir(DEV_STATE_DIR);
 
+/** Variables passed through from the caller's shell. Everything else is dropped. */
+export const PASSTHROUGH_ENV = ["PATH", "TMPDIR", "LANG", "LC_ALL", "TZ", "USER"] as const;
+
+function passthrough(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of PASSTHROUGH_ENV) {
+    const value = source[key];
+    if (value) env[key] = value;
+  }
+  env.PATH ??= "/usr/bin:/bin";
+  return env;
+}
+
 /**
- * A minimal environment for OpenClaw: no inherited provider credentials,
- * gateway tokens or profile overrides from the caller's shell.
+ * The whole environment OpenClaw runs with: an allowlist from the caller plus
+ * the dev profile paths. Provider keys, tokens, base URLs and profile overrides
+ * in the caller's shell never reach the gateway or the CLI.
  */
-export function openclawEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
+export function openclawEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...passthrough(source),
     HOME: homedir(),
-    PATH: process.env.PATH ?? "/usr/bin:/bin",
     OPENCLAW_PROFILE: "dev",
     OPENCLAW_STATE_DIR: DEV_STATE_DIR,
     OPENCLAW_CONFIG_PATH: DEV_CONFIG_PATH,
     OPENCLAW_GATEWAY_PORT: String(GATEWAY_PORT),
     NO_COLOR: "1",
   };
-  for (const key of ["TMPDIR", "LANG", "TZ", "USER", "SHELL"]) {
-    const value = process.env[key];
-    if (value) env[key] = value;
-  }
-  return env;
+}
+
+/** The scripted provider needs nothing from the caller beyond the allowlist. */
+export function providerEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return passthrough(source);
 }
 
 const OPENCLAW_BIN = process.env.OPENCLAW_BIN ?? "openclaw";

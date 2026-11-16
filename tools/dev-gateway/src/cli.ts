@@ -38,9 +38,16 @@ import {
   openclaw,
   openclawSync,
   parseJsonOutput,
+  providerEnv,
   spawnOpenclawDetached,
 } from "./env.ts";
-import { SEED_BOTS, sessionKeyFor, type SeedBot } from "./seed-data.ts";
+import {
+  SEED_BOTS,
+  sessionKeyFor,
+  type SeedBot,
+  type SeedTask,
+  type SeedTurn,
+} from "./seed-data.ts";
 import { spawn, spawnSync } from "node:child_process";
 
 type RunState = {
@@ -141,10 +148,92 @@ export function devConfig(token: string) {
     agents: {
       defaults: { model: { primary: MODEL_REF }, thinkingDefault: "low" },
     },
+    tools: {
+      // Offer tools directly instead of behind tool_search/tool_call wrappers,
+      // so scripted tool calls name the real tool.
+      toolSearch: false,
+      // With no policy the gateway runs model shell commands without asking.
+      // This global policy is inherited by every bot without its own override,
+      // including bots created later; the scripted model never needs a shell.
+      exec: { mode: "deny" },
+    },
+    // Memory search is outside `models` and defaults to a hosted embeddings
+    // provider. Off, with no provider, so nothing can reach a paid API.
+    memory: { search: { enabled: false, provider: "none" } },
     plugins: {
       entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
     },
   };
+}
+
+type JsonRecord = Record<string, unknown>;
+const at = (value: unknown, ...path: string[]): unknown =>
+  path.reduce<unknown>((node, key) => (node as JsonRecord | undefined)?.[key], value);
+
+/**
+ * The guarantees the development gateway must keep: only the scripted model,
+ * no memory-search embeddings, and no shell for the model. Returns what is wrong.
+ */
+export function sandboxProblems(config: unknown): string[] {
+  const problems: string[] = [];
+  if (at(config, "models", "mode") !== "replace") problems.push('models.mode must be "replace"');
+  const providers = Object.keys(
+    (at(config, "models", "providers") as JsonRecord | undefined) ?? {},
+  );
+  if (providers.length !== 1 || providers[0] !== PROVIDER_ID) {
+    problems.push(`models.providers must contain only "${PROVIDER_ID}"`);
+  }
+  const baseUrl = at(config, "models", "providers", PROVIDER_ID, "baseUrl");
+  if (typeof baseUrl !== "string" || !baseUrl.startsWith("http://127.0.0.1:")) {
+    problems.push("the scripted provider must be on loopback");
+  }
+  if (at(config, "memory", "search", "enabled") !== false)
+    problems.push("memory.search.enabled must be false");
+  if (at(config, "tools", "exec", "mode") !== "deny")
+    problems.push('tools.exec.mode must be "deny"');
+  if (at(config, "tools", "exec", "security") !== "deny")
+    if (
+      at(config, "tools", "exec", "security") !== undefined ||
+      at(config, "tools", "exec", "ask") !== undefined
+    ) {
+      // A legacy security/ask pair would replace the mode instead of deriving from it.
+      problems.push("tools.exec must set only mode, not security or ask");
+    }
+  for (const [id, entry] of Object.entries(
+    (at(config, "agents", "entries") as JsonRecord | undefined) ?? {},
+  )) {
+    const exec = at(entry, "tools", "exec") as JsonRecord | undefined;
+    if (
+      exec &&
+      (exec.mode !== undefined || exec.security !== undefined || exec.ask !== undefined)
+    ) {
+      problems.push(`agents.entries.${id}.tools.exec overrides the global exec policy`);
+    }
+    if (at(entry, "memory", "search", "enabled") === true) {
+      problems.push(`agents.entries.${id}.memory.search re-enables memory search`);
+    }
+  }
+  if (at(config, "gateway", "bind") !== "loopback")
+    problems.push('gateway.bind must be "loopback"');
+  return problems;
+}
+
+function assertSandboxed(): void {
+  let config: unknown;
+  try {
+    config = JSON.parse(readFileSync(DEV_CONFIG_PATH, "utf8"));
+  } catch (error) {
+    throw new Error(
+      `cannot read ${DEV_CONFIG_PATH}: ${String(error)}. Run \`pnpm dev-gateway reset\`.`,
+      { cause: error },
+    );
+  }
+  const problems = sandboxProblems(config);
+  if (problems.length > 0) {
+    throw new Error(
+      `the development gateway config is not sandboxed:\n  - ${problems.join("\n  - ")}\nRun \`pnpm dev-gateway reset\` to recreate it.`,
+    );
+  }
 }
 
 function ensureConfig(): DevConnection {
@@ -175,6 +264,28 @@ async function gatewayHealthy(): Promise<boolean> {
   return result.status === 0;
 }
 
+type ExecScope = { agentId?: string; security?: { effective?: string } };
+
+/** Ask the running gateway what exec policy each bot actually gets. */
+export async function execPolicyProblems(): Promise<string[]> {
+  const snapshot = parseJsonOutput<{ effectivePolicy?: { scopes?: ExecScope[] } }>(
+    await must(["approvals", "get", "--json"]),
+  );
+  const scopes = snapshot.effectivePolicy?.scopes ?? [];
+  if (scopes.length === 0) return ["the gateway reported no exec policy scopes"];
+  return scopes
+    .filter((scope) => scope.security?.effective !== "deny")
+    .map(
+      (scope) =>
+        `exec security for ${scope.agentId ?? "?"} is ${scope.security?.effective ?? "unknown"}`,
+    );
+}
+
+async function assertExecDenied(): Promise<void> {
+  const problems = await execPolicyProblems();
+  if (problems.length > 0) throw new Error(`exec is not denied:\n  - ${problems.join("\n  - ")}`);
+}
+
 export async function start(): Promise<void> {
   const state = readState();
   if (state && isAlive(state.gatewayPid) && isAlive(state.providerPid)) {
@@ -188,16 +299,17 @@ export async function start(): Promise<void> {
     throw new Error(`port ${PROVIDER_PORT} is in use by a process this tool did not start`);
   }
   ensureConfig();
+  assertSandboxed();
   mkdirSync(RUN_DIR, { recursive: true });
 
-  const providerLog = openSync(join(RUN_DIR, "provider.log"), "a");
+  const providerLog = openSync(join(RUN_DIR, "provider.log"), "w");
   const provider = spawn(
     process.execPath,
     [fileURLToPath(new URL("./provider-main.ts", import.meta.url))],
     {
       detached: true,
       stdio: ["ignore", providerLog, providerLog],
-      env: { PATH: process.env.PATH },
+      env: providerEnv(),
     },
   );
   provider.unref();
@@ -205,7 +317,7 @@ export async function start(): Promise<void> {
   writeState({ providerPid: provider.pid, startedAt: new Date().toISOString() });
   await waitFor("the scripted provider", () => portOpen(PROVIDER_PORT), 10_000);
 
-  const gatewayLog = openSync(join(RUN_DIR, "gateway.log"), "a");
+  const gatewayLog = openSync(join(RUN_DIR, "gateway.log"), "w");
   const gateway = spawnOpenclawDetached(
     ["gateway", "run", "--port", String(GATEWAY_PORT), "--bind", "loopback"],
     { stdio: ["ignore", gatewayLog, gatewayLog] },
@@ -218,6 +330,7 @@ export async function start(): Promise<void> {
     startedAt: new Date().toISOString(),
   });
   await waitFor("the development gateway", gatewayHealthy, 90_000);
+  await assertExecDenied();
   console.log(`Development gateway ready on ${GATEWAY_URL}`);
   console.log(`  scripted model  http://127.0.0.1:${PROVIDER_PORT}/v1 (pid ${provider.pid})`);
   console.log(`  gateway         pid ${gateway.pid}, logs in ${RUN_DIR}`);
@@ -339,35 +452,115 @@ async function configureBot(bot: SeedBot, agents: Map<string, AgentRow>): Promis
   ]);
 }
 
+type AgentRunOutput = {
+  status?: string;
+  summary?: string;
+  result?: {
+    meta?: { aborted?: boolean; stopReason?: string; finalAssistantVisibleText?: string };
+  };
+};
+
+/** The text a scripted turn ends with: the text steps of its last round. */
+export function expectedFinalText(turn: SeedTurn): string {
+  const last = turn.rounds.at(-1) ?? [];
+  return last
+    .flatMap((step) => (step.kind === "text" ? [step.text] : []))
+    .join("")
+    .trim();
+}
+
+/** `openclaw agent` waits for the run's terminal outcome; check that it is the one we scripted. */
+export function checkTurnOutcome(output: AgentRunOutput, turn: SeedTurn): string | null {
+  const meta = output.result?.meta;
+  if (output.status !== "ok" || output.summary !== "completed") {
+    return `run ended with status ${output.status ?? "?"} (${output.summary ?? "no summary"})`;
+  }
+  if (meta?.aborted) return "run was aborted";
+  if (meta?.stopReason !== "stop")
+    return `run stopped with ${meta?.stopReason ?? "no stop reason"}`;
+  const actual = (meta.finalAssistantVisibleText ?? "").trim();
+  const expected = expectedFinalText(turn);
+  if (actual !== expected)
+    return `final reply differs from the script: ${JSON.stringify(actual.slice(0, 80))}`;
+  return null;
+}
+
+type HistoryMessage = { role?: string; stopReason?: string; isError?: boolean; content?: unknown };
+
+/** Check a seeded session's durable history against its script. Returns what is wrong. */
+export function checkHistory(messages: HistoryMessage[], task: SeedTask): string[] {
+  const problems: string[] = [];
+  const users = messages.filter((m) => m.role === "user").length;
+  if (users !== task.turns.length)
+    problems.push(`expected ${task.turns.length} user turns, found ${users}`);
+  const expectedTools = task.turns
+    .flatMap((turn) => turn.rounds.flat())
+    .filter((step) => step.kind === "tool").length;
+  const results = messages.filter((m) => m.role === "toolResult");
+  if (results.length !== expectedTools) {
+    problems.push(`expected ${expectedTools} tool results, found ${results.length}`);
+  }
+  if (results.some((m) => m.isError)) problems.push("a tool call failed");
+  const last = messages.at(-1);
+  if (last?.role !== "assistant" || last.stopReason !== "stop") {
+    problems.push("the session does not end with a completed assistant reply");
+  }
+  return problems;
+}
+
 /** Run a bot's scripted conversations. Sessions are independent, so bots run in parallel. */
 async function seedConversations(bot: SeedBot): Promise<void> {
   const existing = await existingSessionKeys(bot.id);
   for (const task of bot.tasks) {
     const key = sessionKeyFor(bot.id, task.slug);
-    if (existing.has(key)) continue;
-    for (const turn of task.turns) {
+    const alreadySeeded = existing.has(key);
+    for (const turn of alreadySeeded ? [] : task.turns) {
+      const output = parseJsonOutput<AgentRunOutput>(
+        await must([
+          "agent",
+          "--agent",
+          bot.id,
+          "--session-key",
+          key,
+          "--message",
+          turn.prompt,
+          "--thinking",
+          "low",
+          "--json",
+        ]),
+      );
+      const problem = checkTurnOutcome(output, turn);
+      if (problem) throw new Error(`${bot.name} / ${task.label}: ${problem}`);
+    }
+    if (!alreadySeeded)
       await must([
-        "agent",
-        "--agent",
-        bot.id,
-        "--session-key",
-        key,
-        "--message",
-        turn.prompt,
-        "--thinking",
-        "low",
+        "gateway",
+        "call",
+        "sessions.patch",
+        "--params",
+        JSON.stringify({ key, label: task.label }),
         "--json",
       ]);
+    const history = parseJsonOutput<{ messages?: HistoryMessage[] }>(
+      await must([
+        "gateway",
+        "call",
+        "chat.history",
+        "--params",
+        JSON.stringify({ sessionKey: key, limit: 200 }),
+        "--json",
+      ]),
+    );
+    const problems = checkHistory(history.messages ?? [], task);
+    if (problems.length > 0) {
+      const advice = alreadySeeded
+        ? " (left by an earlier seed; run `pnpm dev-gateway reset`)"
+        : "";
+      throw new Error(`${bot.name} / ${task.label}: ${problems.join("; ")}${advice}`);
     }
-    await must([
-      "gateway",
-      "call",
-      "sessions.patch",
-      "--params",
-      JSON.stringify({ key, label: task.label }),
-      "--json",
-    ]);
-    console.log(`  ${bot.name}: ${task.label}`);
+    console.log(
+      `  ${bot.name}: ${task.label}${alreadySeeded ? " (already seeded, verified)" : ""}`,
+    );
   }
 }
 
@@ -382,6 +575,7 @@ export async function seed(): Promise<void> {
   const agents = new Map(rows.map((row) => [row.id, row]));
   console.log("Seeding sample bots and conversations");
   for (const bot of SEED_BOTS) await configureBot(bot, agents);
+  await assertExecDenied();
   await Promise.all(SEED_BOTS.map((bot) => seedConversations(bot)));
   console.log("Seed complete");
 }
