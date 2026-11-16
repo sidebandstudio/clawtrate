@@ -34,7 +34,6 @@ const SECURITY_HEADERS = {
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
   "x-frame-options": "DENY",
-  "cross-origin-opener-policy": "same-origin",
 };
 
 export function createAccessToken(): string {

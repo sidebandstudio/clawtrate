@@ -3,4 +3,4 @@ packages:
   - apps/*
   - tools/*
 allowBuilds:
-  electron: true
+  electron: set this to true or false

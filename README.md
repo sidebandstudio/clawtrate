@@ -58,7 +58,7 @@ The gateway connection, the device key and pairing all live in the preview host 
 pnpm desktop
 ```
 
-This builds and starts the Electron app. Development builds offer the same **Use the development gateway** button, and pair the same way.
+This builds and starts the Electron app. The first run downloads the Electron binary. Development builds offer the same **Use the development gateway** button, and pair the same way.
 
 ## Checks
 

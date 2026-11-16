@@ -34,12 +34,16 @@ export function summarizeArguments(argumentsText: string): string {
   try {
     const parsed: unknown = JSON.parse(argumentsText);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return Object.entries(parsed)
-        .map(([key, value]) => {
-          const text = typeof value === "string" ? value : JSON.stringify(value);
-          return `${key}: ${text.length > 48 ? `${text.slice(0, 48)}…` : text}`;
-        })
-        .join("  ");
+      const entries = Object.entries(parsed);
+      const shown = entries.slice(0, 2).map(([key, value]) => {
+        const text = (typeof value === "string" ? value : JSON.stringify(value)).replace(
+          /\s+/g,
+          " ",
+        );
+        return `${key}: ${text.length > 40 ? `${text.slice(0, 40)}…` : text}`;
+      });
+      if (entries.length > 2) shown.push(`+${entries.length - 2}`);
+      return shown.join("  ");
     }
   } catch {
     // Not JSON; show it raw.
