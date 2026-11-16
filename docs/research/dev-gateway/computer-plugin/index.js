@@ -1,4 +1,9 @@
-// clawtrate-computer: research prototype.
+// clawtrate-computer: RESEARCH PROTOTYPE. It demonstrates that an ordinary
+// plugin can give a non-admin client a view of a bot's browser and user
+// takeover. It has NOT passed a security review for shipping and must not be
+// installed outside a development gateway. The requirements for a shipped
+// plugin are in docs/research/gateway-capabilities.md, "Requirements for the
+// shipped plugin".
 //
 // Gives a non-admin client a live view of a bot's browser and lets the user
 // take control of a tab. Isolation model: one managed browser profile per bot.
@@ -31,12 +36,24 @@ const RENEW_TIMEOUT_MS = 20_000;
 // process-wide slot. Tests reset it through STATE_KEY.
 export const STATE_KEY = Symbol.for("clawtrate-computer.state.v2");
 const STATE = (globalThis[STATE_KEY] ??= {});
-STATE.inflight ??= new Map(); // toolCallId -> { profile, runId, startedAt }
+STATE.inflight ??= new Map(); // callKey(runId, toolCallId) -> { agentId, profile, startedAt }
 STATE.leases ??= new Map(); // leaseKey(profile, targetId) -> lease
 STATE.tickets ??= new Map(); // ticket -> { bot, targetId, streamId, expiresAt, retained }
 STATE.streams ??= new Map(); // streamId -> { bot, targetId, renewedAt }
 
 const leaseKey = (profile, targetId) => `${profile}\n${targetId}`;
+// The host identifies a tool call by run and call id together; call ids alone
+// repeat across runs.
+const callKey = (runId, toolCallId) => `${runId}\n${toolCallId}`;
+
+// Selectors are read the way the browser tool reads them: strings, trimmed,
+// empty meaning absent (readToolStringParam, dist/common-*.mjs).
+export const toolString = (v) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+
+// The only browser actions a configured bot may use. Anything else, including
+// importprofile (which picks its own destination via `into`), profiles, stop,
+// downloads and uploads, is refused rather than reasoned about one by one.
+export const BOT_ACTIONS = new Set(["status", "start", "tabs", "open", "focus", "close", "snapshot", "screenshot", "navigate", "text", "act"]);
 
 /** Accept only a literal loopback HTTP origin: http://127.0.0.1:<port> or http://[::1]:<port>. */
 export function parseCdpUrl(raw) {
@@ -168,6 +185,11 @@ export default {
   register(api) {
     const cfg = parseConfig(api.pluginConfig ?? {});
     const { bots, profiles, drainTimeoutMs } = cfg;
+    // The browser default applies to callers that omit `profile`. If it were a
+    // bot's profile, every unconfigured agent would act in that bot's browser.
+    const defaultProfile = (config) => toolString(config?.browser?.defaultProfile) ?? "openclaw";
+    const currentConfig = () => api.runtime?.config?.current?.() ?? api.config;
+    if (profiles.has(defaultProfile(api.config))) throw new Error(`browser.defaultProfile must not be a bot profile`);
     const { inflight, leases, tickets, streams } = STATE;
     let emit = () => {};
     const err = (respond, code, message) => respond(false, undefined, { code, message });
@@ -199,35 +221,55 @@ export default {
       });
     }
 
-    // Pin each configured bot's browser calls to its own profile, refuse calls
-    // that could leave it, block while a user holds control, and track running
-    // calls by their host toolCallId.
+    // Pin each configured bot's browser calls to its own profile on the host
+    // browser, allow only tab actions, block while a user holds control, and
+    // track running calls by the host's run and call id. Keep every other agent
+    // out of the bots' profiles, whatever spelling or selector it uses.
     api.on("before_tool_call", (event, ctx) => {
       if (event.toolName !== "browser") return;
       const params = event.params ?? {};
       const bot = bots.get(ctx?.agentId);
       if (!bot) {
-        if (typeof params.profile === "string" && profiles.has(params.profile)) {
+        const named = toolString(params.profile) ?? defaultProfile(currentConfig());
+        if (profiles.has(named) || profiles.has(toolString(params.into))) {
           return { block: true, blockReason: "That browser profile belongs to another bot." };
+        }
+        if (params.dashboard !== undefined) {
+          return { block: true, blockReason: "Browser dashboards are disabled while bots have their own browsers." };
         }
         return;
       }
-      if (params.node !== undefined || params.target !== undefined || params.dashboard !== undefined) {
-        return { block: true, blockReason: "This bot's browser is pinned to its own profile; node, target and dashboard routing are not allowed." };
+      const action = toolString(params.action);
+      if (!BOT_ACTIONS.has(action)) {
+        return { block: true, blockReason: `Browser action "${action ?? ""}" is not available to this bot.` };
       }
-      if (typeof event.toolCallId !== "string" || !event.toolCallId) {
-        return { block: true, blockReason: "Browser call without a tool call id cannot be tracked; refused." };
+      const target = toolString(params.target);
+      if (params.node !== undefined || params.dashboard !== undefined || params.into !== undefined || (target !== undefined && target !== "host")) {
+        return { block: true, blockReason: "This bot's browser is pinned to its own profile on the host; node, sandbox, dashboard and import routing are not allowed." };
+      }
+      const runId = toolString(event.runId) ?? toolString(ctx?.runId);
+      const toolCallId = toolString(event.toolCallId);
+      if (!runId || !toolCallId) {
+        return { block: true, blockReason: "Browser call without a run and tool call id cannot be tracked; refused." };
       }
       for (const lease of leases.values()) {
         if (lease.profile === bot.profile) {
           return { block: true, blockReason: "The user has control of this bot's browser. Wait until they release it." };
         }
       }
-      inflight.set(event.toolCallId, { profile: bot.profile, runId: event.runId ?? ctx?.runId, startedAt: Date.now() });
-      return { params: { ...params, profile: bot.profile } };
+      inflight.set(callKey(runId, toolCallId), { agentId: bot.agentId, profile: bot.profile, startedAt: Date.now() });
+      // target "host": never a node or sandbox browser; if host control is not
+      // allowed for this session, the browser tool refuses instead of rerouting.
+      return { params: { ...params, action, profile: bot.profile, target: "host" } };
     });
-    api.on("after_tool_call", (event) => {
-      if (event.toolName === "browser" && typeof event.toolCallId === "string") inflight.delete(event.toolCallId);
+    api.on("after_tool_call", (event, ctx) => {
+      if (event.toolName !== "browser") return;
+      const runId = toolString(event.runId) ?? toolString(ctx?.runId);
+      const toolCallId = toolString(event.toolCallId);
+      if (!runId || !toolCallId) return;
+      const key = callKey(runId, toolCallId);
+      // Only the matching admitted record, and only for the same agent.
+      if (inflight.get(key)?.agentId === ctx?.agentId) inflight.delete(key);
     });
 
     /** The host checked session access and browser tool policy; map the session to its bot. */
