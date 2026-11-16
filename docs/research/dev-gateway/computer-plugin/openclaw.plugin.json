@@ -1,0 +1,12 @@
+{
+  "id": "clawtrate-computer",
+  "name": "Clawtrate computer",
+  "description": "Research prototype: live view and user takeover of a bot's browser tab.",
+  "categories": ["developer-tools"],
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": { "cdpUrl": { "type": "string" } }
+  }
+}
