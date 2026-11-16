@@ -1,0 +1,58 @@
+{
+  "gateway": {
+    "mode": "local",
+    "port": 19101,
+    "bind": "loopback",
+    "auth": { "mode": "token", "token": "${OPENCLAW_DEV_TOKEN}" }
+  },
+  "discovery": { "mdns": { "mode": "off" } },
+  "browser": { "headless": true },
+  "models": {
+    "mode": "replace",
+    "providers": {
+      "fake": {
+        "baseUrl": "http://127.0.0.1:19102/v1",
+        "apiKey": "fake-local",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "scripted",
+            "name": "Scripted fake",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 128000,
+            "maxTokens": 4096
+          }
+        ]
+      }
+    }
+  },
+  "tools": { "toolSearch": false, "profile": "coding" },
+  "agents": {
+    "ownership": "explicit",
+    "defaults": {
+      "model": { "primary": "fake/scripted", "fallbacks": [] },
+      "utilityModel": "fake/scripted",
+      "skipBootstrap": true
+    },
+    "entries": {
+      "atlas": {
+        "name": "Atlas",
+        "identity": { "name": "Atlas", "emoji": "🧭", "theme": "research assistant" },
+        "tools": { "exec": { "mode": "ask" } }
+      },
+      "pixel": {
+        "name": "Pixel",
+        "identity": { "name": "Pixel", "emoji": "🎨", "theme": "design helper" },
+        "thinkingDefault": "low",
+        "tools": { "agentToAgent": { "send": ["atlas"] }, "deny": ["exec"] }
+      }
+    }
+  },
+  "mcp": {
+    "servers": {
+      "coder": { "command": "node", "args": ["<CHECKOUT>/docs/research/dev-gateway/fake-coding-mcp.mjs"] }
+    }
+  }
+}
