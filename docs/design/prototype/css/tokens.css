@@ -64,6 +64,8 @@
   --loop-work: 1200ms;
   --loop-shimmer: 2000ms;
   --loop-nudge: 2600ms;
+  --loop-blink: 5600ms;
+  --loop-caret: 1200ms;
 }
 
 /* Light ------------------------------------------------------------------- */

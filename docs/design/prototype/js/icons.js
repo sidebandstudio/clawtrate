@@ -78,18 +78,41 @@
     extra4: { body: "gem", color: "#a5d955", tilt: 0, look: [-0.4, -0.4] },
   };
 
-  function character(id) {
+  // The eyes say the state. idle: looking the bot's own way. thinking: turned
+  // up. working: straight ahead. waiting: wide, on the viewer. blocked and
+  // failed: half closed. done: smiling.
+  function eyes(state, look, y) {
+    let [lx, ly] = look;
+    const at = (x, shape) => shape(x + lx, y + ly);
+    let shape = (x, cy) => `<circle cx="${x}" cy="${cy}" r="2.05"/>`;
+    if (state === "thinking") [lx, ly] = [lx * 0.4, -1.7];
+    if (state === "working") [lx, ly] = [0, 0];
+    if (state === "waiting") {
+      [lx, ly] = [0, 0];
+      shape = (x, cy) => `<circle cx="${x}" cy="${cy}" r="2.65"/>`;
+    }
+    if (state === "blocked" || state === "failed") {
+      [lx, ly] = [0, 0.8];
+      shape = (x, cy) => `<ellipse cx="${x}" cy="${cy}" rx="2.2" ry="0.85"/>`;
+    }
+    if (state === "done") {
+      [lx, ly] = [0, 0];
+      shape = (x, cy) =>
+        `<path d="M${x - 2.1} ${cy + 0.9}Q${x} ${cy - 2.6} ${x + 2.1} ${cy + 0.9}" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>`;
+    }
+    return `<g class="eyes" fill="#fff">${at(15.8, shape)}${at(24.2, shape)}</g>`;
+  }
+
+  function character(id, state = "idle") {
     const bot = bots[id];
     if (!bot) return "";
-    const [lx, ly] = bot.look;
     const y = 19.3 + (bot.lift || 0);
     return (
       `<svg viewBox="0 0 40 40" aria-hidden="true">` +
       `<g fill="${bot.color}" stroke="${bot.color}" stroke-width="0">${bodies[bot.body]}</g>` +
       `<g transform="rotate(${bot.tilt} 20 ${y})">` +
       `<rect x="8.8" y="${y - 4.8}" width="22.4" height="9.6" rx="4.8" fill="#16181b"/>` +
-      `<circle cx="${15.8 + lx}" cy="${y + ly}" r="2.05" fill="#fff"/>` +
-      `<circle cx="${24.2 + lx}" cy="${y + ly}" r="2.05" fill="#fff"/>` +
+      eyes(state, bot.look, y) +
       `</g></svg>`
     );
   }
@@ -107,7 +130,7 @@
       el.outerHTML = icon(el.dataset.icon, el.className ? `icon ${el.className}` : "icon");
     });
     root.querySelectorAll("[data-bot]:empty").forEach((el) => {
-      el.innerHTML = character(el.dataset.bot);
+      el.innerHTML = character(el.dataset.bot, el.dataset.state);
     });
     root.querySelectorAll("[data-brand]:empty").forEach((el) => {
       el.innerHTML = brand;
