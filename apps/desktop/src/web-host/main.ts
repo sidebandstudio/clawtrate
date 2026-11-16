@@ -53,10 +53,9 @@ async function main(): Promise<void> {
     devGateway,
     autoConnectDev: values["dev-gateway"] || tokenDisabled,
     // Without an access token, anyone who can reach the port can use this host,
-    // so it may only ever talk to the local development gateway.
-    ...(tokenDisabled && devGateway
-      ? { allowGatewayUrl: (url: string) => url === devGateway.url }
-      : {}),
+    // so it may only ever talk to the local development gateway: saved, typed,
+    // retried or otherwise.
+    devOnly: tokenDisabled,
   });
   const accessToken = tokenDisabled ? null : createAccessToken();
   const host = startWebHost({

@@ -1,8 +1,9 @@
 // Electron main process: hosts the core client and serves state to the renderer over IPC.
 
 import {
-  applyBridgeCommand,
   batchSnapshots,
+  createBridgeSession,
+  type BridgeSession,
   parseBridgeCommand,
   type ClawtrateState,
   type HostInfo,
@@ -94,8 +95,21 @@ async function main(): Promise<void> {
     info,
     state: client.state,
   }));
-  ipcMain.handle("clawtrate:command", async (_event, raw: unknown) => {
-    await applyBridgeCommand(client, parseBridgeCommand(raw), policy);
+  // One bridge session per window, so a closed window releases its transcripts.
+  const sessions = new Map<number, BridgeSession>();
+  ipcMain.handle("clawtrate:command", async (event, raw: unknown) => {
+    const contents = event.sender;
+    let session = sessions.get(contents.id);
+    if (!session) {
+      const created = createBridgeSession(client, policy);
+      sessions.set(contents.id, created);
+      contents.once("destroyed", () => {
+        created.dispose();
+        sessions.delete(contents.id);
+      });
+      session = created;
+    }
+    await session.apply(parseBridgeCommand(raw));
   });
   batchSnapshots(client.store.subscribe, (state) => {
     window?.webContents.send("clawtrate:state", state);

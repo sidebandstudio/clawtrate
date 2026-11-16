@@ -3,8 +3,8 @@
 // gateway token or the gateway socket; it only receives state and sends commands.
 
 import {
-  applyBridgeCommand,
   batchSnapshots,
+  createBridgeSession,
   parseBridgeCommand,
   type BridgeServerMessage,
 } from "@clawtrate/core";
@@ -12,6 +12,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
+import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { HostRuntime } from "../host/runtime.ts";
 
@@ -46,10 +47,16 @@ function safeEqual(a: string, b: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function readCookie(req: IncomingMessage, name: string): string | null {
+/** A cookie's value, or null when it is absent or not validly encoded. */
+export function readCookie(req: IncomingMessage, name: string): string | null {
   for (const part of (req.headers.cookie ?? "").split(";")) {
     const [key, ...rest] = part.trim().split("=");
-    if (key === name) return decodeURIComponent(rest.join("="));
+    if (key !== name) continue;
+    try {
+      return decodeURIComponent(rest.join("="));
+    } catch {
+      return null; // a malformed escape is an invalid credential, not an error
+    }
   }
   return null;
 }
@@ -146,11 +153,24 @@ export function startWebHost(options: WebHostOptions) {
 
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
+  const refuseUpgrade = (socket: Duplex, status: "400 Bad Request" | "401 Unauthorized") => {
+    socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+  };
+
   server.on("upgrade", (req, socket, head) => {
-    const url = new URL(req.url ?? "/", "http://placeholder");
-    if (url.pathname !== "/bridge" || !sameOrigin(req) || authorized(req, url) === "denied") {
-      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-      socket.destroy();
+    socket.on("error", () => socket.destroy());
+    // Everything about an unauthenticated upgrade is untrusted input: any
+    // parsing failure is answered and the socket closed, never thrown.
+    let allowed: boolean;
+    try {
+      const url = new URL(req.url ?? "/", "http://placeholder");
+      allowed = url.pathname === "/bridge" && sameOrigin(req) && authorized(req, url) !== "denied";
+    } catch {
+      refuseUpgrade(socket, "400 Bad Request");
+      return;
+    }
+    if (!allowed) {
+      refuseUpgrade(socket, "401 Unauthorized");
       return;
     }
     sockets.handleUpgrade(req, socket, head, (ws) => sockets.emit("connection", ws));
@@ -164,6 +184,8 @@ export function startWebHost(options: WebHostOptions) {
     const stop = batchSnapshots(runtime.client.store.subscribe, (state) =>
       send({ type: "state", state }),
     );
+    // Each tab is its own viewer: its open transcripts are released when it goes away.
+    const session = createBridgeSession(runtime.client, runtime.policy);
     ws.on("message", (data) => {
       let id = "";
       try {
@@ -176,7 +198,7 @@ export function startWebHost(options: WebHostOptions) {
           throw new Error("invalid message");
         id = message.id;
         const command = parseBridgeCommand(message.command);
-        applyBridgeCommand(runtime.client, command, runtime.policy).then(
+        session.apply(command).then(
           () => send({ type: "result", id, ok: true }),
           (error: unknown) =>
             send({
@@ -195,7 +217,10 @@ export function startWebHost(options: WebHostOptions) {
         });
       }
     });
-    ws.on("close", stop);
+    ws.on("close", () => {
+      stop();
+      session.dispose();
+    });
   });
 
   server.listen(options.port, options.host);
