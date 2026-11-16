@@ -6,3 +6,5 @@ playwright-report
 test-results
 tools/dev-gateway/.run
 assets/brand/generated.json
+docs/research
+docs/parity.md

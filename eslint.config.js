@@ -12,6 +12,8 @@ export default tseslint.config(
       "**/.run/**",
       "playwright-report/**",
       "test-results/**",
+      // Research prototypes, kept as reference material; not part of the build.
+      "docs/research/**",
     ],
   },
   js.configs.recommended,
