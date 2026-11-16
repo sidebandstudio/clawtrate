@@ -9,7 +9,7 @@
   "scripts": {
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
-    "typecheck": "pnpm -r --parallel typecheck",
+    "typecheck": "pnpm -r --parallel typecheck && tsc -p tsconfig.json",
     "test": "vitest run",
     "e2e": "playwright test",
     "desktop": "pnpm --filter @clawtrate/desktop start",
