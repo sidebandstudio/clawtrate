@@ -79,7 +79,7 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   - `discovery.mdns.mode: "off"`, `update.checkOnStart: false` and the memory plugin's dreaming job off.
 - **Enforcement.** `start` re-reads the config and refuses to run if any of these guarantees is missing; it asks for a `reset`. `start` and `seed` both read the gateway's effective exec policy with `openclaw --dev approvals get` and fail unless every bot's effective exec security is `deny`. Unit tests cover the generated config.
 - **Processes.** `start` records the PIDs it spawned in `tools/dev-gateway/.run/state.json`, which is git-ignored, along with the logs and the connection file. `stop` sends SIGTERM to those PIDs, waits up to 15 seconds, then sends SIGKILL, and does the same for any direct child the gateway left behind. The e2e teardown stops the preview host the same way after 10 seconds, and stops the gateway only if the test started it. Nothing is ever stopped by name.
-- **Ports.** Gateway 19001, scripted model 19091, web preview 5310, e2e preview host 5317 (loopback only). Port 19101 and the `roster-probe` profile belong to another tool and are left alone.
+- **Ports.** Gateway 19001, scripted model 19091, web preview 5310, e2e preview host 5317 (loopback only).
 
 ### Checked against the gateway research notes
 
