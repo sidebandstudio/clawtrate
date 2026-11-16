@@ -3,6 +3,7 @@
 // `openclaw()` below, which always passes `--dev` and a scrubbed environment.
 
 import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,8 +15,13 @@ export const PROVIDER_ID = "scripted";
 export const MODEL_ID = "dev-1";
 export const MODEL_REF = `${PROVIDER_ID}/${MODEL_ID}`;
 
+/** OpenClaw's own location for the `--dev` profile under a given home. */
+export function devStateDir(home: string = homedir()): string {
+  return join(home, ".openclaw-dev");
+}
+
 /** OpenClaw's own location for the `--dev` profile. Nothing else is touched. */
-export const DEV_STATE_DIR = join(homedir(), ".openclaw-dev");
+export const DEV_STATE_DIR = devStateDir();
 export const DEV_CONFIG_PATH = join(DEV_STATE_DIR, "openclaw.json");
 
 const TOOL_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,8 +31,8 @@ export const STATE_FILE = join(RUN_DIR, "state.json");
 /** Read by the preview host's `--dev-gateway` mode. */
 export const CONNECTION_FILE = join(RUN_DIR, "connection.json");
 
-export function assertDevStateDir(path: string): void {
-  if (basename(path) !== ".openclaw-dev" || dirname(path) !== homedir()) {
+export function assertDevStateDir(path: string, home: string = homedir()): void {
+  if (basename(path) !== ".openclaw-dev" || dirname(path) !== home) {
     throw new Error(
       `refusing to use ${path}: the development gateway lives only in ~/.openclaw-dev`,
     );
@@ -71,6 +77,17 @@ export function providerEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.Pro
 
 const OPENCLAW_BIN = process.env.OPENCLAW_BIN ?? "openclaw";
 
+/**
+ * OpenClaw also loads a `.env` from its working directory, so it always runs
+ * inside the tool-owned state folder (checked by state-guard.ts), never in
+ * the caller's directory.
+ */
+function openclawCwd(): string {
+  if (existsSync(DEV_STATE_DIR)) return DEV_STATE_DIR;
+  mkdirSync(RUN_DIR, { recursive: true });
+  return RUN_DIR;
+}
+
 function guardArgs(args: string[]): string[] {
   if (args.some((arg) => arg === "--profile" || arg.startsWith("--profile="))) {
     throw new Error("the dev-gateway tool never selects another OpenClaw profile");
@@ -83,6 +100,7 @@ export type RunResult = { status: number | null; stdout: string; stderr: string 
 /** Run an OpenClaw CLI command against the development profile and wait for it. */
 export function openclawSync(args: string[], options: { input?: string } = {}): RunResult {
   const result = spawnSync(OPENCLAW_BIN, guardArgs(args), {
+    cwd: openclawCwd(),
     env: openclawEnv(),
     encoding: "utf8",
     input: options.input,
@@ -96,6 +114,7 @@ export function openclawSync(args: string[], options: { input?: string } = {}): 
 export function openclaw(args: string[]): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(OPENCLAW_BIN, guardArgs(args), {
+      cwd: openclawCwd(),
       env: openclawEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -110,7 +129,12 @@ export function openclaw(args: string[]): Promise<RunResult> {
 
 /** Start a long-running OpenClaw process detached from this one. */
 export function spawnOpenclawDetached(args: string[], options: SpawnOptions) {
-  return spawn(OPENCLAW_BIN, guardArgs(args), { ...options, env: openclawEnv(), detached: true });
+  return spawn(OPENCLAW_BIN, guardArgs(args), {
+    ...options,
+    cwd: openclawCwd(),
+    env: openclawEnv(),
+    detached: true,
+  });
 }
 
 /** Parse the first JSON document in CLI output, tolerating leading log lines. */

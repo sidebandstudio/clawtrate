@@ -22,6 +22,7 @@ import { createConnection } from "node:net";
 import { isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderAvatar } from "./avatars.ts";
+import { assertStateDirOwned, createStateDir } from "./state-guard.ts";
 import {
   CONNECTION_FILE,
   DEV_CONFIG_PATH,
@@ -238,15 +239,16 @@ function assertSandboxed(): void {
 
 function ensureConfig(): DevConnection {
   assertDevStateDir(DEV_STATE_DIR);
+  assertStateDirOwned(DEV_STATE_DIR);
   const existing = readDevConnection();
   if (existsSync(DEV_CONFIG_PATH) && existing) return existing;
-  if (existsSync(DEV_CONFIG_PATH)) {
+  if (existsSync(DEV_STATE_DIR)) {
     throw new Error(
-      `${DEV_CONFIG_PATH} exists but was not created by this tool. Run \`pnpm dev-gateway reset\` first.`,
+      `${DEV_STATE_DIR} exists but holds no config from this checkout. Run \`pnpm dev-gateway reset\` first.`,
     );
   }
   const token = randomBytes(24).toString("base64url");
-  mkdirSync(DEV_STATE_DIR, { recursive: true, mode: 0o700 });
+  createStateDir(DEV_STATE_DIR);
   writeFileSync(DEV_CONFIG_PATH, `${JSON.stringify(devConfig(token), null, 2)}\n`, { mode: 0o600 });
   const connection = { url: GATEWAY_URL, token };
   mkdirSync(RUN_DIR, { recursive: true });
@@ -287,6 +289,7 @@ async function assertExecDenied(): Promise<void> {
 }
 
 export async function start(): Promise<void> {
+  assertStateDirOwned(DEV_STATE_DIR);
   const state = readState();
   if (state && isAlive(state.gatewayPid) && isAlive(state.providerPid)) {
     console.log(`Development gateway already running on ${GATEWAY_URL}`);
@@ -565,6 +568,7 @@ async function seedConversations(bot: SeedBot): Promise<void> {
 }
 
 export async function seed(): Promise<void> {
+  assertStateDirOwned(DEV_STATE_DIR);
   if (!(await gatewayHealthy())) {
     throw new Error("the development gateway is not running. Run `pnpm dev-gateway start` first.");
   }
@@ -583,6 +587,7 @@ export async function seed(): Promise<void> {
 type PendingDevice = { requestId: string; clientId?: string; displayName?: string };
 
 export async function approve(requestId?: string): Promise<string[]> {
+  assertStateDirOwned(DEV_STATE_DIR);
   const listed = parseJsonOutput<{ pending?: PendingDevice[] }>(
     await must(["devices", "list", "--json"]),
   );
