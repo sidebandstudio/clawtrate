@@ -1,0 +1,8 @@
+{
+  "id": "clawtrate-probe",
+  "name": "Clawtrate probe",
+  "description": "Proves a plugin can add a Gateway RPC method, an HTTP route and a broadcast event.",
+  "categories": ["developer-tools"],
+  "activation": { "onStartup": true },
+  "configSchema": { "type": "object", "additionalProperties": false }
+}
