@@ -354,7 +354,7 @@ Not Grok Bot evidence. This is Clawtrate's intended behavior, written so a test 
 | `stopping` | The user sends a message | `stopping` | The message is queued (a new run in `queued`); "Send now" on its chip is unavailable until the run is terminal. |
 | `stopping` | The gateway reports the run finished normally before the stop took effect | `completed` | The stop note says "Finished before Stop took effect"; queued messages then start in order. |
 | `running`, `waiting` or `stopping` | The gateway reports an error, or the run exceeds Clawtrate's turn limit | `failed` | Pending cards close as "Closed: the run failed"; queued messages then start in order. |
-| `queued` | The gateway refuses to start the run (for example a budget cutoff) | `failed` | The chip reads "Couldn't start" with the reason. |
+| (none) or `queued` | The gateway refuses to start the run (for example a budget cutoff) | `failed` | The sent message, or the queued chip, reads "Couldn't start" with the reason. |
 
 **Status line (collapsed view).** Within 1 second of a send (Clawtrate's choice), a status line appears at the bottom of the task's transcript, with the Bot's avatar and a phrase. The phrase always has text. While a step is running, it is that step's plain-language summary ("Reading the pricing pages"). When no step is running, including before the first step and after a step finishes while the Bot is still thinking, it is "Thinking". In `waiting` it reads "Waiting for you" and in `stopping` it reads "Stopping…". Progress messages, cards and Messaged cards that arrive during the run render above the status line, and the status line stays put. **It is removed only when the run reaches a terminal state.**
 
