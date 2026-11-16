@@ -143,18 +143,25 @@ stand-ins for read and write on session-shaped methods
 `session-method-scopes-base-CuhU2F_D.mjs`; admission in
 `authorizeOperatorScopesForRequiredScope`, `method-scopes-BdXzw-yD.mjs`):
 
-- `operator.sessions.read` admits, in place of `operator.read`:
-  `agents.list`, `agent.identity.get`, `models.list`, `sessions.list`,
-  `sessions.subscribe`, `sessions.messages.subscribe`/`unsubscribe`,
-  `sessions.describe`, `sessions.get`, `sessions.resolve`, `sessions.search`,
-  `sessions.preview`, `sessions.files.list`/`get`/`assets`,
-  `sessions.processes.list`, `chat.history`, `chat.startup`,
-  `chat.metadata`, `chat.message.get`, `session.members.list`, `users.self`,
-  `users.prefs.get`, `themes.get` and `themes.list`; that is the complete
-  list (`SESSION_READ_METHODS`, lines 4-41). `themes.set` and
-  `themes.import` need `operator.write` with no substitute. The session's
-  sharing
-  policy still applies.
+- `operator.sessions.read` admits, in place of `operator.read`, exactly these
+  37 methods, in source order (`SESSION_READ_METHODS`, lines 4-41):
+  `agent.identity.get`, `agents.list`, `canvas.document.preview`,
+  `models.list`, `progressCard.get`, `projects.list`,
+  `session.suggestions.list`, `session.reactions.list`,
+  `sessions.groups.list`, `sessions.processes.list`, `sessions.list`,
+  `sessions.subscribe`, `sessions.messages.subscribe`,
+  `sessions.messages.unsubscribe`, `sessions.viewers.set`,
+  `sessions.preview`, `sessions.describe`, `sessions.branches.list`,
+  `sessions.get`, `sessions.github.options`, `sessions.github.status`,
+  `sessions.resolve`, `sessions.search`, `sessions.files.list`,
+  `sessions.files.get`, `sessions.files.assets`,
+  `sessions.setInvolvement`, `chat.history`, `chat.startup`,
+  `chat.metadata`, `chat.message.get`, `session.members.list`,
+  `session.members.listEvidence`, `themes.get`, `themes.list`,
+  `users.prefs.get`, `users.self`.
+  `themes.set` and `themes.import` are not in the set; they need
+  `operator.write` with no substitute. The session's sharing policy still
+  applies.
 - `operator.sessions.write` admits, in place of `operator.write`:
   `chat.send`, `chat.abort`, `sessions.create`, `sessions.patch`,
   `sessions.patchMany`, `sessions.fork`, `sessions.recover`,
@@ -165,7 +172,11 @@ stand-ins for read and write on session-shaped methods
   caller's own row". In practice it is for the caller's own sessions.
   `sessions.github.publish` requires it directly. A plugin method can accept
   it through `sessionAccess.allowOwnSessionScope`.
-- Neither one grants anything outside those lists. Clawtrate does not need
+- Neither one substitutes for read or write on any method outside these two
+  source sets. Two other places name them: `sessions.github.publish`
+  requires `operator.sessions.write` directly, and a plugin method may accept
+  `operator.sessions.write` through `sessionAccess.allowOwnSessionScope`.
+  Clawtrate does not need
   them for its own connection, but a shared or guest device could be paired
   with only these.
 
@@ -882,6 +893,13 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
 
 ### 18. The bot's computer
 
+> **Status of the computer-view work.** Plugin P4 below is a **research
+> prototype**. It demonstrates that the view and takeover are feasible for
+> an ordinary plugin. It has **not** passed a security review for shipping
+> and must not be installed outside a development gateway. Builders write
+> the shipped plugin from "Requirements for the shipped plugin" in
+> section 3.
+
 **Dedicated browser: live view and input are built in.** The bundled
 `browser` plugin registers:
 
@@ -978,9 +996,12 @@ limits are in section 3, plugin P4.
 managed browser profile (`browser.profiles.bot-atlas`, `bot-pixel`, each with
 its own debugging port).
 - The plugin's `before_tool_call` hook rewrites every `browser` call from
-  that bot to use the bot's profile.
-- It blocks node, target and dashboard routing for the bot, and blocks any
-  other agent that names the bot's profile.
+  that bot to use the bot's profile on the host browser (`target: "host"`).
+- The hook handles both kinds of caller:
+  - Configured bots may use only tab actions. Node, sandbox, dashboard and
+    import routing are refused for them.
+  - Other agents are refused any bot profile, whether named in `profile`
+    or `into` (with the browser tool's trimming) or reached by default.
 - A session may view or control exactly the tabs in its own bot's browser,
   as listed live by that browser's CDP endpoint. Nothing is inferred from
   tool results.
@@ -1216,12 +1237,12 @@ Entry points and authority:
 
 | Step | Entry point | Authority and checks |
 | --- | --- | --- |
-| Give each bot its own browser | `api.on("before_tool_call")` for `toolName === "browser"`: returns `{params: {...params, profile: <bot profile>}}`. It blocks node/target/dashboard routing for the bot, and blocks other agents that name a bot profile | Hook context's `agentId`, from the host. The browser tool's own result reported the pinned profile (live) |
+| Give each bot its own browser | `api.on("before_tool_call")` for `toolName === "browser"`. Selectors are read the way the tool reads them: trimmed, with empty meaning absent. A configured bot may use only `status`, `start`, `tabs`, `open`, `focus`, `close`, `snapshot`, `screenshot`, `navigate`, `text` and `act`. Other actions, `importprofile` among them, are refused, and so are `node`, `dashboard`, `into` and any `target` but `host`. The hook then returns `{params: {...params, action, profile: <bot profile>, target: "host"}}`. Another agent is refused a bot profile named in `profile` or `into`, and `dashboard` selectors. The plugin refuses to load if `browser.defaultProfile` is a bot profile | Hook context's `agentId`, from the host. The browser tool's own result reported the pinned profile (live). With `target: "host"`, the tool never picks a node or sandbox, and refuses when host control is not allowed (`<openclaw>/dist/browser-request-CRdbSjXm.mjs` lines 1567 and 1593). The allowlist, target pin and import refusal were checked offline only |
 | List, view, take, release, renew, input | `api.registerGatewayMethod("clawtrate-computer.*", …, { scope: "operator.write", sessionAccess: { mode: "write", requiredTool: "browser" } })` | The host checks the session, sharing and the session's browser tool policy. The plugin maps `sessionAccessAuthority.target.agentId` to that bot's browser and requires the tab to be in its live CDP target list |
 | Stream | `api.registerHttpRoute({ path: "/clawtrate-computer/stream", auth: "plugin", handleUpgrade })` with a hand-written WebSocket handshake | One-use, 60 s, 192-bit ticket from `view.open`, deleted before any await. The stream closes when `view.renew` stops for 20 s, when the retained session authority fails, or when the tab goes away |
 | Frames and input | CDP over the target's debugger URL: `Page.startScreencast`, `Page.screencastFrameAck`, `Input.dispatchMouseEvent`, `Input.insertText` (Node's global `fetch` and `WebSocket`) | Each `cdpUrl` must be the literal `http://127.0.0.1:<port>` or `http://[::1]:<port>`, or the config is rejected. Discovery uses `redirect: "error"`. A target is used only if its `webSocketDebuggerUrl` is exactly `ws://<same host>:<same port>/devtools/page/<id>` |
 | Block the bot while the user drives | the same `before_tool_call` hook returns `{block: true, blockReason}` while any lease exists on that bot's profile | Only that bot's browser calls are affected, from all its sessions |
-| Track running bot calls | `before_tool_call` records `toolCallId`; `after_tool_call` removes it. A browser call without a `toolCallId` is refused | Keyed by the host's tool call id |
+| Track running bot calls | `before_tool_call` records the host's run id and tool call id together; `after_tool_call` removes only the matching record, and only for the same agent. A browser call without both ids is refused | The same `runId:toolCallId` identity the host uses for its own call bookkeeping |
 | Events | `ctx.gatewayEvents.emit("control", …)` gives `plugin.clawtrate-computer.control {profile, targetId, holder, state}`, with states `draining`, `granted`, `busy`, `released`, `expired`, `revoked` and `tab-closed` | Scope `operator.read`: every reader sees it, not only that bot's sessions |
 
 Contract:
@@ -1237,13 +1258,23 @@ Contract:
     15 s), the take **fails closed**: no lease remains, and the client should
     say "the bot is still acting" and let the user retry. It returns
     `CONFLICT` if anyone holds or is taking the tab.
-- **`control.release`, `input` and `view.renew`.** These need the holder's
-  connection and the lease's `generation`, an unguessable 128-bit id. Other
-  viewers get `FORBIDDEN`. Input, release and expiry run one at a time on
-  each lease. Input rechecks that the lease is still the same one, still
+- **`control.release` and `input`.** These need the holder's connection and
+  the lease's `generation`, an unguessable 128-bit id. Other viewers get
+  `FORBIDDEN`. Input, release and expiry run one at a time on each lease. Input rechecks that the lease is still the same one, still
   granted and still authorized after connecting and before every CDP
   command. Input that started under a lease cannot land after that lease
   ends (offline test C-03b).
+- **`view.renew {sessionKey, targetId, streamId, generation?}`.** This does
+  two separate renewals.
+  - Stream renewal: any viewer admitted to the tab's bot renews its own
+    stream (`streamId` from its `view.open`). The stream must match that
+    bot and tab, otherwise the reply is `NOT_FOUND`.
+  - Lease renewal: the lease is renewed as well only when the call comes
+    from the lease holder's connection with the current `generation`.
+  - The reply is `{ok: true, renewWithinMs, leaseRenewed}`. A missing or
+    wrong `generation`, or another viewer's call, still renews the stream,
+    but returns `leaseRenewed: false` and leaves the lease's expiry clock
+    alone.
 - **`input {kind: "click"|"scroll"|"text", x?, y?, deltaY?, text?}`.**
   Scroll uses a CDP wheel event.
 - **Frames.** They use the built-in screencast's binary layout and header,
@@ -1261,7 +1292,8 @@ Limits:
   that bot's browser calls are refused. Bot calls name tabs by handles such
   as `t1` that a plugin cannot resolve.
 - **Unconfigured bots** keep using the shared `openclaw` profile and get no
-  view.
+  view. While bots have their own browsers, unconfigured agents also lose
+  browser dashboards, because a dashboard widget can name any profile.
 - **Operators are not blocked.** `browser.request` (admin) and
   `browser.dashboard.request` (write) are gateway methods, and no hook
   reaches them, so an admin client or a dashboard widget can still drive a
@@ -1278,8 +1310,9 @@ Limits:
 - **Not bound to the connection.** Plugins receive no connection-closed
   signal, and `sessionAccessAuthority.retain()` did not abort when the
   viewer disconnected (live). Streams and leases therefore expire through
-  renewal: call `view.renew` about every 5 s. Each renewal re-runs the
-  host's session access check.
+  renewal: call `view.renew` about every 5 s, passing the lease's
+  `generation` while holding control. Each renewal re-runs the host's
+  session access check.
 - **Policy bypass.** Frames and input go straight over CDP, so they skip
   the browser plugin's navigation checks: a user click can follow a link
   the bot could not open. The prototype reports `meta` on navigation; it
@@ -1305,6 +1338,89 @@ Limits:
 No plugin is proposed for rows 13 and 17: the surface exists but was not
 exercised. For steer (row 5), a test is needed first, not a plugin.
 
+### Requirements for the shipped plugin
+
+The P4 prototype is a feasibility demonstration, not a shippable plugin.
+Builders write the shipped computer-view plugin from this list. Each item is
+meant to be checked by a test or a review finding.
+
+**Security review.**
+
+- [ ] The shipped plugin gets its own security review before it is installed
+      on any gateway other than a development gateway. Passing the
+      prototype's tests does not count.
+
+**Browser isolation (fixed in the prototype; keep and test).**
+
+- [ ] Read every selector the way the browser tool reads it before any
+      ownership check: strings trimmed, empty meaning absent. Cover the
+      omitted profile, which resolves to `browser.defaultProfile` or
+      `openclaw`. Refuse configurations where the default is a bot's
+      profile. (R3-01; tests R3-01a-c.)
+- [ ] Track bot browser calls by the host's run id and tool call id
+      together. Refuse a call that lacks either. Remove only the matching
+      record, and only for the same agent. (R3-02; tests R3-02a-c.)
+- [ ] Refuse `importprofile` for bot callers. Refuse imports into a
+      reserved bot profile, by trimmed `into`, from every agent the hook
+      sees. (R3-03; test R3-03.)
+- [ ] Allow bots only an explicit list of tab actions, and refuse
+      everything else. The prototype allows `status`, `start`, `tabs`,
+      `open`, `focus`, `close`, `snapshot`, `screenshot`, `navigate`, `text`
+      and `act`. Extend it only after review. (Test R3-03b.)
+- [ ] Pin every rewritten bot call to `target: "host"` and the bot's
+      profile. Refuse node, sandbox and dashboard selectors. Refuse the
+      call when host browser control is not allowed, rather than routing
+      elsewhere. (R3-05; test R3-05.)
+- [ ] Derive view and control rights only from the host-checked session's
+      agent and that bot's live CDP target list. Never derive them from
+      tool results. (Tests C-01a-d.)
+
+**Takeover and lease (fixed in the prototype; keep and test).**
+
+- [ ] Fail closed: if a bot call is still running at the drain deadline, do
+      not grant control. (Test C-02a.)
+- [ ] Only the holder, with the lease generation, can release or send
+      input. Run input, release and expiry one at a time. Recheck the lease
+      and authority before every command. (Tests C-03a-b.)
+- [ ] Use CDP endpoints only on literal loopback, with no redirects, and
+      only with a debugger URL on the same address and port. (Tests
+      C-05a-c.)
+
+**Deadlines and cancellation (N-01, not done in the prototype).**
+
+- [ ] Put deadlines on CDP discovery, WebSocket connect and every command
+      reply.
+- [ ] Cancel aborts through setup and active commands. Close connections
+      that finish opening after their stream or lease ended.
+- [ ] Settle queued input before returning control to the bot. Release,
+      expiry and service shutdown must complete even when a transport stage
+      is stalled. Test each stage stalled.
+- [ ] Define how replacing a browser or profile retires its streams and
+      leases.
+
+**Tests still missing (N-02, not done in the prototype).**
+
+- [ ] A positive control: a valid click, text and scroll must actually be
+      dispatched.
+- [ ] Delayed revocation of the retained session authority during a stream
+      and during input; lease expiry; serialization at the command level.
+- [ ] A debugger URL on the right loopback address but the wrong port must
+      be refused. Cover IPv6, credentials in the URL, other schemes, and a
+      simulated redirect, not only the fetch option.
+
+**Stated limits the shipped plugin must address or document.**
+
+- [ ] Operator gateway calls (`browser.request`, `browser.dashboard.request`)
+      bypass the tool hooks and can drive a bot's browser during a user
+      takeover.
+- [ ] Direct CDP input and frames skip the browser plugin's navigation
+      policy.
+- [ ] A takeover blocks browser calls from every session of the bot, not
+      one tab.
+- [ ] Other tools may reach a browser outside the `browser` tool hook,
+      such as the `computer` tool or `exec`. Account for them in the
+      isolation policy.
+
 ## 4. Development gateway recipe
 
 Everything here was run against an isolated profile and port, and is
@@ -1312,7 +1428,7 @@ committed under `docs/research/dev-gateway/`:
 
 | File | Purpose |
 | --- | --- |
-| `dev-gateway.sh` | `start`, `check-env`, `stop` and `reset`. Refuses unsafe profile names and state it did not create, runs everything under a controlled environment, records real PIDs, and stops with a kill-after-timeout. |
+| `dev-gateway.sh` | `start`, `check-env`, `stop` and `reset`. Refuses unsafe profile names and any existing state folder, so every start uses a new, empty one. Runs everything under a controlled environment, records real PIDs, and stops with a kill-after-timeout. |
 | `fake-openai.mjs` | Scripted fake model provider: OpenAI Chat Completions streaming on loopback, no dependencies. |
 | `openclaw.dev.json` | Gateway config template, described below. It loads the two plugins below from the checkout. |
 | `seed.mjs` | Creates bots and tasks, waits for every run, and verifies the transcripts; exits non-zero on any failure. |
@@ -1328,8 +1444,8 @@ Another port needs a change in the template, `PORT` in the script, and the
 `cdpPort` values.
 
 ```bash
-# 1. Start: refuses unsafe names and unowned or credential-bearing state,
-#    creates a fresh profile from the template, starts the fake model and the gateway
+# 1. Start: refuses unsafe names and any existing state folder,
+#    creates a new profile from the template, starts the fake model and the gateway
 PROFILE=clawtrate-dev docs/research/dev-gateway/dev-gateway.sh start
 
 # 2. Ask the running gateway which environment variable names it really has
@@ -1371,20 +1487,16 @@ the developer's credentials. Model routing alone does not guarantee that.
   (`resolveGlobalDotEnvFiles`, `<openclaw>/dist/dotenv-global-CNTZ1AEX.mjs`
   lines 118-135; `createTrustedGatewayEnvLoader`,
   `<openclaw>/dist/pre-bootstrap-fvJUb9k2.mjs` lines 336-358).
-  - `env -i` alone therefore does not keep credentials out. The launcher
-    refuses a state folder that is a symlink, that lacks its own marker
-    file `.clawtrate-dev-gateway`, or that holds any `.env`, `*.env`,
-    `auth-profiles*.json` or `credentials/*` file. `reset` deletes only a
-    marked folder.
-  - Live, under a temporary `HOME` with a synthetic profile:
-    - an unmarked folder holding a planted `.env` and a credentials
-      fixture: refused;
-    - the same folder marked: refused, listing both files;
-    - marked with only the credentials fixture: refused;
-    - marked with only a `.env`: refused;
-    - a symlinked state folder: refused.
-
-    All exited 3.
+  - `env -i` alone therefore does not keep credentials out, and this
+    release also keeps model credentials in SQLite state. So the launcher
+    does not try to prove an old folder clean. `start` refuses whenever the
+    state folder already exists, or is a symlink, and names the reset
+    command. It then creates the folder with plain `mkdir`, so it never
+    reuses one. `reset` deletes only a folder carrying the launcher's marker
+    file `.clawtrate-dev-gateway`.
+  - Tested under a temporary `HOME`, without starting a gateway: an existing
+    marked folder containing `state/openclaw.sqlite`, and a symlinked state
+    folder, were both refused with exit 3, and nothing was started.
 - **Environment.** OpenClaw resolves provider credentials from environment
   variables per provider (`resolveEnvApiKey` in
   `<openclaw>/dist/model-auth-env-dEPoNA3I.mjs`).
