@@ -1,32 +1,51 @@
 import type { ConnectionState, HostInfo } from "@clawtrate/core";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import logoUrl from "./assets/logo-mark.png";
 import { useCommand } from "./bridge.tsx";
+import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
 import { gatewayLabel } from "./format.ts";
 import { CheckIcon, CopyIcon } from "./icons.tsx";
 
 export const PRODUCT_NAME = "Clawtrate";
 export const SLOGAN = "Your OpenClaw agents, orchestrated.";
 
-function CopyButton({ text, label }: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false);
+/** A command with a copy button that works over plain http too, or says how to copy by hand. */
+export function CommandLine({ command, label }: { command: string; label: string }) {
+  const [state, setState] = useState<"idle" | CopyResult>("idle");
+  const codeRef = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 1500);
+    if (state !== "copied") return;
+    const timer = setTimeout(() => setState("idle"), 1500);
     return () => clearTimeout(timer);
-  }, [copied]);
+  }, [state]);
+  const copy = async () => {
+    const result = await copyText(command);
+    if (result === "manual" && codeRef.current) selectContents(codeRef.current);
+    setState(result);
+  };
+  const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘C" : "Ctrl+C";
   return (
-    <button
-      type="button"
-      className="icon-button"
-      aria-label={copied ? "Copied" : label}
-      title={copied ? "Copied" : label}
-      onClick={() => {
-        void navigator.clipboard?.writeText(text).then(() => setCopied(true));
-      }}
-    >
-      {copied ? <CheckIcon /> : <CopyIcon />}
-    </button>
+    <>
+      <div className="command">
+        <code ref={codeRef}>{command}</code>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label={state === "copied" ? "Copied" : label}
+          title={state === "copied" ? "Copied" : label}
+          onClick={() => void copy()}
+        >
+          {state === "copied" ? <CheckIcon /> : <CopyIcon />}
+        </button>
+      </div>
+      <p className="copy-status" role="status" aria-live="polite">
+        {state === "copied"
+          ? "Copied."
+          : state === "manual"
+            ? `Selected. Press ${shortcut} to copy.`
+            : ""}
+      </p>
+    </>
   );
 }
 
@@ -41,17 +60,15 @@ function Countdown({ until }: { until: number | null }) {
   return <>{seconds > 0 ? ` in ${seconds}s` : " now"}</>;
 }
 
-function PairingPanel({ connection, info }: { connection: ConnectionState; info: HostInfo }) {
+function PairingPanel({ connection }: { connection: ConnectionState }) {
   const send = useCommand();
   const pairing = connection.pairing!;
-  const devCommand = "pnpm dev-gateway approve";
-  const onDevGateway = info.devGateway !== null && info.devGateway.url === connection.gatewayUrl;
   return (
     <section className="panel" aria-labelledby="pair-title">
       <h2 id="pair-title">Approve this device</h2>
       <p className="panel-lede">
-        {gatewayLabel(connection.gatewayUrl)} has not seen this device before. An operator on the
-        gateway host approves it once; after that it connects with its own device token.
+        {gatewayLabel(connection.gatewayUrl)} has not seen this device before. It is approved once;
+        after that it connects with its own device token.
       </p>
       <ol className="pair-steps">
         <li className="pair-step" data-state="done">
@@ -69,18 +86,9 @@ function PairingPanel({ connection, info }: { connection: ConnectionState; info:
         <li className="pair-step" data-state="active">
           <span className="pair-marker">2</span>
           <div>
-            <h3>Approve on the gateway host</h3>
-            <p>{pairing.message}</p>
-            <div className="command">
-              <code>{pairing.approveCommand}</code>
-              <CopyButton text={pairing.approveCommand} label="Copy approve command" />
-            </div>
-            {onDevGateway && (
-              <div className="command">
-                <code>{devCommand}</code>
-                <CopyButton text={devCommand} label="Copy development approve command" />
-              </div>
-            )}
+            <h3>Approve the request</h3>
+            <p>{pairing.approveNote ?? "Run this in the repository that started the gateway:"}</p>
+            <CommandLine command={pairing.approveCommand} label="Copy approve command" />
           </div>
         </li>
         <li className="pair-step" data-state="pending">
@@ -237,7 +245,7 @@ export function ConnectScreen({
           </div>
         </header>
         {connection.status === "pairing" && connection.pairing ? (
-          <PairingPanel connection={connection} info={info} />
+          <PairingPanel connection={connection} />
         ) : (
           <ConnectForm connection={connection} info={info} />
         )}
