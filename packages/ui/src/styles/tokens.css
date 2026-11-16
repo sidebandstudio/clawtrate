@@ -6,9 +6,10 @@
   --font-display: "Instrument Serif", ui-serif, Georgia, serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
 
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-md: 13px;
+  /* 12px is the floor for anything read repeatedly: times, status, labels. */
+  --text-xs: 12px;
+  --text-sm: 12.5px;
+  --text-md: 13.5px;
   --text-base: 14px;
   --text-lg: 16px;
   --text-title: 24px;
@@ -49,8 +50,9 @@
   --border: #dfe3dc;
   --border-strong: #cfd5cc;
   --text: #151a1f;
-  --text-muted: #5b646b;
-  --text-faint: #848c91;
+  --text-muted: #474f55;
+  /* At least 4.5:1 on every light surface, including hover and selected fills. */
+  --text-faint: #5a6368;
 
   --accent: #0a6e5c;
   --accent-strong: #06624f;
@@ -87,8 +89,9 @@
     --border: #1d232d;
     --border-strong: #2a313d;
     --text: #e6ebe9;
-    --text-muted: #9aa5a8;
-    --text-faint: #6b767b;
+    --text-muted: #b0babd;
+    /* At least 4.5:1 on every dark surface, including hover and selected fills. */
+    --text-faint: #8b969b;
 
     --accent: #3ee6c1;
     --accent-strong: #6cf0d3;
@@ -124,8 +127,8 @@
   --border: #1d232d;
   --border-strong: #2a313d;
   --text: #e6ebe9;
-  --text-muted: #9aa5a8;
-  --text-faint: #6b767b;
+  --text-muted: #b0babd;
+  --text-faint: #8b969b;
 
   --accent: #3ee6c1;
   --accent-strong: #6cf0d3;
