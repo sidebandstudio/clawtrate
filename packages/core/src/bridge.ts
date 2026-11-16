@@ -7,6 +7,8 @@ import type { ClawtrateState } from "./types.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
+  /** Connect to the local development gateway. The host supplies its token. */
+  | { type: "connectDevGateway" }
   | { type: "disconnect" }
   | { type: "retry" }
   | { type: "openSession"; key: string }
@@ -57,6 +59,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       }
       return { type: "connect", url: command.url, token: token ?? null };
     }
+    case "connectDevGateway":
     case "disconnect":
     case "retry":
       return { type: command.type };
@@ -71,13 +74,27 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
   }
 }
 
+export type BridgePolicy = {
+  /** Connection details for the development gateway, when the host has them. */
+  devGateway?: { url: string; token: string | null } | null;
+  /** Refuse gateway URLs the host does not allow, for example in token-free dev mode. */
+  allowGatewayUrl?: (url: string) => boolean;
+};
+
 export async function applyBridgeCommand(
   client: ClawtrateClient,
   command: BridgeCommand,
+  policy: BridgePolicy = {},
 ): Promise<void> {
   switch (command.type) {
     case "connect":
+      if (policy.allowGatewayUrl && !policy.allowGatewayUrl(command.url)) {
+        throw new Error("This host only connects to the development gateway.");
+      }
       return client.connect({ url: command.url, token: command.token ?? null });
+    case "connectDevGateway":
+      if (!policy.devGateway) throw new Error("No development gateway is configured on this host.");
+      return client.connect(policy.devGateway);
     case "disconnect":
       return client.disconnect();
     case "retry":
@@ -101,7 +118,7 @@ export function batchSnapshots(
   delayMs = 16,
 ): () => void {
   let pending: ClawtrateState | null = null;
-  let timer: unknown = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
   const unsubscribe = subscribe((state) => {
     pending = state;
     timer ??= setTimeout(() => {

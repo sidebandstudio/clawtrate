@@ -90,10 +90,9 @@ export function sessionChangeRow(payload: unknown): RawRecord | null {
   const nested = asRecord(record.session);
   const row = nested ? { ...nested } : { ...record };
   delete row.session;
-  if (!sessionRowKey(row)) {
-    const key = str(record.sessionKey) ?? str(record.key);
-    if (key) row.key = key;
-  }
+  // Normalize to `key`, the field `sessions.list` rows use.
+  const key = str(row.key) ?? str(row.sessionKey) ?? str(record.sessionKey) ?? str(record.key);
+  if (key) row.key = key;
   if (!str(row.agentId) && str(record.agentId)) row.agentId = record.agentId;
   return row;
 }
@@ -102,6 +101,27 @@ export function isSessionRemoval(payload: unknown): boolean {
   const record = asRecord(payload);
   const reason = str(record?.reason);
   return reason === "delete" || reason === "deleted" || record?.deleted === true;
+}
+
+/**
+ * Gateway previews are the start of the last message, often markdown. Reduce
+ * them to readable plain text for a two-line list preview.
+ */
+export function plainPreview(text: string | null): string | null {
+  if (!text) return null;
+  const plain = text
+    .split("\n")
+    .filter((line) => !/^\s*\|?\s*:?-{3,}/.test(line)) // table separator rows
+    .join(" ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // links and images
+    .replace(/[*_~`]+/g, "") // emphasis and code marks
+    .replace(/(^|\s)(#{1,6}|>|[-+]|\d+\.)\s+/g, "$1") // headings, quotes, list markers
+    .replace(/\s*\|\s*/g, " · ") // table cells
+    .replace(/(\s*·\s*)+/g, " · ")
+    .replace(/^\s*·\s*|\s*·\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return plain || null;
 }
 
 function taskStatus(row: RawRecord): TaskStatus {
@@ -126,7 +146,7 @@ export function mapSessionRow(row: RawRecord): Task | null {
     botId,
     sessionId: str(row.sessionId),
     title: str(row.label) ?? str(row.derivedTitle) ?? str(row.displayName) ?? suffix,
-    preview: str(row.lastMessagePreview),
+    preview: plainPreview(str(row.lastMessagePreview)),
     updatedAt: num(row.updatedAt) ?? num(row.lastActivityAt) ?? num(row.createdAt),
     status: taskStatus(row),
     unread: row.unread === true,
