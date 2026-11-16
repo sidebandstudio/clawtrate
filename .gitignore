@@ -1,0 +1,17 @@
+node_modules/
+dist/
+out/
+build/
+.vite/
+.expo/
+coverage/
+playwright-report/
+test-results/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Private run state and third-party reference images. Never commit.
+.orchestrator/
