@@ -93,7 +93,7 @@ The research notes (merged separately) recommend four things. This branch does a
 ## Brand
 
 - `assets/brand/logo.png` is the only hand-placed brand file. `pnpm brand:icons` (`tools/brand/src/make-icons.ts`) derives everything else from it with a small PNG codec, so no native image dependency is needed. The outputs are the Electron icons (`apps/desktop/resources/icon.png`, `icon-mac.png`, `icon.icns`, `icon.ico`), the favicons, and the in-app mark (`packages/ui/src/assets/logo-mark.png`). `assets/brand/generated.json` records the logo's hash, and a unit test fails when the icons are older than the logo.
-- The logo file carries C2PA provenance metadata from the image generator, including that generator's icon. The derived icons are written fresh and carry none of it.
+- The logo must not carry provenance, text or camera metadata (`caBX`, `tEXt`, `iTXt`, `zTXt`, `eXIf` chunks). `pnpm brand:strip` removes them in place and copies every other chunk byte for byte, so the pixels do not change. `pnpm brand:icons` refuses a logo that still has them, and a unit test checks the committed file.
 - Accent tokens come from the mark's mint. Dark theme: `--accent` `#3ee6c1` (12.2:1 on `#0b0e14`), hover `#6cf0d3`, text on accent `#04261f`. Light theme, where the raw mint is only 1.6:1 on white: `--accent` `#0a6e5c` (6.2:1 on white), hover `#06624f`, soft fill `#e6f5f0` (accent text on it 5.5:1), indicator line `#0d8f77` (4.0:1, above the 3:1 minimum for non-text).
 - Type is Instrument Sans for the interface, Instrument Serif for titles and JetBrains Mono for tool calls. All three are open-licensed and installed from npm, so the app loads no fonts from the network.
 

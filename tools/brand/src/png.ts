@@ -173,3 +173,41 @@ export function resize(image: Image, width: number, height: number): Image {
   }
   return { width, height, data: out };
 }
+
+/**
+ * Chunks that carry provenance, text or camera metadata rather than pixels.
+ * The logo must not publish any of them.
+ */
+export const METADATA_CHUNKS = ["caBX", "tEXt", "iTXt", "zTXt", "eXIf"] as const;
+
+/** Chunk types in file order. */
+export function listChunks(file: Uint8Array): string[] {
+  const buf = Buffer.from(file);
+  if (!buf.subarray(0, 8).equals(SIGNATURE)) throw new Error("not a PNG file");
+  const types: string[] = [];
+  for (let offset = 8; offset < buf.length;) {
+    const length = buf.readUInt32BE(offset);
+    types.push(buf.toString("ascii", offset + 4, offset + 8));
+    offset += 12 + length;
+  }
+  return types;
+}
+
+/**
+ * Copy a PNG without its metadata chunks. Every other chunk, including the
+ * image data, is copied byte for byte, so the pixels are unchanged.
+ */
+export function stripMetadataChunks(file: Uint8Array): Buffer {
+  const buf = Buffer.from(file);
+  if (!buf.subarray(0, 8).equals(SIGNATURE)) throw new Error("not a PNG file");
+  const kept: Buffer[] = [SIGNATURE];
+  for (let offset = 8; offset < buf.length;) {
+    const length = buf.readUInt32BE(offset);
+    const type = buf.toString("ascii", offset + 4, offset + 8);
+    const end = offset + 12 + length;
+    if (!(METADATA_CHUNKS as readonly string[]).includes(type))
+      kept.push(buf.subarray(offset, end));
+    offset = end;
+  }
+  return Buffer.concat(kept);
+}

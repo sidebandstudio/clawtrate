@@ -16,7 +16,8 @@
     "desktop:dev": "pnpm --filter @clawtrate/desktop dev",
     "preview:web": "pnpm --filter @clawtrate/desktop preview:web",
     "dev-gateway": "node tools/dev-gateway/src/cli.ts",
-    "brand:icons": "node tools/brand/src/make-icons.ts"
+    "brand:icons": "node tools/brand/src/make-icons.ts",
+    "brand:strip": "node tools/brand/src/strip-logo.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

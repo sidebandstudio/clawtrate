@@ -2,13 +2,14 @@
 //
 //   node tools/brand/src/make-icons.ts      (or: pnpm brand:icons)
 //
-// To change the logo, replace assets/brand/logo.png and run the command again.
+// To change the logo, replace assets/brand/logo.png, run `pnpm brand:strip` to
+// remove any provenance or text metadata, then run this command again.
 
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { decodePng, encodePng, resize, type Image } from "./png.ts";
+import { decodePng, encodePng, listChunks, METADATA_CHUNKS, resize, type Image } from "./png.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 export const LOGO_PATH = join(ROOT, "assets/brand/logo.png");
@@ -101,8 +102,20 @@ export function sha256(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
+/** Metadata chunks that must not be published with the logo. */
+export function logoMetadataChunks(file: Uint8Array): string[] {
+  return listChunks(file).filter((type) => (METADATA_CHUNKS as readonly string[]).includes(type));
+}
+
 function main(): void {
-  const logo = decodePng(readFileSync(LOGO_PATH));
+  const source = readFileSync(LOGO_PATH);
+  const metadata = logoMetadataChunks(source);
+  if (metadata.length > 0) {
+    throw new Error(
+      `assets/brand/logo.png carries ${metadata.join(", ")} metadata. Run \`pnpm brand:strip\` first.`,
+    );
+  }
+  const logo = decodePng(source);
   if (logo.width !== logo.height) throw new Error("the logo must be square");
 
   const outputs: Record<string, Buffer> = {

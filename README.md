@@ -77,10 +77,11 @@ pnpm e2e
 The logo is `assets/brand/logo.png`. The desktop icons, the favicons and the mark inside the app are all generated from it:
 
 ```bash
+pnpm brand:strip   # removes provenance and text metadata from the logo
 pnpm brand:icons
 ```
 
-To change the logo, replace that one file and run the command. A unit test fails if the generated icons are older than the logo. The interface's accent color is taken from the mark and defined in `packages/ui/src/styles/tokens.css`.
+To change the logo, replace that one file and run both commands. A unit test fails if the generated icons are older than the logo. The interface's accent color is taken from the mark and defined in `packages/ui/src/styles/tokens.css`.
 
 ## Repository
 
