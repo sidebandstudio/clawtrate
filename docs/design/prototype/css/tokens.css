@@ -1,0 +1,167 @@
+/* Clawtrate design tokens.
+
+   This file is the proposed replacement for packages/ui/src/styles/tokens.css.
+   Token names the shell already uses keep their names, so its rules pick up
+   the new values. docs/design/visual-language.md lists every old and new
+   value, and the tokens that are new or retired.
+
+   One difference from the app's file: themes here apply to any element that
+   carries data-theme, not only to :root, so the gallery can show light and
+   dark side by side. In the app, keep the shell's selectors
+   (:root, the prefers-color-scheme block, :root[data-theme]). */
+
+:root {
+  /* One family for the interface, a mono for code. */
+  --font-ui: "Figtree Variable", "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+  /* Retired: the display serif. Kept as an alias so old rules do not break. */
+  --font-display: var(--font-ui);
+
+  --text-xs: 12px; /* stamps, times, the smallest text allowed */
+  --text-sm: 13px; /* secondary labels, event lines */
+  --text-md: 14px; /* previews, task rows, buttons, panel rows */
+  --text-base: 15px; /* messages, bot names, inputs */
+  --text-lg: 17px; /* phone inputs, dialog titles */
+  --text-title: 28px; /* the connection screen's name */
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-strong: 600; /* headings inside a reply, the product name */
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  --radius-sm: 10px; /* insets: code, fields inside cards, task rows */
+  --radius-md: 14px; /* rows, menus, small cards */
+  --radius-lg: 18px; /* bubbles, cards, the phone sheet */
+  --radius-pill: 999px; /* buttons, pills, the composer */
+
+  --rail-width: 280px;
+  --list-width: 0px; /* retired: tasks moved into the rail */
+  --panel-width: 360px;
+  --header-height: 56px; /* the band the floating controls sit in */
+  --transcript-max: 760px;
+  --conversation-min: 440px;
+  --tap-min: 44px;
+
+  --avatar-row: 40px;
+  --avatar-pin: 56px;
+  --avatar-hero: 88px;
+  --avatar-pill: 22px;
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.2, 1);
+  --dur-quick: 120ms;
+  --dur-base: 200ms;
+  --dur-settle: 420ms;
+  --loop-think: 2600ms;
+  --loop-work: 1200ms;
+  --loop-shimmer: 2000ms;
+  --loop-nudge: 2600ms;
+}
+
+/* Light ------------------------------------------------------------------- */
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Two surfaces and one raised fill. Neutral, no tint. */
+  --bg: #ffffff; /* the stage: conversation, connection screen */
+  --bg-rail: #f6f6f5; /* the sidebar */
+  --bg-list: var(--bg-rail); /* retired alias */
+  --bg-pane: #ffffff;
+  --bg-raised: #ffffff; /* floating pills, menus, round buttons */
+  --bg-bubble: #f0f0ee; /* the bot's bubbles, cards */
+  --bg-inset: #f0f0ee; /* fields */
+  --bg-code: rgba(17, 18, 19, 0.06); /* inline code, on any surface */
+  --bg-hover: rgba(17, 18, 19, 0.05);
+  --bg-selected: rgba(17, 18, 19, 0.08);
+  --bg-inverse: #111213; /* primary buttons */
+  --bg-scrim: rgba(17, 18, 19, 0.22);
+
+  --border: rgba(17, 18, 19, 0.09); /* the one hairline, table rules */
+  --border-strong: rgba(17, 18, 19, 0.16); /* field and composer outlines */
+
+  --text: #111213;
+  --text-muted: #55575b;
+  --text-faint: #606266; /* 4.7:1 or better on every surface */
+  --text-inverse: #ffffff;
+
+  /* The accent comes from the logo's mint. In light it is the deep shade. */
+  --accent: #0a6e5c;
+  --accent-strong: #06624f;
+  --accent-soft: rgba(10, 110, 92, 0.1);
+  --accent-line: #0d8f77; /* non-text marks: rings, dots, focus */
+  --accent-on: #ffffff;
+
+  /* The user's bubble is the accent. */
+  --bubble-user: #0a6e5c;
+  --bubble-user-text: #ffffff;
+
+  --warn: #935600;
+  --warn-soft: rgba(147, 86, 0, 0.1);
+  --warn-line: rgba(147, 86, 0, 0.32);
+  --danger: #b3261e;
+  --danger-soft: rgba(179, 38, 30, 0.09);
+  --danger-line: rgba(179, 38, 30, 0.3);
+
+  --shadow-button: 0 0 0 1px rgba(17, 18, 19, 0.06), 0 1px 2px rgba(17, 18, 19, 0.06);
+  --shadow-raised: 0 0 0 1px rgba(17, 18, 19, 0.06), 0 2px 8px rgba(17, 18, 19, 0.08);
+  --shadow-pop: 0 0 0 1px rgba(17, 18, 19, 0.06), 0 12px 36px rgba(17, 18, 19, 0.16);
+  --stage-glow: none; /* retired */
+}
+
+/* Dark -------------------------------------------------------------------- */
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #101112;
+  --bg-rail: #0b0c0d;
+  --bg-list: var(--bg-rail);
+  --bg-pane: #101112;
+  --bg-raised: #1c1d1f;
+  --bg-bubble: #1f2022;
+  --bg-inset: #1a1b1d;
+  --bg-code: rgba(255, 255, 255, 0.08);
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-selected: rgba(255, 255, 255, 0.1);
+  --bg-inverse: #f3f3f2;
+  --bg-scrim: rgba(0, 0, 0, 0.5);
+
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  --text: #f3f3f2;
+  --text-muted: #b4b6b9;
+  --text-faint: #9d9fa2; /* 4.6:1 or better on every surface */
+  --text-inverse: #111213;
+
+  --accent: #3ee6c1;
+  --accent-strong: #6cf0d3;
+  --accent-soft: rgba(62, 230, 193, 0.12);
+  --accent-line: #3ee6c1;
+  --accent-on: #04261f;
+
+  --bubble-user: #3ee6c1;
+  --bubble-user-text: #04261f;
+
+  --warn: #f0b45a;
+  --warn-soft: rgba(240, 180, 90, 0.12);
+  --warn-line: rgba(240, 180, 90, 0.42);
+  --danger: #ff8a80;
+  --danger-soft: rgba(255, 138, 128, 0.12);
+  --danger-line: rgba(255, 138, 128, 0.42);
+
+  --shadow-button: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-raised: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 4px 14px rgba(0, 0, 0, 0.4);
+  --shadow-pop: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 16px 44px rgba(0, 0, 0, 0.6);
+  --stage-glow: none;
+}
