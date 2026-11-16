@@ -2,5 +2,7 @@ packages:
   - packages/*
   - apps/*
   - tools/*
+# Electron 45 downloads its binary the first time it runs, so its install
+# script is declined explicitly. pnpm fails installs with unreviewed scripts.
 allowBuilds:
-  electron: set this to true or false
+  electron: false
