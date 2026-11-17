@@ -8,18 +8,6 @@
   const $ = (selector) => document.querySelector(selector);
   const keep = location.search; // carry the prototype's settings to the next page
 
-  // The product mark is the app's own file, which is in the repository once the
-  // shell is merged. Until then a local, ignored copy stands in (see README.md).
-  const mark = $("[data-mark]");
-  if (mark) {
-    mark.addEventListener("error", () => {
-      if (mark.dataset.fallback) return (mark.hidden = true);
-      mark.dataset.fallback = "true";
-      mark.src = "mark.local.png";
-    });
-    if (mark.complete && mark.naturalWidth === 0) mark.dispatchEvent(new Event("error"));
-  }
-
   const form = $("#connect-form");
   if (form) {
     const button = $("#connect-button");

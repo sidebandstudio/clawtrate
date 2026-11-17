@@ -68,7 +68,7 @@ document.fonts.check('15px "Figtree Variable"') && [...document.fonts].some((f) 
 
 ## The product mark
 
-The connection screens show the product's own mark, `packages/ui/src/assets/logo-mark.png`, by relative path. That file is in the repository once the app shell is merged. Where it is not there yet, copy it to `mark.local.png` beside the pages; that name is ignored by git and the pages fall back to it. The mark is never redrawn.
+The connection screens show the product's own mark, `packages/ui/src/assets/logo-mark.png`, by relative path. It is never copied here or redrawn.
 
 ## What is drawn here and what is not
 
