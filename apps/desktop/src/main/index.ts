@@ -86,15 +86,16 @@ async function main(): Promise<void> {
     app.dock?.setIcon(join(RESOURCES, "icon-mac.png"));
   }
 
+  const devInstance = selectInstance(undefined, process.env);
   runtime = await startHostRuntime({
     kind: "desktop",
     displayName: "Clawtrate Desktop",
     dataDir: process.env.CLAWTRATE_DATA_DIR ?? join(app.getPath("userData"), "gateway"),
     // Only development builds look for the local development gateway.
-    // CLAWTRATE_DEV_INSTANCE selects a named development instance.
-    devGateway: app.isPackaged
-      ? null
-      : readDevConnection(REPO_ROOT, { instance: selectInstance(undefined, process.env) }),
+    // CLAWTRATE_DEV_INSTANCE selects a named development instance. Its address
+    // is opened only while this checkout can still prove it, before every attempt.
+    devGateway: app.isPackaged ? null : readDevConnection(REPO_ROOT, { instance: devInstance }),
+    recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance: devInstance }),
     autoConnectDev: process.env.CLAWTRATE_AUTOCONNECT_DEV === "1",
   });
   const { client, info, policy } = runtime;

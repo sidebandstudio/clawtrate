@@ -31,6 +31,16 @@ import {
   startHostRuntime,
 } from "../src/host/runtime.ts";
 import { startWebHost } from "../src/web-host/server.ts";
+import { NAMED_PORT_BLOCK, NAMED_PORT_RANGE } from "../../../tools/dev-gateway/src/instance.ts";
+import { portFree } from "../../../tools/dev-gateway/src/registry.ts";
+
+async function until(check: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
 
 // A stand-in for some other, private gateway. It only counts connection attempts.
 let other: WebSocketServer;
@@ -90,6 +100,7 @@ describe("token-free development mode (A1)", () => {
       displayName: "Clawtrate Web",
       dataDir,
       devGateway,
+      recheckDevGateway: () => devGateway,
     });
     expect(runtime.client.state.connection.status).not.toBe("idle");
     runtime.client.stop();
@@ -141,19 +152,25 @@ describe("token-free development mode (A1)", () => {
  */
 function provenCheckout(
   instance: string | null,
-  options: { gateway?: Proc; checkout?: string; connection?: Record<string, unknown> } = {},
+  options: {
+    gateway?: Proc;
+    checkout?: string;
+    connection?: Record<string, unknown>;
+    port?: number;
+  } = {},
 ) {
   const home = mkdtempSync(join(tmpdir(), "clawtrate-home-"));
   const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-checkout-")));
   const runDir = devRunDir(repoRoot, instance);
   const gateway = options.gateway ?? liveProcess();
+  const port = instance === null ? 19001 : (options.port ?? 19240);
   const { runId, stateDir } = seedInstance(home, instance, {
     gateway,
     checkout: options.checkout ?? repoRoot,
     runRoot: join(repoRoot, "tools/dev-gateway/.run"),
+    ...(instance === null ? {} : { marker: { gatewayPort: port, providerPort: port + 10 } }),
   });
   // The run file records the checkout that started it; edit it back to this one.
-  const port = instance === null ? 19001 : 19240;
   writeFileSync(
     join(runDir, "state.json"),
     JSON.stringify({
@@ -277,6 +294,46 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
       runtime.client.stop();
     }
   });
+
+  it("an automatic retry after the proof is lost opens nothing, with the desktop and the token-free wiring", async () => {
+    for (const mode of ["desktop", "token-free"] as const) {
+      // A listener on the instance's port that is not (or no longer) its gateway.
+      let port = NAMED_PORT_RANGE.last + 1 - NAMED_PORT_BLOCK;
+      while (!(await portFree(port))) port -= NAMED_PORT_BLOCK;
+      const listener = new WebSocketServer({ host: "127.0.0.1", port });
+      await new Promise((resolve) => listener.once("listening", resolve));
+      let connections = 0;
+      listener.on("connection", (socket) => {
+        connections += 1;
+        socket.terminate();
+      });
+      const proven = provenCheckout("alpha", { port });
+      const devGateway = proven.read()!;
+      expect(devGateway).not.toBeNull();
+      const runtime = await startHostRuntime({
+        kind: mode === "desktop" ? "desktop" : "web",
+        displayName: "Clawtrate",
+        dataDir: mkdtempSync(join(tmpdir(), "clawtrate-runtime-")),
+        devGateway,
+        autoConnectDev: true,
+        recheckDevGateway: proven.read,
+        ...(mode === "token-free" ? { devOnly: true } : {}),
+      });
+      await until(() => connections === 1);
+      // The gateway process is gone; the protocol's own retry must ask again.
+      childFor(proven.gateway.pid).kill("SIGTERM");
+      await new Promise((resolve) => childFor(proven.gateway.pid).once("exit", resolve));
+      await until(
+        () => runtime.client.state.connection.error?.code === "GATEWAY_NOT_ALLOWED",
+        8000,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      expect(connections, mode).toBe(1);
+      expect(runtime.client.state.connection.retryAt).toBeNull();
+      runtime.client.stop();
+      await new Promise((resolve) => listener.close(resolve));
+    }
+  }, 30_000);
 
   it("does not start token-free without a proven development gateway", async () => {
     await expect(

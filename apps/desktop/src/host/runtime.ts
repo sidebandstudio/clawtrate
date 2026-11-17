@@ -108,25 +108,34 @@ export async function startHostRuntime(options: {
   /** Connect to the development gateway at startup when nothing else is saved. */
   autoConnectDev?: boolean;
   /**
-   * Only ever connect to the development gateway, and only while `recheckDevGateway`
-   * still proves it. Enforced by the client before every connection, including a
-   * saved one and every retry, so token-free hosts cannot resume another gateway
-   * or follow a port that a different process has taken over.
+   * Only ever connect to the development gateway. Saved, typed and retried
+   * connections to any other gateway are refused, so token-free hosts cannot
+   * resume another gateway.
    */
   devOnly?: boolean;
-  /** Proves the development gateway again; usually `readDevConnection` with the same options. */
+  /**
+   * Proves the development gateway again; usually `readDevConnection` with the
+   * same options. Required with a development gateway: its address is opened
+   * only while this proof holds, checked by the client before every attempt,
+   * including its own retries, so a port another process has taken over after
+   * the gateway stopped is never reconnected to.
+   */
   recheckDevGateway?: () => DevGatewayConnection | null;
 }): Promise<HostRuntime> {
-  if (options.devOnly && (!options.devGateway || !options.recheckDevGateway)) {
+  if (options.devOnly && !options.devGateway) {
     throw new Error(
       "Development-only mode needs the development gateway. Run `pnpm dev-gateway up`.",
     );
   }
-  // The one gateway a development-only host may open: the selected instance's.
-  const devOnly = options.devOnly ? options.devGateway : null;
-  const devGateway = options.devGateway
-    ? { url: options.devGateway.url, token: options.devGateway.token }
-    : null;
+  const dev = options.devGateway;
+  if (dev && !options.recheckDevGateway) {
+    throw new Error("a development gateway needs a way to prove it again before each connection");
+  }
+  const devGateway = dev ? { url: dev.url, token: dev.token } : null;
+  const stillProven = () => {
+    const proof = options.recheckDevGateway!();
+    return proof !== null && proof.url === dev!.url && proof.token === dev!.token;
+  };
   const client = new ClawtrateClient(
     createNodeHost({
       dataDir: options.dataDir,
@@ -140,16 +149,15 @@ export async function startHostRuntime(options: {
         if (level !== "debug") console[level === "info" ? "log" : level](`[core] ${message}`);
       },
     }),
-    devOnly
-      ? {
-          allowGatewayUrl: (url) => {
-            if (url !== devOnly.url) return false;
-            const proof = options.recheckDevGateway!();
-            return proof !== null && proof.url === devOnly.url && proof.token === devOnly.token;
-          },
-        }
-      : {},
+    {
+      allowGatewayUrl: (url) => {
+        if (dev && url === dev.url) return stillProven();
+        // Other gateways the user chose deliberately, unless this host is development-only.
+        return !options.devOnly;
+      },
+    },
   );
+  const devOnly = options.devOnly ? dev : null;
   if (devOnly) {
     const saved = await client.savedSettings();
     if (saved && saved.url !== devOnly.url) throw new SavedGatewayRefusedError(saved.url);
