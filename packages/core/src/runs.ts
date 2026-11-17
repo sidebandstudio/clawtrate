@@ -11,9 +11,10 @@ import type {
   ApprovalSourceAccess,
 } from "./approvals.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
-import { digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
+import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
 import {
   MAX_CLOSED_CARDS_PER_RUN,
+  MAX_ID_CHARS,
   MAX_INLINE_RAW_CHARS,
   MAX_PENDING_QUESTIONS_PER_TASK,
   MAX_RUN_LIST,
@@ -393,7 +394,7 @@ export const MAX_STEP_TEXT = 2_000;
 export const RAW_INLINE_LIMIT = MAX_INLINE_RAW_CHARS;
 /** JSON characters of raw payloads the host keeps across all tasks; the oldest give way. */
 export const MAX_RAW_BYTES = 32 * 1024 * 1024;
-/** One raw payload the host keeps; a larger one is not kept, and `readStepRaw` answers null for it. */
+/** One raw payload the host keeps; a larger one is not kept, and `readStepRaw` reads it from history once history holds it. */
 export const MAX_RAW_ENTRY_CHARS = 262_144;
 /** Finished runs kept per task. */
 export const MAX_RUNS_PER_TASK = 16;
@@ -413,20 +414,37 @@ export const MAX_SETTLED_APPROVALS = MAX_SETTLED_APPROVAL_COUNT;
 export const MAX_STEPS_PER_RUN = MAX_STEPS_PER_TASK;
 export { MAX_STEPS_PER_TASK };
 
+/**
+ * A step's whole raw call and result, read on demand (`readStepRaw`), or why
+ * it cannot be read yet. A step whose payload was too large for the raw table
+ * is readable once the gateway's history holds it; until then it is
+ * `not-available-yet`, never presented as recoverable.
+ */
+export type StepRead =
+  | { status: "available"; raw: StepRaw }
+  | { status: "not-available-yet"; reason: string };
+
 /** Full raw payloads, keyed by task and step id. Owned by the client, never snapshotted. */
 export class RawTable {
   private readonly entries = new Map<string, { task: string; raw: StepRaw; size: number }>();
   private readonly perTask = new Map<string, number>();
   private sum = 0;
   private readonly budget: number;
+  private readonly entryMax: number;
 
-  /** `budget` is the most JSON characters kept; the oldest entries give way first. */
-  constructor(budget: number = MAX_RAW_BYTES) {
+  /**
+   * `budget` is the most JSON characters kept, the oldest entries giving way
+   * first; one entry larger than `entryMax` is not kept. A table built aside
+   * for one read, and dropped after it, may take both as unbounded.
+   */
+  constructor(budget: number = MAX_RAW_BYTES, entryMax: number = MAX_RAW_ENTRY_CHARS) {
     this.budget = budget;
+    this.entryMax = entryMax;
   }
 
+  /** Keys pass the id cap, so a long id is kept and looked up as the same short value as in the state. */
   private key(sessionKey: string, stepId: string): string {
-    return `${sessionKey}\u0000${stepId}`;
+    return `${capId(sessionKey, MAX_ID_CHARS)}\u0000${capId(stepId, MAX_ID_CHARS)}`;
   }
 
   get(sessionKey: string, stepId: string): StepRaw | null {
@@ -437,9 +455,10 @@ export class RawTable {
     const key = this.key(sessionKey, stepId);
     this.drop(key);
     const size = rawSize(raw);
-    if (size > this.budget || size > MAX_RAW_ENTRY_CHARS) return;
-    this.entries.set(key, { task: sessionKey, raw, size });
-    this.charge(sessionKey, size);
+    if (size > this.budget || size > this.entryMax) return;
+    const task = capId(sessionKey, MAX_ID_CHARS);
+    this.entries.set(key, { task, raw, size });
+    this.charge(task, size);
     for (const [oldest] of this.entries) {
       if (this.sum <= this.budget) break;
       this.drop(oldest);
@@ -475,7 +494,7 @@ export class RawTable {
   }
 
   usage(sessionKey: string): number {
-    return this.perTask.get(sessionKey) ?? 0;
+    return this.perTask.get(capId(sessionKey, MAX_ID_CHARS)) ?? 0;
   }
 
   /** Drop the payloads of these steps of a task. */
@@ -483,29 +502,9 @@ export class RawTable {
     for (const stepId of stepIds) this.drop(this.key(sessionKey, stepId));
   }
 
-  /**
-   * Free at least `amount` characters of one task's payloads, oldest first,
-   * keeping those of `keep` (open steps). Returns what was freed and how many.
-   */
-  evict(
-    sessionKey: string,
-    amount: number,
-    keep: ReadonlySet<string>,
-  ): { freed: number; count: number } {
-    let freed = 0;
-    let count = 0;
-    for (const [key, entry] of [...this.entries]) {
-      if (freed >= amount) break;
-      if (entry.task !== sessionKey) continue;
-      if (keep.has(key.slice(sessionKey.length + 1))) continue;
-      freed += this.drop(key);
-      count += 1;
-    }
-    return { freed, count };
-  }
-
   clearTask(sessionKey: string): void {
-    for (const [key, entry] of [...this.entries]) if (entry.task === sessionKey) this.drop(key);
+    const task = capId(sessionKey, MAX_ID_CHARS);
+    for (const [key, entry] of [...this.entries]) if (entry.task === task) this.drop(key);
   }
 
   clear(): void {
@@ -737,7 +736,25 @@ function closeReasoning(run: Run, ctx: EngineContext, at: number | null): Run {
   };
 }
 
-function upsertStep(run: Run, step: Step): Run {
+/**
+ * A step text cut to its bound is named in the step's `cut` at the first cut,
+ * however it was cut (the engine's character cap or the schema's), so the
+ * interface can always tell that the whole text is elsewhere.
+ */
+function flagCutTexts(step: Step): Step {
+  const known = step.cut ?? [];
+  const missing = (["argsText", "output", "result"] as const)
+    .filter((field) => {
+      const value = step[field];
+      return value !== null && value.text.length < value.totalChars;
+    })
+    .map((field) => `${field}.text`)
+    .filter((path) => !known.includes(path));
+  return missing.length === 0 ? step : { ...step, cut: [...known, ...missing] };
+}
+
+function upsertStep(run: Run, written: Step): Run {
+  const step = flagCutTexts(written);
   const index = run.steps.findIndex((each) => each.id === step.id);
   if (index === -1) return { ...run, steps: [...run.steps, step] };
   const steps = [...run.steps];

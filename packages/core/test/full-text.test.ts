@@ -205,3 +205,53 @@ describe("a step's text", () => {
     }
   });
 });
+
+describe("a step whose text is too long for the raw table", () => {
+  it("is marked cut at once, reads as not available yet, then whole once history holds it", async () => {
+    const gateway = grantingGateway();
+    const { client, transcript } = await openTask({ gateway });
+    const viewer = createBridgeSession(client);
+    try {
+      await viewer.apply({ type: "openSession", key: KEY });
+      const whole = "r".repeat(300_000);
+      gateway.emit("agent", agentEvent("large", 1, "thinking", { text: whole }));
+      gateway.emit("agent", agentEvent("large", 2, "thinking", { text: "second" }));
+      await until(() => transcript().runs[0]?.steps.length === 2);
+      const first = transcript().runs[0]!.steps[0]!;
+      expect(first.output!.totalChars).toBe(whole.length);
+      // Flagged at the first cut, whichever cap made it.
+      expect(first.cut).toContain("output.text");
+      // Too long for the raw table, and not yet in history: said so, never null.
+      expect(client.stepRaw(KEY, first.id)).toBeNull();
+      expect(await viewer.apply({ type: "readStepRaw", key: KEY, stepId: first.id })).toEqual({
+        status: "not-available-yet",
+        reason: expect.any(String),
+      });
+      // Once the run is in history, its whole text is read from there, and nothing is kept.
+      gateway.handlers["chat.history"] = () => ({
+        messages: [
+          { role: "user", content: "think", __openclaw: { id: "u1", seq: 1 } },
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: whole },
+              { type: "thinking", thinking: "second" },
+              { type: "text", text: "done" },
+            ],
+            stopReason: "stop",
+            __openclaw: { id: "a1", seq: 2, runId: "large" },
+          },
+        ],
+      });
+      const read = await viewer.apply({ type: "readStepRaw", key: KEY, stepId: first.id });
+      expect(read?.status).toBe("available");
+      expect((read as { raw: { call: { thinking: string } } }).raw.call.thinking).toBe(whole);
+      expect(client.stepRaw(KEY, first.id)).toBeNull();
+      // A step the task does not have is null.
+      expect(await viewer.apply({ type: "readStepRaw", key: KEY, stepId: "tool:none" })).toBeNull();
+    } finally {
+      viewer.dispose();
+      client.stop();
+    }
+  });
+});

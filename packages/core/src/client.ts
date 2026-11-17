@@ -104,6 +104,7 @@ import {
   type QuestionCard,
   type Run,
   type StepRaw,
+  type StepRead,
   type TaskActivity,
 } from "./runs.ts";
 import {
@@ -2494,10 +2495,42 @@ export class ClawtrateClient {
     return mapHistory(history?.messages).find((item) => item.id === itemId) ?? null;
   }
 
-  /** The exact raw call and result of a step, including ones too large to travel inline. */
+  /** The raw call and result of a step as the raw table keeps it now; null when it is not kept. */
   stepRaw(key: string, stepId: string): StepRaw | null {
     if (!this.state.transcripts[key]) return null;
     return this.raw.get(key, stepId);
+  }
+
+  /**
+   * A step's whole raw call and result, returned without being kept: from the
+   * raw table while it fits there, otherwise from the gateway's history once
+   * that step is in history. Until then the answer is `not-available-yet`.
+   * Null only when the task has no such step.
+   */
+  async readStepRaw(key: string, stepId: string): Promise<StepRead | null> {
+    const has = () =>
+      this.state.transcripts[key]?.runs.some((run) => run.steps.some((step) => step.id === stepId));
+    if (!has()) return null;
+    const kept = this.raw.get(key, stepId);
+    if (kept) return { status: "available", raw: kept };
+    const history = asRecord(
+      await this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
+    );
+    const current = this.state.transcripts[key];
+    if (!current || !has()) return null;
+    // Rebuilt aside, as a resync would, into a table dropped after this read.
+    const scratch = new RawTable(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+    const ctx = { ...this.context(key), raw: scratch };
+    const fromHistory = runsFromHistory(history?.messages, asRecord(history?.inFlightRun), ctx);
+    const merge = mergeHistoryRuns(current.runs, fromHistory, ctx);
+    const whole = scratch.get(key, merge.fromHistory.get(stepId) ?? stepId);
+    return whole
+      ? { status: "available", raw: whole }
+      : {
+          status: "not-available-yet",
+          reason:
+            "This step's whole text was too long to keep here; it can be read once the gateway's history holds it.",
+        };
   }
 
   // Activity ------------------------------------------------------------------------

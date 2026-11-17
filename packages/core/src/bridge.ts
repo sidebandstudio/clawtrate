@@ -8,7 +8,7 @@ import {
   type AttachmentStore,
 } from "./attachments.ts";
 import { MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
-import type { StepRaw } from "./runs.ts";
+import type { StepRead } from "./runs.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 
 export type BridgeCommand =
@@ -58,7 +58,11 @@ export type BridgeCommand =
   | { type: "readApprovalText"; key: string; approvalId: string }
   /** A history item whole, read again and not kept. */
   | { type: "readHistoryItem"; key: string; itemId: string }
-  /** The exact raw call and result behind a step card, however large. */
+  /**
+   * The exact raw call and result behind a step card, read whole: available,
+   * or not available yet when it was too long to keep and history does not
+   * hold it yet.
+   */
   | { type: "readStepRaw"; key: string; stepId: string }
   /** Ask again, with its own key, for a task creation the gateway refused. */
   | { type: "retryCreation"; creationId: string }
@@ -71,7 +75,7 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
   : C extends { type: "createTask" }
     ? { key: string }
     : C extends { type: "readStepRaw" }
-      ? StepRaw | null
+      ? StepRead | null
       : C extends { type: "readApprovalText" }
         ? { text: Record<string, string | string[] | null>; digest: string }
         : C extends { type: "readHistoryItem" }
@@ -478,7 +482,7 @@ export function createBridgeSession(
       case "dismissCreation":
         return client.dismissCreation(command.creationId);
       case "readStepRaw":
-        return client.stepRaw(mine(command.key), command.stepId);
+        return client.readStepRaw(mine(command.key), command.stepId);
     }
   };
   return {
