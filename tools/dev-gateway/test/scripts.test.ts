@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chunkText } from "../src/fake-provider.ts";
 import { normalizePrompt, planReply, type ChatMessage } from "../src/scripts.ts";
-import { NARRATING_PROMPT, SEED_BOTS, SLOW_PROMPT, UNSEEDED_TURNS } from "../src/seed-data.ts";
+import { SEED_BOTS } from "../src/seed-data.ts";
 
 const ALL_TOOLS = new Set(["ls", "read", "write", "exec"]);
 
@@ -68,22 +68,24 @@ describe("chunkText", () => {
   });
 });
 
-describe("prompts the seed does not send", () => {
-  it("are scripted too: one narrates between its tool calls, one streams slowly", () => {
+describe("the end-to-end runs the seed does not leave behind", () => {
+  it("are scenarios: one narrates between its tool calls, one streams slowly", () => {
+    // Three rounds: text and a listing, text and a write, then text.
     const narrate = planReply(
-      [{ role: "user", content: `[Mon 09:00] ${NARRATING_PROMPT}` }],
+      [{ role: "user", content: "[Mon 09:00] #text #list #write" }],
       ALL_TOOLS,
     );
     expect(narrate.map((step) => step.kind)).toEqual(["text", "tool"]);
-    const slow = planReply([{ role: "user", content: SLOW_PROMPT }], ALL_TOOLS);
-    expect(slow).toEqual(UNSEEDED_TURNS[1]!.rounds[0]);
-    const text = slow[0]!.kind === "text" ? slow[0] : null;
+    const slow = planReply([{ role: "user", content: "#stream 8" }], ALL_TOOLS);
     // About ten seconds at its own pace.
-    expect(chunkText(text!.text).length * text!.delayMs!).toBeGreaterThan(8_000);
-  });
-
-  it("are not seeded", () => {
-    const seeded = SEED_BOTS.flatMap((bot) => bot.tasks.flatMap((task) => task.turns));
-    for (const turn of UNSEEDED_TURNS) expect(seeded).not.toContainEqual(turn);
+    const ms = slow.reduce(
+      (sum, step) =>
+        step.kind === "text" || step.kind === "reasoning"
+          ? sum + chunkText(step.text).length * (step.delayMs ?? 0)
+          : sum,
+      0,
+    );
+    expect(ms).toBeGreaterThan(9_000);
+    expect(ms).toBeLessThan(14_000);
   });
 });

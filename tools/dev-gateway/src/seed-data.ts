@@ -493,64 +493,203 @@ Call the pharmacy before you leave to confirm the order is filled.`),
   },
 ];
 
-/** A prompt whose reply narrates between its tool calls, in three short messages. */
-export const NARRATING_PROMPT = "Check my lists and tell me which evening this week is free.";
+/** The one bot whose shell commands are not denied: each one asks for approval. */
+export const SHELL_BOT = "otto";
 
-/** A prompt whose reply streams slowly, for about ten seconds. */
-export const SLOW_PROMPT = "Take your time and write out the whole packing list for the trip.";
+/** The two bots that may message each other. No other bot may message anyone. */
+export const MESSAGING_PAIR = ["marlow", "pip"] as const;
 
-const PACKING = [
-  "Rain shell",
-  "Two warm layers",
-  "Hiking boots, already worn in",
-  "Wool socks, three pairs",
-  "Headlamp and spare batteries",
-  "Water bottles, one each",
-  "Trail snacks for both days",
-  "Sunscreen and a hat",
-  "First-aid kit",
-  "Phone charger and a power bank",
-  "Paper map of the trails",
-  "Something to read in the evening",
-];
-
-/**
- * Prompts the scripted model answers that the seed never sends. Tests send
- * them to existing tasks for runs the seed does not leave behind: one that
- * narrates as it works, and one that is still going when the client restarts.
- */
-export const UNSEEDED_TURNS: SeedTurn[] = [
-  {
-    prompt: NARRATING_PROMPT,
-    rounds: [
-      [
-        say("On it. Reading your weekend list first."),
-        tool("call_pip_narrate_1", "read", { path: "lists/mountain-weekend.md" }),
-      ],
-      [
-        say("Read it. Noting the free evening in a list next."),
-        tool("call_pip_narrate_2", "write", {
-          path: "lists/free-evening.md",
-          content: "# Free evening\n\nThursday\n",
-        }),
-      ],
-      [say("Thursday evening is free. I wrote it down in `lists/free-evening.md`.")],
-    ],
-  },
-  {
-    prompt: SLOW_PROMPT,
-    rounds: [
-      [
-        {
-          kind: "text",
-          text: `Here is the whole packing list, one thing at a time.\n\n${[...PACKING, ...PACKING.map((item) => `${item}, a spare`)].map((item) => `- ${item}`).join("\n")}\n\nThat is everything.`,
-          delayMs: 300,
-        },
-      ],
-    ],
-  },
-];
+/** The bot a messaging bot writes to, or null for a bot outside the pair. */
+export function messagingPartner(botId: string): string | null {
+  const [a, b] = MESSAGING_PAIR;
+  return botId === a ? b : botId === b ? a : null;
+}
 
 export function sessionKeyFor(botId: string, slug: string): string {
   return `agent:${botId}:${slug}`;
 }
+
+/**
+ * Finished examples of the live situations, seeded through a paired client
+ * after the scripted tasks, in this order. Each prompt is a scenario phrase
+ * (see scenarios.ts), so the same reply plays when someone sends it again.
+ * Where a person has to act, the seed answers the question or resolves the
+ * approval itself.
+ */
+export type ScenarioExample = {
+  botId: string;
+  slug: string;
+  label: string;
+  prompt: string;
+  finalText: string;
+  /** The tool calls the run makes, in order. */
+  toolCalls: string[];
+  /** How many of their results are errors. */
+  toolErrors: number;
+  /** What the seed does as the user while the run waits. */
+  interaction?:
+    | { kind: "question"; answers: Record<string, string[]> }
+    | { kind: "approval"; decision: "allow-once"; command: string };
+  /** A bot-to-bot message: the recipient's run must reply in this session. */
+  recipientSession?: string;
+  /**
+   * Each tool result as `chat.history` keeps it, in order: its error flag, its
+   * text blocks (a string exactly, a pattern where the home folder, a run id
+   * or a thread number varies) and its details (exactly, a pattern or "count"
+   * per key, or undefined when history keeps none).
+   */
+  results: ExampleResult[];
+};
+
+export type ExampleResult = {
+  toolName: string;
+  isError: boolean;
+  content: (string | RegExp)[];
+  details?: Record<string, unknown>;
+};
+
+const quoted = (names: string[]) => names.map((name) => JSON.stringify(name)).join("\n");
+const answered = (header: string, id: string, value: string) =>
+  `${header}: ${value}\n\n${JSON.stringify({ status: "answered", answers: { answers: { [id]: [value] } } }, null, 2)}`;
+
+const JUNIPER_INSTRUCTIONS = SEED_BOTS.find((bot) => bot.id === "main")!.instructions;
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export const SCENARIO_EXAMPLES: ScenarioExample[] = [
+  {
+    // Opened by a person first: a bot may ask questions only in a session a
+    // person owns, and messages from Pip arrive here.
+    botId: "marlow",
+    slug: "main",
+    label: "Notes for Pip",
+    prompt: "Reply with a note on Saturday's plan.",
+    finalText: "Happy to help. The plan looks sound; I would leave half an hour earlier.",
+    toolCalls: [],
+    toolErrors: 0,
+    results: [],
+  },
+  {
+    botId: "pip",
+    slug: "ask-marlow",
+    label: "Ask Marlow about the plan",
+    prompt: "Message your partner about Saturday's plan.",
+    finalText:
+      "Marlow replied:\n\n> Happy to help. The plan looks sound; I would leave half an hour earlier.",
+    toolCalls: ["sessions_send"],
+    toolErrors: 0,
+    recipientSession: "agent:marlow:main",
+    results: [
+      {
+        toolName: "sessions_send",
+        isError: false,
+        content: [
+          new RegExp(
+            `^${escape(
+              JSON.stringify(
+                {
+                  runId: "RUNID",
+                  sessionKey: "agent:marlow:main",
+                  status: "ok",
+                  delivery: { status: "skipped" },
+                  reply: "Happy to help. The plan looks sound; I would leave half an hour earlier.",
+                },
+                null,
+                2,
+              ),
+            ).replace("RUNID", "[0-9a-f-]{36}")}$`,
+          ),
+        ],
+        details: { sessionKey: "agent:marlow:main" },
+      },
+    ],
+  },
+  {
+    botId: "main",
+    slug: "show-your-work",
+    label: "Show your work",
+    prompt: "Show your work: what is in your workspace?",
+    finalText: "I listed my workspace and read my instructions. Both steps are shown above.",
+    toolCalls: ["ls", "read"],
+    toolErrors: 0,
+    results: [
+      {
+        toolName: "ls",
+        isError: false,
+        // The seeded workspace: the gateway's starting files and the brief's notes/.
+        content: [
+          quoted(["AGENTS.md", "BOOTSTRAP.md", "IDENTITY.md", "SOUL.md", "USER.md", "notes/"]),
+        ],
+      },
+      { toolName: "read", isError: false, content: [JUNIPER_INSTRUCTIONS] },
+    ],
+  },
+  {
+    botId: "main",
+    slug: "failed-step",
+    label: "A step that fails",
+    prompt: "Use a tool that fails, then carry on.",
+    finalText: "That file does not exist, so the step failed. I will carry on without it.",
+    toolCalls: ["read"],
+    toolErrors: 1,
+    results: [
+      {
+        toolName: "read",
+        isError: true,
+        content: [
+          /^\{\n {2}"status": "error",\n {2}"tool": "read",\n {2}"error": "File not found: \S+\/workspace\/missing\/old-notes\.md\."\n\}$/,
+        ],
+      },
+    ],
+  },
+  {
+    botId: "main",
+    slug: "coding-handoff",
+    label: "Hand off to the coding agent",
+    prompt: "Ask the coding agent to add a dark mode toggle.",
+    finalText: "The coding agent picked it up: https://coding-agent.example/threads/thread-1",
+    toolCalls: ["coder__send_message"],
+    toolErrors: 0,
+    results: [
+      {
+        toolName: "coder__send_message",
+        isError: false,
+        content: [
+          /^structuredContent:\n\{\n {2}"reply": "Opened a branch and drafted the change for: Add a dark mode toggle to the settings page\.",\n {2}"threadId": "(thread-\d+)",\n {2}"url": "https:\/\/coding-agent\.example\/threads\/\1"\n\}$/,
+          "Opened a branch and drafted the change.",
+        ],
+      },
+    ],
+  },
+  {
+    botId: "pip",
+    slug: "route-question",
+    label: "Which route on Saturday",
+    prompt: "Ask me a question before you plan the route.",
+    finalText: "Thanks. You answered:\n\n- route: Lake loop",
+    toolCalls: ["ask_user"],
+    toolErrors: 0,
+    interaction: { kind: "question", answers: { route: ["Lake loop"] } },
+    results: [
+      { toolName: "ask_user", isError: false, content: [answered("Route", "route", "Lake loop")] },
+    ],
+  },
+  {
+    botId: SHELL_BOT,
+    slug: "list-workspace",
+    label: "List the workspace (approved)",
+    prompt: "Run a command I can approve: list your workspace.",
+    finalText: "The command ran once you approved it, and its output is shown above.",
+    toolCalls: ["exec"],
+    toolErrors: 0,
+    interaction: { kind: "approval", decision: "allow-once", command: "ls" },
+    results: [
+      {
+        toolName: "exec",
+        isError: false,
+        // Otto's starting files and the changes/ folder its disk-space task wrote.
+        content: ["AGENTS.md\nBOOTSTRAP.md\nIDENTITY.md\nSOUL.md\nUSER.md\nchanges"],
+        details: { exitCode: 0, durationMs: "count", cwd: /\/workspaces\/otto$/ },
+      },
+    ],
+  },
+];
