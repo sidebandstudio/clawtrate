@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { status } from "../src/cli.ts";
+import { openInstance, status } from "../src/cli.ts";
 import { assertDevStateDir, devStateDir, OpenclawRunner, SpawnRefusedError } from "../src/env.ts";
 import {
   ForeignStateError,
@@ -82,7 +82,8 @@ function countingRunner(
     spawnSyncImpl: fakeSpawnSync,
     isAlive: alive,
   });
-  return { runner, calls };
+  const inst = openInstance(null, { home, runRoot: join(home, "run"), runner });
+  return { runner, calls, inst };
 }
 
 function writeRunRecord(home: string, record: object): void {
@@ -96,7 +97,7 @@ describe("preparing fresh state", () => {
     expect(devStateDir(home)).toBe(join(home, ".openclaw-dev"));
     expect(() => assertDevStateDir(devStateDir(home), home)).not.toThrow();
     expect(() => assertDevStateDir(join(home, ".openclaw"), home)).toThrow(
-      /only in ~\/\.openclaw-dev/,
+      /lives only in ~\/\.openclaw-dev/,
     );
   });
 
@@ -188,9 +189,9 @@ describe("preparing fresh state", () => {
 describe("the OpenClaw spawn boundary", () => {
   it("status with absent state spawns nothing", async () => {
     const home = tempHome();
-    const { runner, calls } = countingRunner(devStateDir(home), home);
+    const { inst, calls } = countingRunner(devStateDir(home), home);
     const lines: string[] = [];
-    await status(runner, (line) => lines.push(line));
+    await status(inst, (line) => lines.push(line));
     expect(calls).toEqual([]);
     expect(lines.join("\n")).toMatch(
       /healthy {5}no \(not checked: There is no development gateway state/,
@@ -202,9 +203,9 @@ describe("the OpenClaw spawn boundary", () => {
     const stateDir = devStateDir(home);
     plant(stateDir, "openclaw.json", "{}");
     writeRunRecord(home, { runId: "r", gatewayPid: process.pid, startedAt: "" });
-    const { runner, calls } = countingRunner(stateDir, home);
+    const { inst, calls } = countingRunner(stateDir, home);
     const lines: string[] = [];
-    await status(runner, (line) => lines.push(line));
+    await status(inst, (line) => lines.push(line));
     expect(calls).toEqual([]);
     expect(lines.join("\n")).toMatch(/not checked: .*was not created by the dev-gateway tool/);
   });
