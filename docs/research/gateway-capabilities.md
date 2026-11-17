@@ -237,14 +237,14 @@ means a plugin is needed.
 | 10 | Memory read, edit, delete | partial |
 | 11 | Files and artifacts | available |
 | 12 | Models and effort | available |
-| 13 | Nodes and machine choice | available (admin; live with a headless node, row 20) |
+| 13 | Nodes and machine choice | available: whole-task device placement at write, exec routing at admin (row 20) |
 | 14 | Tool permissions and exec policy per bot | available (admin; one atomic `config.patch`) |
 | 15 | Usage, cost, context window | available |
 | 16 | Notifications and mobile push | missing for a third-party iOS app |
 | 17 | Voice and talk | available (not exercised live) |
 | 18 | The bot's computer: browser, canvas, screens | partial |
 | 19 | Questions, run behavior, reasoning, tool detail, bot-to-bot states, lists, attachments | available, with the gaps listed in row 19 |
-| 20 | Shared conversations, side panel, computer signals, per-bot controls | see row 20; shared multi-bot conversations do not exist |
+| 20 | Shared conversations, side panel, computer signals, per-bot controls | see row 20; no native multi-bot session was found, a client can compose one |
 | 21 | Routines, notifications, skills, connectors, secrets, voice, client as a node | see row 21 |
 
 ### 1. Connect, challenge, pairing, device tokens, scope upgrades, caps
@@ -754,8 +754,8 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
   `{provider:"none", searchMode:"fts-only", results:[]}` even after a
   matching `MEMORY.md` was written, because the index had not been built.
   The gateway asked for `openclaw memory status --index --agent <id>`.
-  `memory.get` requires "a provider-scoped memory reference" taken from
-  search results; untested for that reason.
+  `memory.get` requires "a provider-scoped memory reference", which only
+  `memory.search {version:2}` returns (row 20, memory); untested.
 - With `memory.search.provider: "none"` (the section 4 template),
   `memory.status` reports provider `none` and `memory.search` uses local
   full-text search only. Live: after `MEMORY.md` was written, search for a
@@ -857,12 +857,17 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
   `node.hostStats`, `node.runnerInventory.changed` and
   `node.invoke.request`.
 - Choosing where a bot's tools run:
-  - per session, `sessions.patch {execHost, execNode}` and
-    `sessions.create {execNode}` (`schema`). Both need **`operator.admin`**
-    (row 4);
+  - a whole task, on a paired session-host device: `sessions.dispatch
+    {key, deviceId}` or `{key, autoDevice:true}`, and `sessions.move` to a
+    device, at **`operator.write`**, under the runtime and device
+    conditions in row 20 (machine choice);
+  - exec routing only, per session: `sessions.patch {execHost, execNode}`
+    and `sessions.create {execNode}` (`schema`). Both need
+    **`operator.admin`** (row 4);
   - per bot, `agents.entries.<id>.tools.exec.{host, node}` in config;
   - per browser call, `browser.request {target:"node", node:"<id>"}`.
-- **Status: available** for admin connections. Live with a headless node
+- **Status: available.** Device placement is write-scoped; exec routing and
+  per-bot defaults are admin. Live with a headless node
   (`openclaw --profile <dev> node run`): pairing, `node.list` fields,
   `node.hostStats`, and an exec routed to the node by `sessions.patch
   {execHost, execNode}` (row 20, machine choice).
@@ -1829,87 +1834,144 @@ Live and source agree on these ceilings:
 
 ### 20. Side panel and per-bot controls
 
-Same markings as row 19: **live**, **source** or **unverified**. The probe
-scripts are in `docs/research/dev-gateway/scenarios/` (row 20 files are
-listed in its README).
+Same markings as row 19: **live**, **source** or **unverified**. "Live" means
+a committed script in `docs/research/dev-gateway/scenarios/` reproduces it
+(its README lists the row 20 files). A failed probe is evidence about that
+probe, not about the version. Every absence below names the search behind
+it, and every `operator.admin` claim names the lower-scope paths checked.
 
-A headless node was paired for this row. `openclaw --profile <dev> node run
---host 127.0.0.1 --port 19101 --no-tls --display-name probe-node` was run
-under the launcher's controlled environment.
+**Lower-scope search, used throughout this row.** The method map in the
+pinned `schema` was scanned for every non-admin method in the families
+`agents.*`, `config.*`, `exec.*`, `cron.*`, `memory.*`, `skills.*`,
+`mcp.*`, `secrets.*`, `models.*`, `environments.*`, `node.*`, `plugins.*`
+and `tools.*`, plus `sessions.dispatch` and `sessions.move`. The non-admin
+results:
+- read: `agents.list`, `agents.files.list/get`, `agents.workspace.list/get`,
+  `config.get/schema/schema.lookup`, `memory.*`, `models.list`,
+  `models.authStatus`;
+- write: `skills.library.*`, `mcp.app.*` writes, `tools.invoke`, and
+  `sessions.dispatch`/`sessions.move` with device targets.
+
+Where a claim below says **`operator.admin`**, no method in that list does
+the same job unless the claim names one.
+
+Node fixtures for this row were started with `openclaw --profile <probe>
+node run --host 127.0.0.1 --port 19101 --no-tls --display-name <name>` under
+the launcher's controlled environment.
 
 #### Conversations shared by several bots
 
-**There are none in 2026.10.6.** Every session belongs to exactly one agent:
+- **No native multi-agent session was found**, and every session belongs
+  to one executing agent. Evidence:
+  - the key is `agent:<agentId>:…`, and the transcript lives in that
+    agent's own store (`<openclaw>/docs/concepts/multi-agent.md`, "Each
+    agent has its own");
+  - live: `chat.send` on Atlas's session with `agentId:"pixel"` failed
+    with `INVALID_REQUEST` "agent "pixel" does not match session key agent
+    "atlas"";
+  - the method map has no group or multi-agent conversation method
+    (search: method names containing `group`, `member`, `participant`,
+    `discussion`, `swarm`). `sessions.groups.*` organizes the sidebar.
+- **Membership is access metadata**, not a second executing agent.
+  `session.members.add {sessionKey, identityId}` (`operator.write`)
+  accepts an id from the session's known identities: the caller, every
+  projected session creator, and human profiles (`knownSessionIdentities`,
+  `<openclaw>/dist/sessions-sharing-DX8n-lby.mjs` lines 32-58 and
+  245-263).
+  - Creators keep their `createdActor.type`, so an agent that created a
+    session through spawn can be a known identity.
+  - Live: the invented ids `pixel` and `agent:pixel` were "unknown
+    identity". That shows only that those two strings were unknown, not a
+    human-only rule.
+  - Adding an agent identity does not change who executes the session.
+- `chat.send` `mentions` are human profile mentions (`{profileId, start,
+  end}`, at most 10).
+- **What a client can compose:**
+  - one session per bot, with `sessions.create` (`operator.write`);
+  - a group-to-sessions mapping held by the client or a plugin;
+  - a merged view from `chat.history`, `session.message` and `agent`/`chat`
+    events, each carrying `sessionKey` and `agentId` (`operator.read`);
+  - targeting with `chat.send {sessionKey}` per bot, and coordination
+    between bots with `sessions_send`.
 
-- Its key is `agent:<agentId>:…`.
-- Its transcript lives in that agent's own session store
-  (`<openclaw>/docs/concepts/multi-agent.md`, "Each agent has its own").
-- Live: `chat.send` on Atlas's session with `agentId: "pixel"` was refused
-  with `INVALID_REQUEST` "agent "pixel" does not match session key agent
-  "atlas"".
-
-`session.members.list`/`add`/`remove` (`operator.read`/`operator.write`)
-share a session with other **human profiles**. The identities they accept
-are profiles, session creators and the caller
-(`knownSessionIdentities`,
-`<openclaw>/dist/sessions-sharing-DX8n-lby.mjs` lines 31-58). Live: adding
-`pixel` or `agent:pixel` returned "unknown identity".
-`sessions.setInvolvement {key, expectedSessionId, hidden}` hides a session
-from the caller's own list. `chat.send` `mentions` are human profile
-mentions (`{profileId, start, end}`, at most 10).
-
-A client can only emulate a group: one task per bot plus `sessions_send`
-between them (row 7). Approvals then behave as in each bot's own session.
-A recipient's exec approval fails, as shown next.
+  Shared context, turn-taking and answer selection must then be designed
+  in the client or plugin; the gateway stores no shared transcript.
 
 #### Approvals raised outside the user's own run
 
-- **Helpers and bot-to-bot recipients cannot raise exec approvals here**
-  (live). A sub-agent started with `sessions_spawn`, and the recipient of a
-  `sessions_send`, both ran an exec that needed approval. Both tool calls
-  failed at once with "Exec approval registration failed:
-  GatewayClientRequestError: missing scope: operator.approvals". No card
-  was shown.
-  - Source: the registration call in
-    `<openclaw>/dist/bash-tools.exec-approval-request-DeVkQIN2.mjs` lines
-    45 and 131. It goes through `callGatewayTool`
-    (`<openclaw>/dist/gateway-0s_-cY-q.mjs`), whose requester identity for
-    those runs lacks `operator.approvals`.
-  - Runs started by the operator raise cards normally. So a recipient
-    "waiting for approval" does not occur. The sender sees `status:"ok"`
-    with the recipient's reply about the failed tool.
-  - Whether this is intended or a defect was not settled.
-- **Side runs** (`/btw`) on the built-in runtime are one-shot provider calls
-  without tools, so they raise no approvals
-  (`<openclaw>/docs/tools/btw.md`). Only Codex-harness side questions can
-  run shell tools.
-- **Stopping the parent** (row F-098): there was nothing to cancel, because
-  of the two points above. `chat.abort {preserveSideRuns:true}` spares
-  `/btw` runs only.
+- **Observed in the probe (unresolved)**: a sub-agent started with
+  `sessions_spawn`, and the recipient of a `sessions_send`, each ran an
+  exec needing approval. Each child's own transcript holds the tool error
+  "Exec approval registration failed: GatewayClientRequestError: missing
+  scope: operator.approvals", and no card was raised (live,
+  `helper-and-recipient-approvals.mjs`, which reads the child transcript
+  and reports `CARD`, `FAILED` or `UNKNOWN`).
+- **Not a version-wide rule.** The registration helper only wraps the
+  error (`<openclaw>/dist/bash-tools.exec-approval-request-DeVkQIN2.mjs`
+  lines 44-46 and 129-135). It does not forbid approvals for helpers or
+  recipients.
+  - The call goes through `callGatewayTool`
+    (`<openclaw>/dist/gateway-0s_-cY-q.mjs` lines 397-425). That uses
+    in-process dispatch with minimum synthetic scopes when a gateway
+    context is bound, and a transport fallback otherwise
+    (`<openclaw>/dist/in-process-gateway-BE6BFDfY.mjs` lines 94-128).
+  - Which path the nested runs took on the probe, and why it lacked the
+    scope, was not established.
+- So: treat helper and recipient cards as possible.
+  - The gateway delivers child approvals to ancestor audiences
+    (`session.approval`, row 19).
+  - `chat.abort` cancels controlled descendants
+    (`<openclaw>/dist/chat-abort-handler-ta8mBb_q.mjs` lines 183-205).
+  - Run-bound approvals are cancelled when their owner ends.
+  - Raising a real child approval and showing its cancellation remain
+    **unverified**.
+- **Side runs** (`/btw`) on the direct-provider path are one-shot provider
+  calls without tools (`<openclaw>/docs/tools/btw.md`). Codex-harness side
+  questions and CLI backends have their own contracts, so this does not
+  hold for every runtime. `chat.abort {preserveSideRuns:true}` spares BTW
+  runs.
 
-#### A settings change while an approval is pending (live)
+#### A settings change while an approval is pending
+
+Live, `members-mcpcancel-settings.mjs settings`:
 
 | Change | Pending approval | Run |
 | --- | --- | --- |
-| `sessions.patch {permissionMode:"guarded"}` (write) | resolved `deny`, `resolvedBy:"approval-scope-closed"` | ended `aborted`; the patch returned `UNAVAILABLE` "Permissions were saved, but could not be applied to the active run. Stop the run and continue to use the saved permissions." |
-| `config.patch` setting the bot's `tools.exec.mode` to `full` (admin) | stays pending and listed | continues to wait |
-| `sessions.patch {execSecurity, execAsk}` (admin) | unchanged | refused with `INVALID_REQUEST` "execSecurity/execAsk are retired; set permissionMode … or use /exec for this run only" |
+| `sessions.patch {permissionMode:"guarded"}` (write) | resolved `deny`, `resolvedBy:"approval-scope-closed"` | in this probe the change could not be applied, so the patch returned `UNAVAILABLE` "Permissions were saved, but could not be applied…" and the run ended `aborted` |
+| `config.patch` setting the bot's `tools.exec.mode` to `full` (admin; restored exactly afterwards) | still listed after 4 s | waited, then finished after the probe denied it |
 
-The docs say pending approvals from the old permissions are cancelled, not
-granted (`<openclaw>/docs/gateway/permission-modes.md`, "Change permissions
-during a task").
+The source has three outcomes for a permission change
+(`<openclaw>/dist/sessions-patch-permissions.runtime-BdqqviLC.mjs` lines
+48-84):
+- **applied**: approvals from the old permissions are cancelled and the
+  run continues with the new policy;
+- **refused before saving**: an active run that cannot apply permissions
+  gets `INVALID_REQUEST` "This run cannot apply permissions while
+  active…";
+- **saved but not applied**: the run is stopped and the patch returns
+  `UNAVAILABLE`, as in the probe.
+
+A client must not treat every permission patch as a Stop. The config
+observation shows only that this one config change left the approval
+pending.
+
+`sessions.patch {execSecurity, execAsk}` is retired. Requests carrying
+either field, even `null`, fail with `INVALID_REQUEST`
+(`<openclaw>/dist/sessions-patch-DIr6Po0r.mjs` line 127; live).
 
 #### MCP cancellation
 
-When a run is aborted during an MCP call, the server receives
+When a run is aborted during an MCP call, the server received
 `notifications/cancelled {requestId, reason:"AbortError: agent run
-aborted"}` (live: the stand-in server's `received_notifications` tool
-reported it).
+aborted"}`. The stand-in server's `received_notifications` tool reported
+it (live, `members-mcpcancel-settings.mjs mcpcancel`).
 
 #### Files and the library (side panel)
 
 - **Tree**: page through it with `agents.workspace.list {agentId, path?,
   offset?, limit?}` (`operator.read`), one directory per call.
+  - `limit` defaults to 250, maximum 500
+    (`<openclaw>/dist/agents-workspace-Gm2ASifr.mjs` lines 14-15).
   - It returns `{path, parentPath?, entries:[{path, name, kind:
     file|directory, size?, updatedAtMs?}], totalEntries, offset}`.
   - Live: a directory entry had `updatedAtMs` and no `size`; a file had
@@ -1918,11 +1980,16 @@ reported it).
   - `agents.workspace.get {agentId, path}` (`operator.read`) returns
     `{file:{path, name, size, updatedAtMs, mimeType, encoding:
     utf8|base64, content}}`.
-  - `sessions.files.get {sessionKey, path}` (`operator.read`) adds
-    `kind`, `previewKind` (live `"text"`), `contentEncoding` and a SHA-256
-    `hash`.
-  - The size limit for inline content is not documented, and was not
-    tested (**unverified**).
+  - `sessions.files.get {sessionKey, path}` (`operator.read`) adds `kind`,
+    `previewKind` (live `"text"`), `contentEncoding` and a SHA-256 `hash`.
+  - Limits: previews are capped at 262 144 bytes
+    (`WORKSPACE_PREVIEW_MAX_BYTES`,
+    `<openclaw>/dist/workspace-file-limits-loc-yzkf.mjs`), and
+    agent-workspace images at 5 242 880 bytes
+    (`agents-workspace-Gm2ASifr.mjs` line 13).
+  - Supported agent-workspace previews are UTF-8 text and recognized
+    image formats (same file, lines 115-139), not arbitrary binary
+    files.
 - **What a task touched**: `sessions.files.list {sessionKey}`
   (`operator.read`) lists files the session `modified` or `read`.
   - Fields: `{path, workspacePath, name, kind, missing, size,
@@ -1931,55 +1998,63 @@ reported it).
     gives git file stats. Outside a git checkout it returns
     `unavailableReason:"not_git"` (live).
 - **Which step produced a file**: the file tools' events. Live, a `write`
-  call carried:
-  - `tool start {toolCallId, args:{path, content}}`;
-  - a result `details:{changed, created, diff, firstChangedLine, patch}`.
-
-  Join on `toolCallId` and `runId`. Neither `sessions.files.list` nor the
-  workspace listing names the step.
-- **Live changes**: the gateway has **no** workspace or file-change event.
-  Live: a write produced only `agent`, `chat`, `sessions.changed`,
-  `session.message` and `presence`. Refresh the listing on file-tool
-  `tool result` events.
+  call carried `tool start {toolCallId, args:{path, content}}` and a result
+  `details:{changed, created, diff, firstChangedLine, patch}`. Join on
+  `toolCallId` and `runId`. No producing-step field was found on
+  `sessions.files.list` or workspace entries (schema definitions
+  `SessionsFilesListResult`, `AgentsWorkspaceListResult`).
+- **Live changes**: no workspace or file-change event was found. Search:
+  the events advertised in `hello-ok.features.events` and
+  `<openclaw>/dist/server-methods-list-Cv0-xJIK.mjs`.
+  - Live: a write produced only `agent`, `chat`, `sessions.changed`,
+    `session.message` and `presence`.
+  - Refreshing on file-tool `tool result` events misses changes made by
+    shell commands or outside the gateway.
 - **Artifacts across a bot's tasks**: `artifacts.list` needs `sessionKey`
-  or `runId` (live: "artifacts require sessionKey or runId"). `limit` is at
-  most 4 (`schema`). A bot-wide library means one call per task.
-- **Downloads**:
-  - `artifacts.download {artifactId, …}` returns `download.mode` `bytes`
-    (inline base64 over the socket), `url` (with `transport:"http"`: a
-    five-minute, connection-bound URL) or `unsupported` (`schema`
-    `ArtifactSummary`).
-  - The HTTP form was not fetched live (**unverified**).
-  - Workspace files have no HTTP route; read them with
-    `agents.workspace.get`.
+  or `runId` (live: "artifacts require sessionKey or runId"). `limit` is
+  1-4 and it pages with `cursor`, so one task can take several calls.
+- **Downloads**: `artifacts.download {artifactId, sessionKey|runId,
+  transport?:"http"}` (`operator.read`) returns `{artifact, encoding?,
+  data?, url?, expiresAt?}` (`schema` `ArtifactsDownloadResult`;
+  `<openclaw>/dist/artifacts-CVcZMNpQ.mjs` lines 568-640).
+  - The mode is `artifact.download.mode`.
+  - `bytes`: top-level `encoding:"base64"` and `data`.
+  - `url`: top-level `url`, plus `expiresAt` for a managed or HTTP
+    download (with `transport:"http"`, a five-minute, connection-bound
+    URL).
+  - An artifact whose mode is `unsupported` makes the call fail with
+    `artifact_download_unsupported`.
+  - The HTTP form was not fetched live.
+  - No general route serves workspace files over HTTP (search: workspace
+    handlers and the HTTP route list); read them with
+    `agents.workspace.get`. `sessions.files.assets` serves session preview
+    assets under its own contract.
 
 #### Computer signals
 
 | Signal | Source of truth | Shown |
 | --- | --- | --- |
-| Gateway computer available | `computer.status {probe?}` (`operator.read`) → `{configured, available, computerUse?, error?}`. `probe:false` is a passive read; `probe:true` (the default) prepares the computer (`<openclaw>/docs/nodes/computer-use.md`; `<openclaw>/dist/computer-tool-BYo9lKTd.mjs` lines 105-125) | live: `{configured:false, available:false}` without a provider |
-| Node connected, last seen | `node.list`/`node.describe` (`operator.read`): `connected`, `connectedAtMs`, `lastConnectedAtMs`, `lastSeenAtMs`, `lastSeenReason`, `approvalState`, `paired`, `commands`, `caps`, `hostStats`, `pathEnv`, `platform`, `version`, `deviceFamily`, `modelIdentifier` | live |
-| Heartbeat | `node.hostStats {nodeId, hostStats:{cpuCount, loadAverage[3], memoryTotalBytes, memoryFreeBytes, diskTotalBytes?, diskAvailableBytes?, updatedAtMs}}` every 60 s (`NODE_HOST_STATS_INTERVAL_MS`, `<openclaw>/dist/node-host-stats-DL3iDh5d.mjs`). Not sent by a node started with `--commands` (restricted surface) | live, with the default command surface |
-| Free disk space | `hostStats.diskAvailableBytes`, on the event and in `node.list` | live |
-| Asleep | no state. A sleeping machine shows as `connected:false` with a stale `lastSeenAtMs`. Mobile nodes send `node.presence` with `trigger` `background`, `silent_push`, `bg_app_refresh`, `significant_location`, `manual` or `connect` (`schema` `NodePresenceAlivePayload`) | source |
-| Needs a human | no dedicated signal. A bot can ask with `ask_user` (row 19) using options such as "Done" and "Skip", and resumes on the answer. Cloud environments have a `take_control` action (`<openclaw>/docs/nodes/computer-use.md`); they were not investigated | source |
-| Recovery | no recover method. Nodes reconnect themselves. `computer.status {probe:true}` re-prepares the gateway computer. A run can be stopped with `chat.abort` | source |
-| What a node reports | its pairing request: `caps`, `commands`, `bins` (programs found on the node's path), `platform`, `deviceFamily`, `modelIdentifier`, `version` (live, `node.pair.list`) | live |
+| Gateway computer available | `computer.status {probe?}` (`operator.read`) → `{configured, available, computerUse?, error?}`. `probe:false` is a passive read. `probe` defaults to true, which prepares the computer (`<openclaw>/dist/computer-service-C6lOH7z0.mjs` lines 334-341; `<openclaw>/docs/nodes/computer-use.md`) | live: `{configured:false, available:false}` without a provider |
+| Node connected, last seen | `node.list`/`node.describe` (`operator.read`): `connected`, `connectedAtMs`, `lastConnectedAtMs`, `lastSeenAtMs`, `lastSeenReason`, `approvalState`, `paired`, `commands`, `caps`, `hostStats`, `pathEnv`, `platform`, `version`, `deviceFamily`, `modelIdentifier`, `sessionHost` | live (`node-pairing-hoststats.mjs`) |
+| Heartbeat and free disk | `node.hostStats {nodeId, hostStats:{cpuCount, loadAverage[3], memoryTotalBytes, memoryFreeBytes, diskTotalBytes?, diskAvailableBytes?, updatedAtMs}}` every 60 s (`NODE_HOST_STATS_INTERVAL_MS`, `<openclaw>/dist/node-host-stats-DL3iDh5d.mjs`), also on `node.list`. Disk figures are optional, for the node's sampled volume. A node started with `--commands` (restricted surface) sends none | live |
+| Asleep | no sleep state was found in the node, presence or computer schemas. A disconnected node is not evidence of sleep. Mobile nodes refresh presence by sending the node-to-gateway message `node.event {event:"node.presence.alive"}` with a `trigger`; the gateway stores it as `lastSeenReason`, so operators read `node.list`. The operator `node.presence` event carries activity updates, not `trigger` (`<openclaw>/dist/server-node-events-D7AhsYlE.mjs` lines 53-63 and 746-795) | source |
+| Needs a human | no dedicated computer signal was found (search: the event list and computer methods). A bot can ask with `ask_user` (row 19), offering "Done" and "Skip", and resumes on the answer. Cloud environments have a `take_control` action (`<openclaw>/docs/nodes/computer-use.md`); not investigated | source |
+| Recovery | no physical-computer recover method was found. The only method names containing "recover" are `sessions.recover` and `worktrees.recoverRemoval`, which act on other resources. Nodes reconnect on their own, and `computer.status {probe:true}` re-prepares the gateway computer | source |
+| What a node reports | its pairing request: `caps`, `commands`, `bins`, `platform`, `deviceFamily`, `modelIdentifier`, `version` (live, `node.pair.list`) | live |
 
 Paired client devices: `device.pair.list` (`operator.pairing`)
 `paired[]` carries `deviceId`, `displayName`, `platform`, `clientId`,
 `role`, `scopes`, `approvedVia`, `createdAtMs`, `approvedAtMs`,
-`lastSeenAtMs`, `lastSeenReason` and `connected` (live). There is no
-separate "last opened" time.
+`lastSeenAtMs`, `lastSeenReason` and `connected` (live). No last-opened
+field was found (schema `DevicePairListResult`, node list fields).
+`lastSeenAtMs` is also updated by background alive messages and token
+authentication, so label it "Last seen".
 
 Live pairing behavior on loopback:
-- The node was approved silently ("node capability surface silent
-  auto-approve").
-- Restarting it with a wider command surface created a new pending request
-  in `node.pair.list`. `node.pair.approve` emitted `node.pair.resolved
-  {decision:"approved"}`.
-- Some commands were withheld until approved ("node command surface
-  withheld").
+- The node was approved silently.
+- Restarting it with a wider command surface created a new pending request,
+  and `node.pair.approve` emitted `node.pair.resolved {decision:"approved"}`.
+- Some commands were withheld until approved.
 
 #### Model and reasoning effort
 
@@ -1989,8 +2064,13 @@ Live pairing behavior on loopback:
   - per turn, `operator.write` (`chat.send {thinking, fastMode}`);
   - per bot, **`operator.admin`** (`agents.update {model}`, and
     `config.patch` for `thinkingDefault`, `reasoningDefault`,
-    `fastModeDefault`);
-  - `sessions.patch {reasoningLevel, contextWindow}` is `operator.admin`.
+    `fastModeDefault`). Lower path checked: no non-admin `agents.*` or
+    `config.*` method writes per-agent defaults;
+  - `sessions.patch {reasoningLevel, contextWindow}` is
+    **`operator.admin`**. Those fields are outside the write-scope field
+    set (`resolveSessionsPatchRequiredScope`,
+    `<openclaw>/dist/session-method-scopes-base-CuhU2F_D.mjs` lines
+    101-105).
 - **Precedence** (`<openclaw>/docs/tools/thinking.md`, "Resolution order"):
   1. message directive;
   2. session override;
@@ -2002,257 +2082,383 @@ Live pairing behavior on loopback:
 - **When a change applies** (`<openclaw>/docs/concepts/model-failover.md`,
   "Live model switching"): a user-driven model change made with
   `sessions.patch` marks a pending live switch. The active run may adopt it
-  in the same turn, and otherwise the next turn starts from it. Fallback
-  models are turn-local.
-- **Effort a turn ran with**: **not recorded** (live).
-  - The history row carries `provider`, `model`, `usage`, `stopReason`
-    and `responseId`.
-  - `lifecycle phase:"model"` carries `{provider, model}`.
-  - With `chat.send {thinking:"high"}`, neither those nor the session row
-    held the level.
+  in the same turn; otherwise the next turn starts from it.
+- **Effort a turn ran with**: no complete, supported public per-turn
+  actual-effort field was found.
+  - Live: history rows carry `provider`, `model`, `usage`, `stopReason`
+    and `responseId`, and `lifecycle phase:"model"` carries `{provider,
+    model}` (`effort-and-models.mjs`).
+  - Internally the transcript records `thinking_level_change` entries
+    (`<openclaw>/dist/sdk-DoZOl8zm.mjs` lines 89-93 and 174-191). They are
+    not a complete public per-turn API.
+  - A client can store the `chat.send.thinking` it sent and label it
+    "requested".
 - **Models and what they support** (live): `models.list {agentId,
   includeDetails:true}` returns `{id, name, provider, contextWindow, local,
-  input:["text","image"], reasoning, tags, thinkingLevels[{id, label}],
-  thinkingDefault, available}`.
-- **Plugin at a lower scope**: possible for per-bot model and effort. It
-  would need to:
-  - accept only a model from `models.list` for that bot and a level from
-    its `thinkingLevels`;
-  - write only those keys, through a `baseHash` compare-and-set;
-  - refuse every other config path.
+  input, reasoning, tags, thinkingLevels[{id, label}], thinkingDefault,
+  available}`.
+- **Plugin at a lower scope** (feasible, not built):
+  - Entry points: an ordinary plugin can register a write-scope method with
+    `api.registerGatewayMethod`, and change config with
+    `api.runtime.config.mutateConfigFile` and a `baseHash`
+    (`<openclaw>/dist/config-contracts-C65kIjn4.d.ts` line 44653).
+  - It must:
+    - validate the model and level against the bot's current
+      `models.list` and the operator's allowed selection;
+    - refuse provider, auth, runtime, fallback and any other config path;
+    - keep the revision check.
 
 #### Tool permissions and approvals
 
-- **Default review (`exec.mode: "auto"`)**, live with a scripted reviewer:
-  - `agent stream:"tool"` emits `{phase:"review", name:"exec", toolCallId,
-    approvalReviewOutcome:"reviewing", review:{id:"guardian:<toolCallId>",
-    label:"Guardian", status:"in_progress"}}`;
-  - then `approvalReviewOutcome` is `approved` or `denied`, with
-    `review.riskLevel` (`low|medium|high|unknown`) and `review.rationale`;
-  - the result has `details.approvalReviewOutcome`, and its text starts
-    "Exec auto-review allowed once (risk=low): …" or "Exec denied by
-    auto-review (risk=high): …", followed by the denial guidance.
-  - An `ask` verdict or a reviewer failure becomes a normal
-    `exec.approval.requested`, whose text reads "Exec auto-review deferred
-    to human approval …".
-  - Three denials in a row in one session escalate to a human.
-  - Without a reviewer model, the default reviewer always asks
-    (`<openclaw>/dist/exec-auto-review-BFvTJS5y.mjs`;
-    `<openclaw>/dist/bash-tools-Cig8cES0.mjs` lines 490-525;
-    `<openclaw>/dist/exec-auto-reviewer-C7ldeGpx.mjs` lines 61-215).
-  - Reviewer settings: `tools.exec.reviewer.{model, thinking, fastMode,
-    timeoutMs}` (default 30 000 ms) (`<openclaw>/docs/tools/exec.md`).
-  - There is **no reviewer for other tools**. The only other reviewed
-    request is a dashboard widget capability. For other tools, "ask" is a
+- **Default review (`exec.mode: "auto"`)**:
+  - Live, with a scripted reviewer (`exec-auto-review.mjs`, allow and deny
+    verdicts only):
+    - `agent stream:"tool"` emits `{phase:"review", name:"exec", toolCallId,
+      approvalReviewOutcome:"reviewing", review:{id:"guardian:<toolCallId>",
+      label:"Guardian", status:"in_progress"}}`;
+    - then `approvalReviewOutcome` is `approved` or `denied`, with
+      `review.riskLevel` and `review.rationale`;
+    - the result has `details.approvalReviewOutcome`, and its text starts
+      "Exec auto-review allowed once (risk=low): …" or "Exec denied by
+      auto-review (risk=high): …".
+  - From source, not exercised:
+    - an `ask` verdict or a reviewer failure becomes an ordinary
+      `exec.approval.requested`;
+    - three denials in a row in one session escalate to a human;
+    - without a reviewer model, the default reviewer asks
+      (`<openclaw>/dist/exec-auto-review-BFvTJS5y.mjs`;
+      `<openclaw>/dist/bash-tools-Cig8cES0.mjs` lines 490-525;
+      `<openclaw>/dist/exec-auto-reviewer-C7ldeGpx.mjs` lines 61-215).
+  - Settings: `tools.exec.reviewer.{model, thinking, fastMode, timeoutMs}`
+    (`<openclaw>/docs/tools/exec.md`).
+  - No generic native reviewer for other tools was found. The only other
+    reviewed request kind is a dashboard widget capability (`requestKind`
+    in `exec-auto-reviewer-C7ldeGpx.mjs`). For other tools, "ask" is a
     plugin `before_tool_call` returning `requireApproval` (P5).
-- **What a card shows**: `exec.approval.requested.request.commandAnalysis`
-  is `{commandCount, nestedCommandCount, riskKinds[], warningLines[]}`
-  (live, row 19). Plugin approvals offer `allow-once`, `allow-always` and
-  `deny`, limited by the request's `allowedDecisions`. The gateway rejects
-  any other decision (`<openclaw>/docs/plugins/plugin-permission-requests.md`).
-- **`allow-always`**, which depends on where it is used:
-  - Interactive exec: it writes an allowlist entry under
-    `agents.<agentId>.allowlist` in the host approvals document.
-    - The entry is bound to that bot, the exact argv (`argPattern`) and the
-      working directory.
-    - Entry fields: `id`, `pattern`, `argPattern`, `source:"allow-always"`,
-      `lastUsedAt`, `lastResolvedPath`. The time it was granted is not
-      stored.
-    - Read and edit them through `exec.approvals.get`/`set`
-      (**`operator.admin`**).
-  - Codex MCP calls: it writes `agents.<agentId>.mcpTools[{server, tool,
-    source, addedAt}]`.
-  - Plugin approvals: durable only if the plugin implements it.
-  - Sources: `<openclaw>/docs/tools/exec-approvals.md`, allowlist table
-    and "MCP tool grants".
-- **Standing grants are for routines only.** An `allow-always` on an
-  approval raised by a cron run mints a grant.
-  - The grant is bound to the bot, the job, its definition, and the exact
-    command, working directory and environment.
-  - `exec.approval.grants.list {limit?≤500}` (`operator.approvals`)
-    returns `{grantId, mintedByApprovalId, agentId, cronJobId,
-    cronJobName, command, cwd, createdAtMs, expiresAtMs|null,
-    revokedAtMs|null, revokedBy|null, lastUsedAtMs|null, useCount}`.
-  - `exec.approval.grants.revoke {grantId}` returns `revoked`,
-    `already-revoked` or `not-found`.
-  - Duration: `grantExpiresInDays` on `approval.resolve` or
-    `exec.approval.resolve` is an **integer from 1 to 3650 days**
-    (`schema`). The default is unlimited, or
-    `tools.exec.grantExpiryDays`. So a one-hour grant is impossible.
-  - Grants do not apply to node-host automations
-    (`<openclaw>/docs/tools/exec-approvals.md`, "Standing grants for
-    automations").
+- **What a card shows**: an interactive gateway exec request carries
+  `request.command`, `commandArgv?`, `cwd`, `host`, `nodeId`, `agentId`,
+  `security`, `ask`, `warningText` and `commandAnalysis {commandCount,
+  nestedCommandCount, riskKinds[], warningLines[]}`
+  (`<openclaw>/dist/bash-tools.exec-approval-request-DeVkQIN2.mjs` lines
+  94-105; schema `ExecApprovalRequestParams`).
+  - `commandText` belongs to an optional `systemRunPlan`, to the
+    `session.approval` presentation, and to stored allowlist entries; it
+    is not a root request field.
+  - Each request states the decisions it offers (`allowedDecisions` /
+    `unavailableDecisions`), and only those are accepted.
+- **`allow-always` is conditional and per execution host**
+  (`<openclaw>/docs/tools/exec-approvals.md` lines 244, 286 and 501-533;
+  `<openclaw>/dist/src-BSx5Woe0.mjs` lines 4515-4626):
+  - It is offered only when the request allows it. Inline-eval and
+    unbindable command forms do not get a reusable rule.
+  - For a gateway-host command, it writes an allowlist entry under
+    `agents.<agentId>.allowlist` in the gateway's approvals document.
+    - The entry is bound to that bot, the exact argv (`argPattern`) and
+      the working directory.
+    - Entry fields: `id`, `pattern`, `argPattern`,
+      `source:"allow-always"`, `lastUsedAt`, `lastResolvedPath`. No grant
+      time is stored (search: the allowlist entry schema).
+  - Read and edit the rules with `exec.approvals.get`/`set`; for a node
+    host, its own policy is `exec.approvals.node.get`/`set`. All four are
+    **`operator.admin`**: no `exec.*` method below admin reads or writes
+    rules.
+  - Rules shared by all bots go in `file.agents["*"].allowlist`.
+    `defaults` holds only `security`, `ask`, `askFallback` and
+    `autoAllowSkills` (`<openclaw>/dist/exec-approvals-resolver-DmLXnc-C.mjs`
+    lines 7-12; `<openclaw>/dist/src-BSx5Woe0.mjs` lines 4442-4447).
+  - An effective `ask:"always"` still prompts despite a saved rule.
+  - Codex MCP calls write `agents.<agentId>.mcpTools[{server, tool, source,
+    addedAt}]`. Plugin approvals are durable only if the plugin implements
+    it.
+- **Standing grants: two kinds.**
+  - **Routine (cron) grants**: an `allow-always` on an approval raised by a
+    cron run mints a grant. It is bound to the bot, the job and its
+    definition, and the exact command, working directory and environment.
+    - `exec.approval.grants.list {limit?≤500}` (`operator.approvals`)
+      returns `{grantId, mintedByApprovalId, agentId, cronJobId,
+      cronJobName, command, cwd, createdAtMs, expiresAtMs|null,
+      revokedAtMs|null, revokedBy|null, lastUsedAtMs|null, useCount}`.
+    - `exec.approval.grants.revoke {grantId}` returns `revoked`,
+      `already-revoked` or `not-found`. These two methods expose this
+      ledger only.
+    - Duration: `grantExpiresInDays` on `approval.resolve`/
+      `exec.approval.resolve` is an integer, 1-3650 days (`schema`).
+      Omitted, it uses `tools.exec.grantExpiryDays` or no expiry. A
+      sub-day value is not accepted.
+    - Live (`routines.mjs`, row 21): mint, list, reuse on the next run,
+      revoke.
+  - **Placement-scoped grants** for eligible high-risk plugin node
+    commands: an `allow-always` can retain a grant bound to the plugin,
+    command, approval scope, agent, session, node pairing generation and
+    active remote-exec placement.
+    - It lasts at most 30 days (`PLACEMENT_GRANT_TTL_MS = 2592e6`,
+      `<openclaw>/dist/server-aux-handlers-Bbmano5U.mjs` line 1693;
+      lines 1374-1419 and 1693-1760).
+    - It is invalidated on placement, pairing, runtime or approval
+      changes (`<openclaw>/dist/node-invoke-plugin-policy-BrRmTyKE.mjs`
+      lines 114-145 and 485-501).
+    - No listing or revocation method for these grants was found (search:
+      `exec.*` and `approval.*` methods).
+    - Source only.
 - **Rules expressible with the gateway's own config** (all
-  **`operator.admin`**):
+  **`operator.admin`**; lower path checked: none in the list above):
   - allow and deny per bot: `agents.entries.<id>.tools.{profile, allow,
     alsoAllow, deny}`;
-  - ask, for exec only: `tools.exec.mode` `ask` or `auto`, and the
-    allowlist in the approvals document;
-  - outbound bot messaging: `tools.agentToAgent.send`.
-
-  "Ask before tool X" for other tools needs P5.
-- **What locks a rule** (`<openclaw>/docs/tools/exec-approvals.md`, first
-  note; `<openclaw>/docs/gateway/permission-modes.md`, "Policy precedence"):
-  - the effective policy is the stricter of `tools.exec.*` and the host
-    approvals document, which can only tighten;
-  - a host-local `ask:"always"` keeps prompting whatever the session
-    asks;
-  - a session `permissionMode:"full"` (admin) is the one exception to the
-    approvals-file floors;
+  - ask, for exec only: `tools.exec.mode` `ask` or `auto`, plus the
+    host allowlists;
+  - outbound bot messaging per bot:
+    `agents.entries.<id>.tools.agentToAgent.send`. The top-level
+    `tools.agentToAgent` accepts only `enabled` and `allow`
+    (`<openclaw>/dist/zod-schema.agent-runtime-iDxKMLd-.mjs` lines 586-591
+    and 640-651).
+- **What locks a rule** (`<openclaw>/docs/tools/exec-approvals.md` lines
+  24-36; `<openclaw>/docs/gateway/permission-modes.md`, "Policy
+  precedence"):
+  - the effective policy is the stricter of `tools.exec.*` and the
+    execution host's approvals document, which can only tighten;
+  - a host-local `ask:"always"` keeps prompting;
+  - a session `permissionMode:"full"` (admin) is the exception to the
+    approvals-file floors **on the gateway host only**. A node still
+    enforces its own policy: an unmatched allowlist/off command can be
+    denied, and node `ask:"always"` still prompts;
   - `/exec` per-turn overrides can only tighten.
 - **Smallest scopes**:
-  - resolving cards, standing grants and history: `operator.approvals`;
+  - resolving cards, cron grants and history: `operator.approvals`;
   - session `permissionMode` other than `full`: `operator.write`;
-  - per-bot rules, `exec.approvals.*` and `permissionMode:"full"`:
-    **`operator.admin`**.
-- **Plugin at a lower scope**:
-  - Rules that only **tighten** a bot (add a deny, raise `exec.mode` to
-    `ask`) could be offered at `operator.write`. The plugin must refuse any
-    loosening, any change to `full`, and any other config path.
-  - Loosening and allowlist edits should stay admin, because they grant the
-    bot new power.
+  - per-bot rules, `exec.approvals.*`, `exec.approvals.node.*` and
+    `permissionMode:"full"`: **`operator.admin`**. For `full`, the patch
+    scope function makes it admin (`session-method-scopes-base` line 103).
+- **Plugin at a lower scope** (feasible, not built): a write-scope method
+  (`api.registerGatewayMethod`) using `api.runtime.config.mutateConfigFile`
+  could add per-bot restrictions. It must:
+  - compare against the current effective policy inside the guarded
+    mutation;
+  - accept only additive denies and stricter modes. Replacing a deny or
+    allowlist with `ask` can loosen policy.
+
+  A config change does not by itself cancel pending approvals.
 
 #### Memory
 
-- **Where an item came from** (live): each `memory.search` result is
-  `{path, startLine, endLine, score, textScore, snippet, source:
-  "memory"|"sessions", provenance:{originClass, sessionKind,
-  observedAt}}`.
-  - It names a file and lines, not the bot run or chat that wrote it.
-  - Session lineage is tracked only for automatically ingested memories,
-    and is used only by the CLI `openclaw memory forget`
-    (`<openclaw>/docs/concepts/memory-provenance.md`).
-- **Params** (source, handlers in
-  `<openclaw>/dist/memory-provider-DcxG9TJs.mjs`):
-  - `memory.search {agentId, query, maxResults?, minScore?, cursor?,
-    sources?}`;
-  - `memory.get {agentId, reference, from?, lines?}`;
-  - `memory.status {agentId}`.
-
-  All three are `operator.read`.
-- **Shared memory**: none.
-  - Each bot searches only its own memory (live: Pixel's search did not
-    find Atlas's note).
-  - The documented way to share is a common folder in
-    `memory.search.extraPaths` (config, admin)
+- **`memory.search` has two response versions**
+  (`<openclaw>/dist/memory-search-CKxnFvV7.mjs` lines 34-140;
+  `<openclaw>/dist/memory-provider-DcxG9TJs.mjs` lines 33-66 and 145-160).
+  All three methods are `operator.read`.
+  - **Default** (no `version`, or `version:1`): `{agentId, provider,
+    searchMode, results, …staleness, warning?}`. `results` are the
+    built-in backend's hits, `{path, startLine, endLine, score,
+    textScore, snippet, source:"memory"|"sessions", provenance?}`. Live,
+    `provenance` held `{originClass, sessionKind, observedAt}`
+    (`memory-save-search.mjs`).
+    - This path refuses provider-runtime memory plugins, with "retry
+      memory.search with version: 2".
+    - The `provenance` fields come from the built-in backend and are not
+      a stable cross-provider contract.
+  - **`version:2`**: `{version:2, agentId, providerId, hits, nextCursor?,
+    coverage, warning?}`.
+    - Each hit is `{reference:{providerId, id, revision?, fragment?},
+      excerpt, score?, source, citations, automaticRecall?}`.
+    - Line numbers appear only inside `citations`, and `reference.id` is
+      opaque (a path only for the built-in adapter;
+      `<openclaw>/dist/memory-runtime-CH6-OvYH.mjs` lines 146-192).
+    - `cursor` works only where the provider paginates.
+  - Params: `{agentId, query, maxResults? (≤50, default 20), minScore?,
+    cursor?, sources?, version?}`.
+- **`memory.get {agentId, reference, from?, lines?}`** needs a v2
+  `reference`.
+- **`memory.status {agentId}`** always returns the v2 envelope:
+  `{version:2, agentId, providerId, status:"ready"|"degraded"|
+  "unavailable", message?, details?}`.
+  - Implementation detail is optional. Live, the built-in backend put it
+    under `details.legacy`, with `dirty`, file and chunk counts, and an
+    embedding `cache.maxEntries` of 50 000. That is a cache limit, not a
+    memory capacity.
+- **Where an item came from**: search names a file or reference, not the
+  bot run or chat that wrote it. Session lineage exists only for
+  automatically ingested memories and is used by the CLI `openclaw memory
+  forget` (`<openclaw>/docs/concepts/memory-provenance.md`).
+- **Shared memory**: no provider-neutral shared-memory inventory RPC was
+  found; `memory.*` has only the three methods, all keyed by `agentId`.
+  - Each bot searches its own memory (live: Pixel's search did not find
+    Atlas's note).
+  - Sharing is a common folder in `memory.search.extraPaths` (config,
+    **`operator.admin`**; no lower path in the list above)
     (`<openclaw>/docs/concepts/multi-agent.md`).
-- **Pinning and capacity**: no pin.
-  - Memory is Markdown: `MEMORY.md` plus `memory/*.md`.
-  - The search cache holds `maxEntries` 50 000 (live `memory.status`).
-  - `MEMORY.md` is injected under the bootstrap limits
-    (`<openclaw>/docs/concepts/memory.md`).
-- **The bot saving a memory by itself**: no memory event.
-  - The bot writes with its file tools. Live: `write` to `MEMORY.md` and
-    `memory/2026-11-16.md` emitted ordinary `tool` events with
-    `args.path`.
-  - Watch file-tool results whose path is `MEMORY.md` or under
-    `memory/`.
-- **Reindex**: no RPC.
-  - `memory.status` reports `dirty` and the index state.
-  - Search results carried a warning naming the CLI rebuild (`openclaw
-    memory status --index --agent <id>`).
+- **Pinning**: no pin method or pinned-item field was found. The only
+  method names containing "pin" are `skills.curator.pin/unpin`, which pin
+  skills. Memory is Markdown: `MEMORY.md` plus `memory/*.md`, injected
+  under the bootstrap limits.
+- **The bot saving a memory by itself**: no memory-save event was found in
+  the advertised event list.
+  - Live: the bot's `write` to `MEMORY.md` and `memory/<date>.md` emitted
+    ordinary `tool` events with `args.path`.
+  - Watching file-tool results catches only writes through those tools.
+- **Reindex**: no reindex method was found (`memory.*` has three methods).
+  The default search response named the CLI rebuild (`openclaw memory
+  status --index --agent <id>`).
 - **Plugin at a lower scope**:
-  - P2 already covers edit and delete.
-  - A reindex method at `operator.write` would need to:
-    - check that `agentId` is configured;
-    - rate-limit the call;
-    - only start the rebuild, with no path or provider arguments.
+  - P2 covers edit and delete.
+  - A reindex method is **unverified**. The public plugin runtime has no
+    generic memory-reindex call, and a provider's refresh belongs to the
+    memory provider. A plugin would need an owner-supported refresh
+    adapter, or a controlled CLI invocation for the gateway's own profile,
+    with admission and cancellation.
 
 #### Machine choice
 
-- **Per task**: `sessions.patch {execHost:"node", execNode:<nodeId>}` and
-  `sessions.create {execNode}` are **`operator.admin`**.
-  - Live: the write device was refused, "missing scope: operator.admin".
-  - Live, with admin: an exec in that task raised an approval with
-    `host:"node"` and a `systemRunBinding.argv`. After `allow-once`, it ran
-    on the node and returned `command_output` and `exitCode:0`.
+- **Per task, on a paired device: `operator.write`.**
+  - `sessions.dispatch {key, deviceId}` or `{key, autoDevice:true}`, and
+    `sessions.move` with a device target, are write-scoped.
+    `sessions.dispatch` with `profileId` (a cloud worker profile) and
+    `sessions.move` to a profile are admin
+    (`resolveDynamicSessionMutationRequiredScope`,
+    `<openclaw>/dist/method-scopes-BdXzw-yD.mjs` lines 13-19; schema
+    `SessionsDispatchParams`, `SessionsMoveParams`).
+  - Conditions (`<openclaw>/dist/sessions-dispatch-C5D4yJ51.mjs` lines
+    215-300; `<openclaw>/dist/placement-session-runtime-CB5fjWJK.mjs`
+    lines 17-31):
+    - the session's runtime must declare placement support. The built-in
+      `openclaw` runtime declares `worker-turn` with device placement, and
+      other harnesses declare it through `cloudPlacement`;
+    - the device must be a paired node that hosts sessions (`sessionHost`,
+      from `openclaw node run --session-host`), pass the device
+      eligibility check, and have capacity. `autoDevice` picks among
+      eligible hosts;
+    - archived sessions are refused.
+  - This moves the whole task's execution to the device, with its own
+    remote workspace. It was not exercised live: the fixtures were not
+    session hosts.
+- **Per task, exec routing only: `operator.admin`.** `sessions.patch
+  {execHost:"node", execNode}` and `sessions.create {execNode}` route only
+  exec calls, and both are admin.
+  - Live (`node-routed-exec.mjs`): the write device was refused, "missing
+    scope: operator.admin".
+  - With admin, an exec in that task ran on the node.
 - **Per bot**: `agents.entries.<id>.tools.exec.{host, node}` through
-  `config.patch` (**`operator.admin`**, source).
+  `config.patch` (**`operator.admin`**; no lower path in the list above).
 - **What a node must declare**: `system.run` (and `system.run.prepare`,
-  `system.which`) for exec. Commands that pair only with admin are listed
+  `system.which`) for exec routing. A device placement runtime can require
+  further `requiredNodeCommands`. Commands that pair only with admin are
   in row 13.
+- **Working directory on a node**: with no explicit `workdir` and no
+  session `execCwd`, the node uses its own default. Live, `pwd` printed the
+  node host process's directory. An explicit `workdir` or session cwd is
+  passed through (`resolveExecWorkdir`,
+  `<openclaw>/dist/bash-tools-Cig8cES0.mjs` lines 2548-2558;
+  `<openclaw>/dist/sessions-patch-DIr6Po0r.mjs` lines 98-106). So a node can
+  run in a chosen per-bot or per-task folder.
 - **Isolation between bots on one machine**:
-  - On the gateway host, each bot has its own workspace
-    (`workspace-<agentId>`), which is its working directory and **not** a
-    sandbox. Absolute paths reach the whole host unless sandboxing is on
-    (`<openclaw>/docs/concepts/agent-workspace.md`).
-  - On a node, the exec ran in the node host's own working directory, not
-    in a per-bot folder (live).
-  - Browser profiles are global (`browser.defaultProfile`); per-bot
-    profiles need P4 (row 18).
-- **Plugin at a lower scope**: possible. Pinning a task to a node from an
-  admin-made allowlist of (bot, node) pairs could be offered at
-  `operator.write`. The plugin must:
-  - check the node is paired and approved;
-  - never change host approval policy;
-  - refuse `execHost` values outside the list.
+  - A workspace directory is the bot's default working directory, not an
+    OS sandbox for processes.
+  - OpenClaw's own file tools are confined to the session root in the
+    `read-only`, `guarded` and `workspace` permission modes, without a
+    container. `full` lifts that, while required roots and sandbox
+    restrictions still apply (`<openclaw>/docs/gateway/permission-modes.md`
+    lines 14-21).
+  - Shell `exec` has its own, broader authority under exec policy.
+  - Browser profiles are global (`browser.defaultProfile`). No per-agent
+    browser-profile config key was found (search: the agent config
+    schema in `zod-schema.agent-runtime-iDxKMLd-.mjs`); P4 enforces per-bot
+    profiles (row 18).
+- **Plugin at a lower scope**: prefer the native write-scope placement
+  above. A plugin that pins exec routing at write would use
+  `api.runtime.agent.session.patchSessionEntry`
+  (`config-contracts-C65kIjn4.d.ts` line 44713) from a method declared
+  with `sessionAccess:{mode:"write"}`. It must:
+  - bind the exact agent, session id and lifecycle;
+  - check the exact allowed (bot, node) pair;
+  - clear a stale cwd when the node changes;
+  - recheck pairing and approval when publishing.
 
 #### Usage
 
-- **By bot**: `usage.cost {agentId}`, and `sessions.usage {agentId}`
-  `aggregates.byAgent`.
-- **By task**: `sessions.usage {key}`.
-- **By source**:
-  - `sessions.usage` `aggregates` has `byModel`, `byProvider`,
-    `byAgent`, `byChannel` and `byCreator` (live keys).
-  - There is no grouping by routine or by calling bot. Derive it from
-    session keys (`…:cron:…`, `…:subagent:…`) and from inter-session
-    provenance (row 19).
-
-  All `operator.read`.
+- **By bot**: `usage.cost {agentId}` and `sessions.usage {agentId}`
+  `aggregates.byAgent`. **By task**: `sessions.usage {key}`. All
+  `operator.read`.
+  - `sessions.usage` rows carry a nested `usage` object with `totalCost`
+    and token totals, or `usage:null` with `computing:true`
+    (`<openclaw>/dist/usage-DNHtJAIp.mjs` lines 1102-1124).
+  - `sessions.list` rows carry `estimatedCostUsd` instead.
+- **By source**: `sessions.usage` `aggregates` has `byModel`,
+  `byProvider`, `byAgent`, `byChannel` and `byCreator` (live keys).
+  - No grouping by routine was found in that rollup. Derive it from
+    session keys (`…:cron:…`) or from `cron.runs` usage (row 21).
+  - `byCreator` can name an agent that created a session, but not every
+    bot that later sent into an existing session. Inter-session provenance
+    (row 19) marks those turns.
 - **Currency**: estimated **USD**, from `models.providers.<p>.models[].cost`
   in USD per 1M tokens (`<openclaw>/docs/reference/token-use.md`, "Cost
   estimation").
-  - Totals: `{input, output, cacheRead, cacheWrite, totalTokens,
-    totalCost, inputCost, outputCost, cacheReadCost, cacheWriteCost,
+  - Totals: `{input, output, cacheRead, cacheWrite, totalTokens, totalCost,
+    inputCost, outputCost, cacheReadCost, cacheWriteCost,
     missingCostEntries}` (live keys).
-  - Session rows carry `estimatedCostUsd`.
-- **Context window**: row 15 (`contextTokens`, `contextBudgetStatus`).
+- **Context window**: row 15.
 - **Provider limits**: `usage.status` →
   `providers[].windows[{label, usedPercent, resetAt?}]`, plus balances and
   budgets where the provider reports them
   (`<openclaw>/dist/provider-usage.fetch.claude-Dhz9Brye.mjs` lines 14-57).
   Live: `{providers:[]}` with the fake provider.
-- **Budget or cutoff**: the gateway has **no** budget store and no spend
-  cutoff. A client could build a soft budget on `sessions.changed` rows
-  (`estimatedCostUsd`) and stop runs with `chat.abort`. A hard cutoff would
-  need a plugin `before_model_call`-style hook, which was not investigated
-  (**unverified**).
+- **Budgets and cutoffs**: no user-defined budget store or token-budget
+  admission control was found (search: method and definition names
+  containing "budget" in the schema; provider-reported budgets are a
+  different thing).
+  - A client can count tokens per period from `sessions.usage` and
+    `sessions.usage.timeseries`/`logs`, taking one latest total per
+    session or using deltas.
+  - It can refuse its own new `chat.send` calls at the limit, and pause a
+    routine with `cron.update {patch:{enabled:false}}`
+    (**`operator.admin`**).
+  - `chat.abort` stops a run; it is not admission control.
+  - Other clients and channels are not bound by a client-side budget.
 
 #### Creating, duplicating, importing, exporting and deleting a bot
 
 - **Create**: `agents.create`, then `config.patch` and `agents.files.set`
-  (all **`operator.admin`**, row 3). Not atomic.
-- **Duplicate, import, export**: no method.
-  - Export can be assembled at `operator.read` from `config.get` (secrets
-    redacted), `agents.files.get` and `agents.workspace.get`.
-  - Import needs the admin writes above.
-  - The CLI has `agents add`, `team create`, `bind`, `set-identity` and
-    `delete`, and no export (`<openclaw>/docs/cli/agents.md`).
+  (all **`operator.admin`**, row 3; no non-admin `agents.*` writer exists
+  in the list above). Not atomic.
+- **Duplicate and import over RPC**: no method was found (search: the
+  `agents.*` and `claws.*` method names).
+- **Export**: no export RPC was found. The experimental CLI has `openclaw
+  claws export <agent> --out <path>`, a portable package, and a matching
+  install (`<openclaw>/docs/cli/claws.md`). Over RPC, an export can be
+  assembled at `operator.read` from `config.get` (secrets redacted),
+  `agents.files.get` and `agents.workspace.get`.
 - **Delete**: `agents.delete {agentId, deleteFiles?=true}`
-  (**`operator.admin`**). In one journaled operation it removes:
-  - the config entry;
-  - the bot's bindings;
-  - its cron jobs and its exec-approval entries
-    (`<openclaw>/dist/agents-DAPW-UCQ.mjs` line 874);
-  - when `deleteFiles` is set, the workspace (including memory), agent
-    directory, session transcripts and databases, which go to the Trash.
+  (**`operator.admin`**). It journals the cleanup
+  (`<openclaw>/dist/agents-DAPW-UCQ.mjs` lines 810-1048):
+  - always: the config entry and the bot's bindings, its cron jobs and
+    exec-approval entries (line 874), and its session-store entries. The
+    purge at line 927 runs whether or not `deleteFiles` is set, so "keep
+    files" does not keep sessions usable;
+  - with `deleteFiles`: an attempt to move the workspace (including
+    memory), agent directory and session files to the Trash;
+  - paths shared with a surviving bot are kept, and protected shared or
+    inherited store owners are refused;
+  - the reply is `{ok:true, removedBindings, removed[], failed[],
+    purgeFailed?}`. An `ok` reply can still report failures, and the
+    journal is kept for a retry. Show `failed[]` and `purgeFailed`.
+  - No atomic preview was found. A best-effort preview reads
+    `agents.workspace.list` (paged), `sessions.list {agentId}` and
+    `cron.list {includeDisabled:true}` (`operator.read`).
+- **Plugin at a lower scope** (feasible, not built): create-from-template
+  through a write-scope plugin method and `mutateConfigFile`. It must:
+  - reserve and validate the agent id;
+  - allocate a fresh owned workspace and agent directory, never an
+    existing host path;
+  - enforce the fixed model and tool template and the creator's
+    authority;
+  - handle partial setup.
 
-  The workspace is kept if another bot shares it, and directories holding
-  another bot's database are kept. There is no preview call
-  (`<openclaw>/docs/cli/agents.md`, `agents delete`).
-- **Plugin at a lower scope**:
-  - Create-from-template at `operator.write` is possible. The plugin must
-    write only a fixed template, with no tool widening and no
-    `exec.mode` looser than the gateway default.
-  - Delete should stay admin: it trashes data and removes routines.
+  Delete should stay admin.
 
 ### 21. Routines, notifications, skills, connectors, secrets, voice and the client as a node
 
 Markings as in rows 19 and 20: **live** means a committed scenario in
 `docs/research/dev-gateway/scenarios/` reproduces it (named in brackets);
 **source** names the code or docs path; **unverified** says what was tried.
-"Does not exist" claims name the search that was made.
+A failed probe is evidence about that probe, not about the version. Each
+absence names its search. Each `operator.admin` claim was checked against
+the non-admin method inventory at the top of row 20.
 
 #### Routines
 
@@ -2260,7 +2466,9 @@ Markings as in rows 19 and 20: **live** means a committed scenario in
   - reads, all `operator.read`: `cron.list`, `cron.get`, `cron.status`,
     `cron.runs`, `cron.history`;
   - writes, all **`operator.admin`**: `cron.add`, `cron.update {id,
-    patch}`, `cron.remove`, `cron.run`.
+    patch}`, `cron.remove`, `cron.run`. Lower path checked: every non-admin
+    `cron.*` method is a read. The bot's own `automations` tool (below)
+    acts with the bot's authority, not the client's.
   - Pause and resume is `cron.update {patch:{enabled}}`.
   - Plugin at a lower scope: possible for pause, resume and run-now of
     existing jobs. It must not accept a payload or schedule edit, and must
@@ -2349,7 +2557,8 @@ Markings as in rows 19 and 20: **live** means a committed scenario in
   - With no approval-capable client connected, the request is denied at
     once (`<openclaw>/docs/tools/exec-approvals.md`, "Standing grants for
     automations").
-- **Other triggers** (source):
+- **Other triggers** (source; the `CronJob` schema has no webhook field,
+  and its `trigger` is `{script, once?}`):
   - schedule kinds `at`, `every`, `cron`, `on-exit` (a watched command
     exits) and `stream` (lines from a supervised command);
   - `trigger.script`, a condition gate run when the schedule is due;
@@ -2420,9 +2629,11 @@ Markings as in rows 19 and 20: **live** means a committed scenario in
   2612-2775) has no presence or viewer check; a search for presence,
   viewer, online, connected, suppress and skip there found nothing. A
   client-side or P3 rule is needed.
-- **What a notification names**: `{category, title, body, tag, path?}`,
-  for example `path: "ask/<id>"` for a question (same file, line 2618
-  onward). It does not name the gateway; a client must map each
+- **What a notification names**: the notification built for an event is
+  `{category, title, body, tag, path?}`, for example `path: "ask/<id>"` for
+  a question (`resolveEventWebPushNotification`, same file, line 2618
+  onward). No gateway identifier was found in it. How the sender wraps it
+  in the encrypted payload was not traced. A client should map each
   subscription endpoint to its gateway.
 
 #### Skills
@@ -2453,6 +2664,10 @@ All methods and scopes are from the `schema` method map; live parts are in
   skills (`<openclaw>/docs/tools/skills-config.md`, config, **admin**).
   - Global enablement of an installed skill is `skills.update {skillKey,
     enabled}`, also **`operator.admin`**.
+  - Lower path checked: `skills.library.mutate {action:"enable"|"disable"}`
+    (`operator.write`) switches the user's **library** skills, not
+    installed or per-bot skills. `skills.library.activate` attaches one to a
+    single task.
   - Plugin at a lower scope: a per-bot skill switch at `operator.write` is
     possible. It must change only `agents.entries.<id>.skills` and must not
     install or enable skill code.
@@ -2474,25 +2689,43 @@ All methods and scopes are from the `schema` method map; live parts are in
   - The change feed is `skills.workshop.changes {agentId, limit?, beforeMs?}`
     (`operator.read`); `skills.workshop.list` and `read` are
     `operator.read`; `archive` and `restore` are **`operator.admin`** (live:
-    "missing scope: operator.admin" at write).
+    "missing scope: operator.admin" at write). Lower path checked: no
+    non-admin `skills.workshop.*` writer exists.
   - `skills.changed {reason}` is broadcast about 30 s after a skills-folder
     change (`<openclaw>/dist/server-startup-early-BquJMfnW.mjs` lines
     40-58).
   - **Unverified live**: in the probe, `skill_workshop` `list` returned the
     user's library entries, and `create` failed validation with "content:
-    schema is false". That does not match the tool schema in
-    `<openclaw>/dist/openclaw-tools-DV-z1IAc.mjs` lines 13918-13936. The
+    schema is false". That is a probe observation. It does not match the
+    tool schema in `<openclaw>/dist/openclaw-tools-DV-z1IAc.mjs` lines
+    13918-13936, so do not conclude that bots cannot create skills. The
     bot-created skill's events could not be shown.
 - **Delete**: library `mutate {action:"remove"}` (`operator.write`, live).
   Workshop skills are archived, not deleted.
 
 #### Connectors and MCP servers
 
-- **Catalog**: there is no connector catalog with categories. `tools.catalog`
-  does not list MCP servers (live: no `coder` entry). The configured servers
-  are `config.get` `mcp.servers` (`operator.read`, secrets redacted).
-  `mcp.app.*` covers interactive MCP Apps, not a catalog.
-- **Adding a server**: `config.patch` on `mcp.servers.<name>` with
+- **Catalog**: plugins, which is how most connectors ship, have a
+  categorized catalog at `operator.read` (source; not called live, because
+  it queries ClawHub, an outside service):
+  - `plugins.catalog.categories {}` returns `{categories:[{slug, label,
+    description, icon, order, pinnedPackages?}]}`;
+  - `plugins.catalog.browse {query?, intent?: all|bundled|trending|official|
+    featured, category?, cursor?, pageSize?≤100}` returns items with
+    `catalog {name, summary, author, official, categories, icon, …}` and
+    `local {present, installed, enabled, state, pluginId?, install?}`;
+  - `plugins.catalog.get {id, version?}` returns details;
+  - `plugins.list` gives the installed inventory
+    (`<openclaw>/docs/gateway/protocol/rpc-system-and-channels.md` lines
+    95-99; `schema` `PluginsCatalog*`).
+
+  Installing is `plugins.install` (**`operator.admin`**; no non-admin
+  `plugins.*` writer exists). Raw MCP servers are not in that catalog, and
+  `tools.catalog` does not list them (live: no `coder` entry). Configured
+  servers are in `config.get` `mcp.servers` (`operator.read`, secrets
+  redacted). `mcp.app.*` covers interactive MCP Apps.
+- **Adding a server** (lower path checked: no non-admin method writes
+  `mcp.servers`): `config.patch` on `mcp.servers.<name>` with
   `{command, args, env?, cwd?}` for a command server, or `{url, transport,
   headers?, auth?:"oauth"}` for a remote one (**`operator.admin`**;
   `<openclaw>/docs/cli/mcp/transports.md`).
@@ -2503,13 +2736,19 @@ All methods and scopes are from the `schema` method map; live parts are in
   - Plugin at a lower scope: not advisable. A command server runs an
     arbitrary program on the host; a remote-URL-only allowlist plugin would
     have to enforce HTTPS, an admin-set host allowlist, and no stdio.
-- **Auth state and accounts**: no RPC reports a server's sign-in state or
-  accounts. The search covered every method whose name contains `mcp.`;
-  there are only `mcp.app.*` and `mcp.authLogin`. Tokens live in the
-  state database (`mcp_oauth_stores`). An unsigned server is left out of
-  the bot's tools rather than failing the turn (same doc).
+- **Auth state and accounts**:
+  - For a raw MCP server in `mcp.servers`, no method reporting sign-in
+    state or accounts was found. The search covered every `mcp.*` method
+    (only `mcp.app.*` and `mcp.authLogin` exist). Tokens live in the state
+    database (`mcp_oauth_stores`). An unsigned server is left out of the
+    bot's tools rather than failing the turn (same doc).
+  - Plugin-backed connectors report a coarse state: `plugins.list` and the
+    catalog's `local.state` are `enabled`, `disabled`, `needs-setup`,
+    `not-installed` or `error` (`operator.read`; `schema`
+    `PluginsListResult`). No per-account list was found there.
 - **Signing in**: `mcp.authLogin {sessionId, serverName}`
-  (**`operator.admin`**; `<openclaw>/dist/mcp-auth-login-DAnddU_m.mjs`
+  (**`operator.admin`**, enforced again inside the handler; no non-admin
+  sign-in method was found; `<openclaw>/dist/mcp-auth-login-DAnddU_m.mjs`
   lines 16-90).
   - It runs a wizard session that asks the client to open an authorization
     URL. The provider redirects to the gateway's `/oauth/mcp/callback`.
@@ -2526,9 +2765,9 @@ All methods and scopes are from the `schema` method map; live parts are in
   `bundle-mcp`, exact names or globs such as `coder__*`, using the safe
   server prefix (row 19) (**admin**, source:
   `<openclaw>/docs/gateway/config-tools/tool-policy.md`).
-- **A bot asking to add a server**: no such tool. A search of tool
-  definitions found no tool named with `mcp`, and the bot's `gateway` tool is
-  update-only. A bot with `exec` could run `openclaw mcp` commands under exec
+- **A bot asking to add a server**: no such tool was found. Tool `name:`
+  literals in `dist/` containing "mcp" were searched, and none was found;
+  the `coding` profile describes the bot's `gateway` tool as update-only. A bot with `exec` could run `openclaw mcp` commands under exec
   approval.
 
 #### Drafts and secure input
@@ -2537,10 +2776,14 @@ All methods and scopes are from the `schema` method map; live parts are in
   tool `name:` literal in `dist/` contains "draft".
   - Approval decisions are only `allow-once`, `allow-always` and `deny`
     (row 20), so arguments cannot be edited at approval (F-344, F-453).
-  - Editable defaults (`defaultAnswers`) come only from the agent harness's
-    structured input (`<openclaw>/dist/structured-input-BIzCMO3F.mjs`). The
-    plugin SDK has no question API; a search of `dist/plugin-sdk` for
-    question requests found none.
+  - Editable defaults (`defaultAnswers`) are produced only by the agent
+    harness's structured input (`<openclaw>/dist/structured-input-BIzCMO3F.mjs`,
+    `gateway-question-dispatch-BcIWFUex.mjs`; search: `defaultAnswers` in
+    `dist/`).
+  - No plugin-SDK entry point for raising a question was found. In
+    `dist/plugin-sdk/*.d.ts`, `question-gateway-runtime.d.ts` resolves
+    questions from channels and `decisions.d.ts` covers model-scored
+    decisions.
   - A plugin could still provide its own draft tool, methods and event
     (plugin API, section 3). **Unverified**.
 - **Secrets without the transcript**: the bot's `secrets` tool (`request`,
@@ -2553,14 +2796,19 @@ All methods and scopes are from the `schema` method map; live parts are in
     secretStoreAllowedHosts}` (`operator.questions`).
   - The egress proxy substitutes the secret only in requests to
     `allowedHosts`.
-  - Operator store methods: `secrets.store.list`, `set` and `delete`
-    (**`operator.admin`**).
-  - **Observed in the probe**: the bot's `request` failed with
+  - Operator store methods: `secrets.store.list`, `set` and `delete`.
+  - Operator store methods are **`operator.admin`** (lower path checked:
+    no non-admin `secrets.*` method exists; the bot's request is answered
+    at `operator.questions`).
+  - **Observed in the probe (unresolved)**: the bot's `request` failed with
     "missing scope: operator.questions", whether or not the device that
     started the run held that scope. The value never appeared in events or
-    the transcript (live, `secrets-request.mjs`). Whether this is a probe
-    artifact like the helper-approval failure in row 20 is unsettled.
-- **A password vault** of logins, cards and contacts: does not exist.
+    the transcript (live, `secrets-request.mjs`). This is a probe
+    observation like the helper-approval failure in row 20, not a rule;
+    the end-to-end save is unverified.
+- **A password vault** of logins, cards and contacts: not found. Method
+  names containing `vault`, `password` or `credential` give only
+  `plugins.credentials.inspect`; secrets are `secrets.*`.
   - The secret store holds named values limited by host, not per bot.
   - Filling a website form without the bot seeing the value is possible
     only by the user typing during a P4 takeover.
@@ -2588,8 +2836,10 @@ All from source unless marked: `schema` Talk definitions;
   `brain: agent-consult|direct-tools|none`, `ttlMs` (1 s to 1 h).
   - `talk.voice.set {voice, sessionKey?, voiceSessionId?}` sets the voice
     per session.
-  - A voice kept per bot is not a config field. The search covered the talk
-    docs for per-agent settings; set it on the bot's session instead.
+  - No per-bot voice setting was found (search: the talk docs and the
+    `TalkVoiceSetParams`/`TalkVoiceGetParams` schemas, which take a
+    session or voice session, not an agent). Set it on the bot's session
+    instead.
 - **Reconnect after a drop**: `talk.client.create` resumes the logical call
   when the client passes the same `voiceSessionId` while replacing the
   provider transport. Accepted work outlives a replaced connection
@@ -2630,7 +2880,8 @@ Live, in `client-node.mjs`:
 What a client must declare and what that costs:
 - **Commands are filtered by platform.**
   - The allowed set is the platform's defaults, plus approved desktop host
-    commands, plus `gateway.nodes.commands.allow` (admin config).
+    commands, plus `gateway.nodes.commands.allow` (admin config; no
+    non-admin `node.*` method changes the allowlist).
     Dangerous commands such as `camera.snap`, `screen.record`, `sms.send`
     and `contacts.add` are left out unless that config allows them
     (`resolveNodeCommandAllowlistInternal`,
@@ -2657,9 +2908,15 @@ What a client must declare and what that costs:
   - `node.invoke.cancel` and `node.invoke.input` events exist;
   - duplex invokes idle out after 30 s (`NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS`,
     `<openclaw>/dist/node-commands-Bxo-2Y4j.mjs`).
-- **Permissions**: the node reports `permissions` at connect. The gateway
-  does not enforce them; the node must refuse commands it cannot serve.
-- The bot reaches node commands through its `nodes` tool and `node.invoke`.
+- **Permissions**: the node reports `permissions` at connect. The only
+  gateway use found is `permissions.accessibility`, which gates node
+  presence-activity reports (`<openclaw>/dist/nodes-BW91tb1K.mjs` line 56).
+  No use for admitting `node.invoke` was found in that file or
+  `node-command-policy-I3ly1VaT.mjs`, so the node must refuse commands it
+  cannot serve.
+- The bot reaches node commands through its `nodes` tool. An operator calls
+  `node.invoke`, which is `operator.write` except for the admin-only node
+  commands (row 13).
 
 #### Remaining items
 
@@ -2683,18 +2940,21 @@ What a client must declare and what that costs:
   - plugin credentials: `plugins.credentials.inspect` (**`operator.admin`**);
   - environment variables of exec.
 
-  There is no per-bot credential list in one call.
+  No per-bot credential list in one call was found among the read methods
+  above.
 - **Image generation**: the `image_generate` tool exists (source `core`,
   `coding` profile), and `view_image` with it (live: `tools.effective` and
   `tools.catalog`). It needs a configured image provider; none was
   exercised.
 - **Proactive check-ins**: the per-bot heartbeat is
   `agents.entries.<id>.heartbeat.{every, prompt, timeoutSeconds}`
-  (**admin** config; `<openclaw>/docs/gateway/heartbeat.md`).
+  (**admin** config, no non-admin method writes it;
+  `<openclaw>/docs/gateway/heartbeat.md`).
 - **Shareable links**: `session.publicShare.set {sessionKey,
   expectedSessionId, enabled}` (`operator.write`) returns a `v1.` share
   token for a session. A shareable link to a Page (canvas document) was not
-  found.
+  found: the only method name containing "share" is
+  `session.publicShare.set`.
 
 ## 3. Plugin API
 
@@ -3310,8 +3570,10 @@ whatever server name the owner chooses in `mcp.servers`.
     - schedule changes;
     - the built-in browser view;
     - `chat.inject`;
-    - choosing a node and per-session tool overrides (`execNode`,
-      `toolOverrides` on `sessions.patch` or `sessions.create`);
+    - routing exec to a node and per-session tool overrides (`execNode`,
+      `toolOverrides` on `sessions.patch` or `sessions.create`); placing a
+      whole task on a device with `sessions.dispatch`/`sessions.move` is
+      write-scoped (row 20);
     - per-session exec placement (`execHost`, only on `sessions.patch`;
       `execSecurity` and `execAsk` are retired).
 
