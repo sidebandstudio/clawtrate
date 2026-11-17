@@ -1341,6 +1341,8 @@ export class ClawtrateClient {
       throw new Error(`At most ${MAX_TRACKED_TASKS} tasks can be open at once.`);
     }
     this.checkOutboxTaskRoom();
+    // Owned before anything is awaited: its key, its task slot and its place in the count are
+    // taken now, so the same request asked meanwhile joins it rather than sending a second key.
     this.reservedTasks += 1;
     let reserved = true;
     const release = () => {
@@ -1363,12 +1365,16 @@ export class ClawtrateClient {
             key: null,
             gatewayStartedAt: null,
           };
+    this.putCreation(creation);
     let sent = false;
     try {
       // A viewer that goes away while access is approved takes its request with it (`withdraw`).
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
       // The viewer went away while access settled: nothing is asked of the gateway.
       this.checkNotWithdrawn(options.owner);
+      // Switching gateways while access settled dropped it: it is never asked of another gateway.
+      if (this.creations.get(creation.id)?.status !== "creating")
+        throw new Error("Switched to another gateway.");
       creation.gatewayStartedAt = this.gatewayStartedAt;
       this.putCreation(creation);
       sent = true;
@@ -1377,9 +1383,12 @@ export class ClawtrateClient {
       return this.completeCreation(creation, result, true);
     } catch (error) {
       if (!sent) {
-        // Nothing was asked of the gateway; an earlier refused attempt stays as it was.
-        if (!earlier) this.creations.delete(creation.id);
-        this.publishCreations();
+        // Nothing was asked of the gateway: an earlier refused attempt goes back to how it was,
+        // a new one is dropped, and whoever joined it learns why.
+        if (this.creations.has(creation.id)) {
+          if (earlier) this.putCreation(earlier, error as Error);
+          else this.dropCreation(creation.id, error as Error);
+        }
         throw error;
       }
       // Settled as unknown already (an answer that names no task).
@@ -1463,8 +1472,7 @@ export class ClawtrateClient {
       this.creations.delete(id);
       this.releaseCheckingSlot(id);
       this.publishCreations();
-      for (const waiter of this.creationWaiters.get(id) ?? []) waiter.resolve(key);
-      this.creationWaiters.delete(id);
+      this.settleCreationWaiters(id, key);
     } else {
       this.closeSession(key);
       this.putCreation({ ...creation, status: "created", error: null, key });
@@ -1472,18 +1480,36 @@ export class ClawtrateClient {
     return key;
   }
 
-  private putCreation(creation: TaskCreation): void {
+  /** Keep a creation as it now is; once it is settled, callers waiting on it learn how (or `reason`). */
+  private putCreation(creation: TaskCreation, reason?: Error): void {
     this.creations.delete(creation.id);
     this.creations.set(creation.id, creation);
     this.publishCreations();
     // Callers waiting on its outcome learn it once it is settled one way or the other.
     if (creation.status === "creating" || creation.status === "checking") return;
     this.releaseCheckingSlot(creation.id);
-    const waiting = this.creationWaiters.get(creation.id) ?? [];
-    this.creationWaiters.delete(creation.id);
+    if (creation.status === "created" && creation.key)
+      this.settleCreationWaiters(creation.id, creation.key);
+    else
+      this.settleCreationWaiters(
+        creation.id,
+        reason ?? new Error(creation.error ?? "The task was not created."),
+      );
+  }
+
+  /** Forget a creation that was never asked of the gateway; whoever joined it learns why. */
+  private dropCreation(id: string, reason: Error): void {
+    this.creations.delete(id);
+    this.publishCreations();
+    this.settleCreationWaiters(id, reason);
+  }
+
+  private settleCreationWaiters(id: string, outcome: string | Error): void {
+    const waiting = this.creationWaiters.get(id) ?? [];
+    this.creationWaiters.delete(id);
     for (const waiter of waiting) {
-      if (creation.status === "created" && creation.key) waiter.resolve(creation.key);
-      else waiter.reject(new Error(creation.error ?? "The task was not created."));
+      if (typeof outcome === "string") waiter.resolve(outcome);
+      else waiter.reject(outcome);
     }
   }
 

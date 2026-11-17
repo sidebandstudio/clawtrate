@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
 import { ClawtrateClient, CREATION_KEY_WINDOW_MS, MAX_TRACKED_TASKS } from "../src/client.ts";
+import { MAX_CREATIONS } from "../src/state-bounds.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, openTask, URL_A } from "./client-harness.ts";
 import {
@@ -250,6 +251,65 @@ describe("a creation the gateway refused", () => {
       expect(client.state.creations).toEqual([]);
     } finally {
       viewer.dispose();
+      client.stop();
+    }
+  });
+});
+
+describe("a creation is owned before anything is awaited (D3)", () => {
+  it("joins two identical requests made together, with one key", async () => {
+    const gateway = grantingGateway();
+    const hold = deferred<unknown>();
+    gateway.handlers["sessions.create"] = () => hold.promise;
+    const { client } = await openTask({ gateway, client: { requestTimeoutMs: 1_000 } });
+    try {
+      const a = client.createTask("otto", "one instruction");
+      const b = client.createTask("otto", "one instruction");
+      await until(() => gateway.calls("sessions.create").length >= 1);
+      await sleep(30);
+      hold.resolve({ key: "agent:otto:created", runId: "created" });
+      expect(await Promise.all([a, b])).toEqual(["agent:otto:created", "agent:otto:created"]);
+      expect(gateway.calls("sessions.create")).toHaveLength(1);
+      expect(client.sessionInterest("agent:otto:created")).toBe(2);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("takes its place in the count before access is checked", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["sessions.create"] = () => new Promise(() => {});
+    const { client } = await openTask({ gateway, client: { requestTimeoutMs: 1_000 } });
+    try {
+      const asked = Array.from({ length: MAX_CREATIONS + 1 }, (_, i) =>
+        client.createTask("otto", `instruction ${i}`).catch((error: Error) => error),
+      );
+      // Counted at once: never more creations kept than the count, whatever is awaited after.
+      expect(client.state.creations.length).toBeLessThanOrEqual(MAX_CREATIONS);
+      await sleep(30);
+      expect(client.state.creations.length).toBeLessThanOrEqual(MAX_CREATIONS);
+      expect(gateway.calls("sessions.create").length).toBe(client.state.creations.length);
+      const refused = (await Promise.race([Promise.all(asked.slice(-1)), sleep(30)])) as
+        Error[] | undefined;
+      expect(refused?.[0]?.message).toMatch(/Too many|At most/);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a request withdrawn before it was sent takes those who joined it with it", async () => {
+    const gateway = grantingGateway();
+    const { client } = await openTask({ gateway });
+    const owner = {};
+    try {
+      const first = client.createTask("otto", "one instruction", { owner });
+      const joined = client.createTask("otto", "one instruction");
+      client.withdraw(owner);
+      await expect(first).rejects.toThrow("withdrawn");
+      await expect(joined).rejects.toThrow("withdrawn");
+      expect(gateway.calls("sessions.create")).toHaveLength(0);
+      expect(client.state.creations).toEqual([]);
+    } finally {
       client.stop();
     }
   });
