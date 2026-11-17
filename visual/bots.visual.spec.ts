@@ -585,26 +585,32 @@ test("F-013 F-027 F-266: pins, hidden bots and the manual order belong to the ga
   await expect(page.locator('.pin-grid .pin[data-bot="otto"]')).toBeVisible();
 });
 
-test("F-013 F-027: an arrangement saved before it was kept per gateway is carried over to the open gateway", async ({
+test("F-013 F-027 F-266: old saved state that names no gateway is ignored: the gateway opens with no pins, nothing hidden and the default order", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    if (sessionStorage.getItem("seeded")) return;
-    sessionStorage.setItem("seeded", "1");
-    localStorage.setItem(
-      "clawtrate.roster",
-      JSON.stringify({ pinned: ["pip"], hidden: ["marlow"], sort: "recent", manual: [] }),
-    );
+  const before = JSON.stringify({
+    pinned: ["pip"],
+    hidden: ["marlow"],
+    sort: "manual",
+    manual: ["quartermaster", "pip"],
   });
+  await page.addInitScript((value) => localStorage.setItem("clawtrate.roster", value), before);
   await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
-  await expect(page.locator('.pin-grid .pin[data-bot="pip"]')).toBeVisible();
-  await expect(page.locator(".hidden-toggle")).toBeVisible();
-  const keys = await page.evaluate(() =>
-    Object.keys(localStorage).filter((key) => key.startsWith("clawtrate.roster")),
+  await settle(page);
+  await expect(page.locator(".pin-grid")).toHaveCount(0);
+  await expect(page.locator(".hidden-toggle")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Sort bots/ })).toHaveAccessibleName(
+    /^Sort bots: Recent activity/,
   );
-  expect(keys).toEqual([expect.stringMatching(/^clawtrate\.roster:gateway:[0-9a-f]{64}$/)]);
-  await page.reload();
-  await expect(page.locator('.pin-grid .pin[data-bot="pip"]')).toBeVisible();
+  await expect(listOrder(page)).resolves.toEqual([
+    "Otto",
+    "Juniper",
+    "Marlow",
+    "Pip",
+    "Quartermaster of the Family Calendar and Errands",
+  ]);
+  // Nothing reads it and nothing deletes it.
+  expect(await page.evaluate(() => localStorage.getItem("clawtrate.roster"))).toBe(before);
 });
 
 test("F-426: a bot row shows the most urgent state of its tasks; opening a done-with-failures task clears it", async ({

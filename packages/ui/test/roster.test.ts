@@ -120,19 +120,25 @@ describe("each gateway's arrangement", () => {
     expect(readRoster(null)).toMatchObject({ pinned: [], hidden: [], sort: "recent" });
   });
 
-  it("F-013 F-027 F-266: an arrangement saved before it was kept per gateway moves to the first gateway that reads it, once", () => {
+  it("F-013 F-027 F-266: a gateway opened for the first time starts with no pins, nothing hidden and the default order, even when old state that names no gateway exists", () => {
     const before = saved({ pinned: ["otto"], hidden: ["marlow"], sort: "manual", manual: ["pip"] });
     data.set("clawtrate.roster", before);
     expect(readRoster("gateway:a1")).toEqual({
-      pinned: ["otto"],
-      hidden: ["marlow"],
-      sort: "manual",
-      manual: ["pip"],
+      pinned: [],
+      hidden: [],
+      sort: "recent",
+      manual: [],
     });
-    expect(data.get(`clawtrate.${rosterKey("gateway:a1")}`)).toBe(before);
-    expect(data.has("clawtrate.roster")).toBe(false);
-    // A second gateway does not get it too.
-    expect(readRoster("gateway:b2")).toMatchObject({ pinned: [], hidden: [] });
+    expect(readRoster("gateway:a1", "address:ws://127.0.0.1:18789")).toEqual({
+      pinned: [],
+      hidden: [],
+      sort: "recent",
+      manual: [],
+    });
+    expect(readRoster("address:ws://127.0.0.1:18789")).toMatchObject({ pinned: [], hidden: [] });
+    // The old state is not read into any gateway, and is left where it is.
+    expect(data.get("clawtrate.roster")).toBe(before);
+    expect([...data.keys()]).toEqual(["clawtrate.roster"]);
   });
 
   it("F-013 F-027 F-266: an arrangement kept under the address moves to the identity once the gateway gives one", () => {

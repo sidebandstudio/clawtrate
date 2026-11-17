@@ -5,9 +5,9 @@
 //
 // Bot ids belong to a gateway (every gateway has a `main`), so the arrangement
 // is kept per gateway: under the gateway's own identity, or under its address
-// when it gives none. An arrangement saved before it was kept per gateway, or
-// under the address before the identity was known, moves to the gateway that
-// is open when it is first read.
+// when it gives none. One kept under the address before the identity was known
+// moves to the identity. An arrangement saved before it was kept per gateway
+// names no gateway, so it is ignored and left where it is.
 
 import type { Bot, ConnectionState, Task } from "@clawtrate/core";
 import { useCallback, useState } from "react";
@@ -30,9 +30,6 @@ export type RosterPrefs = {
   manual: string[];
 };
 
-/** The single arrangement kept before it was kept per gateway. */
-const LEGACY_KEY = "roster";
-
 /** The preference key of one gateway's arrangement. */
 export const rosterKey = (scope: string) => `roster:${scope}`;
 
@@ -50,17 +47,14 @@ const ids = (value: unknown): string[] =>
 
 /**
  * The arrangement for `scope`. When it has none yet, the one kept under the
- * gateway's address (`fallback`), or else the one from before arrangements
- * were kept per gateway, moves to it.
+ * gateway's address (`fallback`) moves to it.
  */
 export function readRoster(scope: string | null, fallback: string | null = null): RosterPrefs {
   if (scope === null) return parseRoster(null);
   let raw = readPreference(rosterKey(scope));
   if (raw === null) {
-    const from = [fallback && fallback !== scope ? rosterKey(fallback) : null, LEGACY_KEY].find(
-      (key): key is string => key !== null && readPreference(key) !== null,
-    );
-    if (from) {
+    const from = fallback && fallback !== scope ? rosterKey(fallback) : null;
+    if (from && readPreference(from) !== null) {
       raw = readPreference(from);
       writePreference(rosterKey(scope), raw);
       writePreference(from, null);
