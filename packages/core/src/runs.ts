@@ -255,6 +255,12 @@ export type OutgoingStatus =
   | "held"
   /** Held until the active run is terminal. */
   | "queued"
+  /**
+   * Held or queued when a Stop was confirmed: nothing starts by itself after
+   * a stop, so it stays here, never sent, until the person sends it (retry)
+   * or removes it (delete).
+   */
+  | "not-sent"
   | "sending"
   /** The gateway accepted it; it leaves the outbox once history has it. */
   | "sent"
@@ -2333,6 +2339,40 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
 /** Shown on a message the gateway accepted that history does not hold. */
 export const UNCONFIRMED_ERROR =
   "The gateway accepted this message, but its history does not show it. It may not have been delivered.";
+
+/** The run that ended last: by its end time, and among equal or unknown ones, by its place. */
+function lastEnded(runs: readonly Run[]): Run | undefined {
+  let last: Run | undefined;
+  for (const run of runs) {
+    if (!isTerminal(run.state) || run.state === "cancelled") continue;
+    if (!last || (run.endedAt ?? -Infinity) >= (last.endedAt ?? -Infinity)) last = run;
+  }
+  return last;
+}
+
+/**
+ * After a confirmed Stop nothing starts by itself (conversation.md §15–16):
+ * with no run active and the last one stopped, every queued or held message
+ * becomes `not-sent`, and queued runs are cancelled. Messages sent after the
+ * stop never queue, since no run is active, so this applies only to work
+ * left from before it.
+ */
+export function parkAfterStop(activity: TaskActivity, now: number): TaskActivity {
+  if (activity.runs.some((run) => isActive(run.state))) return activity;
+  if (lastEnded(activity.runs)?.state !== "stopped") return activity;
+  const parked = activity.outbox.filter(
+    (message) => message.status === "queued" || message.status === "held",
+  );
+  if (parked.length === 0) return activity;
+  let next = activity;
+  for (const message of parked) {
+    next = updateMessage(cancelQueuedRun(next, message.id, now), message.id, {
+      status: "not-sent",
+      runId: null,
+    });
+  }
+  return next;
+}
 
 /** Shown on a message no answer came for and history does not hold. */
 export const UNKNOWN_ERROR =

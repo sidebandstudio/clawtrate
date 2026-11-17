@@ -81,6 +81,7 @@ import {
   cachedSize,
   isTerminal,
   markUnconfirmed,
+  parkAfterStop,
   markQuestion,
   mergeHistoryRuns,
   queueLocalRun,
@@ -1247,7 +1248,8 @@ export class ClawtrateClient {
       !message ||
       (message.status !== "failed" &&
         message.status !== "unconfirmed" &&
-        message.status !== "unknown")
+        message.status !== "unknown" &&
+        message.status !== "not-sent")
     )
       return;
     const transcript = this.state.transcripts[key]!;
@@ -1285,6 +1287,7 @@ export class ClawtrateClient {
         message.status !== "cancelled" &&
         message.status !== "unconfirmed" &&
         message.status !== "unknown" &&
+        message.status !== "not-sent" &&
         message.status !== "handled")
     )
       return;
@@ -2815,6 +2818,11 @@ export class ClawtrateClient {
           ),
         );
       }
+    }
+    // After a confirmed Stop nothing starts by itself: what was held or queued stays, not sent.
+    if (parkAfterStop(transcript, this.now()) !== transcript) {
+      this.updateActivity(key, (activity) => parkAfterStop(activity, this.now()));
+      return;
     }
     const active = activeRun(transcript);
     const held = transcript.outbox

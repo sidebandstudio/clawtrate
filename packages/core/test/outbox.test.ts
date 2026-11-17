@@ -120,8 +120,12 @@ describe("queued messages (F-421, F-420)", () => {
       viewer.apply({ type: "sendQueuedNow", key: KEY, messageId: third.messageId }),
     ).rejects.toThrow(/unavailable while the run stops/);
     gateway.emit("agent", agentEvent("run-x", 3, "lifecycle", { phase: "end", aborted: true }));
-    await until(() => sentTexts(gateway).length === 2);
-    expect(sentTexts(gateway)).toEqual(["now", "third"]);
+    // The stop was confirmed: the queued message stays, not sent (§15–16).
+    await until(
+      () => transcript().outbox.find((m) => m.id === third.messageId)?.status === "not-sent",
+    );
+    await sleep(30);
+    expect(sentTexts(gateway)).toEqual(["now"]);
     viewer.dispose();
     client.stop();
   });
@@ -133,6 +137,46 @@ describe("queued messages (F-421, F-420)", () => {
     client.sendMessage(KEY, "later", { mode: "queue" });
     gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
     await until(() => transcript().outbox[0]?.status === "cancelled");
+    client.stop();
+  });
+});
+
+describe("after a confirmed Stop nothing starts by itself (F-468)", () => {
+  it("keeps queued and held messages as not sent, and Remove and Send act on each", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    start(gateway);
+    gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
+    await until(() => transcript().runs[0]?.state === "waiting");
+    const held = client.sendMessage(KEY, "held one");
+    expect(transcript().outbox[0]!.status).toBe("held");
+    await client.stopRun(KEY, "run-x");
+    const queued = client.sendMessage(KEY, "queued one");
+    expect(transcript().outbox[1]!.status).toBe("queued");
+    gateway.emit("chat", { runId: "run-x", sessionKey: KEY, seq: 9, state: "aborted" });
+    await until(() => transcript().outbox.every((m) => m.status === "not-sent"));
+    await sleep(30);
+    expect(sentTexts(gateway)).toEqual([]);
+    expect(transcript().runs.filter((run) => run.state === "queued")).toEqual([]);
+
+    client.deleteMessage(KEY, held);
+    expect(transcript().outbox.map((m) => m.id)).toEqual([queued]);
+    client.retryMessage(KEY, queued);
+    await until(() => sentTexts(gateway).length === 1);
+    expect(sentTexts(gateway)).toEqual(["queued one"]);
+    client.stop();
+  });
+
+  it("still starts queued messages when the run finished before the stop took effect", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: false, runIds: [] });
+    start(gateway);
+    await until(() => transcript().runs.length === 1);
+    client.sendMessage(KEY, "after it", { mode: "queue" });
+    await client.stopRun(KEY, "run-x");
+    gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end", aborted: false }));
+    await until(() => sentTexts(gateway).length === 1);
+    expect(sentTexts(gateway)).toEqual(["after it"]);
     client.stop();
   });
 });

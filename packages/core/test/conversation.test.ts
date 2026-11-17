@@ -446,7 +446,7 @@ describe("steering and questions (F-096, F-292, F-468)", () => {
 });
 
 describe("queueing and stopping (F-097, F-419, F-420, F-421)", () => {
-  it("queues a message sent while stopping and starts it once the run is stopped", async () => {
+  it("F-468: queues a message sent while stopping; once the stop is confirmed it stays, not sent, until sent again", async () => {
     const { client, gateway, transcript } = await openTask();
     startRun(gateway);
     await until(() => transcript().runs.length === 1);
@@ -467,15 +467,21 @@ describe("queueing and stopping (F-097, F-419, F-420, F-421)", () => {
       state: "aborted",
       stopReason: "rpc",
     });
+    await until(() => transcript().outbox[0]?.status === "not-sent");
+    await sleep(30);
+    // Nothing starts by itself after a confirmed Stop.
+    expect(gateway.calls("chat.send")).toEqual([]);
+    expect(transcript().runs.map((run) => [run.id, run.state])).toEqual([
+      ["run-x", "stopped"],
+      [id, "cancelled"],
+    ]);
+    // Sending it is the person's choice: it starts a run with the same key.
+    client.retryMessage(KEY, id);
     await until(() => gateway.calls("chat.send").length === 1);
     expect(gateway.calls("chat.send")[0]).toMatchObject({
       queueMode: "followup",
       idempotencyKey: id,
     });
-    expect(transcript().runs.map((run) => [run.id, run.state])).toEqual([
-      ["run-x", "stopped"],
-      ["run-1", "running"],
-    ]);
     client.stop();
   });
 
