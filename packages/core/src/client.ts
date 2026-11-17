@@ -30,6 +30,12 @@ import {
   sessionRowsFromList,
   type RawRecord,
 } from "./mapping.ts";
+import {
+  PAIRING_ENDED,
+  pairingOutcome,
+  protocolMessage,
+  protocolMismatch,
+} from "./connect-errors.ts";
 import { createStore, type Store } from "./store.ts";
 import {
   initialConnectionState,
@@ -134,6 +140,10 @@ export class ClawtrateClient {
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapping = false;
   private changedDuringBootstrap = false;
+  /** The pairing request this client last saw pending, and when. */
+  private pairingSeen: { requestId: string; at: number } | null = null;
+  /** The current attempt reached hello. */
+  private attemptGreeted = false;
 
   constructor(host: ClawtrateHost, options: ClientOptions = {}) {
     this.host = host;
@@ -187,6 +197,7 @@ export class ClawtrateClient {
     if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
     const token = options.token?.trim() || null;
     this.settings = { url, token };
+    this.pairingSeen = null;
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
     await this.open();
   }
@@ -195,6 +206,7 @@ export class ClawtrateClient {
   async disconnect(): Promise<void> {
     this.close();
     this.settings = null;
+    this.pairingSeen = null;
     this.rows = new Map();
     await this.host.storage.delete(SETTINGS_KEY);
     this.store.set({
@@ -214,6 +226,17 @@ export class ClawtrateClient {
       return;
     }
     await this.open();
+  }
+
+  /**
+   * Close the connection and keep everything else: the gateway, the device's
+   * pairing and what is on screen. `retryNow` reconnects.
+   */
+  async suspend(): Promise<void> {
+    if (!this.settings) return;
+    this.close();
+    this.clearLiveText();
+    this.setConnection({ status: "disconnected", retryAt: null, error: null, pairing: null });
   }
 
   /** Stop without forgetting anything. Used when the host process exits. */
@@ -341,6 +364,9 @@ export class ClawtrateClient {
           }
           throw new GatewayNotAllowedError(settings.url);
         }
+        this.attemptGreeted = false;
+        // An attempt is under way: no retry is waiting any more.
+        if (this.state.connection.retryAt !== null) this.setConnection({ retryAt: null });
         const socket = this.host.createWebSocket(settings.url);
         socket.onopen = () => handlers.open();
         socket.onmessage = (event) => handlers.message(String(event.data));
@@ -393,6 +419,25 @@ export class ClawtrateClient {
       },
       onHello: (hello) => {
         if (generation !== this.generation) return;
+        this.attemptGreeted = true;
+        if (hello.protocol !== PROTOCOL_VERSION) {
+          // Outside this client's range: nothing else is asked of this gateway.
+          const protocol = { gateway: hello.protocol, client: PROTOCOL_VERSION };
+          this.close();
+          this.setConnection({
+            status: "error",
+            retryAt: null,
+            protocol: hello.protocol,
+            serverVersion: hello.server.version,
+            error: {
+              code: "PROTOCOL_MISMATCH",
+              message: protocolMessage(protocol),
+              hint: null,
+              protocol,
+            },
+          });
+          return;
+        }
         this.handleHello(hello, generation);
       },
       onConnectFailure: async (error) =>
@@ -410,7 +455,21 @@ export class ClawtrateClient {
         const status = this.state.connection.status;
         if (status !== "pairing" && status !== "error") {
           // Once this gateway has answered, every later drop is a reconnect, not a first connect.
-          this.setConnection({ status: this.everConnected ? "reconnecting" : "connecting" });
+          // An attempt that never got an answer says so, unless the gateway gave a reason.
+          const unanswered =
+            !this.attemptGreeted && !this.state.connection.error
+              ? {
+                  error: {
+                    code: "UNREACHABLE",
+                    message: `Nothing answered at ${hostOf(settings.url)}.`,
+                    hint: "Check that the gateway is running and that the address is right.",
+                  },
+                }
+              : {};
+          this.setConnection({
+            status: this.everConnected ? "reconnecting" : "connecting",
+            ...unanswered,
+          });
         }
         this.clearLiveText();
       },
@@ -458,8 +517,38 @@ export class ClawtrateClient {
     const code = typeof details.code === "string" ? details.code : error.gatewayCode;
     const hint = typeof details.remediationHint === "string" ? details.remediationHint : null;
 
+    const mismatch = protocolMismatch(details);
+    if (mismatch) {
+      this.setConnection({
+        status: "error",
+        pairing: null,
+        retryAt: null,
+        error: {
+          code: "PROTOCOL_MISMATCH",
+          message: protocolMessage(mismatch),
+          hint,
+          protocol: mismatch,
+        },
+      });
+      return { closeCode: 1000, closeReason: "protocol mismatch", stop: true };
+    }
+
     if (code === "PAIRING_REQUIRED") {
       const requestId = typeof details.requestId === "string" ? details.requestId : "";
+      // The request this client was waiting on is gone: the gateway's owner
+      // rejected it, or it expired. Stop, and let the user ask again.
+      const outcome = pairingOutcome(this.pairingSeen, requestId, this.now());
+      if (outcome !== "pending") {
+        this.pairingSeen = null;
+        this.setConnection({
+          status: "error",
+          pairing: null,
+          retryAt: null,
+          error: { ...PAIRING_ENDED[outcome], hint: null },
+        });
+        return { closeCode: 1000, closeReason: `pairing ${outcome}`, stop: true };
+      }
+      if (requestId) this.pairingSeen = { requestId, at: this.now() };
       const scopes = Array.isArray(details.requestedScopes)
         ? details.requestedScopes.filter((s): s is string => typeof s === "string")
         : [...REQUESTED_SCOPES];
@@ -512,6 +601,7 @@ export class ClawtrateClient {
 
   private handleHello(hello: HelloOk, generation: number): void {
     this.everConnected = true;
+    this.pairingSeen = null;
     this.setConnection({
       status: "connected",
       serverVersion: hello.server.version,
@@ -539,17 +629,22 @@ export class ClawtrateClient {
     this.bootstrapping = true;
     this.changedDuringBootstrap = false;
     this.setDiscovery({ status: "loading", error: null });
+    // Bots are published as soon as they arrive, so the app can open on them
+    // while tasks are still loading.
     const [agents, sessions] = await Promise.allSettled([
-      this.request("agents.list", {}),
+      this.request("agents.list", {}).then((result) => {
+        if (generation === this.generation) {
+          this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+        }
+        return result;
+      }),
       this.loadAllSessions(generation, "sessions.subscribe"),
     ]);
     this.bootstrapping = false;
     if (generation !== this.generation) return;
 
     const failures: string[] = [];
-    if (agents.status === "fulfilled") {
-      this.store.update((state) => ({ ...state, bots: mapAgents(agents.value) }));
-    } else {
+    if (agents.status !== "fulfilled") {
       failures.push(`bots: ${errorMessage(agents.reason)}`);
     }
     if (sessions.status === "fulfilled") {
@@ -833,6 +928,14 @@ export class ClawtrateClient {
 
   private log(level: "debug" | "info" | "warn" | "error", message: string): void {
     this.host.log?.(level, message);
+  }
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
   }
 }
 

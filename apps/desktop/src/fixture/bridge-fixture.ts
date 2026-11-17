@@ -23,6 +23,7 @@ export const FIXTURE_INFO: HostInfo = {
   kind: "web",
   version: "0.1.0",
   devGateway: { url: "ws://127.0.0.1:19001" },
+  deviceName: "Clawtrate Web",
 };
 
 const GATEWAY_URL = "ws://127.0.0.1:18789";
@@ -52,6 +53,12 @@ export const SCENES = [
   "partial",
   "zero-tasks",
   "task-states",
+  "protocol-mismatch",
+  "pairing-rejected",
+  "pairing-expired",
+  "connect-unreachable",
+  "disconnected",
+  "offline-unreachable",
 ] as const;
 
 export type SceneName = (typeof SCENES)[number];
@@ -104,6 +111,12 @@ function pairing(): ClawtrateState {
     },
   };
 }
+
+const UNREACHABLE = {
+  code: "UNREACHABLE",
+  message: "Nothing answered at 127.0.0.1:18789.",
+  hint: "Check that the gateway is running and that the address is right.",
+};
 
 const withConnection = (state: ClawtrateState, change: Partial<ConnectionState>) => ({
   ...state,
@@ -289,6 +302,60 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: { ...base, discovery: { ...base.discovery, partial: true } }, steps: [] };
     case "zero-tasks":
       return { initial: { ...base, tasksByBot: { ...base.tasksByBot, marlow: [] } }, steps: [] };
+    case "protocol-mismatch":
+      return {
+        initial: withConnection(base, {
+          status: "error",
+          retryAt: null,
+          protocol: 5,
+          serverVersion: "2027.2.1",
+          error: {
+            code: "PROTOCOL_MISMATCH",
+            message: "This gateway speaks protocol 5. This version of Clawtrate speaks protocol 4.",
+            hint: null,
+            protocol: { gateway: 5, client: 4 },
+          },
+        }),
+        steps: [],
+      };
+    case "pairing-rejected":
+    case "pairing-expired":
+      return {
+        initial: withConnection(idle(), {
+          status: "error",
+          gatewayUrl: GATEWAY_URL,
+          error:
+            name === "pairing-rejected"
+              ? {
+                  code: "PAIRING_REJECTED",
+                  message: "The gateway's owner rejected this device's pairing request.",
+                  hint: null,
+                }
+              : {
+                  code: "PAIRING_EXPIRED",
+                  message: "Nobody approved this device's pairing request in time.",
+                  hint: null,
+                },
+        }),
+        steps: [],
+      };
+    case "connect-unreachable":
+      return {
+        initial: withConnection(idle(), {
+          status: "connecting",
+          gatewayUrl: GATEWAY_URL,
+          retryAt: Date.now() + 4000,
+          error: UNREACHABLE,
+        }),
+        steps: [],
+      };
+    case "disconnected":
+      return { initial: withConnection(base, { status: "disconnected" }), steps: [] };
+    case "offline-unreachable":
+      return {
+        initial: withConnection(reconnecting(base), { error: UNREACHABLE }),
+        steps: [],
+      };
     case "task-states":
       return { initial: { ...base, tasksByBot: withTaskStates(base.tasksByBot) }, steps: [] };
   }
@@ -329,6 +396,9 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
       case "disconnect":
         set(idle());
         return;
+      case "suspend":
+        set(withConnection(state, { status: "disconnected", retryAt: null, error: null }));
+        return;
       case "retry": {
         const { status } = state.connection;
         if (status === "pairing") {
@@ -340,6 +410,23 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
           return;
         }
         if (status === "connected" && state.discovery.status !== "error") return;
+        const code = state.connection.error?.code ?? "";
+        if (code.startsWith("PAIRING_")) {
+          // Trying again sends a new pairing request.
+          set(withConnection(idle(), { status: "connecting", gatewayUrl: GATEWAY_URL }));
+          setTimeout(() => set(pairing()), 400);
+          return;
+        }
+        if (code === "PROTOCOL_MISMATCH") {
+          // The handshake is repeated, and the gateway still speaks another protocol.
+          const mismatch = state;
+          set(withConnection(state, { status: "connecting", error: null }));
+          setTimeout(() => set(mismatch), 400);
+          return;
+        }
+        // An attempt is under way, then the gateway answers.
+        set(withConnection(state, { status: "reconnecting", retryAt: null, error: null }));
+        await new Promise((resolve) => setTimeout(resolve, 300));
         set(catchingUp(state));
         setTimeout(() => set(caughtUp(state)), 700);
         return;

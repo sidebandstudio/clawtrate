@@ -34,6 +34,8 @@ export function Shell({
   bubbles,
   onBubbles,
   onUnreadCount,
+  onOpenSettings,
+  inert = false,
 }: {
   state: ClawtrateState;
   theme: ThemeChoice;
@@ -41,6 +43,9 @@ export function Shell({
   bubbles: BubbleChoice;
   onBubbles: (choice: BubbleChoice) => void;
   onUnreadCount?: ((count: number) => void) | undefined;
+  onOpenSettings: () => void;
+  /** Set while Settings covers the shell. */
+  inert?: boolean;
 }) {
   const send = useCommand();
   const selection = useSelection(state);
@@ -194,6 +199,7 @@ export function Shell({
       ref={shellRef}
       data-panel={panelOpen ? "open" : "closed"}
       data-view={view}
+      inert={inert}
     >
       <Rail
         bots={state.bots}
@@ -209,7 +215,8 @@ export function Shell({
         onTheme={onTheme}
         bubbles={bubbles}
         onBubbles={onBubbles}
-        inert={drawerOpen}
+        onOpenSettings={onOpenSettings}
+        inert={drawerOpen || inert}
       />
       <div className="main-pane" ref={mainRef}>
         <Conversation
@@ -237,7 +244,7 @@ export function Shell({
           readOnly={!canWrite(state.connection)}
           online={state.connection.status === "connected"}
           toggleRef={toggleRef}
-          inert={drawerOpen}
+          inert={drawerOpen || inert}
         />
         <button
           type="button"

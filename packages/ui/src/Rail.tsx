@@ -56,6 +56,8 @@ export function presenceWords(connection: ConnectionState, catchingUp: boolean):
       return "Can't reach the gateway";
     case "idle":
       return "Not connected";
+    case "disconnected":
+      return "Disconnected";
   }
 }
 
@@ -239,6 +241,7 @@ export function Rail({
   onTheme,
   bubbles,
   onBubbles,
+  onOpenSettings,
   inert,
 }: {
   bots: Bot[];
@@ -258,6 +261,7 @@ export function Rail({
   onTheme: (choice: ThemeChoice) => void;
   bubbles: BubbleChoice;
   onBubbles: (choice: BubbleChoice) => void;
+  onOpenSettings: () => void;
   inert: boolean;
 }) {
   const send = useCommand();
@@ -584,6 +588,15 @@ export function Rail({
       },
     })),
     { kind: "rule" },
+    {
+      kind: "item",
+      label: "Settings",
+      icon: <SettingsIcon />,
+      onSelect: () => {
+        setMenu(null);
+        onOpenSettings();
+      },
+    },
     {
       kind: "item",
       label: "Disconnect",

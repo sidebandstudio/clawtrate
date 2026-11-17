@@ -10,6 +10,8 @@ export type BridgeCommand =
   /** Connect to the local development gateway. The host supplies its token. */
   | { type: "connectDevGateway" }
   | { type: "disconnect" }
+  /** Close the connection and keep the gateway and the pairing, until `retry` reconnects. */
+  | { type: "suspend" }
   | { type: "retry" }
   | { type: "openSession"; key: string }
   | { type: "closeSession"; key: string };
@@ -19,6 +21,8 @@ export type HostInfo = {
   version: string;
   /** Set when the host was started against the local development gateway. */
   devGateway: { url: string } | null;
+  /** The name this device gives the gateway when it pairs, for example "Clawtrate Desktop". */
+  deviceName?: string;
 };
 
 /** Renderer-side view of the bridge, implemented over IPC or a WebSocket. */
@@ -61,6 +65,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     }
     case "connectDevGateway":
     case "disconnect":
+    case "suspend":
     case "retry":
       return { type: command.type };
     case "openSession":
@@ -109,6 +114,8 @@ export function createBridgeSession(
           return client.connect(policy.devGateway);
         case "disconnect":
           return client.disconnect();
+        case "suspend":
+          return client.suspend();
         case "retry":
           return client.retryNow();
         case "openSession":

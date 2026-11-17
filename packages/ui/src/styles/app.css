@@ -2724,3 +2724,142 @@ textarea {
 ::highlight(clawtrate-find-current) {
   background-color: color-mix(in srgb, currentColor 32%, transparent);
 }
+
+/* Setting up a gateway: connecting, pairing this device, loading its bots. */
+.setup-steps {
+  display: grid;
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 4px auto 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+.setup-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+
+.setup-steps li[data-state="current"] {
+  color: var(--text);
+}
+
+.setup-steps li[data-state="pending"] {
+  color: var(--text-faint);
+}
+
+.setup-steps .status-dot {
+  margin: 0 2px;
+}
+
+.form-error .button {
+  margin-top: 8px;
+}
+
+/* Done: a check on a disc. */
+.glyph[data-state="done"] {
+  background: var(--ring);
+}
+
+.glyph[data-state="done"]::after {
+  top: 2.4px;
+  left: 4.1px;
+  width: 3.2px;
+  height: 5.6px;
+  border: solid var(--glyph-ink);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(40deg);
+}
+
+/* Queued: a hollow ring. */
+.glyph[data-state="queued"]::after {
+  inset: 1.5px;
+  border: 1.5px solid var(--text-faint);
+  border-radius: 50%;
+}
+
+/* Disconnected by the user: a still, neutral dot. */
+.status-strip[data-tone="off"] .status-dot,
+.status-dot[data-status="disconnected"],
+.status-dot[data-status="idle"] {
+  background: var(--text-faint);
+}
+
+/* Settings: a dialog over either screen. */
+.settings-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.settings-scrim {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: var(--bg-scrim);
+  cursor: default;
+}
+
+.settings {
+  position: relative;
+  width: min(520px, 100%);
+  max-height: calc(100% - 32px);
+  overflow: auto;
+  padding: 18px 20px 22px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.settings-head h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.settings-pane h3 {
+  margin: 0 0 8px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text-faint);
+}
+
+.settings .facts dd {
+  text-align: right;
+}
+
+.settings-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.settings-note {
+  margin: 12px 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}

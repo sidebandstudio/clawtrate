@@ -109,6 +109,19 @@ export const STATE_SCENES: StateScene[] = [
       await page.keyboard.press("Enter");
     },
   },
+  { name: "setup-connecting", query: "scene=connect-unreachable" },
+  { name: "setup-loading-bots", query: "scene=discovering" },
+  { name: "pairing-rejected", query: "scene=pairing-rejected" },
+  { name: "protocol-mismatch", query: `scene=protocol-mismatch&${OTTO_DISK}` },
+  { name: "disconnected", query: `scene=disconnected&${OTTO_DISK}` },
+  {
+    name: "settings",
+    query: `scene=offline-unreachable&${OTTO_DISK}`,
+    prepare: async (page) => {
+      await page.keyboard.press("ControlOrMeta+,");
+      await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+    },
+  },
   {
     name: "bot-search",
     query: `scene=main&${OTTO_DISK}`,

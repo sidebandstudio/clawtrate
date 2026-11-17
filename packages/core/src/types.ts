@@ -11,7 +11,9 @@ export type ConnectionStatus =
   /** Was connected, lost the socket, and is retrying with backoff. */
   | "reconnecting"
   /** Stopped retrying; needs the user to act. */
-  | "error";
+  | "error"
+  /** The user disconnected; the gateway and the pairing are kept until they reconnect. */
+  | "disconnected";
 
 export type PairingRequest = {
   requestId: string;
@@ -24,7 +26,13 @@ export type PairingRequest = {
   requestedScopes: string[];
 };
 
-export type ConnectionError = { code: string; message: string; hint: string | null };
+export type ConnectionError = {
+  code: string;
+  message: string;
+  hint: string | null;
+  /** For `PROTOCOL_MISMATCH`: the protocol the gateway speaks, and the one this client speaks. */
+  protocol?: { gateway: number | null; client: number };
+};
 
 export type ConnectionState = {
   status: ConnectionStatus;

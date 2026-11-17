@@ -171,6 +171,7 @@ export async function startHostRuntime(options: {
     info: {
       kind: options.kind,
       version: APP_VERSION,
+      deviceName: options.displayName,
       devGateway: devGateway ? { url: devGateway.url } : null,
     },
     policy: { devGateway },
