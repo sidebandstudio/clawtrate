@@ -2702,21 +2702,41 @@ export class ClawtrateClient {
       : Math.min(MAX_HISTORY_READ_CHARS, Math.max(GATEWAY_HISTORY_TEXT_CHARS, known + 64));
     const history = await this.readHistoryWhole(key, maxChars);
     const current = this.state.transcripts[key];
-    if (!current || !find()) return null;
+    const shown = find();
+    const run = current?.runs.find((each) => each.steps.some((one) => one.id === stepId));
+    if (!current || !shown || !run) return null;
     // Rebuilt aside, as a resync would, into a table dropped after this read.
     const scratch = new RawTable(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
     const ctx = { ...this.context(key), raw: scratch };
-    // The same function names the step in the rebuild as here: its payload is under the same id.
+    const windowCut = history?.hasMore === true;
     const fromHistory = runsFromHistory(history?.messages, asRecord(history?.inFlightRun), ctx, {
-      windowCut: history?.hasMore === true,
+      windowCut,
     });
     const whole = scratch.get(key, stepId);
-    const read = fromHistory.flatMap((run) => run.steps).find((each) => each.id === stepId);
-    if (!whole || !read) {
+    const read = fromHistory.flatMap((each) => each.steps).find((each) => each.id === stepId);
+    // A step's id is its place, which history can give another block: what was fetched is
+    // this step only when it shows so. This check only ever withholds `available`.
+    const same = whole !== null && read !== undefined && sameStep(shown, read, whole);
+    // Its message replaced by the gateway's placeholder: not a cut text, and asking again does not help.
+    if ((!same || read.truncated) && oversizedWhere(history?.messages, run.id, shown, windowCut)) {
+      return {
+        status: "too-large-for-gateway",
+        reason:
+          "The gateway replaces a message this large with a placeholder in its history and will not return its text in full.",
+      };
+    }
+    if (!same) {
+      if (whole && read) {
+        return {
+          status: "not-established",
+          reason:
+            "What the gateway's history returned at this step's place could not be shown to be this step, so it is not offered as its text.",
+        };
+      }
       return {
         status: "not-available-yet",
         reason:
-          "This step's whole text was too long to keep here, and the gateway's history did not return it: it may not hold it yet, or its page was too large to include it.",
+          "This step's whole text was too long to keep here, and the gateway's history did not return it: it may not hold it yet, or its page was too large to include it. Trying again later may help.",
       };
     }
     if (read.truncated) {
@@ -3854,6 +3874,82 @@ function strongerResync(
   if (!a) return b;
   if (!b) return a;
   return RESYNC_STRENGTH[b] > RESYNC_STRENGTH[a] ? b : a;
+}
+
+/**
+ * Whether a step rebuilt from history is the step shown: for a tool, the
+ * gateway's own call id; for reasoning, the fetched text begins with the text
+ * the shown step holds (which keeps the beginning of its text).
+ */
+function sameStep(
+  shown: Run["steps"][number],
+  read: Run["steps"][number],
+  whole: StepRaw,
+): boolean {
+  if (shown.kind === "tool")
+    return (
+      read.kind === "tool" && shown.toolCallId !== null && read.toolCallId === shown.toolCallId
+    );
+  const thinking = asRecord(whole.call)?.thinking;
+  return (
+    read.kind === "reasoning" &&
+    typeof thinking === "string" &&
+    thinking.startsWith(shown.output?.text ?? "")
+  );
+}
+
+/**
+ * Whether the history the gateway returned replaced the message that holds a
+ * step with its oversized placeholder (`__openclaw.truncated` with reason
+ * `oversized`, for a message above its 131,072-byte limit, whatever
+ * `maxChars` asked): a tool result naming the step's call, or an assistant
+ * message of the step's run where the step's reasoning anchor is in effect.
+ */
+function oversizedWhere(
+  messages: unknown,
+  runId: string,
+  step: Run["steps"][number],
+  windowCut: boolean,
+): boolean {
+  const rows = Array.isArray(messages) ? messages : [];
+  const oversized = (row: RawRecord) => {
+    const meta = asRecord(row.__openclaw);
+    return meta?.truncated === true && meta.reason === "oversized";
+  };
+  if (step.kind === "tool") {
+    return rows.some((entry) => {
+      const row = asRecord(entry);
+      return (
+        row !== null &&
+        oversized(row) &&
+        (row.toolCallId ?? row.tool_call_id ?? row.toolUseId ?? row.tool_use_id) === step.toolCallId
+      );
+    });
+  }
+  // The step's anchor, from its id: `reasoning:<runId>:<anchor>:<n>`.
+  const prefix = `reasoning:${runId}:`;
+  if (!step.id.startsWith(prefix)) return false;
+  const rest = step.id.slice(prefix.length);
+  const anchor = rest.slice(0, rest.lastIndexOf(":"));
+  const first = asRecord(rows[0]);
+  let current =
+    windowCut && first && first.role !== "user" && asRecord(first.__openclaw)?.runId === runId
+      ? "c"
+      : "s";
+  for (const entry of rows) {
+    const row = asRecord(entry);
+    if (!row || asRecord(row.__openclaw)?.runId !== runId || row.role !== "assistant") continue;
+    if (oversized(row) && current === anchor) return true;
+    for (const part of Array.isArray(row.content) ? row.content : []) {
+      const block = asRecord(part);
+      if (
+        (block?.type === "toolCall" || block?.type === "tool_use") &&
+        typeof block.id === "string"
+      )
+        current = `t.${block.id}`;
+    }
+  }
+  return false;
 }
 
 /** A count a host sets: the default when it sets none, and never above it. */

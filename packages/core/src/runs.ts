@@ -455,9 +455,23 @@ export type StepRead =
   /**
    * History holds the step, but the gateway cut its row to a display length
    * even at the length asked for (`__openclaw.truncated`): `raw` is what it
-   * sent, a prefix of what it stored, `receivedChars` that text's length.
+   * sent, the beginning of what it stored with the gateway's own marker after
+   * it, and `receivedChars` the length of the longest text the rebuilt step
+   * exposes (its arguments, output or result), not of the raw payload.
    */
-  | { status: "cut-by-gateway"; raw: StepRaw; receivedChars: number; reason: string };
+  | { status: "cut-by-gateway"; raw: StepRaw; receivedChars: number; reason: string }
+  /**
+   * History returned something at this step's place, but nothing shows it is
+   * this step (a reasoning text that does not begin with the step's own, a
+   * different call id): it is not offered as the step's text.
+   */
+  | { status: "not-established"; reason: string }
+  /**
+   * The gateway replaced the message that holds this step with its
+   * oversized placeholder (a message above its 131,072-byte limit): it will
+   * not return this text in full, so asking again does not help.
+   */
+  | { status: "too-large-for-gateway"; reason: string };
 
 /** Full raw payloads, keyed by task and step id. Owned by the client, never snapshotted. */
 export class RawTable {

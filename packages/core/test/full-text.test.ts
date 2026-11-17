@@ -584,3 +584,153 @@ describe("a whole read from history (C2)", () => {
     }
   });
 });
+
+/** The gateway's placeholder for a message above its 131,072-byte limit (OpenClaw 2026.10.6). */
+const oversizedPlaceholder = (
+  meta: Record<string, unknown>,
+  extra: Record<string, unknown> = {},
+) => ({
+  role: "assistant",
+  content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+  ...extra,
+  __openclaw: { ...meta, truncated: true, reason: "oversized" },
+});
+
+describe("a whole read answers only for the step shown (R7-3)", () => {
+  const thinkingRow = (thinking: string, seq: number) => ({
+    role: "assistant",
+    content: [{ type: "thinking", thinking }],
+    stopReason: "stop",
+    __openclaw: { id: `a${seq}`, seq, runId: "r" },
+  });
+
+  it("a whole read does not substitute an unseen earlier reasoning block for the selected card", async () => {
+    const { client, gateway, transcript } = await openTask();
+    try {
+      // The live stream missed the first block; the card shows the second, too long to keep.
+      const shown = "second:".padEnd(300_000, "s");
+      gateway.emit("agent", agentEvent("r", 1, "thinking", { text: shown }));
+      await until(() => transcript().runs[0]?.steps.length === 1);
+      const step = transcript().runs[0]!.steps[0]!;
+      // History holds the missed first block at the card's place, and the second as the gateway's placeholder.
+      gateway.handlers["chat.history"] = () => ({
+        messages: [
+          thinkingRow("first, missed while disconnected", 1),
+          oversizedPlaceholder({ id: "a2", seq: 2, runId: "r" }),
+        ],
+        inFlightRun: { runId: "r" },
+      });
+      const read = await client.readStepRaw(KEY, step.id);
+      expect(read?.status).not.toBe("available");
+      // The card's own message is the placeholder: the gateway will not return it, so asking again does not help.
+      expect(read).toEqual({ status: "too-large-for-gateway", reason: expect.any(String) });
+      expect(transcript().runs[0]!.steps[0]!.output!.text.startsWith("second:")).toBe(true);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("says it could not establish the step when history holds another block at its place", async () => {
+    const { client, gateway, transcript } = await openTask();
+    try {
+      gateway.emit(
+        "agent",
+        agentEvent("r", 1, "thinking", { text: "second:".padEnd(300_000, "s") }),
+      );
+      await until(() => transcript().runs[0]?.steps.length === 1);
+      const step = transcript().runs[0]!.steps[0]!;
+      gateway.handlers["chat.history"] = () => ({
+        messages: [thinkingRow("first, missed while disconnected", 1)],
+        inFlightRun: { runId: "r" },
+      });
+      expect(await client.readStepRaw(KEY, step.id)).toEqual({
+        status: "not-established",
+        reason: expect.any(String),
+      });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("says the gateway will not return a reasoning message above its single-message limit", async () => {
+    const gateway = grantingGateway();
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      const whole = "r".repeat(300_000);
+      gateway.emit("agent", agentEvent("large", 1, "thinking", { text: whole }));
+      await until(() => transcript().runs[0]?.steps.length === 1);
+      const step = transcript().runs[0]!.steps[0]!;
+      // The display cap at `maxChars`, then the 131,072-byte single-message limit, as the gateway applies them.
+      gateway.handlers["chat.history"] = (params) => {
+        const cap = (params as { maxChars?: number }).maxChars ?? 8_000;
+        const message = {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: whole.length <= cap ? whole : `${whole.slice(0, cap)}\n...(truncated)...`,
+            },
+          ],
+          stopReason: "stop",
+          __openclaw: { id: "a1", seq: 1, runId: "large" },
+        };
+        return {
+          messages: [
+            JSON.stringify(message).length > 131_072
+              ? oversizedPlaceholder({ id: "a1", seq: 1, runId: "large" })
+              : message,
+          ],
+        };
+      };
+      const first = await client.readStepRaw(KEY, step.id);
+      expect(first).toEqual({ status: "too-large-for-gateway", reason: expect.any(String) });
+      expect(await client.readStepRaw(KEY, step.id)).toEqual(first);
+      // A step history does not hold yet is still "not available yet": waiting can help there.
+      gateway.handlers["chat.history"] = () => ({ messages: [] });
+      expect((await client.readStepRaw(KEY, step.id))?.status).toBe("not-available-yet");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("says the same of a tool result the gateway replaced, by its call id", async () => {
+    const gateway = grantingGateway();
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      const output = "o".repeat(300_000);
+      gateway.emit(
+        "agent",
+        agentEvent("r", 1, "tool", { phase: "start", name: "exec", toolCallId: "c1", args: {} }),
+      );
+      gateway.emit(
+        "agent",
+        agentEvent("r", 2, "tool", {
+          phase: "result",
+          name: "exec",
+          toolCallId: "c1",
+          isError: false,
+          result: { content: [{ type: "text", text: output }], details: {} },
+        }),
+      );
+      await until(() => transcript().runs[0]?.steps[0]?.status === "done");
+      const step = transcript().runs[0]!.steps[0]!;
+      gateway.handlers["chat.history"] = () => ({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "c1", name: "exec", arguments: {} }],
+            __openclaw: { id: "a1", seq: 1, runId: "r" },
+          },
+          oversizedPlaceholder(
+            { id: "t1", seq: 2, runId: "r" },
+            { role: "toolResult", toolCallId: "c1" },
+          ),
+        ],
+        inFlightRun: { runId: "r" },
+      });
+      expect((await client.readStepRaw(KEY, step.id))?.status).toBe("too-large-for-gateway");
+    } finally {
+      client.stop();
+    }
+  });
+});
