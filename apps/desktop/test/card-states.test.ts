@@ -431,22 +431,58 @@ describe("Messaged T3 Code cards from the engine's state", () => {
     expect(cards("t3-failed").selected.mcpCalls[0]!.error).toMatch(/ECONNREFUSED/);
   });
 
-  it("F-132 F-134: before its result names it, a call is an ordinary tool step, not a T3 Code card", () => {
-    for (const name of [
-      "t3-started",
-      "t3-approval",
-      "t3-delivery-unknown",
-      "t3-not-sent",
-    ] as const) {
+  it("F-132 F-134: with the gateway's map, a call is the T3 Code card from its start, in each state before a result; without it, an ordinary step", () => {
+    const expected: Array<[CardSceneName, string]> = [
+      ["t3-started", "call-started"],
+      ["t3-approval", "approval"],
+      ["t3-delivery-unknown", "delivery-unknown"],
+      ["t3-not-sent", "not-sent"],
+    ];
+    for (const [name, key] of expected) {
       const { transcript, selected } = cards(name);
-      expect(selected.mcpCalls, name).toEqual([]);
+      expect(transcript.mcpTools, name).toEqual({
+        [`${T3_SERVER}__t3_thread_launch`]: { server: T3_SERVER, tool: "t3_thread_launch" },
+      });
+      const calls = selected.mcpCalls.filter((card) => card.codingAgent);
+      expect(calls, name).toHaveLength(1);
+      const step = transcript.runs[0]!.steps.find((each) => each.id === calls[0]!.stepId);
+      expect(mcpKey(calls[0]!, transcript.approvals, step?.status === "waiting"), name).toBe(key);
+      // No map: nothing identifies the call before its result.
+      const bare = selectCards({ ...transcript, mcpTools: {} }, [], rawOf);
       expect(
-        transcript.runs[0]!.steps.some(
-          (step) => step.toolName === `${T3_SERVER}__t3_thread_launch`,
-        ),
+        bare.mcpCalls.filter((card) => card.codingAgent),
         name,
-      ).toBe(true);
+      ).toEqual([]);
     }
+  });
+
+  it("F-132 F-134: the result overrules the map: another tool named is an ordinary step; a result naming none never makes Call made", () => {
+    const { transcript } = cards("t3-call-made");
+    const steps = transcript.runs[0]!.steps;
+    const withResult = (result: Record<string, unknown> | null, status: Step["status"]) => ({
+      ...transcript,
+      runs: transcript.runs.map((run) => ({
+        ...run,
+        steps: steps.map((step) => ({
+          ...step,
+          status,
+          raw: step.raw ? { ...step.raw, result } : null,
+        })),
+      })),
+    });
+    const t3 = (t: Parameters<typeof selectCards>[0]) =>
+      selectCards(t, [], rawOf).mcpCalls.filter((card) => card.codingAgent);
+    // Its own result names T3 Code's tool: Call made.
+    expect(t3(transcript)).toMatchObject([{ state: "returned" }]);
+    // The map named T3 Code, the result names another tool: an ordinary step.
+    const other = { mcpServer: T3_SERVER, mcpTool: "t3_project_list_v2" };
+    expect(t3(withResult({ result: { content: [], details: other } }, "done"))).toEqual([]);
+    // A result naming no tool, as history keeps it: never Call made on the map's word.
+    expect(t3(withResult({ content: [{ type: "text", text: "ok" }] }, "done"))).toEqual([]);
+    // A failure naming no tool keeps the map's word.
+    expect(
+      t3(withResult({ content: [{ type: "text", text: "Denied." }], isError: true }, "failed")),
+    ).toMatchObject([{ state: "failed" }]);
   });
 
   it("F-134 F-470: with the gateway's map of effective names, each state before a result says only what the events establish", () => {
@@ -1031,9 +1067,11 @@ describe("a T3 Code card's state moves only as its own call's events establish",
       ...transcript,
       runs: transcript.runs.map((run) => ({ ...run, steps: made.runs[0]!.steps })),
     });
-    // In the app: no card while nothing names the call, then Call made.
+    // In the app, with the gateway's map: Delivery unknown, then Call made when the result names it.
     const stopped = cards("t3-delivery-unknown");
-    expect(stopped.selected.mcpCalls).toEqual([]);
+    expect(stopped.selected.mcpCalls.filter((card) => card.codingAgent)).toMatchObject([
+      { state: "unknown" },
+    ]);
     const shown = selectCards(withResult(stopped.transcript), [], rawOf, stopped.selected);
     expect(shown.mcpCalls.filter((card) => card.codingAgent)).toMatchObject([
       { state: "returned" },

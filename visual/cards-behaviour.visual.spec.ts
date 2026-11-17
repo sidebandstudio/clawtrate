@@ -1,7 +1,7 @@
 // How the cards behave in the fixture mode (conversation.md sections 9 to 13):
 // decisions and answers go through the bridge to the engine's reducers, and
 // the cards show only what the engine's state establishes.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { contextFor, openFixture, settle, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
@@ -1023,7 +1023,15 @@ test.describe("Messaged cards", () => {
     for (const scene of ["messaged-sent", "messaged-replied", "messaged-no-reply"]) {
       expect(await verb(scene, "messaged-card"), scene).toBe("sent");
     }
-    expect(await verb("t3-failed", "t3-card")).toBe("asked to send");
+    for (const scene of [
+      "t3-started",
+      "t3-approval",
+      "t3-delivery-unknown",
+      "t3-failed",
+      "t3-not-sent",
+    ]) {
+      expect(await verb(scene, "t3-card"), scene).toBe("asked to send");
+    }
     expect(await verb("t3-call-made", "t3-card")).toBe("sent");
     await openFixture(page, "scene=received-completed", "light");
     const received = page.getByTestId("received-card");
@@ -1181,7 +1189,7 @@ test.describe("Messaged cards", () => {
     const state = page.getByTestId("messaged-card").locator("summary .state");
     await expect(state).toHaveText("Last seen working");
     await expect(state.locator(".glyph")).toHaveCSS("animation-name", "none");
-    for (const scene of ["messaged-working", "messaged-approval"]) {
+    for (const scene of ["messaged-working", "t3-started", "messaged-approval"]) {
       await page.goto(`/?scene=${scene}&theme=light&motion=reduce`);
       await page.locator(".app").waitFor();
       const glyph = page.locator(".card summary .state .glyph").first();
@@ -1201,20 +1209,20 @@ type FixtureStep = {
   raw: Record<string, unknown> | null;
 };
 type FixtureState = {
-  transcripts: Record<string, { items: unknown[]; runs: Array<{ steps: FixtureStep[] }> }>;
+  transcripts: Record<
+    string,
+    { items: unknown[]; runs: Array<{ steps: FixtureStep[] }>; mcpTools: unknown }
+  >;
 };
+const TASK = "agent:otto:transcode-cache";
 
-test.describe("Messaged T3 Code cards", () => {
-  test.use(contextFor(WIDE, "light"));
-
-  test("F-134: when a step becomes the T3 Code card, the reading line holds, and the card is open, with Raw, and focused as the step was", async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: 1440, height: 640 });
-    await openFixture(page, "scene=t3-approval", "light");
-    const key = "agent:otto:transcode-cache";
-    // The call as history holds it before its result: an ordinary tool step, with text after it.
-    await page.evaluate((key) => {
+/**
+ * The call as history holds it before its result: an ordinary tool step, with
+ * text after it. `map` keeps the gateway's map of tool names, or clears it.
+ */
+async function historyStep(page: Page, map: boolean): Promise<void> {
+  await page.evaluate(
+    ({ key, map }) => {
       const fixture = (
         window as unknown as {
           clawtrateFixture: { setState(change: (s: FixtureState) => unknown): void };
@@ -1230,6 +1238,7 @@ test.describe("Messaged T3 Code cards", () => {
             ...s.transcripts,
             [key]: {
               ...t,
+              mcpTools: map ? t.mcpTools : {},
               items: [
                 ...t.items,
                 {
@@ -1252,32 +1261,15 @@ test.describe("Messaged T3 Code cards", () => {
           },
         };
       });
-    }, key);
-    const step = page.getByTestId("tool-call");
-    await page.locator(".steps > summary").click();
-    await step.locator("summary").click();
-    await expect(step).toHaveAttribute("open", "");
-    // The card below, open; the reader at a marked line: the approval's title at the reading line.
-    const approval = page.getByTestId("approval-card");
-    await approval.getByText("Show full request").click();
-    const marked = approval.locator(".request-title");
-    await marked.evaluate((title) => {
-      const scroller = title.closest<HTMLElement>('[data-testid="transcript"]')!;
-      const band = Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
-      scroller.scrollTop +=
-        title.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
-      scroller.dispatchEvent(new Event("scroll"));
-    });
-    // Focus back in the step, as a reader reading it would leave it.
-    await step
-      .locator("summary")
-      .evaluate((summary: HTMLElement) => summary.focus({ preventScroll: true }));
-    await settle(page);
-    const before = (await marked.boundingBox())!.y;
-    await expect(page.getByTestId("t3-card")).toHaveCount(0);
+    },
+    { key: TASK, map },
+  );
+}
 
-    // The call's result names T3 Code's tool.
-    await page.evaluate((key) => {
+/** The call's result arrives, naming `tool` as its own. */
+async function resultNaming(page: Page, tool: string): Promise<void> {
+  await page.evaluate(
+    ({ key, tool }) => {
       const fixture = (
         window as unknown as {
           clawtrateFixture: { setState(change: (s: FixtureState) => unknown): void };
@@ -1285,7 +1277,7 @@ test.describe("Messaged T3 Code cards", () => {
       ).clawtrateFixture;
       fixture.setState((s) => {
         const t = s.transcripts[key]!;
-        const details = { mcpServer: "t3code", mcpTool: "t3_thread_launch" };
+        const details = { mcpServer: "t3code", mcpTool: tool };
         return {
           ...s,
           transcripts: {
@@ -1315,7 +1307,50 @@ test.describe("Messaged T3 Code cards", () => {
           },
         };
       });
-    }, key);
+    },
+    { key: TASK, tool },
+  );
+}
+
+/** Put a line at the reading line, just under the protected band at the top. */
+async function toReadingLine(line: Locator): Promise<void> {
+  await line.evaluate((element) => {
+    const scroller = element.closest<HTMLElement>('[data-testid="transcript"]')!;
+    const band = Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
+    scroller.scrollTop +=
+      element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
+    scroller.dispatchEvent(new Event("scroll"));
+  });
+}
+
+test.describe("Messaged T3 Code cards", () => {
+  test.use(contextFor(WIDE, "light"));
+
+  test("F-134: when a step becomes the T3 Code card, the reading line holds, and the card is open, with Raw, and focused as the step was", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 640 });
+    await openFixture(page, "scene=t3-approval", "light");
+    // No map from the gateway: the call is an ordinary step until its result names it.
+    await historyStep(page, false);
+    const step = page.getByTestId("tool-call");
+    await page.locator(".steps > summary").click();
+    await step.locator("summary").click();
+    await expect(step).toHaveAttribute("open", "");
+    // The card below, open; the reader at a marked line: the approval's title at the reading line.
+    const approval = page.getByTestId("approval-card");
+    await approval.getByText("Show full request").click();
+    const marked = approval.locator(".request-title");
+    await toReadingLine(marked);
+    // Focus back in the step, as a reader reading it would leave it.
+    await step
+      .locator("summary")
+      .evaluate((summary: HTMLElement) => summary.focus({ preventScroll: true }));
+    await settle(page);
+    const before = (await marked.boundingBox())!.y;
+    await expect(page.getByTestId("t3-card")).toHaveCount(0);
+
+    await resultNaming(page, "t3_thread_launch");
     const card = page.getByTestId("t3-card");
     await expect(card).toHaveCount(1);
     await settle(page);
@@ -1329,12 +1364,50 @@ test.describe("Messaged T3 Code cards", () => {
     await expect(card.locator("summary")).toBeFocused();
   });
 
-  test("F-132: before its result names it, a call is an ordinary tool step and no T3 Code card is drawn", async ({
+  test("F-132 F-134: a card the gateway's map made, whose result names another tool, becomes the ordinary step again: the reading line holds, open and focused as the card was", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 640 });
+    await openFixture(page, "scene=t3-approval", "light");
+    // The gateway's map names T3 Code's tool: the card from the call's start, the step not drawn.
+    await historyStep(page, true);
+    const card = page.getByTestId("t3-card");
+    await expect(card).toHaveCount(1);
+    await expect(card.locator("summary .state")).toHaveText("Waiting for approval");
+    await expect(page.getByTestId("tool-call")).toHaveCount(0);
+    await card.locator("summary").click();
+    await expect(card).toHaveAttribute("open", "");
+    const approval = page.getByTestId("approval-card");
+    await approval.getByText("Show full request").click();
+    const marked = approval.locator(".request-title");
+    await toReadingLine(marked);
+    await card
+      .locator("summary")
+      .evaluate((summary: HTMLElement) => summary.focus({ preventScroll: true }));
+    await settle(page);
+    const before = (await marked.boundingBox())!.y;
+
+    // The result names another tool: the map named the wrong one.
+    await resultNaming(page, "t3_project_list_v2");
+    await expect(card).toHaveCount(0);
+    await settle(page);
+    expect(Math.abs((await marked.boundingBox())!.y - before)).toBeLessThanOrEqual(1);
+    await expect(approval.locator(".request-full")).toHaveAttribute("open", "");
+    // The ordinary step again, in its group, open and focused as the card was.
+    const step = page.getByTestId("tool-call");
+    await expect(step).toHaveCount(1);
+    await expect(page.locator("details.steps").first()).toHaveAttribute("open", "");
+    await expect(step).toHaveAttribute("open", "");
+    await expect(step.locator("summary")).toBeFocused();
+  });
+
+  test("F-132: without the gateway's map a call is an ordinary step until its result names it; with it, the card from its start", async ({
     page,
   }) => {
     for (const scene of ["t3-started", "t3-approval", "t3-delivery-unknown", "t3-not-sent"]) {
       await openFixture(page, `scene=${scene}`, "light");
-      await expect(page.getByTestId("transcript-turn").first(), scene).toBeVisible();
+      await expect(page.getByTestId("t3-card"), scene).toHaveCount(1);
+      await historyStep(page, false);
       await expect(page.getByTestId("t3-card"), scene).toHaveCount(0);
     }
     await openFixture(page, "scene=t3-call-made", "light");
@@ -1386,10 +1459,14 @@ test.describe("Messaged T3 Code cards", () => {
     await expect(page.getByTestId("t3-card").getByRole("link")).toHaveCount(0);
   });
 
-  test("F-134 F-314: each state a call's result establishes is what the card says", async ({
+  test("F-134 F-314 F-470: each state is what the call's events establish, before its result by the gateway's map", async ({
     page,
   }) => {
     const states: Record<string, string> = {
+      "t3-started": "Call started",
+      "t3-approval": "Waiting for approval",
+      "t3-delivery-unknown": "Delivery unknown",
+      "t3-not-sent": "Not sent",
       "t3-call-made": "Call made",
       "t3-failed": "Failed",
     };

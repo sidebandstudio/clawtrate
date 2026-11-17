@@ -18,6 +18,8 @@ import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { mcpToolMap } from "../packages/core/src/cards.ts";
+import { MAX_MCP_TOOLS } from "../packages/core/src/state-bounds.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { openCheckClients, type ClientName } from "../tools/dev-gateway/src/scenario-check.ts";
@@ -573,6 +575,17 @@ test.describe("tool-server calls on a real gateway", () => {
     await ordinaryStep(reader, "https://coding-agent.example/threads/");
     await reload(page, "Juniper", t.title);
     await ordinaryStep(page, "https://coding-agent.example/threads/");
+  });
+
+  test("the gateway's map from tools.effective names the stand-in's tools by their own names, as the engine reads it", async () => {
+    const t = await called("mcp-map", "#mcp");
+    await clients.plain.terminal(t.runId);
+    const answer = await clients.plain.request("tools.effective", { sessionKey: t.key });
+    const map = mcpToolMap(answer, MAX_MCP_TOOLS);
+    expect(map["coder__send_message"]).toEqual({ server: "coder", tool: "send_message" });
+    expect(map["coder__run_checks"]).toEqual({ server: "coder", tool: "run_checks" });
+    // Built-in tools are not tool-server tools.
+    expect(Object.keys(map).every((name) => name.startsWith("coder__"))).toBe(true);
   });
 
   test("F-314: an error result is an ordinary failed step", async () => {

@@ -384,9 +384,14 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
   const env = useCardEnv();
   // The ordinary step this call was drawn as until its result named it, as the reader left it.
   const handover = useStepHandover();
-  const [handed] = useState(() =>
-    card.toolCallId ? handover?.stateOf(card.toolCallId) : undefined,
-  );
+  const [handed] = useState(() => {
+    const state = card.toolCallId ? handover?.stateOf(card.toolCallId) : undefined;
+    return state?.from === "step" ? state : undefined;
+  });
+  // Kept for the ordinary step this call becomes again if its result names another tool.
+  const note = (element: HTMLDetailsElement, focused: boolean) =>
+    card.toolCallId &&
+    handover?.note(card.toolCallId, { open: element.open, focused, from: "card" });
   const raw = useRawDisclosure(read.load, handed?.open === true);
   const run = env.runOf(card.runId);
   const step = run?.steps.find((each) => each.id === card.stepId);
@@ -460,6 +465,13 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
       data-connection={lost ? "lost" : undefined}
       id={domId}
       data-testid="t3-card"
+      onToggle={(event) =>
+        note(event.currentTarget, event.currentTarget.contains(document.activeElement))
+      }
+      onFocus={(event) => note(event.currentTarget, true)}
+      onBlur={(event) =>
+        note(event.currentTarget, event.currentTarget.contains(event.relatedTarget as Node | null))
+      }
     >
       <summary aria-label={`Messaged T3 Code: ${first} ${word}.`} title={first}>
         <span className="messaged-verb">Messaged</span>

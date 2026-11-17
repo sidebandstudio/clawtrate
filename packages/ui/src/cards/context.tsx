@@ -26,14 +26,19 @@ export const CardSettingsContext = createContext<CardSettings>({ codingServers: 
 
 export const useCardSettings = () => useContext(CardSettingsContext);
 
-/** How the reader left an ordinary tool step: open or closed, and whether focus was in it. */
-export type StepState = { open: boolean; focused: boolean };
+/**
+ * How the reader left a call's ordinary step or its T3 Code card (`from`):
+ * open or closed, and whether focus was in it.
+ */
+export type StepState = { open: boolean; focused: boolean; from: "step" | "card" };
 
 /**
- * An ordinary tool step that becomes a card once its result names it hands
- * the card its state: the card opens if the step was open, with its Raw view
- * open in place of the step's arguments and result as received, and takes
- * focus if the step had it. The step is then not drawn beside the card.
+ * A call drawn one way hands the other its state when the evidence changes:
+ * an ordinary step that becomes the T3 Code card opens the card, with its Raw
+ * view open in place of the step's arguments and result as received, and
+ * gives it focus if the step had it; a card whose result names another tool
+ * becomes the ordinary step again, open, in its open group, with focus, as the
+ * card was. Only one of them is drawn at a time.
  */
 export type StepHandover = {
   /** Whether this call is drawn as a card. */

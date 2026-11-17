@@ -73,21 +73,28 @@ export const T3_CODE_TOOLS: readonly string[] = [
 
 /**
  * The engine's card selection for a task, and which calls are T3 Code. That
- * is decided per call, never per server: a call is T3 Code when its result
- * names its own tool (`details.mcpTool`) as one of T3 Code's published tools,
- * or names its server (`details.mcpServer`) as one a host configured as T3
- * Code (`codingServers`, the only whole-server rule).
+ * is decided per call, never per server, and the call's own result decides:
+ * a call is T3 Code when its result names its own tool (`details.mcpTool`) as
+ * one of T3 Code's published tools, or its server (`details.mcpServer`) as one
+ * a host configured as T3 Code (`codingServers`, the only whole-server rule).
  *
- * Before its result a call is not identified. The tool name a call starts
- * with is the gateway's effective name, `<safe server>__<safe tool>`, cut to
- * 64 characters and given a `-2` suffix on a collision (`buildSafeToolName`
- * in OpenClaw 2026.10.6's `agent-bundle-mcp-names`), so its pieces are not
- * the server and tool; the engine reads no map from effective names to
- * tools. Until its result names it, the call stays an ordinary tool step;
- * then its card takes the place where the call began.
+ * Before its result, the gateway's map from effective names to tools
+ * (`mcpTools`, from `tools.effective`) is the evidence: a call whose effective
+ * name maps to one of those tools shows as the T3 Code card from its start.
+ * The map is rebuilt from the gateway's current catalog, so it can name
+ * another tool than the running attempt had; the result overrules it, and a
+ * call whose result names another tool is an ordinary step again. A result
+ * that does not name its tool (history keeps no `details` for tool-server
+ * results; a denial carries none) leaves the map's word for Failed, Not sent
+ * or Delivery unknown, but the map alone never makes a call Call made: such
+ * a call is an ordinary step. Nothing is read out of the effective name itself (`<safe
+ * server>__<safe tool>`, cut to 64 characters and given a `-2` suffix on a
+ * collision, `buildSafeToolName` in OpenClaw 2026.10.6).
  */
 export function selectCards(
-  transcript: Pick<Transcript, "runs" | "approvals" | "linkedRuns" | "interSession">,
+  transcript: Pick<Transcript, "runs" | "approvals" | "linkedRuns" | "interSession"> & {
+    mcpTools?: Transcript["mcpTools"];
+  },
   codingServers: readonly string[],
   rawOf: (step: Step) => StepRaw | null,
   previous?: SelectedCards,
@@ -99,14 +106,37 @@ export function selectCards(
       linkedRuns: transcript.linkedRuns,
       interSession: transcript.interSession,
     },
-    { codingServers, rawOf, ...(previous ? { previous } : {}) },
+    {
+      codingServers,
+      mcpTools: transcript.mcpTools ?? {},
+      rawOf,
+      ...(previous ? { previous } : {}),
+    },
   );
-  // Without a map of names, the engine identifies a call only from its result's own details.
+  const steps = new Map(transcript.runs.flatMap((run) => run.steps.map((step) => [step.id, step])));
+  const isT3 = (server: string, tool: string) =>
+    codingServers.includes(server) || T3_CODE_TOOLS.includes(tool);
   const mcpCalls = selected.mcpCalls.map((card) => {
-    const t3 = codingServers.includes(card.server) || T3_CODE_TOOLS.includes(card.tool);
+    const step = steps.get(card.stepId);
+    const raw = step ? rawOf(step) : null;
+    const named = resultTool(raw);
+    // A result that does not name its tool leaves the map's word, but never for Call made.
+    const t3 = named
+      ? isT3(named.server, named.tool)
+      : isT3(card.server, card.tool) && card.state !== "returned";
     return t3 === card.codingAgent ? card : { ...card, codingAgent: t3 };
   });
   return { ...selected, mcpCalls };
+}
+
+/** The server and tool a call's result names (`details.mcpServer`, `details.mcpTool`), if it does. */
+function resultTool(raw: StepRaw | null): { server: string; tool: string } | null {
+  const result = raw?.result as Record<string, unknown> | null | undefined;
+  const body = (result?.result ?? result) as Record<string, unknown> | null | undefined;
+  const details = body?.details as Record<string, unknown> | null | undefined;
+  return typeof details?.mcpServer === "string" && typeof details.mcpTool === "string"
+    ? { server: details.mcpServer, tool: details.mcpTool }
+    : null;
 }
 
 /** The cards' states, to tell when the remembered selection needs replacing. */
@@ -194,11 +224,16 @@ export function useCards(
   // The last selection, so a card's state only moves forward: the engine's
   // own `previous` input. It is replaced when a card's state changes.
   const [previous, setPrevious] = useState<SelectedCards | undefined>(undefined);
-  const { runs, approvals, linkedRuns, interSession } = transcript;
+  const { runs, approvals, linkedRuns, interSession, mcpTools } = transcript;
   const selected = useMemo(
     () =>
-      selectCards({ runs, approvals, linkedRuns, interSession }, codingServers, rawOf, previous),
-    [runs, approvals, linkedRuns, interSession, codingServers, rawOf, previous],
+      selectCards(
+        { runs, approvals, linkedRuns, interSession, mcpTools },
+        codingServers,
+        rawOf,
+        previous,
+      ),
+    [runs, approvals, linkedRuns, interSession, mcpTools, codingServers, rawOf, previous],
   );
   // Adjusted while rendering, as React does for state that follows other state;
   // the engine keeps states forward-only, so this settles after one pass.
