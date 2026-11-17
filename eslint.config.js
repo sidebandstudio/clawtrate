@@ -14,6 +14,8 @@ export default tseslint.config(
       "test-results/**",
       // Research prototypes, kept as reference material; not part of the build.
       "docs/research/**",
+      // The design prototype: static browser pages, kept exactly as they render.
+      "docs/design/prototype/**",
       // Git-ignored local working folder; never part of the repository.
       ".orchestrator/**",
     ],
