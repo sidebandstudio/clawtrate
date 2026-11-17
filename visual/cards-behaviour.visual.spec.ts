@@ -49,7 +49,7 @@ const questionCard = (page: Page) => page.getByTestId("question-card");
 test.describe("approval cards", () => {
   test.use(contextFor(WIDE, "light"));
 
-  test("F-163 F-170 F-171 F-329 F-155: a pending approval names the bot, says what runs where, shows its warnings, and offers only the request's decisions, with Deny", async ({
+  test("F-163 F-171 F-329 F-155: a pending approval names the bot, says what runs where, shows its warnings, and offers only the request's decisions, its refusal labelled Deny", async ({
     page,
   }) => {
     await openFixture(page, "scene=approval-pending", "light");

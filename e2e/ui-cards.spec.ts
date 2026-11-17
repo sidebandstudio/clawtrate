@@ -282,7 +282,7 @@ test.describe("tasks this app creates", () => {
 });
 
 test.describe("approval cards on a real gateway", () => {
-  test("F-163 F-170: a command that needs approval, allowed once: the card, the decision, Raw, and after reading history again", async () => {
+  test("F-163: a command that needs approval, allowed once: the card, the decision, Raw, and after reading history again", async () => {
     const { title } = await hostTask("otto", "Approve once", "#sleep 2");
     await openTask(page, "Otto", title);
     const approval = card(page, "approval-card");

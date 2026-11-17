@@ -24,7 +24,7 @@ const open = async (_page: Page, card: Locator) => {
   });
 };
 
-const APPROVAL = "F-163 F-164 F-170 F-171 F-329";
+const APPROVAL = "F-163 F-164 F-171 F-329";
 const RESOLVED = "F-165 F-168 F-169 F-325";
 const QUESTION = "F-112 F-113 F-114 F-302 F-303";
 const MESSAGED = "F-119 F-121 F-122 F-123 F-434 F-469";
