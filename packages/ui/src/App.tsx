@@ -1,9 +1,10 @@
-import type { HostInfo } from "@clawtrate/core";
-import { useEffect } from "react";
+import type { ConnectionError, HostInfo } from "@clawtrate/core";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useClawtrateState } from "./bridge.tsx";
 import { ConnectScreen } from "./ConnectScreen.tsx";
-import { readPreference, useTheme } from "./preferences.ts";
+import { readPreference, useBubbles, useTheme } from "./preferences.ts";
 import { screenFor } from "./screen.ts";
+import { Settings } from "./Settings.tsx";
 import { Shell } from "./Shell.tsx";
 
 /**
@@ -27,22 +28,97 @@ function useInputAndMotion() {
   }, []);
 }
 
+/** The first control on the screen, for when focus has nowhere else to go. */
+const FIRST_CONTROL = ".app :is(input, button, [tabindex='0']):not([disabled], [tabindex='-1'])";
+
 /**
  * The connection screen is for connecting and pairing. Once a gateway has
  * delivered anything, the shell stays mounted through reconnects, keeping
  * scroll position and open details, with a status strip on top.
  */
-export function App({ info }: { info: HostInfo }) {
+export function App({
+  info,
+  onUnreadCount,
+}: {
+  info: HostInfo;
+  /** The host's dock or taskbar badge: called with the number of unread tasks. */
+  onUnreadCount?: ((count: number) => void) | undefined;
+}) {
   const state = useClawtrateState();
   useInputAndMotion();
   // The theme applies on every screen; the gateway menu in the shell changes it.
   const [theme, setTheme] = useTheme();
+  const [bubbles, setBubbles] = useBubbles();
+  // Settings opens over either screen, with Cmd/Ctrl+, or from the gateway menu.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpener = useRef<HTMLElement | null>(null);
+  const openSettings = useCallback(() => {
+    const active = document.activeElement as HTMLElement | null;
+    settingsOpener.current = active && active !== document.body ? active : null;
+    setSettingsOpen(true);
+  }, []);
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false);
+    const opener = settingsOpener.current;
+    requestAnimationFrame(() => {
+      if (opener?.isConnected && !opener.closest("[inert]")) opener.focus();
+      // The control that opened it is gone (another gateway was chosen): the
+      // first control on the screen now showing.
+      else document.querySelector<HTMLElement>(FIRST_CONTROL)?.focus();
+    });
+  }, []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key === ",") {
+        event.preventDefault();
+        openSettings();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openSettings]);
+  // A protocol mismatch stays on screen while Retry repeats the handshake, until
+  // a handshake succeeds or the user chooses another gateway.
+  const [mismatch, setMismatch] = useState<ConnectionError | null>(null);
+  const { status, error } = state.connection;
+  if (error?.code === "PROTOCOL_MISMATCH" && mismatch !== error) setMismatch(error);
+  else if (mismatch && (status === "connected" || status === "idle" || status === "pairing")) {
+    setMismatch(null);
+  }
+  const screen = mismatch ? "connect" : screenFor(state);
+  // When one screen replaces another and takes focus with it, focus the first
+  // control of the new one. Not on launch: nothing had focus to lose.
+  const shown = useRef(screen);
+  useEffect(() => {
+    if (shown.current === screen) return;
+    shown.current = screen;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    document.querySelector<HTMLElement>(FIRST_CONTROL)?.focus();
+  }, [screen]);
   return (
     <div className="app">
-      {screenFor(state) === "shell" ? (
-        <Shell state={state} theme={theme} onTheme={setTheme} />
+      {settingsOpen && (
+        <Settings connection={state.connection} info={info} onClose={closeSettings} />
+      )}
+      {screen === "shell" ? (
+        <Shell
+          state={state}
+          theme={theme}
+          onTheme={setTheme}
+          bubbles={bubbles}
+          onBubbles={setBubbles}
+          onUnreadCount={onUnreadCount}
+          onOpenSettings={openSettings}
+          inert={settingsOpen}
+        />
       ) : (
-        <ConnectScreen connection={state.connection} info={info} />
+        <ConnectScreen
+          connection={state.connection}
+          discovery={state.discovery}
+          info={info}
+          mismatch={mismatch}
+          inert={settingsOpen}
+        />
       )}
     </div>
   );

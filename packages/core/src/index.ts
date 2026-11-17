@@ -15,6 +15,7 @@ export * from "./remote-bridge.ts";
 export { utf8Length } from "./encoding.ts";
 export * from "./scopes.ts";
 export * from "./bridge.ts";
+export * from "./connect-errors.ts";
 export {
   AccessRequestError,
   APPROVAL_CAPS,

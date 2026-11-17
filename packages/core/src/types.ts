@@ -15,7 +15,9 @@ export type ConnectionStatus =
   /** Was connected, lost the socket, and is retrying with backoff. */
   | "reconnecting"
   /** Stopped retrying; needs the user to act. */
-  | "error";
+  | "error"
+  /** The user disconnected; the gateway and the pairing are kept until they reconnect. */
+  | "disconnected";
 
 export type PairingRequest = {
   requestId: string;
@@ -28,7 +30,13 @@ export type PairingRequest = {
   requestedScopes: string[];
 };
 
-export type ConnectionError = { code: string; message: string; hint: string | null };
+export type ConnectionError = {
+  code: string;
+  message: string;
+  hint: string | null;
+  /** For `PROTOCOL_MISMATCH`: the protocol the gateway speaks, and the one this client speaks. */
+  protocol?: { gateway: number | null; client: number };
+};
 
 export type ScopeUpgradeStatus =
   | "idle"
@@ -58,6 +66,12 @@ export type ScopeUpgradeState = {
 export type ConnectionState = {
   status: ConnectionStatus;
   gatewayUrl: string | null;
+  /**
+   * The gateway's own identity (`gateway.identity.get` `deviceId`), stable
+   * across addresses and restarts. Null until it is read, or when the gateway
+   * does not give it.
+   */
+  gatewayId: string | null;
   serverVersion: string | null;
   protocol: number | null;
   /** Scopes the gateway granted this connection (`hello-ok.auth.scopes`). */
@@ -95,7 +109,19 @@ export type Bot = {
   cut?: string[];
 };
 
-export type TaskStatus = "running" | "done" | "failed" | "idle";
+export type TaskStatus =
+  | "running"
+  | "done"
+  | "failed"
+  | "idle"
+  /**
+   * The next three come from run events (a pending approval or question, an
+   * unreachable machine, a failed step in a finished run) that a read-only
+   * connection does not receive yet; the mapping never produces them today.
+   */
+  | "waiting"
+  | "blocked"
+  | "done-with-failures";
 
 export type Task = {
   key: string;
@@ -106,8 +132,20 @@ export type Task = {
   updatedAt: number | null;
   status: TaskStatus;
   unread: boolean;
+  /**
+   * Context use after the latest run: tokens used out of the model's context
+   * window. Absent when the gateway does not report both.
+   */
+  context?: TaskContext;
   /** Paths of fields cut to their bound. */
   cut?: string[];
+};
+
+export type TaskContext = {
+  used: number;
+  window: number;
+  /** False when the gateway says the count is from before the latest run. */
+  fresh: boolean;
 };
 
 export type ToolResult = { isError: boolean; text: string };
@@ -245,6 +283,7 @@ export const initialScopeUpgrade: ScopeUpgradeState = {
 export const initialConnectionState: ConnectionState = {
   status: "idle",
   gatewayUrl: null,
+  gatewayId: null,
   serverVersion: null,
   protocol: null,
   scopes: [],

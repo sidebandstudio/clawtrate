@@ -11,6 +11,7 @@ import {
   OTTO_DISK,
   settle,
   SIZES,
+  STATE_SCENES,
   THEMES,
 } from "./fixture.ts";
 
@@ -168,6 +169,7 @@ const SCENES: Scene[] = [
       await expect(page.getByRole("menu", { name: "Gateway" })).toBeVisible();
     },
   },
+  ...STATE_SCENES,
 ];
 
 /** Every card scene, with every card, full request and Raw panel open. */
@@ -182,22 +184,43 @@ const openCards = async (page: Page) => {
   for (let i = 0; i < (await raws.count()); i += 1) await raws.nth(i).click();
 };
 
-for (const scene of CARD_SCENES) {
-  SCENES.push({ name: `card ${scene}`, query: `scene=${scene}`, prepare: openCards });
-}
-
-const WIDE = SIZES.find((size) => size.name === "1440")!;
-const PHONE = SIZES.find((size) => size.phone)!;
-
-for (const size of [WIDE, PHONE]) {
+// Every width the screenshots are taken at: 1440, 1100, 800 and the phone.
+for (const size of SIZES) {
   for (const theme of THEMES) {
     test.describe(`legibility ${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
       for (const scene of SCENES) {
-        test(scene.name, async ({ page }) => {
+        test(`F-471: legibility, ${scene.name}`, async ({ page }) => {
           await openFixture(page, scene.query, theme);
           await settle(page);
           await scene.prepare?.(page);
+          await settle(page);
+          const findings = await page.evaluate(audit);
+          expect(findings.length, "some text was measured").toBeGreaterThan(0);
+          expect(
+            findings.filter((f) => f.size < 12),
+            "text below 12px",
+          ).toEqual([]);
+          expect(
+            findings.filter((f) => f.ratio < 4.5),
+            "text below 4.5:1",
+          ).toEqual([]);
+        });
+      }
+    });
+  }
+}
+
+// The cards, at the desktop and the phone width they are shot at.
+for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
+  for (const theme of THEMES) {
+    test.describe(`legibility of cards ${size.name} ${theme}`, () => {
+      test.use(contextFor(size, theme));
+      for (const scene of CARD_SCENES) {
+        test(`F-471: legibility, card ${scene}`, async ({ page }) => {
+          await openFixture(page, `scene=${scene}`, theme);
+          await settle(page);
+          await openCards(page);
           await settle(page);
           const findings = await page.evaluate(audit);
           expect(findings.length, "some text was measured").toBeGreaterThan(0);

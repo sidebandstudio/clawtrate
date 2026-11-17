@@ -1,5 +1,12 @@
-import type { ConnectionState, HostInfo } from "@clawtrate/core";
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import type { ConnectionError, ConnectionState, DiscoveryState, HostInfo } from "@clawtrate/core";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import logoUrl from "./assets/logo-mark.png";
 import { Character, type CharacterSpec } from "./Avatar.tsx";
 import { useCommand } from "./bridge.tsx";
@@ -57,9 +64,78 @@ function Countdown({ until }: { until: number | null }) {
     const timer = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(timer);
   }, []);
-  if (until === null) return null;
+  // No retry waiting means an attempt is under way.
+  if (until === null) return <> now</>;
   const seconds = Math.max(0, Math.ceil((until - now) / 1000));
   return <>{seconds > 0 ? ` in ${seconds}s` : " now"}</>;
+}
+
+type StepState = "done" | "current" | "pending";
+
+/**
+ * Setting up a gateway, one step at a time: connecting, pairing this device,
+ * loading its bots. The app opens as soon as the bots have loaded.
+ */
+function SetupSteps({
+  connection,
+  loadingBots,
+  pairingText,
+}: {
+  connection: ConnectionState;
+  loadingBots: boolean;
+  /** While pairing, the step says what it is waiting for. */
+  pairingText?: ReactNode;
+}) {
+  const gateway = gatewayLabel(connection.gatewayUrl);
+  const pairing = connection.status === "pairing";
+  const reached = pairing || loadingBots;
+  const steps: Array<{ state: StepState; label: ReactNode; waiting?: boolean }> = [
+    reached
+      ? { state: "done", label: `Connected to ${gateway}` }
+      : { state: "current", label: `Connecting to ${gateway}` },
+    loadingBots || (connection.paired && !pairing)
+      ? { state: "done", label: "This device is paired" }
+      : pairing
+        ? { state: "current", label: pairingText ?? "Waiting for approval", waiting: true }
+        : { state: "pending", label: "Pair this device" },
+    loadingBots
+      ? { state: "current", label: "Loading bots" }
+      : { state: "pending", label: "Load bots" },
+  ];
+  return (
+    <ol className="setup-steps" aria-label="Setting up" data-testid="setup-steps">
+      {steps.map((step, index) => (
+        <li
+          key={index}
+          data-state={step.state}
+          aria-current={step.state === "current" ? "step" : undefined}
+        >
+          {step.waiting ? (
+            <span className="status-dot" data-status="pairing" aria-hidden="true" />
+          ) : (
+            <span
+              className="glyph"
+              data-state={
+                step.state === "done" ? "done" : step.state === "current" ? "working" : "queued"
+              }
+              aria-hidden="true"
+            />
+          )}
+          <span role={step.state === "current" ? "status" : undefined}>{step.label}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** A connection failure's title. */
+export function failureTitle(code: string | null | undefined): string {
+  switch (code) {
+    case "PAIRING_ENDED":
+      return "The pairing request is no longer pending";
+    default:
+      return "Could not connect";
+  }
 }
 
 /** What a requested scope lets this device do, in plain words. */
@@ -93,16 +169,19 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
       </p>
       {pairing.approveNote && <p className="approve-note">{pairing.approveNote}</p>}
       <CommandLine command={pairing.approveCommand} label="Copy approve command" />
-      <p className="waiting" role="status">
-        <span className="status-dot" data-status="pairing" aria-hidden="true" />
-        <span>
-          {checked ? "Not approved yet, checking again" : "Waiting for approval, checking again"}
-          <Countdown until={connection.retryAt} />
-        </span>
-      </p>
+      <SetupSteps
+        connection={connection}
+        loadingBots={false}
+        pairingText={
+          <>
+            {checked ? "Not approved yet, checking again" : "Waiting for approval, checking again"}
+            <Countdown until={connection.retryAt} />
+          </>
+        }
+      />
       <ul className="scopes" aria-label="This device asks to">
         {pairing.requestedScopes.map((scope) => (
-          <li key={scope}>
+          <li key={scope} data-scope={scope}>
             <EyeIcon />
             {SCOPE_WORDS[scope] ?? scope}
           </li>
@@ -137,6 +216,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
   const [url, setUrl] = useState(connection.gatewayUrl ?? info.devGateway?.url ?? "");
   const [token, setToken] = useState("");
   const [submitError, setSubmitError] = useState<{ title: string; message: string } | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const busy = connection.status === "connecting";
 
   const submit = (event: FormEvent) => {
@@ -161,19 +241,24 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
     ? { ...submitError, hint: null, code: null }
     : connection.error
       ? {
-          title: "Could not connect",
+          title: failureTitle(connection.error.code),
           message: connection.error.message,
           hint: connection.error.hint,
           code: connection.error.code,
         }
       : null;
+  // Try again repeats what failed: the saved gateway's connection, or this form.
+  const tryAgain = () => {
+    if (!submitError && connection.error && connection.gatewayUrl) void send({ type: "retry" });
+    else formRef.current?.requestSubmit();
+  };
 
   return (
     <section className="panel" aria-labelledby="connect-title">
       <h2 id="connect-title" className="visually-hidden">
         Connect to your gateway
       </h2>
-      <form onSubmit={submit} noValidate>
+      <form onSubmit={submit} noValidate ref={formRef}>
         <label className="field">
           <span className="visually-hidden">Gateway address</span>
           <input
@@ -204,6 +289,9 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             {error.message}
             {error.hint && ` ${error.hint}`}
             {error.code && <span className="form-error-code">{error.code}</span>}
+            <button type="button" className="button" data-size="sm" onClick={tryAgain}>
+              Try again
+            </button>
           </div>
         )}
         <div className="actions">
@@ -214,7 +302,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             data-size="lg"
             disabled={busy}
           >
-            {busy ? "Connecting…" : "Connect"}
+            {busy ? "Connecting…" : "Connect a gateway"}
           </button>
           {info.devGateway && (
             <button
@@ -235,6 +323,99 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
           only, and the token is used once.
         </p>
       </form>
+    </section>
+  );
+}
+
+/** Connecting for the first time, and loading the bots once connected. */
+function SetupPanel({
+  connection,
+  loadingBots,
+}: {
+  connection: ConnectionState;
+  loadingBots: boolean;
+}) {
+  const send = useCommand();
+  const error = connection.error;
+  return (
+    <section className="panel" aria-labelledby="setup-title">
+      <h2 id="setup-title" className="visually-hidden">
+        Setting up {gatewayLabel(connection.gatewayUrl)}
+      </h2>
+      <SetupSteps connection={connection} loadingBots={loadingBots} />
+      {error && !loadingBots && (
+        <div className="form-error" role="alert">
+          <strong>{failureTitle(error.code)}</strong>
+          {error.message}
+          {error.hint && ` ${error.hint}`}
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            onClick={() => void send({ type: "retry" })}
+          >
+            Try again
+          </button>
+        </div>
+      )}
+      <div className="actions">
+        <button
+          type="button"
+          className="button"
+          data-variant="quiet"
+          data-size="lg"
+          onClick={() => void send({ type: "disconnect" })}
+        >
+          Use another gateway
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/** The gateway speaks a protocol this client does not: nothing is asked of it. */
+function ProtocolNotice({
+  connection,
+  error,
+}: {
+  connection: ConnectionState;
+  error: ConnectionError;
+}) {
+  const send = useCommand();
+  const protocol = error.protocol;
+  const retrying = connection.status === "connecting" || connection.status === "reconnecting";
+  const gateway = gatewayLabel(connection.gatewayUrl);
+  return (
+    <section className="panel" aria-labelledby="protocol-title" data-testid="protocol-notice">
+      <h2 id="protocol-title">This gateway speaks another protocol</h2>
+      <p className="panel-lede">
+        {protocol?.gateway === null || protocol?.gateway === undefined
+          ? `${gateway} does not speak protocol ${protocol?.client ?? ""}, the one this version of ${PRODUCT_NAME} speaks.`
+          : `${gateway} speaks protocol ${protocol.gateway}. This version of ${PRODUCT_NAME} speaks protocol ${protocol.client}.`}{" "}
+        Update the one that is older, then retry.
+      </p>
+      <div className="actions">
+        <button
+          type="button"
+          className="button"
+          data-size="lg"
+          aria-disabled={retrying || undefined}
+          onClick={() => {
+            if (!retrying) void send({ type: "retry" });
+          }}
+        >
+          {retrying ? "Retrying…" : "Retry"}
+        </button>
+        <button
+          type="button"
+          className="button"
+          data-variant="quiet"
+          data-size="lg"
+          onClick={() => void send({ type: "disconnect" })}
+        >
+          Choose another gateway
+        </button>
+      </div>
     </section>
   );
 }
@@ -301,18 +482,39 @@ function Ensemble() {
 
 export function ConnectScreen({
   connection,
+  discovery,
   info,
+  mismatch = null,
+  inert = false,
 }: {
   connection: ConnectionState;
+  discovery: DiscoveryState;
   info: HostInfo;
+  /** The latest protocol mismatch, kept while a retry repeats the handshake. */
+  mismatch?: ConnectionError | null;
+  /** Set while Settings covers the screen. */
+  inert?: boolean;
 }) {
   const pairing = connection.status === "pairing" && connection.pairing;
   const host = `${info.kind === "web" ? "Web preview" : "Desktop"} ${info.version}`;
+  const loadingBots = connection.status === "connected" && discovery.status === "loading";
+  const settingUp = loadingBots || connection.status === "connecting";
   return (
-    <main className="connect">
+    <main className="connect" inert={inert}>
       <div className="connect-drag" />
       <div className="connect-card">
-        {pairing ? (
+        {mismatch ? (
+          <>
+            <header className="connect-brand">
+              <img src={logoUrl} alt={PRODUCT_NAME} width={56} height={56} />
+            </header>
+            <ProtocolNotice connection={connection} error={mismatch} />
+            <p className="connect-foot">
+              {gatewayLabel(connection.gatewayUrl)}
+              {connection.serverVersion ? ` · OpenClaw ${connection.serverVersion}` : ""} · {host}
+            </p>
+          </>
+        ) : pairing ? (
           <>
             <header className="connect-brand">
               <img src={logoUrl} alt={PRODUCT_NAME} width={56} height={56} />
@@ -330,7 +532,11 @@ export function ConnectScreen({
               <h1>{PRODUCT_NAME}</h1>
               <p>{SLOGAN}</p>
             </header>
-            <ConnectForm connection={connection} info={info} />
+            {settingUp ? (
+              <SetupPanel connection={connection} loadingBots={loadingBots} />
+            ) : (
+              <ConnectForm connection={connection} info={info} />
+            )}
             <p className="connect-foot">
               {connection.deviceId
                 ? `This device ${connection.deviceId.slice(0, 8)}`

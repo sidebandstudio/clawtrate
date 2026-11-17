@@ -85,3 +85,12 @@ export function gatewayLabel(url: string | null): string {
     return url;
   }
 }
+
+/** A task's context use, for its header: "Context: 18,432 of 128,000 tokens". */
+export function contextWords(
+  context: { used: number; window: number; fresh: boolean } | undefined,
+): string {
+  if (!context) return "Context: unavailable";
+  const n = (value: number) => value.toLocaleString(undefined);
+  return `Context: ${context.fresh ? "" : "about "}${n(context.used)} of ${n(context.window)} tokens`;
+}

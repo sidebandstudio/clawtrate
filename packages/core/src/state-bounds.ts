@@ -55,6 +55,7 @@ import type {
   PairingRequest,
   ScopeUpgradeState,
   Task,
+  TaskContext,
   TaskCreation,
   ToolResult,
   Transcript,
@@ -424,6 +425,7 @@ const connectionError = object<ConnectionError>()({
   code: NAME,
   message: text(MAX_MESSAGE_LINE_CHARS),
   hint: text(MAX_MESSAGE_LINE_CHARS),
+  protocol: object<NonNullable<ConnectionError["protocol"]>>()({ gateway: NUMBER, client: NUMBER }),
 });
 const upgrade = object<ScopeUpgradeState>()({
   status: ENUM,
@@ -436,6 +438,7 @@ const upgrade = object<ScopeUpgradeState>()({
 const connection = object<ConnectionState>()({
   status: ENUM,
   gatewayUrl: text(MAX_MESSAGE_LINE_CHARS),
+  gatewayId: ID,
   serverVersion: NAME,
   protocol: NUMBER,
   scopes: list(MAX_SCOPES, NAME),
@@ -474,6 +477,7 @@ const task = flagged<Task>()({
   updatedAt: NUMBER,
   status: ENUM,
   unread: FLAG,
+  context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
 });
 /** A task creation as kept (`MAX_CREATIONS` of them). */
 export const CREATION: Bound = object<TaskCreation>()({
@@ -514,6 +518,7 @@ const SESSION_ROW_FIELDS = [
   "agentId",
   "archived",
   "category",
+  "contextTokens",
   "createdAt",
   "derivedTitle",
   "displayName",
@@ -527,6 +532,8 @@ const SESSION_ROW_FIELDS = [
   "sessionKey",
   "spawnedBy",
   "status",
+  "totalTokens",
+  "totalTokensFresh",
   "unread",
   "updatedAt",
 ] as const;

@@ -92,7 +92,7 @@ const resetInstance = (name: string, runId: string) => {
 const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 /** Stop a child we started: SIGTERM, a bounded wait, then SIGKILL. */
-async function stopChild(child: ChildProcess, timeoutMs = 10_000): Promise<void> {
+export async function stopChild(child: ChildProcess, timeoutMs = 10_000): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
   child.kill("SIGTERM");
@@ -105,8 +105,12 @@ async function stopChild(child: ChildProcess, timeoutMs = 10_000): Promise<void>
   }
 }
 
-/** The preview host, spawned behind a gate so it cannot run before it is recorded. */
-function startHost(instance: string, staticDir: string, dataDir: string) {
+/**
+ * The preview host, spawned behind a gate so it cannot run before it is
+ * recorded. A test that quits and restarts a client starts its own with this,
+ * on its own copy of the host's data, and stops it by its process.
+ */
+export function startHost(instance: string, staticDir: string, dataDir: string) {
   const gated: Gated = gatedSpawn(
     spawn,
     process.execPath,
@@ -301,6 +305,9 @@ export default async function globalSetup() {
       throw new Error(`preview host is on ${url}, a port e2e never uses`);
     }
     process.env.CLAWTRATE_E2E_URL = url;
+    // For a test that runs a second client host from the same build and a copy of this one's data.
+    process.env.CLAWTRATE_E2E_STATIC = staticDir;
+    process.env.CLAWTRATE_E2E_DATA = dataDir;
   } catch (error) {
     if (host) await stopChild(host);
     const problems = cleanUpOnce();

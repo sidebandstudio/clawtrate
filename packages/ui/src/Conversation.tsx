@@ -8,6 +8,7 @@ import type {
 } from "@clawtrate/core";
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -16,7 +17,8 @@ import {
 } from "react";
 import { Avatar } from "./Avatar.tsx";
 import { CardScope, CardSlot, TrailingCards } from "./cards/index.ts";
-import { daysAgo, fullDate, stampTime, summarizeArguments } from "./format.ts";
+import { FindBar } from "./Find.tsx";
+import { contextWords, daysAgo, fullDate, stampTime, summarizeArguments } from "./format.ts";
 import { ArrowDownIcon, BackIcon, ChevronIcon, EyeIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -124,6 +126,15 @@ function Turn({ item }: { item: TranscriptItem }) {
         ),
       )}
     </div>
+  );
+}
+
+/** Under the task's name: how much of the model's context the task uses. */
+function TaskContext({ task }: { task: Task }) {
+  return (
+    <p className="task-context" data-testid="task-context">
+      {contextWords(task.context)}
+    </p>
   );
 }
 
@@ -346,6 +357,7 @@ function TranscriptView({
             <h1 className="task-line" tabIndex={-1}>
               {task.title}
             </h1>
+            <TaskContext task={task} />
             {note}
             {rows}
             <TrailingCards />
@@ -451,6 +463,36 @@ export function Conversation({
   inert?: boolean;
 }) {
   const itemCount = transcript?.items.length ?? 0;
+  const sectionRef = useRef<HTMLElement>(null);
+  const [finding, setFinding] = useState(false);
+  const findOpener = useRef<HTMLElement | null>(null);
+  const canFind = task !== null && itemCount + (transcript?.live ? 1 : 0) > 0;
+
+  // Cmd/Ctrl+F finds in the open conversation, while one is on screen.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
+      if (event.key.toLowerCase() !== "f" || inert || !canFind) return;
+      if (!sectionRef.current?.checkVisibility()) return;
+      event.preventDefault();
+      if (!finding) findOpener.current = document.activeElement as HTMLElement | null;
+      setFinding(true);
+      sectionRef.current.querySelector<HTMLInputElement>(".find-bar input")?.select();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [inert, canFind, finding]);
+
+  const closeFind = useCallback(() => {
+    setFinding(false);
+    const opener = findOpener.current;
+    findOpener.current = null;
+    requestAnimationFrame(() => {
+      if (opener?.isConnected && opener !== document.body) opener.focus();
+      else sectionRef.current?.querySelector<HTMLElement>(".transcript")?.focus();
+    });
+  }, []);
+
   const pillName = bot
     ? task
       ? `${bot.name}, ${task.title}. Show details.`
@@ -502,6 +544,7 @@ export function Conversation({
             <h1 className="task-line" tabIndex={-1}>
               {task.title}
             </h1>
+            <TaskContext task={task} />
             <div className="skeleton" data-side="end" style={{ width: "46%", marginTop: 22 }} />
             <div className="skeleton" style={{ width: "62%", height: 88, marginTop: 16 }} />
             <div className="skeleton" style={{ width: "38%" }} />
@@ -547,6 +590,7 @@ export function Conversation({
 
   return (
     <section
+      ref={sectionRef}
       className="conversation"
       aria-label="Conversation"
       inert={inert}
@@ -565,7 +609,9 @@ export function Conversation({
             <BackIcon />
           </button>
         </div>
-        {bot ? (
+        {finding && canFind ? (
+          <FindBar scope={sectionRef} onClose={closeFind} />
+        ) : bot ? (
           <button
             type="button"
             className="title-pill"

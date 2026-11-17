@@ -9,6 +9,7 @@ import {
   initialState,
   markApproval,
   markQuestion,
+  PAIRING_ENDED,
   type ApprovalCard,
   type BridgeCommand,
   type BridgeResultFor,
@@ -27,15 +28,25 @@ import {
   type CardSceneName,
   type DecisionMode,
 } from "./cards.ts";
-import { FAILING_TASK, OPEN_TASK, fixtureBots, fixtureTasks, fixtureTranscripts } from "./data.ts";
+import {
+  FAILING_TASK,
+  OPEN_TASK,
+  fixtureBots,
+  fixtureTasks,
+  fixtureTranscripts,
+  withTaskStates,
+} from "./data.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
   version: "0.1.0",
   devGateway: { url: "ws://127.0.0.1:19001" },
+  deviceName: "Clawtrate Web",
 };
 
-const GATEWAY_URL = "ws://127.0.0.1:18789";
+export const GATEWAY_URL = "ws://127.0.0.1:18789";
+/** The fixture gateway's identity, as `gateway.identity.get` would give it. Invented. */
+export const GATEWAY_ID = "6f3b0d2e9a41c7f58e2d4b1a0c9e7f3d5b8a2c4e6f1d0b9a8c7e5f4d3b2a1c0e";
 const DEVICE_ID = "a41c9e02f7d84b19c6e2";
 
 /** Every scene the fixture can show, by the name used in `?scene=`. */
@@ -61,6 +72,13 @@ export const SCENES = [
   "empty",
   "partial",
   "zero-tasks",
+  "task-states",
+  "protocol-mismatch",
+  "pairing-ended",
+  "connect-unreachable",
+  "disconnected",
+  "offline-unreachable",
+  "offline-down",
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -71,6 +89,7 @@ const connected: ConnectionState = {
   ...initialState.connection,
   status: "connected",
   gatewayUrl: GATEWAY_URL,
+  gatewayId: GATEWAY_ID,
   serverVersion: "2026.10.6",
   protocol: 4,
   scopes: ["operator.read"],
@@ -117,6 +136,12 @@ function pairing(): ClawtrateState {
     },
   };
 }
+
+const UNREACHABLE = {
+  code: "UNREACHABLE",
+  message: "Nothing answered at 127.0.0.1:18789.",
+  hint: "Check that the gateway is running and that the address is right.",
+};
 
 const withConnection = (state: ClawtrateState, change: Partial<ConnectionState>) => ({
   ...state,
@@ -303,6 +328,51 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: { ...base, discovery: { ...base.discovery, partial: true } }, steps: [] };
     case "zero-tasks":
       return { initial: { ...base, tasksByBot: { ...base.tasksByBot, marlow: [] } }, steps: [] };
+    case "protocol-mismatch":
+      return {
+        initial: withConnection(base, {
+          status: "error",
+          retryAt: null,
+          protocol: 5,
+          serverVersion: "2027.2.1",
+          error: {
+            code: "PROTOCOL_MISMATCH",
+            message: "This gateway speaks protocol 5. This version of Clawtrate speaks protocol 4.",
+            hint: null,
+            protocol: { gateway: 5, client: 4 },
+          },
+        }),
+        steps: [],
+      };
+    case "pairing-ended":
+      return {
+        initial: withConnection(idle(), {
+          status: "error",
+          gatewayUrl: GATEWAY_URL,
+          error: { ...PAIRING_ENDED, hint: null },
+        }),
+        steps: [],
+      };
+    case "connect-unreachable":
+      return {
+        initial: withConnection(idle(), {
+          status: "connecting",
+          gatewayUrl: GATEWAY_URL,
+          retryAt: Date.now() + 4000,
+          error: UNREACHABLE,
+        }),
+        steps: [],
+      };
+    case "disconnected":
+      return { initial: withConnection(base, { status: "disconnected" }), steps: [] };
+    case "offline-unreachable":
+    case "offline-down":
+      return {
+        initial: withConnection(reconnecting(base), { error: UNREACHABLE }),
+        steps: [],
+      };
+    case "task-states":
+      return { initial: { ...base, tasksByBot: withTaskStates(base.tasksByBot) }, steps: [] };
   }
 }
 
@@ -351,6 +421,10 @@ function answerStrings(
 
 export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
+  /** Every command the interface sent, for tests that check what was asked of the host. */
+  sent: BridgeCommand[];
+  /** The last unread count the interface gave for the dock badge. */
+  badge: number | null;
 } {
   const now = Date.now();
   const { initial, steps } = scene(name, now);
@@ -362,6 +436,7 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
   };
   for (const step of steps) setTimeout(() => set(step.change(state)), step.after);
   let pairingChecks = 0;
+  const sent: BridgeCommand[] = [];
   // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
   const later = (ms: number, change: (state: ClawtrateState) => ClawtrateState) =>
@@ -370,6 +445,7 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
     state.transcripts[key]?.approvals.find((each) => each.id === id);
 
   async function apply(command: BridgeCommand): Promise<void> {
+    sent.push(command);
     switch (command.type) {
       case "connect":
       case "connectDevGateway":
@@ -379,6 +455,9 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
         return;
       case "disconnect":
         set(idle());
+        return;
+      case "suspend":
+        set(withConnection(state, { status: "disconnected", retryAt: null, error: null }));
         return;
       case "retry": {
         const { status } = state.connection;
@@ -391,6 +470,29 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
           return;
         }
         if (status === "connected" && state.discovery.status !== "error") return;
+        const code = state.connection.error?.code ?? "";
+        if (code.startsWith("PAIRING_")) {
+          // Trying again sends a new pairing request.
+          set(withConnection(idle(), { status: "connecting", gatewayUrl: GATEWAY_URL }));
+          setTimeout(() => set(pairing()), 400);
+          return;
+        }
+        if (code === "PROTOCOL_MISMATCH") {
+          // The handshake is repeated, and the gateway still speaks another protocol.
+          const mismatch = state;
+          set(withConnection(state, { status: "connecting", error: null }));
+          setTimeout(() => set(mismatch), 400);
+          return;
+        }
+        // An attempt is under way, then the gateway answers; in "offline-down"
+        // it still does not, and the next retry is scheduled.
+        set(withConnection(state, { status: "reconnecting", retryAt: null, error: null }));
+        if (name === "offline-down") {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          set(withConnection(state, { retryAt: Date.now() + 4000, error: UNREACHABLE }));
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
         set(catchingUp(state));
         setTimeout(() => set(caughtUp(state)), 700);
         return;
@@ -562,5 +664,7 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
     invoke: answer,
     attach: () => Promise.reject(new Error("the fixture does not hold files")),
     setState: (change) => set(change(state)),
+    sent,
+    badge: null,
   };
 }

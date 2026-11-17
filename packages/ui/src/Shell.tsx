@@ -5,9 +5,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
-import { readPreference, writePreference, type ThemeChoice } from "./preferences.ts";
+import {
+  readPreference,
+  writePreference,
+  type BubbleChoice,
+  type ThemeChoice,
+} from "./preferences.ts";
 import { Rail } from "./Rail.tsx";
 import { useSelection } from "./selection.ts";
+import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
 import { WorkPanel } from "./WorkPanel.tsx";
 
@@ -26,10 +32,21 @@ export function Shell({
   state,
   theme,
   onTheme,
+  bubbles,
+  onBubbles,
+  onUnreadCount,
+  onOpenSettings,
+  inert = false,
 }: {
   state: ClawtrateState;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
+  bubbles: BubbleChoice;
+  onBubbles: (choice: BubbleChoice) => void;
+  onUnreadCount?: ((count: number) => void) | undefined;
+  onOpenSettings: () => void;
+  /** Set while Settings covers the shell. */
+  inert?: boolean;
 }) {
   const send = useCommand();
   const selection = useSelection(state);
@@ -93,6 +110,13 @@ export function Shell({
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePanel, drawerOpen, setPanel]);
 
+  // The dock or taskbar badge counts unread tasks, other than the one on screen.
+  const unread = unreadCount(state.tasksByBot, selection.seen, task?.key ?? null);
+  useEffect(() => {
+    onUnreadCount?.(unread);
+  }, [unread, onUnreadCount]);
+  useEffect(() => () => onUnreadCount?.(0), [onUnreadCount]);
+
   // Keep exactly the selected task's transcript open on the host.
   const taskKey = task?.key ?? null;
   useEffect(() => {
@@ -134,6 +158,7 @@ export function Shell({
     if (onePane) navigatedTo.current = "detail";
     setView("detail");
   }, [onePane]);
+  const showList = useCallback(() => setView("list"), []);
   const backToList = useCallback(() => {
     navigatedTo.current = "list";
     setView("list");
@@ -150,7 +175,7 @@ export function Shell({
       const rail = shellRef.current?.querySelector(".rail");
       (
         rail?.querySelector<HTMLElement>('.task[aria-current="true"]') ??
-        rail?.querySelector<HTMLElement>('.bot[aria-current="true"]') ??
+        rail?.querySelector<HTMLElement>(':is(.bot, .pin)[aria-current="true"]') ??
         rail?.querySelector<HTMLElement>(".bot")
       )?.focus();
     }
@@ -175,6 +200,7 @@ export function Shell({
       ref={shellRef}
       data-panel={panelOpen ? "open" : "closed"}
       data-view={view}
+      inert={inert}
     >
       <Rail
         bots={state.bots}
@@ -185,9 +211,13 @@ export function Shell({
         selection={selection}
         onePane={onePane}
         onOpen={openDetail}
+        onShowList={showList}
         theme={theme}
         onTheme={onTheme}
-        inert={drawerOpen}
+        bubbles={bubbles}
+        onBubbles={onBubbles}
+        onOpenSettings={onOpenSettings}
+        inert={drawerOpen || inert}
       />
       <div className="main-pane" ref={mainRef}>
         <OpenTaskContext.Provider value={selection.selectTask}>
@@ -216,7 +246,7 @@ export function Shell({
             readOnly={!canWrite(state.connection)}
             online={state.connection.status === "connected"}
             toggleRef={toggleRef}
-            inert={drawerOpen}
+            inert={drawerOpen || inert}
           />
         </OpenTaskContext.Provider>
         <button
