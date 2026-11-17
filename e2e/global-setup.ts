@@ -1,31 +1,95 @@
-// Starts what the end-to-end test needs and returns the teardown that stops it:
-// a fresh, seeded development gateway (unless one this tool started is already
-// running) and a preview host with a fresh device identity.
+// Starts what the end-to-end tests need and returns the teardown that stops it.
+//
+// Every run has its own development gateway instance, named for the run, on
+// ports the dev tooling chooses. It never uses the default instance or its
+// ports, whether or not something runs there, so runs in several checkouts can
+// go at once. Before its own instance it starts an unseeded sentinel instance,
+// so there is always another instance's gateway listening while the tests run;
+// the tests and the teardown check that it, and every instance that was already
+// running, is left as it was.
+//
+// Cleanup removes exactly what this run created: each instance by name and by
+// the run id this run gave it, the preview host it spawned and its temporary
+// folders. Each resource is written to a run record in this checkout before or
+// as it is acquired. Cleanup runs from the teardown, from a setup failure, on
+// SIGINT and SIGTERM, and when the process exits. A run killed outright leaves
+// its record behind, and the next run in this checkout cleans it up once that
+// run's runner is proven gone.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { createConnection } from "node:net";
+import { randomBytes } from "node:crypto";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gatedSpawn, type Gated } from "../tools/dev-gateway/src/env.ts";
+import { newRunId, processIdentity, processState } from "../tools/dev-gateway/src/state-guard.ts";
+import { cleanUp, recoverDeadRuns, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
-export const E2E_PORT = 5317;
+/** Run records of this checkout's end-to-end runs. Git-ignored. */
+const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
+/** The default instance's ports and the web preview's. An e2e run uses none of them. */
+export const FORBIDDEN_PORTS = [19001, 19091, 5310, 5311];
 
-function devGateway(...args: string[]): string {
-  return execFileSync(process.execPath, [CLI, ...args], { cwd: ROOT, encoding: "utf8" });
+export type ListedInstance = {
+  name: string | null;
+  stateDir: string;
+  gatewayPort: number | null;
+  providerPort: number | null;
+  gatewayPid: number | null;
+  gatewayRunning: boolean;
+  gatewayState: "none" | "dead" | "alive" | "unknown";
+};
+
+function cliEnv(): NodeJS.ProcessEnv {
+  // The instance is named by the flag alone, never inherited from the environment.
+  const env = { ...process.env };
+  delete env.CLAWTRATE_DEV_INSTANCE;
+  return env;
 }
 
-function portOpen(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = createConnection({ host: "127.0.0.1", port });
-    socket.once("connect", () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once("error", () => resolve(false));
+export function devGateway(instance: string | null, ...args: string[]): string {
+  const flags = instance === null ? [] : ["--instance", instance];
+  return execFileSync(process.execPath, [CLI, ...args, ...flags], {
+    cwd: ROOT,
+    env: cliEnv(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "inherit"],
   });
 }
+
+export function listInstances(): ListedInstance[] {
+  return JSON.parse(devGateway(null, "list", "--json")) as ListedInstance[];
+}
+
+/**
+ * The running instances this run must leave alone, by name, pid and ports: the
+ * default instance, named instances that are not e2e runs', and the ones in
+ * `keep`. Other e2e runs' instances come and go with those runs.
+ */
+export function runningOthers(own: string[], keep: string[] = []): string[] {
+  return listInstances()
+    .filter(
+      (row) =>
+        // A gateway that cannot be checked counts as running: it must be left alone too.
+        (row.gatewayState === "alive" || row.gatewayState === "unknown") &&
+        (row.name === null ||
+          (!own.includes(row.name) && (!row.name.startsWith("e2e-") || keep.includes(row.name)))),
+    )
+    .map(
+      (row) =>
+        `${row.name ?? "(default)"} pid ${row.gatewayPid} ports ${row.gatewayPort}/${row.providerPort}`,
+    )
+    .sort();
+}
+
+/** Reset one of this run's instances, only if it still holds the run this run gave it. */
+const resetInstance = (name: string, runId: string) => {
+  devGateway(name, "reset", "--run-id", runId);
+};
+
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 /** Stop a child we started: SIGTERM, a bounded wait, then SIGKILL. */
 async function stopChild(child: ChildProcess, timeoutMs = 10_000): Promise<void> {
@@ -41,38 +105,29 @@ async function stopChild(child: ChildProcess, timeoutMs = 10_000): Promise<void>
   }
 }
 
-export default async function globalSetup() {
-  const startedGateway = !devGateway("status").includes("healthy     yes");
-  if (startedGateway) {
-    if (await portOpen(19001))
-      throw new Error("port 19001 is in use by something this tool did not start");
-    // Every start is a fresh, seeded gateway.
-    devGateway("start");
-  } else {
-    // Reusing the gateway this tool is running: seeding verifies what exists.
-    devGateway("seed");
-  }
-
-  execFileSync("pnpm", ["--filter", "@clawtrate/desktop", "build:web"], {
-    cwd: ROOT,
-    stdio: "ignore",
-  });
-
-  const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-e2e-"));
-  const host = spawn(
+/** The preview host, spawned behind a gate so it cannot run before it is recorded. */
+function startHost(instance: string, staticDir: string, dataDir: string) {
+  const gated: Gated = gatedSpawn(
+    spawn,
     process.execPath,
     [
       join(ROOT, "apps/desktop/src/web-host/main.ts"),
       "--host",
       "127.0.0.1",
+      // The system picks a free port; the host prints the one it bound.
       "--port",
-      String(E2E_PORT),
+      "0",
+      "--instance",
+      instance,
+      "--static-dir",
+      staticDir,
       "--data-dir",
       dataDir,
     ],
     { cwd: ROOT, stdio: ["ignore", "pipe", "inherit"] },
   );
-  const url = await new Promise<string>((resolve, reject) => {
+  const host = gated.child;
+  const url = new Promise<string>((resolve, reject) => {
     let output = "";
     const timer = setTimeout(
       () => reject(new Error(`preview host did not start:\n${output}`)),
@@ -83,16 +138,174 @@ export default async function globalSetup() {
       const match = /Local\s+(http:\/\/\S+)/.exec(output);
       if (match) {
         clearTimeout(timer);
-        resolve(match[1]!);
+        resolve(match[1]!.replace("localhost", "127.0.0.1"));
       }
     });
     host.once("exit", (code) => reject(new Error(`preview host exited with ${code}:\n${output}`)));
   });
-  process.env.CLAWTRATE_E2E_URL = url.replace("localhost", "127.0.0.1");
+  return { host, url, gated };
+}
 
-  return async () => {
-    await stopChild(host);
-    rmSync(dataDir, { recursive: true, force: true });
-    if (startedGateway) devGateway("stop");
+function selfIdentity(): string {
+  const found = processIdentity(process.pid);
+  if (found.state !== "alive") throw new Error("could not determine this process's start time");
+  return found.identity;
+}
+
+export default async function globalSetup() {
+  const run = process.env.CLAWTRATE_E2E_RUN ?? randomBytes(4).toString("hex");
+  if (!/^[0-9a-f]{8}$/.test(run)) throw new Error(`CLAWTRATE_E2E_RUN must be 8 hex digits`);
+  const name = `e2e-${run}`;
+  const sentinel = `e2e-${run}-other`;
+  const own = [name, sentinel];
+  // The spec's own dev-gateway calls address this run's instance.
+  process.env.CLAWTRATE_DEV_INSTANCE = name;
+  process.env.CLAWTRATE_E2E_SENTINEL = sentinel;
+
+  recoverDeadRuns(RECORDS, resetInstance);
+
+  // Registered before anything is started.
+  const record: RunRecord = {
+    run,
+    runner: { pid: process.pid, identity: selfIdentity() },
+    instances: [],
+    host: null,
+    dirs: [],
   };
+  saveRecord(RECORDS, record);
+  let child: ChildProcess | null = null;
+  let host: ChildProcess | null = null;
+  let cleaned: string[] | null = null;
+  const cleanUpOnce = (): string[] => {
+    if (cleaned) return cleaned;
+    // A dev-gateway command still running is ended first; the reset below
+    // waits for the instance's lock, which that command holds until it exits.
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const found = processIdentity(child.pid!);
+      child.kill("SIGTERM");
+      // Wait, synchronously, until it has exited: the reset must not see it running.
+      if (found.state === "alive") {
+        const deadline = Date.now() + 15_000;
+        while (
+          processState(child.pid, found.identity, processIdentity) === "alive" &&
+          Date.now() < deadline
+        ) {
+          sleepSync(100);
+        }
+      }
+    }
+    cleaned = cleanUp(RECORDS, record, resetInstance);
+    return cleaned;
+  };
+  const onSignal = (signal: NodeJS.Signals) => {
+    const problems = cleanUpOnce();
+    if (problems.length > 0) console.error(problems.join("\n"));
+    process.exit(signal === "SIGINT" ? 130 : 143);
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  process.on("exit", () => void cleanUpOnce());
+
+  /** A dev-gateway command, run so that signals are handled while it runs. */
+  const cli = (instance: string, ...args: string[]) =>
+    new Promise<void>((resolve, reject) => {
+      if (cleaned) return reject(new Error("the run was interrupted"));
+      child = spawn(process.execPath, [CLI, ...args, "--instance", instance], {
+        cwd: ROOT,
+        env: cliEnv(),
+        stdio: ["ignore", "inherit", "inherit"],
+      });
+      child.once("error", reject);
+      child.once("exit", (code, signal) =>
+        code === 0
+          ? resolve()
+          : reject(new Error(`dev-gateway ${args[0]} ${instance} failed (${code ?? signal})`)),
+      );
+    });
+  /** Start an instance, recording its name and run id first. */
+  const startInstance = (instance: string, ...flags: string[]) => {
+    const runId = newRunId();
+    record.instances.push({ name: instance, runId });
+    saveRecord(RECORDS, record);
+    return cli(instance, "start", "--run-id", runId, ...flags);
+  };
+  const tempDir = () => {
+    const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+    record.dirs.push(dir);
+    saveRecord(RECORDS, record);
+    return dir;
+  };
+
+  const alreadyRunning = runningOthers(own);
+  const teardown = async () => {
+    if (host) await stopChild(host);
+    const problems = [...cleanUpOnce()];
+    const after = runningOthers(own);
+    const gone = alreadyRunning.filter((row) => !after.includes(row));
+    if (gone.length > 0) problems.push(`instances that were running changed: ${gone.join(", ")}`);
+    if (listInstances().some((row) => row.name !== null && own.includes(row.name))) {
+      problems.push("this run's instance folders were not removed");
+    }
+    if (problems.length > 0) throw new Error(problems.join("\n"));
+  };
+
+  try {
+    const staticDir = tempDir();
+    const dataDir = tempDir();
+    // Another instance's gateway is listening before this run's starts.
+    await startInstance(sentinel, "--no-seed");
+    process.env.CLAWTRATE_E2E_OTHERS = JSON.stringify(runningOthers([name], [sentinel]));
+    // Every start is a fresh, seeded gateway.
+    await startInstance(name);
+    const mine = listInstances().find((row) => row.name === name);
+    if (!mine?.gatewayRunning) throw new Error(`instance ${name} is not running`);
+    for (const port of [mine.gatewayPort, mine.providerPort]) {
+      if (port === null || FORBIDDEN_PORTS.includes(port)) {
+        throw new Error(`instance ${name} is on port ${port}, which e2e never uses`);
+      }
+    }
+
+    // Built into this run's own folder, so parallel runs never share output.
+    execFileSync(
+      "pnpm",
+      [
+        "--filter",
+        "@clawtrate/desktop",
+        "exec",
+        "vite",
+        "build",
+        "--config",
+        "vite.web.config.ts",
+        "--outDir",
+        staticDir,
+        "--emptyOutDir",
+      ],
+      { cwd: ROOT, stdio: "ignore" },
+    );
+    if (cleaned) throw new Error("the run was interrupted");
+    record.hostPending = true;
+    saveRecord(RECORDS, record);
+    const started = startHost(name, staticDir, dataDir);
+    host = started.host;
+    const found = processIdentity(host.pid!);
+    if (found.state !== "alive") {
+      started.gated.abort();
+      throw new Error("could not record the preview host");
+    }
+    record.host = { pid: host.pid!, identity: found.identity };
+    delete record.hostPending;
+    saveRecord(RECORDS, record);
+    started.gated.release();
+    const url = await started.url;
+    if (FORBIDDEN_PORTS.includes(Number(new URL(url).port))) {
+      throw new Error(`preview host is on ${url}, a port e2e never uses`);
+    }
+    process.env.CLAWTRATE_E2E_URL = url;
+  } catch (error) {
+    if (host) await stopChild(host);
+    const problems = cleanUpOnce();
+    if (problems.length > 0) console.error(problems.join("\n"));
+    throw error;
+  }
+  return teardown;
 }
