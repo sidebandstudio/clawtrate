@@ -43,6 +43,7 @@ Every setting can be given in the address, which is how the screenshots are take
 | `artifactload`, `thumbs` | `failed`: the first opening of an item fails; the gateway's thumbnail for a large picture fails. `thumbs=original`: the thumbnail comes back as the original, over 2 MB (Work pane) |
 | `computer` | `noplugin`, `unconfigured`, `unused`, `closed`, `watching`, `full`, `draining`, `control`, `busy`, `conflict`, `ended`, `offline`, `nodeunknown`, `stuck`, `active`, `elsewhere`, `releasefail`, `releaseunknown`, `complexquestion`; with `firstwatch=1` for the one-time note (Work pane) |
 | `checkout` | `1`: Changes adds the checkout's comparison (Work pane) |
+| `repo`, `taskroot` | `repo=1`: the task works in a repository the gateway keeps; `taskroot=worktree`: an ordinary folder of its own, not established as the bot's workspace (Work pane) |
 | `open` | `create` or `settings`, a dialog to open (bots) |
 | `step` | `look`, `account`, `connect` (bots, New bot) |
 | `section`, `account` | A Settings section, `accounts` or `integrations`, and an account's page by its id, for example `account=openai:work` (bots) |
