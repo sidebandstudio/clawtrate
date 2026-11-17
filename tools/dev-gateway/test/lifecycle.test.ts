@@ -171,6 +171,23 @@ describe("a process is recorded before it can run (B1)", () => {
     expect(before).toBeTruthy();
   });
 
+  it("a released gate does not keep the spawner alive", async () => {
+    const worker = spawn(process.execPath, [WORKER, "gate-release"], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    children.push(worker);
+    const pid = await printedPid(worker);
+    const identity = identityOf(pid);
+    const exited = await Promise.race([
+      new Promise((resolve) => worker.once("exit", () => resolve(true))),
+      new Promise((resolve) => setTimeout(() => resolve(false), 5000)),
+    ]);
+    expect(exited).toBe(true);
+    // The released command runs on; it is a stand-in, stopped here by PID and start time.
+    expect(processState(pid, identity, processIdentity)).toBe("alive");
+    process.kill(pid, "SIGTERM");
+  }, 10_000);
+
   it("a process whose spawner is killed before recording it exits without running", async () => {
     const dir = tempDir("clawtrate-gate-");
     const marker = join(dir, "ran");

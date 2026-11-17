@@ -307,7 +307,8 @@ export function gatedSpawn(
   gate?.on("error", () => {});
   return {
     child,
-    release: () => gate?.end("go\n"),
+    // Closed once the line is written, so the gate never keeps this process alive.
+    release: () => gate?.end("go\n", () => gate.destroy()),
     abort: () => gate?.destroy(),
   };
 }

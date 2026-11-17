@@ -9,6 +9,8 @@
 //                                        until killed
 //   gate-crash <file>                    gated-spawn `touch <file>`, print its pid, then die by
 //                                        SIGKILL before recording or releasing it
+//   gate-release                         gated-spawn a detached `sleep 30`, release it, print its
+//                                        pid and return: nothing may keep this process alive
 //   start-crash <home> <runRoot> <name> <role>
 //                                        run the real `start` with OpenClaw and the scripted model
 //                                        replaced by gated `sleep` stand-ins; the moment <role>
@@ -78,6 +80,11 @@ if (mode === "hold") {
   const gated = gatedSpawn(spawn, "touch", [args[0]!], { detached: true });
   writeSync(1, `pid ${gated.child.pid}\n`);
   process.kill(process.pid, "SIGKILL");
+} else if (mode === "gate-release") {
+  const gated = gatedSpawn(spawn, "sleep", ["30"], { detached: true, stdio: "ignore" });
+  gated.child.unref();
+  gated.release();
+  writeSync(1, `pid ${gated.child.pid}\n`);
 } else if (mode === "start-crash") {
   const [home, runRoot, name, role] = args as [string, string, string, "provider" | "gateway"];
   const fakeSync = (() => ({ status: 0, stdout: "", stderr: "" })) as never;
