@@ -2717,25 +2717,31 @@ export class ClawtrateClient {
    * their servers and tools for a task (`tools.effective`, `operator.read`),
    * after its history loads and whenever the gateway reports its plugins
    * changed. Evidence for a call before its result only; a failed read keeps
-   * the map there was.
+   * the map there was. Reads of one task are numbered like its lists: an
+   * answer to an older read that arrives after a newer one's is dropped.
    */
   private async readToolMap(key: string, generation: number): Promise<void> {
     const incarnation = this.incarnations.get(key);
+    const listKey = `${key}\u0000tools`;
+    const revision = (this.listRequested.get(listKey) ?? 0) + 1;
+    this.listRequested.set(listKey, revision);
+    const stale = () =>
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation ||
+      (this.listApplied.get(listKey) ?? 0) > revision;
     let answer: unknown;
     try {
       answer = await this.request("tools.effective", { sessionKey: key });
     } catch (error) {
       if (generation === this.generation)
         this.log("warn", `tools.effective failed: ${errorMessage(error)}`);
+      // A failure is this read's answer too: an older map arriving later changes nothing.
+      if (!stale()) this.listApplied.set(listKey, revision);
       return;
     }
-    if (
-      generation !== this.generation ||
-      !this.tracked(key) ||
-      this.incarnations.get(key) !== incarnation
-    ) {
-      return;
-    }
+    if (stale()) return;
+    this.listApplied.set(listKey, revision);
     const map = mcpToolMap(answer, MAX_MCP_TOOLS);
     const current = this.state.transcripts[key];
     if (!current || JSON.stringify(current.mcpTools) === JSON.stringify(map)) return;

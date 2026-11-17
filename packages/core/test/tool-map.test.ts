@@ -95,6 +95,29 @@ describe("the tool map from tools.effective", () => {
     }
   });
 
+  it("keeps the newer read's map when an older read of the same task answers after it", async () => {
+    const answers: Array<(value: unknown) => void> = [];
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["tools.effective"] = () => new Promise((resolve) => answers.push(resolve));
+    try {
+      gateway.emit("plugins.changed", {});
+      await until(() => answers.length === 1);
+      gateway.emit("plugins.changed", {});
+      await until(() => answers.length === 2);
+      // The newer read answers first, with the catalog as it is now.
+      answers[1]!(answer([entry("t3code__t3_thread_send", "t3code", "t3_thread_send")]));
+      await until(() => "t3code__t3_thread_send" in transcript().mcpTools);
+      // The older read's answer, from before the change, comes late and changes nothing.
+      answers[0]!(answer([entry("t3code__t3_thread_launch", "t3code", "t3_thread_launch")]));
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      expect(transcript().mcpTools).toEqual({
+        t3code__t3_thread_send: { server: "t3code", tool: "t3_thread_send" },
+      });
+    } finally {
+      client.stop();
+    }
+  });
+
   it("drops an answer for a task released while it was read", async () => {
     let answerRead!: (value: unknown) => void;
     const { client, gateway, transcript } = await openTask();
