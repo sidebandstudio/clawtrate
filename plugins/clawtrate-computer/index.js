@@ -980,8 +980,10 @@ export function createComputer(api, options = {}) {
 
   // ---- the bot's browser tool ----
 
-  // Highest priority: the pin is in place before any other hook can ask for
-  // approval of the call's parameters, and a block here ends the decision.
+  // Priority 1000, chosen to be above the usual ones so the pin is in place
+  // before most other hooks see the call; the gateway runs hooks highest
+  // first, and another plugin can choose a higher priority. A block here
+  // ends the decision.
   api.on(
     "before_tool_call",
     (event, ctx) => {

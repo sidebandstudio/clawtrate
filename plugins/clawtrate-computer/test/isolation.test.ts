@@ -2,6 +2,8 @@
 // host browser, and no other agent reaches a bot's profile. Rights to view and
 // control come only from the admitted session's bot and its live tab list.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   ATLAS_SESSION,
@@ -222,10 +224,29 @@ describe("R3-05: routing is pinned to the host", () => {
     ).toBe(true);
   });
 
-  it("runs before other hooks, for the browser tool only", () => {
+  it("registers its hook at its chosen priority, 1000, for the browser tool only", () => {
     const h = load();
     const [entry] = h.hooks.get("before_tool_call")!;
     expect(entry!.opts).toEqual({ matcher: ["browser"], priority: 1000 });
+  });
+
+  it("the plugin's page gives that priority as chosen, not as a promise to run first", () => {
+    const page = readFileSync(join(import.meta.dirname, "../README.md"), "utf8");
+    const [entry] = load().hooks.get("before_tool_call")!;
+    expect(page).toContain(`with priority ${String(entry!.opts.priority)}`);
+    expect(page).toContain("it is not a guarantee of running first");
+    expect(page).not.toMatch(/hook runs first/);
+  });
+
+  it("the plugin's page tells the gateway's write-tier session dashboard from its admin route", () => {
+    const page = readFileSync(join(import.meta.dirname, "../README.md"), "utf8");
+    expect(page).toMatch(
+      /`browser\.dashboard\.request`, is on the write tier \(`operator\.write`\)/,
+    );
+    expect(page).toMatch(
+      /`browser\.request`, reaches every profile and every tab, and needs full admin access/,
+    );
+    expect(page).not.toMatch(/watching a bot's browser needs full admin access/);
   });
 
   it("warns when another hook ran a bot's call with another profile", async () => {

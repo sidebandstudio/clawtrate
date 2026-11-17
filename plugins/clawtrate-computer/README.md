@@ -8,7 +8,12 @@ Clawtrate is an independent open-source project. It is not made by, affiliated w
 
 ## What it adds
 
-Without the plugin, watching a bot's browser needs full admin access to the gateway (`operator.admin`), and nothing stops a person and a bot from acting in the same tab at once. With it:
+Without the plugin, a device has two routes to a bot's browser, and neither gives a person a tab to themselves:
+
+- **The gateway's session dashboard**, `browser.dashboard.request`, is on the write tier (`operator.write`) and admitted per task, for a task whose policy allows the browser tool. It reaches one tab only, the dashboard tab bound to that task: open it, watch it as a screencast, read it, navigate it and act in it. It cannot list or watch the bot's other tabs or choose another profile or tab, and it does not stop the bot: a person and the bot can act in that tab at the same time.
+- **The admin route**, `browser.request`, reaches every profile and every tab, and needs full admin access to the gateway (`operator.admin`).
+
+With the plugin:
 
 - **One browser per bot.** Every `browser` tool call of a configured bot is sent to that bot's own browser profile on the gateway's machine. Other agents cannot use a configured bot's profile.
 - **Watching.** Anyone whose device may use one of the bot's tasks can list the bot's tabs and watch one live.
@@ -135,7 +140,7 @@ It guarantees, for each configured bot:
 1. **Operator browser controls.** `browser.request` (for devices with `operator.admin`) and `browser.dashboard.request` (for a browser dashboard widget in a task) are gateway methods; no plugin hook sees them, so such a device can still drive the bot's browser. A dashboard widget can name any browser profile, and the plugin blocks only the browser tool's dashboard selector, not the `dashboard` tool that creates widgets. If that matters, deny the `dashboard` tool, and give `operator.admin` to no device you would not let drive the bot's browser.
 2. **The browser's debugging port.** Each bot's browser listens on its loopback port without authentication. Any process on the gateway's machine can drive it there, including a command a bot runs with `exec`, `process` or `code_execution` on the gateway host. Deny those tools, or run them in a sandbox, for every agent that should not reach the bots' browsers.
 3. **Other tools that drive a screen or a browser,** such as the `computer` tool, act outside the `browser` tool hook. Deny them where they could reach the bots' browsers.
-4. **Other plugins.** This plugin's hook runs first (priority 1000) for the `browser` tool, so its routing is in place before any other plugin asks for approval. A plugin that rewrites browser calls after it could undo that; the plugin logs a warning when a bot's call ran with another profile, but cannot stop it.
+4. **Other plugins.** This plugin registers its `browser` hook with priority 1000, a priority chosen to be above the usual ones; it is not a guarantee of running first. The gateway runs hooks in order of priority, highest first, and any plugin can choose a higher one. A hook that runs before this one sees the call before it is pinned to the bot's profile, and one that runs after it can rewrite the call's profile again; the plugin logs a warning when a bot's call ran with another profile, but cannot stop it.
 
 **Other limits.**
 
