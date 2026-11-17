@@ -196,12 +196,13 @@ describe("the closed contract with accounts", () => {
     expect(recordedStartOptions({ runDir })).toEqual({});
     for (const [text, ok] of [
       ['{"accounts":true}', true],
+      ["{}", true],
       ['{"accounts":"yes"}', false],
       ['{"accounts":true,"plugins":[]}', false],
     ] as const) {
       rmSync(join(runDir, "start-options.json"), { force: true });
       writeFileSync(join(runDir, "start-options.json"), text);
-      if (ok) expect(recordedStartOptions({ runDir })).toEqual({ accounts: true });
+      if (ok) expect(recordedStartOptions({ runDir })).toEqual(JSON.parse(text));
       else expect(() => recordedStartOptions({ runDir })).toThrow(/not a record of start options/);
     }
   });

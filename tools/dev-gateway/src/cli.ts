@@ -579,7 +579,7 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
     recorded === null ||
     typeof recorded !== "object" ||
     Object.keys(recorded).some((key) => key !== "accounts") ||
-    typeof (recorded as StartOptions).accounts !== "boolean"
+    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts)
   ) {
     throw new Error(`${path} is not a record of start options`);
   }
