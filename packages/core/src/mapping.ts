@@ -5,6 +5,7 @@
 import type {
   Bot,
   Task,
+  TaskContext,
   TaskStatus,
   ToolResult,
   TranscriptBlock,
@@ -172,7 +173,19 @@ export function mapSessionRow(row: RawRecord): Task | null {
     updatedAt: num(row.updatedAt) ?? num(row.lastActivityAt) ?? num(row.createdAt),
     status: taskStatus(row),
     unread: row.unread === true,
+    ...contextOf(row),
   };
+}
+
+/**
+ * Context use from a session row: `totalTokens` (the latest run's context, as
+ * the gateway counts it) out of `contextTokens` (the model's context window).
+ */
+function contextOf(row: RawRecord): { context: TaskContext } | Record<string, never> {
+  const used = num(row.totalTokens);
+  const window = num(row.contextTokens);
+  if (used === null || window === null || window <= 0) return {};
+  return { context: { used, window, fresh: row.totalTokensFresh !== false } };
 }
 
 /** Rows from a `sessions.list` result, keyed by session key. */
@@ -266,6 +279,8 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
   const items: TranscriptItem[] = [];
   let currentRun: string | null = null;
   const pendingCalls = new Map<string, Extract<TranscriptBlock, { kind: "tool-call" }>>();
+  /** The item each pending call is in, so a cut result marks it. */
+  const callItems = new Map<string, TranscriptItem>();
 
   arr(messages).forEach((entry, index) => {
     const message = asRecord(entry);
@@ -274,6 +289,8 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
     const id = `${str(info.id) ?? `row-${index}`}:${index}`;
     const timestamp = num(message.timestamp) ?? num(info.recordTimestampMs);
     const kind = str(info.kind);
+    // The gateway cut this row to its display length.
+    const cutByGateway = info.truncated === true;
 
     if (kind && SYSTEM_ROW_TEXT[kind]) {
       items.push({
@@ -292,7 +309,14 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         const text = textOf(message.content);
         currentRun = null;
         if (!text.trim()) return;
-        items.push({ id, role: "user", timestamp, blocks: [{ kind: "text", text }], model: null });
+        items.push({
+          id,
+          role: "user",
+          timestamp,
+          blocks: [{ kind: "text", text }],
+          model: null,
+          ...(cutByGateway ? { truncated: true } : {}),
+        });
         return;
       }
       case "assistant": {
@@ -302,13 +326,20 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         }
         const runId = str(info.runId);
         const previous = items.at(-1);
+        let item: TranscriptItem;
         if (previous?.role === "assistant" && runId !== null && runId === currentRun) {
           previous.blocks.push(...blocks);
-          return;
+          item = previous;
+        } else {
+          currentRun = runId;
+          if (blocks.length === 0) return;
+          item = { id, role: "assistant", timestamp, blocks, model: str(message.model) };
+          items.push(item);
         }
-        currentRun = runId;
-        if (blocks.length === 0) return;
-        items.push({ id, role: "assistant", timestamp, blocks, model: str(message.model) });
+        if (cutByGateway) item.truncated = true;
+        for (const block of blocks) {
+          if (block.kind === "tool-call" && block.callId) callItems.set(block.callId, item);
+        }
         return;
       }
       case "toolResult":
@@ -325,6 +356,8 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
               : text,
         };
         call.result = result;
+        const holder = callItems.get(callId!);
+        if (cutByGateway && holder) holder.truncated = true;
         return;
       }
       default:

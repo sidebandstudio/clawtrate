@@ -8,9 +8,11 @@ import {
   type ClawtrateState,
   type HostInfo,
 } from "@clawtrate/core";
-import { app, BrowserWindow, ipcMain, nativeTheme, shell } from "electron";
-import { writeFileSync } from "node:fs";
+import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, session, shell } from "electron";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
 import {
   readDevConnection,
   selectInstance,
@@ -19,10 +21,41 @@ import {
 } from "../host/runtime.ts";
 
 app.setName("Clawtrate");
+// Every renderer is sandboxed, including any not created through createWindow.
+app.enableSandbox();
 
 const APP_ROOT = app.getAppPath();
 const REPO_ROOT = join(APP_ROOT, "../..");
 const RESOURCES = join(APP_ROOT, "resources");
+const RENDERER_DIR = join(import.meta.dirname, "../renderer");
+// Only a development build loads the renderer from the dev server; a packaged
+// app never loads a URL taken from its environment.
+const DEV_SERVER = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL;
+
+/** The app's own content: its renderer folder, or the dev server in development. */
+function isAppContent(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.protocol === "file:") return url.href.startsWith(pathToFileURL(RENDERER_DIR).href + "/");
+  if (DEV_SERVER === undefined) return false;
+  const dev = new URL(DEV_SERVER);
+  // The dev server's page, assets and its hot-reload socket.
+  return url.hostname === dev.hostname && url.port === dev.port;
+}
+
+/** Links leave the app only for the web: http and https open in the system browser. */
+function openExternally(raw: string): void {
+  try {
+    const { protocol } = new URL(raw);
+    if (protocol === "http:" || protocol === "https:") void shell.openExternal(raw);
+  } catch {
+    // not a URL: ignored
+  }
+}
 
 let runtime: HostRuntime | null = null;
 let window: BrowserWindow | null = null;
@@ -46,18 +79,15 @@ function createWindow(): BrowserWindow {
     },
   });
 
-  // Links from transcripts open in the system browser; the app window never navigates away.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//.test(url)) void shell.openExternal(url);
-    return { action: "deny" };
+  win.on("closed", () => {
+    if (window === win) window = null;
   });
-  win.webContents.on("will-navigate", (event) => event.preventDefault());
   win.once("ready-to-show", () => {
     if (!process.env.CLAWTRATE_SCREENSHOT) win.show();
   });
 
-  if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
-  else void win.loadFile(join(import.meta.dirname, "../renderer/index.html"));
+  if (DEV_SERVER) void win.loadURL(DEV_SERVER);
+  else void win.loadFile(join(RENDERER_DIR, "index.html"));
   return win;
 }
 
@@ -80,8 +110,53 @@ async function captureAndQuit(win: BrowserWindow, path: string): Promise<void> {
   app.quit();
 }
 
+/**
+ * Every web contents, the window's and any other: no new windows (links from
+ * transcripts open in the system browser), no navigation, no webviews.
+ */
+app.on("web-contents-created", (_event, contents) => {
+  contents.setWindowOpenHandler(({ url }) => {
+    openExternally(url);
+    return { action: "deny" };
+  });
+  contents.on("will-navigate", (event) => event.preventDefault());
+  contents.on("will-attach-webview", (event) => event.preventDefault());
+});
+
+/**
+ * Nothing but the app's own files is loaded. The one exception is a bot's
+ * picture, an https image the gateway names (the page's policy allows it as
+ * `img-src https:`). The renderer is granted no permissions except writing
+ * text to the clipboard for the copy buttons.
+ */
+function lockDownSession(): void {
+  const ses = session.defaultSession;
+  ses.webRequest.onBeforeRequest((details, callback) => {
+    const allowed =
+      isAppContent(details.url) ||
+      details.url.startsWith("devtools:") ||
+      details.url.startsWith("data:") ||
+      (details.resourceType === "image" && details.url.startsWith("https://"));
+    callback({ cancel: !allowed });
+  });
+  const allowedPermission = (permission: string) => permission === "clipboard-sanitized-write";
+  ses.setPermissionRequestHandler((_contents, permission, grant) =>
+    grant(allowedPermission(permission)),
+  );
+  ses.setPermissionCheckHandler((_contents, permission) => allowedPermission(permission));
+}
+
+/** The device key and tokens live here, readable by this user only. */
+function privateDataDir(): string {
+  const dir = process.env.CLAWTRATE_DATA_DIR ?? join(app.getPath("userData"), "gateway");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") chmodSync(dir, 0o700);
+  return dir;
+}
+
 async function main(): Promise<void> {
   await app.whenReady();
+  lockDownSession();
   if (process.platform === "darwin" && !app.isPackaged) {
     app.dock?.setIcon(join(RESOURCES, "icon-mac.png"));
   }
@@ -90,7 +165,7 @@ async function main(): Promise<void> {
   runtime = await startHostRuntime({
     kind: "desktop",
     displayName: "Clawtrate Desktop",
-    dataDir: process.env.CLAWTRATE_DATA_DIR ?? join(app.getPath("userData"), "gateway"),
+    dataDir: privateDataDir(),
     // Only development builds look for the local development gateway.
     // CLAWTRATE_DEV_INSTANCE selects a named development instance. Its address
     // is opened only while this checkout can still prove it, before every attempt.
@@ -131,8 +206,30 @@ async function main(): Promise<void> {
     store.check(meta, data.byteLength);
     return store.add(meta, data.byteLength, () => Buffer.from(data).toString("base64"));
   });
+  // Unread activity on the dock (macOS, Linux) or the taskbar button (Windows).
+  const dot = nativeImage.createFromBitmap(Buffer.from(dotBitmap(16, [10, 110, 92])), {
+    width: 16,
+    height: 16,
+  });
+  ipcMain.on("clawtrate:badge", (_event, raw: unknown) => {
+    const count = parseBadgeCount(raw);
+    if (count === null) return;
+    applyUnreadBadge(
+      {
+        platform: process.platform,
+        setBadgeCount: (value) => app.setBadgeCount(value),
+        setOverlay: (icon, description) => {
+          for (const win of BrowserWindow.getAllWindows()) {
+            win.setOverlayIcon(icon ? dot : null, description);
+          }
+        },
+      },
+      count,
+    );
+  });
   batchSnapshots(client.store.subscribe, (state) => {
-    window?.webContents.send("clawtrate:state", state);
+    // A snapshot can fire after the window closed, during quit for one.
+    if (window && !window.isDestroyed()) window.webContents.send("clawtrate:state", state);
   });
 
   window = createWindow();
@@ -150,4 +247,15 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => runtime?.client.stop());
 
-void main();
+// One app per data folder: a second launch focuses the running window and exits.
+if (app.requestSingleInstanceLock()) {
+  app.on("second-instance", () => {
+    if (!window) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  });
+  void main();
+} else {
+  app.quit();
+}

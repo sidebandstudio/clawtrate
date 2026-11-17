@@ -4,5 +4,8 @@ packages:
   - tools/*
 # Electron 45 downloads its binary the first time it runs, so its install
 # script is declined explicitly. pnpm fails installs with unreviewed scripts.
+# electron-winstaller comes with electron-builder for Squirrel installers; the
+# Windows build uses NSIS, so its script (picking a bundled 7-Zip) is not needed.
 allowBuilds:
   electron: false
+  electron-winstaller: false

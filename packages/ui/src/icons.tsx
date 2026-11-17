@@ -120,3 +120,29 @@ export const WarnIcon = (props: IconProps) => (
     <path d="M8 11.4v.1" />
   </Icon>
 );
+
+export const PinIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M5.75 2.75h4.5M6.75 2.75v3.5L4.5 9.25h7l-2.25-3v-3.5M8 9.25v4" />
+  </Icon>
+);
+
+export const HideIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M6.4 3.6A6.7 6.7 0 0 1 8 3.4c3.4 0 5.6 3 6 4.6-.2.6-.6 1.4-1.3 2.2M4.3 4.6C3 5.5 2.2 6.9 2 8c.4 1.6 2.6 4.6 6 4.6 1.2 0 2.2-.4 3.1-.9" />
+    <path d="M6.6 6.6a2 2 0 0 0 2.8 2.8M2.75 2.75l10.5 10.5" />
+  </Icon>
+);
+
+export const SortIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M3 4.5h10M3 8h7M3 11.5h4" />
+  </Icon>
+);
+
+/** A filled five-pointed star, for the primary bot's badge. */
+export const StarIcon = (props: IconProps) => (
+  <Icon {...props} fill="currentColor" stroke="none">
+    <path d="m8 1.9 1.8 3.8 4.1.5-3 2.9.8 4.1L8 11.2l-3.7 2 .8-4.1-3-2.9 4.1-.5L8 1.9Z" />
+  </Icon>
+);

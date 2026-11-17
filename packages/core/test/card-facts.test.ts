@@ -181,8 +181,7 @@ describe("an explicit correction of a tool result (D4)", () => {
     const scratch = new RawTable();
     const history = runsFromHistory(rows, null, { ...ctx(), raw: scratch });
     const merge = mergeHistoryRuns(activity.runs, history, ctx());
-    for (const [stepId, source] of merge.fromHistory)
-      raw.set(KEY, stepId, scratch.get(KEY, source)!);
+    for (const stepId of merge.fromHistory) raw.set(KEY, stepId, scratch.get(KEY, stepId)!);
     const resynced = { ...activity, runs: merge.runs };
     expect(select(resynced, { previous: before }).mcpCalls[0]!.state).toBe("returned");
     const freshRaw = (step: Step) => step.raw ?? scratch.get(KEY, step.id);

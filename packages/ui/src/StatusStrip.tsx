@@ -53,14 +53,14 @@ export function useSyncPhase(state: ClawtrateState, taskKey: string | null): Syn
 }
 
 export type Strip = {
-  tone: "warn" | "danger" | "ok";
+  tone: "warn" | "danger" | "ok" | "off";
   /** The state. It keeps its place beside the action and shortens only after the explanation. */
   text: string;
   /** The state in fewer words, for the one-pane layout. */
   short?: string;
   /** The explanation after the middle dot; it shortens first. */
   more: string | null;
-  action: "retry" | "reload" | null;
+  action: "retry" | "reload" | "reconnect" | null;
   /** Show the host's retry countdown in the text. */
   countdown: boolean;
 };
@@ -94,6 +94,14 @@ export function stripFor(
         short: "Can't reach the gateway",
         more: connection.error?.message ?? "showing saved messages",
         action: "retry",
+        countdown: false,
+      };
+    case "disconnected":
+      return {
+        tone: "off",
+        text: "Disconnected",
+        more: "showing saved messages",
+        action: "reconnect",
         countdown: false,
       };
     case "connected":
@@ -180,8 +188,12 @@ export function StatusStrip({
         {strip.more && <span>· {strip.more}</span>}
       </span>
       {strip.action && (
-        <button type="button" onClick={strip.action === "retry" ? onRetry : onReload}>
-          {strip.action === "retry" ? "Retry now" : "Try again"}
+        <button type="button" onClick={strip.action === "reload" ? onReload : onRetry}>
+          {strip.action === "retry"
+            ? "Retry now"
+            : strip.action === "reconnect"
+              ? "Reconnect"
+              : "Try again"}
         </button>
       )}
     </div>

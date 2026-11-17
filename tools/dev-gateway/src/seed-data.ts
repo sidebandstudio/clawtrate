@@ -493,6 +493,64 @@ Call the pharmacy before you leave to confirm the order is filled.`),
   },
 ];
 
+/** A prompt whose reply narrates between its tool calls, in three short messages. */
+export const NARRATING_PROMPT = "Check my lists and tell me which evening this week is free.";
+
+/** A prompt whose reply streams slowly, for about ten seconds. */
+export const SLOW_PROMPT = "Take your time and write out the whole packing list for the trip.";
+
+const PACKING = [
+  "Rain shell",
+  "Two warm layers",
+  "Hiking boots, already worn in",
+  "Wool socks, three pairs",
+  "Headlamp and spare batteries",
+  "Water bottles, one each",
+  "Trail snacks for both days",
+  "Sunscreen and a hat",
+  "First-aid kit",
+  "Phone charger and a power bank",
+  "Paper map of the trails",
+  "Something to read in the evening",
+];
+
+/**
+ * Prompts the scripted model answers that the seed never sends. Tests send
+ * them to existing tasks for runs the seed does not leave behind: one that
+ * narrates as it works, and one that is still going when the client restarts.
+ */
+export const UNSEEDED_TURNS: SeedTurn[] = [
+  {
+    prompt: NARRATING_PROMPT,
+    rounds: [
+      [
+        say("On it. Reading your weekend list first."),
+        tool("call_pip_narrate_1", "read", { path: "lists/mountain-weekend.md" }),
+      ],
+      [
+        say("Read it. Noting the free evening in a list next."),
+        tool("call_pip_narrate_2", "write", {
+          path: "lists/free-evening.md",
+          content: "# Free evening\n\nThursday\n",
+        }),
+      ],
+      [say("Thursday evening is free. I wrote it down in `lists/free-evening.md`.")],
+    ],
+  },
+  {
+    prompt: SLOW_PROMPT,
+    rounds: [
+      [
+        {
+          kind: "text",
+          text: `Here is the whole packing list, one thing at a time.\n\n${[...PACKING, ...PACKING.map((item) => `${item}, a spare`)].map((item) => `- ${item}`).join("\n")}\n\nThat is everything.`,
+          delayMs: 300,
+        },
+      ],
+    ],
+  },
+];
+
 export function sessionKeyFor(botId: string, slug: string): string {
   return `agent:${botId}:${slug}`;
 }

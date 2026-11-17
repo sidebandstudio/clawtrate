@@ -64,6 +64,12 @@ import {
   type RawRecord,
 } from "./mapping.ts";
 import {
+  PAIRING_ENDED,
+  pairingEnded,
+  protocolMessage,
+  protocolMismatch,
+} from "./connect-errors.ts";
+import {
   activeRun,
   activitySize,
   applyAgentEvent,
@@ -267,8 +273,12 @@ function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
 export const FOREIGN_SESSIONS = 16;
 export const FOREIGN_RUNS_PER_SESSION = 4;
 const MAX_TIMER_MS = 2_147_483_647;
-/** Whole reads from history (`readStepRaw`, `readHistoryItem`) in flight at once; past it one is refused. */
+/** Whole reads (`readStepRaw`, `readHistoryItem`, `readApprovalText`) in flight at once; past it one is refused. */
 export const MAX_FULL_READS = 4;
+/** The text length `chat.history` gives when not asked for more (OpenClaw 2026.10.6). */
+export const GATEWAY_HISTORY_TEXT_CHARS = 8_000;
+/** The most text per row a whole read asks `chat.history` for: the protocol's `maxChars` maximum. */
+export const MAX_HISTORY_READ_CHARS = 500_000;
 /** Runs of one task whose streaming `chat` text is kept to build on the next delta. */
 export const MAX_STREAMS_PER_TASK = 2;
 /** Spawn links kept (`spawnedBy`), newest. */
@@ -277,7 +287,12 @@ const PAIRING_RETRY_MS = 3000;
 
 const SETTINGS_KEY = "connection";
 
-export type ConnectionSettings = { url: string; token: string | null };
+export type ConnectionSettings = {
+  url: string;
+  token: string | null;
+  /** The user chose Disconnect: stay disconnected, across restarts, until Reconnect. */
+  suspended?: boolean;
+};
 
 export type ConnectOptions = { url: string; token?: string | null };
 
@@ -616,6 +631,10 @@ export class ClawtrateClient {
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapping = false;
   private changedDuringBootstrap = false;
+  /** The pairing request this client last saw pending, and when. */
+  private pairingSeen: string | null = null;
+  /** The current attempt reached hello. */
+  private attemptGreeted = false;
   /** Set by the protocol client's gap callback; the reconnect it forces reloads with this reason. */
   private pendingResync: CaughtUp["reason"] | null = null;
   /** The next hello follows a reconnect this client made on purpose, so it is not a resync. */
@@ -635,13 +654,6 @@ export class ClawtrateClient {
     { task: string; files: OutgoingAttachment[]; bytes: number }
   >();
   private attachmentBytes = 0;
-  /**
-   * Live reasoning ids come from this counter, which never goes backwards for
-   * the life of the client: no id is used twice in a task, whatever is
-   * resynced, closed or reopened.
-   */
-  private nextReasoningId = 0;
-  private readonly ids = { next: () => this.nextReasoningId++ };
   /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
   private readonly withdrawnOwners = new WeakSet<object>();
   /** Task creations not yet settled, oldest first (`MAX_CREATIONS`). */
@@ -675,6 +687,14 @@ export class ClawtrateClient {
   private readonly listApplied = new Map<string, number>();
   /** Whole reads from history in flight (`MAX_FULL_READS`). */
   private fullReads = 0;
+  /**
+   * Task lists being read, each its rows so far, already bounded: at most two,
+   * a hello's and one refresh (refreshes run one at a time; a changed
+   * connection's read ends when its requests are flushed).
+   */
+  private readonly listings = new Set<Map<string, RawRecord>>();
+  private refreshing = false;
+  private refreshAgain = false;
 
   /** Tasks followed at once: the host's count, at most `MAX_TRACKED_TASKS`. */
   private readonly trackedLimit: number;
@@ -695,11 +715,20 @@ export class ClawtrateClient {
     return raw ? (JSON.parse(raw) as ConnectionSettings) : null;
   }
 
-  /** Resume the saved gateway, if any and if allowed. */
+  private async saveSettings(settings: ConnectionSettings): Promise<void> {
+    this.settings = settings;
+    await this.host.storage.set(SETTINGS_KEY, JSON.stringify(settings));
+  }
+
+  /** Resume the saved gateway, if any and if allowed, unless the user disconnected from it. */
   async start(): Promise<void> {
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
     this.settings = await this.savedSettings();
+    if (this.settings?.suspended) {
+      this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
+      return;
+    }
     if (this.settings) await this.open();
   }
 
@@ -710,6 +739,7 @@ export class ClawtrateClient {
     const token = options.token?.trim() || null;
     if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
     this.settings = { url, token };
+    this.pairingSeen = null;
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
     await this.open();
   }
@@ -719,6 +749,7 @@ export class ClawtrateClient {
     this.abandonAccessRequest("Disconnected from the gateway.");
     this.close();
     this.settings = null;
+    this.pairingSeen = null;
     this.rows = new Map();
     this.raw.clear();
     this.retained.clear();
@@ -740,7 +771,23 @@ export class ClawtrateClient {
       await this.bootstrap(this.generation, null);
       return;
     }
+    if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
     await this.open();
+  }
+
+  /**
+   * Close the connection and keep everything else: the gateway, the device's
+   * pairing and what is on screen. `retryNow` reconnects.
+   */
+  async suspend(): Promise<void> {
+    if (!this.settings) return;
+    // Saved, so a restart does not reconnect by itself.
+    await this.saveSettings({ ...this.settings, suspended: true });
+    // The connection stops: writes waiting for access fail, as on any lost connection.
+    // Runs are kept as they are and reconciled with history after Reconnect.
+    this.abandonAccessRequest("Disconnected from the gateway.");
+    this.close();
+    this.setConnection({ status: "disconnected", retryAt: null, error: null, pairing: null });
   }
 
   /** Stop without forgetting anything. Used when the host process exits. */
@@ -2660,7 +2707,8 @@ export class ClawtrateClient {
     const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
     if (!approval) throw new Error("That approval is not in this task.");
     const source = APPROVAL_SOURCES.find((each) => each.kind === approval.kind)!;
-    const value = await this.request(source.method, {});
+    // A whole read like the others: it shares their gate, so viewers cannot hold many lists at once.
+    const value = await this.wholeRead(() => this.request(source.method, {}));
     const record = asRecord(value);
     const items = Array.isArray(value)
       ? value
@@ -2695,19 +2743,30 @@ export class ClawtrateClient {
    */
   async readHistoryItem(key: string, itemId: string): Promise<TranscriptItem | null> {
     if (!this.state.transcripts[key]) return null;
-    const history = await this.readHistoryWhole(key);
+    // The length needed is not known here: the most the gateway gives. An item it still cut says so.
+    const history = await this.readHistoryWhole(key, MAX_HISTORY_READ_CHARS);
     return mapHistory(history?.messages).find((item) => item.id === itemId) ?? null;
   }
 
-  /** A history page read for a whole value, at most `MAX_FULL_READS` at once. */
-  private async readHistoryWhole(key: string): Promise<RawRecord | null> {
+  /**
+   * A history page read for a whole value, at most `MAX_FULL_READS` at once,
+   * asking the gateway for text up to `maxChars` (it cuts to 8,000 otherwise).
+   */
+  private async readHistoryWhole(key: string, maxChars: number): Promise<RawRecord | null> {
+    return asRecord(
+      await this.wholeRead(() =>
+        this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT, maxChars }),
+      ),
+    );
+  }
+
+  /** One whole read (history or an approval list), at most `MAX_FULL_READS` at once; past it, refused. */
+  private async wholeRead<T>(read: () => Promise<T>): Promise<T> {
     if (this.fullReads >= MAX_FULL_READS)
       throw new Error("Other whole texts are being read; try again in a moment.");
     this.fullReads += 1;
     try {
-      return asRecord(
-        await this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
-      );
+      return await read();
     } finally {
       this.fullReads -= 1;
     }
@@ -2726,33 +2785,78 @@ export class ClawtrateClient {
    * Null only when the task has no such step.
    */
   async readStepRaw(key: string, stepId: string): Promise<StepRead | null> {
-    const has = () =>
-      this.state.transcripts[key]?.runs.some((run) => run.steps.some((step) => step.id === stepId));
-    if (!has()) return null;
+    const find = () =>
+      this.state.transcripts[key]?.runs
+        .flatMap((run) => run.steps)
+        .find((step) => step.id === stepId);
+    const step = find();
+    if (!step) return null;
+    // What the raw table keeps is whole unless a history row it came from was cut.
     const kept = this.raw.get(key, stepId);
-    if (kept) return { status: "available", raw: kept };
-    const history = await this.readHistoryWhole(key);
+    if (kept && !step.truncated) return { status: "available", raw: kept };
+    // Ask for the length the step needs; one the gateway cut gives no length, so the most it gives.
+    const known = Math.max(
+      ...[step.argsText, step.output, step.result].map((text) => text?.totalChars ?? 0),
+    );
+    const maxChars = step.truncated
+      ? MAX_HISTORY_READ_CHARS
+      : Math.min(MAX_HISTORY_READ_CHARS, Math.max(GATEWAY_HISTORY_TEXT_CHARS, known + 64));
+    const history = await this.readHistoryWhole(key, maxChars);
     const current = this.state.transcripts[key];
-    if (!current || !has()) return null;
+    const shown = find();
+    const run = current?.runs.find((each) => each.steps.some((one) => one.id === stepId));
+    if (!current || !shown || !run) return null;
     // Rebuilt aside, as a resync would, into a table dropped after this read.
     const scratch = new RawTable(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
     const ctx = { ...this.context(key), raw: scratch };
-    const fromHistory = runsFromHistory(history?.messages, asRecord(history?.inFlightRun), ctx);
-    const merge = mergeHistoryRuns(current.runs, fromHistory, ctx);
-    const whole = scratch.get(key, merge.fromHistory.get(stepId) ?? stepId);
-    return whole
-      ? { status: "available", raw: whole }
-      : {
-          status: "not-available-yet",
+    const windowCut = history?.hasMore === true;
+    const fromHistory = runsFromHistory(history?.messages, asRecord(history?.inFlightRun), ctx, {
+      windowCut,
+    });
+    const whole = scratch.get(key, stepId);
+    const read = fromHistory.flatMap((each) => each.steps).find((each) => each.id === stepId);
+    // A step's id is its place, which history can give another block: what was fetched is
+    // this step only when it shows so. This check only ever withholds `available`.
+    const same = whole !== null && read !== undefined && sameStep(shown, read, whole);
+    // Its message replaced by the gateway's placeholder: not a cut text, and asking again does not help.
+    if ((!same || read.truncated) && oversizedWhere(history?.messages, run.id, shown, windowCut)) {
+      return {
+        status: "too-large-for-gateway",
+        reason:
+          "The gateway replaces a message this large with a placeholder in its history and will not return its text in full.",
+      };
+    }
+    if (!same) {
+      if (whole && read) {
+        return {
+          status: "not-established",
           reason:
-            "This step's whole text was too long to keep here; it can be read once the gateway's history holds it.",
+            "What the gateway's history returned at this step's place could not be shown to be this step, so it is not offered as its text.",
         };
+      }
+      return {
+        status: "not-available-yet",
+        reason:
+          "This step's whole text was too long to keep here, and the gateway's history did not return it: it may not hold it yet, or its page was too large to include it. Trying again later may help.",
+      };
+    }
+    if (read.truncated) {
+      return {
+        status: "cut-by-gateway",
+        raw: whole,
+        receivedChars: Math.max(
+          ...[read.argsText, read.output, read.result].map((text) => text?.totalChars ?? 0),
+        ),
+        reason: "The gateway's history holds this step's text only cut to a shorter length.",
+      };
+    }
+    return { status: "available", raw: whole };
   }
 
   // Activity ------------------------------------------------------------------------
 
   private context(key: string): EngineContext {
-    return { sessionKey: key, now: this.now(), raw: this.raw, ids: this.ids };
+    return { sessionKey: key, now: this.now(), raw: this.raw };
   }
 
   private updateActivity(
@@ -3007,6 +3111,7 @@ export class ClawtrateClient {
           stored && !this.options.readOnly ? [...stored.heldScopes] : [...READ_SCOPES],
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
         serverVersion: sameGateway ? state.connection.serverVersion : null,
+        gatewayId: sameGateway ? state.connection.gatewayId : null,
       },
       transcripts: sameGateway
         ? state.transcripts
@@ -3054,6 +3159,9 @@ export class ClawtrateClient {
           }
           throw new GatewayNotAllowedError(settings.url);
         }
+        this.attemptGreeted = false;
+        // An attempt is under way: no retry is waiting any more.
+        if (this.state.connection.retryAt !== null) this.setConnection({ retryAt: null });
         const socket = this.host.createWebSocket(settings.url);
         socket.onopen = () => handlers.open();
         socket.onmessage = (event) => handlers.message(String(event.data));
@@ -3111,6 +3219,25 @@ export class ClawtrateClient {
       },
       onHello: (hello) => {
         if (generation !== this.generation) return;
+        this.attemptGreeted = true;
+        if (hello.protocol !== PROTOCOL_VERSION) {
+          // Outside this client's range: nothing else is asked of this gateway.
+          const protocol = { gateway: hello.protocol, client: PROTOCOL_VERSION };
+          this.close();
+          this.setConnection({
+            status: "error",
+            retryAt: null,
+            protocol: hello.protocol,
+            serverVersion: hello.server.version,
+            error: {
+              code: "PROTOCOL_MISMATCH",
+              message: protocolMessage(protocol),
+              hint: null,
+              protocol,
+            },
+          });
+          return;
+        }
         this.handleHello(hello, generation);
       },
       onConnectFailure: async (error) =>
@@ -3128,8 +3255,20 @@ export class ClawtrateClient {
         const status = this.state.connection.status;
         if (status !== "pairing" && status !== "error") {
           // Once this gateway has answered, every later drop is a reconnect, not a first connect.
+          // An attempt that never got an answer says so, unless the gateway gave a reason.
+          const unanswered =
+            !this.attemptGreeted && !this.state.connection.error
+              ? {
+                  error: {
+                    code: "UNREACHABLE",
+                    message: `Nothing answered at ${hostOf(settings.url)}.`,
+                    hint: "Check that the gateway is running and that the address is right.",
+                  },
+                }
+              : {};
           this.setConnection({
             status: this.everConnected ? "reconnecting" : "connecting",
+            ...unanswered,
             // No connection, no effective access; the next hello says what is granted.
             canWrite: false,
             canAnswer: false,
@@ -3224,8 +3363,37 @@ export class ClawtrateClient {
     const code = typeof details.code === "string" ? details.code : error.gatewayCode;
     const hint = typeof details.remediationHint === "string" ? details.remediationHint : null;
 
+    const mismatch = protocolMismatch(details);
+    if (mismatch) {
+      this.setConnection({
+        status: "error",
+        pairing: null,
+        retryAt: null,
+        error: {
+          code: "PROTOCOL_MISMATCH",
+          message: protocolMessage(mismatch),
+          hint,
+          protocol: mismatch,
+        },
+      });
+      return { closeCode: 1000, closeReason: "protocol mismatch", stop: true };
+    }
+
     if (code === "PAIRING_REQUIRED") {
       const requestId = typeof details.requestId === "string" ? details.requestId : "";
+      // The request this client was waiting on is gone: the gateway's owner
+      // rejected it, or it expired. Stop, and let the user ask again.
+      if (pairingEnded(this.pairingSeen, requestId)) {
+        this.pairingSeen = null;
+        this.setConnection({
+          status: "error",
+          pairing: null,
+          retryAt: null,
+          error: { ...PAIRING_ENDED, hint: null },
+        });
+        return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
+      }
+      if (requestId) this.pairingSeen = requestId;
       const scopes = Array.isArray(details.requestedScopes)
         ? details.requestedScopes.filter((s): s is string => typeof s === "string")
         : [...REQUESTED_SCOPES];
@@ -3282,6 +3450,7 @@ export class ClawtrateClient {
   private handleHello(hello: HelloOk, generation: number): void {
     const wasConnected = this.everConnected;
     this.everConnected = true;
+    this.pairingSeen = null;
     // The protocol gives a boot id at most 96 characters; anything else names no start.
     const bootId = asRecord(hello.server)?.bootId;
     this.gatewayBootId =
@@ -3336,17 +3505,36 @@ export class ClawtrateClient {
     this.bootstrapping = true;
     this.changedDuringBootstrap = false;
     this.setDiscovery({ status: "loading", error: null });
+    // The gateway's identity comes with its bots, so what this device keeps
+    // per gateway (pins, hidden bots, order) is known when the bots appear.
+    const gatewayId = this.request("gateway.identity.get", {}).then(
+      (result) => {
+        const id = asRecord(result)?.deviceId;
+        return typeof id === "string" && id ? id : null;
+      },
+      () => null,
+    );
+    // Bots are published as soon as they arrive, so the app can open on them
+    // while tasks are still loading.
     const [agents, sessions] = await Promise.allSettled([
-      this.request("agents.list", {}),
+      this.request("agents.list", {}).then(async (result) => {
+        const id = await gatewayId;
+        if (generation === this.generation) {
+          this.store.update((state) => ({
+            ...state,
+            connection: { ...state.connection, gatewayId: id },
+            bots: mapAgents(result),
+          }));
+        }
+        return result;
+      }),
       this.loadAllSessions(generation, "sessions.subscribe"),
     ]);
     this.bootstrapping = false;
     if (generation !== this.generation) return;
 
     const failures: string[] = [];
-    if (agents.status === "fulfilled") {
-      this.store.update((state) => ({ ...state, bots: mapAgents(agents.value) }));
-    } else {
+    if (agents.status !== "fulfilled") {
       failures.push(`bots: ${errorMessage(agents.reason)}`);
     }
     if (sessions.status === "fulfilled") {
@@ -3385,19 +3573,27 @@ export class ClawtrateClient {
     const first = asRecord(await this.request(firstMethod, SESSION_LIST_PARAMS));
     let page = firstMethod === "sessions.subscribe" ? asRecord(first?.list) : first;
     // Each page is bounded as it arrives: only task rows, only the fields read, the newest
-    // `MAX_LISTED_TASKS` of them, so nothing accumulates across pages.
-    let rows = new Map<string, RawRecord>();
-    for (let pages = 1; ; pages += 1) {
-      rows = newestRows([...rows.values(), ...sessionRowsFromList(page)]);
-      const nextOffset = page?.nextOffset;
-      const more = page?.hasMore === true && typeof nextOffset === "number";
-      if (!more) return { rows, partial: false };
-      if (pages >= MAX_SESSION_PAGES || generation !== this.generation) {
-        return { rows, partial: true };
+    // `MAX_LISTED_TASKS` of them, so nothing accumulates across pages. The rows so far are
+    // kept where the retention registry sees them (`listings`) until the read ends.
+    const rows = new Map<string, RawRecord>();
+    this.listings.add(rows);
+    try {
+      for (let pages = 1; ; pages += 1) {
+        const next = newestRows([...rows.values(), ...sessionRowsFromList(page)]);
+        rows.clear();
+        for (const [key, row] of next) rows.set(key, row);
+        const nextOffset = page?.nextOffset;
+        const more = page?.hasMore === true && typeof nextOffset === "number";
+        if (!more) return { rows, partial: false };
+        if (pages >= MAX_SESSION_PAGES || generation !== this.generation) {
+          return { rows, partial: true };
+        }
+        page = asRecord(
+          await this.request("sessions.list", { ...SESSION_LIST_PARAMS, offset: nextOffset }),
+        );
       }
-      page = asRecord(
-        await this.request("sessions.list", { ...SESSION_LIST_PARAMS, offset: nextOffset }),
-      );
+    } finally {
+      this.listings.delete(rows);
     }
   }
 
@@ -3411,14 +3607,27 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, tasksByBot }));
   }
 
+  /** One refresh at a time; one asked for meanwhile runs once after it. */
   private async refreshSessions(generation: number): Promise<void> {
+    if (this.refreshing) {
+      this.refreshAgain = true;
+      return;
+    }
+    this.refreshing = true;
     try {
-      const { rows, partial } = await this.loadAllSessions(generation, "sessions.list");
-      if (generation !== this.generation) return;
-      this.replaceRows(rows);
-      this.setDiscovery({ partial });
-    } catch (error) {
-      this.log("warn", `sessions.list failed: ${String(error)}`);
+      do {
+        this.refreshAgain = false;
+        try {
+          const { rows, partial } = await this.loadAllSessions(generation, "sessions.list");
+          if (generation !== this.generation) return;
+          this.replaceRows(rows);
+          this.setDiscovery({ partial });
+        } catch (error) {
+          this.log("warn", `sessions.list failed: ${String(error)}`);
+        }
+      } while (this.refreshAgain && generation === this.generation);
+    } finally {
+      this.refreshing = false;
     }
   }
 
@@ -3574,11 +3783,16 @@ export class ClawtrateClient {
       const ctx = this.context(key);
       // History is built aside; only the steps the merge takes from it bring their raw payloads.
       const scratch = new RawTable();
-      const fromHistory = runsFromHistory(messages, inFlight, { ...ctx, raw: scratch });
+      const fromHistory = runsFromHistory(
+        messages,
+        inFlight,
+        { ...ctx, raw: scratch },
+        { windowCut: history?.hasMore === true },
+      );
       const current = this.state.transcripts[key] ?? this.emptyTranscript(key);
       const merge = mergeHistoryRuns(current.runs, fromHistory, ctx);
-      for (const [stepId, source] of merge.fromHistory) {
-        const payload = scratch.get(key, source);
+      for (const stepId of merge.fromHistory) {
+        const payload = scratch.get(key, stepId);
         if (payload) this.raw.set(key, stepId, payload);
       }
       const runs = settleVanishedRuns(
@@ -3868,6 +4082,14 @@ export class ClawtrateClient {
   }
 }
 
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 const RESYNC_STRENGTH: Record<CaughtUp["reason"], number> = { reconnect: 1, gap: 2 };
 
 function strongerResync(
@@ -3877,6 +4099,82 @@ function strongerResync(
   if (!a) return b;
   if (!b) return a;
   return RESYNC_STRENGTH[b] > RESYNC_STRENGTH[a] ? b : a;
+}
+
+/**
+ * Whether a step rebuilt from history is the step shown: for a tool, the
+ * gateway's own call id; for reasoning, the fetched text begins with the text
+ * the shown step holds (which keeps the beginning of its text).
+ */
+function sameStep(
+  shown: Run["steps"][number],
+  read: Run["steps"][number],
+  whole: StepRaw,
+): boolean {
+  if (shown.kind === "tool")
+    return (
+      read.kind === "tool" && shown.toolCallId !== null && read.toolCallId === shown.toolCallId
+    );
+  const thinking = asRecord(whole.call)?.thinking;
+  return (
+    read.kind === "reasoning" &&
+    typeof thinking === "string" &&
+    thinking.startsWith(shown.output?.text ?? "")
+  );
+}
+
+/**
+ * Whether the history the gateway returned replaced the message that holds a
+ * step with its oversized placeholder (`__openclaw.truncated` with reason
+ * `oversized`, for a message above its 131,072-byte limit, whatever
+ * `maxChars` asked): a tool result naming the step's call, or an assistant
+ * message of the step's run where the step's reasoning anchor is in effect.
+ */
+function oversizedWhere(
+  messages: unknown,
+  runId: string,
+  step: Run["steps"][number],
+  windowCut: boolean,
+): boolean {
+  const rows = Array.isArray(messages) ? messages : [];
+  const oversized = (row: RawRecord) => {
+    const meta = asRecord(row.__openclaw);
+    return meta?.truncated === true && meta.reason === "oversized";
+  };
+  if (step.kind === "tool") {
+    return rows.some((entry) => {
+      const row = asRecord(entry);
+      return (
+        row !== null &&
+        oversized(row) &&
+        (row.toolCallId ?? row.tool_call_id ?? row.toolUseId ?? row.tool_use_id) === step.toolCallId
+      );
+    });
+  }
+  // The step's anchor, from its id: `reasoning:<runId>:<anchor>:<n>`.
+  const prefix = `reasoning:${runId}:`;
+  if (!step.id.startsWith(prefix)) return false;
+  const rest = step.id.slice(prefix.length);
+  const anchor = rest.slice(0, rest.lastIndexOf(":"));
+  const first = asRecord(rows[0]);
+  let current =
+    windowCut && first && first.role !== "user" && asRecord(first.__openclaw)?.runId === runId
+      ? "c"
+      : "s";
+  for (const entry of rows) {
+    const row = asRecord(entry);
+    if (!row || asRecord(row.__openclaw)?.runId !== runId || row.role !== "assistant") continue;
+    if (oversized(row) && current === anchor) return true;
+    for (const part of Array.isArray(row.content) ? row.content : []) {
+      const block = asRecord(part);
+      if (
+        (block?.type === "toolCall" || block?.type === "tool_use") &&
+        typeof block.id === "string"
+      )
+        current = `t.${block.id}`;
+    }
+  }
+  return false;
 }
 
 /** A count a host sets: the default when it sets none, and never above it. */

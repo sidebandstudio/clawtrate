@@ -14,7 +14,10 @@ async function boot() {
     root.render(
       <StrictMode>
         <BridgeProvider bridge={bridge}>
-          <App info={bridge.info} />
+          <App
+            info={bridge.info}
+            onUnreadCount={api ? (count) => api.setBadge(count) : undefined}
+          />
         </BridgeProvider>
       </StrictMode>,
     );

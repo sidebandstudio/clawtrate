@@ -18,3 +18,16 @@ export function markSeen(seen: SeenMap, task: Task): SeenMap {
   const at = task.updatedAt ?? 0;
   return seen[task.key] === at ? seen : { ...seen, [task.key]: at };
 }
+
+/** Unread tasks across every bot, other than the one on screen: the dock badge's count. */
+export function unreadCount(
+  tasksByBot: Record<string, Task[]>,
+  seen: SeenMap,
+  onScreenKey: string | null,
+): number {
+  let count = 0;
+  for (const tasks of Object.values(tasksByBot)) {
+    for (const task of tasks) if (task.key !== onScreenKey && isUnread(task, seen)) count += 1;
+  }
+  return count;
+}

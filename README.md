@@ -91,7 +91,18 @@ pnpm desktop
 
 This builds and starts the Electron app. The first run downloads the Electron binary. Development builds offer the same **Use the development gateway** button, and pair the same way.
 
+### 4. Package the desktop app
+
+```bash
+pnpm package:mac      # Clawtrate.app, a .dmg and a .zip for Apple silicon and Intel, in apps/desktop/dist
+pnpm check:packaged   # launches the packaged app and pairs it with a development gateway of its own
+```
+
+`pnpm package:win` builds an x64 installer on Windows. The builds are unsigned unless signing variables are set. [CONTRIBUTING.md](CONTRIBUTING.md) explains signing and how to open an unsigned build. A packaged app does not offer the development gateway.
+
 ## Checks
+
+[CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the checks, the development gateway rules, what may be committed and packaging.
 
 ```bash
 pnpm lint
@@ -108,7 +119,7 @@ pnpm fixture   # builds the interface on fixed sample data and serves it on 127.
 pnpm visual    # screenshot, legibility and behaviour tests against the fixture mode
 ```
 
-The fixture mode is the real interface fed a fixed state through the same bridge the hosts use. It needs no gateway and makes no request of its own. Pick what it shows from the address: `?scene=` with `main`, `connect`, `connect-error`, `connecting`, `pairing`, `reconnecting`, `reconnecting-unloaded`, `offline`, `offline-long-address`, `catching-up`, `synced`, `sync-pending`, `sync-failed`, `refresh-failed`, `load-failed`, `loading`, `discovery-error`, `discovering`, `empty`, `partial` or `zero-tasks`; `&bot=otto&task=agent:otto:disk-space` to open a task; `&panel=open`; `&theme=dark`. It is a separate build, never part of the desktop app or the web preview.
+The fixture mode is the real interface fed a fixed state through the same bridge the hosts use. It needs no gateway and makes no request of its own. Pick what it shows from the address: `?scene=` with `main`, `connect`, `connect-error`, `connecting`, `pairing`, `reconnecting`, `reconnecting-unloaded`, `offline`, `offline-long-address`, `catching-up`, `synced`, `sync-pending`, `sync-failed`, `refresh-failed`, `load-failed`, `loading`, `discovery-error`, `discovering`, `empty`, `partial`, `zero-tasks`, `task-states`, `protocol-mismatch`, `pairing-rejected`, `pairing-expired`, `connect-unreachable`, `disconnected` or `offline-unreachable`; `&bot=otto&task=agent:otto:disk-space` to open a task; `&panel=open`; `&theme=dark`; `&pins=main,otto`, `&hidden=marlow` and `&sort=name` for the rail's arrangement; `&bubbles=neutral`. It is a separate build, never part of the desktop app or the web preview.
 
 `pnpm visual` compares screenshots with the baselines in `visual/baselines/`, which are taken on macOS and only valid there. After an intended change, `pnpm visual:update` rewrites them; look at every changed image before committing it.
 
@@ -129,7 +140,7 @@ To change the logo, replace that one file and run both commands. A unit test fai
 
 - `packages/core`: the gateway connection, device pairing, state stores and the mapping from gateway data to view models. It has no DOM or Node APIs; hosts inject the socket, storage and signing.
 - `packages/ui`: the React interface shared by the desktop app and the web preview.
-- `apps/desktop`: the Electron app and the web preview host.
+- `apps/desktop`: the Electron app, its packaging (`packaging/`) and the web preview host.
 - `tools/dev-gateway`: development gateway control and the scripted model server.
 - `tools/brand`: the icon generator.
 - `docs/decisions.md`: versions, protocol choices and why things are the way they are.

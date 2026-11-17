@@ -65,7 +65,7 @@ describe("resync is idempotent (F-107)", () => {
     activity = feed(activity, agentEvent("run-1", 3, "thinking", { text: "abcd", delta: "d" }));
     expect(
       activity.runs[0]!.steps.map((step) => [step.id, step.status, step.output?.text]),
-    ).toEqual([["reasoning:run-1:0", "running", "abcd"]]);
+    ).toEqual([["reasoning:run-1:s:0", "running", "abcd"]]);
   });
 
   it("merging the same history twice gives the same runs as once", () => {

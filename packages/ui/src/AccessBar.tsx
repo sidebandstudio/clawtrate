@@ -113,6 +113,8 @@ export function AccessBar({
     }
   }
 
+  // Asking needs the gateway: while the connection is down the bar only explains.
+  if (connection.status !== "connected") action = null;
   const pending = !info.readOnly && upgrade.status === "pending";
   return (
     <footer className="composer" data-readonly="true">
