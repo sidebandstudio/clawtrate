@@ -256,6 +256,7 @@ export function load(
     state,
     timeouts: options.timeouts ?? { discoveryMs: 300, connectMs: 300, commandMs: 300 },
     ticketTtlMs: options.ticketTtlMs,
+    env: {},
     renewTimeoutMs: options.renewTimeoutMs,
     fetchImpl: browser.fetchImpl,
     WebSocketImpl: browser.WebSocketImpl,

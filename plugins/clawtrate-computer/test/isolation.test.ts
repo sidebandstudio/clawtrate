@@ -13,6 +13,7 @@ import {
   PIXEL_TAB,
   load,
 } from "./harness.ts";
+import { browserConfigProblems, parseConfig } from "../lib/config.js";
 
 const withDefault = (defaultProfile: string) => ({
   browser: { ...BROWSER_CONFIG.browser, defaultProfile },
@@ -372,5 +373,117 @@ describe("configuration", () => {
         JSON.stringify(browser),
       ).toThrow(/browser config/);
     }
+  });
+});
+
+describe("ownership is decided on the endpoint the gateway resolves, never on the text", () => {
+  const profiles = BROWSER_CONFIG.browser.profiles;
+  const withProfiles = (extra: Record<string, unknown>, browser: Record<string, unknown> = {}) => ({
+    browser: { defaultProfile: "openclaw", ...browser, profiles: { ...profiles, ...extra } },
+  });
+  // Each reaches bot-atlas's browser on 127.0.0.1:19113, written differently.
+  const aliases: Record<string, unknown>[] = [
+    { cdpUrl: "http://127.0.0.1:019113" },
+    { cdpUrl: "http://127.0.0.1:19113?x" },
+    { cdpUrl: "http://127.0.0.1:19113#x" },
+    { cdpUrl: "http://127.0.0.1:19113/json/version" },
+    { cdpUrl: " http://127.0.0.1:19113 " },
+    { cdpUrl: "HTTP://127.0.0.1:19113" },
+    { cdpUrl: "http://127.1:19113" },
+    { cdpUrl: "http://0x7f000001:19113" },
+    { cdpUrl: "http://2130706433:19113" },
+    { cdpUrl: "http://127.0.0.2:19113" },
+    { cdpUrl: "http://0.0.0.0:19113" },
+    { cdpUrl: "http://localhost:19113" },
+    { cdpUrl: "http://a-name.example:19113" },
+    { cdpUrl: "http://[::1]:19113" },
+    { cdpUrl: "http://[0:0:0:0:0:0:0:1]:19113" },
+    { cdpUrl: "http://[::ffff:127.0.0.1]:19113" },
+    { cdpUrl: "https://127.0.0.1:19113" },
+    { cdpUrl: "ws://127.0.0.1:19113/devtools/browser/x" },
+    { cdpUrl: "http://user:secret@127.0.0.1:19113" },
+    { cdpUrl: "http://127.0.0.1", cdpPort: 19113 },
+    { cdpUrl: "ws://127.0.0.1:9/devtools/browser/x", cdpPort: 19113 },
+    { cdpPort: 19113, attachOnly: true },
+    { driver: "extension", cdpPort: 19113 },
+    { driver: "existing-session", cdpUrl: "http://127.0.0.1:19113" },
+    { driver: "existing-session", mcpArgs: ["--browserUrl=http://127.0.0.1:19113"] },
+    { driver: "existing-session", mcpArgs: ["-u", "http://localhost:19113"] },
+    { engine: "lightpanda", attachOnly: true, cdpUrl: "ws://127.0.0.1:19113" },
+  ];
+
+  it("refuses to load beside any profile that resolves to a bot's endpoint, however it is written", () => {
+    for (const alias of aliases) {
+      expect(() => load({ hostConfig: withProfiles({ alias }) }), JSON.stringify(alias)).toThrow(
+        /alias reaches bot-atlas's browser/,
+      );
+    }
+  });
+
+  it("refuses such a profile, named, as the default or omitted, once the config changes to add it", async () => {
+    for (const alias of aliases) {
+      const h = load();
+      h.setCurrent(withProfiles({ alias }));
+      const what = JSON.stringify(alias);
+      expect(
+        (await h.before("ledger", "r", "c1", { action: "tabs", profile: "alias" }))?.block,
+        what,
+      ).toBe(true);
+      h.setCurrent(withProfiles({ alias }, { defaultProfile: "alias" }));
+      expect((await h.before("ledger", "r", "c2", { action: "tabs" }))?.block, what).toBe(true);
+      expect(
+        (await h.before("ledger", "r", "c3", { action: "tabs", profile: " alias " }))?.block,
+        what,
+      ).toBe(true);
+      expect(
+        (await h.before("ledger", "r", "c4", { action: "importprofile", into: "alias" }))?.block,
+        what,
+      ).toBe(true);
+      // The bot itself is not served beside it either.
+      expect((await h.call("tabs", {})).error?.details?.reason, what).toBe(
+        "browser_config_mismatch",
+      );
+      await h.stop();
+    }
+  });
+
+  it("counts the profiles the gateway adds by itself", () => {
+    const { openclaw: _openclaw, ...bots } = profiles;
+    // Without a declared openclaw profile the gateway adds one on browser.cdpUrl's port, or
+    // on the first port of its managed range (gateway port + 11), whose port can come
+    // from the environment. (Its extension relay, chrome, skips every declared port.)
+    const parsed = parseConfig(BASE_CONFIG);
+    for (const [what, config, env] of [
+      [
+        "openclaw on browser.cdpUrl",
+        { browser: { profiles: bots, cdpUrl: "http://127.0.0.1:19113" } },
+        {},
+      ],
+      [
+        "openclaw on the managed range",
+        { gateway: { port: 19102 }, browser: { profiles: bots } },
+        {},
+      ],
+      [
+        "the same, the gateway's port from its environment",
+        { browser: { profiles: bots } },
+        { OPENCLAW_GATEWAY_PORT: "19102" },
+      ],
+    ] as const) {
+      expect(browserConfigProblems(config, parsed, env).join("; "), what).toMatch(
+        /reaches bot-atlas's browser/,
+      );
+    }
+    expect(
+      browserConfigProblems({ gateway: { port: 19000 }, browser: { profiles } }, parsed, {}),
+    ).toEqual([]);
+  });
+
+  it("lets another profile use the same port number on a literal address elsewhere", async () => {
+    const h = load({ hostConfig: withProfiles({ remote: { cdpUrl: "http://192.0.2.10:19113" } }) });
+    expect(
+      (await h.before("ledger", "r", "c1", { action: "tabs", profile: "remote" }))?.block,
+    ).toBeUndefined();
+    await h.stop();
   });
 });

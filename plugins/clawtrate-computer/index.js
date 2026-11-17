@@ -28,8 +28,8 @@ import {
   DEFAULT_IMPORT_PROFILE,
   PLUGIN_ID,
   browserConfigProblems,
-  defaultProfileOf,
   parseConfig,
+  profileOwner,
   profileSelector,
   toolString,
 } from "./lib/config.js";
@@ -159,7 +159,10 @@ export function inputCommands(params) {
  */
 export function createComputer(api, options = {}) {
   const config = parseConfig(api.pluginConfig ?? {});
-  const startProblems = browserConfigProblems(api.config, config);
+  // The gateway's environment: its port can come from there, and with it the
+  // ports of the profiles it adds by itself.
+  const env = options.env ?? process.env;
+  const startProblems = browserConfigProblems(api.config, config, env);
   if (startProblems.length > 0) {
     throw new Error(`${PLUGIN_ID}: the browser config does not match: ${startProblems.join("; ")}`);
   }
@@ -171,7 +174,7 @@ export function createComputer(api, options = {}) {
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     ...(options.WebSocketImpl ? { WebSocketImpl: options.WebSocketImpl } : {}),
   };
-  const { bots, profiles } = config;
+  const { bots } = config;
   // Tests may use shorter times than the config's bounds allow.
   const drainTimeoutMs = options.drainTimeoutMs ?? config.drainTimeoutMs;
   const renewTimeoutMs = options.renewTimeoutMs ?? config.renewTimeoutMs;
@@ -369,7 +372,7 @@ export function createComputer(api, options = {}) {
         "this bot has no browser of its own in the computer plugin",
       );
     }
-    const problems = browserConfigProblems(currentConfig(), config);
+    const problems = browserConfigProblems(currentConfig(), config, env);
     if (problems.length > 0) {
       retireBot(bot, "browser-config-changed");
       refuse(
@@ -849,13 +852,25 @@ export function createComputer(api, options = {}) {
       const params = isPlainObject(event.params) ? event.params : {};
       const bot = bots.get(ctx?.agentId);
       if (!bot) {
-        // Every other agent stays out of the bots' profiles, by any spelling,
-        // by default, as an import destination or through a dashboard.
-        const named = profileSelector(params.profile) ?? defaultProfileOf(currentConfig());
-        // An import with no `into` goes to DEFAULT_IMPORT_PROFILE, which is never a bot's.
-        const into = profileSelector(params.into) ?? DEFAULT_IMPORT_PROFILE;
-        if (profiles.has(named) || profiles.has(into)) {
+        // Every other agent stays out of the bots' browsers: by any spelling
+        // of a bot's profile, by another profile that the gateway resolves to
+        // a bot's endpoint, by default, as an import destination or through
+        // a dashboard.
+        const now = currentConfig();
+        // An import with no `into` goes to DEFAULT_IMPORT_PROFILE.
+        const reached = [
+          profileOwner(now, config, params.profile, env),
+          profileOwner(now, config, toolString(params.into) ?? DEFAULT_IMPORT_PROFILE, env),
+        ];
+        if (reached.some((owner) => owner.bot)) {
           return { block: true, blockReason: "That browser profile belongs to another bot." };
+        }
+        if (reached.some((owner) => owner.unresolved)) {
+          return {
+            block: true,
+            blockReason:
+              "The browser config cannot be read, so which browser this call reaches is unknown.",
+          };
         }
         if (params.dashboard !== undefined) {
           return {
@@ -895,7 +910,7 @@ export function createComputer(api, options = {}) {
         };
       }
       if (leaseOnProfile(bot.profile)) return { block: true, blockReason: BLOCKED_WHILE_HELD };
-      if (browserConfigProblems(currentConfig(), config).length > 0) {
+      if (browserConfigProblems(currentConfig(), config, env).length > 0) {
         return {
           block: true,
           blockReason: "This bot's browser is not set up as the computer plugin expects.",
