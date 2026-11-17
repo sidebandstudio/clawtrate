@@ -76,7 +76,7 @@ describe("the end-to-end runs the seed does not leave behind", () => {
       ALL_TOOLS,
     );
     expect(narrate.map((step) => step.kind)).toEqual(["text", "tool"]);
-    const slow = planReply([{ role: "user", content: "#slow 8" }], ALL_TOOLS);
+    const slow = planReply([{ role: "user", content: "#stream 8" }], ALL_TOOLS);
     // About ten seconds at its own pace.
     const ms = slow.reduce(
       (sum, step) =>

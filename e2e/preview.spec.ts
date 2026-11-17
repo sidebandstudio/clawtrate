@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { protocolMismatch } from "../packages/core/src/connect-errors.ts";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
+import { SCENARIO_EXAMPLES, SEED_BOTS } from "../tools/dev-gateway/src/seed-data.ts";
 import {
   devGateway,
   FORBIDDEN_PORTS,
@@ -14,6 +15,14 @@ import {
   startHost,
   stopChild,
 } from "./global-setup.ts";
+
+/** A bot's tasks after the seed: its seeded tasks and the live examples seeded with it. */
+function seededTaskCount(botId: string): number {
+  return new Set([
+    ...SEED_BOTS.find((bot) => bot.id === botId)!.tasks.map((task) => task.slug),
+    ...SCENARIO_EXAMPLES.filter((example) => example.botId === botId).map((e) => e.slug),
+  ]).size;
+}
 
 /** This run's own development gateway instance, created by global setup. */
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -285,7 +294,7 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
   await openBot(page, "Otto");
   const ottoTasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
   await expect(ottoTasks.locator(".task-time")).toHaveText(
-    Array(3).fill(/^(\d{1,2}:\d{2}\s[AP]M|Yesterday)$/),
+    Array(seededTaskCount("otto")).fill(/^(\d{1,2}:\d{2}\s[AP]M|Yesterday)$/),
   );
   await botRow(page, "Pip").focus();
   await page.keyboard.press("ArrowRight");
@@ -777,7 +786,9 @@ test("F-017 F-020: a run started on the gateway shows its bot working, then the 
   await expect(botRow(page, "Marlow").locator(".bot-preview")).toContainText(
     "This is the scripted development model",
   );
-  await expect(botRow(page, "Marlow")).toHaveAccessibleName(/^Marlow, 2 tasks/);
+  await expect(botRow(page, "Marlow")).toHaveAccessibleName(
+    new RegExp(`^Marlow, ${seededTaskCount("marlow")} tasks`),
+  );
 });
 
 test("F-323: work goes on after the page is closed, and reopening shows where it got to", async ({
@@ -785,6 +796,8 @@ test("F-323: work goes on after the page is closed, and reopening shows where it
 }) => {
   await openShell(page);
   await openTask(page, "Pip", "Saturday errands route");
+  // Counted once the transcript has loaded; count() does not wait for it.
+  await expect(page.getByTestId("transcript-turn").first()).toBeVisible();
   const before = await page.getByTestId("transcript-turn").count();
   const context = page.context();
   // Ask the gateway for a run, and leave the preview while it works.
@@ -933,8 +946,8 @@ test("F-323: a client quit while a run is in progress, and opened again, shows t
       "--session-key",
       "agent:pip:weekend-trip",
       "--message",
-      // About eleven seconds of slowly streamed text.
-      "#slow 8",
+      // About eleven seconds of slowly streamed text, with no reasoning first.
+      "#stream 8",
       "--thinking",
       "low",
       "--json",

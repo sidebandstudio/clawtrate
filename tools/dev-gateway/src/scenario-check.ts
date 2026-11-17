@@ -1175,6 +1175,21 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
+    name: "a slow stream with no reasoning first",
+    covers: ["#stream"],
+    run: async (h) => {
+      const key = await h.session("main", "stream");
+      const started = Date.now();
+      const view = await h.run("plain", key, "#stream 2");
+      // Text only, streamed for about the time asked.
+      same(view.agent("thinking").length, 0, "reasoning events");
+      expect(view.agent("assistant").length > 1, "the text came in several pieces");
+      expect(Date.now() - started >= 1_500, "the stream took about two seconds");
+      view.expectCalls([]);
+      view.expectEnd("final", scriptedFinalText("#stream 2"));
+    },
+  },
+  {
     name: "a slow stream, stopped mid-run",
     covers: ["#slow"],
     run: async (h) => {

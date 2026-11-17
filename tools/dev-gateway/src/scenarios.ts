@@ -281,6 +281,15 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: "stream",
+    phrase: "stream a long answer",
+    defaultArg: 10,
+    maxArg: 300,
+    summary:
+      "Text streamed slowly for N seconds (default 10), with no reasoning first: a run still going when a client quits and opens again.",
+    steps: (seconds) => [slowText(seconds)],
+  },
+  {
     name: "slow-tool",
     phrase: "run a slow tool",
     defaultArg: 20,
