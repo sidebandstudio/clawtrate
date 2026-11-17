@@ -5,6 +5,7 @@ import {
   applyAgentEvent,
   emptyActivity,
   initialState,
+  parseExecApproval,
   RawTable,
   type TaskActivity,
   type ApprovalCard,
@@ -23,11 +24,13 @@ import {
   botMessageNote,
   decisionPhase,
   expiryLine,
+  mayDispatch,
   mcpKey,
   mcpNote,
   questionNote,
   resolvedView,
   sendableDecisions,
+  SUMMARY_COMMAND_CHARS,
   targetChips,
 } from "../../../packages/ui/src/cards/model.ts";
 import { placeCards } from "../../../packages/ui/src/cards/placement.ts";
@@ -92,6 +95,7 @@ describe("approval cards from the engine's state", () => {
     expect(view.summary).toEqual({
       lead: "Run ",
       code: "mv /srv/media/transcode-cache /srv/scratch/transcode-cache",
+      codeFull: null,
       middle: " on ",
       machine: "media-box",
     });
@@ -116,13 +120,21 @@ describe("approval cards from the engine's state", () => {
       label: "Command",
       text: "mv /srv/media/transcode-cache /srv/scratch/transcode-cache",
     });
-    expect(view.rows.map((row) => row.label)).toEqual(["Runs on", "Folder", "Asked by", "Warning"]);
+    expect(view.rows.map((row) => row.label)).toEqual([
+      "Arguments",
+      "Runs on",
+      "Folder",
+      "Asked by",
+      "Warning",
+    ]);
+    expect(view.argv).toEqual(["mv", "/srv/media/transcode-cache", "/srv/scratch/transcode-cache"]);
   });
 
   it("F-167: the form shows the request's fields and says in words what the gateway keeps; days only for a routine's grant", () => {
     const ordinary = approvalView(approval("approval-pending").card, bots, otto);
     expect(ordinary.form.rows.map((row) => row.label)).toEqual([
       "Command",
+      "Arguments",
       "Folder",
       "Runs on",
       "Bot",
@@ -204,8 +216,7 @@ describe("approval cards from the engine's state", () => {
     );
     expect(words("approval-denied")).toMatchObject({
       tag: "Denied",
-      sentence:
-        "Denied. The command was not run. Otto won't do this, and won't ask again until you send another message.",
+      sentence: "Denied. The command was not run.",
     });
     expect(words("approval-expired").tag).toBe("Expired");
     expect(words("approval-expired").sentence).toMatch(
@@ -580,5 +591,58 @@ describe("cards follow the gateway's identifiers, forward only", () => {
     expect(botMessageKey(final.botMessages[0]!)).toBe("replied");
     const failedAfter = { "run-r": { ...running["run-r"], state: "failed" as const, endedAt: 2 } };
     expect(botMessageKey(select(replied, final, failedAfter).botMessages[0]!)).toBe("replied");
+  });
+});
+
+describe("the approval says what the request carries, as it carries it", () => {
+  const exec = (request: Record<string, unknown>) =>
+    parseExecApproval({
+      id: "apr_q",
+      request: {
+        agentId: "otto",
+        host: "gateway",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        ...request,
+      },
+    })!;
+
+  it("F-167 F-163: the command stays exact and its arguments keep their boundaries", () => {
+    const card = exec({ command: "printf '%s' 'a b'", commandArgv: ["printf", "%s", "a b"] });
+    const view = approvalView(card, bots, otto);
+    expect(view.exact).toEqual({ label: "Command", text: "printf '%s' 'a b'" });
+    const command = view.form.rows.find((row) => row.label === "Command")!;
+    const args = view.form.rows.find((row) => row.label === "Arguments")!;
+    expect(command.value).toBe("printf '%s' 'a b'");
+    expect(args.list).toEqual(["printf", "%s", "a b"]);
+    // A request with arguments and no command shows no command it did not send.
+    const argvOnly = approvalView(exec({ commandArgv: ["ls", "-la"] }), bots, otto);
+    expect(argvOnly.exact).toBeNull();
+    expect(argvOnly.form.rows.map((row) => row.label)).not.toContain("Command");
+  });
+
+  it("F-163: the summary stays short however long the command; the whole is in the full request", () => {
+    const long = `rsync -a ${"/srv/media/archive/".repeat(40)} /mnt/backup`;
+    const view = approvalView(exec({ command: long }), bots, otto);
+    expect(view.summary.code!.length).toBeLessThanOrEqual(SUMMARY_COMMAND_CHARS + 1);
+    expect(view.summary.code!.endsWith("…")).toBe(true);
+    expect(view.summary.codeFull).toBe(long);
+    expect(view.exact!.text).toBe(long);
+    const twoLines = approvalView(exec({ command: "echo one\necho two" }), bots, otto);
+    expect(twoLines.summary.code).toBe("echo one…");
+  });
+
+  it("F-163: without approval access no decision is dispatched, and without question access no answer", () => {
+    const none = { canApprove: false, canAnswer: false };
+    for (const decision of ["allow-once", "allow-always", "deny"]) {
+      expect(mayDispatch({ type: "resolveApproval", decision } as { type: string }, none)).toBe(
+        false,
+      );
+    }
+    expect(mayDispatch({ type: "answerQuestion" }, none)).toBe(false);
+    expect(mayDispatch({ type: "dismissQuestion" }, none)).toBe(false);
+    expect(mayDispatch({ type: "requestAccess" }, none)).toBe(true);
+    expect(mayDispatch({ type: "resolveApproval" }, { canApprove: true, canAnswer: false })).toBe(
+      true,
+    );
   });
 });

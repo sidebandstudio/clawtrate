@@ -197,6 +197,20 @@ test.describe("approval cards", () => {
     });
   });
 
+  test("F-163: Deny works while an earlier decision is on its way; a second allow is not offered", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=approval-sending", "light");
+    await recordCommands(page);
+    const card = approvalCard(page);
+    await expect(card.getByText("Sending your decision…")).toBeVisible();
+    await expect(card.getByRole("button", { name: "Always allow…" })).toHaveCount(0);
+    await card.getByRole("button", { name: "Allow once" }).click({ force: true });
+    await card.getByRole("button", { name: "Deny" }).click();
+    await expect(card.locator(".tag")).toHaveText("Denied");
+    expect((await sent(page)).map((command) => command.decision)).toEqual(["deny"]);
+  });
+
   test("F-165: Deny sends deny, the buttons go, and the card says the command was not run", async ({
     page,
   }) => {
@@ -207,11 +221,7 @@ test.describe("approval cards", () => {
     await expect(card.locator(".tag")).toHaveText("Denied");
     await expect(card.getByRole("button", { name: /Allow|Deny/ })).toHaveCount(0);
     await card.locator("summary").first().click();
-    await expect(
-      card.getByText(
-        "Denied. The command was not run. Otto won't do this, and won't ask again until you send another message.",
-      ),
-    ).toBeVisible();
+    await expect(card.getByText("Denied. The command was not run.")).toBeVisible();
     expect((await sent(page)).at(-1)).toMatchObject({ decision: "deny" });
   });
 
@@ -224,7 +234,13 @@ test.describe("approval cards", () => {
     const always = card.getByRole("button", { name: "Always allow…" });
     await always.click();
     const form = card.getByRole("group", { name: "Always allow" });
-    await expect(form.locator("dt")).toHaveText(["Command", "Folder", "Runs on", "Bot"]);
+    await expect(form.locator("dt")).toHaveText([
+      "Command",
+      "Arguments",
+      "Folder",
+      "Runs on",
+      "Bot",
+    ]);
     await expect(form.locator("dd").last()).toHaveText("Otto");
     await expect(form.locator(".standing-outcome")).toHaveText(
       "The gateway will add this to media-box's allowlist, so Otto is not asked again for commands it matches. The gateway decides what that covers; it can be wider than this exact command.",
@@ -353,12 +369,12 @@ test.describe("approval cards", () => {
     const card = approvalCard(page);
     await expect(card.locator('.request-actions[data-row="main"] button')).toHaveText(["Deny"]);
     await card.getByText("Show full request").click();
-    const before = (await card.locator(".command-line code").textContent())!.length;
+    const before = (await card.locator(".command-line code").first().textContent())!.length;
     await card.getByRole("button", { name: "Read the whole request" }).click();
     await expect(card.getByRole("button", { name: "Allow once" })).toBeVisible();
-    expect((await card.locator(".command-line code").textContent())!.length).toBeGreaterThan(
-      before,
-    );
+    expect(
+      (await card.locator(".command-line code").first().textContent())!.length,
+    ).toBeGreaterThan(before);
     await card.getByRole("button", { name: "Allow once" }).click();
     await expect(card.locator(".tag")).toHaveText("Allowed once");
     const digest = (await sent(page)).find(
@@ -368,6 +384,72 @@ test.describe("approval cards", () => {
     expect((await sent(page)).map((command) => command.type)).toEqual([
       "readApprovalText",
       "resolveApproval",
+    ]);
+  });
+
+  test("F-163: Allow is offered only while the whole text read through the engine is on screen, its fields kept apart", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=approval-cut", "light");
+    await recordCommands(page);
+    const card = approvalCard(page);
+    // Read without opening the full request first: reading opens it.
+    await card.getByRole("button", { name: "Read the whole request" }).click();
+    const inset = card.locator('.request-inset[data-whole="true"]');
+    await expect(inset).toBeVisible();
+    await expect(card.locator(".request-full")).toHaveAttribute("open", "");
+    await expect(inset.locator(".code-label")).toHaveText(["Command", "Folder"]);
+    await expect(inset.locator(".command-line code").last()).toHaveText("/srv/media");
+    expect((await inset.locator(".command-line code").first().textContent())!).not.toContain(
+      "\n/srv/media",
+    );
+    await expect(card.getByRole("button", { name: "Allow once" })).toBeVisible();
+    // Hidden again, it is no longer shown: Allow goes with it.
+    await card.getByText("Hide full request").click();
+    await expect(card.getByRole("button", { name: "Allow once" })).toHaveCount(0);
+    await expect(card.locator('.request-actions[data-row="main"] button')).toHaveText(["Deny"]);
+    await card.getByText("Show full request").click();
+    await expect(card.getByRole("button", { name: "Allow once" })).toBeVisible();
+  });
+
+  test("F-163: a long command keeps the card compact; the summary shows its start, the full request the rest", async ({
+    browser,
+  }) => {
+    for (const size of [WIDE, PHONE]) {
+      const context = await browser.newContext(contextFor(size, "light"));
+      const page = await context.newPage();
+      await openFixture(page, "scene=approval-cut", "light");
+      const card = approvalCard(page);
+      const code = card.locator(".request-summary code");
+      await expect(code).toHaveText(/…$/);
+      expect((await code.textContent())!.length).toBeLessThanOrEqual(73);
+      const box = await card.boundingBox();
+      expect(box!.height, size.name).toBeLessThan(size.phone ? 760 : 520);
+      await context.close();
+    }
+  });
+
+  test("F-167: the Always allow form shows the command exactly and each argument on its own", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=approval-pending", "light");
+    const card = approvalCard(page);
+    await card.getByRole("button", { name: "Always allow…" }).click();
+    const form = card.getByRole("group", { name: "Always allow" });
+    await expect(form.locator("dt")).toHaveText([
+      "Command",
+      "Arguments",
+      "Folder",
+      "Runs on",
+      "Bot",
+    ]);
+    await expect(form.locator("dd").first()).toHaveText(
+      "mv /srv/media/transcode-cache /srv/scratch/transcode-cache",
+    );
+    await expect(form.getByRole("list", { name: "Arguments" }).locator("li")).toHaveText([
+      "mv",
+      "/srv/media/transcode-cache",
+      "/srv/scratch/transcode-cache",
     ]);
   });
 
@@ -441,6 +523,21 @@ test.describe("approval cards", () => {
     await expect(card.getByRole("button", { name: /Allow|Deny/ })).toHaveCount(0);
     await card.getByRole("button", { name: "Request access" }).click();
     expect(await sent(page)).toEqual([{ type: "requestAccess" }]);
+  });
+
+  test("F-163: on a connection without approval access neither the shortcut nor anything else sends a decision", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=approval-readonly", "light");
+    await recordCommands(page);
+    const card = approvalCard(page);
+    await card.getByRole("button", { name: "Raw" }).focus();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await card.getByText("Show full request").click();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await settle(page);
+    expect(await sent(page)).toEqual([]);
+    await expect(card).toHaveAttribute("data-state", "pending");
   });
 
   test("F-163: ⌘J moves focus to the oldest pending card", async ({ page }) => {
