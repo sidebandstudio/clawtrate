@@ -2,6 +2,7 @@
   "name": "@clawtrate/desktop",
   "productName": "Clawtrate",
   "description": "Your OpenClaw agents, orchestrated.",
+  "author": "Clawtrate contributors",
   "version": "0.1.0",
   "private": true,
   "type": "module",
