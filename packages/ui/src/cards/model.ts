@@ -288,7 +288,7 @@ export function resolvedView(
       return {
         tag: "Denied",
         tone: null,
-        sentence: `Denied. ${notRun} ${name} won't do this, and won't ask again until you send another message.`,
+        sentence: `Denied. ${notRun}`,
         saved: null,
         winner,
       };
