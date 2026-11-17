@@ -1450,6 +1450,39 @@ test.describe("Messaged T3 Code cards", () => {
     await expect(step.locator("summary")).toBeFocused();
   });
 
+  test("a closed step or card that has focus hands focus over as it is replaced, and stays closed", async ({
+    page,
+  }) => {
+    // Step to card: the step closed in its open group, focus on its line.
+    await openFixture(page, "scene=t3-approval", "light");
+    await historyStep(page, false);
+    await page.locator(".steps > summary").click();
+    const step = page.getByTestId("tool-call");
+    await step
+      .locator("summary")
+      .evaluate((summary: HTMLElement) => summary.focus({ preventScroll: true }));
+    await expect(step).not.toHaveAttribute("open", "");
+    await resultNaming(page, "t3_thread_launch");
+    const card = page.getByTestId("t3-card");
+    await expect(card).toHaveCount(1);
+    await expect(card).not.toHaveAttribute("open", "");
+    await expect(card.locator("summary")).toBeFocused();
+
+    // Card to step: the card the map made, closed, focus on its line.
+    await openFixture(page, "scene=t3-approval", "light");
+    await historyStep(page, true);
+    await expect(card).toHaveCount(1);
+    await card
+      .locator("summary")
+      .evaluate((summary: HTMLElement) => summary.focus({ preventScroll: true }));
+    await expect(card).not.toHaveAttribute("open", "");
+    await resultNaming(page, "t3_project_list_v2");
+    await expect(card).toHaveCount(0);
+    await expect(step).toHaveCount(1);
+    await expect(step).not.toHaveAttribute("open", "");
+    await expect(step.locator("summary")).toBeFocused();
+  });
+
   test("F-132: without the gateway's map a call is an ordinary step until its result names it; with it, the card from its start", async ({
     page,
   }) => {

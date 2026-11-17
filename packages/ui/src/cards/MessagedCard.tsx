@@ -428,10 +428,11 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
   const link = resultLink(card);
   const domId = cardDomId({ kind: "t3-code", id: card.id });
   useLayoutEffect(() => {
-    if (!handed?.open) return;
+    if (!handed || !(handed.open || handed.focused)) return;
     const element = document.getElementById(domId);
     if (!(element instanceof HTMLDetailsElement)) return;
-    element.open = true;
+    // Open only if the step was; focus moves over either way.
+    if (handed.open) element.open = true;
     if (handed.focused) element.querySelector("summary")?.focus({ preventScroll: true });
   }, [handed, domId]);
 

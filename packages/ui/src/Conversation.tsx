@@ -74,10 +74,11 @@ function ToolStep({ call }: { call: ToolCall }) {
   useLayoutEffect(() => {
     const state = call.callId ? handover?.stateOf(call.callId) : undefined;
     const details = element.current;
-    if (state?.from !== "card" || !state.open || !details) return;
+    if (state?.from !== "card" || !(state.open || state.focused) || !details) return;
+    // Its group opens so the step can be read or hold focus; the step opens only if the card was.
     const group = details.closest<HTMLDetailsElement>("details.steps");
     if (group) group.open = true;
-    details.open = true;
+    if (state.open) details.open = true;
     if (state.focused) details.querySelector("summary")?.focus({ preventScroll: true });
     // Once, as it is drawn.
     // eslint-disable-next-line react-hooks/exhaustive-deps
