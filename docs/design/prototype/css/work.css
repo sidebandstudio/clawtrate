@@ -1773,3 +1773,7 @@
   font-size: var(--text-xs);
   color: var(--text-faint);
 }
+
+.screen-caption span {
+  color: var(--text-faint);
+}

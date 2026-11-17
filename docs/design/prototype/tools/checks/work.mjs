@@ -421,6 +421,9 @@ await p.close();
 p = await open(comp + "&firstwatch=1");
 check("F-140 nothing is drawn before Watch", await q(p, () => document.querySelector('.screen[data-state="idle"]') && !document.querySelector(".screen > svg") && !!document.querySelector('.screen [data-cmp="watch"]')));
 check("the first watch of a bot carries the one-time note", await q(p, () => document.querySelector(".computer .files-alert").textContent.includes("may be signed in to sites")));
+check("M3 the note and the caption say the browser is the bot's, used by all of its tasks", await q(p, () =>
+  document.querySelector(".computer .files-alert").textContent.startsWith("This is Juniper's browser, used by all of Juniper's tasks.") &&
+  document.querySelector(".screen-caption").textContent.startsWith("Juniper's browser, used by all of its tasks")));
 await p.click('[data-cmp="note-ok"]');
 check("Got it removes the note for good", await q(p, () => !document.querySelector('[data-cmp="note-ok"]')));
 check("F-144 the banner says the bot waits, with Take control and Show the question", await q(p, () => document.querySelector(".computer-banner strong").textContent === "Juniper is waiting for you" && !!document.querySelector('.computer-banner [data-cmp="take"]')));
@@ -460,13 +463,21 @@ check("F-142 Take control waits for the bot and says so", await q(p, () => docum
 await p.waitForTimeout(1000);
 check("F-145 granted: the question's own answers and Give back control", await q(p, () =>
   [...document.querySelectorAll(".control-bar .button")].map((x) => x.textContent).join() === "I'm done,Skip,Give back control" && document.querySelector(".screen-frame").dataset.control === "true"));
-check("the bar says which input reaches the page", await q(p, () => document.querySelector(".control-note").textContent.startsWith("Clicks, scrolling and typed text reach the page. Enter, Tab and other keys don't yet.")));
+check("the bar says which input reaches the page", await q(p, () => document.querySelector(".control-note").textContent.startsWith("Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet.")));
+check("M4 the bar promises only the browser tool's block and names the ways it leaves open", await q(p, () => {
+  const t = document.querySelector(".control-note").textContent;
+  return t.includes("Juniper's browser tool can't act here, in any of Juniper's tasks") && t.includes("Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands") && !t.includes("can't use its browser in any task");
+}));
 check("taking control is an event line in the conversation", await q(p, () => [...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You took control of Juniper's browser"))));
 await p.focus(".screen-frame");
 await p.keyboard.type("2208");
 check("typing goes to the page as text", await q(p, () => window.CT.work.computer.typed === "2208" && document.querySelector(".screen-frame svg").textContent.includes("2208")));
 await p.keyboard.press("Enter");
 check("Enter is not sent, and the view says so", await q(p, () => !document.querySelector(".screen-hint").hidden && document.querySelector(".screen-hint").textContent.startsWith("Enter isn't sent to the page")));
+await p.focus(".screen-frame");
+await p.keyboard.press("Tab");
+check("Tab on the controlled picture is not sent: focus moves on", await q(p, () => !document.activeElement.classList.contains("screen-frame") && window.CT.work.computer.typed === "2208"));
+await p.focus(".screen-frame");
 await p.keyboard.press("Escape");
 check("Escape in control never hands back: it moves to Give back control", await q(p, () => document.activeElement.dataset.cmp === "release" && window.CT.work.computer.control === "granted"));
 await p.click('.control-bar [data-answer="0"]');

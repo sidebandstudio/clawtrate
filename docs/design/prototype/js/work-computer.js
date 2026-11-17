@@ -121,7 +121,7 @@
     const tab = tabNow();
     const note =
       !C.noteSeen && C.view === "idle"
-        ? `<p class="files-alert" data-tone="quiet" role="note">${name}'s browser may be signed in to sites. What you see here is live, and anyone who can see your screen sees it too.` +
+        ? `<p class="files-alert" data-tone="quiet" role="note">This is ${name}'s browser, used by all of ${name}'s tasks. It may be signed in to sites, and what you see here is live: anyone who can see your screen sees it too.` +
           `<button type="button" class="button" data-size="sm" data-cmp="note-ok">Got it</button></p>`
         : "";
     let tile;
@@ -147,7 +147,7 @@
     return (
       note +
       tile +
-      `<p class="screen-caption">${name}'s browser · ${esc(tab.title)} · ${tab.domain}</p>` +
+      `<p class="screen-caption">${name}'s browser, used by all of its tasks<br><span>${esc(tab.title)} · ${tab.domain}</span></p>` +
       (C.control === "granted" && !C.full ? `<p class="screen-caption"><strong>You have control.</strong> ${CT.linkButton("Give back control", { attrs: 'data-cmp="release"' })}</p>` : "") +
       (tabs.length > 1
         ? `<ul class="screen-tabs" aria-label="${name}'s tabs">${tabs
@@ -331,7 +331,7 @@
     return (
       `<div class="control-bar" data-state="control">${icon("hand")}<strong>You have control</strong><span class="spacer"></span>${answers}` +
       `<button type="button" class="button" data-size="sm"${C.question ? ' data-variant="quiet"' : ' data-variant="primary"'} data-cmp="release">Give back control</button></div>` +
-      `<p class="control-note" id="control-note">Clicks, scrolling and typed text reach the page. Enter, Tab and other keys don't yet. ${name} can't use its browser in any task until you give control back. Pages you open aren't checked by the gateway's browser rules.</p>`
+      `<p class="control-note" id="control-note">Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${name}'s browser tool can't act here, in any of ${name}'s tasks. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p>`
     );
   }
 
@@ -580,7 +580,7 @@
           $(".screen-frame svg", view).outerHTML = page();
           return;
         }
-        if (["Enter", "Tab", "Backspace"].includes(event.key)) {
+        if (["Enter", "Backspace"].includes(event.key)) {
           event.preventDefault();
           const hint = $(".screen-hint", view);
           hint.textContent = `${event.key} isn't sent to the page. ${event.key === "Enter" ? "Click the page's button instead." : ""}`.trim();
