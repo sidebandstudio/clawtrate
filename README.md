@@ -28,7 +28,7 @@ pnpm dev-gateway start
 
 This runs `openclaw --dev gateway run` on `ws://127.0.0.1:19001` with its state in `~/.openclaw-dev`, so it never touches a gateway you use day to day. It talks only to a scripted model server on `127.0.0.1:19091`; no model provider account is used. It then seeds four sample bots with their own instructions and avatars, and eleven conversations with reasoning and tool calls. Each seeded run is checked against its script. `pnpm dev-gateway up` does the same.
 
-Every start is a fresh, seeded gateway. It stops the gateway this checkout started before, deletes `~/.openclaw-dev` and creates it again empty. OpenClaw keeps credentials in the same SQLite stores a clean profile has, so the tool never reuses state rather than trying to prove old state clean. If `~/.openclaw-dev` was not created by this tool, or is a symlink, `start` refuses and changes nothing. If its gateway is running and another checkout started it, `start` and `reset` also refuse, say which instance is in use, and change nothing. Because the gateway is new each time, preview hosts and the desktop app pair again after a start.
+Every start is a fresh, seeded gateway. It stops the gateway this checkout started before, deletes `~/.openclaw-dev` and creates it again empty. OpenClaw keeps credentials in the same SQLite stores a clean profile has, so the tool never reuses state rather than trying to prove old state clean. If `~/.openclaw-dev` was not created by this tool, or is a symlink, `start` refuses and changes nothing. The tool records every process it starts by PID and start time, and it deletes a state folder only with proof that nothing runs on it: every recorded process is gone and nothing listens on the instance's ports. So if the folder's gateway may be running and this checkout cannot prove it started it, `start` and `reset` refuse, say which instance is in use, and change nothing. `stop` signals only processes it can prove this checkout started; anything it cannot prove, it reports and leaves alone. A gateway started by an older version of the tool has no recorded identity, so stop it yourself by its PID and delete `tools/dev-gateway/.run/state.json` before the next start. Because the gateway is new each time, preview hosts and the desktop app pair again after a start.
 
 Other commands: `pnpm dev-gateway status`, `stop`, `seed` (verify the running gateway's seed), `approve`, `reset` (stop, then delete the instance's state folder), `list` and `prune`. Commands that talk to the gateway refuse to run unless the gateway this checkout started on that state is still running.
 
@@ -42,10 +42,10 @@ pnpm dev-gateway approve --instance review
 CLAWTRATE_DEV_INSTANCE=review pnpm dev-gateway status
 pnpm dev-gateway list       # every instance on this machine, its folder, ports and gateway
 pnpm dev-gateway reset --instance review
-pnpm dev-gateway prune      # remove named instances nothing is running on
+pnpm dev-gateway prune      # machine-wide: remove every idle named instance, any checkout's
 ```
 
-A name is 1 to 24 lowercase letters, digits and inner hyphens. The instance runs `openclaw --profile clawtrate-dev-<name>` with its state in `~/.openclaw-clawtrate-dev-<name>`, and `start` picks free ports for its gateway and scripted model between 19200 and 19999 and records them. Every rule above holds per instance: its own fresh folder and marker, its own run files in `tools/dev-gateway/.run/instances/<name>`, and no command for one instance acts on another instance's folder, gateway or processes. `reset` removes only the named instance; `prune` never removes the default one.
+A name is 1 to 24 lowercase letters, digits and inner hyphens. The instance runs `openclaw --profile clawtrate-dev-<name>` with its state in `~/.openclaw-clawtrate-dev-<name>`, and `start` picks free ports for its gateway and scripted model between 19200 and 19999 and records them. Every rule above holds per instance: its own fresh folder and marker, its own run files in `tools/dev-gateway/.run/instances/<name>`, and no command for one instance acts on another instance's folder, gateway or processes. `reset` removes only the named instance. `start`, `stop`, `reset` and `prune` take a lock per instance, and port choice a lock for the machine, so two commands never act on the same instance at once. `list` and `prune` cover every instance on the machine and refuse `--instance`; `prune` is deliberate maintenance, removes only instances proven idle, and never the default one.
 
 ### 2. Open the web preview
 
@@ -67,7 +67,7 @@ The gateway connection, the device key and pairing all live in the preview host 
 
 - `pnpm preview:web --dev-gateway` connects to the development gateway at startup.
 - `pnpm preview:web --no-access-token` turns the access token off. It is only accepted with the development gateway. The host then opens nothing but the development gateway, and refuses to start if its data directory remembers another one; use a separate `--data-dir` for development.
-- `pnpm preview:web --instance <name>` (or `CLAWTRATE_DEV_INSTANCE`) makes both of the above use that instance's gateway instead of the default instance's, as recorded by this checkout's `pnpm dev-gateway start --instance <name>`. The desktop app reads `CLAWTRATE_DEV_INSTANCE` the same way.
+- `pnpm preview:web --instance <name>` (or `CLAWTRATE_DEV_INSTANCE`) makes both of the above use that instance's gateway instead of the default instance's, but only while this checkout's `pnpm dev-gateway start --instance <name>` is provably the instance's current run and its gateway is running. That is checked again before every connection. The desktop app reads `CLAWTRATE_DEV_INSTANCE` the same way.
 - `--port`, `--host` and `--data-dir` change where it listens and where it keeps the device identity.
 
 ### 3. Run the desktop app
@@ -88,7 +88,7 @@ pnpm exec playwright install chromium   # once
 pnpm e2e
 ```
 
-`pnpm e2e` never uses the default instance or its ports. Each run creates its own instance named `e2e-<random>`, plus an unseeded second instance so another gateway is always listening while it runs. It starts the gateway, its scripted model and a preview host with a fresh device identity on free ports, approves the pairing request the page raises, and checks that the bots, a task list and a transcript render, and that every other running instance is left as it was. Afterwards it stops what it started by PID and removes both instances' state, also when a test fails. Runs in several checkouts, or several in one, can go at the same time.
+`pnpm e2e` never uses the default instance or its ports. Each run creates its own instance named `e2e-<random>`, plus an unseeded second instance so another gateway is always listening while it runs. It starts the gateway, its scripted model and a preview host with a fresh device identity on free ports, approves the pairing request the page raises, and checks that the bots, a task list and a transcript render, and that every other running instance is left as it was. Afterwards it removes exactly what it created: its two instances by name and run id, its preview host and its temporary folders, also when a test fails or the run is stopped with Ctrl-C or SIGTERM. A run killed outright is cleaned up by the next `pnpm e2e` in the same checkout. Runs in several checkouts, or several in one, can go at the same time.
 
 ## Logo and icons
 
