@@ -55,3 +55,17 @@ Row 20 scripts:
 | `memory-save-search.mjs` | a bot writing memory, `memory.status`, `memory.search` |
 | `usage-fields.mjs`, `effort-and-models.mjs` | usage result fields; effort per turn and `models.list` details |
 | `paired-devices.mjs` | fields of paired client devices |
+
+Row 21 scripts:
+
+| Script | Row 21 topic |
+| --- | --- |
+| `routines.mjs` | create, run now, approval from the run and its standing grant, pause, refused runs, remove, `cron` events |
+| `routine-history.mjs` | a routine with delivery off: `finished` event, run log, `cron.history`, run session listing |
+| `web-push.mjs` | Web Push subscribe from a non-browser client (endpoint on a closed loopback port), preferences, presence fields |
+| `skills-library-and-workshop.mjs` | the bot's `skill_workshop` tool, library disable and remove |
+| `mcp-servers.mjs` | catalog, adding a command server without a restart, `mcp.authLogin` refusal |
+| `secrets-request.mjs` | the bot's `secrets` request and whether the value leaks |
+| `client-node.mjs` | a client acting as a node: allowed, custom and unanswered commands |
+| `expired-approval.mjs` | "Always allow" on an expired exec approval |
+| `credentials-and-tools.mjs` | model auth status, secret store listing, `image_generate` in the bot's tools |
