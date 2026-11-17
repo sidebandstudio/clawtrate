@@ -372,6 +372,17 @@ button.b-choice:hover {
   color: var(--text-faint);
 }
 
+/* "Let the gateway choose": set apart from the accounts, its whole line readable. */
+.b-choices.b-gw {
+  margin-top: 12px;
+}
+
+.b-choice-sub.b-wrap {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+
 /* A row that does something rather than chooses: a plus and the words. */
 .b-choice[data-kind="add"] .b-choice-title {
   font-weight: var(--weight-regular);

@@ -239,6 +239,9 @@ await p.close();
 
 // FM-16 and FM-17 at phone width.
 const phone = { width: 390, height: 844 };
+p = await open("open=create&step=account&name=Viral", phone);
+check("Phone: Let the gateway choose is set apart by 12 px and its whole line is readable", await p.evaluate(() => { const gw = document.querySelector(".b-choices.b-gw"); const prev = gw.previousElementSibling; const sub = gw.querySelector(".b-choice-sub"); return gw.getBoundingClientRect().top - prev.getBoundingClientRect().bottom >= 11.5 && sub.scrollWidth <= sub.clientWidth + 1 && sub.textContent.includes("with its default model, gpt-5.5."); }));
+await p.close();
 p = await open("open=settings&section=accounts&account=openai:work", phone);
 await p.click('[data-b="disconnect"]');
 check("FM-16 phone: a confirmation is a card at the foot, as tall as its content", await p.evaluate(() => { const r = document.querySelector("#confirm-dialog").getBoundingClientRect(); return r.height < 360 && Math.abs(innerHeight - r.bottom - 12) < 2; }));
