@@ -1,52 +1,13 @@
 import type { ClawtrateState, ConnectionState, DiscoveryState } from "@clawtrate/core";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type RefObject,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { gatewayLabel } from "./format.ts";
-import { CloseIcon } from "./icons.tsx";
-import { ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
+import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
 import { readPreference, writePreference, type ThemeChoice } from "./preferences.ts";
 import { Rail } from "./Rail.tsx";
 import { useSelection } from "./selection.ts";
-
-function WorkPanel({
-  open,
-  onClose,
-  closeRef,
-}: {
-  open: boolean;
-  onClose: () => void;
-  closeRef: RefObject<HTMLButtonElement | null>;
-}) {
-  return (
-    <aside className="work-panel" aria-label="Work" aria-hidden={!open} data-testid="work-panel">
-      <header className="pane-header">
-        <div className="pane-title">
-          <h2>Work</h2>
-        </div>
-        <button
-          type="button"
-          className="icon-button"
-          ref={closeRef}
-          onClick={onClose}
-          aria-label="Close work panel"
-          title="Close (Esc)"
-          tabIndex={open ? 0 : -1}
-        >
-          <CloseIcon />
-        </button>
-      </header>
-      <p className="work-empty">Nothing here yet. Files the bot touches will appear here.</p>
-    </aside>
-  );
-}
+import { WorkPanel } from "./WorkPanel.tsx";
 
 /**
  * One compact strip for connection and loading problems. It overlays the top of
@@ -89,24 +50,6 @@ function StatusStrip({
   );
 }
 
-/** Matches the stylesheet: below this width Work is a drawer over the conversation. */
-const OVERLAY_QUERY = "(max-width: 1319px)";
-
-function useMediaQuery(query: string): boolean {
-  return useSyncExternalStore(
-    useCallback(
-      (onChange: () => void) => {
-        const media = globalThis.matchMedia?.(query);
-        media?.addEventListener("change", onChange);
-        return () => media?.removeEventListener("change", onChange);
-      },
-      [query],
-    ),
-    () => globalThis.matchMedia?.(query).matches ?? false,
-    () => false,
-  );
-}
-
 export function Shell({
   state,
   theme,
@@ -123,10 +66,22 @@ export function Shell({
   // In the one-pane layout the rail and the conversation take turns.
   const [view, setView] = useState<"list" | "detail">("detail");
   const shellRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   const shellWidth = useElementWidth(shellRef);
+  const mainWidth = useElementWidth(mainRef);
   const onePane = shellWidth !== null && shellWidth < ONE_PANE_BELOW;
 
+  // Whether Work is a drawer is decided here, from the width of .main-pane, and
+  // in the stylesheet by the same width (DOCK_FROM); nowhere else.
+  const overlay = mainWidth !== null && mainWidth < DOCK_FROM;
+  const drawerOpen = panelOpen && overlay;
+
   const setPanel = useCallback((open: boolean) => {
+    if (open) openerRef.current = document.activeElement as HTMLElement | null;
     setPanelOpen(open);
     writePreference("panel", open ? "open" : "closed");
   }, []);
@@ -137,13 +92,31 @@ export function Shell({
       if ((event.metaKey || event.ctrlKey) && event.key === "\\") {
         event.preventDefault();
         togglePanel();
-      } else if (event.key === "Escape" && panelOpen) {
+      } else if (event.key === "Escape" && drawerOpen) {
         setPanel(false);
+      } else if (event.key === "Tab" && drawerOpen && panelRef.current) {
+        // The drawer keeps focus inside itself.
+        const items = [
+          ...panelRef.current.querySelectorAll<HTMLElement>("button, [tabindex]"),
+        ].filter((element) => element.tabIndex >= 0 && !element.closest("[hidden]"));
+        const first = items[0];
+        const last = items.at(-1);
+        const active = document.activeElement;
+        if (!panelRef.current.contains(active)) {
+          event.preventDefault();
+          first?.focus();
+        } else if (event.shiftKey && active === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && active === last) {
+          event.preventDefault();
+          first?.focus();
+        }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePanel, panelOpen, setPanel]);
+  }, [togglePanel, drawerOpen, setPanel]);
 
   // Keep exactly the selected task's transcript open on the host.
   const taskKey = task?.key ?? null;
@@ -153,19 +126,23 @@ export function Shell({
     return () => void send({ type: "closeSession", key: taskKey });
   }, [taskKey, send]);
 
-  // As an overlay, Work takes keyboard focus while open and hands it back to the
-  // toggle when it closes; the conversation it covers is inert meanwhile. The
-  // wide inline pane is ordinary page content and moves no focus.
-  const overlay = useMediaQuery(OVERLAY_QUERY);
-  const drawerOpen = panelOpen && overlay;
-  const toggleRef = useRef<HTMLButtonElement>(null);
-  const closeRef = useRef<HTMLButtonElement>(null);
+  // The one place that moves focus for Work. As a drawer it takes focus, unless
+  // focus is already inside it; when the drawer closes, focus returns to the
+  // control that opened it. Docking or undocking an open pane moves nothing
+  // except off what has just become inert.
   const drawerWasOpen = useRef(false);
   useEffect(() => {
-    if (drawerOpen) closeRef.current?.focus();
-    else if (drawerWasOpen.current) toggleRef.current?.focus();
+    if (drawerOpen) {
+      if (!panelRef.current?.contains(document.activeElement)) closeRef.current?.focus();
+    } else if (drawerWasOpen.current && !panelOpen) {
+      const opener = openerRef.current;
+      (opener && opener.isConnected && !opener.closest("[inert]")
+        ? opener
+        : toggleRef.current
+      )?.focus();
+    }
     drawerWasOpen.current = drawerOpen;
-  }, [drawerOpen]);
+  }, [drawerOpen, panelOpen]);
 
   const showStrip = state.connection.status !== "connected" || state.discovery.status === "error";
 
@@ -187,9 +164,9 @@ export function Shell({
         onOpen={() => setView("detail")}
         theme={theme}
         onTheme={onTheme}
-        inert={false}
+        inert={drawerOpen}
       />
-      <div className="main-pane">
+      <div className="main-pane" ref={mainRef}>
         {showStrip && <StatusStrip connection={state.connection} discovery={state.discovery} />}
         <Conversation
           task={task}
@@ -210,7 +187,16 @@ export function Shell({
           tabIndex={-1}
           onClick={() => setPanel(false)}
         />
-        <WorkPanel open={panelOpen} onClose={() => setPanel(false)} closeRef={closeRef} />
+        {panelOpen && (
+          <WorkPanel
+            bot={bot}
+            task={task}
+            drawer={drawerOpen}
+            onClose={() => setPanel(false)}
+            closeRef={closeRef}
+            panelRef={panelRef}
+          />
+        )}
       </div>
     </div>
   );

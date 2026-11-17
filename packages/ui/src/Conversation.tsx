@@ -123,6 +123,53 @@ function Turn({ item, bot }: { item: TranscriptItem; bot: Bot | undefined }) {
 const NEAR_BOTTOM_PX = 96;
 
 /**
+ * The reader's place survives a change of width: opening, closing, docking or
+ * undocking Work, or resizing the window. A reader at the end stays at the
+ * end; otherwise the first item in view stays where it was while the text
+ * reflows around it.
+ */
+function useHoldPlace(scroller: RefObject<HTMLDivElement | null>) {
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+    let place: { atEnd: boolean; anchor: Element | null; offset: number } = {
+      atEnd: true,
+      anchor: null,
+      offset: 0,
+    };
+    let width = element.clientWidth;
+    const record = () => {
+      const top = element.getBoundingClientRect().top;
+      const atEnd =
+        element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX;
+      const anchor =
+        [...element.querySelectorAll(".transcript-inner > *")].find(
+          (node) => node.getBoundingClientRect().bottom > top + 1,
+        ) ?? null;
+      place = { atEnd, anchor, offset: anchor ? anchor.getBoundingClientRect().top - top : 0 };
+    };
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth !== width) {
+        width = element.clientWidth;
+        if (place.atEnd) element.scrollTop = element.scrollHeight;
+        else if (place.anchor?.isConnected) {
+          const top = element.getBoundingClientRect().top;
+          element.scrollTop += place.anchor.getBoundingClientRect().top - top - place.offset;
+        }
+      }
+      record();
+    });
+    record();
+    observer.observe(element);
+    element.addEventListener("scroll", record, { passive: true });
+    return () => {
+      observer.disconnect();
+      element.removeEventListener("scroll", record);
+    };
+  }, [scroller]);
+}
+
+/**
  * The scrolling transcript of one task. Mounted per task, so opening a task
  * starts at its latest message. New output follows only a reader who is already
  * at the end; anyone reading older messages keeps their place and gets a
@@ -157,6 +204,8 @@ function TranscriptView({ transcript, bot }: { transcript: Transcript; bot: Bot 
     const element = scroller.current;
     if (atEnd && element) element.scrollTop = element.scrollHeight;
   }, [contentSize, atEnd]);
+
+  useHoldPlace(scroller);
 
   return (
     <div className="transcript-wrap">
