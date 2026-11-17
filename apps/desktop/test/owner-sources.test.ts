@@ -1,7 +1,8 @@
 // The second guard on what the host keeps works on the source, not on live
 // objects: every collection that can outlive the call that made it (a
-// `new Map`, `Set`, `WeakMap` or `WeakSet`, or an array, kept in a class
-// field, at module level, or in a variable a later-running function captures)
+// `new Map`, `Set`, `WeakMap` or `WeakSet`, an array, or one a factory call
+// makes, kept in a class field, at module level, or in a variable a
+// later-running function captures, directly or inside a plain object)
 // must be either a field the retention registry names (`owners.ts`) or on the
 // allowlist below, each entry with its bound or its lifetime in one line.
 // `owner-scan.ts` finds them. A false alarm is the intended cost: it adds a line here.
@@ -38,6 +39,29 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/scopes.ts:IMPLIED_BY_WRITE": "static, the scopes write implies",
   "packages/core/src/state-bounds.ts:SESSION_ROW_FIELDS": "static, the twenty-one fields read",
   "packages/core/src/state-bounds.ts:SESSION_ROW_IDS": "static, five field names",
+  // Static templates: initial or empty values inside plain objects, copied, never grown.
+  "packages/core/src/approvals.ts:DEFAULT_DECISIONS.exec": "static, three decisions",
+  "packages/core/src/approvals.ts:DEFAULT_DECISIONS.plugin": "static, two decisions",
+  "packages/core/src/approvals.ts:DEFAULT_DECISIONS.system-agent": "static, two decisions",
+  "packages/core/src/approvals.ts:NO_ATTEMPTS.inFlight": "static, an empty list copied on write",
+  "packages/core/src/runs.ts:emptyActivity.runs": "static, an empty list copied on write",
+  "packages/core/src/runs.ts:emptyActivity.outbox": "static, an empty list copied on write",
+  "packages/core/src/runs.ts:emptyActivity.questions": "static, an empty list copied on write",
+  "packages/core/src/runs.ts:emptyActivity.approvals": "static, an empty list copied on write",
+  "packages/core/src/types.ts:initialScopeUpgrade.scopes": "static, an empty list copied on write",
+  "packages/core/src/types.ts:initialConnectionState.scopes":
+    "static, an empty list copied on write",
+  "packages/core/src/types.ts:initialConnectionState.requestedScopes":
+    "static, an empty list copied on write",
+  "packages/core/src/types.ts:initialState.bots": "static, an empty list copied on write",
+  "packages/core/src/types.ts:initialState.unroutedApprovals":
+    "static, an empty list copied on write",
+  "packages/core/src/types.ts:initialState.creations": "static, an empty list copied on write",
+  // Values that go into the bounded state, captured only by an update that runs at once.
+  "packages/core/src/client.ts:completeCreation>message.attachments":
+    "the new outgoing message's files, empty; kept only in the outbox, under its bound",
+  "packages/core/src/runs.ts:applyQuestionRequested>card.settledBy":
+    "the new question card's settling records, empty; kept only in the card, under its bound",
   // Weak: an entry lives only as long as the object it is keyed by.
   "packages/core/src/bounds.ts:bounded": "weak, keyed by retained objects",
   "packages/core/src/bounds.ts:draws": "weak, keyed by bounds, which are static",
@@ -123,6 +147,27 @@ describe("the source keeps no collection outside the registry", () => {
       "probe.ts:createStore>hidden",
       "probe.ts:Grown.added",
       "probe.ts:moduleLevel",
+    ]);
+  });
+
+  it("finds a collection held inside a plain object, and one a factory call makes, as the review's bypasses did", () => {
+    const text = `
+      const reviewBox = { kept: new Map<string, string>(), deeper: { list: [] as string[] } };
+      const made = Array.from({ length: 0 }, () => "");
+      const table = Object.fromEntries([["a", 1]]);
+      export function createNormalizer() {
+        const box = { seen: new Set<string>() };
+        return (value: string) => { box.seen.add(value); return value; };
+      }
+      class Holder { private readonly state = { queue: new Map<string, number>() }; }
+    `;
+    expect(scanText("probe.ts", text).map((each) => each.where)).toEqual([
+      "probe.ts:reviewBox.kept",
+      "probe.ts:reviewBox.deeper.list",
+      "probe.ts:made",
+      "probe.ts:table",
+      "probe.ts:createNormalizer>box.seen",
+      "probe.ts:Holder.state.queue",
     ]);
   });
 });
