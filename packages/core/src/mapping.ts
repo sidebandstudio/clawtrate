@@ -5,6 +5,7 @@
 import type {
   Bot,
   Task,
+  TaskContext,
   TaskStatus,
   ToolResult,
   TranscriptBlock,
@@ -172,7 +173,19 @@ export function mapSessionRow(row: RawRecord): Task | null {
     updatedAt: num(row.updatedAt) ?? num(row.lastActivityAt) ?? num(row.createdAt),
     status: taskStatus(row),
     unread: row.unread === true,
+    ...contextOf(row),
   };
+}
+
+/**
+ * Context use from a session row: `totalTokens` (the latest run's context, as
+ * the gateway counts it) out of `contextTokens` (the model's context window).
+ */
+function contextOf(row: RawRecord): { context: TaskContext } | Record<string, never> {
+  const used = num(row.totalTokens);
+  const window = num(row.contextTokens);
+  if (used === null || window === null || window <= 0) return {};
+  return { context: { used, window, fresh: row.totalTokensFresh !== false } };
 }
 
 /** Rows from a `sessions.list` result, keyed by session key. */

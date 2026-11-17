@@ -96,6 +96,19 @@ export const STATE_SCENES: StateScene[] = [
       await expect(page.getByRole("menu", { name: "Juniper" })).toBeVisible();
     },
   },
+  { name: "narrated-week", query: "scene=main&bot=pip&task=agent:pip:week" },
+  { name: "neutral-bubbles", query: `scene=main&${OTTO_DISK}&bubbles=neutral` },
+  { name: "context-unavailable", query: "scene=main&bot=marlow" },
+  {
+    name: "find",
+    query: `scene=main&${OTTO_DISK}`,
+    prepare: async (page) => {
+      await page.locator(".transcript").focus();
+      await page.keyboard.press("ControlOrMeta+F");
+      await page.getByRole("textbox", { name: "Find in conversation" }).fill("disk");
+      await page.keyboard.press("Enter");
+    },
+  },
   {
     name: "bot-search",
     query: `scene=main&${OTTO_DISK}`,

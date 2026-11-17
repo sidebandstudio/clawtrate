@@ -4,7 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
-import { readPreference, writePreference, type ThemeChoice } from "./preferences.ts";
+import {
+  readPreference,
+  writePreference,
+  type BubbleChoice,
+  type ThemeChoice,
+} from "./preferences.ts";
 import { Rail } from "./Rail.tsx";
 import { useSelection } from "./selection.ts";
 import { unreadCount } from "./unread.ts";
@@ -26,11 +31,15 @@ export function Shell({
   state,
   theme,
   onTheme,
+  bubbles,
+  onBubbles,
   onUnreadCount,
 }: {
   state: ClawtrateState;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
+  bubbles: BubbleChoice;
+  onBubbles: (choice: BubbleChoice) => void;
   onUnreadCount?: ((count: number) => void) | undefined;
 }) {
   const send = useCommand();
@@ -198,6 +207,8 @@ export function Shell({
         onShowList={showList}
         theme={theme}
         onTheme={onTheme}
+        bubbles={bubbles}
+        onBubbles={onBubbles}
         inert={drawerOpen}
       />
       <div className="main-pane" ref={mainRef}>

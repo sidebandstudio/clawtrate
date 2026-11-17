@@ -28,7 +28,7 @@ import {
   StarIcon,
 } from "./icons.tsx";
 import { Menu, type MenuEntry } from "./Menu.tsx";
-import type { ThemeChoice } from "./preferences.ts";
+import type { BubbleChoice, ThemeChoice } from "./preferences.ts";
 import { arrange, moveInOrder, SORT_ORDERS, useRoster } from "./roster.ts";
 import {
   botLabel,
@@ -237,6 +237,8 @@ export function Rail({
   onShowList,
   theme,
   onTheme,
+  bubbles,
+  onBubbles,
   inert,
 }: {
   bots: Bot[];
@@ -254,6 +256,8 @@ export function Rail({
   onShowList: () => void;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
+  bubbles: BubbleChoice;
+  onBubbles: (choice: BubbleChoice) => void;
   inert: boolean;
 }) {
   const send = useCommand();
@@ -560,6 +564,22 @@ export function Rail({
       checked: theme === choice,
       onSelect: () => {
         onTheme(choice);
+        closeMenu(true);
+      },
+    })),
+    { kind: "rule" },
+    { kind: "label", text: "Your messages" },
+    ...(
+      [
+        ["accent", "Accent"],
+        ["neutral", "Neutral"],
+      ] as const
+    ).map(([choice, label]): MenuEntry => ({
+      kind: "radio",
+      label,
+      checked: bubbles === choice,
+      onSelect: () => {
+        onBubbles(choice);
         closeMenu(true);
       },
     })),

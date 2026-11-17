@@ -2,7 +2,7 @@ import type { HostInfo } from "@clawtrate/core";
 import { useEffect } from "react";
 import { useClawtrateState } from "./bridge.tsx";
 import { ConnectScreen } from "./ConnectScreen.tsx";
-import { readPreference, useTheme } from "./preferences.ts";
+import { readPreference, useBubbles, useTheme } from "./preferences.ts";
 import { screenFor } from "./screen.ts";
 import { Shell } from "./Shell.tsx";
 
@@ -44,10 +44,18 @@ export function App({
   useInputAndMotion();
   // The theme applies on every screen; the gateway menu in the shell changes it.
   const [theme, setTheme] = useTheme();
+  const [bubbles, setBubbles] = useBubbles();
   return (
     <div className="app">
       {screenFor(state) === "shell" ? (
-        <Shell state={state} theme={theme} onTheme={setTheme} onUnreadCount={onUnreadCount} />
+        <Shell
+          state={state}
+          theme={theme}
+          onTheme={setTheme}
+          bubbles={bubbles}
+          onBubbles={setBubbles}
+          onUnreadCount={onUnreadCount}
+        />
       ) : (
         <ConnectScreen connection={state.connection} info={info} />
       )}

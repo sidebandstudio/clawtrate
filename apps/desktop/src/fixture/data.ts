@@ -304,9 +304,52 @@ export function fixtureTasks(now: number, bots: Bot[]): Record<string, Task[]> {
       updatedAt: now - spec.ago * MINUTE,
       status: spec.status ?? "done",
       unread: spec.unread ?? false,
+      // Marlow's gateway reports no context use, so its task says so.
+      ...(bot.id === "marlow"
+        ? {}
+        : {
+            context: {
+              used: CONTEXT_USED[`agent:${bot.id}:${spec.slug}`] ?? 3_000 + spec.title.length * 97,
+              window: 128_000,
+              fresh: true,
+            },
+          }),
     }));
   }
   return byBot;
+}
+
+const CONTEXT_USED: Record<string, number> = {
+  "agent:otto:disk-space": 18_432,
+  "agent:pip:week": 9_870,
+};
+
+/** Pip's week: a run that narrates as it goes, then a table wider than a bubble. */
+export const NARRATED_TASK = "agent:pip:week";
+
+function weekTranscript(now: number): TranscriptItem[] {
+  const at = now - 150 * MINUTE;
+  return [
+    item("user", at - 3 * MINUTE, [text("Plan my week. Keep Thursday clear.")]),
+    item("assistant", at - 2 * MINUTE, [
+      text("On it. Checking your calendar first."),
+      tool("w1", "read", { path: "calendar/this-week.md" }, { text: "Mon: dentist 9:00\nWed: school play 18:30" }),
+      text("Reading Thursday's notes now. The table is next."),
+      tool("w2", "read", { path: "calendar/thursday.md" }, { text: "Nothing booked." }),
+      text("Thursday is empty, so I kept it that way."),
+      text(
+        [
+          "Here is the week, with Thursday kept clear.",
+          "",
+          "| | Mon | Tue | Wed | Thu | Fri | Sat | Sun |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- |",
+          "| Morning | Dentist at 9:00 | Groceries before work | Gym | Clear | Car service at 8:30 | Farmers' market | Long walk |",
+          "| Afternoon | Report draft | Team review | Report final | Clear | Pick up the car | Birthday present | Read |",
+          "| Evening | Laundry | Call the plumber | School play at 6:30 | Clear | Dinner out | Birthday dinner | Plan next week |",
+        ].join("\n"),
+      ),
+    ]),
+  ];
 }
 
 /**
@@ -486,7 +529,11 @@ export function fixtureTranscripts(now: number, bots: Bot[]): Record<string, Tra
     for (const spec of SPECS[bot.id] ?? []) {
       const key = `agent:${bot.id}:${spec.slug}`;
       const items =
-        key === OPEN_TASK ? diskTranscript(now) : shortTranscript(spec, now - spec.ago * MINUTE);
+        key === OPEN_TASK
+          ? diskTranscript(now)
+          : key === NARRATED_TASK
+            ? weekTranscript(now)
+            : shortTranscript(spec, now - spec.ago * MINUTE);
       transcripts[key] = {
         sessionKey: key,
         status: "ready",

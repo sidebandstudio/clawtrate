@@ -77,6 +77,18 @@ export type Task = {
   updatedAt: number | null;
   status: TaskStatus;
   unread: boolean;
+  /**
+   * Context use after the latest run: tokens used out of the model's context
+   * window. Absent when the gateway does not report both.
+   */
+  context?: TaskContext;
+};
+
+export type TaskContext = {
+  used: number;
+  window: number;
+  /** False when the gateway says the count is from before the latest run. */
+  fresh: boolean;
 };
 
 export type ToolResult = { isError: boolean; text: string };
