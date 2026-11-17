@@ -29,6 +29,17 @@
 // The setting kinds are SETTING_KINDS and nothing else: there is no kind for
 // free text, a command, an argument list, a credential or a model provider.
 // Any other key or kind is refused.
+//
+// Browsers of their own. One plugin of an instance may also declare
+// `botBrowsers`: which seeded bots get a managed browser of their own, and
+// two timings, each from a closed set (BOT_BROWSER_CHOICES):
+//
+//   "botBrowsers": { "bots": ["marlow", "pip"], "drainTimeoutMs": 2000, "renewTimeoutMs": 6000 }
+//
+// The tool then writes the whole browser setup itself (see `browserConfig`
+// in cli.ts): the browser tool for those bots only, one profile per bot on
+// ports of the instance's own block, headless, and every connection the
+// browser makes mapped to the instance's scripted pages on loopback.
 
 import { createHash } from "node:crypto";
 import {
@@ -66,6 +77,48 @@ export type Setting = { kind: SettingKind; value: boolean | number | string };
 
 export type PluginFile = { path: string; mode: number; bytes: Buffer };
 
+/** The closed sets a `botBrowsers` declaration chooses from. */
+export const BOT_BROWSER_CHOICES = {
+  /** At most this many bots; each gets one port of the instance's block. */
+  maxBots: 4,
+  drainTimeoutMs: [2000, 5000, 15000],
+  renewTimeoutMs: [6000, 10000, 20000],
+} as const;
+
+export type BotBrowsers = { bots: string[]; drainTimeoutMs: number; renewTimeoutMs: number };
+
+/**
+ * Why a `botBrowsers` declaration is not one this guard accepts, one line
+ * per problem: exactly `bots`, `drainTimeoutMs` and `renewTimeoutMs`; bots
+ * from the seeded bots, each once, at most `maxBots`; timings from their sets.
+ */
+export function botBrowsersProblems(value: unknown, seedBots: readonly string[]): string[] {
+  if (!isPlainObject(value)) return ["botBrowsers must be an object"];
+  const problems: string[] = [];
+  if (Object.keys(value).sort().join() !== "bots,drainTimeoutMs,renewTimeoutMs") {
+    problems.push("botBrowsers must be exactly { bots, drainTimeoutMs, renewTimeoutMs }");
+  }
+  const { bots } = value;
+  if (
+    !Array.isArray(bots) ||
+    bots.length === 0 ||
+    bots.length > BOT_BROWSER_CHOICES.maxBots ||
+    new Set(bots).size !== bots.length ||
+    !bots.every((bot) => typeof bot === "string" && seedBots.includes(bot))
+  ) {
+    problems.push(
+      `botBrowsers.bots must be 1 to ${BOT_BROWSER_CHOICES.maxBots} different seeded bots (${seedBots.join(", ")})`,
+    );
+  }
+  for (const key of ["drainTimeoutMs", "renewTimeoutMs"] as const) {
+    const choices: readonly number[] = BOT_BROWSER_CHOICES[key];
+    if (!choices.includes(value[key] as number)) {
+      problems.push(`botBrowsers.${key} must be one of ${choices.join(", ")}`);
+    }
+  }
+  return problems;
+}
+
 export type DevPlugin = {
   /** The folder name under plugins/. */
   name: string;
@@ -77,6 +130,8 @@ export type DevPlugin = {
   digest: string;
   settings: Record<string, Setting>;
   tools: string[];
+  /** The bots it gives a browser of their own, or null. */
+  botBrowsers: BotBrowsers | null;
 };
 
 export type PluginRule = {
@@ -84,6 +139,8 @@ export type PluginRule = {
   gatewayTools: readonly string[];
   /** Plugin ids the development config uses itself. */
   reserved: readonly string[];
+  /** The seeded bots, the only ones a `botBrowsers` declaration may name. */
+  seedBots: readonly string[];
 };
 
 /** A checkout's own plugins folder. */
@@ -158,7 +215,7 @@ export function additionProblems(
   if (!isPlainObject(addition)) return ["the addition must be an object"];
   const problems: string[] = [];
   for (const key of Object.keys(addition)) {
-    if (!["plugin", "settings", "tools"].includes(key)) {
+    if (!["plugin", "settings", "tools", "botBrowsers"].includes(key)) {
       problems.push(`the addition may not set ${key}`);
     }
   }
@@ -196,6 +253,9 @@ export function additionProblems(
         problems.push(`tool ${tool.name} is the gateway's own, not one the plugin provides`);
       }
     }
+  }
+  if (addition.botBrowsers !== undefined) {
+    problems.push(...botBrowsersProblems(addition.botBrowsers, options.seedBots));
   }
   return problems;
 }
@@ -290,7 +350,11 @@ function checkPlugin(name: string, root: string, rule: PluginRule): DevPlugin {
   if (problems.length > 0) {
     refuse(`its contract addition is not one this guard accepts:\n  - ${problems.join("\n  - ")}`);
   }
-  const checked = addition as { settings?: Record<string, Setting>; tools?: { name: string }[] };
+  const checked = addition as {
+    settings?: Record<string, Setting>;
+    tools?: { name: string }[];
+    botBrowsers?: BotBrowsers;
+  };
   return {
     name,
     id,
@@ -298,6 +362,7 @@ function checkPlugin(name: string, root: string, rule: PluginRule): DevPlugin {
     digest: digestFiles(files),
     settings: checked.settings ?? {},
     tools: (checked.tools ?? []).map((tool) => tool.name),
+    botBrowsers: checked.botBrowsers ?? null,
   };
 }
 

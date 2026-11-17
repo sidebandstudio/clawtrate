@@ -38,6 +38,14 @@ export const DEFAULT_GATEWAY_URL = `ws://127.0.0.1:${DEFAULT_GATEWAY_PORT}`;
 export const NAMED_PORT_RANGE = { first: 19200, last: 19999 } as const;
 export const NAMED_PORT_BLOCK = 20;
 export const PROVIDER_PORT_OFFSET = 10;
+/**
+ * An instance whose plugin gives bots browsers of their own (`botBrowsers`)
+ * also uses these ports of its block: the scripted pages one above the
+ * scripted model, and from the twelfth on, the default browser profile's
+ * debugging port followed by one per bot.
+ */
+export const PAGES_PORT_OFFSET = 1;
+export const BROWSER_PORT_OFFSET = 12;
 /** Ports a named instance never uses, whatever the range says. */
 export const RESERVED_PORTS: ReadonlySet<number> = new Set([
   DEFAULT_GATEWAY_PORT,

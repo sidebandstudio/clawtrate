@@ -129,7 +129,11 @@ export function gatewayTurnPrompt(messages: ChatMessage[]): string | null {
   return GATEWAY_TURN_PROMPTS.find((start) => prompt.startsWith(start)) ?? null;
 }
 
-export function planReply(messages: ChatMessage[], tools: Set<string>): ReplyStep[] {
+export function planReply(
+  messages: ChatMessage[],
+  tools: Set<string>,
+  options: { pagesOrigin?: string | null } = {},
+): ReplyStep[] {
   let lastUserIndex = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (messages[i]!.role === "user" && !isRuntimeContext(messages[i]!)) {
@@ -196,6 +200,7 @@ export function planReply(messages: ChatMessage[], tools: Set<string>): ReplySte
     const facts = runtimeFacts(messages);
     const ctx: PlanContext = {
       ...facts,
+      pagesOrigin: options.pagesOrigin ?? null,
       results: after
         .filter((m) => m.role === "tool")
         .map((m) => ({ name: names.get(m.tool_call_id ?? "") ?? "", text: messageText(m) })),
