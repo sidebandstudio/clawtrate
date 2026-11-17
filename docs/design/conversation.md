@@ -27,7 +27,8 @@ The prototype shows all of it: `prototype/gallery.html` has every component in e
 17. After a reconnect
 18. Rows in the rail
 19. What the gateway's events drive
-20. Not covered here
+20. Where this goes beyond the proposals
+21. Not covered here
 
 ## 1. How the pieces fit
 
@@ -75,7 +76,7 @@ This part adds no colour tokens. It uses the set in `visual-language.md`. The to
 | Thing | Surface |
 |---|---|
 | Activity line, event lines, notes, the status line | None. Text on the stage. |
-| Open activity block, Messaged cards, request cards, shelf rows | `--bg-bubble`, radius 18, at most 640 px wide |
+| Open activity block, Messaged cards, request cards, shelf rows | `--bg-bubble`, radius 18, at most 640 px wide. Beside a docked Work pane the conversation is 600 px and they take the column's 560 px. |
 | Code, what was sent, option lists, the full request, inside a card | `--bg-pane`, radius 10 or 14 |
 | Buttons on a card | `--bg-selected`; the primary stays `--bg-inverse` |
 | A pending approval | The card, plus a 1.5 px `--warn-line` outline |
@@ -494,7 +495,7 @@ If the run finished before the stop took effect, the note reads "**Finished befo
 
 ## 16. Jump to latest
 
-New output is followed only when the reader is within 80 px of the bottom. Otherwise the reader's place holds, and one control appears, centred 10 px above the composer: a pill on `--bg-raised` with `--shadow-pop`, 36 px (40 on touch). It rises 6 px and fades in over 200 ms.
+This is the shell's `.jump-latest` control (see `visual-language.md`), with the states a run needs. New output is followed only when the reader is within 96 px of the end. Otherwise the reader's place holds, and the control appears, centred 10 px above the foot of the transcript: a pill on `--bg-raised` with `--shadow-pop`, 36 px (40 on touch), at most 380 px wide. It rises 6 px and fades in over 200 ms.
 
 | State | Content |
 |---|---|
@@ -502,22 +503,55 @@ New output is followed only when the reader is within 80 px of the bottom. Other
 | A run is active | The bot's avatar at 20 px with its state, the current phrase, and a down arrow |
 | A card is pending | The waiting mark, "Needs you" in `--warn`, and an arrow pointing to the card, up or down |
 
-Choosing it scrolls to the bottom, or to the pending card and focuses it, and the control leaves. It also leaves when the reader scrolls back to the bottom.
+Choosing it scrolls to the end, or to the pending card and focuses it, and the control leaves. It also leaves when the reader scrolls back to the end.
 
-The same rule holds when things change above the reader: a block folding at the end of a run, a card resolving, older messages loading. The message at the top of the view stays where it is.
+The same rule holds when things change above the reader: a block folding at the end of a run, a card resolving, older messages loading, the Work pane docking. The message at the top of the view stays where it is.
 
 ## 17. After a reconnect
 
-The status strip in `visual-language.md` reports the connection. For a conversation that was mid-run it adds:
+The status strip reports the connection from the protected band under the title pill (`visual-language.md`, sections 8 and 11), so it never sits over message text and nothing reflows when it comes and goes. One state drives the strip, the rail's footer, the status line and the composer. For a conversation that was mid-run:
 
-- **While disconnected**, the status line stays, but nothing in it moves: the avatar is blocked, and the phrase reads "Reconnecting. Last seen reading the backup log". The elapsed time is hidden. The app does not animate what it cannot see.
-- **On reconnect**, the strip reads "Connected · catching up" while the transcript is fetched again and merged. No message appears twice. (F-107)
-- **Then** "Synced · 3 new in this task" for 4 seconds, or "Synced" alone when nothing was missed. New items below the fold bring up Jump to latest.
-- **If the fetch fails**, "Couldn't sync this task", with "Try again". What was on screen stays. (F-105)
+| Moment | Strip | Status line | Composer |
+|---|---|---|---|
+| The connection drops | **Reconnecting** · showing saved messages, with "Retry now" | Stays, and stops moving: the avatar is blocked, the phrase reads "Reconnecting. Last seen reading the backup log", the elapsed time is hidden | "Offline. You can keep writing."; send disabled |
+| Reconnected, fetching | **Connected** · catching up | Unchanged | Unchanged |
+| Caught up | **Synced** · 3 new in this task, for 4 seconds; "Synced" alone when nothing was missed | Shows the run's real state again | Back to the run's state |
+| The fetch failed | **Couldn't sync this task**, with "Try again" | Unchanged | Unchanged |
 
-Nothing unmounts, and nothing the reader had opened folds: an open block, an open step, an open card and the chosen view all survive. Steps and cards are rebuilt from the history the gateway keeps and are matched by their identifiers, so each updates in place. (F-104, F-442)
+- The app does not animate what it cannot see: while disconnected no ring orbits and no phrase shimmers.
+- What was missed is fetched again and merged in place, without enter animations. No message, step or card appears twice: each is matched by its identifiers and updates the one already on screen. (F-107, F-442)
+- Nothing unmounts and nothing the reader had opened folds: an open block, an open step with its chosen view, and an open card all survive. (F-104)
+- The reader's place holds. New items below the fold bring up Jump to latest.
+- If the fetch fails, what was on screen stays. (F-105)
+
+In the prototype, "Drop the connection" in the bar shows all of this during the scripted run.
 
 ## 18. Rows in the rail
+
+The rail's arrangement, the folded-bot rule and the task rows are defined in `visual-language.md`, section 7. This section adds the states a run brings.
+
+**A bot row** speaks for all of the bot's tasks through three independent signals, so work in one task never hides news in another:
+
+| Signal | Shows | Comes from |
+|---|---|---|
+| The avatar's state | The face, ring and badge of section 3 | The most urgent state among the bot's tasks: waiting for you, failed or blocked, done with failures, working, done, idle (F-426) |
+| Line two and the time | What the bot last said or is doing now | The latest activity in any task |
+| The unread dot | An 8 px accent dot at the end of line two | Any unread task other than the one on screen (F-022) |
+
+With the state avatar, the run-state mark that the plain shell puts at the start of line two moves onto the avatar: the ring for working, the badge for waiting, blocked and failed.
+
+| Bot's state | Avatar | Line two | Time |
+|---|---|---|---|
+| working | working, with the ring | The current phrase, `--text-muted` | now |
+| thinking | thinking | Thinking | now |
+| waiting for you | waiting, with its badge | "Waiting for you: approve a command" or "…: a question", in `--warn` (F-021) | since it began waiting |
+| blocked | blocked, with its badge | "Can't reach media-box", in `--warn` | |
+| failed | failed, with its badge | "Couldn't finish: provider overloaded", in `--danger` | |
+| done with failures | done, with the failed badge | "Finished with 1 failed step", in `--danger`, and the unread dot (F-295) | |
+| done, unread | done | The latest message, and the unread dot | |
+| idle | idle | The latest message | |
+
+A bot working in one task while another task is unread shows the working avatar, the working task's phrase and the unread dot together. The row's accessible name is "<Bot>, <state>", with ", unread" when it applies. (F-020) A pinned tile shows the same avatar state, with the unread dot beside the name.
 
 **A task row** is its title and at most one mark at the right. (F-057)
 
@@ -532,22 +566,9 @@ Nothing unmounts, and nothing the reader had opened folds: an open block, an ope
 | queued | queued | | ", queued" |
 | idle | none | `--text-muted` | |
 
-Opening a task clears done, done with failures and their marks. (F-022, F-295)
+A task's state is always a mark and never a word, because warn-coloured text is not allowed on the selected task's fill (`visual-language.md`, section 13). Opening a task clears done, done with failures and their marks. (F-022, F-295)
 
-**A bot row** shows the most urgent state among its tasks, in this order: waiting for you, failed or blocked, done with failures, working, done, idle. (F-426)
-
-| State | Avatar | Second line | Time |
-|---|---|---|---|
-| working | working | The current phrase, `--text-muted` | now |
-| thinking | thinking | Thinking | now |
-| waiting for you | waiting | "Waiting for you: approve a command" or "…: a question", in `--warn` (F-021) | since it began waiting |
-| blocked | blocked | "Can't reach media-box", in `--warn` | |
-| failed | failed | "Couldn't finish: provider overloaded", in `--danger` | |
-| done with failures | done | "Finished with 1 failed step", with the failed mark at the end (F-295) | |
-| done, unread | done | The latest message, with the unread dot (F-022) | |
-| idle | idle | The latest message | |
-
-The row's accessible name is "<Bot>, <state>", with ", unread" or ", done with failures" when they apply. (F-020) In a narrowed rail the avatar alone carries the state, which is why every state that needs you has a badge.
+**The phone** uses the same rows at touch sizes: 44 px avatars, 44 px task rows.
 
 ## 19. What the gateway's events drive
 
@@ -575,7 +596,28 @@ Three things depend on the gateway more than the rest:
 - **Expiry of a standing allow.** The map shows grants expiring in whole days. "1 hour" needs a finer expiry from the gateway or a plugin; until then the Lasts row offers only what the gateway can keep.
 - **The recipient's state on a Messaged card.** Working and Recipient waiting need the recipient's run to be identifiable before the send returns. Where it is not, the card goes from Sending to Replied.
 
-## 20. Not covered here
+## 20. Where this goes beyond the proposals
+
+The proposals say what must be true. These are the places where this design adds a state, a rule or a control they do not have, or reads one differently.
+
+| What | In the proposals | Here |
+|---|---|---|
+| Avatar states | Six: idle, thinking, working, waiting, blocked, done | Eight: failed and stopped are added. Failed shares blocked's place in the priority order and its slumped face, with its own badge. Stopped is the idle face with a square badge until the next run or until the task is opened. |
+| Avatars with a picture | Not addressed | The ring and the badge carry the state, since there is no face to move. |
+| An approval as a step | Every approval is a step | An approval for a tool call is that step's waiting status; only an approval with no tool call is a step of its own. A command that needed approval is counted once. |
+| The activity block when a run ends | Its open or folded state is kept while steps arrive, across scrolling and across tasks | The same, and in addition an open block folds when the run ends unless a step in it is open or focus is inside it. |
+| Status phrases | "Thinking", the running step's summary, "Waiting for you", "Stopping…" | The same, plus phrases for the gateway's own status phases, retries, an unreachable machine and a lost connection (section 4). |
+| Elapsed time | Not addressed | Shown on the status line, counting from the send. |
+| Where the Send menu lives | On the Send button | During a run, on a mode word beside Send ("Steer" or "Queue"); with no run, on a right-click or long press of Send. |
+| Queued messages | A "Queued" chip on the message | A row on a shelf above the composer, with "Send now" and "Cancel"; the message enters the transcript when it starts. |
+| A steer that the gateway turns into a restart | Not addressed | The caption reads "Steer · restarted the turn". |
+| Jump to latest | Not addressed | Three states: new output, a live run, a pending card (section 16). |
+| A reconnect during a run | The strip and the refetch | Also: the status line stops moving and says what it last saw (section 17). |
+| A standing allow's duration | 1 hour, 1 day, until revoked | The same three, with the note that the gateway's grants are in whole days today (section 19). |
+
+Every run state in section 5.6, every Messaged and T3 Code card state in sections 6.1 and 6.2, the receiving side's six states and the permission order in section 8.8 are shown as written. None is dropped.
+
+## 21. Not covered here
 
 - Group chats, and approval cards inside them (F-080, F-179, F-289, F-290).
 - Secure Form, Computer, draft, file and link cards. They use the card frame here: `--bg-bubble`, radius 18, a 17 px title, a tag at the top right, buttons along the foot.
