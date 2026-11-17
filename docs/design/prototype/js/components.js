@@ -93,7 +93,7 @@
   CT.statusLine = ({ bot, state = "thinking", phrase = "Thinking", elapsed = "", fresh = false, badge, steps = true }) => {
     const name = CT.bots[bot].name;
     const face = state === "stopping" ? "idle" : state;
-    const spoken = `${name}, ${stateWord[face]}: ${phrase}.${steps ? " Show steps." : " No steps yet."}`;
+    const spoken = `${name}, ${stateWord[face]}: ${phrase}.${steps ? " Show the action." : " Nothing running to show."}`;
     return (
       `<button type="button" class="status-line" data-state="${state}" data-action="status" aria-label="${esc(spoken)}" title="${esc(phrase)}">` +
       `${CT.presence(bot, face, { label: false, badge })}` +
@@ -241,7 +241,7 @@
   CT.step = ({ id, kind = "tool", status = "done", title, detail = "", statusText = "", open = false, body = "", fresh = false }) =>
     `<li><details class="step" data-kind="${kind}" data-status="${status}"${id ? ` id="${id}"` : ""}` +
     `${open ? " open" : ""}${fresh ? ' data-fresh="true"' : ""}>` +
-    `<summary title="${esc(title)}"><span class="step-node">${status === "running" ? CT.glyph("working") : icon(stepIcon[kind] || "tool")}</span>` +
+    `<summary title="${esc(title)}"><span class="step-node">${status === "running" ? CT.glyph("working") : icon(stepIcon[kind] || kind)}</span>` +
     `<span class="step-title">${esc(title)}</span>` +
     `<span class="step-detail">${detail}</span>` +
     `<span class="step-status">${statusText}</span>` +
@@ -284,6 +284,8 @@
     // T3 Code.
     "call-made": ["check", "Call made", ""],
     "delivery-unknown": ["queued", "Delivery unknown", ""],
+    checking: ["sending", "Checking", ""],
+    "stop-requested": ["stopped", "Stop requested", ""],
     // The receiving side follows the recipient's own run.
     "waiting-you": ["waiting", "Waiting for you", "warn"],
     completed: ["check", "Completed", ""],
@@ -299,12 +301,13 @@
   };
 
   // target: a bot id, or "t3code". verb: "Messaged" or "Message from".
-  CT.messaged = ({ id, target, verb = "Messaged", first, state, open = false, body = "" }) => {
+  // line: a later call on a thread, shown where it happened (section 11.4).
+  CT.messaged = ({ id, target, verb = "Messaged", first, state, open = false, body = "", line = "" }) => {
     const t3 = target === "t3code";
     const who = t3 ? `${CT.agentMark()}T3 Code` : `${CT.avatar(target)}${CT.bots[target].name}`;
     const name = t3 ? "T3 Code" : CT.bots[target].name;
     return (
-      `<details class="card messaged" data-target="${target}" data-state="${state}"${id ? ` id="${id}"` : ""}${open ? " open" : ""}>` +
+      `<details class="card messaged" data-target="${target}" data-state="${state}"${id ? ` id="${id}"` : ""}${line ? ` data-line="${line}"` : ""}${open ? " open" : ""}>` +
       `<summary aria-label="${verb} ${name}: ${esc(first)} ${CT.stateWords[state]}."><span class="messaged-verb">${verb}</span>` +
       `<span class="messaged-who">${who}</span>` +
       `<span class="messaged-first">${esc(first)}</span>${CT.state(state)}${icon("chevron", "icon chevron")}</summary>` +
