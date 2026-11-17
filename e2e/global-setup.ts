@@ -46,10 +46,19 @@ export function listInstances(): ListedInstance[] {
   return JSON.parse(devGateway(null, "list", "--json")) as ListedInstance[];
 }
 
-/** The instances other than this run's that were running, by name, pid and ports. */
-export function runningOthers(own: string[]): string[] {
+/**
+ * The running instances this run must leave alone, by name, pid and ports: the
+ * default instance, named instances that are not e2e runs', and the ones in
+ * `keep`. Other e2e runs' instances come and go with those runs.
+ */
+export function runningOthers(own: string[], keep: string[] = []): string[] {
   return listInstances()
-    .filter((row) => row.gatewayRunning && (row.name === null || !own.includes(row.name)))
+    .filter(
+      (row) =>
+        row.gatewayRunning &&
+        (row.name === null ||
+          (!own.includes(row.name) && (!row.name.startsWith("e2e-") || keep.includes(row.name)))),
+    )
     .map(
       (row) =>
         `${row.name ?? "(default)"} pid ${row.gatewayPid} ports ${row.gatewayPort}/${row.providerPort}`,
@@ -110,7 +119,8 @@ function startHost(instance: string, staticDir: string, dataDir: string) {
 }
 
 export default async function globalSetup() {
-  const run = randomBytes(4).toString("hex");
+  const run = process.env.CLAWTRATE_E2E_RUN ?? randomBytes(4).toString("hex");
+  if (!/^[0-9a-f]{8}$/.test(run)) throw new Error(`CLAWTRATE_E2E_RUN must be 8 hex digits`);
   const name = `e2e-${run}`;
   const sentinel = `e2e-${run}-other`;
   const own = [name, sentinel];
@@ -149,7 +159,7 @@ export default async function globalSetup() {
   try {
     // Another instance's gateway is listening before this run's starts.
     devGateway(sentinel, "start", "--no-seed");
-    process.env.CLAWTRATE_E2E_OTHERS = JSON.stringify(runningOthers([name]));
+    process.env.CLAWTRATE_E2E_OTHERS = JSON.stringify(runningOthers([name], [sentinel]));
     // Every start is a fresh, seeded gateway.
     devGateway(name, "start");
     const mine = listInstances().find((row) => row.name === name);

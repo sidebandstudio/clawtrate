@@ -280,5 +280,7 @@ test("leaves every other instance's gateway as it found it", () => {
   // Same processes on the same ports as before this run's instance started.
   const before = JSON.parse(process.env.CLAWTRATE_E2E_OTHERS!) as string[];
   expect(before.some((row) => row.startsWith(`${process.env.CLAWTRATE_E2E_SENTINEL} `))).toBe(true);
-  expect(runningOthers([INSTANCE])).toEqual(expect.arrayContaining(before));
+  expect(runningOthers([INSTANCE], [process.env.CLAWTRATE_E2E_SENTINEL!])).toEqual(
+    expect.arrayContaining(before),
+  );
 });
