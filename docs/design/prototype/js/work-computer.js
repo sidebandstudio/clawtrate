@@ -196,7 +196,9 @@
             `</p>`
           : "") +
         `<dl class="facts">` +
-        row("Commands ran on", "media-box", "Named by the approval at 5:31 PM") +
+        // An approval names a proposed target; only a command's own result says where it ran.
+        row("Command approval target", "media-box", "Requested 5:31 PM · allowed") +
+        row("Commands ran on", "media-box", "By the command at 5:36 PM, from its result") +
         row(`Set for ${name}`, "Commands: media-box", `A setting for ${name}. A task can run somewhere else.`) +
         row("Browser", browser) +
         `</dl>` +
@@ -212,7 +214,7 @@
     }
     return (
       `<dl class="facts">` +
-      row("Commands ran on", "Not reported in this task.") +
+      row("Command approval target", "Not reported in this task.") +
       row(`Set for ${name}`, "Commands: the gateway's machine", `A setting for ${name}. A task can run somewhere else.`) +
       row("Browser", browser) +
       `</dl>`

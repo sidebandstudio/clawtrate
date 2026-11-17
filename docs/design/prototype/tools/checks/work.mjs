@@ -674,9 +674,11 @@ await p.close();
 
 // The machine, actions and commands.
 p = await open("&panel=open&tab=computer");
-check("F-147 M5 where commands ran comes from evidence; the setting is labelled as one", await q(p, () => {
+check("F-147 M5 the approval's target, the execution record and the setting are three separate rows", await q(p, () => {
   const rows = [...document.querySelectorAll("#panel-computer .facts")[0].querySelectorAll(":scope > div")].map((d) => d.textContent);
-  return rows[0] === "Commands ran onmedia-boxNamed by the approval at 5:31 PM" && rows[1] === "Set for OttoCommands: media-boxA setting for Otto. A task can run somewhere else." && rows[2] === "BrowserNot reported.";
+  return rows[0] === "Command approval targetmedia-boxRequested 5:31 PM · allowed" &&
+    rows[1] === "Commands ran onmedia-boxBy the command at 5:36 PM, from its result" &&
+    rows[2] === "Set for OttoCommands: media-boxA setting for Otto. A task can run somewhere else." && rows[3] === "BrowserNot reported.";
 }));
 check("F-148 M5 the node's state, when it was last seen, and the stats' time; never a heartbeat", await q(p, () => {
   const t = document.querySelector("#panel-computer").textContent;
@@ -702,7 +704,10 @@ check("M5 a node whose record couldn't be read is Unknown, with the last value r
 }));
 await p.close();
 p = await open(comp);
-check("M5 a task with no approval says where its commands ran is not reported", await q(p, () => [...document.querySelectorAll("#panel-computer .facts div")].some((d) => d.textContent === "Commands ran onNot reported in this task.")));
+check("M5 a task with no approval request reports no target, and with no execution record makes no claim of where commands ran", await q(p, () => {
+  const rows = [...document.querySelectorAll("#panel-computer .facts div")].map((d) => d.textContent);
+  return rows.includes("Command approval targetNot reported in this task.") && !rows.some((r) => r.startsWith("Commands ran on"));
+}));
 await p.close();
 
 p = await open(comp + "&computer=watching&motion=reduce");
