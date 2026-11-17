@@ -8,6 +8,9 @@
 
 import {
   applyAgentEvent,
+  applyQuestionRequested,
+  applyQuestionResolved,
+  askUserQuestionId,
   emptyActivity,
   INTERACTIVE_SCOPES,
   mapHistory,
@@ -31,6 +34,7 @@ export const ACTION_SCENES = [
   "actions-kinds",
   "actions-becoming-fold",
   "actions-history",
+  "actions-question",
 ] as const;
 
 export type ActionScene = (typeof ACTION_SCENES)[number];
@@ -837,9 +841,83 @@ function scene(name: ActionScene): Turn[] {
           ],
         },
       ];
+    case "actions-question":
+      // A question the gateway refused before registering it, a read, then the question it asked.
+      return [
+        {
+          user: "Plan Saturday's errands around the backup window.",
+          parts: [
+            { call: read("logs/backup-2026-11-15.log", LOG, 0.2) },
+            {
+              call: {
+                name: "ask_user",
+                args: { questions: [] },
+                text: "questions must contain at least one question",
+                isError: true,
+                took: 0.1,
+              },
+            },
+            { call: read("notes/errands.md", "Hardware store\nLibrary returns\nPost office", 0.2) },
+            {
+              call: {
+                name: "ask_user",
+                args: {
+                  questions: [
+                    {
+                      questionId: "route",
+                      header: "Route",
+                      question: "Which route on Saturday?",
+                      options: [{ label: "Lake loop" }, { label: "Town centre" }],
+                    },
+                  ],
+                },
+                text: JSON.stringify({ status: "answered" }),
+                details: { status: "answered", answers: { answers: { route: ["Lake loop"] } } },
+                took: 30,
+              },
+            },
+            {
+              text: "Lake loop it is: hardware store first, then the library and the post office.",
+            },
+          ],
+        },
+      ];
     default:
       return [];
   }
+}
+
+/** The question the scene's valid `ask_user` call (`call_1_04` of `run-1`) registered, answered. */
+function sceneQuestions(now: number): Pick<TaskActivity, "questions"> {
+  const id = askUserQuestionId("run-1", "call_1_04");
+  const ctx: EngineContext = { sessionKey: OPEN_TASK, now, raw: new RawTable() };
+  const record = {
+    id,
+    questions: [
+      {
+        questionId: "route",
+        header: "Route",
+        question: "Which route on Saturday?",
+        options: [{ label: "Lake loop" }, { label: "Town centre" }],
+      },
+    ],
+    agentId: "otto",
+    sessionKey: OPEN_TASK,
+    runId: "run-1",
+    createdAtMs: now - 29 * 60 * SECOND,
+    expiresAtMs: now + 60 * SECOND,
+    status: "pending",
+  };
+  const answered = { id, status: "answered", answers: { answers: { route: ["Lake loop"] } } };
+  const activity = applyQuestionResolved(
+    applyQuestionRequested(emptyActivity, record, ctx),
+    answered,
+    {
+      via: "question.resolved",
+      record: answered,
+    },
+  );
+  return { questions: activity.questions };
 }
 
 // History -------------------------------------------------------------------------------
@@ -1171,7 +1249,7 @@ export function actionScene(
       ...history,
       outbox: [],
       approvals: [],
-      questions: [],
+      questions: name === "actions-question" ? sceneQuestions(now).questions : [],
     })),
     steps: [],
   };

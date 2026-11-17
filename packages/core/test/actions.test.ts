@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  askUserQuestionId,
   callFromBlock,
   callFromStep,
   foldLineOf,
@@ -1745,3 +1746,13 @@ describe("the arguments' projection", () => {
 function empty(): Partial<ActionCall> {
   return { text: "", details: null };
 }
+
+describe("a question's id", () => {
+  it("is the gateway's: ask_ and 32 hex characters of SHA-256 over the run id, a NUL and the call id", () => {
+    // Computed independently with Node's crypto for run "run-7" and call "call_ask_2".
+    expect(askUserQuestionId("run-7", "call_ask_2")).toBe("ask_d69313b5c381dc8c066d2ff3f66bcd61");
+    expect(askUserQuestionId("run-7", "call_ask_3")).not.toBe(
+      askUserQuestionId("run-7", "call_ask_2"),
+    );
+  });
+});

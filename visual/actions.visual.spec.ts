@@ -61,6 +61,7 @@ const BASELINES: Array<{ scene: string; rows: string; prepare?: (page: Page) => 
   { scene: "actions-running", rows: "F-082 F-432" },
   { scene: "actions-failed", rows: "F-092 F-294" },
   { scene: "actions-mixed", rows: "F-092" },
+  { scene: "actions-question", rows: "F-488" },
   {
     scene: "actions-failed",
     rows: "F-293",
@@ -110,6 +111,29 @@ for (const size of SIZES) {
 
 test.describe("action cards", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
+  test("a question takes its own ask_user call's place, found by the gateway's question id; an ask_user that failed first stays a failed action", async ({
+    page,
+  }) => {
+    await open(page, "actions-question");
+    const question = page.getByTestId("question-card");
+    await expect(question).toHaveCount(1);
+    // The failed call is an ordinary failed action, in its place among the reads.
+    await expect(cards(page)).toHaveCount(3);
+    expect(
+      await cards(page).evaluateAll((nodes) => nodes.map((n) => n.getAttribute("data-call"))),
+    ).toEqual(["call_1_01", "call_1_02", "call_1_03"]);
+    await expect(line(cards(page).nth(1))).toHaveAccessibleName(
+      /^Couldn't ask a question, .*, failed$/,
+    );
+    // The question follows the marker read, where its call was; the valid call is not drawn again.
+    const order = await page
+      .locator('.transcript :is(details.card.action, [data-testid="question-card"])')
+      .evaluateAll((nodes) =>
+        nodes.map((n) => n.getAttribute("data-call") ?? n.getAttribute("data-testid")),
+      );
+    expect(order).toEqual(["call_1_01", "call_1_02", "call_1_03", "question-card"]);
+    await expect(page.locator('[data-call="call_1_04"]')).toHaveCount(0);
+  });
 
   test("F-488: one call of every listed kind shows its label, in order; nothing opened, no reasoning on screen", async ({
     page,

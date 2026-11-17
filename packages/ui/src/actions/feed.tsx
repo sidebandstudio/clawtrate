@@ -6,6 +6,7 @@
 // names, and a question card takes its `ask_user` call's place.
 
 import {
+  askUserQuestionId,
   callFromBlock,
   callFromStep,
   groupFeed,
@@ -103,7 +104,13 @@ function runOfItem(
 type CardsFor = {
   card: (callId: string) => CardRef | null;
   approvals: (callId: string) => CardRef[];
-  /** The question cards of a run not placed yet, oldest first, matched in order to its `ask_user` calls. */
+  /**
+   * The question card an `ask_user` call asked, by the gateway's question id
+   * for that call (`askUserQuestionId`), never by order; null when none was
+   * registered (a call that failed first is an ordinary failed action).
+   */
+  question: (callId: string, runId: string | null) => CardRef | null;
+  /** The question cards of a run not placed yet, oldest first: placed by when they arrived. */
   questions: (runId: string) => CardRef[];
   /** Cards already placed in some run's column: each card is placed once. */
   taken: Set<string>;
@@ -117,18 +124,18 @@ function callEntries(
   name: string,
   action: () => FeedEntry<FeedRef>,
   cards: CardsFor,
-  questions: CardRef[],
+  runId: string | null,
 ): FeedEntry<FeedRef>[] {
   const card = cards.card(callId);
   const out: FeedEntry<FeedRef>[] = [];
   if (card && cards.taken.has(refKey(card))) return out;
   if (card) cards.taken.add(refKey(card));
+  const question = !card && name === "ask_user" ? cards.question(callId, runId) : null;
   if (card) out.push({ type: "card", id: callId, ref: { t: "card", ref: card } });
-  else if (name === "ask_user" && questions.length > 0) {
-    const question = questions.shift()!;
+  else if (question && !cards.taken.has(refKey(question))) {
     cards.taken.add(refKey(question));
     out.push({ type: "break", id: refKey(question), ref: { t: "card", ref: question } });
-  } else out.push(action());
+  } else if (!question) out.push(action());
   for (const approval of cards.approvals(callId)) {
     if (cards.taken.has(refKey(approval))) continue;
     cards.taken.add(refKey(approval));
@@ -159,7 +166,6 @@ function itemEntries(
   const reasoningBlocks = item.blocks.filter((b) => b.kind === "reasoning").length;
   // The engine's derived reasoning ids, when its run holds the same blocks.
   const engineIds = reasoningSteps.length === reasoningBlocks;
-  const questions = run ? [...cards.questions(run.id)] : [];
   const entries: FeedEntry<FeedRef>[] = [];
   let r = 0;
   // A bubble is keyed by its text, not its place, so a block history adds before it keeps it.
@@ -199,7 +205,7 @@ function itemEntries(
           block.name,
           () => ({ type: "action", call: callFromBlock(block, found?.step, found?.run) }),
           cards,
-          questions,
+          run?.id ?? found?.run.id ?? null,
         ),
       );
     }
@@ -211,7 +217,6 @@ function itemEntries(
 function runEntries(run: Run, cards: CardsFor, rest: CardRef[]): FeedEntry<FeedRef>[] {
   const entries: FeedEntry<FeedRef>[] = [];
   const preambles = [...(run.preambles ?? [])];
-  const questions = [...cards.questions(run.id)];
   const preamble = (p: Preamble) =>
     entries.push({ type: "bubble", id: `preamble:${p.id}`, ref: { t: "preamble", preamble: p } });
   let tools = 0;
@@ -229,13 +234,13 @@ function runEntries(run: Run, cards: CardsFor, rest: CardRef[]): FeedEntry<FeedR
         step.toolName ?? "",
         () => ({ type: "action", call: callFromStep(step, run) }),
         cards,
-        questions,
+        run.id,
       ),
     );
   }
   preambles.forEach(preamble);
   // A card that names no call of the run takes its place by when it arrived, among the calls.
-  for (const ref of [...rest, ...questions]) {
+  for (const ref of [...rest, ...cards.questions(run.id)]) {
     if (cards.taken.has(refKey(ref))) continue;
     cards.taken.add(refKey(ref));
     const at = cards.arrivedAt(ref);
@@ -316,6 +321,14 @@ export function ActionScope({
         transcript.approvals
           .filter((card) => card.toolCallId === callId)
           .map((card) => ({ kind: "approval" as const, id: card.id })),
+      question: (callId, runId) => {
+        const card = transcript.questions.find((q) =>
+          [q.runId, runId, transcript.sessionKey].some(
+            (identity) => identity && q.id === askUserQuestionId(identity, callId),
+          ),
+        );
+        return card ? { kind: "question", id: card.id } : null;
+      },
       questions: (runId) =>
         transcript.questions
           .filter((card) => card.runId === runId && !taken.has(`question:${card.id}`))

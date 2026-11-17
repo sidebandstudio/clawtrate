@@ -4,6 +4,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { contextFor, openFixture, settle, SIZES } from "./fixture.ts";
 
+/** The gateway's id for the fixture's question: run `run_7f3a91c2`, call `call_ask` (`askUserQuestionId`). */
+const QUESTION_ID = "ask_26e18573cf5e61d9e5d65618d22de594";
+
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
 
@@ -693,7 +696,7 @@ test.describe("question cards", () => {
       {
         type: "answerQuestion",
         key: "agent:otto:transcode-cache",
-        questionId: "qst_81f0",
+        questionId: QUESTION_ID,
         answers: { keep_cache: [{ option: 0 }] },
       },
     ]);
@@ -819,7 +822,7 @@ test.describe("question cards", () => {
     expect((await sent(page)).at(-1)).toEqual({
       type: "dismissQuestion",
       key: "agent:otto:transcode-cache",
-      questionId: "qst_81f0",
+      questionId: QUESTION_ID,
     });
     expect((await transcript(page)).runs[0]!.state).toBe("running");
   });

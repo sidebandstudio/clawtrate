@@ -6,6 +6,7 @@
 // to the next action, else to the reply that follows, else to the run's end.
 
 import { RUN_LINE, durationWords } from "./action-words.ts";
+import { sha256Hex, utf8Bytes } from "./bytes.ts";
 import {
   isOpenOutcome,
   kindOf,
@@ -159,6 +160,20 @@ export function callsOf<R>(groups: FeedGroup<R>[]): ActionCall[] {
   return groups.flatMap((g) =>
     g.type === "action" ? [g.call] : g.type === "fold" ? g.members.map((m) => m.call) : [],
   );
+}
+
+// Questions ----------------------------------------------------------------------------
+
+/**
+ * The id the gateway gives the question an `ask_user` call asks: `ask_` and
+ * the first 32 hex characters of SHA-256 over its run id (else its session
+ * key), a NUL, and the call's id (OpenClaw 2026.10.6 `buildAskUserQuestionId`).
+ * It is computed before the call's input is checked, and the question is
+ * registered only when the input is valid: a call that failed first has no
+ * question, and a question is matched to its call by this id, never by order.
+ */
+export function askUserQuestionId(runIdOrSessionKey: string, toolCallId: string): string {
+  return `ask_${sha256Hex(utf8Bytes(`${runIdOrSessionKey.trim()}\0${toolCallId}`)).slice(0, 32)}`;
 }
 
 // From the engine's state ------------------------------------------------------------
