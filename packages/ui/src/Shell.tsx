@@ -100,7 +100,7 @@ function Rail({
                 onClick={() => onSelect(bot.id)}
                 data-testid="bot"
               >
-                <Avatar bot={bot} badge />
+                <Avatar bot={bot} />
                 <span className="bot-text" aria-hidden="true">
                   <span className="bot-name">{bot.name}</span>
                   <span className="bot-theme">{running ? "working" : (bot.theme ?? "")}</span>
@@ -183,7 +183,7 @@ function TaskList({
   return (
     <section className="list-pane" aria-label="Tasks">
       <header className="pane-header">
-        {bot && <Avatar bot={bot} size={26} />}
+        {bot && <Avatar bot={bot} />}
         <div className="pane-title">
           <h2>{bot?.name ?? "No bots"}</h2>
           <p>

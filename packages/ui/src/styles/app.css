@@ -18,13 +18,15 @@ body {
   color: var(--text);
   font-family: var(--font-ui);
   font-size: var(--text-base);
+  font-weight: var(--weight-regular);
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
-  font-feature-settings: "ss01", "cv11";
   overflow: hidden;
 }
 
-button {
+button,
+input,
+textarea {
   font: inherit;
   color: inherit;
 }
@@ -32,7 +34,6 @@ button {
 :focus-visible {
   outline: 2px solid var(--accent-line);
   outline-offset: 2px;
-  border-radius: var(--radius-sm);
 }
 
 ::selection {
@@ -46,6 +47,179 @@ button {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+/* The element that holds the shell is the container the layout responds to,
+   so the same rules serve a narrow window and a split view. new */
+.app {
+  position: relative;
+  height: 100%;
+  container: app / size;
+}
+
+.icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Controls ---------------------------------------------------------------- */
+
+/* Every icon control is a circle with a fill, so it reads as a target. */
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-button);
+  color: var(--text);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.icon-button:hover {
+  background: color-mix(in srgb, var(--bg-raised) 92%, var(--text));
+}
+
+.icon-button[data-variant="quiet"] {
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.icon-button[data-variant="quiet"]:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.icon-button[aria-pressed="true"] {
+  background: var(--bg-selected);
+  box-shadow: none;
+}
+
+.icon-button:disabled {
+  background: var(--bg-bubble);
+  box-shadow: none;
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  white-space: nowrap;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.button:hover {
+  background: color-mix(in srgb, var(--bg-bubble) 92%, var(--text));
+}
+
+/* The primary action is neutral and high contrast, never the accent. */
+.button[data-variant="primary"] {
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+}
+
+.button[data-variant="primary"]:hover {
+  background: color-mix(in srgb, var(--bg-inverse) 86%, var(--bg));
+}
+
+.button[data-variant="quiet"] {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.button[data-variant="quiet"]:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.button[data-size="lg"] {
+  width: 100%;
+  height: 48px;
+  font-size: var(--text-base);
+}
+
+.button[data-size="sm"] {
+  height: 30px;
+  padding: 0 12px;
+  font-size: var(--text-sm);
+}
+
+/* Disabled keeps readable text: a grey fill and faint text, never opacity. */
+.button:disabled,
+.button[data-variant="primary"]:disabled {
+  background: var(--bg-bubble);
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.input {
+  width: 100%;
+  height: 48px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  color: var(--text);
+  font-size: var(--text-base);
+}
+
+.input::placeholder {
+  color: var(--text-faint);
+}
+
+.input:focus {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--bg),
+    0 0 0 4px var(--accent-line);
+}
+
+/* Avatars ------------------------------------------------------------------ */
+
+/* An avatar is a character: flat colour, no frame. A bot that brings its own
+   picture gets it cropped to a circle. */
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: var(--avatar-row);
+  height: var(--avatar-row);
+}
+
+.avatar svg,
+.avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.avatar img {
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 /* Shell ---------------------------------------------------------------- */
@@ -202,37 +376,6 @@ button {
   color: var(--accent);
 }
 
-.avatar {
-  position: relative;
-  display: grid;
-  place-items: center;
-  flex: none;
-  overflow: hidden;
-  border-radius: 9px;
-  background: var(--bg-raised);
-  box-shadow: inset 0 0 0 1px var(--border);
-  font-size: 15px;
-}
-
-.avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.avatar-emoji {
-  position: absolute;
-  right: -4px;
-  bottom: -4px;
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--bg-rail);
-  font-size: 10px;
-}
-
 .rail-footer {
   display: flex;
   align-items: center;
@@ -297,35 +440,6 @@ button {
 
 .status-dot[data-status="error"] {
   background: var(--danger);
-}
-
-.icon-button {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  flex: none;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.icon-button:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.icon-button[aria-pressed="true"] {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.icon-button svg {
-  width: 16px;
-  height: 16px;
 }
 
 /* Task list ------------------------------------------------------------- */
@@ -1206,24 +1320,6 @@ button {
   color: var(--text-faint);
 }
 
-.input {
-  width: 100%;
-  height: 36px;
-  padding: 0 var(--space-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--bg-pane);
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: var(--text-md);
-}
-
-.input:focus {
-  outline: none;
-  border-color: var(--accent-line);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
 .field-hint {
   margin-top: 6px;
   font-size: var(--text-xs);
@@ -1234,41 +1330,6 @@ button {
   display: flex;
   gap: var(--space-2);
   margin-top: var(--space-5);
-}
-
-.button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--bg-pane);
-  font-size: var(--text-md);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.button:hover {
-  border-color: var(--text-faint);
-}
-
-.button[data-variant="primary"] {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-on);
-}
-
-.button[data-variant="primary"]:hover {
-  border-color: var(--accent-strong);
-  background: var(--accent-strong);
-}
-
-.button:disabled {
-  opacity: 0.55;
-  cursor: default;
 }
 
 .form-error {
@@ -1450,6 +1511,7 @@ button {
   }
 }
 
+/* Reduced motion, from the system setting or from the app's own setting. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -1457,6 +1519,13 @@ button {
     animation: none !important;
     transition: none !important;
   }
+}
+
+[data-motion="reduce"] *,
+[data-motion="reduce"] *::before,
+[data-motion="reduce"] *::after {
+  animation: none !important;
+  transition: none !important;
 }
 
 /* Below 980px the rail shows avatars only, with names in tooltips. */

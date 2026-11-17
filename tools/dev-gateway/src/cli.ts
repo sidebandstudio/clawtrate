@@ -27,7 +27,6 @@ import {
 import { createConnection } from "node:net";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { renderAvatar } from "./avatars.ts";
 import {
   ForeignStateError,
   isAlive,
@@ -457,7 +456,6 @@ async function configureBot(bot: SeedBot, agents: Map<string, AgentRow>): Promis
   }
   mkdirSync(workspace, { recursive: true });
   writeFileSync(join(workspace, "AGENTS.md"), bot.instructions);
-  writeFileSync(join(workspace, "avatar.png"), renderAvatar(bot));
   await must([
     "agents",
     "set-identity",
@@ -469,8 +467,6 @@ async function configureBot(bot: SeedBot, agents: Map<string, AgentRow>): Promis
     bot.emoji,
     "--theme",
     bot.theme,
-    "--avatar",
-    "avatar.png",
     "--json",
   ]);
 }

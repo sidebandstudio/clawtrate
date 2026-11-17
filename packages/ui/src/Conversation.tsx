@@ -95,7 +95,7 @@ function Turn({ item, bot }: { item: TranscriptItem; bot: Bot | undefined }) {
   return (
     <article className="turn" data-role={item.role} data-testid="transcript-turn">
       <div className="turn-gutter">
-        {isUser || !bot ? <span className="user-mark">You</span> : <Avatar bot={bot} size={28} />}
+        {isUser || !bot ? <span className="user-mark">You</span> : <Avatar bot={bot} />}
       </div>
       <div className="turn-main">
         <header className="turn-meta">
@@ -160,7 +160,7 @@ function TranscriptView({ transcript, bot }: { transcript: Transcript; bot: Bot 
           ))}
           {transcript.live && (
             <article className="turn" data-role="assistant" data-testid="live-turn">
-              <div className="turn-gutter">{bot && <Avatar bot={bot} size={28} />}</div>
+              <div className="turn-gutter">{bot && <Avatar bot={bot} />}</div>
               <div className="turn-main">
                 <header className="turn-meta">
                   <span className="turn-author">{bot?.name ?? "Bot"}</span>

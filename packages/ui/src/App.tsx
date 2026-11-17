@@ -1,8 +1,31 @@
 import type { HostInfo } from "@clawtrate/core";
+import { useEffect } from "react";
 import { useClawtrateState } from "./bridge.tsx";
 import { ConnectScreen } from "./ConnectScreen.tsx";
+import { readPreference } from "./preferences.ts";
 import { screenFor } from "./screen.ts";
 import { Shell } from "./Shell.tsx";
+
+/**
+ * Touch sizes when the primary pointer is coarse, and reduced motion when the
+ * viewer asked for it in the app (`?motion=reduce` or the stored preference).
+ * Both are set on the root, beside `data-theme`.
+ */
+function useInputAndMotion() {
+  useEffect(() => {
+    const root = document.documentElement;
+    const coarse = globalThis.matchMedia?.("(pointer: coarse)");
+    const applyInput = () => {
+      if (coarse?.matches) root.dataset.input = "touch";
+      else delete root.dataset.input;
+    };
+    applyInput();
+    coarse?.addEventListener("change", applyInput);
+    const fromUrl = new URLSearchParams(globalThis.location?.search ?? "").get("motion");
+    if ((fromUrl ?? readPreference("motion")) === "reduce") root.dataset.motion = "reduce";
+    return () => coarse?.removeEventListener("change", applyInput);
+  }, []);
+}
 
 /**
  * The connection screen is for connecting and pairing. Once a gateway has
@@ -11,9 +34,14 @@ import { Shell } from "./Shell.tsx";
  */
 export function App({ info }: { info: HostInfo }) {
   const state = useClawtrateState();
-  return screenFor(state) === "shell" ? (
-    <Shell state={state} />
-  ) : (
-    <ConnectScreen connection={state.connection} info={info} />
+  useInputAndMotion();
+  return (
+    <div className="app">
+      {screenFor(state) === "shell" ? (
+        <Shell state={state} />
+      ) : (
+        <ConnectScreen connection={state.connection} info={info} />
+      )}
+    </div>
   );
 }
