@@ -1286,3 +1286,26 @@ describe("times history rows give are not the call's own", () => {
     expect(run!.steps[0]!.rowTimes).toBe(true);
   });
 });
+
+describe("the gateway's title for a call", () => {
+  it("is kept from its item events, as sent", () => {
+    let activity = emptyActivity;
+    activity = applyAgentEvent(
+      activity,
+      agent("run-1", 1, "lifecycle", { phase: "start" }),
+      ctx(),
+    ).activity;
+    activity = applyAgentEvent(
+      activity,
+      agent("run-1", 2, "item", {
+        kind: "tool",
+        toolCallId: "c1",
+        name: "skills_search",
+        phase: "start",
+        title: "Skill Search",
+      }),
+      ctx(),
+    ).activity;
+    expect(only(activity).steps[0]!.gatewayTitle).toBe("Skill Search");
+  });
+});

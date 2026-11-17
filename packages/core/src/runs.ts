@@ -126,6 +126,8 @@ export type Step = {
   kind: StepKind;
   /** Short title derived from the tool name, the same live and from history. */
   title: string;
+  /** The gateway's own English title for the call (`item` events' `title`), as sent; live only. */
+  gatewayTitle?: string;
   /** The tool name exactly as the gateway sent it, for example `sessions_send` or `coder__send_message`. */
   toolName: string | null;
   toolCallId: string | null;
@@ -2058,9 +2060,11 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
   // The item start comes just before the tool start: the step shows from it.
   if (!existing && data.phase !== "start") return run;
   const step = existing ?? blankToolStep(toolCallId, str(data.name), num(data.startedAt));
+  const title = str(data.title);
   return upsertStep(run, {
     ...step,
     ...(data.commandBearing === true ? { commandBearing: true } : {}),
+    ...(title ? { gatewayTitle: title } : {}),
     startedAt: num(data.startedAt) ?? step.startedAt,
     endedAt: isOpenStep(step) ? step.endedAt : (num(data.endedAt) ?? step.endedAt),
   });
@@ -2370,6 +2374,7 @@ function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "h
         ...(live.omittedBefore ? { omittedBefore: live.omittedBefore } : {}),
         // What the live stream established about the call stays: history keeps no `commandBearing`.
         args: history.args ?? live.args ?? null,
+        ...(live.gatewayTitle ? { gatewayTitle: live.gatewayTitle } : {}),
         ...(live.commandBearing || history.commandBearing ? { commandBearing: true } : {}),
         // The canonical copy replaced a finished, replaceable result: an explicit correction.
         correction: isOpenStep(live) ? live.correction : live.correction + 1,

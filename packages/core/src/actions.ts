@@ -85,6 +85,8 @@ export type ActionCall = {
   lastSeen?: boolean;
   /** Its run was stopped: an error result that says nothing more is the stop's, not a failure. */
   runStopped?: boolean;
+  /** The gateway's own English title for the call (`item.title`), as sent; for the general card. */
+  gatewayTitle?: string | null;
 };
 
 /** What the reading needs to know beyond the call. */
@@ -2333,6 +2335,8 @@ export function readableOf(call: ActionCall, ctx: ReadingContext = {}): Readable
     }
     default:
       for (const [k, value] of Object.entries(a)) add(k, value, typeof value !== "string");
+      // The gateway's own English title for the call, shown as sent (8.3, point 5).
+      if (kind === "tool") add(LABELS.gatewayCallsIt, call.gatewayTitle);
   }
   const text = result || (open ? (call.partial ?? "") : (call.text ?? ""));
   if (text) {

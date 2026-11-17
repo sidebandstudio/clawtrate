@@ -279,6 +279,7 @@ export function callFromStep(
     fromHistory: run.origin === "history" && !step.details,
     partial: open ? (step.output?.text ?? null) : null,
     runStopped: run.state === "stopped" || run.state === "cancelled",
+    ...(step.gatewayTitle ? { gatewayTitle: step.gatewayTitle } : {}),
   });
 }
 

@@ -1822,3 +1822,16 @@ describe("a refusal reads the same live and from history", () => {
     );
   });
 });
+
+describe("the general card's readable view", () => {
+  it("has the gateway's own English title for the call, as sent (8.3)", () => {
+    const c = call("skills_search", { query: "invoice" }, { gatewayTitle: "Skill Search" });
+    expect(readableOf(c).rows).toContainEqual({
+      label: "The gateway calls it",
+      value: "Skill Search",
+    });
+    expect(readableOf({ ...c, gatewayTitle: null }).rows.map((r) => r.label)).not.toContain(
+      "The gateway calls it",
+    );
+  });
+});

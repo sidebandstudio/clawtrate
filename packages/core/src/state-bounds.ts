@@ -218,6 +218,7 @@ export const STEP: Bound = flagged<Step>()({
   commandBearing: FLAG,
   rowTimes: FLAG,
   omittedBefore: NUMBER,
+  gatewayTitle: text(MAX_NAME_CHARS),
   // A path is an id: never cut, since a cut path would name another file.
   files: object<StepFiles>()({
     paths: list(MAX_STEP_PATHS, id(MAX_STEP_PATH_CHARS)),
