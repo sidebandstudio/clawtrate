@@ -266,6 +266,7 @@
     const tab = $("#tab-computer");
     if (tab) tab.innerHTML = `Computer${used && C.active ? '<span class="tab-mark" aria-hidden="true"></span>' : ""}`;
     if (tab) tab.setAttribute("aria-label", used && C.active ? "Computer, in use" : "Computer");
+    CT.fitTabs?.();
   };
 
   // Watching -------------------------------------------------------------------------------------------

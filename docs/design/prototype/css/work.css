@@ -1723,3 +1723,39 @@
     padding-left: 12px;
   }
 }
+
+/* The tab bar when its tabs do not fit: the settings design's rule (bots.md,
+   section 19). Tabs never wrap or shorten; side padding narrows first, then the
+   row scrolls sideways with no scroll bar, a 16px fade at each clipped edge, and
+   the chosen tab kept in view. The Computer tab's dot stays with its word. */
+.tabs {
+  justify-content: safe center;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  flex: none;
+  white-space: nowrap;
+}
+
+.tabs[data-fit="narrow"] .tab,
+.tabs[data-fit="scroll"] .tab {
+  padding: 0 10px;
+}
+
+.tabs[data-clip="start"] {
+  mask-image: linear-gradient(to right, transparent, #000 16px);
+}
+
+.tabs[data-clip="end"] {
+  mask-image: linear-gradient(to left, transparent, #000 16px);
+}
+
+.tabs[data-clip="both"] {
+  mask-image: linear-gradient(to right, transparent, #000 16px, #000 calc(100% - 16px), transparent);
+}

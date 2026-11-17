@@ -28,6 +28,48 @@ await p.click('.task[data-task="o3"]');
 check("…the tab stays as it is on another task", await q(p, () => document.querySelector("#tab-settings").getAttribute("aria-selected") === "true"));
 await p.click("#tab-files");
 await p.click('.task[data-task="o1"]');
+await p.close();
+
+// The tab bar's overflow rule, shared with the settings design (bots.md, section 19).
+p = await open("&bot=juniper&task=j2&computer=active&panel=open&tab=computer", { width: 1100, height: 760 });
+check("English labels fit the 360px drawer with full padding", await q(p, () => !document.querySelector(".tabs").dataset.fit && getComputedStyle(document.querySelector(".tab")).paddingLeft === "14px"));
+const relabel = (labels) =>
+  q(p, (ls) => {
+    const tabs = [...document.querySelectorAll(".tabs .tab")];
+    tabs.forEach((tab, i) => (tab.firstChild.textContent = ls[i]));
+    window.CT.fitTabs();
+  }, labels);
+await relabel(["Detalles", "Archivos", "Ordenador", "Ajustes"]);
+check("slightly longer labels: side padding narrows to 10px first, no scrolling", await q(p, () => {
+  const bar = document.querySelector(".tabs");
+  return bar.dataset.fit === "narrow" && getComputedStyle(document.querySelector(".tab")).paddingLeft === "10px" && bar.scrollWidth <= bar.clientWidth;
+}));
+await relabel(["Einzelheiten", "Dateien", "Arbeitsrechner", "Einstellungen"]);
+check("labels that still don't fit: the row scrolls, no tab wraps or shortens", await q(p, () => {
+  const bar = document.querySelector(".tabs");
+  const tabs = [...bar.querySelectorAll(".tab")];
+  return bar.dataset.fit === "scroll" && bar.scrollWidth > bar.clientWidth && tabs.every((t) => t.getBoundingClientRect().height <= 33 && t.scrollWidth <= t.clientWidth + 1);
+}));
+check("the chosen tab is in view, with a fade at the clipped edge", await q(p, () => {
+  const bar = document.querySelector(".tabs").getBoundingClientRect();
+  const tab = document.querySelector("#tab-computer").getBoundingClientRect();
+  return tab.left >= bar.left - 1 && tab.right <= bar.right + 1 && ["start", "end", "both"].includes(document.querySelector(".tabs").dataset.clip);
+}));
+check("the Computer dot stays on its word's line", await q(p, () => {
+  const tab = document.querySelector("#tab-computer").getBoundingClientRect();
+  const dot = document.querySelector("#tab-computer .tab-mark").getBoundingClientRect();
+  return dot.top > tab.top && dot.bottom < tab.bottom && dot.left > tab.left && dot.right < tab.right;
+}));
+await p.focus("#tab-computer");
+await p.keyboard.press("End");
+check("End scrolls the chosen tab into view", await q(p, () => {
+  const bar = document.querySelector(".tabs").getBoundingClientRect();
+  const tab = document.querySelector("#tab-settings").getBoundingClientRect();
+  return document.activeElement.id === "tab-settings" && tab.right <= bar.right + 1 && tab.left >= bar.left - 1;
+}));
+await p.close();
+
+p = await open(files);
 check("F-152 files tab lists the task's changed and read files", await q(p, () => {
   const heads = [...document.querySelectorAll("#panel-files .files h3")].map((h) => h.textContent);
   return heads.join() === "Changed,Read,Sent in chat" && document.querySelectorAll('#panel-files [data-open]').length === 5;

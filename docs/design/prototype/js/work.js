@@ -964,6 +964,7 @@
     },
     tabChanged(name) {
       CT.work.tabChanged?.(name);
+      fitTabs();
     },
     connectionChanged(name) {
       if (!app) return;
@@ -981,6 +982,39 @@
       if (b) this.panel(b, current()); // the connection's first state is known now
     },
   };
+
+  // The tab bar when its tabs do not fit (bots.md, section 19): narrower padding
+  // first, then a sideways scroll with the chosen tab in view and a fade at each
+  // clipped edge.
+  function fitTabs() {
+    const bar = $(".tabs");
+    if (!bar) return;
+    delete bar.dataset.fit;
+    if (bar.scrollWidth > bar.clientWidth) bar.dataset.fit = "narrow";
+    if (bar.scrollWidth > bar.clientWidth) bar.dataset.fit = "scroll";
+    const chosen = $('.tab[aria-selected="true"]', bar);
+    if (bar.dataset.fit === "scroll" && chosen) {
+      const left = chosen.offsetLeft - bar.offsetLeft;
+      if (left < bar.scrollLeft + 16) bar.scrollLeft = left - 16;
+      else if (left + chosen.offsetWidth > bar.scrollLeft + bar.clientWidth - 16) bar.scrollLeft = left + chosen.offsetWidth - bar.clientWidth + 16;
+    }
+    clip(bar);
+  }
+  function clip(bar) {
+    const start = bar.scrollLeft > 1;
+    const end = bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 1;
+    if (start && end) bar.dataset.clip = "both";
+    else if (start) bar.dataset.clip = "start";
+    else if (end) bar.dataset.clip = "end";
+    else delete bar.dataset.clip;
+  }
+  document.addEventListener("DOMContentLoaded", () => {
+    const bar = $(".tabs");
+    if (!bar) return;
+    new ResizeObserver(() => fitTabs()).observe(bar);
+    bar.addEventListener("scroll", () => clip(bar));
+  });
+  CT.fitTabs = fitTabs;
 
   // Wiring ------------------------------------------------------------------------------------------
 

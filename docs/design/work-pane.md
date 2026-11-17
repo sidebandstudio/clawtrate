@@ -48,7 +48,7 @@ Reference
 
 ## 1. How the pane works
 
-**Tabs.** The pane has one tab bar, shared with the design of a bot's settings (`bots.md`, section 8): Details, Files, Computer, Settings, in that order, as `visual-language.md` section 9 draws them: plain words, centred, the chosen one on a `--bg-selected` pill. Details, Files and Computer are about the open task; Settings is about the bot, whichever task is open, and is specified there. This document adds nothing to the row except one mark on Computer while the bot's browser is in use (section 15). The arrows, Home and End move across all four; the bar behaves the same docked, as a drawer and as the phone's sheet.
+**Tabs.** The pane has one tab bar, shared with the design of a bot's settings (`bots.md`, section 8): Details, Files, Computer, Settings, in that order, as `visual-language.md` section 9 draws them: plain words, centred, the chosen one on a `--bg-selected` pill. Details, Files and Computer are about the open task; Settings is about the bot, whichever task is open, and is specified there. This document adds nothing to the row except one mark on Computer while the bot's browser is in use (section 15); that mark's meaning is this document's. The arrows, Home and End move across all four; the bar behaves the same docked, as a drawer and as the phone's sheet. What the bar does when its tabs do not fit is the settings design's rule (`bots.md`, section 19), and this document follows it without adding to it.
 
 **What opens it, and on which tab.**
 
@@ -61,9 +61,10 @@ Reference
 
 When the person asked for a particular file or the computer, focus goes to it, docked or not: they chose to go there. Opening the pane by itself does not take focus while docked, as `visual-language.md` says.
 
-**The pane follows the open task.** It always shows the open task's bot and that task's files and computer. It never shows another task's.
+**The pane follows the open task, and says where something belongs to the whole bot.** Details and Files are the open task's: its files, its artifacts, its steps. Computer is about the bot's computer as this task uses it: its recent actions and commands are this task's, but the browser it shows is the bot's own, and every task of that bot shares it, with its tabs and its sign-ins (section 17). The pane never presents a tab of that browser as belonging to this task.
 
-- The chosen tab stays as it is when the person switches tasks, so Settings, which is about the bot, does not jump away. What the pane remembers for each task is where Files was (the folder or the file open, and the view) and how far each level was scrolled; coming back to a task restores it.
+- **One rule for the chosen tab.** The chosen tab belongs to the pane, not to a task or a bot: it stays as it is when the person switches tasks, and when they switch bots, so Settings, which is about the bot, does not jump away. The pane opens on the tab last shown, and on Details the first time.
+- What the pane remembers for each task is where Files was (the folder or the file open, and the view) and how far each level was scrolled; coming back to a task restores it. Nothing else is kept per task.
 - Switching to a task the pane has not shown yet starts Files at its top.
 - With no task open, Files and Computer show one line: "Pick one of <Bot>'s tasks to see its files." and "Pick one of <Bot>'s tasks to see its computer." Details keeps its own line.
 
@@ -823,7 +824,7 @@ F-139, F-143, F-147, F-148, F-153, F-154 and F-275 are met as written. F-275's i
 - A signal that the open task ran a command since a given time.
 - Workspace pages by folder, kept per bot.
 - File content with its hash, so a reload can tell "changed" from "the same".
-- Per task: the pane's tab, the Files stack, each level's scroll. Per bot: the sort.
+- Per pane: the chosen tab, kept across tasks and bots (section 1). Per task: the Files stack and each level's scroll. Per bot: the sort.
 
 ### What the gateway must supply
 
