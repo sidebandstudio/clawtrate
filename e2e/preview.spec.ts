@@ -116,8 +116,10 @@ async function openTask(page: Page, bot: string, task: string) {
  * queued message can be in it. Its title is its label.
  */
 async function ownTask(page: Page, label: string): Promise<{ key: string; title: string }> {
-  const title = `${label} ${INSTANCE.slice(-4)}`;
-  const key = `agent:otto:check-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  // New on every run, so a repeated check never meets an earlier run's task.
+  const suffix = Math.random().toString(16).slice(2, 6);
+  const title = `${label} ${suffix}`;
+  const key = `agent:otto:check-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${suffix}`;
   await gatewayCall("sessions.create", { key, agentId: "otto", label: title });
   await expect(
     page.getByRole("list", { name: "Otto's tasks" }).or(page.getByTestId("bot-list")),
