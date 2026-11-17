@@ -488,6 +488,27 @@ describe("the scripted side", () => {
     ).toBe(400);
   });
 
+  it("records the status the scripted model really answered, a scripted model error included", async () => {
+    const base = await listen();
+    const work = credentialFor("api_key", "acme", "work");
+    const response = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${work}` },
+      body: JSON.stringify({
+        model: "dev-1",
+        stream: false,
+        messages: [
+          { role: "user", content: "#model-error\nRuntime: agent=main | session=agent:main:t2" },
+        ],
+      }),
+    });
+    const { requests } = (await (await fetch(`${base}/scripted/requests`)).json()) as {
+      requests: { account: string; status: number }[];
+    };
+    expect(response.status).not.toBe(200);
+    expect(requests.map((r) => [r.account, r.status])).toEqual([["acme:work", response.status]]);
+  });
+
   it("answers a failure with the message it was given, so the gateway's reason can be tried", async () => {
     const base = await listen();
     const work = credentialFor("api_key", "acme", "work");
@@ -598,11 +619,13 @@ describe("the scripted side", () => {
     };
     expect(
       [accounts.observe(work), accounts.observe(work), accounts.observe(work)].map(
-        (f) => f?.status ?? null,
+        (o) => o.failure?.status ?? null,
       ),
     ).toEqual([401, 401, null]);
     now += 5;
-    expect(accounts.observe({ authorization: undefined, model: null, session: null })).toEqual({
+    expect(
+      accounts.observe({ authorization: undefined, model: null, session: null }).failure,
+    ).toEqual({
       status: 401,
     });
     expect(accounts.requests(3).map((r) => [r.seq, r.at])).toEqual([[4, 1_005]]);

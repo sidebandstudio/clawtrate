@@ -76,7 +76,7 @@ curl -s "http://127.0.0.1:<port>/scripted/requests?since=<seq>"          # after
 }
 ```
 
-`account` is the account whose credential arrived, or `null`; `credential` is its kind (`api_key`, `token`, `oauth`), `other` for a credential no account has (the `scripted` provider's placeholder key) or `none`; `session` is the gateway session the request was for; `status` is what the scripted model answered. A request with no credential at all is answered 401, as a real provider answers one. The port is in `pnpm dev-gateway status --instance <name>` (`scripted model`). The record is in memory and starts empty with every start.
+`account` is the account whose credential arrived, or `null`; `credential` is its kind (`api_key`, `token`, `oauth`), `other` for a credential no account has (the `scripted` provider's placeholder key) or `none`; `session` is the gateway session the request was for; `status` is the status the scripted model answered the request with: the account's scripted failure, a failure the conversation itself scripted (`#model-error`), or 200. A request with no credential at all is answered 401, as a real provider answers one. The port is in `pnpm dev-gateway status --instance <name>` (`scripted model`). The record is in memory and starts empty with every start.
 
 ## Failures per account
 

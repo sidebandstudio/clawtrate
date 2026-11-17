@@ -62,7 +62,11 @@ export type RequestRecord = {
   model: string | null;
   /** The gateway session the request was made for, from its runtime line. */
   session: string | null;
-  /** What the scripted model answered: 200, or the scripted failure. */
+  /**
+   * The status the scripted model answered the request with: the account's
+   * scripted failure, a failure the conversation scripted (`#model-error`),
+   * or 200.
+   */
   status: number;
 };
 
@@ -167,13 +171,14 @@ export class ScriptedAccounts {
 
   /**
    * Record a chat completion and say whether its account is scripted to
-   * fail. Called once per request, before any reply is written.
+   * fail. Called once per request, before any reply is written; the record
+   * it returns takes the status of a failure decided later (`answered`).
    */
   observe(request: {
     authorization: string | undefined;
     model: string | null;
     session: string | null;
-  }): ScriptedFailure | null {
+  }): { failure: ScriptedFailure | null; record: RequestRecord } {
     const owner = accountOfCredential(request.authorization);
     const failure = owner ? this.failures.get(owner.account) : undefined;
     let answer: ScriptedFailure | null = request.authorization ? null : { status: 401 };
@@ -187,7 +192,7 @@ export class ScriptedAccounts {
     }
     const status = answer?.status ?? null;
     this.seq += 1;
-    this.records.push({
+    const record: RequestRecord = {
       seq: this.seq,
       at: this.now(),
       account: owner?.account ?? null,
@@ -195,8 +200,14 @@ export class ScriptedAccounts {
       model: request.model,
       session: request.session,
       status: status ?? 200,
-    });
-    return answer;
+    };
+    this.records.push(record);
+    return { failure: answer, record };
+  }
+
+  /** The status a request was finally answered with, when it is not the account's. */
+  answered(record: RequestRecord, status: number): void {
+    record.status = status;
   }
 
   requests(since = 0): RequestRecord[] {

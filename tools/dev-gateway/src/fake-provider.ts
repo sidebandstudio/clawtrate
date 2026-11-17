@@ -300,7 +300,7 @@ export function startFakeProvider(options: FakeProviderOptions) {
           .map((tool) => tool.function?.name)
           .filter((name): name is string => typeof name === "string");
         const session = runtimeFacts(messages).sessionKey;
-        const accountFailure = accounts.observe({
+        const { failure: accountFailure, record } = accounts.observe({
           authorization: req.headers.authorization,
           model: body.model ?? null,
           session: session ?? null,
@@ -329,6 +329,7 @@ export function startFakeProvider(options: FakeProviderOptions) {
         const model = body.model ?? FAKE_MODEL_ID;
         const id = completionId(messages);
         const failure = steps.find((step) => step.kind === "fail");
+        if (failure) accounts.answered(record, failure.status);
         if (failure) {
           log(`completion messages=${messages.length} failing with ${failure.status}`);
           sendJson(res, failure.status, {
