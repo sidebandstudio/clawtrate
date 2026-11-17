@@ -527,3 +527,37 @@ test.describe("the connection screen on a phone", () => {
     }
   });
 });
+
+test.describe("a task row's time", () => {
+  test.use(contextFor(WIDE, "light"));
+
+  test("each row shows its latest activity, aligned, without growing the row", async ({ page }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    const rows = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
+    await expect(rows).toHaveCount(6);
+    const measured = await rows.evaluateAll((buttons) =>
+      buttons.map((button) => ({
+        height: button.getBoundingClientRect().height,
+        time: button.querySelector(".task-time")?.textContent ?? "",
+        size: getComputedStyle(button.querySelector(".task-time")!).fontSize,
+        right: button.querySelector(".task-time")!.getBoundingClientRect().right,
+        description: button.getAttribute("aria-description") ?? "",
+      })),
+    );
+    expect(measured.map((row) => row.time)).toEqual([
+      "now",
+      "5:36 PM",
+      "2:34 PM",
+      "Yesterday",
+      "Sat",
+      "Fri",
+    ]);
+    for (const row of measured) {
+      expect(row.height).toBe(34);
+      expect(row.size).toBe("12px");
+      // Rows with a mark (running, unread) and without one share the time's edge.
+      expect(Math.abs(row.right - measured[0]!.right)).toBeLessThan(0.5);
+      expect(row.description).toBe(`Last activity ${row.time}`);
+    }
+  });
+});

@@ -121,11 +121,19 @@ function TaskRows({
               onBlur={() => onTip(null)}
             >
               <span className="task-title">{task.title}</span>
-              {task.status === "running" || task.status === "failed" ? (
-                <StateMark state={task.status} />
-              ) : unread ? (
-                <span className="unread-dot" aria-hidden="true" />
-              ) : null}
+              {task.updatedAt !== null && (
+                <time className="task-time" aria-hidden="true">
+                  {task.status === "running" ? "now" : rowTime(task.updatedAt, now)}
+                </time>
+              )}
+              {/* One slot for at most one mark, kept even when empty so times line up. */}
+              <span className="task-mark" aria-hidden="true">
+                {task.status === "running" || task.status === "failed" ? (
+                  <StateMark state={task.status} />
+                ) : unread ? (
+                  <span className="unread-dot" />
+                ) : null}
+              </span>
             </button>
           </li>
         );

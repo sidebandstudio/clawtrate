@@ -240,11 +240,16 @@ test("the rail names every bot", async ({ page }) => {
     await expect(botRow(page, name)).toBeVisible();
     await expect(botRow(page, name)).toContainText(name);
   }
-  // A task title truncated in the 248px rail shows in full on keyboard focus.
+  // A task title truncated in the 248px rail shows in full on keyboard focus,
+  // and each task row shows the time of its latest activity.
   await openBot(page, "Otto");
   const ottoTasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
   await ottoTasks.filter({ hasText: "Disk almost full on the media box" }).focus();
   await expect(page.getByTestId("rail-tooltip")).toHaveText("Disk almost full on the media box");
+  await expect(ottoTasks.locator(".task-time")).toHaveCount(3);
+  await expect(ottoTasks.first().locator(".task-time")).not.toHaveText("");
+  // A title that fits shows no tooltip. Beside its time it fits the 280px rail.
+  await page.setViewportSize({ width: 1440, height: 900 });
   await ottoTasks.filter({ hasText: "Weekly backup check" }).focus();
   await expect(page.getByTestId("rail-tooltip")).toHaveCount(0);
 });
