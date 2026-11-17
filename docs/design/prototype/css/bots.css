@@ -819,6 +819,17 @@ button.b-open > .icon {
   background: var(--bg-rail);
 }
 
+.b-nav-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* The list's own Close shows only where the list stands alone (the phone). */
+.b-nav-head .b-close {
+  display: none;
+}
+
 .b-nav h2 {
   margin: 4px 10px 12px;
   font-size: var(--text-lg);
@@ -1156,6 +1167,11 @@ button.b-open[role="radio"] .icon {
   .b-nav h2 {
     margin: 2px 0 16px;
     font-size: var(--text-title-sm);
+  }
+
+  .b-nav-head .b-close {
+    display: grid;
+    margin-top: -14px;
   }
 
   .b-nav-item {

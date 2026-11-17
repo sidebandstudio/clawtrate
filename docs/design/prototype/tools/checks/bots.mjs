@@ -184,7 +184,9 @@ await p.close();
 p = await open();
 await p.click(".gateway-pill");
 await p.click('[data-action="b-settings"]');
-check("P1 Settings opens from the gateway menu on Accounts", (await dlg(p, "settings-dialog")) && (await text(p, "#b-section-title")) === "Accounts");
+check("FM-14 Settings opens from the gateway menu on the shell's Gateway pane, kept as built", (await dlg(p, "settings-dialog")) && (await text(p, "#b-section-title")) === "Gateway" && (await text(p, "#settings-dialog .facts")).includes("Granted scopes") && (await p.evaluate(() => !!document.querySelector('#settings-dialog [data-action="disconnect"]'))));
+check("FM-14 the sections are Gateway, then Accounts, then Integrations", (await p.evaluate(() => [...document.querySelectorAll(".b-nav-item")].map((n) => n.textContent).join(","))) === "Gateway,Accounts,Integrations");
+await p.click('[data-b-section="accounts"]');
 await p.click('[data-b-account="openai:work"]');
 check("P1 an account's page: label, kind, state, the bots that use it", await p.evaluate(() => { const t = document.querySelector("#settings-dialog .facts").textContent; return t.includes("Work") && t.includes("Subscription") && t.includes("Connected") && t.includes("Otto (locked), Marlow"); }));
 await p.click('[data-b="relabel"]');
@@ -202,7 +204,7 @@ await p.keyboard.press("Escape");
 await p.waitForTimeout(50);
 check("P1 closing Settings returns focus to the gateway row", !(await dlg(p, "settings-dialog")) && (await p.evaluate(() => document.activeElement.classList.contains("gateway-pill"))));
 await p.close();
-p = await open("open=settings&access=read");
+p = await open("open=settings&section=accounts&access=read");
 check("P1 read-only Settings: ids, not labels, and no Connect", await p.evaluate(() => !document.querySelector('#settings-dialog [data-b="connect"]') && document.querySelector("#settings-dialog .b-choice-title .mono")?.textContent === "openai:work" && document.querySelector("#settings-dialog .access-bar").textContent.includes("Read-only.")));
 await p.close();
 
@@ -259,7 +261,7 @@ await p.click('.b-menu [data-value="grok-4.7"]');
 await p.click('#panel-settings [data-bs="save-change"]');
 check("P2 the change posts a grey line in the task", (await text(p, "#transcript")).includes("Marlow now runs on xAI · Personal. The run in progress finishes on OpenAI · Work."));
 await p.click('#panel-settings [data-bs="main"]');
-check("P2 tools that come with the account appear under its provider", (await pane(p)).includes("With xAI") && (await pane(p)).includes("Search posts on X"));
+check("P2 tools that come with the account appear under its provider", (await pane(p)).includes("From xAI") && (await pane(p)).includes("Search posts on X"));
 await p.close();
 
 p = await open("bot=otto&panel=open&tab=settings&bview=change");
@@ -323,6 +325,34 @@ p = await open("fail=signedout");
 await p.click('[data-testid="account-error"] [data-bs="sign-in-again"]');
 await p.waitForTimeout(900);
 check("P2 signed out: Sign in again starts the provider's sign-in in Settings", (await dlg(p, "settings-dialog")) && (await text(p, "#b-section-title")).startsWith("Sign in to ChatGPT"));
+await p.close();
+
+// FM-11: which catalogue the model list shows, and effort following the model.
+p = await open("bot=marlow&panel=open&tab=settings");
+check("FM-11 a bot with a task: the models the gateway lists for its account in its latest task", (await text(p, "#b-model-line")).includes("The models OpenAI · Work offers, as the gateway lists them for Marlow's latest task."));
+await p.click('#panel-settings [data-b-select="model"]');
+check("FM-11 a model the gateway lists as unavailable is shown, marked", (await text(p, '.b-menu [data-value="gpt-5.5-codex"]')).includes("Not available"));
+await p.keyboard.press("Escape");
+check("FM-17 Escape in the menu closes the menu alone and returns focus to the select", await p.evaluate(() => !document.querySelector(".b-menu") && document.activeElement.dataset.bSelect === "model" && window.app.model.panel));
+await p.evaluate(() => (window.bots.binding.marlow.effort = "High"));
+await p.click('#panel-settings [data-b-select="model"]');
+await p.click('.b-menu [data-value="gpt-5.5-mini"]');
+check("FM-11 changing to a model without the effort takes one it offers, and says so", (await text(p, "#b-model-line")).includes("Effort is now Low: gpt-5.5-mini doesn't offer High.") && (await text(p, '#panel-settings [data-b-select="effort"]')).includes("Low"));
+await p.focus('#panel-settings [data-b-select="effort"]');
+await p.keyboard.press("ArrowDown");
+check("FM-17 Down opens a closed select", await p.evaluate(() => !!document.querySelector(".b-menu")));
+await p.close();
+p = await open("open=create&step=account&name=Viral&chosen=xai:default");
+check("FM-11 a new bot: the provider's models, and whose decision the rest is", (await text(p, "#create-dialog")).includes("xAI's models, as the gateway lists them. Which ones this account may use is xAI's decision."));
+await p.close();
+
+// FM-12: provider tools from the gateway's inventory.
+p = await open("bot=juniper&panel=open&tab=settings&xaitools=1");
+check("FM-12 xAI's tools can be listed for a bot on another provider, from the gateway's tool list", (await text(p, "#panel-settings")).includes("From xAI") && (await text(p, "#panel-settings")).includes("From the gateway's tool list for Juniper's latest task"));
+check("FM-12 no Ask without the rules plugin, and it says so", !(await text(p, "#panel-settings .facts:has([title=x_search])")).includes("Ask") && (await text(p, "#panel-settings")).includes("Asking first needs Clawtrate's rules plugin."));
+await p.close();
+p = await open("bot=juniper&panel=open&tab=settings");
+check("FM-12 on another provider without the tools switched on, none are listed", !(await text(p, "#panel-settings")).includes("From xAI"));
 await p.close();
 
 // Checks, the access tiers, loading, errors, no account.

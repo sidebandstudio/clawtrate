@@ -103,7 +103,7 @@
     draft: { name: p("name") ?? "", body: "drop", color: "#ff6f9c", account: p("chosen") || DEFAULT_MODEL.account || null, model: null, effort: "Medium" },
     create: { step: p("step") || "look", status: p("create") || "idle", opener: null },
     connect: null, // { from, view, option, stage, ... }
-    settings: { section: p("section") || "accounts", account: p("account") || null, pane: p("account") || p("section") ? "section" : "nav", edit: false },
+    settings: { section: p("section") || "gateway", account: p("account") || null, pane: p("account") || p("section") ? "section" : "nav", edit: false },
     seconds: 4,
     grantedNote: false,
     accountsState: p("accts") || "ready", // loading, error
@@ -615,7 +615,8 @@
   // Settings --------------------------------------------------------------------------------------------
 
   const settingsDialog = $("#settings-dialog");
-  const SECTIONS = [["accounts", "Accounts"]];
+  // The shell's built Settings has the Gateway pane; this design adds the rest after it.
+  const SECTIONS = [["gateway", "Gateway"], ["accounts", "Accounts"]];
   CT.botsSections = SECTIONS;
 
   function openSettings(opener, section) {
@@ -632,7 +633,7 @@
   function renderSettings() {
     const s = B.settings;
     const nav =
-      `<nav class="b-nav" aria-label="Settings"><h2 id="settings-title">Settings</h2>` +
+      `<nav class="b-nav" aria-label="Settings"><div class="b-nav-head"><h2 id="settings-title">Settings</h2>${close("Close settings")}</div>` +
       SECTIONS.map(([id, label]) => `<button type="button" class="b-nav-item" data-b-section="${id}"${id === s.section ? ' aria-current="page"' : ""}>${label}${icon("chevron")}</button>`).join("") +
       `</nav>`;
     const section = sectionView();
@@ -649,6 +650,7 @@
 
   function sectionView() {
     const s = B.settings;
+    if (s.section === "gateway") return gatewayPane();
     if (s.section === "accounts") {
       if (B.connect && B.connect.from === "settings") {
         const view = renderConnect();
@@ -658,6 +660,17 @@
       return accountsList();
     }
     return (CT.botsSectionViews?.[s.section] || (() => ({ title: "", body: "" })))({ back: toNav(), isAdmin, adminBar, button, note, esc, icon });
+  }
+
+  // The Gateway pane as built (packages/ui/src/Settings.tsx), unchanged.
+  function gatewayPane() {
+    const scopes = { read: ["operator.read"], write: ["operator.read", "operator.write", "operator.approvals", "operator.questions"], admin: ["operator.read", "operator.write", "operator.approvals", "operator.questions", "operator.admin"] }[B.access];
+    const body =
+      `<dl class="facts"><div><dt>Address</dt><dd>gateway.local</dd></div><div><dt>State</dt><dd>Connected</dd></div>` +
+      `<div><dt>This device</dt><dd class="mono">device 9c2e41</dd></div><div><dt>Granted scopes</dt><dd class="b-wrap-value">${scopes.join(", ")}</dd></div>` +
+      `<div><dt>Gateway</dt><dd>OpenClaw 2026.10.6</dd></div></dl>` +
+      `<div class="b-actions" style="margin-top:16px">${button("Disconnect", 'data-action="disconnect" data-size="sm"')}${button("Use another gateway", 'data-action="disconnect" data-size="sm"', "quiet")}</div>`;
+    return { title: "Gateway", back: toNav(), body };
   }
 
   function accountsList() {
@@ -858,6 +871,12 @@
       const n = event.key === "Home" ? 0 : event.key === "End" ? radios.length - 1 : (i + (["ArrowDown", "ArrowRight"].includes(event.key) ? 1 : -1) + radios.length) % radios.length;
       radios[n].focus();
       radios[n].click();
+    }
+    // A closed select opens with Down, as with Enter and Space.
+    if (!menu && event.key === "ArrowDown" && event.target.matches?.("[data-b-select]") && !event.target.disabled) {
+      event.preventDefault();
+      event.target.click();
+      return;
     }
     // An open select menu: arrows move, Escape closes it before anything else.
     if (menu && menu.contains(event.target)) {

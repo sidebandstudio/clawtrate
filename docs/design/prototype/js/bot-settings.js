@@ -105,6 +105,11 @@
 
   // The tools an account brings, from the gateway's tool list under the provider's plugin.
   const PROVIDER_TOOLS = { xai: [["Search posts on X", "x_search"], ["Run code", "code_execution"]] };
+  // xaitools=1: the gateway's xAI settings switch the tools on for every model.
+  const XAI_EVERYWHERE = p("xaitools") === "1";
+  // The effort levels the gateway reports for each model; [] means none.
+  const LEVELS = { "gpt-5.5-mini": ["Low", "Medium"], "grok-build-0.1": [], "minimax-m3": [] };
+  const levels = (model) => LEVELS[model] ?? EFFORTS;
 
   // The commands a person runs on the gateway's machine for a lock.
   const lockCommand = (bot, a) => `openclaw models auth order set --provider ${a.provider} --agent ${bot} ${a.id}`;
@@ -170,7 +175,13 @@
     const a = acct(b.account);
     const name = esc(botName(id));
     const provider = a ? a.provider : b.mode === "gateway" ? D.DEFAULT_MODEL.provider : null;
-    const tools = (PROVIDER_TOOLS[provider] || []).map(([label]) => row(label, "Allowed")).join("");
+    // Tools from the gateway's inventory for the bot's latest task, by plugin:
+    // xAI's are offered with an xAI model, or for any model where switched on.
+    const bot = app.bots.find((x) => x.id === id);
+    const hasRun = bot.tasks.some((t) => !t.fresh);
+    const listed = hasRun && (provider === "xai" || XAI_EVERYWHERE) ? PROVIDER_TOOLS.xai : [];
+    const tools = listed.map(([label, tool]) => row(`<span title="${tool}">${label}</span>`, (b.deny || []).includes(tool) ? "Denied" : "Allowed")).join("");
+    const lastTask = bot.tasks.find((t) => !t.fresh);
     return (
       `<h3 class="b-tabgroup">About</h3><dl class="facts">` +
       row("Description", `<span class="b-faint">None</span>`) +
@@ -181,7 +192,12 @@
       `</dl>` +
       (a || b.mode === "gateway"
         ? `<div class="b-pair" style="margin-top:8px">${D.select("model", "Model", b.model || D.DEFAULT_MODEL.model)}${D.select("effort", "Effort", b.effort)}</div>` +
-          `<p class="b-hint">${esc(providerName(provider || D.DEFAULT_MODEL.provider))}'s models, as the gateway lists them. Which ones ${a ? "this account" : "an account"} may use is ${esc(providerName(provider || D.DEFAULT_MODEL.provider))}'s decision.</p>`
+          `<p class="b-hint" id="b-model-line">${
+            S.effortNote ||
+            (a && hasRun
+              ? `The models ${esc(acctName(a))} offers, as the gateway lists them for ${name}'s latest task.`
+              : `${esc(providerName(provider || D.DEFAULT_MODEL.provider))}'s models, as the gateway lists them. Which ones ${a ? "this account" : "an account"} may use is ${esc(providerName(provider || D.DEFAULT_MODEL.provider))}'s decision.`)
+          }</p>`
         : "") +
       (b.served ? note(`<p>The gateway tried another ${esc(providerName(provider))} account in ${name}'s last run with a notice. See Account.</p>`, "warn") : "") +
       (b.failed ? note(`<p>${b.failed}</p>`, "danger") : "") +
@@ -189,9 +205,11 @@
       row("Permissions", "Ask before running commands") +
       `</dl>` +
       (tools
-        ? `<h4 class="b-group">With ${esc(providerName(provider))}</h4><dl class="facts">${tools}</dl>` +
-          `<p class="b-hint">These come with ${esc(providerName(provider))} accounts, while ${name} runs on ${esc(providerName(provider))}. ${esc(providerName(provider))} bills them per call.</p>`
-        : "") +
+        ? `<h4 class="b-group">From xAI</h4><dl class="facts">${tools}</dl>` +
+          `<p class="b-hint">From the gateway's tool list for ${name}'s latest task${lastTask ? `, ${esc(lastTask.title)}` : ""}. xAI bills these per call. Asking first needs Clawtrate's rules plugin.</p>`
+        : !hasRun
+          ? `<p class="b-hint">Tools that come with a provider appear here after ${name}'s first task.</p>`
+          : "") +
       (CT.botsT3Row ? CT.botsT3Row(id) : "") +
       `<h3 class="b-tabgroup">Runs on</h3><dl class="facts">${row("Machine", "Gateway host")}</dl>`
     );
@@ -319,8 +337,8 @@
       if (b.running) html += note(`<p>A run in progress finishes on ${esc(acctName(was))}. The next run uses ${esc(acctName(pick))}.</p>`, "", icon("clock"));
       if (was && lockState(id) === "locked" && was.provider === pick.provider)
         html += note(`<p>${name} is locked to ${esc(acctName(was))}. After saving, ${name} runs on ${esc(acctName(pick))} first, and the gateway still tries ${esc(acctName(was))} when ${esc(acctName(pick))} fails, until you lock to ${esc(acctName(pick))} or unlock. Account then shows both commands.</p>`, "warn");
-      const leaving = was && was.provider !== pick.provider ? PROVIDER_TOOLS[was.provider] : null;
-      if (leaving) html += note(`<p>${leaving.map(([t]) => t).join(" and ")} come with ${esc(providerName(was.provider))} and leave ${name}'s tools.</p>`);
+      const leaving = was && was.provider === "xai" && pick.provider !== "xai" && !XAI_EVERYWHERE ? PROVIDER_TOOLS.xai : null;
+      if (leaving) html += note(`<p>${leaving.map(([t]) => t).join(" and ")} come with xAI here, and may leave ${name}'s tools.</p>`);
     }
     html += `<div class="b-actions" style="margin-top:16px">${button("Save", `data-bs="save-change" data-size="sm"${ready ? "" : " disabled"}`, "primary")}${button("Cancel", 'data-bs="account" data-size="sm"', "quiet")}</div>`;
     return html;
@@ -443,12 +461,25 @@
       if (t.closest(".b-menu")) return;
       const which = sel.dataset.bSelect;
       const provider = S.view === "change" ? acct(S.pick).provider : acct(b.account)?.provider || "openai";
-      const items = which === "model" ? MODELS[provider].map((m) => [m, ""]) : EFFORTS.map((e) => [e, ""]);
+      const items = which === "model" ? MODELS[provider].map((m) => [m, m === "gpt-5.5-codex" ? "Not available" : ""]) : levels(S.view === "change" ? S.pickModel || b.model : b.model).map((e) => [e, ""]);
       const value = which === "model" ? (S.view === "change" ? S.pickModel : b.model) : b.effort;
       CT.botsSelect(sel, items, value, (v) => {
         if (which === "model" && S.view === "change") S.pickModel = v;
-        else if (which === "model") b.model = v;
-        else b.effort = v;
+        else if (which === "model") {
+          b.model = v;
+          // The effort keeps its level if the new model offers it, else its default.
+          const l = levels(v);
+          if (!l.length) b.effort = "Not offered";
+          else if (!l.includes(b.effort)) {
+            const was = b.effort;
+            b.effort = l[Math.floor((l.length - 1) / 2)];
+            S.effortNote = `Effort is now ${b.effort}: ${v} doesn't offer ${was}.`;
+            setTimeout(() => {
+              S.effortNote = null;
+              render();
+            }, 4000);
+          }
+        } else b.effort = v;
         render();
         $(`[data-b-select="${which}"]`, panel)?.focus();
         if (S.view === "main") announce(`${which === "model" ? "Model" : "Effort"} saved`);
