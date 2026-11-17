@@ -1,0 +1,57 @@
+{
+  "id": "clawtrate-dev-signin",
+  "name": "Clawtrate development sign-ins",
+  "description": "Development instances only: scripted sign-ins for the scripted provider acme, against the instance's own scripted model on loopback. No real provider, account or network beyond loopback.",
+  "activation": {
+    "onStartup": true
+  },
+  "providers": ["acme"],
+  "setup": {
+    "requiresRuntime": false
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "acme",
+      "method": "device-code",
+      "choiceId": "acme-device-code",
+      "choiceLabel": "Acme (scripted)",
+      "choiceHint": "a link and a code",
+      "groupId": "acme",
+      "groupLabel": "Acme (scripted)",
+      "credentialOnly": true,
+      "appGuidedAuth": "device-code"
+    },
+    {
+      "provider": "acme",
+      "method": "browser",
+      "choiceId": "acme-browser",
+      "choiceLabel": "Acme in the browser (scripted)",
+      "choiceHint": "paste the code back",
+      "groupId": "acme",
+      "groupLabel": "Acme (scripted)",
+      "credentialOnly": true,
+      "appGuidedAuth": "oauth"
+    },
+    {
+      "provider": "acme",
+      "method": "api-key",
+      "choiceId": "acme-api-key",
+      "choiceLabel": "Acme API key (scripted)",
+      "choiceHint": "billed per token",
+      "groupId": "acme",
+      "groupLabel": "Acme (scripted)",
+      "credentialOnly": true,
+      "appGuidedSecret": true
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["signinUrl"],
+    "properties": {
+      "signinUrl": {
+        "type": "string"
+      }
+    }
+  }
+}
