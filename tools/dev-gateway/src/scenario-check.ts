@@ -306,16 +306,6 @@ export type CallExpectation = {
 /** Runs for which the gateway sent its "seq gap" error event (see RunView.validate). */
 export const SEQ_GAP_NOTES = new Set<string>();
 
-/** Poll a condition until it holds, or fail after the limit. */
-async function until(label: string, check: () => Promise<boolean>, timeoutMs = 60_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await check()) return;
-    await sleep(250);
-  }
-  throw new CheckFailure(`timed out after ${timeoutMs} ms waiting for ${label}`);
-}
-
 /** Every run a check started or watched, and whether its calls and its end were asserted. */
 const TRACKED = new Map<string, { calls: boolean; end: boolean; sessionKey: string }>();
 
@@ -1278,19 +1268,16 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     run: async (h) => {
       const key = await h.session("main", "slow-abort");
       const view = await h.start("plain", key, "#slow 20");
-      // The barrier is the gateway's own record of this run's streamed text (its in-flight run
-      // in history), with most of the twenty seconds of text still to come. Not the text events:
-      // on a loaded machine the gateway can pass them on only as the turn settles, and an abort
-      // then races the run's end.
-      await until("the run's text on the gateway", async () => {
-        const history = await h
-          .op("plain")
-          .request<{ inFlightRun?: { runId?: string; text?: string } }>("chat.history", {
-            sessionKey: key,
-            limit: 1,
-          });
-        return history.inFlightRun?.runId === view.runId && (history.inFlightRun.text ?? "") !== "";
-      });
+      // The barrier is the run's own reasoning, which comes first. The gateway passes the
+      // reply's text on in one piece only as the turn settles (observed: reasoning in the first
+      // half second, then nothing until the whole text and the end together), so no point
+      // "mid-stream" can be observed; after the reasoning, twenty seconds of the turn remain.
+      await h
+        .op("plain")
+        .waitFor(
+          "the run's reasoning",
+          (e) => isAgent("thinking")(e) && rec(e.payload).runId === view.runId,
+        );
       const out = await h.op("plain").request("chat.abort", { sessionKey: key });
       same(out, { ok: true, aborted: true, runIds: [view.runId] }, "chat.abort result");
       await h.wait(view, 30_000);
@@ -1303,9 +1290,11 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["cancelled", true],
         "lifecycle end status",
       );
+      // What the aborted event carries is the reply as far as the model had got: the start of
+      // the scripted reply, empty if the stop came before its first piece.
       expect(
-        view.finalText().startsWith("Here is a long answer"),
-        "the aborted event carries the partial text",
+        scriptedFinalText("#slow 20").startsWith(view.finalText()),
+        "the aborted event carries the partial text, a start of the reply",
       );
       view.expectCalls([]);
       view.expectEnd("aborted", null);
@@ -1332,6 +1321,34 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       await h.wait(first, 90_000);
       await h.wait(second, 90_000);
       same([first.terminal.state, second.terminal.state], ["final", "final"], "both runs' ends");
+      // The gateway runs the queued turn under an id of its own, which it names beside the
+      // send's in sessions.changed (`clientRunId`): under it come only run_status events, and
+      // the turn's lifecycle, text and end come under the send's id. It is the same turn.
+      const own = h
+        .op("plain")
+        .events.map((e) => rec(e.payload))
+        .find(
+          (p) =>
+            p.clientRunId === second.runId &&
+            typeof p.runId === "string" &&
+            p.runId !== second.runId,
+        );
+      if (own) {
+        const ownId = String(own.runId);
+        const streams = new Set(
+          h
+            .op("plain")
+            .runEvents(ownId)
+            .filter((e) => e.event === "agent" || e.event === "chat")
+            .map((e) => `${e.event} ${String(rec(e.payload).stream ?? rec(e.payload).state)}`),
+        );
+        same(
+          [...streams].filter((each) => each !== "agent run_status"),
+          [],
+          "the queued turn's own id carries only run_status",
+        );
+        TRACKED.set(ownId, { calls: true, end: true, sessionKey: key });
+      }
       const firstEnd = first.events.find(isChat("final"))!;
       // Observed: a turn the gateway runs from its queue reports no lifecycle start under the
       // send's run id (its run_status goes under an id of the gateway's own), so the order is
