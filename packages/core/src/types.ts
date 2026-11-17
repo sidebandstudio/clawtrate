@@ -137,6 +137,11 @@ export type Task = {
    * window. Absent when the gateway does not report both.
    */
   context?: TaskContext;
+  /**
+   * The reasoning effort the task asks for (`thinkingLevel` on its session
+   * row), as the gateway names it. Absent when the task records none.
+   */
+  effort?: string;
   /** Paths of fields cut to their bound. */
   cut?: string[];
 };

@@ -67,6 +67,8 @@ export type ActionEnv = {
   lost: boolean;
   /** Approvals are not sent on this connection. */
   readOnly: boolean;
+  /** The reasoning effort the task asks for, when its row records one. */
+  effort: string | null;
 };
 
 export const ActionEnvContext = createContext<ActionEnv | null>(null);
@@ -817,7 +819,7 @@ export function RunLineView({
 }) {
   const env = useActionEnv();
   const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.run(runId), false);
-  const record = `${model ?? "model not reported"} · effort not reported`;
+  const record = `${model ?? actionWords.RUN_LINE.modelNotReported} · ${actionWords.RUN_LINE.effort(env.effort)}`;
   return (
     <details
       className="run-line"

@@ -338,6 +338,7 @@ export function ActionScope({
   engineRuns,
   lost,
   readOnly,
+  effort = null,
   ctx: given,
   children,
 }: {
@@ -346,6 +347,8 @@ export function ActionScope({
   engineRuns: Run[];
   lost: boolean;
   readOnly: boolean;
+  /** The reasoning effort the task asks for, for the run line's record. */
+  effort?: string | null;
   ctx: ReadingContext;
   children: ReactNode;
 }) {
@@ -471,8 +474,9 @@ export function ActionScope({
       rawState,
       lost,
       readOnly,
+      effort,
     };
-  }, [taskKey, transcript.runs, transcript.sessionKey, ctx, rawState, lost, readOnly]);
+  }, [taskKey, transcript.runs, transcript.sessionKey, ctx, rawState, lost, readOnly, effort]);
 
   useKeepFocus();
 

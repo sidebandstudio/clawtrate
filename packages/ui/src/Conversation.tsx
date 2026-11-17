@@ -349,6 +349,7 @@ function TranscriptView({
               engineRuns={live.engineRuns}
               lost={!liveOptions.connected}
               readOnly={!liveOptions.interactive}
+              effort={task.effort ?? null}
               ctx={reading}
             >
               <h1 className="task-line" tabIndex={-1}>

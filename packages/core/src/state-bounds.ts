@@ -546,6 +546,7 @@ const task = flagged<Task>()({
   status: ENUM,
   unread: FLAG,
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
+  effort: NAME,
 });
 /** A task creation as kept (`MAX_CREATIONS` of them). */
 export const CREATION: Bound = object<TaskCreation>()({

@@ -257,10 +257,11 @@ test.describe("action cards", () => {
     await open(page, "actions-short");
     const run = page.getByTestId("run-line");
     await expect(run).toHaveCount(1);
-    await expect(run.locator("summary")).toHaveAccessibleName("Worked for 1s · 2 actions");
+    // A run read from history reports no duration: its rows' times are not the run's own.
+    await expect(run.locator("summary")).toHaveAccessibleName("Worked · 2 actions");
     await open(page, "actions-failed");
     await expect(page.getByTestId("run-line").locator("summary")).toHaveAccessibleName(
-      /^Worked for \d+[ms0-9 ]* · 6 actions · 2 failed · 1 unavailable$/,
+      /^Worked · 6 actions · 2 failed · 1 unavailable$/,
     );
     await expect(page.getByTestId("run-line").locator(".run-failed")).toHaveText("2 failed");
     await open(page, "actions-thought");
@@ -272,6 +273,16 @@ test.describe("action cards", () => {
       "scripted/dev-1 · effort not reported",
     );
     await expect(page.getByRole("button", { name: "Copy run id" })).toBeVisible();
+    // The effort the task asks for, when its row records one.
+    await setState(
+      page,
+      `const tasks = Object.fromEntries(Object.entries(state.tasksByBot).map(([bot, list]) =>
+         [bot, list.map((t) => t.key === "agent:otto:disk-space" ? { ...t, effort: "high" } : t)]));
+       return { ...state, tasksByBot: tasks };`,
+    );
+    await expect(page.getByTestId("run-line")).toContainText(
+      "scripted/dev-1 · requested effort high",
+    );
   });
 
   test("F-090: a stopped run's line reads Stopped after, under the stop note", async ({ page }) => {

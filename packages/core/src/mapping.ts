@@ -174,6 +174,7 @@ export function mapSessionRow(row: RawRecord): Task | null {
     status: taskStatus(row),
     unread: row.unread === true,
     ...contextOf(row),
+    ...(str(row.thinkingLevel) ? { effort: str(row.thinkingLevel)! } : {}),
   };
 }
 
