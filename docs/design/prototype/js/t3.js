@@ -16,6 +16,9 @@
 //   t3withheld=1             a bot is turned on, but the gateway withholds the tools
 //   t3catalog=loading|error  the limits page's lists from T3 Code
 //   t3write=refused|timeout|partial   how the next gateway write ends
+//   skilldef=1               the gateway has a default skill list without the T3 Code skill
+//   skillread=fail           the read-back after enabling doesn't show the skill
+//   skillchanged=1           the person changed a bot's list after Clawtrate wrote it
 //   section=integrations     Settings on Integrations; bview=t3 a bot's T3 Code page
 
 (function () {
@@ -50,6 +53,15 @@
   if (added) binding.otto.t3 = { on: true, projects: "some", chosen: ["website"], models: ["Codex · gpt-5.5"], ask: true };
   if (added && p("t3withheld")) binding.otto.t3.withheld = true;
   if (T.on && p("t3found")) binding.pip.t3found = true;
+  // Which skills a bot sees: its own list when it has one; otherwise the gateway's
+  // default list; with neither, every loaded skill (section 17).
+  const SKILL = "clawtrate-t3";
+  const DEFAULT_SKILLS = p("skilldef") === "1" ? ["github", "weather"] : null;
+  const effectiveSkills = (id) => binding[id].skills || DEFAULT_SKILLS; // null: every loaded skill
+  const seesSkill = (id) => {
+    const list = effectiveSkills(id);
+    return !list || list.includes(SKILL);
+  };
   const PROJECTS = ["website", "home-scripts", "newsletter"];
   const T3MODELS = ["Codex · gpt-5.5", "Codex · gpt-5.5-mini", "Claude · claude-sonnet-5.5"];
   const botName = (id) => app.bots.find((b) => b.id === id)?.name || id;
@@ -199,6 +211,12 @@
       (t.on ? `<div><button type="button" class="b-open" data-bs="t3" aria-label="T3 Code limits for ${esc(botName(id))}. Open."><span>Limits</span><span class="b-open-value"><span>${limitsWord(t)}</span></span>${icon("chevron")}</button></div>` : "") +
       `</dl>` +
       (t.on && !T.plugin ? `<p class="b-hint">Without Clawtrate's plugin, ${esc(botName(id))} gets the T3 Code tools without Clawtrate's instructions for them.</p>` : "") +
+      (t.on && T.plugin && t.skillUnconfirmed
+        ? note(`<p>On. Clawtrate couldn't confirm the T3 Code skill for ${esc(botName(id))}.</p><div class="b-actions">${button("Try again", `data-t3="skill-retry" data-t3bot="${id}" data-size="sm"`)}</div>`, "warn")
+        : "") +
+      (t.on && T.plugin && binding[id].skillsWritten && !t.skillUnconfirmed
+        ? `<p class="b-hint">${esc(botName(id))} has a list of skills of its own: the gateway's default list as it was, plus T3 Code. It no longer follows the default list.</p>`
+        : "") +
       (t.writeError ? note(`<p>Couldn't change T3 Code for ${esc(botName(id))}: the gateway refused the change.</p>`, "danger") : "") +
       (!ready && isAdmin() ? `<div class="b-actions" style="margin-top:8px">${button("Open Settings", 'data-t3="open-settings" data-size="sm"')}</div>` : "")
     );
@@ -371,12 +389,57 @@
         CT.botsRender();
         return $('[data-t3="bot-toggle"]')?.focus();
       }
-      cur.on = !cur.on;
-      cur.writeError = false;
-      binding[id].t3 = cur;
+      const b = binding[id];
+      const finish = () => {
+        cur.writeError = false;
+        binding[id].t3 = cur;
+        CT.botsRender();
+        $('[data-t3="bot-toggle"]')?.focus();
+        announce(`T3 Code ${cur.on ? "on" : "off"} for ${botName(id)}${cur.skillUnconfirmed ? ", skill not confirmed" : ""}`);
+      };
+      if (!cur.on) {
+        // Turning on: the deny goes, and the skill is given by the one list the bot follows.
+        const enable = () => {
+          cur.on = true;
+          if (T.plugin && !seesSkill(id)) {
+            if (b.skills) b.skills = [...b.skills, SKILL]; // its own list: add the name
+            else {
+              b.skills = [...DEFAULT_SKILLS, SKILL]; // follows the default: a list of its own
+              b.skillsWritten = [...b.skills];
+            }
+          }
+          // The read-back decides whether the skill is said to be in place.
+          cur.skillUnconfirmed = T.plugin && (p("skillread") === "fail" || !seesSkill(id));
+          if (p("skillchanged") === "1" && b.skillsWritten) b.skills = [...b.skills, "docs-search"];
+          finish();
+        };
+        if (T.plugin && !b.skills && DEFAULT_SKILLS && !DEFAULT_SKILLS.includes(SKILL))
+          return D.confirmBox({
+            title: `Turn on T3 Code for ${botName(id)}?`,
+            text: `${botName(id)} follows the gateway's default list of skills. To give ${botName(id)} the T3 Code skill, Clawtrate gives ${botName(id)} a list of its own: today's default list plus T3 Code. From then on, ${botName(id)} stops following the gateway's default list: a skill added to the default later won't reach ${botName(id)}.`,
+            action: "",
+            label: "Turn on",
+            run: enable,
+          });
+        return enable();
+      }
+      // Turning off: the deny comes back and the skill goes; a list Clawtrate wrote
+      // and nobody changed since is removed, so the bot follows the default again.
+      cur.on = false;
+      cur.skillUnconfirmed = false;
+      if (b.skills && b.skills.includes(SKILL)) {
+        const rest = b.skills.filter((x) => x !== SKILL);
+        const untouched = b.skillsWritten && rest.length === b.skillsWritten.length - 1 && rest.every((x) => b.skillsWritten.includes(x));
+        if (untouched) delete b.skills;
+        else b.skills = rest;
+        delete b.skillsWritten;
+      }
+      finish();
+    }
+    if (what === "skill-retry") {
+      const cur = binding[t.dataset.t3bot].t3;
+      cur.skillUnconfirmed = !seesSkill(t.dataset.t3bot);
       CT.botsRender();
-      $('[data-t3="bot-toggle"]')?.focus();
-      announce(`T3 Code ${cur.on ? "on" : "off"} for ${botName(id)}`);
     }
     if (what === "projects") {
       binding[app.model.selectedBot].t3.projects = t.dataset.value;
