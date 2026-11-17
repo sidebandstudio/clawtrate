@@ -9,7 +9,7 @@ Static pages for the design in `docs/design/`. Open `index.html` in a browser. T
 | `app.html` | The main view: bots with their tasks, a conversation, the Work pane. It runs on a small local model, so selecting, folding, pinning, the menus, sending, the connection states and the Work pane all work. Right-click a bot for its menu. |
 | `gallery.html` | Every conversation component in every state. Steps and cards work as they do in the app: they open, Raw opens, copy copies, approvals and questions resolve. The composer, the access bar and the rail rows are pictures of each state there. |
 | `conversation.html` | One scripted turn, played inside the shell: Play, Step, Drop the connection and Restart are in the bar. The approval and the question pause it until you answer; Stop, steer, queue, hold and the send menu work at any point. "Start read-only" plays it on a read-only connection, with the access bar and the request for access. |
-| `work.html` | The app with the Work pane's contents, specified in `docs/design/work-pane.md`: a task's files and the bot's workspace, the reader and its changes, the way from a step to its file and back. The bar has the events the pane reacts to ("Otto edits the notes", "The write finishes", "Otto runs a command"). Open Otto's task "Disk almost full on the media box", then the Work pane. |
+| `work.html` | The app with the Work pane's contents, specified in `docs/design/work-pane.md`: a task's files and the bot's workspace, the reader and its changes, the way from a step to its file and back; the cards for what a bot sends, their menu, and the media viewer (Juniper's task "Library e-book apps compared" has every kind). The bar has the events the pane reacts to ("Otto edits the notes", "The write finishes", "Otto runs a command"). Open Otto's task "Disk almost full on the media box", then the Work pane. |
 
 The dark bar at the top is prototype chrome, not part of the product. It switches the theme, the width of the frame the app sits in (full, 1100, 800, phone) and reduced motion.
 
@@ -38,6 +38,8 @@ Every setting can be given in the address, which is how the screenshots are take
 | `files` | `loading`, `empty`, `error`, `stale`, `writing`, `commands`, `many` (Work pane) |
 | `folder` | A workspace folder to open: `/`, `notes`, `logs` (Work pane) |
 | `file`, `fileview` | A file to open in the reader, for example `file=notes/disk-2026-11-16.md&fileview=changes`; views are `preview`, `source`, `changes` (Work pane) |
+| `artifact`, `viewer` | An item the bot sent, opened in the pane or in the media viewer, for example `bot=juniper&task=j2&artifact=a-terms` or `viewer=a-usage` (Work pane) |
+| `artifactload`, `thumbs` | `failed`: the first opening of an item fails; the gateway's thumbnail for a large picture fails (Work pane) |
 
 `work.html` takes every parameter `app.html` takes; `work-pane.md`, section 22, lists its own.
 
@@ -67,7 +69,7 @@ Each prints one line for every check, `ok` or `FAIL`, then a count, and exits wi
 | `js/connect.js` | What the buttons on the connection screens do. |
 | `js/components.js`, `js/samples.js`, `js/behaviors.js` | The conversation components' markup, their sample content, and their behaviour: the two views of a step, Raw, copy, the approval form, question cards and the keyboard paths. |
 | `js/gallery.js`, `js/run.js` | The gallery and the scripted run. |
-| `css/work.css`, `js/work.js` | The Work pane's contents and their local model. `work.js` extends `app.js` through `CT.appExtension`, a set of optional hooks that `app.html` does not use. |
+| `css/work.css`, `js/work.js`, `js/work-artifacts.js` | The Work pane's contents and their local model: files in `work.js`, artifacts and media in `work-artifacts.js`. `work.js` extends `app.js` through `CT.appExtension`, a set of optional hooks that `app.html` does not use. |
 | `tools/make-local-fonts.mjs` | Builds the ignored local font stylesheet. |
 | `tools/checks/` | Headless checks of the pages' behaviour: `shell.mjs` for the app and pairing pages, `conversation.mjs` for the scripted run and the gallery, `work.mjs` for the Work pane. |
 

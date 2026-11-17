@@ -368,9 +368,163 @@ Where the pane goes:
 
 **Coming back.** After "Show in chat", the step has a second link beside "Open file" for as long as the pane is not open on that file: "Back to notes.md". It reopens the reader where it was. ⌘[ in the conversation does the same while that link is present.
 
----
+# Part 2. Artifacts and media
 
-Part 2 (artifacts and media) and Part 3 (the computer) follow in this document as they are finished. Sections 20 to 22 cover Part 1 now.
+## 11. What a bot hands over
+
+An **artifact** is something a bot attached to a message for the person: a document, a picture, a chart, a recording, a video. The gateway finds them in the task's transcript, as blocks of four types, and gives each an id, a title, and what it knows of its type, its size and how it can be fetched (section 20).
+
+| What the person sees                  | What it is at the gateway                                                   | Card           |
+| ------------------------------------- | --------------------------------------------------------------------------- | -------------- |
+| A document, a spreadsheet, an archive | A `file` artifact                                                           | The file card  |
+| A picture or a chart                  | An `image` artifact. A chart is a picture of a chart; nothing else marks it | The picture    |
+| A recording                           | An `audio` artifact                                                         | The audio card |
+| A video                               | A `video` artifact                                                          | The video tile |
+| A page the bot made                   | A canvas document (not an artifact; section 12, "A page")                   | The page card  |
+| A link in the bot's text              | Text. The client reads the address                                          | The link card  |
+
+A file the bot wrote to its workspace but did not attach is not an artifact. It is in Files under Changed (Part 1), and its step is in the conversation. The two are never shown as one item: the gateway does not link a workspace file to an attachment, and the design does not guess from names.
+
+**What can be fetched.** Each artifact says how its content can be downloaded, and the card and the pane follow it exactly:
+
+| The gateway says                          | Open and Download                                                                                 | Preview                                     |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Its bytes are in the transcript           | Available. Large items come through the gateway's five-minute download link instead of the socket | Made on the device from the bytes           |
+| It is at an address the gateway serves    | Available, through that address                                                                   | Made on the device                          |
+| It has no content to send ("unsupported") | Not available                                                                                     | Only what the transcript holds, if anything |
+
+A picture larger than 256 KB is not sent inline when the task's pictures are listed. Its card shows the gateway's thumbnail, a PNG of at most 1200 px fetched over the gateway's download link, and fetches the full picture only when it is opened. The thumbnail route has not been exercised against a gateway (section 20); when it fails, the card falls back to its quiet tile (section 12).
+
+**Versions.** The gateway keeps no link between two attachments, even with the same name. Each card is the item as it was sent, with the time it was sent; a later card with the same name is another item. A file's own history is in Files, in Changes (section 7). A page is the one exception: two cards for the same canvas document are the same page, so the earlier card reads "A newer version is below" and opens the newest.
+
+## 12. Cards in the conversation
+
+Cards sit in the transcript where the message put them, left-aligned with the bot's bubbles, under the bubble of the message they belong to. They follow `visual-language.md`: the raised fill (`--bg-bubble`), radius 18, no outline, no shadow. Nothing on them is coloured but the media itself.
+
+### The file card (F-115)
+
+```
+[icon]  disk-report.md
+        Markdown · 37 KB
+```
+
+- 64 px tall, padded 12 × 14, at least 240 px and at most 360 px wide (the column's width less 24 px on a phone).
+- A 40 px tile, radius 10, on `--bg-pane`, holding the kind's icon in `--text-muted`: lines for a document, a page with lines for a PDF, a box for an archive.
+- The name (15/500, cut in the middle so the extension stays) and, under it, the type in words and the size (13, faint): "Markdown · 37 KB", "PDF · 412 KB", "ZIP archive · 8.4 MB". The type comes from the media type the gateway reports, or from the extension; unknown is "File". A size the gateway did not report is left out.
+- The whole card is one button. Choosing it opens the item in the pane (section 13). Its name: "disk-report.md, Markdown, 37 KB. Open in the Work pane."
+- On hover or keyboard focus a quiet round "More" button (28 px) appears at its right; right-click and touch-and-hold open the same menu (below).
+
+### Pictures (F-117)
+
+- A picture is shown by itself, without a card: radius 18, at its own aspect ratio, at most 320 px wide and 320 px tall on the desktop, and the column's 78% on a phone. Its fill while loading is `--bg-bubble`.
+- **Several in one message** form a grid: two columns, 4 px apart, each cell square, the whole grid 320 px wide with the outer corners at radius 18 and inner corners at 6. Five or more show four cells, the last reading "+3" on a dark scrim over the picture.
+- Choosing one opens the media viewer at that picture (section 14). Its name is its title and "Open full size".
+- On hover or keyboard focus, a 28 px "More" button appears at the top right of a picture or grid, on a dark disc, and opens the card's menu (below); on touch it is always shown.
+
+### Video and audio (F-117)
+
+- **Video**: a tile like a picture, the poster or the gateway's thumbnail behind a round 44 px play button on a dark disc, with the duration at the bottom right when it is known. It opens in the media viewer.
+- **Audio**: a file card whose tile is a round play button. While it plays, the second line becomes a thin progress track with the time, "0:12 / 1:04". Only one recording plays at a time.
+
+### Links (F-116)
+
+- A link the bot wrote stays in its bubble as a link. When a message is only a link, or ends with one, a link card follows the bubble: a 40 px tile with the link icon, the link's text or the page's title (15/500), and the domain (13, faint).
+- **The preview** is fetched by the device itself, on hover after 500 ms on the desktop and on touch-and-hold on the phone, never when the card is drawn. It sends no cookies and no credentials. It shows the page's title, its description and its preview image in a 320 px popover (`--bg-raised`, `--shadow-pop`, radius 14). A page that gives none shows its address alone. A failed preview shows the address and "No preview".
+- Choosing the card opens the address in the system browser. Its name: "Library e-books, library.example. Opens in your browser."
+
+### A page
+
+A bot can make a page, an interactive document, on the gateway's canvas. The card is a file card with the page icon, the page's title, and "Page" as its type; its button is "Open".
+
+- It opens in the media viewer's frame (section 14), which shows the canvas document in a web view, full window, with the conversation one Close away.
+- **Not established.** The gateway serves canvas documents (`canvas.document.view`, and a hosted address for the canvas), but neither has been exercised (section 20). Until it is, a builder ships the card and checks the view against a development gateway first. When the page cannot be loaded, the viewer says "This page can't be shown here." with the gateway's reason and "Try again".
+
+### The card's menu (F-118, F-304, F-305, F-306)
+
+One menu for every artifact, opened by the More button, right-click, Shift+F10 or the Menu key on a focused card, and touch-and-hold on the phone. It is `.menu` (232 px). Items appear only when they can do something:
+
+| Item                     | Present                                                            | Does                                                                                                                                                                   |
+| ------------------------ | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Open                     | Always                                                             | As choosing the card                                                                                                                                                   |
+| Download                 | The gateway can send it                                            | Saves it under its own name, with its bytes. Announces "Downloaded disk-report.md" (F-118)                                                                             |
+| Copy image               | A picture that can be fetched                                      | Puts the picture on the clipboard. Announces "Copied the image" (F-305)                                                                                                |
+| Save image…, Save video… | A picture or a video that can be fetched                           | The system's save dialog, starting in Downloads (F-306)                                                                                                                |
+| Copy text                | A text file that can be fetched                                    | Copies its text                                                                                                                                                        |
+| Show in Files            | Always                                                             | Opens the pane on Files, at the item in "Sent in chat"                                                                                                                 |
+| Download all 3           | The message has more than one item and at least two can be fetched | Saves each with its own name, into the folder the person chooses. When some cannot be fetched: "Download 2 of 3", and the announcement says which was left out (F-304) |
+
+An item that cannot be downloaded has no Download in its menu, and its pane view says why (section 13).
+
+### States of a card
+
+| State                            | The card                                                                                                                                                                     |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Loading a picture                | The tile in `--bg-bubble` at the picture's size, `aria-busy="true"`. Still under reduced motion                                                                              |
+| The picture's preview isn't sent | The quiet tile: `--bg-bubble`, the picture icon, the title and size ("cache-growth.png · 3.1 MB"). It loads the gateway's thumbnail; until then it opens the viewer as usual |
+| The thumbnail failed             | The quiet tile stays, with "No preview" in place of the size. Choosing it still opens the viewer, which fetches the picture itself                                           |
+| The gateway has no content       | The card is drawn as usual and opens the pane's view, which says why it can't be opened (section 13)                                                                         |
+| While the connection is lost     | Cards keep their last look. Opening one that is not on the device says "Can't reach the gateway. Try again when it's back."                                                  |
+
+## 13. An artifact in the pane
+
+Choosing a card opens it in Files, in the reader's frame (section 6), with the item's own head and facts. Back returns to "Sent in chat" in this task's files, whichever way the person came.
+
+```
+files-head     [Back]  disk-report.md                [Download] [Copy]
+meta           Markdown · 37 KB
+source         Sent by Otto at 5:37 PM · Show in chat
+body           …
+foot           Raw
+```
+
+- **Source line**: "Sent by <Bot> at <time>" and "Show in chat", which scrolls to the message and fills its card for 1.6 s, as section 10 does for a step. In a drawer, the drawer closes first.
+- **Body**, by what the device can make of the bytes:
+
+| The item                                                   | Body                                                                                                                                           |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Text and code                                              | The code view (section 6)                                                                                                                      |
+| Markdown                                                   | Preview, with Source beside it                                                                                                                 |
+| A picture                                                  | The picture at the pane's width; choosing it opens the viewer                                                                                  |
+| A PDF                                                      | Its pages, rendered on the device, one under another at the pane's width, with "Page 1 of 4" over each. Choosing a page opens the viewer at it |
+| Audio                                                      | The audio player, full width                                                                                                                   |
+| Video                                                      | The poster with the play button; it plays in the viewer                                                                                        |
+| Anything else (an archive, a format the device can't draw) | The facts block (Name, Type, Size, Sent) and "There's no preview for this kind of file." with Download as a default button under it (F-307)    |
+
+- **Actions**: Download when the gateway can send it, Copy for text and pictures.
+- **Raw**, a text button at the foot, is the conversation's Raw (`conversation.md` section 9): the artifact's record as the gateway sends it (`artifacts.get`), with its id, type, media type, size, download mode, run and message. It never holds the bytes.
+
+**States** (F-307):
+
+| State                            | The pane shows                                                                                                                                |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Loading                          | The head and facts at once, then "Loading disk-report.md…" with `aria-busy` where the body goes                                               |
+| Couldn't load                    | "Couldn't open disk-report.md.", the gateway's reason in one sentence, and "Try again". A successful retry replaces the line with the preview |
+| No content at the gateway        | The facts and "The gateway has this item's name and type, but not its content, so it can't be opened or downloaded." No Download              |
+| A picture kept as a preview only | The picture, and under it: "The gateway kept a preview of this picture only. It can't be downloaded." No Download, no Copy image              |
+| The device can't draw it         | As "Anything else" above, with Download                                                                                                       |
+
+**"Sent in chat"** in the Files tab (section 3) lists the task's artifacts newest first, as file rows: the kind's icon (or a 32 px thumbnail for a picture), the title, and "Sent 5:37 PM · 37 KB". A page is listed with its type, "Page". They are fetched with the task's files and paged by the gateway; pictures come four at a time, so the group ends with "Show more" while there are more.
+
+## 14. The media viewer
+
+Pictures, video, PDF pages and pages open in one viewer that fills the window (F-117).
+
+- **Frame.** A `dialog`, modal, over the whole window. Its ground is the dark theme's stage (`--bg` of `[data-theme="dark"]`), in either theme: a picture is judged on a dark, quiet ground, and a light frame would glare around a dark video. All of its controls use the dark theme's tokens, so it adds no colour.
+- **Top bar**, 56 px, floating like the conversation's: at the left the item's title (15/500) and, when there are several, "2 of 3" (13, faint); at the right round buttons for Download, Copy image (pictures), and Close. Each has its name and tooltip: "Download usage.png", "Copy the image", "Close the viewer (Esc)".
+- **The item**, centred and fitted to the space under the bar, never enlarged beyond its own size. Clicking a picture switches between fitted and actual size; at actual size it can be dragged.
+- **Several items**: round 40 px buttons at the left and right edges, "Previous" and "Next", and Left and Right on the keyboard. A strip of 48 px thumbnails at the foot shows up to 12, the current one with a 2 px `--accent-line` ring.
+- **Video**: the system's player inside the frame, with play and pause (Space), a scrubber, the time, and a speed menu, "0.5×", "1×", "1.5×", "2×" (a `menu` with `menuitemradio`s). The speed is kept for the session.
+- **Right-click** on a picture: "Copy image", "Save image…"; on a video: "Save video…" (F-305, F-306).
+- **Keys**: Escape closes. Left and Right move. ⌘C copies the picture. ⌘S saves.
+- **Focus** moves to Close when the viewer opens and returns to the card, row or picture that opened it when it closes. Tab stays inside the viewer.
+- **Motion**: it fades in over 120 ms; under reduced motion it appears at once. Moving between items is instant.
+- **Phone**: full screen. Swiping left and right moves between items; swiping down closes. The top bar's actions are "Share" and "Save to Photos" (or "Save to Files" for a PDF).
+
+**States.** Loading: the item's thumbnail, if there is one, under a working mark at the centre; otherwise the mark alone. Couldn't load: "Couldn't load usage.png." and "Try again", centred. An item with no content at the gateway is not offered in the viewer's sequence.
+
+# Part 3. The computer
+
+Part 3 follows in this document when it is finished. Sections 20 to 22 cover Parts 1 and 2 now.
 
 ## 20. What the gateway's facts drive
 
@@ -395,6 +549,25 @@ Names are from `docs/research/gateway-capabilities.md` (the map). "Source" means
 
 What Part 1 assumes and the map does not establish: that `sessions.files.list` lists a file the moment its write result arrives. The map shows the list after a write (live), not its timing. Section 9's fetch after a result is the design's answer either way.
 
+### Part 2
+
+| Shown                                                 | Driven by                                                                                                                                                                                                                                                                         | Source                                                                                                                       |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| The four kinds of artifact; a chart is only a picture | The transcript's blocks are collected by type: `image`, `input_image`, `image_url` as image; `audio`, `input_audio` as audio; `video`, `input_video` as video; `file`, `attachment`, `input_file`, and anything else with content, as file                                        | `dist/session-artifact-read-CN5ihAvI.mjs` lines 67-79 and 87-90                                                              |
+| A card's title                                        | The block's `title`, else `fileName`, `filename`, `alt`, the attachment's label, else "<type> <n>"                                                                                                                                                                                | `dist/session-artifact-read-CN5ihAvI.mjs` line 123                                                                           |
+| Type and size; the stable id; the run and message     | The summary's `mimeType`, `sizeBytes`, `id`, `runId`, `messageSeq`                                                                                                                                                                                                                | `dist/session-artifact-read-CN5ihAvI.mjs` lines 152-167                                                                      |
+| What can be fetched: bytes, an address, or nothing    | `download.mode` `bytes`, `url` or `unsupported`, from the block's data or a safe address                                                                                                                                                                                          | `dist/artifacts-content-C0x4QGox.mjs` lines 23-73                                                                            |
+| Download; large items through the link                | `artifacts.download {artifactId, sessionKey, transport?:"http"}` (`operator.read`): base64 inline, or a five-minute connection-bound address; inline transfer of a large item is refused with "request transport: http"; `unsupported` fails with `artifact_download_unsupported` | Map §11 and §20 "Downloads"; `dist/artifacts-CVcZMNpQ.mjs` lines 568-647. The HTTP form was not fetched live                 |
+| A preview-only picture: no Download                   | A picture listed with `type: "image"` and without a downloadable source of its own gets an id starting `preview_`, source `session-transcript-preview`, and download mode `unsupported`                                                                                           | `dist/session-artifact-read-CN5ihAvI.mjs` lines 142 and 152-162                                                              |
+| Pictures over 256 KB not sent inline; the thumbnail   | `IMAGE_INLINE_PREVIEW_MAX_BYTES = 262144`; `?variant=thumbnail` on the download address gives a PNG of at most 1200 px                                                                                                                                                            | `dist/session-artifact-read-CN5ihAvI.mjs` lines 66 and 135-151; map §11 (from `docs/gateway/clients.md`, not exercised live) |
+| "Sent in chat", four pictures at a time               | `artifacts.list {sessionKey, type?, limit?, cursor?}`: limit and cursor only with `type: "image"`, limit 1-4; without a type, the whole list                                                                                                                                      | Map §20 "Artifacts across a bot's tasks"; `dist/artifacts-CVcZMNpQ.mjs` lines 495-496                                        |
+| Raw on an artifact                                    | `artifacts.get {artifactId, …}`, the summary without data or address                                                                                                                                                                                                              | Map §11; `dist/artifacts-content-C0x4QGox.mjs` lines 6-9                                                                     |
+| A page                                                | `canvas.document.view {docId}`, `canvas.document.preview`, the hosted canvas address in `hello-ok.pluginSurfaceUrls.canvas`, renewed with `plugin.surface.refresh` (`operator.read`)                                                                                              | Map §18 "Canvas". Not exercised: an unknown id returned `UNAVAILABLE`                                                        |
+| Link previews                                         | Nothing: the device fetches them                                                                                                                                                                                                                                                  | Parity F-116 cell                                                                                                            |
+| An attachment's place in the conversation             | `chat.history` attachments by `fileName`                                                                                                                                                                                                                                          | Map §19 "Attachments"; parity F-447 cell                                                                                     |
+
+What Part 2 assumes and the map does not establish: that a bot's outgoing documents, recordings and videos reach the transcript as blocks of those types. The source collects them when they are there (above); the map names only image blocks with an `artifactId` (parity F-115's cell). The cards follow whatever blocks arrive; a task with only pictures shows only pictures.
+
 ## 21. Parity rows to reword
 
 Only the Clawtrate column changes.
@@ -407,7 +580,10 @@ Only the Clawtrate column changes.
 | F-448 | better: while a run creates, changes or deletes files with the file tools, the listing updates without a reload, and an open preview reloads when such a change lands; a change made by a command shows after a refresh, and the tab says when commands have run since it was checked (§7 proposal). | No file-change event exists; refetching after file-tool results misses commands.                             |
 | F-321 | better: in the Files tab or section, files created or changed by the active run's file tools carry a "Changed this run" marker, and files changed in the previous run "Changed last run" (§7 proposal).                                                                                              | Attribution comes only from file-tool events.                                                                |
 
-F-320, F-446 and F-447 are met as written.
+| F-304 | same; note: "Download all" saves every item in the message that the gateway can send; when one cannot be sent, the item reads "Download 2 of 3" and the result names what was left out. The check compares every downloadable item's name and bytes with the originals. | An artifact whose download mode is `unsupported` cannot be fetched. |
+| F-307 | better: from a file card, a format the device cannot preview shows its details and "Download"; an item the gateway holds no content for says so and offers no "Download"; a failed load shows the error and "Try again"; a successful retry shows the preview (F-115 covers the successful card preview; the Files pane has its own rows). | The `unsupported` download mode. |
+
+F-320, F-446 and F-447 are met as written, and so are F-115, F-116, F-117, F-118, F-305 and F-306. F-115's dependency cell says that only image blocks are named; the gateway's source collects file, audio and video blocks as artifacts too (section 20), and a builder correcting that cell can cite it.
 
 ## 22. For builders
 
@@ -455,3 +631,41 @@ Nothing new for Part 1. Every call is `operator.read`.
 | `folder`               | A workspace folder to open: `/` for the root, `notes`, `logs` (more entries than one page)                                                                                |
 | `file`                 | A file to open: `notes/disk-2026-11-16.md`, `inventory.md`, `logs/transcode.log` (too large), `notes/receipts.pdf` (not text), `charts/usage.png` (an image)              |
 | `fileview`             | `preview`, `source`, `changes`                                                                                                                                            |
+
+### Part 2: what each part uses
+
+| Part                           | Uses                                                                   | New                        |
+| ------------------------------ | ---------------------------------------------------------------------- | -------------------------- |
+| The file, audio and page cards | The card frame of `conversation.md` (`--bg-bubble`, radius 18)         | `.artifact`                |
+| Pictures and the grid          |                                                                        | `.media-grid`              |
+| The card's menu                | `.menu`                                                                |                            |
+| The link card's preview        | `.menu`'s surface (`--bg-raised`, `--shadow-pop`)                      | `.link-preview`            |
+| An artifact in the pane        | The reader (section 6), `.facts`, Raw from `conversation.md` section 9 | the PDF pages, `.pdf-page` |
+| The viewer                     | The dark theme's tokens; round icon buttons                            | `.viewer`                  |
+
+### What the engine supplies for Part 2
+
+- For each message, its artifacts in order (`artifacts.list` for the task, matched to messages by `messageSeq`), with their summaries.
+- A fetch for one artifact that tries the bytes inline and moves to `transport: "http"` when the gateway asks; the five-minute address is used at once and never stored.
+- For pictures over 256 KB, the thumbnail address, fetched when the card comes into view.
+- Canvas documents named in the transcript, with their ids, so two cards of one page can be told apart from two pages.
+
+### Order to build Part 2
+
+1. The file card and the pane's view for text and markdown, with Download and Raw. Check F-115, F-118.
+2. Pictures, the grid and the viewer with its keys. Check F-117, F-305, F-306.
+3. The card's menu and "Download all". Check F-304 as reworded.
+4. The states that come from the download mode and from failures. Check F-307 as reworded.
+5. Audio and video, then PDF pages.
+6. The link card and its preview. Check F-116.
+7. The page card, once a development gateway shows a canvas document.
+
+### Prototype states for Part 2
+
+| Parameter                     | Values                                                                                                                                                               |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bot=juniper&task=j2`         | Juniper's research task, with every kind of card                                                                                                                     |
+| `artifact`                    | An item to open in the pane: `a-report`, `a-usage`, `a-terms` (a PDF), `a-screens` (no preview), `a-cover` (a preview only), `a-card` (no content), `a-note` (audio) |
+| `artifactload`                | `failed`: the first opening of an item fails, and Try again succeeds                                                                                                 |
+| `viewer`                      | An item to open in the viewer: `a-usage`, `a-growth`, `a-chart`, `a-walk` (video), `page`                                                                            |
+| `menu=artifact&menuitem=<id>` | The card's menu for an item                                                                                                                                          |

@@ -22,7 +22,7 @@ const files = "&panel=open&tab=files";
 let p = await open(files);
 check("F-152 files tab lists the task's changed and read files", await q(p, () => {
   const heads = [...document.querySelectorAll("#panel-files .files h3")].map((h) => h.textContent);
-  return heads.join() === "Changed,Read" && document.querySelectorAll('#panel-files [data-open]').length === 5;
+  return heads.join() === "Changed,Read,Sent in chat" && document.querySelectorAll('#panel-files [data-open]').length === 5;
 }));
 check("F-321 a file changed by a file tool carries the run marker", await q(p, () =>
   document.querySelector('[data-open="notes/disk-2026-11-16.md"]').textContent.includes("Changed last run") &&
@@ -197,6 +197,144 @@ check("phone: Files is a full-width sheet", await q(p, () => {
 check("phone: rows are touch height", await q(p, () => document.querySelector('[data-open="inventory.md"]').getBoundingClientRect().height >= 56));
 await p.click('[data-open="notes/disk-2026-11-16.md"]');
 check("phone: the reader opens in the sheet", await q(p, () => document.querySelector("#files-title").textContent === "disk-2026-11-16.md"));
+await p.close();
+
+// Part 2: artifacts and media -------------------------------------------------------------------
+
+const juniper = "&bot=juniper&task=j2";
+const downloads = async (p, action, count) => {
+  const got = [];
+  p.on("download", (d) => got.push(d));
+  await action();
+  for (let i = 0; i < 40 && got.length < count; i++) await p.waitForTimeout(50);
+  await p.waitForTimeout(150);
+  return got;
+};
+
+p = await open("");
+check("F-115 a file card shows its name, type and size", (await q(p, () => document.querySelector("#card-a-report .artifact-main").getAttribute("aria-label"))) === "disk-report.md, Markdown, 37 KB. Open in the Work pane.");
+await p.click("#card-a-report .artifact-main");
+check("F-115 choosing it opens the item in the pane, loading first", await q(p, () => document.querySelector("#files-title").textContent === "disk-report.md" && !!document.querySelector('#reader-body [aria-busy="true"]')));
+await p.waitForTimeout(350);
+check("F-115 then its preview, with the source line", await q(p, () => !!document.querySelector("#reader-body .reader-preview h2") && document.querySelector(".reader-source").textContent.startsWith("Sent by Otto at 5:37 PM")));
+await p.click(".artifact-raw .link-button");
+check("Raw shows the artifact's record, never its bytes", await q(p, () => {
+  const panel = document.querySelector(".reader .raw-panel");
+  return !panel.hidden && panel.textContent.includes('"mode": "bytes"') && !panel.textContent.includes("Transcode cache: about");
+}));
+await p.click(".reader-source [data-show-card]");
+check("F-447 Show in chat on an attachment fills its card and focuses it", await q(p, () => document.querySelector("#card-a-report").dataset.flash === "true" && document.activeElement === document.querySelector("#card-a-report .artifact-main")));
+await p.close();
+
+p = await open("");
+await p.hover("#card-a-report");
+await p.click("#card-a-report .artifact-more");
+check("the card's menu opens on its first item", await q(p, () => document.activeElement.dataset.mi === "open" && [...document.querySelectorAll(".artifact-menu .menu-item")].map((x) => x.textContent).join() === "Open,Download,Copy text,Show in Files,Download all 3"));
+let got = await downloads(p, () => p.click('.artifact-menu [data-mi="download"]'), 1);
+const reportBytes = await readFile(await got[0].path());
+check("F-118 Download saves the item under its name with its bytes", got[0].suggestedFilename() === "disk-report.md" && reportBytes.equals(Buffer.from(await q(p, () => window.CT.work.artifacts["a-report"].content), "utf8")));
+check("focus returns to the More button", await q(p, () => document.activeElement.classList.contains("artifact-more")));
+await p.click("#card-a-report .artifact-more");
+got = await downloads(p, () => p.click('.artifact-menu [data-mi="all"]'), 3);
+check("F-304 Download all saves every item in the message", got.map((d) => d.suggestedFilename()).sort().join() === "cache-growth.png,disk-report.md,usage.png");
+await p.focus("#card-a-usage");
+await p.keyboard.press("Shift+F10");
+check("Shift+F10 on a picture opens its menu with Copy image and Save image…", await q(p, () => [...document.querySelectorAll(".artifact-menu .menu-item")].map((x) => x.textContent).includes("Save image…")));
+got = await downloads(p, () => p.click('.artifact-menu [data-mi="save"]'), 1);
+check("F-306 Save image… saves the picture under its name", got[0]?.suggestedFilename() === "usage.png");
+await p.keyboard.press("Escape");
+await p.click("#card-a-report .artifact-more");
+await p.click('.artifact-menu [data-mi="files"]');
+check("Show in Files opens the pane at the item in Sent in chat", await q(p, () => document.activeElement.dataset.key === "a:a-report" && [...document.querySelectorAll("#panel-files h3")].some((h) => h.textContent === "Sent in chat")));
+await p.close();
+
+const ctx = await b.newContext({ viewport: { width: 1440, height: 900 }, permissions: ["clipboard-read", "clipboard-write"] });
+p = await ctx.newPage();
+await p.goto(base);
+await p.click("#card-a-usage", { button: "right" });
+await p.click('.artifact-menu [data-mi="copy-image"]');
+await p.waitForTimeout(400);
+check("F-305 Copy image puts the picture on the clipboard", await q(p, async () => {
+  const items = await navigator.clipboard.read();
+  return items.some((i) => i.types.includes("image/png")) && document.querySelector("#announcer").textContent === "Copied the image";
+}));
+await ctx.close();
+
+// The viewer.
+p = await open("");
+await p.click("#card-a-usage");
+check("F-117 a picture opens the viewer with focus on Close", await q(p, () => document.querySelector(".viewer").getAttribute("aria-modal") === "true" && document.activeElement.dataset.v === "close" && document.querySelector(".viewer-title").textContent.includes("1 of 2")));
+await p.keyboard.press("ArrowRight");
+check("F-117 arrow keys move between items", await q(p, () => document.querySelector(".viewer-title strong").textContent === "cache-growth.png"));
+check("the viewer is dark in the light theme", await q(p, () => getComputedStyle(document.querySelector(".viewer")).backgroundColor === "rgb(16, 17, 18)"));
+got = await downloads(p, () => p.click('.viewer [data-v="download"]'), 1);
+check("F-117 the viewer's Download saves the item", got[0]?.suggestedFilename() === "cache-growth.png");
+await p.keyboard.press("Escape");
+check("F-117 Escape closes the viewer and returns focus to the picture", await q(p, () => !document.querySelector(".viewer") && document.activeElement.id === "card-a-usage" && !document.querySelector(".shell").inert));
+await p.close();
+
+p = await open(`${juniper}&viewer=a-walk`);
+await p.waitForTimeout(50);
+await p.click('.viewer [data-v="speed"]');
+check("F-117 video speed is a menu of 0.5× to 2×", await q(p, () => [...document.querySelectorAll(".speed-menu .menu-item")].map((x) => x.textContent).join() === "0.5×,1×,1.5×,2×" && document.activeElement.dataset.speed === "1×"));
+await p.click('[data-speed="2×"]');
+check("choosing 2× sets the speed", await q(p, () => document.querySelector('.viewer [data-v="speed"]').textContent === "2×"));
+await p.close();
+
+// What cannot be fetched, and failures.
+p = await open(`${juniper}&panel=open&artifact=a-card`);
+await p.waitForTimeout(350);
+check("F-307 an item with no content says so, with no Download", await q(p, () => !document.querySelector('#panel-files [data-art="download"]') && document.querySelector(".reader-why").textContent.startsWith("The gateway has this item's name and type, but not its content")));
+await p.close();
+p = await open(`${juniper}&panel=open&artifact=a-screens`);
+await p.waitForTimeout(350);
+check("F-307 a format with no preview shows its details and Download", await q(p, () => document.querySelector(".reader-why").textContent === "There's no preview for this kind of file." && document.querySelectorAll('#panel-files [data-art="download"]').length === 2));
+await p.close();
+p = await open(`${juniper}&panel=open&artifact=a-cover`);
+await p.waitForTimeout(350);
+check("a picture kept as a preview only can't be downloaded", await q(p, () => !document.querySelector('#panel-files [data-art="download"]') && document.querySelector(".reader-why").textContent.includes("kept a preview of this picture only")));
+await p.close();
+p = await open(`${juniper}&panel=open&artifact=a-terms&artifactload=failed`);
+await p.waitForTimeout(350);
+check("F-307 a failed load shows the error and Try again", await q(p, () => document.querySelector("#reader-body [role=alert]").textContent.startsWith("Couldn't open lending-terms.pdf")));
+await p.click('[data-art="retry"]');
+await p.waitForTimeout(350);
+check("F-307 a successful retry shows the preview", await q(p, () => document.querySelectorAll(".pdf-page").length === 3 && !document.querySelector("#reader-body [role=alert]")));
+await p.close();
+
+p = await open(juniper);
+await p.click("#card-a-terms .artifact-more");
+check("F-304 when one item can't be fetched, the menu says Download 2 of 3", await q(p, () => document.querySelector('.artifact-menu [data-mi="all"]').textContent === "Download 2 of 3"));
+got = await downloads(p, () => p.click('.artifact-menu [data-mi="all"]'), 2);
+check("F-304 it saves the two that can be fetched and says which was left out", got.length === 2 && (await q(p, () => document.querySelector("#announcer").textContent)).includes("library-card.pkpass can't be downloaded"));
+await p.click("#card-a-cover", { button: "right" });
+check("a preview-only picture's menu has no Download", await q(p, () => ![...document.querySelectorAll(".artifact-menu .menu-item")].some((x) => x.textContent === "Download")));
+await p.keyboard.press("Escape");
+await p.hover("#card-link .artifact-main");
+await p.waitForTimeout(650);
+check("F-116 a link's preview appears on hover, fetched then", await q(p, () => !!document.querySelector(".link-preview") && document.querySelector(".link-preview").textContent.includes("library.example")));
+await p.click("#card-link .artifact-main");
+check("F-116 choosing a link card leaves the app for the browser, not the pane", await q(p, () => location.href.includes("work.html") && document.querySelector(".shell").dataset.panel === "closed"));
+await p.close();
+
+p = await open("&thumbs=failed");
+check("a failed thumbnail leaves the quiet tile with No preview", await q(p, () => document.querySelector("#card-a-growth .media-quiet").textContent.includes("No preview")));
+await p.click("#card-a-growth");
+check("it still opens the viewer", await q(p, () => document.querySelector(".viewer-title strong").textContent === "cache-growth.png"));
+await p.close();
+p = await open("");
+check("before the thumbnail arrives the tile is busy", await q(p, () => document.querySelector("#card-a-growth").getAttribute("aria-busy") === "true"));
+await p.waitForTimeout(700);
+check("then it shows the thumbnail", await q(p, () => !document.querySelector("#card-a-growth .media-quiet") && !!document.querySelector("#card-a-growth svg")));
+await p.close();
+
+p = await open(`${juniper}${files}`);
+check("Sent in chat lists the task's items in the Files tab", await q(p, () => document.querySelectorAll('#panel-files [data-open-artifact]').length === 7));
+await p.close();
+
+p = await open(`${juniper}&viewer=a-chart&width=phone`, { width: 390, height: 844 });
+await p.waitForTimeout(50);
+check("phone: the viewer fills the screen", await q(p, () => document.querySelector(".viewer").getBoundingClientRect().width >= 389));
 await p.close();
 
 await b.close();

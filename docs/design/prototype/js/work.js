@@ -457,7 +457,11 @@
     `<div class="work-empty"><span class="empty-mark">${icon("file")}</span><h4>No files yet</h4><p>Files ${b.name} reads or writes in this task appear here.</p></div>`;
 
   function taskTop(b, t, st) {
-    if (!hasFiles(t) || st.list === "empty") return `<div class="files">${emptyFiles(b)}${workspaceRow(b)}</div>`;
+    if (!hasFiles(t)) {
+      const sent = CT.work?.sentInChat?.(b, t, st, "") || "";
+      return `<div class="files">${sent ? freshLine(st) + sent : emptyFiles(b)}${workspaceRow(b)}</div>`;
+    }
+    if (st.list === "empty") return `<div class="files">${emptyFiles(b)}${workspaceRow(b)}</div>`;
     if (st.list === "loading") {
       return `<div class="files" aria-busy="true" aria-label="Loading this task's files"><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div></div>`;
     }
@@ -807,7 +811,7 @@
   function download(path) {
     const f = files[path];
     const name = path.split("/").pop();
-    const data = f.kind === "image" ? new Blob([chart()], { type: "image/svg+xml" }) : new Blob([new TextEncoder().encode(f.content)], { type: f.type || "text/plain" });
+    const data = f.kind === "image" ? new Blob([chart().replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ')], { type: "image/svg+xml" }) : new Blob([new TextEncoder().encode(f.content)], { type: f.type || "text/plain" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(data);
     a.download = name;
@@ -1190,8 +1194,5 @@
     copyText,
     turn,
     bubble,
-    get app() {
-      return app;
-    },
   });
 })();
