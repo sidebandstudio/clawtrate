@@ -1238,6 +1238,25 @@ export function foreignQuestionRequested(
   return next.questions.length > 0 ? { ...next, questions: [] } : next;
 }
 
+/**
+ * Questions a task's runs wait on that the task holds no record of: a run that
+ * waited on a question while nobody here had its task open keeps only the
+ * card's id, and keeps it when the task is opened. Each settles through the
+ * same rules as a question with its record: `question.resolved`, or a
+ * `question.list` read that no longer lists it.
+ */
+export function questionMarkers(activity: TaskActivity): string[] {
+  return activity.runs.flatMap((run) =>
+    [...run.pendingCards, ...run.suspendedCards]
+      .filter(
+        (card) =>
+          card.kind === "question" &&
+          !activity.questions.some((question) => question.id === card.id),
+      )
+      .map((card) => card.id),
+  );
+}
+
 /** That question settled: its run goes on. */
 export function foreignQuestionResolved(activity: TaskActivity, payload: RawRecord): TaskActivity {
   const id = str(payload.id);
@@ -1379,6 +1398,11 @@ export function settleMissingQuestions(
       (pendingBefore === undefined || pendingBefore.has(question.id))
     ) {
       next = applyQuestionResolved(next, { id: question.id, status: "closed" });
+    }
+  }
+  for (const id of questionMarkers(activity)) {
+    if (!pendingIds.has(id) && (pendingBefore === undefined || pendingBefore.has(id))) {
+      next = foreignQuestionResolved(next, { id, status: "closed" });
     }
   }
   return next;

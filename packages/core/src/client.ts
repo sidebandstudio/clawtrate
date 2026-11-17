@@ -93,6 +93,7 @@ import {
   applyQuestionResolved,
   foreignQuestionRequested,
   foreignQuestionResolved,
+  questionMarkers,
   bindRun,
   cancelQueuedRun,
   dropUnboundRun,
@@ -831,7 +832,7 @@ export class ClawtrateClient {
     const kept = this.retained.delete(key);
     if (!kept || !this.incarnations.has(key))
       this.incarnations.set(key, (this.nextIncarnation += 1));
-    this.setTranscript(key, (current) => current ?? this.emptyTranscript(key));
+    this.setTranscript(key, (current) => current ?? this.openedTranscript(key));
     // An approval waiting for a task that can show it may belong here now.
     this.routeUnrouted();
     if (this.state.connection.status === "connected") void this.loadTranscript(key, !kept, null);
@@ -2956,11 +2957,13 @@ export class ClawtrateClient {
       !this.tracked(key) ||
       this.incarnations.get(key) !== incarnation ||
       (this.listApplied.get(listKey) ?? 0) > revision;
-    const pendingBefore = new Set(
-      (this.state.transcripts[key]?.questions ?? [])
+    const before = this.state.transcripts[key];
+    const pendingBefore = new Set([
+      ...(before?.questions ?? [])
         .filter((question) => question.status === "pending")
         .map((question) => question.id),
-    );
+      ...(before ? questionMarkers(before) : []),
+    ]);
     try {
       const result = asRecord(await this.request("question.list", {}));
       if (stale()) return;
@@ -3993,6 +3996,21 @@ export class ClawtrateClient {
 
   // Transcripts ----------------------------------------------------------------
 
+  /**
+   * A task opened now. What the engine already knows of its runs, from
+   * following them while nobody had the task open (a recipient's run, and the
+   * question it waits on, by id), is its from the first moment: an outgoing
+   * message is held behind that question at once, and the history read and the
+   * question list settle it by the same rules as any other.
+   */
+  private openedTranscript(key: string): Transcript {
+    const sessionKey = capId(key, MAX_ID_CHARS);
+    const known = this.foreign.get(sessionKey);
+    this.foreign.delete(sessionKey);
+    const empty = this.emptyTranscript(key);
+    return known ? { ...empty, runs: known.runs } : empty;
+  }
+
   private emptyTranscript(key: string): Transcript {
     return {
       ...emptyActivity,
@@ -4313,6 +4331,11 @@ export class ClawtrateClient {
                 via: "question.resolved",
                 record: event.payload,
               }),
+            );
+          } else if (questionMarkers(transcript).includes(id)) {
+            // Known only by its id, from before the task was opened: its run goes on.
+            this.updateActivity(transcript.sessionKey, (activity) =>
+              foreignQuestionResolved(activity, payload),
             );
           }
         }

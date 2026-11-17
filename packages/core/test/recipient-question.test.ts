@@ -65,6 +65,79 @@ describe("a recipient's run that asks its own user", () => {
     }
   });
 
+  /** This task's bot sends to Marlow, whose run then asks its own user; nobody has Marlow open. */
+  async function waitingRecipient() {
+    const opened = await openTask();
+    const { gateway, transcript } = opened;
+    gateway.emit("agent", agentEvent("run-s", 1, "lifecycle", { phase: "start" }));
+    gateway.emit(
+      "agent",
+      agentEvent("run-s", 2, "tool", {
+        phase: "result",
+        name: "sessions_send",
+        toolCallId: "c1",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "{}" }],
+          details: { runId: "run-r", sessionKey: PEER, status: "accepted" },
+        },
+      }),
+    );
+    gateway.emit("agent", agentEvent("run-r", 1, "lifecycle", { phase: "start" }, PEER));
+    gateway.emit("question.requested", questionRecord("q-peer", "run-r", PEER));
+    await until(() => transcript().linkedRuns["run-r"]?.state === "waiting");
+    // Marlow's history read on opening shows the run still going; the question list is slow.
+    gateway.handlers["chat.history"] = () => ({
+      messages: [],
+      hasMore: false,
+      inFlightRun: { runId: "run-r" },
+    });
+    let answerList!: (value: unknown) => void;
+    gateway.handlers["question.list"] = () => new Promise((resolve) => (answerList = resolve));
+    return { ...opened, list: () => answerList };
+  }
+
+  it("F-122 F-468: opened while its question is known, Marlow's task holds a message from the first moment, and a list without it settles it", async () => {
+    const { client, gateway, list } = await waitingRecipient();
+    try {
+      client.openSession(PEER);
+      const opened = () => client.state.transcripts[PEER]!;
+      // Known at once, before any read: the run waits on the question it is known to have.
+      expect(opened().runs.find((run) => run.id === "run-r")?.state).toBe("waiting");
+      await until(() => opened().status === "ready" && list() !== undefined);
+      expect(opened().runs.find((run) => run.id === "run-r")?.state).toBe("waiting");
+      client.sendMessage(PEER, "Keep this for after the answer.");
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(gateway.calls("chat.send")).toEqual([]);
+      expect(opened().outbox[0]?.status).toBe("held");
+      // The gateway no longer lists it: it settled while nobody here watched.
+      list()({ questions: [] });
+      await until(() => opened().runs.find((run) => run.id === "run-r")?.state === "running");
+      expect(opened().questions).toEqual([]);
+      await until(() => gateway.calls("chat.send").length === 1);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-122 F-468: opened while its question is known, the question's own resolution lets the run go on", async () => {
+    const { client, gateway, list } = await waitingRecipient();
+    try {
+      client.openSession(PEER);
+      const opened = () => client.state.transcripts[PEER]!;
+      await until(() => opened().status === "ready" && list() !== undefined);
+      gateway.emit("question.resolved", { id: "q-peer", status: "answered" });
+      await until(() => opened().runs.find((run) => run.id === "run-r")?.state === "running");
+      // A list asked before the answer, still listing it, does not bring it back.
+      list()({ questions: [questionRecord("q-peer", "run-r", PEER)] });
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(opened().runs.find((run) => run.id === "run-r")?.state).toBe("running");
+      expect(opened().questions.filter((question) => question.status === "pending")).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("leaves a question of a session this client follows no run of alone", async () => {
     const { client, gateway } = await openTask();
     try {
