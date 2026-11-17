@@ -35,6 +35,30 @@ export function mainWindowTitle(pid: number): string {
 }
 
 /**
+ * What the taskbar says about the app's button, through UI Automation: the
+ * button's help text is the description of the overlay icon the app set on it
+ * ("3 unread"), and is empty while there is no overlay. The button is found by
+ * its application id, which for an app that sets none is its executable's
+ * path, compared without regard to case.
+ * Returns null if no taskbar has a button for the executable.
+ */
+export function taskbarOverlayDescription(exe: string): string | null {
+  const out = powershell(
+    `
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$ae = [Windows.Automation.AutomationElement]
+$want = 'Appid: ' + $env:CLAWTRATE_CHECK_EXE
+foreach ($bar in $ae::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)) {
+  if ($bar.Current.ClassName -notin 'Shell_TrayWnd', 'Shell_SecondaryTrayWnd') { continue }
+  $button = $bar.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition($ae::AutomationIdProperty, $want, [Windows.Automation.PropertyConditionFlags]::IgnoreCase)))
+  if ($button) { 'found:' + $button.Current.HelpText; break }
+}`,
+    { CLAWTRATE_CHECK_EXE: exe },
+  ).trim();
+  return out.startsWith("found:") ? out.slice("found:".length) : null;
+}
+
+/**
  * The mandatory integrity level of each process's token, as Windows reports
  * it: 0 is untrusted, 4096 low, 8192 medium. Chromium starts a sandboxed
  * renderer with a restricted token at untrusted integrity, and its main

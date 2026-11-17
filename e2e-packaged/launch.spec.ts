@@ -11,7 +11,12 @@ import { devGateway } from "../e2e/global-setup.ts";
 import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
 import { appEnv, packagedExecutable } from "./global-setup.ts";
-import { integrityLevels, mainWindowTitle, windowsProcesses } from "./windows.ts";
+import {
+  integrityLevels,
+  mainWindowTitle,
+  taskbarOverlayDescription,
+  windowsProcesses,
+} from "./windows.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -111,6 +116,24 @@ test("names its window Clawtrate, as Windows sees it", async () => {
   test.skip(!WINDOWS, "on macOS the page's title above is the window's title");
   // The window is shown once its page has painted; until then Windows reports no title.
   await expect.poll(() => mainWindowTitle(APP_PID), { timeout: 20_000 }).toBe("Clawtrate");
+});
+
+test("shows unread tasks as an overlay on its taskbar button, and clears it at zero", async () => {
+  test.skip(!WINDOWS, "the macOS dock badge is not read from outside yet");
+  // The page reports the count through the bridge, as the renderer does for
+  // unread tasks; the main process sets the overlay icon, whose description
+  // Windows gives as the taskbar button's help text.
+  const exe = packagedExecutable(APP);
+  const setBadge = (count: number) =>
+    page.evaluate((value) => {
+      (
+        window as unknown as { clawtrateHost: { setBadge(n: number): void } }
+      ).clawtrateHost.setBadge(value);
+    }, count);
+  await setBadge(3);
+  await expect.poll(() => taskbarOverlayDescription(exe), { timeout: 15_000 }).toBe("3 unread");
+  await setBadge(0);
+  await expect.poll(() => taskbarOverlayDescription(exe), { timeout: 15_000 }).toBe("");
 });
 
 test("hands a second launch to the running app instead of starting another", async () => {
