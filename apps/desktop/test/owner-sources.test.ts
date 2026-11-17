@@ -85,6 +85,8 @@ const ALLOWED: Record<string, string> = {
   // One read: kept while one list read is in flight, then dropped.
   "packages/core/src/client.ts:afterActivityOnce>steered":
     "transient, the held messages released as steers in one synchronous update, at most the task's outbox (16)",
+  "packages/core/src/client.ts:keepLinkedRuns>linked":
+    "one call; the run ids other followed tasks' sends name, at most `MAX_TRACKED_TASKS` × `MAX_LINKED_RUNS`, dropped when it returns",
   "packages/core/src/client.ts:backfillApprovalKind>pendingBefore":
     "one list read; the task's pending approvals, at most `MAX_PENDING_APPROVAL_COUNT`",
   "packages/core/src/client.ts:backfillApprovalKind>mine":
