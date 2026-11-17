@@ -521,6 +521,24 @@ function diskTranscript(now: number): TranscriptItem[] {
   ];
 }
 
+/** Juniper's e-book answer: inline markdown (bold, emphasis, a link, inline code) inside sentences. */
+export const MARKDOWN_TASK = "agent:main:ebook-apps";
+
+function ebookTranscript(spec: TaskSpec, at: number): TranscriptItem[] {
+  return [
+    item("user", at - 2 * MINUTE, [text(spec.ask)]),
+    item("assistant", at, [
+      text(
+        [
+          `${spec.preview} Yours lists **Libby by OverDrive** on its catalogue page, and it is *the easiest of the three* to start with.`,
+          "",
+          "Sign in with your card number on [the library's help page](https://example.org/library/help), then choose `Add a library` if it asks twice.",
+        ].join("\n"),
+      ),
+    ]),
+  ];
+}
+
 function shortTranscript(spec: TaskSpec, at: number): TranscriptItem[] {
   return [
     item("user", at - 2 * MINUTE, [text(spec.ask || `${spec.title}?`)]),
@@ -538,7 +556,9 @@ export function fixtureTranscripts(now: number, bots: Bot[]): Record<string, Tra
           ? diskTranscript(now)
           : key === NARRATED_TASK
             ? weekTranscript(now)
-            : shortTranscript(spec, now - spec.ago * MINUTE);
+            : key === MARKDOWN_TASK
+              ? ebookTranscript(spec, now - spec.ago * MINUTE)
+              : shortTranscript(spec, now - spec.ago * MINUTE);
       transcripts[key] = {
         sessionKey: key,
         status: "ready",

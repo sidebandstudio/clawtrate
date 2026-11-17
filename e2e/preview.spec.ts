@@ -295,6 +295,25 @@ test("F-059 F-063: a task's header shows the gateway's context use, and stamps s
   await expect(page.locator(".msg .bubble").first()).toHaveAttribute("title", /\d:\d\d/);
 });
 
+test("F-076: find matches a phrase from the gateway's reply across its bold text", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Disk almost full on the media box");
+  // The seeded reply says "The disk is now at **61%**.": the figure is bold.
+  await expect(page.locator(".msg .bubble strong", { hasText: "61%" })).toBeVisible();
+  await page.locator(".transcript").focus();
+  await page.keyboard.press("ControlOrMeta+F");
+  await page.getByRole("textbox", { name: "Find in conversation" }).fill("the disk is now at 61%");
+  await expect(page.getByTestId("find-bar").getByRole("status")).toHaveText("1 of 1");
+  const current = await page.evaluate(() => {
+    const registry = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights;
+    return [...(registry.get("clawtrate-find-current") ?? [])][0]?.toString();
+  });
+  expect(current).toBe("The disk is now at 61%");
+  await page.keyboard.press("Escape");
+});
+
 test("the conversation keeps its width and the work panel becomes a drawer", async ({ page }) => {
   await openShell(page);
   await openTask(page, "Otto", "Disk almost full on the media box");

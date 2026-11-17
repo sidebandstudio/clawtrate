@@ -5,6 +5,7 @@ import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts"
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PIP_WEEK = "bot=pip&task=agent:pip:week";
+const JUNIPER_EBOOKS = "bot=main&task=agent:main:ebook-apps";
 
 const rect = async (locator: Locator) => (await locator.boundingBox())!;
 const style = (locator: Locator, property: string) =>
@@ -284,4 +285,56 @@ test("F-076: Cmd/Ctrl+F finds text in the open conversation", async ({ page }) =
   await expect(page.locator(".title-pill")).toBeVisible();
   await expect(transcript).toBeFocused();
   expect((await highlighted()).all).toBe(0);
+});
+
+test("F-076: find reads text as it is rendered, across bold, emphasis, links and inline code, but not from one block into the next", async ({
+  page,
+}) => {
+  const find = async (query: string) => {
+    const field = page.getByRole("textbox", { name: "Find in conversation" });
+    if (!(await field.isVisible())) {
+      await page.locator(".transcript").focus();
+      await page.keyboard.press("ControlOrMeta+F");
+    }
+    await field.fill(query);
+    const status = await page.getByTestId("find-bar").getByRole("status").textContent();
+    const current = await page.evaluate(() => {
+      const registry = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights;
+      return [...(registry.get("clawtrate-find-current") ?? [])][0]?.toString() ?? null;
+    });
+    return { status, current };
+  };
+
+  await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+  await settle(page);
+  // Inline code inside a sentence.
+  expect(await find("transcode-cache.old instead of deleting")).toEqual({
+    status: "1 of 1",
+    current: "transcode-cache.old instead of deleting",
+  });
+  // The end of one paragraph and the code block after it are separate blocks,
+  // and so are two cells of a table.
+  expect(await find("to undo:mv")).toEqual({ status: "No matches", current: null });
+  expect(await find("94%61%")).toEqual({ status: "No matches", current: null });
+  await page.keyboard.press("Escape");
+
+  await openFixture(page, `scene=main&${JUNIPER_EBOOKS}`, "light");
+  await settle(page);
+  const reply = page.locator('.msg[data-role="assistant"] .bubble').last();
+  await expect(reply.locator("strong")).toHaveText("Libby by OverDrive");
+  // Bold, then emphasis, then a link and inline code, each inside a longer phrase.
+  for (const phrase of [
+    "lists Libby by OverDrive on its",
+    "it is the easiest of the three to start",
+    "number on the library's help page, then choose Add a library if",
+  ]) {
+    expect(await find(phrase.toUpperCase())).toEqual({ status: "1 of 1", current: phrase });
+  }
+  // The highlighted range is the one in the page, and takes in the link and the code.
+  const covered = await page.evaluate(() => {
+    const registry = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights;
+    const contents = [...(registry.get("clawtrate-find-current") ?? [])][0]!.cloneContents();
+    return [contents.querySelector("a")?.textContent, contents.querySelector("code")?.textContent];
+  });
+  expect(covered).toEqual(["the library's help page", "Add a library"]);
 });

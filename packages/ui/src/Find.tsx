@@ -24,21 +24,78 @@ const HighlightClass = (
   globalThis as unknown as { Highlight?: new (...ranges: Range[]) => unknown }
 ).Highlight;
 
-/** Every case-insensitive occurrence of `needle` in the text under `root`. */
+/** The nearest ancestor of `node` under `root` that is not laid out inline: its block. */
+function blockOf(node: Node, root: Element, cache: Map<Element, boolean>): Element {
+  for (
+    let element = node.parentElement;
+    element && element !== root;
+    element = element.parentElement
+  ) {
+    let inline = cache.get(element);
+    if (inline === undefined) {
+      inline = getComputedStyle(element).display.startsWith("inline");
+      cache.set(element, inline);
+    }
+    if (!inline) return element;
+  }
+  return root;
+}
+
+/**
+ * Every case-insensitive occurrence of `needle` in the text under `root`. Text
+ * reads as it is rendered: a phrase matches across inline markup (bold, a link,
+ * inline code) inside one block, but never runs on from one block into the next
+ * or across a line break.
+ */
 export function findRanges(root: Element, needle: string): Range[] {
   const query = needle.toLocaleLowerCase();
   if (!query) return [];
   const ranges: Range[] = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const text = node.textContent?.toLocaleLowerCase() ?? "";
-    for (let at = text.indexOf(query); at !== -1; at = text.indexOf(query, at + query.length)) {
+  const cache = new Map<Element, boolean>();
+  // A run is the text of consecutive text nodes in one block, with where each node starts.
+  let run: { text: string; nodes: { node: Text; start: number }[] } = { text: "", nodes: [] };
+  let runBlock: Element | null = null;
+  const at = (offset: number, end: boolean): [Text, number] => {
+    // The node holding the offset; an end offset belongs to the node it closes.
+    let index = run.nodes.length - 1;
+    while (
+      index > 0 &&
+      (end ? run.nodes[index]!.start >= offset : run.nodes[index]!.start > offset)
+    )
+      index -= 1;
+    const { node, start } = run.nodes[index]!;
+    return [node, offset - start];
+  };
+  const search = () => {
+    const text = run.text.toLocaleLowerCase();
+    for (
+      let from = text.indexOf(query);
+      from !== -1;
+      from = text.indexOf(query, from + query.length)
+    ) {
       const range = document.createRange();
-      range.setStart(node, at);
-      range.setEnd(node, at + query.length);
+      range.setStart(...at(from, false));
+      range.setEnd(...at(from + query.length, true));
       ranges.push(range);
     }
+    run = { text: "", nodes: [] };
+  };
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node instanceof HTMLBRElement) {
+      search();
+      continue;
+    }
+    if (!(node instanceof Text)) continue;
+    const block = blockOf(node, root, cache);
+    if (block !== runBlock) {
+      search();
+      runBlock = block;
+    }
+    run.nodes.push({ node, start: run.text.length });
+    run.text += node.data;
   }
+  search();
   return ranges;
 }
 
