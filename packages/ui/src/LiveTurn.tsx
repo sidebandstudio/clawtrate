@@ -22,16 +22,20 @@ export function Placeholder({
   kind,
   children,
   pending = false,
+  since = null,
 }: {
   kind: "activity" | "approval" | "question" | "messaged";
   children: ReactNode;
   pending?: boolean;
+  /** When the card arrived, so Review can go to the oldest. */
+  since?: number | null;
 }) {
   return (
     <p
       className="card-placeholder"
       data-placeholder={kind}
       data-pending={pending || undefined}
+      data-since={since ?? undefined}
       tabIndex={pending ? -1 : undefined}
     >
       {children}
@@ -156,22 +160,34 @@ export function RunCards({ run, transcript }: { run: Run; transcript: Transcript
       );
     }
   }
-  for (const approval of transcript.approvals) {
-    if (approval.runId !== run.id) continue;
-    lines.push(
-      <Placeholder kind="approval" key={approval.id} pending={approval.status === "pending"}>
-        Approval: {approval.status}
-      </Placeholder>,
-    );
-  }
-  for (const question of transcript.questions) {
-    if (question.runId !== run.id) continue;
-    lines.push(
-      <Placeholder kind="question" key={question.id} pending={question.status === "pending"}>
-        Question: {question.questions[0]?.question ?? question.status}
-      </Placeholder>,
-    );
-  }
+  // Approvals and questions in the order they arrived, mixed.
+  const cards = [
+    ...transcript.approvals
+      .filter((approval) => approval.runId === run.id)
+      .map((approval) => ({
+        id: approval.id,
+        at: approval.createdAt,
+        node: (pending: boolean, since: number | null) => (
+          <Placeholder kind="approval" key={approval.id} pending={pending} since={since}>
+            Approval: {approval.status}
+          </Placeholder>
+        ),
+        pending: approval.status === "pending",
+      })),
+    ...transcript.questions
+      .filter((question) => question.runId === run.id)
+      .map((question) => ({
+        id: question.id,
+        at: question.createdAt,
+        node: (pending: boolean, since: number | null) => (
+          <Placeholder kind="question" key={question.id} pending={pending} since={since}>
+            Question: {question.questions[0]?.question ?? question.status}
+          </Placeholder>
+        ),
+        pending: question.status === "pending",
+      })),
+  ].sort((a, b) => (a.at ?? Number.POSITIVE_INFINITY) - (b.at ?? Number.POSITIVE_INFINITY));
+  for (const card of cards) lines.push(card.node(card.pending, card.at));
   return <>{lines}</>;
 }
 

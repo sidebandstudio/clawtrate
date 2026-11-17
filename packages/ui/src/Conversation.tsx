@@ -618,7 +618,14 @@ function needsYouOf(bot: Bot, transcript: Transcript | undefined, interactive: b
 
 /** Move to the oldest card that needs the person, and focus it. */
 function reviewOldest(root: HTMLElement | null) {
-  const card = root?.querySelector<HTMLElement>('[data-pending="true"]');
+  // The oldest by arrival, questions and approvals mixed; one with no time comes last.
+  const pending = [...(root?.querySelectorAll<HTMLElement>('[data-pending="true"]') ?? [])];
+  const at = (element: HTMLElement) =>
+    element.dataset.since ? Number(element.dataset.since) : Number.POSITIVE_INFINITY;
+  const card = pending.reduce<HTMLElement | undefined>(
+    (oldest, each) => (!oldest || at(each) < at(oldest) ? each : oldest),
+    undefined,
+  );
   if (!card) return;
   card.scrollIntoView({ block: "nearest" });
   card.focus();

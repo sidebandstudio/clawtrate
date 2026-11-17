@@ -433,6 +433,69 @@ test.describe("the status line", () => {
     await expect(page.getByTestId("needs-you")).toHaveCount(0);
   });
 
+  test("F-292: Review and Cmd/Ctrl+J go to the oldest pending card by arrival, questions and approvals mixed", async ({
+    page,
+  }) => {
+    await open(page, "run-waiting");
+    // An older question arrives in the state beside the newer approval.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        const approval = transcript.approvals[0]!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              questions: [
+                {
+                  id: "question-old",
+                  runId: "run-live",
+                  status: "pending",
+                  questions: [
+                    {
+                      id: "which",
+                      header: "Which",
+                      question: "Which disk first?",
+                      options: [],
+                      optionsOmitted: 0,
+                      multiSelect: false,
+                      allowsOther: true,
+                    },
+                  ],
+                  createdAt: (approval.createdAt ?? Date.now()) - 60_000,
+                  expiresAt: null,
+                  answers: null,
+                  submitting: false,
+                  error: null,
+                  raw: null,
+                },
+              ],
+            },
+          },
+        };
+      });
+    });
+    await expect(page.getByTestId("needs-you")).toContainText("Otto asked you a question");
+    // In the transcript too, in the order they arrived.
+    await expect(page.locator(".card-placeholder[data-pending]")).toHaveText([
+      "Question: Which disk first?",
+      "Approval: pending",
+    ]);
+    await page.getByTestId("needs-you").getByRole("button", { name: "Review" }).click();
+    await expect(page.locator('[data-placeholder="question"]')).toBeFocused();
+    await page.getByTestId("transcript").focus();
+    await page.keyboard.press("ControlOrMeta+j");
+    await expect(page.locator('[data-placeholder="question"]')).toBeFocused();
+  });
+
   test("F-089: the status line stays while replies and cards arrive and leaves only when the run ends", async ({
     page,
   }) => {
