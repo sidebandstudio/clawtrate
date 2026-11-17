@@ -3,6 +3,8 @@
 // the session's access is revoked, when the tab closes or when the viewer
 // sends anything but a close.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ATLAS, ATLAS_TAB, Access, load, sleep, until } from "./harness.ts";
 
@@ -65,6 +67,40 @@ describe("view tickets", () => {
       "HTTP/1.1 401 Unauthorized",
     );
     expect(h.browser.sockets).toEqual([]);
+  });
+
+  it("a ticket is a bearer capability: it opens the stream for whoever presents it, which still ends with the view's connection", async () => {
+    const h = load();
+    const connection = new AbortController();
+    const view = await h.call("view.open", tab, { connection });
+    // The upgrade carries nothing of the presenting connection: only the ticket.
+    const socket = await h.upgrade(String(view.payload!.wsPath));
+    expect(socket.status).toBe("HTTP/1.1 101 Switching Protocols");
+    connection.abort();
+    expect(socket.closeCode()).toEqual({ code: 4006, reason: "authority_revoked" });
+  });
+
+  it("an unrenewed view takes its unused ticket with it before the ticket's own deadline; a renewal gives the ticket no more time", async () => {
+    const early = load({ renewTimeoutMs: 120, ticketTtlMs: 5000 });
+    const view = await early.call("view.open", tab);
+    expect(Number(view.payload!.expiresAtMs) - Date.now()).toBeGreaterThan(4000);
+    await sleep(200);
+    expect((await early.upgrade(String(view.payload!.wsPath))).status).toBe(
+      "HTTP/1.1 401 Unauthorized",
+    );
+    const renewed = load({ renewTimeoutMs: 5000, ticketTtlMs: 150 });
+    const kept = await renewed.call("view.open", tab);
+    await sleep(80);
+    expect(
+      (await renewed.call("view.renew", { ...tab, streamId: kept.payload!.streamId })).payload,
+    ).toMatchObject({ streamRenewed: true });
+    await sleep(120);
+    expect((await renewed.upgrade(String(kept.payload!.wsPath))).status).toBe(
+      "HTTP/1.1 401 Unauthorized",
+    );
+    expect(readFileSync(join(import.meta.dirname, "../README.md"), "utf8")).toContain(
+      "**The ticket is a bearer capability.**",
+    );
   });
 
   it("bounds the views one connection can open", async () => {
