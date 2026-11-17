@@ -397,8 +397,8 @@
   K.tasks = {
     icon: "tasks",
     words: (c) => {
-      if (c.name === "sessions_history") return three("Reading", "Read", "Couldn't read", c.botName ? `${c.botName}'s task` : "a task", c.taskTitle || "");
-      if (c.name === "sessions_search") return three("Searching tasks for", "Searched tasks for", "Couldn't search tasks for", quote(c.args.query));
+      if (c.name === "sessions_history") return { ...three("Reading", "Read", "Couldn't read", c.botName ? `${c.botName}'s task` : "a task", c.taskTitle || ""), refused: ["Didn't read", c.botName ? `${c.botName}'s task` : "a task"] };
+      if (c.name === "sessions_search") return { ...three("Searching tasks for", "Searched tasks for", "Couldn't search tasks for", quote(c.args.query)), refused: ["Didn't search tasks for", quote(c.args.query)] };
       if (c.name === "agents_list") return three("Looking through", "Looked through", "Couldn't look through", "bots");
       if (c.name === "session_status") return three("Checking", "Checked", "Couldn't check", "this task's status");
       return three("Looking through", "Looked through", "Couldn't look through", "tasks", c.details?.count !== undefined ? plural(c.details.count, "task", "tasks") : "");
@@ -501,7 +501,16 @@
       const files = CT.filesOf(c);
       const pdf = c.name === "pdf";
       const o = files.length > 1 ? `${files.length} ${pdf ? "PDFs" : "images"}` : base(files[0]);
-      return pdf ? three("Reading", "Read", "Couldn't read", o, c.args.pages ? `pages ${c.args.pages}` : firstWords(c.args.prompt)) : three("Looking at", "Looked at", "Couldn't look at", o, firstWords(c.args.prompt));
+      return pdf
+        ? { ...three("Reading", "Read", "Couldn't read", o, c.args.pages ? `pages ${c.args.pages}` : firstWords(c.args.prompt)), refused: ["Didn't read", o] }
+        : { ...three("Looking at", "Looked at", "Couldn't look at", o, firstWords(c.args.prompt)), refused: ["Didn't look at", o] };
+    },
+    // Rejected before any reading: too many, or an unsupported reference (7.3, Not run).
+    outcome: (c) => {
+      const e = c.details?.error;
+      if (e === "too_many_pdfs" || e === "too_many_images") return { outcome: "refused", word: "Too many" };
+      if (e === "unsupported_pdf_reference" || e === "unsupported_image_reference") return { outcome: "refused", word: "Unsupported" };
+      return c.text ? "done" : "made";
     },
     // Documents and images are counted once each; more calls than objects are said as times.
     plural: (n, calls) => {
@@ -562,8 +571,10 @@
   K.tool = {
     icon: "tool",
     neutral: (calls) => CT.nameWords(calls[0].name).replace(/^./, (x) => x.toUpperCase()),
-    words: (c) => three("Using", "Used", "Couldn't use", CT.nameWords(c.name), CT.generalDetail(c.args)),
-    outcome: (c) => CT.payloadOutcome(c) || "done",
+    words: (c) => {
+      const w = CT.nameWords(c.name);
+      return { ...three("Using", "Used", "Couldn't use", w, CT.generalDetail(c.args)), noun: ["Call to", w], refused: ["Didn't use", w], notfound: ["Found nothing with", w] };
+    },
     plural: (n, calls) => [`Used ${CT.nameWords(calls[0].name)}`, `${n} times`],
   };
 
@@ -635,19 +646,38 @@
     return { kind, key: c.name };
   };
 
-  // The general rule (7.3): a payload that carries its own status or code is read from it.
-  // Returns an outcome, or null when the payload says nothing of the kind.
-  const SUCCESS = ["ok", "completed", "success", "sent", "accepted", "answered"];
+  // The general reading of a payload (7.3). Every kind goes through it; a kind's adapter only
+  // adds to it. It looks at details and at a nested details.result, and returns the outcome a
+  // "not done" signal gives, or null when it finds none.
+  const SUCCESS = ["ok", "completed", "success", "sent", "accepted", "answered", "replied"];
+  const word = (v) => CT.nameWords(String(v)).replace(/^./, (x) => x.toUpperCase());
   CT.payloadOutcome = (c) => {
-    const d = c.details || {};
-    if (d.ok === false || d.error || ["error", "failed"].includes(d.status)) return { outcome: "failed" };
-    if (d.status === "forbidden") return { outcome: "refused", word: "Not run" };
-    if (d.status === "not_found") return { outcome: "notfound" };
-    if (d.code === "confirmation_required") return { outcome: "refused", word: "Needs confirmation" };
-    if (d.status === "approval-pending") return { outcome: "waiting" };
-    if (d.status && !SUCCESS.includes(d.status)) return { outcome: "made", word: CT.nameWords(d.status) };
-    if (d.code && !SUCCESS.includes(d.code)) return { outcome: "made", word: CT.nameWords(d.code) };
+    for (const d of [c.details || {}, c.details?.result || {}]) {
+      const status = typeof d.status === "string" ? d.status : "";
+      const code = typeof d.code === "string" ? d.code : "";
+      if (status === "forbidden") return { outcome: "refused", word: "Not run" };
+      if (code === "confirmation_required") return { outcome: "refused", word: "Needs confirmation" };
+      if (status === "approval-pending") return { outcome: "waiting" };
+      if (status === "not_found" || d.removed === false) return { outcome: "notfound" };
+      if (d.ok === false || d.error || status === "error" || status === "failed") return { outcome: "failed" };
+      if (status === "queued") return { outcome: "queued" };
+      if (d.effect === "unverifiable" || d.effect === "suspected_noop") return { outcome: "unconfirmed" };
+      if (d.outcome !== undefined) {
+        const oc = typeof d.outcome === "string" ? d.outcome : d.outcome?.code;
+        return { outcome: "made", word: oc ? word(oc) : "Call made" };
+      }
+      if (status && !SUCCESS.includes(status)) return { outcome: "made", word: word(status) };
+      if (code && !SUCCESS.includes(code)) return { outcome: "made", word: word(code) };
+    }
     return null;
+  };
+
+  // A failure's or refusal's words: the received text when the payload's error is only a code.
+  const reasonOf = (c) => {
+    const e = c.details?.error;
+    const text = String(c.text || "").trim();
+    if (e && /^[a-z0-9_]+$/.test(String(e)) && text && !text.startsWith("{")) return text.split("\n")[0];
+    return e ? String(e) : "";
   };
 
   // Outcomes ------------------------------------------------------------------------------
@@ -656,11 +686,16 @@
   const isOpen = (c) => OPEN.includes(c.status);
 
   // What the call's state says: the event's status, or for a result, the adapter's outcome.
+  // One function decides a call's outcome, for a single card, a fold's members and the feed.
+  // The event's status first; then the kind's adapter where it names something more exact
+  // than Done; then the general reading; Done only when neither finds a signal.
   CT.outcomeOf = (c) => {
     if ((c.status || "done") !== "done") return { outcome: c.status };
     const k = K[CT.kindOf(c).kind];
-    const o = k?.outcome ? k.outcome(c) : "done";
-    return typeof o === "string" ? { outcome: o } : o;
+    const norm = (o) => (typeof o === "string" ? { outcome: o } : o);
+    const own = k?.outcome ? norm(k.outcome(c)) : null;
+    if (own && own.outcome !== "done") return own;
+    return CT.payloadOutcome(c) || own || { outcome: "done" };
   };
 
   // The problem words, in their fixed order (7.4), for a fold's line and the run line.
@@ -754,9 +789,9 @@
       mono = false;
     }
     // A failure's detail is what went wrong, never a count from a result it did not give.
-    if (o.outcome === "failed" && !c.timedOut && !c.cutOff) [detail, mono] = [String(c.details?.error || c.text || "").split("\n")[0].slice(0, 120) || (info.kind === "command" ? detail : ""), info.kind === "command" && !c.text && !c.details?.error];
+    if (o.outcome === "failed" && !c.timedOut && !c.cutOff) [detail, mono] = [(reasonOf(c) || String(c.text || "").split("\n")[0]).slice(0, 120) || (info.kind === "command" ? detail : ""), info.kind === "command" && !c.text && !c.details?.error];
     if (o.outcome === "refused" && c.details?.proposedEffect) detail = `would ${c.details.proposedEffect}`;
-    if (o.outcome === "refused" && c.details?.error) detail = c.details.error;
+    if (o.outcome === "refused" && c.details?.error) detail = reasonOf(c);
     if (o.outcome === "unavailable" && c.details?.warning) detail = c.details.warning;
     if (o.outcome === "unavailable" && c.details?.error) detail = String(c.details.message || c.details.error).split(/[.\n]/)[0];
     return { kind: info.kind, icon: w.icon || k.icon, verb, object, detail, mono, exit: o.outcome === "done" ? w.exit : "", outcome: o };
@@ -887,6 +922,8 @@
         }
         add("Objective", a.objective);
         add("Status", a.status);
+        add("What the gateway said", c.details?.error);
+        add("Next", c.details?.nextAction);
         break;
       case "media":
       case "look":
