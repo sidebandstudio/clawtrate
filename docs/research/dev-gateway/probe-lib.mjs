@@ -1,18 +1,55 @@
 // Probe helpers for the development gateway. Scratch-style research code.
 // Run from a folder where @openclaw/gateway-client@2026.10.6 is installed.
 //
-//   OPENCLAW_DEV_TOKEN=<token> node <scenario>.mjs
+//   OPENCLAW_DEV_RUN_DIR=<launcher RUN_DIR> \
+//   OPENCLAW_DEV_STATE=<launcher state folder> node <scenario>.mjs
 //
 // connect() pairs a device identity on loopback (auto-approved there) with the
 // scopes and caps asked for, records every event, and offers send() that waits
 // for a run's terminal chat event.
+//
+// It refuses any target that is not the launcher's probe gateway:
+//   - the endpoint is fixed to ws://127.0.0.1:19101 (an override must match);
+//   - the token is read from the launcher's run folder, which must also hold
+//     its gateway.pid and fake.pid;
+//   - the state folder must carry the launcher's marker file;
+//   - after connecting, the gateway must report version 2026.10.6 and every
+//     model listed for every configured agent must be the scripted fake.
+// A failed check closes the connection before the scenario can call anything.
 
 import { GatewayClient } from "@openclaw/gateway-client";
 import crypto from "node:crypto";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import path from "node:path";
 
-const URL_ = process.env.OPENCLAW_DEV_URL ?? "ws://127.0.0.1:19101";
-const TOKEN = process.env.OPENCLAW_DEV_TOKEN;
-if (!TOKEN) throw new Error("set OPENCLAW_DEV_TOKEN");
+const PROBE_URL = "ws://127.0.0.1:19101";
+const EXPECTED_VERSION = "2026.10.6";
+const FAKE_PROVIDER = "fake";
+const fail = (why) => {
+  throw new Error(`probe-lib refuses this target: ${why}`);
+};
+if (process.env.OPENCLAW_DEV_URL && process.env.OPENCLAW_DEV_URL !== PROBE_URL) fail(`only ${PROBE_URL} is allowed`);
+const RUN_DIR = process.env.OPENCLAW_DEV_RUN_DIR;
+const STATE = process.env.OPENCLAW_DEV_STATE;
+if (!RUN_DIR || !STATE) fail("set OPENCLAW_DEV_RUN_DIR and OPENCLAW_DEV_STATE to the launcher's folders");
+for (const f of ["token", "gateway.pid", "fake.pid"]) if (!existsSync(path.join(RUN_DIR, f))) fail(`launcher run folder has no ${f}`);
+const marker = path.join(STATE, ".clawtrate-dev-gateway");
+if (!existsSync(marker) || lstatSync(STATE).isSymbolicLink()) fail("state folder has no launcher marker");
+const URL_ = PROBE_URL;
+const TOKEN = readFileSync(path.join(RUN_DIR, "token"), "utf8").trim();
+
+/** Closes the client and rejects unless the gateway is the scripted probe. */
+async function verifyProbeTarget(client, hello) {
+  const version = hello?.server?.version;
+  if (version !== EXPECTED_VERSION) throw new Error(`gateway version ${version}, expected ${EXPECTED_VERSION}`);
+  const { agents = [] } = await client.request("agents.list", {}, { timeoutMs: 30_000 });
+  if (agents.length === 0) throw new Error("no agents listed");
+  for (const agent of agents) {
+    const { models = [] } = await client.request("models.list", { agentId: agent.id }, { timeoutMs: 30_000 });
+    const foreign = models.filter((m) => m.provider !== FAKE_PROVIDER).map((m) => `${m.provider}/${m.id}`);
+    if (models.length === 0 || foreign.length > 0) throw new Error(`agent ${agent.id} has non-fake models: ${foreign.join(", ") || "none listed"}`);
+  }
+}
 
 const identities = new Map();
 function identity(name) {
@@ -67,7 +104,17 @@ export function connect({ name = "probe", scopes = ["operator.read", "operator.w
         };
     const client = new GatewayClient({
       ...opts,
-      onHelloOk: (hello) => {
+      onHelloOk: async (hello) => {
+        if (!scopes.includes("operator.read") && !scopes.includes("operator.admin")) {
+          await client.stopAndWait();
+          return reject(new Error("probe-lib needs operator.read to verify the target"));
+        }
+        try {
+          await verifyProbeTarget(client, hello);
+        } catch (err) {
+          await client.stopAndWait().catch(() => {});
+          return reject(new Error(`probe-lib refuses this target: ${err.message}`));
+        }
         const call = (method, params = {}, timeoutMs = 60_000) => client.request(method, params, { timeoutMs });
         const waitFor = (pred, timeoutMs = 60_000) =>
           new Promise((res, rej) => {

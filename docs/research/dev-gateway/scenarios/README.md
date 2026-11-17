@@ -12,8 +12,20 @@ To run them, copy `../probe-lib.mjs` and the scenarios into a scratch folder
 where `@openclaw/gateway-client@2026.10.6` is installed, then:
 
 ```bash
-OPENCLAW_DEV_TOKEN="$(cat "$RUN_DIR/token")" node questions.mjs
+OPENCLAW_DEV_RUN_DIR="$RUN_DIR" \
+OPENCLAW_DEV_STATE="$HOME/.openclaw-<profile>" node questions.mjs
 ```
+
+`probe-lib.mjs` refuses to connect unless all of these hold:
+- the target is `ws://127.0.0.1:19101`;
+- the run folder holds the launcher's `token`, `gateway.pid` and
+  `fake.pid`;
+- the state folder carries the launcher's marker;
+- the gateway reports 2026.10.6;
+- every model of every agent is the scripted fake.
+
+Scenarios that answer approvals resolve only the request raised in their own
+session for the command they sent.
 
 | Script | Row 19 topic |
 | --- | --- |
@@ -28,6 +40,7 @@ OPENCLAW_DEV_TOKEN="$(cat "$RUN_DIR/token")" node questions.mjs
 | `metadata.mjs`, `search.mjs` | `users.prefs`, reactions, reply references, time fields, `sessions.search` |
 | `attachments.mjs` | image, file and frame ceilings |
 | `talk-selection.mjs` | Talk bot selection by session key |
+| `questions-expiry-abort-scope.mjs` | a read+write device's refused question calls and missing events; 30 s expiry; abort while asking |
 
 Row 20 scripts:
 
