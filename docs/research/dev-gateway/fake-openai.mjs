@@ -8,6 +8,7 @@
 //   user text "#tool <name> <json>" -> stream reasoning, then one tool call
 //   user text "#ask <sessionKey> <message>" -> sessions_send tool call
 //   user text "#slow <seconds> <text>" -> stream text slowly (abort, steer)
+//   user text "#say <text>"         -> reply with exactly <text> (e.g. NO_REPLY)
 //   anything else                   -> stream reasoning, then "Echo: <text>"
 //
 // Usage: node fake-openai.mjs [--port 19102] [--log /path/requests.jsonl]
@@ -46,7 +47,7 @@ const userIntent = (text) => {
     .filter((l) => l && !ENVELOPE.test(l))
     // The first turn of sessions.create keeps the timestamp on the text line.
     .map((l) => l.replace(/^\[[^\]]*\]\s*/, ""));
-  const directive = [...lines].reverse().find((l) => l.startsWith("#tool ") || l.startsWith("#ask "));
+  const directive = [...lines].reverse().find((l) => /^#(tool|ask|say|slow) /.test(l));
   return directive ?? lines.at(-1) ?? "";
 };
 
@@ -89,6 +90,8 @@ function plan(body) {
       },
     };
   }
+  const say = intent.match(/^#say\s+(.+)$/s);
+  if (say) return { text: say[1] };
   const slow = intent.match(/^#slow\s+(\d+)\s*(.*)$/s);
   if (slow) {
     // Stream for roughly <seconds>, for abort and steer tests.
