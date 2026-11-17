@@ -45,7 +45,7 @@ const expected = [
   "Opened energy.example.org",
   'Clicked "Add to basket"',
   "Clicked on the screen",
-  "Tapped on the phone",
+  "Looked at the phone",
   "Changed the Control UI",
   "Created routine Weekly cleanup",
   "Messaged Marlow",
@@ -98,6 +98,16 @@ check(
     ['Searched memory for "gutters"', "Partial"],
     ['Couldn\'t search memory for "loft insulation"', "Unavailable"],
     ['Couldn\'t search posts on X for', "Unavailable"],
+    ["Didn't tap on the phone", "Needs confirmation"],
+    ["Tap on the phone", "Performed"],
+    ["Didn't tap on the phone", "Target stale"],
+    ["Couldn't read from memory: missing.md", "Failed"],
+    ["Found no note 2026-01-01.md in memory", "Not found"],
+    ["Left backup-exclude.md unchanged", "No change"],
+    ["Wants to run mv", "Waiting for you"],
+    ["Didn't start a helper: Price check", "Not run"],
+    ["Found no routine Old reminder to remove", "Not found"],
+    ["Message on Telegram", "Replied"],
   ].every(([start, end], i) => notDone[i]?.startsWith(start) && notDone[i].endsWith(end)) && !notDone.some((l) => /^Made an image|^Ran routine|Sent$/.test(l) && !/^Made 2/.test(l) && !l.endsWith("Sent")),
   JSON.stringify(notDone),
 );
@@ -112,8 +122,37 @@ check("a non-zero exit code is plain text, not a failure", await q(p, () => { co
 const ops = await lines(p, "Real operations, with their own words");
 check(
   "M2 real operations: terminal, screen, phone, documents, a patch's files, goals, routines, speech",
-  ["Looked at shared terminals", "Typed into a terminal", "Changed the Control UI", "Looked at the phone", "Tapped on the phone", "Read 3 PDFs", "Looked at 2 images", "Edited 3 files", "Checked the goal", "Marked the goal complete", "Removed routine Old reminder", "Made a voice clip"].every((label, i) => ops[i]?.startsWith(label)) && !ops.some((l) => l.startsWith("Ran ")),
+  ["Looked at shared terminals", "Typed into a terminal", "Changed the Control UI", "Looked at the phone", "Didn't tap on the phone", "Read 3 PDFs", "Looked at 2 images", "Edited 3 files", "Checked the goal", "Marked the goal complete", "Removed routine Old reminder", "Proposed the next check in 30m", "Made a voice clip"].every((label, i) => ops[i]?.startsWith(label)) && !ops.some((l) => l.startsWith("Ran ")),
   JSON.stringify(ops),
+);
+check("M1 no line says a phone act happened unless the device's code is shown; nothing says Tapped", !(await q(p, () => document.body.innerText.includes("Tapped on the phone"))));
+check(
+  "M1 a phone act awaiting confirmation did nothing: Not run, with the target and the proposed effect in its readable view",
+  await q(p, () => { const c = [...box("Kinds opened").querySelectorAll(".action")].find((a) => a.dataset.kind === "phone"); const t = c.innerText; return c.dataset.status === "refused" && t.includes("Needs confirmation") && t.includes("make a purchase, payment, or subscription change") && t.includes("Pay now") && t.includes("Nothing was done."); }),
+);
+check(
+  "M1 the general rule: a payload's own status or code decides, for a tool the table does not list",
+  await q(p, () => {
+    const o = (details) => CT.outcomeOf({ id: "g", name: "someTool", args: {}, status: "done", text: "{}", details }).outcome;
+    return o(undefined) === "done" && o({ ok: true }) === "done" && o({ status: "completed" }) === "done" && o({ ok: false }) === "failed" && o({ error: "x" }) === "failed" && o({ status: "forbidden" }) === "refused" && o({ status: "not_found" }) === "notfound" && o({ status: "queued_later" }) === "made" && o({ code: "confirmation_required" }) === "refused";
+  }),
+);
+check(
+  "M2 the computer's effect is read from details.result, and its readable view has an Effect row",
+  await q(p, () => {
+    const o = (d) => CT.outcomeOf({ id: "c", name: "computer", args: { action: "left_click" }, status: "done", text: "", details: d }).outcome;
+    const opened = [...box("Kinds opened").querySelectorAll(".action")].find((a) => a.dataset.kind === "computer").innerText;
+    return o({ result: { ok: true, effect: "confirmed" } }) === "done" && o({ result: { ok: true, effect: "suspected_noop" }, followUpObservation: {} }) === "unconfirmed" && o({ result: { ok: true } }) === "made" && o({ result: { ok: false } }) === "failed" && o({ effect: "confirmed" }) === "made" && opened.includes("Effect") && opened.includes("no change was seen");
+  }),
+);
+check(
+  "M2 conversations_turn takes timeoutSeconds; view_image takes path and paths only; a routine's removal and next check are read from their own results",
+  await q(p, () => {
+    const turn = S.calls.turn.args;
+    const img = CT.filesOf({ name: "view_image", args: { url: "https://x.example/a.png", urls: ["u"] } });
+    const key = (action) => CT.kindOf({ id: "r" + action, name: "automations", args: { action }, status: "done" }).key;
+    return turn.timeoutSeconds === 120 && !("timeoutMs" in turn) && img.length === 0 && CT.filesOf(S.calls.images).length === 2 && CT.outcomeOf(S.calls.routineRemoveNone).outcome === "notfound" && CT.outcomeOf(S.calls.routineRemove).outcome === "done" && key("next_check").startsWith("once:") && key("list") !== key("runs") && key("list") === key("list");
+  }),
 );
 check("M2 a plan's steps are completed, in progress or pending", await q(p, () => { const items = [...box("Kinds opened").querySelectorAll(".action-plan li")]; return items.map((i) => i.dataset.status).join(",") === "completed,completed,in_progress,pending" && items[0].querySelector(".glyph[data-state='check']") && items[2].querySelector(".glyph[data-state='working']"); }));
 check("M2 a routine's schedule names its time zone", (await lines(p, "Every kind, done")).find((l) => l.startsWith("Created routine")).includes("Mondays at 9:00 AM, Europe/London"));
@@ -158,6 +197,35 @@ check(
 );
 const counting = await lines(p, "Counting files and actions", ":scope > .action");
 check("M3 files are counted once, and the actions too when there are more", counting[0].startsWith("Read 2 files · 3 reads") && counting[1].startsWith("Edited 2 files · 3 edits"), JSON.stringify(counting));
+const short = await lines(p, "Outcomes short of Done in a fold", ":scope > .action");
+const shortSpoken = await q(p, () => [...box("Outcomes short of Done in a fold").querySelectorAll(":scope > .action")].map((c) => c.querySelector(":scope > summary").getAttribute("aria-label")));
+check(
+  "M3 two background admissions fold as Started, never Made; their accessible state says started",
+  short[0].startsWith("Started making images · 2 times") && short[0].endsWith("2 started") && !/^Made/.test(short[0]) && shortSpoken[0].endsWith("2 started") && !shortSpoken[0].endsWith("done"),
+  JSON.stringify([short[0], shortSpoken[0]]),
+);
+check("M3 two partial searches keep Partial and no duration", short[1].startsWith("Searched memory 2 times") && short[1].endsWith("2 partial") && !/\d+(\.\d)?s$/.test(short[1]), short[1]);
+check("M3 a mix of outcomes is neutral, with the counts of what is short of Done", short[2].startsWith("Image generation · 2 calls") && short[2].endsWith("1 started") && short[3].startsWith("Computer actions · 2 calls") && short[3].endsWith("1 not confirmed"), JSON.stringify(short.slice(2)));
+const ops2 = await lines(p, "Each operation folds under its own key and plural", ":scope > .action");
+check("M3 listing image models folds as a look-up, never as Made", ops2[0].startsWith("Looked at image models · 2 times") && !ops2[0].startsWith("Made"), ops2[0]);
+const distinct = await lines(p, "Counting distinct documents and notes", ":scope > .action");
+check("M3 counts name distinct objects, and more calls are said as times", distinct[0].startsWith("Read 3 PDFs · 2 times") && distinct[1].startsWith("Saved 1 note to memory · 2 times"), JSON.stringify(distinct));
+check(
+  "M3 routine look-ups fold by tool and action, and next_check never folds",
+  await q(p, () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const feed = CT.feed({ insert: (html) => (host.insertAdjacentHTML("beforeend", html), host.lastElementChild), instant: () => true });
+    feed.start({ ...S.calls.routineList, id: "l1" });
+    feed.start({ ...S.calls.routineList, id: "l2" });
+    feed.start({ ...S.calls.routineRuns, id: "r1" });
+    feed.start({ ...S.calls.nextCheck, id: "n1" });
+    feed.start({ ...S.calls.nextCheck, id: "n2" });
+    const shape = [...host.children].map((c) => c.dataset.fold || "1").join(",");
+    host.remove();
+    return shape === "2,1,1,1";
+  }),
+);
 check("a fold with an action running names it", (await lines(p, "One action running", ":scope > .action"))[0].includes("reading"));
 const failed = await q(p, () => { const c = box("A failure inside a fold").querySelector(".action"); return [c.open, c.querySelector(".action-detail").textContent, c.querySelector(".action-state").textContent, c.querySelector(".action-detail").dataset.tone]; });
 check("F-092 a failure inside a closed fold is named on its line", !failed[0] && failed[1].includes("couldn't read backup-2026-11-08.log") && failed[2].includes("1 failed") && failed[3] === "danger", JSON.stringify(failed));
@@ -233,6 +301,14 @@ const tools = await q(p, async () => {
   return seen;
 });
 check("M5 each joined call's Raw opens to that call: its own tool and its own id", tools.length === 6 && tools.every(([shown, , own]) => shown && own) && new Set(tools.map(([, t]) => t)).size === 5, JSON.stringify(tools));
+check(
+  "M4 a read whose last page holds a cut item says part of the reply only, never that the end was read",
+  await q(p, () => { const t = box("A read whose last page holds a cut item").innerText; return t.includes("Part of the reply only") && !t.includes("Read to the end") && !t.includes("First page only"); }),
+);
+check(
+  "M4 Read to the end only when there are no more pages and no item is cut",
+  await q(p, () => { const t = box("One thread, one card: every call on it, each with its own Raw").innerText; return t.includes("Read to the end") && !t.includes("Part of the reply only"); }),
+);
 const threadStates = await lines(p, "The thread's state, from its calls", ":scope > .messaged");
 check(
   "M5 the thread's state: an open call, then what T3 Code reported, never changed by a failed read",
@@ -288,20 +364,38 @@ check(
   t3end.items.length === 6 && t3end.lines.join(",") === "send,read,read,interrupt" && t3end.failedItem === "Failed" && t3end.state.endsWith("Stop requested") && t3end.runLine.includes("7 actions"),
   JSON.stringify(t3end),
 );
+const back = await q(p, async () => {
+  const host = document.createElement("div");
+  document.querySelector("#transcript-inner").append(host);
+  const feed = CT.feed({ insert: (html) => (host.insertAdjacentHTML("beforeend", html), host.lastElementChild) });
+  feed.start({ id: "o1", name: "t3code__t3_thread_send", args: { threadId: "mcp:x", message: "Also add a test." }, nameMap: { server: "t3code", tool: "t3_thread_send" } });
+  const card = host.firstElementChild;
+  const was = card.classList.contains("messaged");
+  card.open = true;
+  card.querySelector('[aria-label="Raw for this call"]').click();
+  card.querySelector('[aria-label="Copy arguments"]').focus();
+  const before = card.offsetTop;
+  feed.update("o1", { status: "done", mcp: { server: "t3code", tool: "create_issue" }, details: { mcpServer: "t3code", mcpTool: "create_issue" }, text: "ok" });
+  const now = host.firstElementChild;
+  const out = {
+    was,
+    isCard: now.classList.contains("action"),
+    words: line(now),
+    open: now.open,
+    rawTab: now.querySelector('[data-view-button="raw"]').getAttribute("aria-selected"),
+    rawShown: !now.querySelector('[data-view="raw"]').hidden,
+    focus: document.activeElement.getAttribute("aria-label"),
+    focusInside: now.contains(document.activeElement),
+    samePlace: now.offsetTop === before,
+    count: host.children.length,
+  };
+  host.remove();
+  return out;
+});
 check(
-  "M5 a call the name mapping called T3 Code's, whose result names another tool, becomes that tool's card in place",
-  await q(p, () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    const feed = CT.feed({ insert: (html) => (host.insertAdjacentHTML("beforeend", html), host.lastElementChild), instant: () => true });
-    feed.start({ id: "o1", name: "t3code__t3_thread_send", args: { threadId: "mcp:x" }, nameMap: { server: "t3code", tool: "t3_thread_send" } });
-    const was = host.firstElementChild.classList.contains("messaged");
-    feed.update("o1", { status: "done", mcp: { server: "t3code", tool: "create_issue" }, details: { mcpServer: "t3code", mcpTool: "create_issue" }, text: "ok" });
-    const now = host.firstElementChild;
-    const ok = was && now.classList.contains("action") && line(now).startsWith("Used t3code") && host.children.length === 1;
-    host.remove();
-    return ok;
-  }),
+  "M5 a mapped T3 Code line whose result names another tool becomes that tool's card in place, open, on its Raw tab, with focus on the same copy button",
+  back.was && back.isCard && back.words.startsWith("Used t3code") && back.open && back.rawTab === "true" && back.rawShown && back.focus === "Copy arguments" && back.focusInside && back.samePlace && back.count === 1,
+  JSON.stringify(back),
 );
 await p.close();
 
