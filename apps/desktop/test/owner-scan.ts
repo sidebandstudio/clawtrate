@@ -1,9 +1,11 @@
-// Finds, in source, every collection that can outlive the call that made it:
-// a `new Map`, `new Set`, `new WeakMap` or `new WeakSet`, or an array literal,
-// that is kept in a class field, at module level, or in a variable a nested
-// function captures (a closure). Collections made and dropped within one call
-// are not reported. Strict by design: a false alarm costs a line in the
-// allowlist of `owner-sources.test.ts`.
+// Finds, in source, collections that can outlive the call that made it: a
+// `new Map`, `new Set`, `new WeakMap` or `new WeakSet`, or an array literal,
+// written directly as the value of a class field, a module-level variable, or
+// a variable a later-running function captures (a closure). Collections made
+// and dropped within one call are not reported. It does not see a collection
+// inside an object or array literal kept that way, nor one a factory call
+// makes (`Array.from`, `Object.fromEntries`). Strict within that: a false
+// alarm costs a line in the allowlist of `owner-sources.test.ts`.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
