@@ -107,7 +107,7 @@ pnpm fixture   # builds the interface on fixed sample data and serves it on 127.
 pnpm visual    # screenshot, legibility and behaviour tests against the fixture mode
 ```
 
-The fixture mode is the real interface fed a fixed state through the same bridge the hosts use. It needs no gateway and makes no request of its own. Pick what it shows from the address: `?scene=` with `main`, `connect`, `connect-error`, `connecting`, `pairing`, `reconnecting`, `offline`, `catching-up`, `synced`, `sync-failed`, `refresh-failed`, `load-failed`, `loading`, `discovery-error`, `discovering`, `empty`, `partial` or `zero-tasks`; `&bot=otto&task=agent:otto:disk-space` to open a task; `&panel=open`; `&theme=dark`. It is a separate build, never part of the desktop app or the web preview.
+The fixture mode is the real interface fed a fixed state through the same bridge the hosts use. It needs no gateway and makes no request of its own. Pick what it shows from the address: `?scene=` with `main`, `connect`, `connect-error`, `connecting`, `pairing`, `reconnecting`, `reconnecting-unloaded`, `offline`, `catching-up`, `synced`, `sync-failed`, `refresh-failed`, `load-failed`, `loading`, `discovery-error`, `discovering`, `empty`, `partial` or `zero-tasks`; `&bot=otto&task=agent:otto:disk-space` to open a task; `&panel=open`; `&theme=dark`. It is a separate build, never part of the desktop app or the web preview.
 
 `pnpm visual` compares screenshots with the baselines in `visual/baselines/`, which are taken on macOS and only valid there. After an intended change, `pnpm visual:update` rewrites them; look at every changed image before committing it.
 

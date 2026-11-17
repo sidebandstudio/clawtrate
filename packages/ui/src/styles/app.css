@@ -356,7 +356,10 @@ textarea {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  height: 12px;
+  /* The same band the conversation's floating controls sit in, so the two panes
+     share one top edge. On a read-only connection it holds no controls (no
+     search, no "+"), and the design keeps the product's name out of the rail. */
+  height: var(--header-height);
   padding: 0 12px;
   -webkit-app-region: drag;
 }
@@ -1221,6 +1224,9 @@ textarea {
 }
 
 .md code {
+  /* A span that wraps keeps its padding and corners on every line. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
   padding: 1px 5px;
   border-radius: 6px;
   background: var(--bg-code);
@@ -2006,10 +2012,6 @@ textarea {
     display: grid;
   }
 
-  .rail-top {
-    height: var(--header-height);
-  }
-
   .rail-footer {
     display: none;
   }
@@ -2127,5 +2129,5 @@ textarea {
 
 /* macOS desktop: leave room for the window controls in the hidden title bar. */
 [data-host="desktop"][data-platform="darwin"] .rail-top {
-  height: 40px;
+  padding-left: 84px;
 }

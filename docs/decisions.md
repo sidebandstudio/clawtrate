@@ -130,7 +130,7 @@ The shell follows `docs/design/visual-language.md`, built in the order of its se
 
 Where the build departs from the specification, and why:
 
-- **Task rows show no time.** The specification gives a task row its title and at most one mark, with the time in the accessible description; the prototype's screenshots show a time on each row. The specification was followed, so long titles have the row's full width. `F-425` asks for the time in the row; it is in the row's description and in Details, not visible.
+- **Task rows show no time.** The prototype's screenshots show a time on each task row, and `F-425` asks for one, but the corrected specification on `main` says the opposite: "With no mark, the title has the whole row." and "The time of last activity is in the row's accessible description." (`docs/design/visual-language.md`, section 7, "Tasks under a bot"). The specification was followed; `F-425` stays partly met until the design gives the row a place for the time.
 - **The title pill opens Work and does not close it**, as the specification says; the panel button toggles. Its name always ends "Show details."
 - **A failed discovery in the strip** reads "Could not load this gateway's bots and tasks", with the gateway's message as the explanation after the dot. The gateway's message alone can be long, and the first part of the strip never shortens.
 - **A task with no messages** says "Messages between you and <Bot> in this task will appear here." The specification's "Say what you need" invites typing, which a read-only connection cannot do.
@@ -138,8 +138,9 @@ Where the build departs from the specification, and why:
 - **A connection error** is titled "Could not connect"; the error's code stays visible, small, under the sentence, for support.
 - **System messages** are centred event lines outside `.turn`, as before, so `transcript-turn` still counts user and assistant items only.
 - **The gateway's name** is its address (host and port): the gateway does not report a name.
+- **A task with nothing saved, while the gateway is away** (after a reload, for example) shows "Waiting for the gateway" instead of loading skeletons that could never finish.
 - **The task-title tooltip** shows on any focus, not only keyboard focus, so a test can focus a row and see it.
-- **Pins, sections, search, "+" and New task** are not rendered (section 14 says so). The `.pin*` and `.rail-section` rules, the composer's field and send button and the extra state marks were not brought over, and the rail's top is a 12 px drag band (40 px in the macOS app).
+- **Pins, sections, search, "+" and New task** are not rendered (section 14 says so). The `.pin*` and `.rail-section` rules, the composer's field and send button and the extra state marks were not brought over, On a read-only connection the rail's top holds no controls. The specification allows only a 12 px drag band there and keeps the product's mark and name out of the rail ("There is no product name in the rail and no heading above the bots."). The band is the full header height instead (56 px, 60 on touch), the same band the conversation's floating controls sit in, so both panes share one top edge and the list starts where it will sit once search and "+" exist; on macOS it also clears the window controls.
 
 ## Fixture mode and visual tests
 

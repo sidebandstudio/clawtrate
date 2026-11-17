@@ -167,6 +167,7 @@ export function Shell({
           }
           refreshNote={phase !== "dropped" && refreshFailed(transcript)}
           readOnly={!canWrite(state.connection)}
+          online={state.connection.status === "connected"}
           toggleRef={toggleRef}
           inert={drawerOpen}
         />

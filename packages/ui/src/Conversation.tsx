@@ -357,6 +357,7 @@ export function Conversation({
   strip,
   refreshNote,
   readOnly,
+  online,
   inert = false,
 }: {
   task: Task | null;
@@ -376,6 +377,8 @@ export function Conversation({
   /** The open task failed to refresh, and that is the conversation's news, not the strip's. */
   refreshNote: boolean;
   readOnly: boolean;
+  /** The gateway is connected, so a task without a transcript can load. */
+  online: boolean;
   /** Set while the Work drawer covers the conversation, so focus cannot land behind it. */
   inert?: boolean;
 }) {
@@ -413,6 +416,15 @@ export function Conversation({
           Choose a task
         </button>
       </EmptyState>
+    );
+  } else if (!online && (!transcript || itemCount === 0) && !transcript?.live) {
+    // Nothing was saved for this task, and nothing can load until the gateway is back.
+    body = (
+      <EmptyState
+        bot={bot}
+        title="Waiting for the gateway"
+        body="This conversation loads when the connection returns."
+      />
     );
   } else if (!transcript || (transcript.status === "loading" && itemCount === 0)) {
     body = (

@@ -29,6 +29,7 @@ export const SCENES = [
   "connecting",
   "pairing",
   "reconnecting",
+  "reconnecting-unloaded",
   "offline",
   "catching-up",
   "synced",
@@ -160,6 +161,11 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: pairing(), steps: [] };
     case "reconnecting":
       return { initial: reconnecting(base), steps: [] };
+    case "reconnecting-unloaded": {
+      const transcripts = { ...base.transcripts };
+      delete transcripts[OPEN_TASK];
+      return { initial: reconnecting({ ...base, transcripts }), steps: [] };
+    }
     case "offline":
       return {
         initial: withConnection(base, {

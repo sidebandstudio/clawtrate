@@ -244,6 +244,16 @@ test.describe("the status strip", () => {
     expect(await page.locator(".rail").boundingBox()).toEqual(before);
   });
 
+  test("a task with nothing saved waits for the gateway instead of loading forever", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openFixture(page, `scene=reconnecting-unloaded&${OTTO_DISK}`, "light");
+    await expect(page.getByTestId("status-strip")).toContainText(/Reconnecting/);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Waiting for the gateway");
+    await expect(page.locator(".skeleton")).toHaveCount(0);
+  });
+
   test("a task that failed to sync is the strip's news while the footer stays connected", async ({
     page,
   }) => {
