@@ -1854,10 +1854,13 @@ function toolAnchor(toolCallId: string): string {
  * is the nearest tool call before it (`t.<toolCallId>`), `c` for a run whose
  * start a history window does not show, or null for the run's start; `n`
  * counts the reasoning blocks since that anchor. The live stream and history
- * compute it alike, so nothing has to be matched.
+ * compute it alike, so nothing has to be matched. The run id and the anchor
+ * are percent-encoded, so neither can hold the `:` that separates the parts
+ * and no two places share an id, whatever characters the gateway's ids use;
+ * ordinary ids (letters, digits, `-`, `_`, `.`) are unchanged by it.
  */
 export function reasoningStepId(runId: string, anchor: string | null, n: number): string {
-  return `reasoning:${runId}:${anchor ?? "s"}:${n}`;
+  return `reasoning:${encodeURIComponent(runId)}:${anchor === null ? "s" : encodeURIComponent(anchor)}:${n}`;
 }
 
 function applyAssistant(run: Run, data: RawRecord, ts: number, ctx: EngineContext): Run {
