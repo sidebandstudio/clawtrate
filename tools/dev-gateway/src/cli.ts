@@ -605,14 +605,22 @@ async function stopProcess(target: StopTarget, identify: Identify): Promise<bool
   const children = childProcesses(target.pid, identify);
   if (state() !== "alive") return state() === "dead";
   process.kill(target.pid, "SIGTERM");
-  const deadline = Date.now() + 15_000;
-  while (state() === "alive" && Date.now() < deadline) await sleep(200);
+  // A lookup can fail for a moment while a process exits, so the wait goes on
+  // through "unknown"; only a process proven alive is ever killed.
+  const settled = async (ms: number) => {
+    const deadline = Date.now() + ms;
+    let now = state();
+    while (now !== "dead" && Date.now() < deadline) {
+      await sleep(200);
+      now = state();
+    }
+    return now;
+  };
   let forced = false;
-  if (state() === "alive") {
+  if ((await settled(15_000)) === "alive") {
     process.kill(target.pid, "SIGKILL");
     forced = true;
-    const killDeadline = Date.now() + 5_000;
-    while (state() === "alive" && Date.now() < killDeadline) await sleep(100);
+    await settled(5_000);
   }
   if (state() !== "dead") {
     console.log(

@@ -16,6 +16,7 @@ import {
   processIdentity,
   processState,
   readMarker,
+  type Identify,
 } from "../src/state-guard.ts";
 import {
   CHECKOUT,
@@ -99,6 +100,37 @@ describe("a process whose identity cannot be read is unknown, never exited (B2)"
       return zombie > 1 && processIdentity(zombie).state === "exited";
     });
     expect(processIdentity(zombie)).toEqual({ state: "exited", how: "zombie" });
+  });
+
+  it("reads the state macOS ps shows for a process that is exiting", () => {
+    const live = liveProcess();
+    brokenPs("echo '?E   Mon Nov 16 21:00:00 2026    '");
+    expect(processIdentity(live.pid)).toEqual({
+      state: "alive",
+      identity: "Mon Nov 16 21:00:00 2026",
+    });
+  });
+
+  it("stop waits through a lookup that briefly fails while the process exits", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const gateway = liveProcess();
+    seedInstance(home, "alpha", { runRoot, gateway });
+    // Once the process has exited, the next three lookups fail, as they can mid-exit.
+    let failing = -1;
+    const identify: Identify = (pid) => {
+      const real = processIdentity(pid);
+      if (pid !== gateway.pid || real.state === "alive") return real;
+      if (failing === -1) failing = 3;
+      if (failing > 0) {
+        failing -= 1;
+        return { state: "unknown", reason: "ps output unreadable" };
+      }
+      return real;
+    };
+    await stop(testInstance(home, runRoot, "alpha", { identify }));
+    expect(failing).toBe(0);
+    expect(processState(gateway.pid, gateway.identity, processIdentity)).toBe("dead");
   });
 
   it("is unknown when ps does not answer in time, while the process lives", () => {

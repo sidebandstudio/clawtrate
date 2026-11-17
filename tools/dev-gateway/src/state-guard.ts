@@ -173,7 +173,8 @@ export const processIdentity: Identify = (pid) => {
   if (result.status !== 0) {
     return failed(`ps for pid ${pid} exited with ${result.status ?? result.signal}`);
   }
-  const match = /^\s*([A-Za-z<>+|]+)\s+(\S.*\S)\s*$/.exec(result.stdout);
+  // The state field varies by system; macOS shows `?E` for a process that is exiting.
+  const match = /^\s*(\S+)\s+(\S.*\S)\s*$/.exec(result.stdout);
   if (!match) return failed(`could not read ps output for pid ${pid}`);
   // A zombie has exited; only its parent has not collected it yet.
   if (match[1]!.startsWith("Z")) return { state: "exited", how: "zombie" };

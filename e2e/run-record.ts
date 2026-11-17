@@ -103,7 +103,8 @@ export function cleanUp(
     if (verdict.state === "alive") {
       process.kill(pid, "SIGTERM");
       const deadline = Date.now() + hostStopMs;
-      while (verdict.state === "alive" && Date.now() < deadline) {
+      // Through "unknown" too: a lookup can fail for a moment while a process exits.
+      while (verdict.state !== "dead" && Date.now() < deadline) {
         sleepSync(100);
         verdict = processVerdict(pid, identity, identify);
       }
