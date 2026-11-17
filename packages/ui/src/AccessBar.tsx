@@ -10,9 +10,10 @@ import { CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
  * section 3). One request covers sending, stopping and answering; it is made
  * only when the person chooses "Request access", never silently, and never
  * for admin. The command and the request id are the host's. The engine waits
- * on the gateway's answer continuously, so the bar offers no "Check now" and
- * no countdown; nor "Cancel request", since nothing can withdraw a request
- * the gateway already holds.
+ * on the gateway's answer continuously (`device.scopes.waitUpgrade`), so the
+ * bar says it updates by itself and offers no "Check now" and no countdown;
+ * nor "Cancel request", since the gateway has no way to withdraw a request
+ * it holds.
  */
 export function AccessBar({
   bot,
@@ -133,6 +134,12 @@ export function AccessBar({
           </div>
           {pending && upgrade.approveCommand && (
             <CommandLine command={upgrade.approveCommand} label="Copy approve command" />
+          )}
+          {pending && (
+            <p className="access-wait" data-testid="access-wait">
+              This changes by itself as soon as the owner approves or denies the request, or it
+              expires.
+            </p>
           )}
           {pending && upgrade.requestId && (
             <div className="access-id">
