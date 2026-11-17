@@ -164,8 +164,27 @@
     );
   }
 
+  // Control this device may still hold, out of sight: after leaving with the release
+  // unconfirmed, or after a drop. It is shown until a confirmation or an end is observed.
+  function heldLine(b) {
+    const name = b.name;
+    if (C.full) return "";
+    if (C.outOfSight && ["releasing", "unconfirmed"].includes(C.control))
+      return (
+        `<p class="files-alert computer-held" role="alert">This device may still have control of ${name}'s browser. Giving it back wasn't confirmed; it ends by itself within about 20 seconds.` +
+        `<button type="button" class="button" data-size="sm" data-cmp="release">Give it back</button></p>`
+      );
+    if (C.control === "maybeheld")
+      return `<p class="files-alert computer-held" role="alert">The connection dropped. Control of ${name}'s browser may remain with this device until it expires.</p>`;
+    if (C.control === "checking") return `<p class="files-alert computer-held" data-tone="quiet" role="status">${glyph("working")}Checking ${name}'s question and browser…</p>`;
+    if (C.control === "ended" && !viewing())
+      return `<p class="files-alert computer-held" data-tone="quiet" role="status">Your control ended.${C.endCause ? ` ${C.endCause}` : ""}</p>`;
+    return "";
+  }
+
   function banner(b) {
     if (!C.plugin || !C.configured || !C.used || !C.open || !C.question || readOnly() || C.stopped) return "";
+    if (["maybeheld", "checking", "releasing", "unconfirmed"].includes(C.control)) return "";
     const waiting = C.released ? `${b.name} is still waiting for you` : `${b.name} is waiting for you`;
     return (
       `<div class="computer-banner" role="region" aria-label="${waiting}">${glyph("waiting")}<div><strong>${waiting}</strong>` +
@@ -274,7 +293,7 @@
       : `<div class="work-empty"><span class="empty-mark">${icon("screen")}</span><h4>No screen to show</h4><p>When ${b.name} uses its browser, you can watch it here.</p></div>`;
     el.innerHTML =
       `<div class="computer">` +
-      (isJ ? banner(b) + stuckLine(b) : "") +
+      (isJ ? heldLine(b) + banner(b) + stuckLine(b) : "") +
       section("Screen", screen) +
       section("Machine", machine(b)) +
       section("Recent actions", actions(b, t)) +
@@ -331,7 +350,11 @@
   // abandoned, and the view's number moves on so late answers are dropped.
   function endView(to = "idle") {
     if (C.control === "draining") abandonTake();
-    if (C.control === "granted" || C.control === "uncertain") giveBack({ quiet: true });
+    if (C.control === "granted") giveBack({ leaving: true });
+    if (["releasing", "unconfirmed"].includes(C.control)) {
+      C.outOfSight = true; // the frames go now; the lease stops being renewed and expires by itself
+      C.renewing = false;
+    }
     C.viewSession++;
     C.view = to;
     if (C.full) closeFull(false);
@@ -366,9 +389,15 @@
     if (C.control === "draining") return bar("", `${glyph("working")}<span>Waiting for ${name} to finish what it's doing in the browser…</span><span class="spacer"></span>${btn("Cancel", "cancel-take")}`);
     if (C.control === "busy") return bar("", `<span>${name} is still acting in this browser. Try again in a moment.</span><span class="spacer"></span>${btn("Try again", "take")}`, "alert");
     if (C.control === "conflict") return bar("", `<span>Someone on another device has control of ${name}'s browser.</span>`);
-    if (C.control === "expired") return bar("", `<span>Your control ended. The gateway stopped hearing from this device.</span><span class="spacer"></span>${btn("Take control", "take")}`, "alert");
-    if (C.control === "releasing") return bar("", `${glyph("working")}<span>Giving control back…</span>`);
-    if (C.control === "uncertain") return bar("", `<span>No answer from the gateway. You may still have control.</span><span class="spacer"></span>${btn("Check again", "check-release")}`, "alert");
+    const why = C.dropped ? `<span class="control-gone">${C.dropped}</span>` : "";
+    if (C.control === "ended") return bar("", `<span>Your control ended.${C.endCause ? ` ${C.endCause}` : ""}</span>${why}<span class="spacer"></span>${btn("Take control", "take")}`, "alert");
+    if (C.control === "releasing") return bar("", `${glyph("working")}<span>Giving control back…</span>${why}`);
+    if (C.control === "unconfirmed")
+      return bar(
+        "unconfirmed",
+        `<span>Giving control back wasn't confirmed. This device may still have control of ${name}'s browser.</span>${why}<span class="spacer"></span>${btn("Try again", "release")}${btn("Check", "check-release")}`,
+        "alert",
+      );
     if (C.control === "answering") return bar("", `${glyph("working")}<span>Sending your answer…</span>`);
     if (C.outcome) return bar("", `<span>${C.outcome}</span>${C.outcomeAction ? `<span class="spacer"></span>${btn("Show the question", "show-question")}` : ""}`, "status");
     if (C.control !== "granted") return "";
@@ -378,7 +407,7 @@
     const gone = C.questionGone ? `<span class="control-gone">${C.questionGone}</span>` : "";
     return (
       bar("control", `${icon("hand")}<strong>You have control</strong>${gone}<span class="spacer"></span>${answers}${btn("Give back control", "release", C.question ? "quiet" : "primary")}`) +
-      (C.releaseFailed ? `<p class="control-note" role="alert">Couldn't give control back. You still have control. ${CT.linkButton("Try again", { attrs: 'data-cmp="release"' })}</p>` : "") +
+      (C.notice ? `<p class="control-note" role="status">${C.notice}</p>` : "") +
       `<p class="control-note" id="control-note">Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${name}'s browser tool can't act here, in any of ${name}'s tasks. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p>`
     );
   }
@@ -425,7 +454,7 @@
   // Until the gateway confirms the release, the lease may still be held: the bar
   // never says "Watching" or offers Take control while control is asked for,
   // held, being given back, or uncertain.
-  const holding = () => ["draining", "granted", "releasing", "uncertain"].includes(C.control);
+  const holding = () => ["draining", "granted", "releasing", "unconfirmed"].includes(C.control);
 
   // The phone's full view (work-pane.md, section 18, "On the phone"): the page
   // zooms and pans on the device; in control it opens at the page's own size.
@@ -447,7 +476,7 @@
     }
     const width = levels[C.zoom];
     const dock =
-      control || C.control === "draining" || C.control === "releasing" || C.control === "uncertain" || C.control === "answering" || C.outcome || ["busy", "conflict", "expired"].includes(C.control)
+      control || ["draining", "releasing", "unconfirmed", "answering", "busy", "conflict", "ended"].includes(C.control) || C.outcome
         ? controlBar(b)
         : readOnly()
           ? ""
@@ -533,56 +562,97 @@
     ($('[data-cmp="answer"]') || $('[data-cmp="answer-in-chat"]') || $('[data-cmp="release"]') || $('[data-cmp="take"]'))?.focus();
   }
 
-  // Handing back, in order: control first, confirmed; then the answer.
-  function giveBack({ quiet = false, then } = {}) {
+  // Handing back, in order (work-pane.md, section 18): control first; an answer
+  // queued behind it goes only on the release call's own success result (or a
+  // released event with this lease's generation). The whole sequence has a
+  // number, and a lost connection retires it.
+  let sequence = 0;
+  function giveBack({ leaving = false, queued = null } = {}) {
+    const my = ++sequence;
     C.control = "releasing";
-    C.releaseFailed = false;
-    if (!quiet) rerenderComputer();
-    const outcome = mode === "releasefail" && !C.retried ? "refused" : mode === "releaseunknown" && !C.retried ? "unknown" : "ok";
-    const finish = () => {
-      if (outcome === "refused") {
-        C.control = "granted";
-        C.releaseFailed = true;
-      } else if (outcome === "unknown") C.control = "uncertain";
-      else {
-        C.control = "none";
-        C.released = C.question;
-        eventLine(`You gave control back · 3:14 PM`);
-        if (!quiet) CT.announce("Control given back to Juniper");
+    C.queued = queued;
+    C.dropped = "";
+    C.notice = "";
+    C.outcome = "";
+    if (!leaving) rerenderComputer();
+    // The fixture's gateway: refused, no answer, or success.
+    const outcome = mode === "releasefail" && !C.retried ? "refused" : mode === "releaseunknown" && !C.retried ? "noanswer" : "ok";
+    setTimeout(() => releaseResult(my, outcome), 400);
+  }
+  function releaseResult(my, outcome) {
+    if (my !== sequence) return; // retired: nothing is assumed, nothing queued is sent
+    if (outcome !== "ok") {
+      // A refusal or a missing answer is not proof of ownership: unconfirmed, input stopped.
+      C.control = "unconfirmed";
+      if (C.queued) C.dropped = "Your answer wasn't sent. Answer in the chat once control is given back.";
+      C.queued = null;
+      rerenderComputer();
+      if (!C.outOfSight) $('[data-cmp="check-release"]')?.focus();
+      return;
+    }
+    // Confirmed by the device's own release call.
+    C.control = "none";
+    C.outOfSight = false;
+    C.released = C.question;
+    eventLine(`You gave control back · 3:14 PM`);
+    CT.announce("Control given back to Juniper");
+    const queued = C.queued;
+    C.queued = null;
+    if (C.dropped) {
+      C.outcome = C.dropped;
+      C.dropped = "";
+    }
+    if (queued?.chat) {
+      closeFull(false);
+      rerenderComputer();
+      const card = $("#q-library");
+      if (card) W.reveal(card, card);
+      return;
+    }
+    if (queued && "i" in queued) return sendAnswer(my, queued.i);
+    rerenderComputer();
+    ($('[data-cmp="take"]', $(".screen-view") || document) || $('[data-cmp="close-full"]'))?.focus();
+  }
+  function sendAnswer(my, i) {
+    if (!C.question) return rerenderComputer(); // the question closed meanwhile: nothing is sent
+    C.control = "answering";
+    rerenderComputer();
+    setTimeout(() => {
+      if (my !== sequence) return;
+      C.control = "none";
+      if (!C.question) {
+        C.outcome = C.closedWhy || "Juniper's question was already answered on another device.";
+      } else if (mode === "answerfail") {
+        C.outcome = "Couldn't send your answer. Control is back with Juniper; answer in the chat.";
+        C.outcomeAction = true;
+      } else {
+        const option = $$(".option", $("#q-library") || document)[i];
+        C.question = false;
+        option?.click(); // the question card answers as it always does
+        C.outcome = "Answer sent. Juniper can carry on.";
+        CT.announce("Answer sent, and control given back to Juniper");
       }
-      if (!quiet) rerenderComputer();
-      if (outcome === "ok" && then) return then(); // the next step owns focus
-      if (!quiet) ($('[data-cmp="check-release"]') || $('[data-cmp="release"]') || $('[data-cmp="take"]', $(".screen-view") || document) || $('[data-cmp="close-full"]'))?.focus();
-    };
-    if (quiet) finish();
-    else setTimeout(finish, 400);
+      rerenderComputer();
+      $('[data-cmp="close-full"]')?.focus();
+    }, 400);
   }
   function release() {
-    C.retried = C.releaseFailed || C.control === "uncertain";
-    giveBack();
+    C.retried = C.control === "unconfirmed" || C.outOfSight;
+    giveBack({ leaving: !viewing() });
   }
   function answer(i) {
-    giveBack({
-      then: () => {
-        C.control = "answering";
-        rerenderComputer();
-        setTimeout(() => {
-          C.control = "none";
-          if (mode === "answerfail") {
-            C.outcome = "Couldn't send your answer. Control is back with Juniper; answer in the chat.";
-            C.outcomeAction = true;
-          } else {
-            const option = $$(".option", $("#q-library") || document)[i];
-            C.question = false;
-            option?.click(); // the question card answers as it always does
-            C.outcome = "Answer sent. Juniper can carry on.";
-            CT.announce("Answer sent, and control given back to Juniper");
-          }
-          rerenderComputer();
-          $('[data-cmp="close-full"]')?.focus();
-        }, 400);
-      },
-    });
+    giveBack({ queued: { i } });
+  }
+  // The question closes, or the run ends, while an answer waits behind the release.
+  function questionClosed(why, runEnded = false) {
+    C.question = false;
+    C.closedWhy = why;
+    C.questionGone = runEnded ? "" : why.replace(", so your answer wasn't sent", "");
+    if (C.queued && "i" in C.queued) {
+      C.queued = null;
+      C.dropped = why;
+    }
+    rerenderComputer();
   }
 
   function eventLine(text) {
@@ -711,22 +781,19 @@
       return C.tabsOpen ? $(".screen-tabs-sheet .menu-item", $(".screen-view"))?.focus() : null;
     }
     if (cmp === "check-release") {
-      // Renew with the generation: an unrenewed lease means control has ended.
-      C.control = "none";
-      C.outcome = "Your control has ended. Juniper's browser is free.";
-      eventLine(`You gave control back · 3:14 PM`);
+      // Renew with the generation: renewed is evidence it is still held; not renewed, that it ended.
+      if (mode === "releasefail") {
+        C.control = "granted";
+        C.notice = "You still have control.";
+      } else {
+        C.control = "ended";
+        C.endCause = ""; // a renewal that was not renewed reports no cause
+        C.outOfSight = false;
+      }
       rerenderComputer();
-      return $('[data-cmp="close-full"]')?.focus();
+      return ($('[data-cmp="release"]') || $('[data-cmp="take"]'))?.focus();
     }
-    if (cmp === "answer-in-chat")
-      return giveBack({
-        then: () => {
-          closeFull(false);
-          rerenderComputer();
-          const card = $("#q-library");
-          if (card) W.reveal(card, card);
-        },
-      });
+    if (cmp === "answer-in-chat") return giveBack({ queued: { chat: true } });
     if (cmp === "answer") return answer(+t.closest("[data-answer]").dataset.answer);
     if (cmp === "show-question") {
       const card = $("#q-library");
@@ -867,10 +934,26 @@
     }
   };
   W.connectionChanged = (name) => {
-    if (name !== "connected" && name !== "synced" && viewing()) {
-      if (C.control === "granted") C.control = "none"; // the device can't give it back; the lease ends at the gateway
-      endView("dropped");
+    const lost = name !== "connected" && name !== "synced" && name !== "syncing";
+    if (lost) {
+      if (["granted", "releasing", "unconfirmed", "answering"].includes(C.control)) {
+        sequence++; // every queued step is retired: no result assumed, no queued answer sent later
+        C.queued = null;
+        C.dropped = "";
+        C.control = "maybeheld";
+        C.outOfSight = false;
+      }
+      if (viewing()) endView("dropped");
       rerenderComputer();
+    } else if (C.control === "maybeheld") {
+      // Read the question's and the browser's state again before offering anything.
+      C.control = "checking";
+      rerenderComputer();
+      setTimeout(() => {
+        C.control = "ended"; // the fixture's tab list shows no lease for this device
+        C.endCause = "";
+        rerenderComputer();
+      }, 500);
     }
   };
   document.addEventListener("visibilitychange", () => {
@@ -881,7 +964,7 @@
   });
 
   // Controls in the prototype's bar.
-  W.barExtra = (W.barExtra || "") + `<button type="button" data-work="tab-closed">Juniper closes its tab</button><button type="button" data-work="lease-ends">The lease ends</button>`;
+  W.barExtra = (W.barExtra || "") + `<button type="button" data-work="tab-closed">Juniper closes its tab</button><button type="button" data-work="lease-ends">The lease ends</button><button type="button" data-work="answered-elsewhere">Answered elsewhere</button><button type="button" data-work="run-ends">Juniper's run ends</button>`;
   const prevBar = W.bar;
   W.bar = (what) => {
     if (prevBar?.(what)) return true;
@@ -893,11 +976,24 @@
       return true;
     }
     if (what === "lease-ends") {
-      if (C.control === "granted") {
-        C.control = "expired";
+      // An expired control event carrying this lease's generation.
+      if (["granted", "unconfirmed", "releasing"].includes(C.control)) {
+        sequence++;
+        C.queued = null;
+        C.control = "ended";
+        C.endCause = "It expired.";
+        C.outOfSight = false;
         eventLine("Your control of Juniper's browser ended · 3:14 PM");
         rerenderComputer();
       }
+      return true;
+    }
+    if (what === "answered-elsewhere") {
+      questionClosed("Juniper's question was answered on another device, so your answer wasn't sent.");
+      return true;
+    }
+    if (what === "run-ends") {
+      questionClosed("Juniper's run ended, so your answer wasn't sent.", true);
       return true;
     }
     return false;

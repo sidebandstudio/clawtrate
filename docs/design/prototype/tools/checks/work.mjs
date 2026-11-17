@@ -551,20 +551,103 @@ await p.waitForTimeout(500);
 check("F-145 Give back control alone leaves the bot waiting", await q(p, () => document.querySelector(".computer-banner strong").textContent === "Juniper is still waiting for you" && document.querySelector("#q-library").dataset.state === "pending"));
 await p.close();
 
-// M7: the release's other answers, and other question shapes.
+// M7: giving back control, in every ending (work-pane.md, section 18).
+// A refused release.
 p = await open(comp + "&computer=releasefail");
 await p.waitForTimeout(50);
 await p.click('.screen-view .control-bar [data-answer="0"]');
 await p.waitForTimeout(500);
-check("M7 a refused release keeps control, says so, and sends no answer", await q(p, () =>
-  window.CT.work.computer.control === "granted" && document.querySelector(".screen-view [role=alert]").textContent.startsWith("Couldn't give control back. You still have control.") && document.querySelector("#q-library").dataset.state === "pending"));
+check("M7 a refused release: ownership unconfirmed, nothing claimed, input stopped, and no answer sent", await q(p, () => {
+  const bar = document.querySelector(".screen-view .control-bar").textContent;
+  return window.CT.work.computer.control === "unconfirmed" && bar.startsWith("Giving control back wasn't confirmed. This device may still have control of Juniper's browser.") &&
+    bar.includes("Your answer wasn't sent.") && !/You (still )?have control|ended/.test(bar) && document.querySelector(".screen-frame").dataset.control === "false" && document.querySelector("#q-library").dataset.state === "pending";
+}));
+await p.focus(".screen-view .screen-frame");
+await p.keyboard.type("99");
+check("M7 while unconfirmed, typing reaches nothing", await q(p, () => window.CT.work.computer.typed === ""));
+await p.click('.screen-view [data-cmp="check-release"]');
+check("M7 Check renews with the generation: renewed is evidence control is still held", await q(p, () => window.CT.work.computer.control === "granted" && document.querySelector(".screen-view").textContent.includes("You still have control.")));
 await p.close();
+
+// No answer to the release, then Check says it ended, with no cause.
 p = await open(comp + "&computer=releaseunknown");
 await p.waitForTimeout(50);
 await p.click('.screen-view [data-cmp="release"]');
 await p.waitForTimeout(500);
-check("M7 no answer to the release: nothing is claimed, and Check again is offered", await q(p, () =>
-  window.CT.work.computer.control === "uncertain" && document.querySelector(".control-bar").textContent.startsWith("No answer from the gateway. You may still have control.") && !document.querySelector(".control-bar").textContent.includes("You have control")));
+check("M7 no answer to the release: unconfirmed, with Try again and Check", await q(p, () =>
+  window.CT.work.computer.control === "unconfirmed" && !!document.querySelector('.screen-view [data-cmp="check-release"]') && !!document.querySelector('.screen-view .control-bar [data-cmp="release"]')));
+await p.click('.screen-view [data-cmp="check-release"]');
+check("M7 a renewal that isn't renewed: Your control ended, with no cause and nothing about the browser being free", await q(p, () => {
+  const t = document.querySelector(".screen-view .control-bar").textContent;
+  return window.CT.work.computer.control === "ended" && t.startsWith("Your control ended.") && !/expired|revoked|free|stopped hearing/.test(t);
+}));
+await p.close();
+
+// Leaving after a refused release, and coming back.
+p = await open(comp + "&computer=releasefail", { width: 1100, height: 760 });
+await p.waitForTimeout(50);
+await p.click('.screen-view [data-cmp="close-full"]');
+await p.click("#tab-files");
+await p.waitForTimeout(500);
+check("M7 leaving after a refused release: the frames go at once and renewals stop", await q(p, () =>
+  window.CT.work.computer.view === "idle" && !document.querySelector(".screen-view") && window.CT.work.computer.renewing === false && window.CT.work.computer.control === "unconfirmed"));
+await p.click("#tab-computer");
+check("M7 coming back: a visible line says control may still be held, with Give it back, and never Watch beside You have control", await q(p, () => {
+  const line = document.querySelector(".computer-held");
+  return line.textContent.startsWith("This device may still have control of Juniper's browser. Giving it back wasn't confirmed") && !!line.querySelector('[data-cmp="release"]') &&
+    !/You have control/.test(document.querySelector("#panel-computer").textContent);
+}));
+await work(p, "lease-ends");
+check("M7 an expired event for this lease ends it, with its reported cause", await q(p, () => document.querySelector(".computer-held").textContent === "Your control ended. It expired."));
+await p.close();
+
+// A drop during the release.
+p = await open(comp + "&computer=control");
+await p.waitForTimeout(50);
+await p.click('.screen-view .control-bar [data-answer="0"]');
+await q(p, () => window.app.setConnection("reconnecting"));
+await p.waitForTimeout(1100);
+check("M7 a drop during the release retires the sequence: no release assumed, no answer sent", await q(p, () =>
+  window.CT.work.computer.control === "maybeheld" && document.querySelector("#q-library").dataset.state === "pending" &&
+  ![...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You gave control back"))));
+check("M7 …and says control may remain until it expires", await q(p, () => document.querySelector(".computer-held").textContent === "The connection dropped. Control of Juniper's browser may remain with this device until it expires."));
+await q(p, () => window.app.setConnection("connected"));
+check("M7 on reconnect it reads the question and the browser again before offering anything", await q(p, () =>
+  window.CT.work.computer.control === "checking" && !document.querySelector(".computer-banner") && !document.querySelector('#panel-computer [data-cmp="take"]')));
+await p.waitForTimeout(600);
+check("M7 …then shows what it read, and the queued answer was never sent", await q(p, () =>
+  window.CT.work.computer.control === "ended" && document.querySelector("#q-library").dataset.state === "pending" && !!document.querySelector(".computer-banner")));
+await p.close();
+
+// A drop while holding.
+p = await open(comp + "&computer=control");
+await p.waitForTimeout(50);
+await q(p, () => window.app.setConnection("reconnecting"));
+check("M7 a drop while holding: the view ends and the tab says control may remain until it expires", await q(p, () =>
+  !document.querySelector(".screen-view") && window.CT.work.computer.control === "maybeheld" && !document.querySelector('#panel-computer [data-cmp="take"]') &&
+  document.querySelector(".computer-held").textContent.startsWith("The connection dropped. Control of Juniper's browser may remain")));
+await p.close();
+
+// The question closes during the release.
+p = await open(comp + "&computer=control");
+await p.waitForTimeout(50);
+await p.click('.screen-view .control-bar [data-answer="0"]');
+await work(p, "answered-elsewhere");
+await p.waitForTimeout(1000);
+check("M7 the question answered elsewhere during the release: the queued answer is removed and the bar says why", await q(p, () =>
+  window.CT.work.computer.control === "none" && document.querySelector(".control-bar").textContent === "Juniper's question was answered on another device, so your answer wasn't sent." &&
+  document.querySelector("#q-library").dataset.state === "pending" && !document.querySelector(".computer-banner")));
+await p.close();
+
+// The task's run ends during the release.
+p = await open(comp + "&computer=control");
+await p.waitForTimeout(50);
+await p.click('.screen-view .control-bar [data-answer="0"]');
+await work(p, "run-ends");
+await p.waitForTimeout(1000);
+check("M7 the run ends during the release: the answer is removed, the bar says why, and nothing says the bot is waiting", await q(p, () =>
+  window.CT.work.computer.control === "none" && document.querySelector(".control-bar").textContent === "Juniper's run ended, so your answer wasn't sent." &&
+  !/still waiting/.test(document.body.textContent)));
 await p.close();
 p = await open(comp + "&computer=complexquestion");
 await p.waitForTimeout(50);
@@ -606,6 +689,7 @@ await p.waitForTimeout(50);
 await p.click('.screen-view [data-cmp="close-full"]');
 check("M6 closing the full view keeps control, with Give back control in the tile", await q(p, () => window.CT.work.computer.control === "granted" && !!document.querySelector('#panel-computer [data-cmp="release"]')));
 await p.click("#tab-files");
+await p.waitForTimeout(500);
 check("M6 leaving the tab while in control gives control back first", await q(p, () =>
   window.CT.work.computer.control === "none" && window.CT.work.computer.view === "idle" && [...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You gave control back"))));
 await p.close();
@@ -636,7 +720,7 @@ for (const [m, words, name] of [
 p = await open(comp + "&computer=control");
 await p.waitForTimeout(50);
 await work(p, "lease-ends");
-check("when the gateway ends the lease, control ends and says why", await q(p, () => document.querySelector(".control-bar").textContent.startsWith("Your control ended. The gateway stopped hearing from this device.")));
+check("M7 an expired event for this lease: Your control ended, with the cause it reports", await q(p, () => document.querySelector(".control-bar").textContent.startsWith("Your control ended. It expired.")));
 await p.close();
 p = await open(comp + "&computer=watching");
 await work(p, "tab-closed");
