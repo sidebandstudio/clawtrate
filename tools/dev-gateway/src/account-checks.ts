@@ -788,6 +788,11 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
         const reason = { 401: "auth", 402: "billing", 429: "rate_limit" }[status];
         same(end.errorDetail?.failoverReason, reason, "the error's failover reason");
         const records = await failoverRecords(h, end.runId);
+        same(
+          records.map((r) => [r.decision, r.profileId]),
+          [["surface_error", profileHash(locked)]],
+          "the run's failover decisions in the log: the failure surfaced, no rotation",
+        );
         h.observe(
           `locked, ${status}: ${requests.length} request(s) to ${locked}; error "${end.errorMessage}"; detail ${canonical(end.errorDetail)}; log ${records.map((r) => `${String(r.decision)} ${String(r.profileId)}`).join(", ")}`,
         );
