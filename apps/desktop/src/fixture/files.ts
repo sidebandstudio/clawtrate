@@ -57,6 +57,8 @@ const NOTE_BEFORE =
   "# Disk on the media box, Nov 16\n\n- Disk was 94% full at 5:31 PM.\n- Largest: /var/lib/transcode-cache, about 180 GB.\n- Then: container images, about 40 GB; rotated logs, about 6 GB.\n";
 const NOTE =
   "# Disk on the media box, Nov 16\n\n- Disk was 94% full at 5:31 PM; 61% after the move.\n- Largest: /var/lib/transcode-cache, about 180 GB.\n- Then: container images, about 40 GB; rotated logs, about 6 GB.\n\n## Changed\n\n- Moved the transcode cache to `transcode-cache.old`.\n- To undo, move it back.\n";
+/** The note once the writing scene's edit has landed: what a read after it returns. */
+const NOTE_WRITTEN = `${NOTE}- Checked again at 5:39 PM: still 61%.\n`;
 const MEDIA_BOX = "Watch disk use. Report above 90%.\n";
 const AGENTS =
   "# Otto\n\nYou are Otto, the operator for a small home server.\n\n- Check before you change. Read logs and configs first.\n- Report in this order: what you found, what you changed, what is left.\n";
@@ -503,6 +505,7 @@ export function fileAnswers(now: number, params: FileParams) {
   const files = taskFiles(now, params);
   let lists = 0;
   let opens = 0;
+  let noteReads = 0;
   const checkedAt = now - 4 * MINUTE;
   const list = (key: string): TaskFileList => ({
     key,
@@ -566,7 +569,11 @@ export function fileAnswers(now: number, params: FileParams) {
       mimeType: file.mimeType ?? null,
     };
     if (file.limit) return { status: "cannot-show", facts, limit: file.limit };
-    const bytes = file.content ?? utf8Bytes(file.text ?? "");
+    // In the writing scene, the note is read again once its edit lands, and has changed.
+    if (params.state === "writing" && path === "notes/disk-2026-11-16.md") noteReads += 1;
+    const written =
+      params.state === "writing" && noteReads > 1 && path === "notes/disk-2026-11-16.md";
+    const bytes = file.content ?? utf8Bytes(written ? NOTE_WRITTEN : (file.text ?? ""));
     const media = file.mimeType?.split("/")[0];
     const kind = media === "image" || media === "audio" || media === "video" ? media : "text";
     return {

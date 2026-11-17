@@ -157,6 +157,16 @@ describe("the main process's save handler", () => {
     );
   const dialogOpened = () => vi.waitFor(() => expect(electron.dialogs.length).toBe(1));
   const answer = (chosen: Chosen) => electron.dialogs.shift()!.answer(chosen);
+  /** A byte of every value, a byte-order mark and a long pattern: what a reader may supply. */
+  const supplied = () =>
+    Uint8Array.from([
+      ...Array.from({ length: 256 }, (_, i) => i),
+      239,
+      187,
+      191,
+      ...Array.from({ length: 70_000 }, (_, i) => (i * 37 + 11) & 255),
+    ]);
+
   beforeAll(async () => {
     electron.appDir = folder();
     process.env.CLAWTRATE_DATA_DIR = join(electron.appDir, "gateway");
@@ -165,6 +175,17 @@ describe("the main process's save handler", () => {
   });
   afterEach(() => {
     while (electron.dialogs.length) answer({ canceled: true });
+  });
+
+  it("F-319: writes exactly the bytes the page handed over, where the dialog chose", async () => {
+    const dir = folder();
+    const bytes = supplied();
+    const pending = save(page(), "../usage.png", bytes.slice().buffer);
+    await dialogOpened();
+    expect(electron.dialogs[0]!.options.defaultPath).toBe(join(electron.appDir, "usage.png"));
+    answer({ canceled: false, filePath: join(dir, "chosen.png") });
+    expect(await pending).toEqual({ status: "saved", name: "chosen.png" });
+    expect(readFileSync(join(dir, "chosen.png")).equals(bytes)).toBe(true);
   });
 
   it("F-319: refuses more than the largest content a reader sends, before any dialog", async () => {

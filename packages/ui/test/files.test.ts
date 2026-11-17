@@ -8,6 +8,7 @@ import {
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 import { collect, isShown } from "../src/work/content.ts";
+import { downloadBytes } from "../src/work/download.ts";
 import { formatSize, limitSentence, nameParts } from "../src/work/files-format.ts";
 import { parseNumberedDiff, parsePatch, patchCounts } from "../src/work/patch.ts";
 
@@ -133,5 +134,49 @@ describe("content put together from its chunks", () => {
       expect(fromBase64(transfer.data)).not.toBeNull();
       expect(transfers.size).toBe(0);
     }
+  }, 60_000);
+
+  it("F-319: the desktop's Download hands its save exactly the bytes the reader supplied", async () => {
+    const bytes = Uint8Array.from([
+      ...Array.from({ length: 256 }, (_, i) => i),
+      ...Array.from({ length: 1_100_000 }, (_, i) => (i * 37 + 11) & 255),
+    ]);
+    const transfers = new FileTransfers(() => 0);
+    const owner = {};
+    let handed: { name: string; data: ArrayBuffer } | null = null;
+    const bridge = {
+      invoke: async (command: { id: string; index: number }) =>
+        transfers.chunk(owner, command.id, command.index),
+      send: async () => {},
+      save: async (file: { name: string; data: ArrayBuffer }) => {
+        handed = file;
+        return { status: "saved", name: file.name };
+      },
+    } as unknown as ClawtrateBridge;
+    const shown = await collect(bridge, {
+      status: "content",
+      facts: {
+        name: "usage.png",
+        path: "usage.png",
+        size: bytes.length,
+        updatedAt: null,
+        mimeType: null,
+      },
+      reader: "agents.workspace.get",
+      kind: "image",
+      mimeType: "image/png",
+      bytes: bytes.length,
+      hash: "",
+      transfer: transfers.start(owner, bytes, DESKTOP_MAX_CHARS),
+    });
+    if (!isShown(shown)) throw new Error("not shown");
+    expect(await downloadBytes(bridge, "usage.png", shown.data)).toEqual({
+      ok: true,
+      announcement: "Downloaded usage.png",
+    });
+    const saved = new Uint8Array(handed!.data);
+    expect(handed!.name).toBe("usage.png");
+    expect(saved.length).toBe(bytes.length);
+    expect(saved.findIndex((byte, i) => byte !== bytes[i])).toBe(-1);
   }, 60_000);
 });

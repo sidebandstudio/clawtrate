@@ -188,6 +188,12 @@ test.describe("the Files tab", () => {
     await expect(page.getByTestId("reader-writing")).toHaveCount(0);
     // The open file is read again when its write lands.
     await expect.poll(reads).toBe(readsBefore + 1);
+    // What the write made replaces the open preview in place, and says so.
+    await expect(page.locator(".reader-preview")).toContainText(
+      "Checked again at 5:39 PM: still 61%.",
+    );
+    await expect(page.getByTestId("reader-note")).toHaveText("Updated just now");
+    await expect(page.getByTestId("work-announcer")).toHaveText("disk-2026-11-16.md updated");
     // The list is fetched once, after the burst.
     await page.getByRole("button", { name: "Back to this task's files" }).click();
     await expect.poll(lists, { timeout: 3000 }).toBeGreaterThan(listsBefore);
