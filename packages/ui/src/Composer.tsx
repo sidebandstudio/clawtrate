@@ -29,6 +29,8 @@ export const IMAGE_LIMIT = 6 * MIB;
 export const FILE_LIMIT = 20 * MIB;
 export const MESSAGE_LIMIT = 25 * MIB;
 const MAX_FILES = 20;
+/** How long a touch on Send is held before its menu opens. */
+const LONG_PRESS_MS = 500;
 
 /** "8.2 MB", "640 KB". */
 export function size(bytes: number): string {
@@ -132,9 +134,19 @@ export function Composer({
   const [files, setFiles] = useState<Attached[]>([]);
   const [menu, setMenuState] = useState<null | "mode" | "send">(null);
   const [trigger, setTrigger] = useState<HTMLElement | null>(null);
-  const setMenu = (next: null | "mode" | "send") => {
-    setTrigger(next === "mode" ? modeRef.current : next === "send" ? sendRef.current : null);
+  /** Open a menu; focus returns to `from` when it closes (Send, for a long press). */
+  const setMenu = (next: null | "mode" | "send", from?: HTMLElement | null) => {
+    setTrigger(
+      from ?? (next === "mode" ? modeRef.current : next === "send" ? sendRef.current : null),
+    );
     setMenuState(next);
+  };
+  // Touch and hold on Send opens the same menu, as a sheet from the foot of the screen.
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressed = useRef(false);
+  const endPress = () => {
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+    pressTimer.current = null;
   };
   // The mode chosen from the menu lasts for the run it was chosen in.
   const [chosen, setChosen] = useState<{ run: string; mode: "steer" | "queue" } | null>(null);
@@ -609,6 +621,9 @@ export function Composer({
   );
 
   const showMode = view.modeWord !== null && text.trim().length > 0;
+  // On a phone the menu is a sheet from the foot of the screen.
+  const touch =
+    typeof document !== "undefined" && document.documentElement.dataset.input === "touch";
 
   return (
     <footer className="composer" data-testid="composer">
@@ -712,11 +727,31 @@ export function Composer({
               title={refusalReason ?? sendName(view.mode)}
               disabled={!canSend}
               data-testid="send"
-              onClick={() => void sendAs(view.mode)}
+              onClick={() => {
+                // The release that ends a long press is not a send.
+                if (longPressed.current) {
+                  longPressed.current = false;
+                  return;
+                }
+                void sendAs(view.mode);
+              }}
+              onPointerDown={(event) => {
+                if (event.pointerType !== "touch") return;
+                longPressed.current = false;
+                endPress();
+                const from = event.currentTarget;
+                pressTimer.current = setTimeout(() => {
+                  longPressed.current = true;
+                  setMenu(view.menu === "idle" ? "send" : "mode", from);
+                }, LONG_PRESS_MS);
+              }}
+              onPointerUp={endPress}
+              onPointerCancel={endPress}
+              onPointerLeave={endPress}
               onContextMenu={(event) => {
-                if (view.menu !== "idle") return;
+                if (view.menu !== "idle" && !touch) return;
                 event.preventDefault();
-                setMenu("send");
+                if (!touch) setMenu("send");
               }}
               onKeyDown={(event) => {
                 if (
@@ -731,11 +766,19 @@ export function Composer({
               <ArrowUpIcon />
             </button>
           </div>
-          {menu && (
+          {menu && !touch && (
             <Menu label="How to send" entries={menuEntries} onClose={closeMenu} trigger={trigger} />
           )}
         </div>
       </div>
+      {menu && touch && (
+        <>
+          <div className="sheet-scrim" aria-hidden="true" onPointerDown={() => closeMenu(true)} />
+          <div className="composer-sheet" data-testid="send-sheet">
+            <Menu label="How to send" entries={menuEntries} onClose={closeMenu} trigger={trigger} />
+          </div>
+        </>
+      )}
     </footer>
   );
 }

@@ -6,7 +6,7 @@
 import type { Run } from "../packages/core/src/runs.ts";
 import type { ClawtrateState } from "../packages/core/src/types.ts";
 import { expect, test, type Page } from "@playwright/test";
-import { openFixture, OTTO_DISK, settle } from "./fixture.ts";
+import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
 
 const open = (page: Page, scene: string, extra = "") =>
   openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed${extra}`, "light");
@@ -970,5 +970,73 @@ test.describe("errors and resync", () => {
     ).toHaveCount(1);
     await expect(page.getByTestId("status-line")).toBeVisible();
     await settle(page);
+  });
+});
+
+test.describe("the phone", () => {
+  test.use(
+    contextFor(
+      SIZES.find((size) => size.phone)!,
+      "light",
+    ),
+  );
+
+  test("F-061 F-282: the Send menu opens as a sheet from the foot of the screen with 52 px rows, from the mode word or a long press on Send, and Escape returns focus", async ({
+    page,
+  }) => {
+    await open(page, "run-working");
+    await field(page).fill("Then look at the photos");
+    await page.getByRole("button", { name: "How to send: Steer" }).tap();
+    const sheet = page.getByTestId("send-sheet");
+    await expect(sheet.getByRole("menu", { name: "How to send" })).toBeVisible();
+    const box = (await sheet.boundingBox())!;
+    const viewport = page.viewportSize()!;
+    expect(Math.round(box.x)).toBe(0);
+    expect(Math.round(box.width)).toBe(viewport.width);
+    expect(Math.round(box.y + box.height)).toBe(viewport.height);
+    for (const item of await sheet.getByRole("menuitemradio").all())
+      expect((await item.boundingBox())!.height).toBeGreaterThanOrEqual(52);
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "How to send: Steer" })).toBeFocused();
+
+    // Touch and hold on Send opens the same sheet; the release does not send.
+    const send = page.getByTestId("send");
+    await send.dispatchEvent("pointerdown", { pointerType: "touch", isPrimary: true });
+    await page.waitForTimeout(650);
+    await send.dispatchEvent("pointerup", { pointerType: "touch", isPrimary: true });
+    await send.dispatchEvent("click");
+    await expect(sheet.getByRole("menuitemradio", { name: /Queue after this turn/ })).toBeVisible();
+    await expect(page.getByTestId("outgoing")).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(send).toBeFocused();
+    await expect(field(page)).toHaveValue("Then look at the photos");
+  });
+
+  test("F-068: every control in the composer and the shelf has at least a 44 px hit area on touch", async ({
+    page,
+  }) => {
+    await open(page, "run-queued");
+    await field(page).fill("Something to send");
+    const sizes = await page.evaluate(() =>
+      [
+        ...document.querySelectorAll<HTMLElement>(
+          ".composer-box button, .shelf-row button, .access-bar button",
+        ),
+      ]
+        .filter((element) => element.getClientRects().length > 0)
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          const after = getComputedStyle(element, "::after");
+          const extended = after.content !== "none" && after.position === "absolute";
+          return {
+            name: element.getAttribute("aria-label") ?? element.textContent ?? "",
+            width: Math.max(rect.width, extended ? Number.parseFloat(after.width) : 0),
+            height: Math.max(rect.height, extended ? Number.parseFloat(after.height) : 0),
+          };
+        }),
+    );
+    expect(sizes.length).toBeGreaterThan(4);
+    expect(sizes.filter((each) => each.width < 44 || each.height < 44)).toEqual([]);
   });
 });

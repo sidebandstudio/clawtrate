@@ -20,6 +20,17 @@ for (const size of SHOWN) {
         });
       }
 
+      if (size.phone) {
+        test("F-061: the send sheet", async ({ page }) => {
+          await openFixture(page, `scene=run-working&${OTTO_DISK}&panel=closed`, theme);
+          await page.getByTestId("composer-input").fill("Then look at the photos");
+          await page.getByRole("button", { name: "How to send: Steer" }).tap();
+          await expect(page.getByTestId("send-sheet")).toBeVisible();
+          await settle(page);
+          await expect(page).toHaveScreenshot(`live-send-sheet-${theme}-${size.name}.png`);
+        });
+      }
+
       test("F-467: the shortcut list", async ({ page }) => {
         await openFixture(page, `scene=composer&${OTTO_DISK}&panel=closed`, theme);
         await page.keyboard.press("ControlOrMeta+/");

@@ -182,6 +182,15 @@ SCENES.push({
 });
 
 SCENES.push({
+  name: "F-061: the send sheet on a phone, or the menu on the desktop",
+  query: `scene=run-working&${OTTO_DISK}&panel=closed`,
+  prepare: async (page) => {
+    await page.getByTestId("composer-input").fill("Then look at the photos");
+    await page.getByRole("button", { name: "How to send: Steer" }).click();
+    await expect(page.getByRole("menu", { name: "How to send" })).toBeVisible();
+  },
+});
+SCENES.push({
   name: "F-467: the shortcut list",
   query: `scene=composer&${OTTO_DISK}&panel=closed`,
   prepare: async (page) => {

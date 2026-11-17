@@ -1089,3 +1089,80 @@
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+
+/* The phone: the Send menu is a sheet from the foot of the screen, with
+   52 px rows; tapping outside it closes it. */
+.sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--bg-scrim);
+}
+
+.composer-sheet {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 61;
+  padding: 8px 8px 14px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+}
+
+.composer-sheet::before {
+  content: "";
+  display: block;
+  width: 36px;
+  height: 4px;
+  margin: 0 auto 8px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+
+.composer-sheet .menu {
+  position: static;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.composer-sheet .menu-item {
+  min-height: 52px;
+  padding: 0 12px;
+  font-size: var(--text-lg);
+}
+
+/* On touch every control in the composer, the shelf and the access bar has a
+   44 px hit area, extended invisibly where the drawing is smaller. */
+[data-input="touch"] .composer-box .icon-button,
+[data-input="touch"] .send-mode,
+[data-input="touch"] .shelf-row .button,
+[data-input="touch"] .shelf-row .icon-button,
+[data-input="touch"] .shelf-clear .link-button,
+[data-input="touch"] .access-bar .button,
+[data-input="touch"] .access-bar .icon-button,
+[data-input="touch"] .turn-error .button,
+[data-input="touch"] .turn-error .icon-button {
+  position: relative;
+}
+
+[data-input="touch"] .composer-box .icon-button::after,
+[data-input="touch"] .send-mode::after,
+[data-input="touch"] .shelf-row .button::after,
+[data-input="touch"] .shelf-row .icon-button::after,
+[data-input="touch"] .access-bar .button::after,
+[data-input="touch"] .access-bar .icon-button::after,
+[data-input="touch"] .turn-error .button::after,
+[data-input="touch"] .turn-error .icon-button::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  transform: translate(-50%, -50%);
+}
