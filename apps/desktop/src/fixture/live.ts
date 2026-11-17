@@ -572,7 +572,7 @@ export function liveCommand(
             ],
           };
         }
-        if (active.state === "stopping" || command.mode === "queue") {
+        if (active.state === "stopping" || (command.mode === "queue" && !asking)) {
           return {
             ...transcript,
             outbox: [
@@ -590,7 +590,7 @@ export function liveCommand(
           outbox: [
             ...transcript.outbox,
             message(id, command.text, now, {
-              mode: "steer",
+              mode: command.mode === "queue" ? "queue" : "steer",
               status: asking ? "held" : "sent",
               runId: active.id,
             }),

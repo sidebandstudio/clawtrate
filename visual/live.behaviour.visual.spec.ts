@@ -672,6 +672,16 @@ test.describe("steering, queueing and holding", () => {
     await expect(held).toHaveCount(1);
   });
 
+  test("F-468: Alt+Enter while a question is pending holds the message too", async ({ page }) => {
+    await open(page, "run-question");
+    await field(page).fill("Queue this after the turn");
+    await page.keyboard.press("Alt+Enter");
+    const held = page.getByTestId("shelf-row").filter({ hasText: "Queue this after the turn" });
+    await expect(held).toContainText("Held until you answer");
+    await expect(held.getByRole("button", { name: "Send now" })).toHaveCount(0);
+    await expect(announcer(page)).toHaveText("Held until you answer");
+  });
+
   test("F-282: Start as new task runs the message in a new task and keeps this one open", async ({
     page,
   }) => {

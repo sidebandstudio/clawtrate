@@ -209,7 +209,8 @@ export function Composer({
           mode: how === "queue" ? "queue" : "auto",
           attachmentIds,
         });
-        if (how === "hold") onAnnounce("Held until you answer");
+        // A pending question holds every message, however it was sent.
+        if (view.mode === "hold") onAnnounce("Held until you answer");
         else if (how === "queue" || view.stopping) onAnnounce("Queued");
       } catch (error) {
         setTextState((current) => {
