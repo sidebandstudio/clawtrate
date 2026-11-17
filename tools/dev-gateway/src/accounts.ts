@@ -178,8 +178,11 @@ export function profileEntryProblem(id: string, entry: unknown): string | null {
     if (!["provider", "mode", "displayName", "email"].includes(key))
       return `${id}.${key} is not allowed`;
   }
-  if (entry.provider !== match[1]) return `${id}.provider must be ${match[1]}`;
-  if (!["api_key", "token", "oauth"].includes(String(entry.mode))) {
+  if (typeof entry.provider !== "string" || entry.provider !== match[1]) {
+    return `${id}.provider must be ${match[1]}`;
+  }
+  // The type first, then the value: a closed set is only ever matched by a string.
+  if (typeof entry.mode !== "string" || !["api_key", "token", "oauth"].includes(entry.mode)) {
     return `${id}.mode must be api_key, token or oauth`;
   }
   for (const key of ["displayName", "email"] as const) {

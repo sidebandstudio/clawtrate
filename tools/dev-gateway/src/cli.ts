@@ -579,6 +579,7 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
   if (
     recorded === null ||
     typeof recorded !== "object" ||
+    Array.isArray(recorded) ||
     Object.keys(recorded).some((key) => key !== "accounts") ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts)
   ) {

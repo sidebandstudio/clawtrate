@@ -145,6 +145,12 @@ describe("the closed contract with accounts", () => {
       ["acme:work", { provider: "acme", mode: "api_key", apiKey: "x" }],
       ["acme:work", { provider: "acme", mode: "api_key", displayName: "a\nb" }],
       ["acme:../x", { provider: "acme", mode: "api_key" }],
+      // A value of the wrong type is refused before its value is looked at.
+      ["acme:work", { provider: "acme", mode: ["api_key"] }],
+      ["acme:work", { provider: "acme", mode: ["token"] }],
+      ["acme:work", { provider: "acme", mode: ["oauth"] }],
+      ["acme:work", { provider: ["acme"], mode: "api_key" }],
+      ["acme:work", { provider: "acme", mode: "api_key", displayName: ["Work"] }],
     ];
     for (const [id, entry] of refused) {
       const config = withAccounts() as unknown as { auth: { profiles: Record<string, unknown> } };
@@ -161,6 +167,10 @@ describe("the closed contract with accounts", () => {
     config.auth.order = { acme: ["openai:work"] };
     expect(problems(config)[0]).toMatch(/^auth\.order must be orders of scripted accounts/);
     config.auth.order = { openai: ["openai:work"] };
+    expect(problems(config)[0]).toMatch(/^auth\.order must be orders of scripted accounts/);
+    config.auth.order = { acme: [["acme:work"]] };
+    expect(problems(config)[0]).toMatch(/^auth\.order must be orders of scripted accounts/);
+    config.auth.order = { acme: "acme:work" };
     expect(problems(config)[0]).toMatch(/^auth\.order must be orders of scripted accounts/);
     delete config.auth.order;
     config.auth.cooldowns = {};
@@ -208,6 +218,9 @@ describe("the closed contract with accounts", () => {
       ["{}", true],
       ['{"accounts":"yes"}', false],
       ['{"accounts":true,"plugins":[]}', false],
+      ["[]", false],
+      ['[{"accounts":true}]', false],
+      ['{"accounts":[true]}', false],
     ] as const) {
       rmSync(join(runDir, "start-options.json"), { force: true });
       writeFileSync(join(runDir, "start-options.json"), text);
