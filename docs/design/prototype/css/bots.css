@@ -724,6 +724,22 @@ select.input {
   text-align: right;
 }
 
+.facts dd.b-wrap-value .b-state {
+  display: inline;
+  white-space: normal;
+}
+
+.facts dd.b-wrap-value .b-state .icon {
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+
+.facts > div:has(> dd.b-wrap-value) {
+  align-items: flex-start;
+  padding: 11px 0;
+  line-height: 1.4;
+}
+
 .facts .mono {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
