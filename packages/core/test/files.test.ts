@@ -346,6 +346,98 @@ describe("reading through the gateway", () => {
     expect(contentBytes(read)).toEqual(bytes);
   });
 
+  it("F-319: a task moved to its own folder while its picture was read shows nothing the workspace reader sent", async () => {
+    const before = Uint8Array.from({ length: 400_000 }, (_, i) => (i * 7) & 255);
+    const after = Uint8Array.from({ length: 400_000 }, (_, i) => (i * 11 + 3) & 255);
+    let moved = false;
+    const row = () => ({ session: { key: KEY, ...(moved ? { spawnedCwd: `${ROOT}/site` } : {}) } });
+    const g = gateway({
+      "sessions.files.list": { sessionKey: KEY, root: ROOT, files: [entry("trail.png", 400_000)] },
+      "sessions.describe": row,
+      "agents.workspace.get": () => {
+        // The task gets its own folder after the reader was chosen, before it answers.
+        moved = true;
+        return {
+          file: {
+            size: before.length,
+            mimeType: "image/png",
+            encoding: "base64",
+            content: toBase64(before),
+          },
+        };
+      },
+      "sessions.files.assets": {
+        assets: [{ ref: "trail.png", mimeType: "image/png", content: toBase64(after) }],
+      },
+    });
+    const ctx = context(g.request);
+    const read = await readTaskFile(ctx, KEY, "otto", "trail.png");
+    expect(read).toMatchObject({ status: "content", reader: "sessions.files.assets" });
+    expect(contentBytes(read)).toEqual(after);
+    expect(ctx.transfers.size).toBe(0);
+  });
+
+  it("F-319: the workspace reader is not asked when the row shows the task's own folder just before the read", async () => {
+    let describes = 0;
+    const g = gateway({
+      "sessions.files.list": { sessionKey: KEY, root: ROOT, files: [entry("trail.png", 400_000)] },
+      // The row the list came with shares the workspace; every later read of it does not.
+      "sessions.describe": () => {
+        describes += 1;
+        return { session: { key: KEY, ...(describes > 1 ? { worktree: { path: "/wt" } } : {}) } };
+      },
+      "sessions.files.assets": { assets: [{ ref: "trail.png", error: "too_large" }] },
+    });
+    const read = await readTaskFile(context(g.request), KEY, "otto", "trail.png");
+    expect(g.calls.map((call) => call.method)).not.toContain("agents.workspace.get");
+    expect(read).toMatchObject({ status: "cannot-show", limit: { where: "task" } });
+  });
+
+  it("F-319: a task whose folder keeps changing while its file is read says so and shows nothing", async () => {
+    let describes = 0;
+    const g = gateway({
+      "sessions.files.list": { sessionKey: KEY, root: ROOT, files: [entry("trail.png", 400_000)] },
+      // Shared with the workspace on each fresh list, moved by the time the reader answers.
+      "sessions.describe": () => {
+        describes += 1;
+        return { session: { key: KEY, ...(describes % 3 === 0 ? { spawnedCwd: "/x" } : {}) } };
+      },
+      "agents.workspace.get": {
+        file: {
+          size: 3,
+          mimeType: "image/png",
+          encoding: "base64",
+          content: toBase64(Uint8Array.from([1, 2, 3])),
+        },
+      },
+    });
+    const read = await readTaskFile(context(g.request), KEY, "otto", "trail.png");
+    expect(read).toEqual({
+      status: "failed",
+      message: "This task's folder changed while the file was read. Try again.",
+    });
+  });
+
+  it("F-152: the workspace browser drops a recording the task's asset reader sent after the task moved", async () => {
+    let moved = false;
+    const g = gateway({
+      "sessions.files.list": { sessionKey: KEY, root: ROOT, files: [] },
+      "sessions.describe": () => ({
+        session: { key: KEY, ...(moved ? { spawnedWorkspaceDir: "/elsewhere" } : {}) },
+      }),
+      "sessions.files.assets": () => {
+        moved = true;
+        return {
+          assets: [
+            { ref: "memo.m4a", mimeType: "audio/mp4", content: toBase64(Uint8Array.from([9])) },
+          ],
+        };
+      },
+    });
+    const read = await readWorkspaceFile(context(g.request), "otto", "memo.m4a", 1, KEY);
+    expect(read).toMatchObject({ status: "cannot-show", limit: { code: "media-outside-task" } });
+  });
+
   it("F-319: a repository-backed task's recording asks no reader at all", async () => {
     const g = gateway(
       listing([entry("walkthrough.mp4", 200)], { repositoryWorkspaceId: "repo-1" }),

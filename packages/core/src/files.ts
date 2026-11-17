@@ -702,20 +702,73 @@ const kindOfMime = (mime: string): FileKind | null =>
           ? "text"
           : null;
 
+/**
+ * The task's row changed while one of its files was read, so the reader
+ * chosen for the folder it had no longer addresses the task's folder. What
+ * that reader sent is dropped.
+ */
+class FolderChanged extends Error {
+  constructor() {
+    super("This task's folder changed while the file was read. Try again.");
+  }
+}
+
+/** Checked after a reader answers and before anything of its answer is used. */
+type Confirm = () => Promise<void>;
+
+/**
+ * Whether the task's row, read now, still establishes that the task works in
+ * the bot's configured workspace (section 8). The workspace reader reads a
+ * task's file, and the task's asset reader a workspace file, only while it
+ * does.
+ */
+async function sharesWorkspace(
+  ctx: FileReaderContext,
+  key: string,
+  root: string | null,
+): Promise<boolean> {
+  const described = await ctx.request("sessions.describe", { key }).catch(() => null);
+  return establishFolder(asRecord(asRecord(described)?.session), root).sameAsWorkspace;
+}
+
+/**
+ * The decision that a reader of the other folder may address this file, made
+ * from the task's row at the moment of the read: checked before the request,
+ * and again once the reader has answered, before anything it sent is used.
+ */
+async function boundToSharedFolder(
+  ctx: FileReaderContext,
+  key: string,
+  root: string | null,
+): Promise<Confirm> {
+  const confirm = async () => {
+    if (!(await sharesWorkspace(ctx, key, root))) throw new FolderChanged();
+  };
+  await confirm();
+  return confirm;
+}
+
 /** One asset of a task file, named relative to its own folder (`sessions.files.assets`). */
 async function readAsset(
   ctx: FileReaderContext,
   key: string,
   facts: FileFacts,
   rootPath: string,
+  confirm?: Confirm,
 ): Promise<FileRead> {
-  const answer = asRecord(
-    await ctx.request("sessions.files.assets", {
+  let raw: unknown;
+  try {
+    raw = await ctx.request("sessions.files.assets", {
       sessionKey: key,
       path: rootPath,
       refs: [encodeURIComponent(basename(rootPath))],
-    }),
-  );
+    });
+  } catch (error) {
+    await confirm?.();
+    throw error;
+  }
+  await confirm?.();
+  const answer = asRecord(raw);
   const asset = asRecord(Array.isArray(answer?.assets) ? answer.assets[0] : null);
   const error = str(asset?.error);
   if (error === "not_found") return { status: "missing", facts };
@@ -761,11 +814,13 @@ async function readFromWorkspace(
   botId: string,
   path: string,
   facts: FileFacts,
+  confirm?: Confirm,
 ): Promise<FileRead> {
   let answer: RawRecord | null;
   try {
     answer = asRecord(await ctx.request("agents.workspace.get", { agentId: botId, path }));
   } catch (error) {
+    await confirm?.();
     const refusal = refusalOf(error);
     if (refusal.type === "workspace_file_not_found") return { status: "missing", facts };
     if (refusal.type === "workspace_file_unsupported")
@@ -788,6 +843,7 @@ async function readFromWorkspace(
     }
     throw error;
   }
+  await confirm?.();
   const file = asRecord(answer?.file);
   const content = typeof file?.content === "string" ? file.content : null;
   const mimeType = str(file?.mimeType) ?? "text/plain";
@@ -811,8 +867,31 @@ async function readFromWorkspace(
 /**
  * A task's file, from the reader section 8 allows: the task reader first when
  * the facts allow it, then the picture or asset reader its answer leads to.
+ * The workspace reader is used only while the task's row, read just before
+ * and just after it, establishes the bot's workspace as the task's folder;
+ * when the row changed, what it sent is dropped and the file is read once
+ * more from fresh facts.
  */
 export async function readTaskFile(
+  ctx: FileReaderContext,
+  key: string,
+  botId: string,
+  path: string,
+): Promise<FileRead> {
+  try {
+    return await readTaskFileOnce(ctx, key, botId, path);
+  } catch (error) {
+    if (!(error instanceof FolderChanged)) throw error;
+  }
+  try {
+    return await readTaskFileOnce(ctx, key, botId, path);
+  } catch (error) {
+    if (!(error instanceof FolderChanged)) throw error;
+    return { status: "failed", message: error.message };
+  }
+}
+
+async function readTaskFileOnce(
   ctx: FileReaderContext,
   key: string,
   botId: string,
@@ -837,10 +916,17 @@ export async function readTaskFile(
   const follow = (step: ReadStep): Promise<FileRead> | FileRead => {
     if ("stop" in step) return { status: "cannot-show", facts, limit: step.stop };
     if (step.reader === "sessions.files.assets") return readAsset(ctx, key, facts, rootPath);
-    if (step.reader === "agents.workspace.get")
-      return readFromWorkspace(ctx, botId, plan.workspacePath!, facts);
+    if (step.reader === "agents.workspace.get") return fromWorkspace(facts);
     return readWithTaskReader();
   };
+  const fromWorkspace = async (facts: FileFacts): Promise<FileRead> =>
+    readFromWorkspace(
+      ctx,
+      botId,
+      plan.workspacePath!,
+      facts,
+      await boundToSharedFolder(ctx, key, list.root),
+    );
   const readWithTaskReader = async (): Promise<FileRead> => {
     let answer: RawRecord | null;
     try {
@@ -894,21 +980,23 @@ export async function readTaskFile(
     if ("stop" in after) return { status: "cannot-show", facts: next, limit: after.stop };
     const nextFacts = next;
     if (after.reader === "sessions.files.assets") return readAsset(ctx, key, nextFacts, rootPath);
-    if (after.reader === "agents.workspace.get")
-      return readFromWorkspace(ctx, botId, plan.workspacePath!, nextFacts);
+    if (after.reader === "agents.workspace.get") return fromWorkspace(nextFacts);
     return { status: "cannot-show", facts: next, limit: { code: "not-text-or-media", mimeType } };
   };
   try {
     return await follow(planTaskRead(plan, list.folder));
   } catch (error) {
+    if (error instanceof FolderChanged) throw error;
     return { status: "failed", message: refusalOf(error).message };
   }
 }
 
 /**
  * A file of the bot's workspace. With `key`, the open task whose asset reader
- * may send its recordings, videos and large scripts, when that task's folder
- * is established as this workspace.
+ * may send its recordings, videos and large scripts, while that task's row,
+ * read just before and just after the asset reader, establishes its folder as
+ * this workspace; when the row changed, what it sent is dropped and the file
+ * is planned once more from fresh facts.
  */
 export async function readWorkspaceFile(
   ctx: FileReaderContext,
@@ -918,13 +1006,21 @@ export async function readWorkspaceFile(
   key: string | null,
 ): Promise<FileRead> {
   const facts: FileFacts = { name: basename(path), path, size, updatedAt: null, mimeType: null };
-  try {
-    const folder = key ? (await listTaskFiles({ ...ctx, maxChars: undefined }, key)).folder : null;
-    const step = planWorkspaceRead({ name: facts.name, size }, folder);
+  const once = async (): Promise<FileRead> => {
+    const list = key ? await listTaskFiles({ ...ctx, maxChars: undefined }, key) : null;
+    const step = planWorkspaceRead({ name: facts.name, size }, list?.folder ?? null);
     if ("stop" in step) return { status: "cannot-show", facts, limit: step.stop };
-    if (step.reader === "sessions.files.assets" && key)
-      return await readAsset(ctx, key, facts, path);
+    if (step.reader === "sessions.files.assets" && key && list)
+      return await readAsset(ctx, key, facts, path, await boundToSharedFolder(ctx, key, list.root));
     return await readFromWorkspace(ctx, botId, path, facts);
+  };
+  try {
+    try {
+      return await once();
+    } catch (error) {
+      if (!(error instanceof FolderChanged)) throw error;
+    }
+    return await once();
   } catch (error) {
     return { status: "failed", message: refusalOf(error).message };
   }
