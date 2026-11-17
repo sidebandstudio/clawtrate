@@ -308,6 +308,12 @@ export type ClientOptions = {
    * tasks followed at once (`MAX_TRACKED_TASKS`).
    */
   limits?: { trackedTasks?: number };
+  /**
+   * Pin the connection to the read tier: every connect asks for
+   * `operator.read` alone, whatever the stored token holds, and access is
+   * never requested, so every write fails at once.
+   */
+  readOnly?: boolean;
 };
 
 /** A file sent with a message, as `chat.send` takes it: base64 content. */
@@ -850,6 +856,8 @@ export class ClawtrateClient {
    * reconnects asking for exactly what was granted of that set.
    */
   async requestAccess(): Promise<void> {
+    if (this.options.readOnly)
+      throw new Error("This host only reads; it does not ask for more access.");
     if (INTERACTIVE_SCOPES.every((scope) => this.holds(scope))) return;
     if (!this.settings) throw new Error("Connect to a gateway first.");
     this.upgradeWanted = true;
@@ -2917,7 +2925,8 @@ export class ClawtrateClient {
         gatewayUrl: settings.url,
         deviceId: identity.deviceId,
         paired,
-        requestedScopes: stored ? [...stored.heldScopes] : [...READ_SCOPES],
+        requestedScopes:
+          stored && !this.options.readOnly ? [...stored.heldScopes] : [...READ_SCOPES],
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
         serverVersion: sameGateway ? state.connection.serverVersion : null,
       },
@@ -2984,7 +2993,7 @@ export class ClawtrateClient {
         // Once paired, the device token is the credential; the bootstrap token is no longer sent.
         const bootstrap = token ? null : settings.token;
         // Exactly the scopes this client means to hold, never what the token happens to allow.
-        const requested = token ? token.heldScopes : [...READ_SCOPES];
+        const requested = token && !this.options.readOnly ? token.heldScopes : [...READ_SCOPES];
         const plan = await lifecycle.buildPlan({
           client,
           role: "operator",
@@ -3742,7 +3751,11 @@ export class ClawtrateClient {
       // scopes this client means to hold, so a broader grant is never asked for.
       load: async ({ deviceId, role }) => {
         const record = await this.loadToken(url, deviceId, role);
-        return record ? { token: record.token, scopes: [...record.heldScopes] } : null;
+        if (!record) return null;
+        return {
+          token: record.token,
+          scopes: this.options.readOnly ? [...READ_SCOPES] : [...record.heldScopes],
+        };
       },
       store: async ({ deviceId, role, token, scopes }) => {
         if (!current()) return;

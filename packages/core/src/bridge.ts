@@ -95,6 +95,11 @@ export type HostInfo = {
   version: string;
   /** Set when the host was started against the local development gateway. */
   devGateway: { url: string } | null;
+  /**
+   * Set when the host pins its connection to the read tier: it never asks for
+   * more access and refuses every command that writes.
+   */
+  readOnly?: boolean;
 };
 
 /** Renderer-side view of the bridge, implemented over IPC or a WebSocket. */
