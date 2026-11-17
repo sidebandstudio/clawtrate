@@ -15,12 +15,7 @@ import {
   MAX_VIEWER_PENDING_COMMANDS,
   type BridgeCommand,
 } from "../src/bridge.ts";
-import {
-  MAX_TASKS_WITH_OUTBOX,
-  MAX_TRACKED_TASKS,
-  MAX_OUTBOX_PER_TASK,
-  type ClawtrateClient,
-} from "../src/client.ts";
+import { ClawtrateClient, MAX_TRACKED_TASKS, MAX_OUTBOX_PER_TASK } from "../src/client.ts";
 import {
   encodeBridgeFrame,
   MAX_BRIDGE_FRAME_BYTES,
@@ -28,7 +23,7 @@ import {
 } from "../src/remote-bridge.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
 import { agentEvent, KEY, openTask } from "./client-harness.ts";
-import { deferred, sleep, until } from "./fake-gateway.ts";
+import { deferred, FakeGateway, memoryStorage, sleep, testHost, until } from "./fake-gateway.ts";
 
 /** A client stand-in that records what reaches it. */
 function stubClient(overrides: Partial<Record<string, (...args: never[]) => unknown>> = {}) {
@@ -150,6 +145,29 @@ describe("per-viewer bounds", () => {
 });
 
 describe("client-wide bounds", () => {
+  it("follow the host's own counts, which may be lower, never higher", async () => {
+    const { client } = await openTask({ client: { limits: { trackedTasks: 2 } } });
+    const viewer = createBridgeSession(client, { maxOpenTasks: 1 });
+    try {
+      client.openSession("agent:otto:t1");
+      expect(() => client.openSession("agent:otto:t2")).toThrow("At most 2 tasks");
+      await viewer.apply({ type: "openSession", key: KEY });
+      await expect(viewer.apply({ type: "openSession", key: "agent:otto:t1" })).rejects.toThrow(
+        "1 tasks open",
+      );
+    } finally {
+      viewer.dispose();
+      client.stop();
+    }
+    const host = testHost(new FakeGateway(), memoryStorage({}));
+    expect(
+      () => new ClawtrateClient(host, { limits: { trackedTasks: MAX_TRACKED_TASKS + 1 } }),
+    ).toThrow(RangeError);
+    expect(() =>
+      createBridgeSession(new ClawtrateClient(host), { maxOpenTasks: MAX_VIEWER_OPEN_TASKS + 1 }),
+    ).toThrow(RangeError);
+  });
+
   it(`follows at most MAX_TRACKED_TASKS (${MAX_TRACKED_TASKS}) tasks`, async () => {
     const { client } = await openTask();
     for (let i = 1; i < MAX_TRACKED_TASKS; i += 1) client.openSession(`agent:otto:t${i}`);
@@ -166,23 +184,6 @@ describe("client-wide bounds", () => {
     expect(() => client.sendMessage(KEY, "one more", { mode: "queue" })).toThrow(
       /waiting to be sent/,
     );
-    client.stop();
-  });
-
-  it(`lets at most MAX_TASKS_WITH_OUTBOX (${MAX_TASKS_WITH_OUTBOX}) tasks hold unsent messages`, async () => {
-    const { client, gateway } = await openTask();
-    for (let i = 0; i <= MAX_TASKS_WITH_OUTBOX; i += 1) {
-      const key = `agent:otto:q${i}`;
-      client.openSession(key);
-      gateway.emit("agent", agentEvent(`run-${i}`, 1, "lifecycle", { phase: "start" }, key));
-    }
-    await until(() => client.state.transcripts["agent:otto:q0"]?.runs.length === 1);
-    await sleep(20);
-    for (let i = 0; i < MAX_TASKS_WITH_OUTBOX; i += 1)
-      client.sendMessage(`agent:otto:q${i}`, "later", { mode: "queue" });
-    expect(() =>
-      client.sendMessage(`agent:otto:q${MAX_TASKS_WITH_OUTBOX}`, "later", { mode: "queue" }),
-    ).toThrow(/waiting in/);
     client.stop();
   });
 });

@@ -7,7 +7,7 @@
 // tests, which can read files.
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createBridgeSession } from "../src/bridge.ts";
+import { createBridgeSession, MAX_VIEWER_OPEN_TASKS } from "../src/bridge.ts";
 import {
   enforce,
   jsonTextLength,
@@ -203,20 +203,31 @@ describe("the client keeps within the totals", () => {
     }
   }, 30_000);
 
-  it.each([1, 4])(
-    "with nine tasks of 30 questions each across %i viewers",
-    async (count) => {
+  it.each([
+    // One viewer opens its own most, `MAX_VIEWER_OPEN_TASKS`; four reach the client's, `MAX_TRACKED_TASKS`.
+    [1, MAX_VIEWER_OPEN_TASKS],
+    [4, MAX_TRACKED_TASKS],
+  ])(
+    "with nine tasks asked for, of 30 questions each, across %i viewers: opens %i",
+    async (count, expected) => {
       const { client, gateway } = await openTask();
       const viewers = Array.from({ length: count }, () => createBridgeSession(client));
       try {
+        // The task the harness opened is let go, so the viewers have every slot.
+        client.closeSession(KEY);
         const keys = Array.from({ length: 9 }, (_, i) => `agent:otto:questions-${i}`);
         const opened: string[] = [];
+        const refused: string[] = [];
         for (const [i, key] of keys.entries()) {
           await viewers[i % count]!.apply({ type: "openSession", key }).then(
             () => opened.push(key),
-            () => undefined,
+            (error: Error) => refused.push(error.message),
           );
         }
+        // What was opened is exactly what the bounds allow, and the rest were refused for them.
+        expect(opened).toHaveLength(expected);
+        expect(refused).toHaveLength(9 - expected);
+        for (const message of refused) expect(message).toMatch(/open at once/);
         await until(() =>
           opened.every((key) => client.state.transcripts[key]?.approvalAccess === "ready"),
         );
@@ -233,8 +244,9 @@ describe("the client keeps within the totals", () => {
           const pending = client.state.transcripts[key]!.questions.filter(
             (each) => each.status === "pending",
           );
-          expect(pending.length).toBeLessThanOrEqual(MAX_PENDING_QUESTIONS_PER_TASK);
+          expect(pending).toHaveLength(MAX_PENDING_QUESTIONS_PER_TASK);
         }
+        expect(Object.keys(client.state.transcripts).sort()).toEqual([...opened].sort());
         expectWithinTotals(client.state);
       } finally {
         viewers.forEach((viewer) => viewer.dispose());

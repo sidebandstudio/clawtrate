@@ -11,7 +11,6 @@ import {
   MAX_OUTBOX_PER_TASK,
   MAX_PENDING_APPROVALS_PER_TASK,
   MAX_RETAINED_ATTACHMENT_BYTES,
-  MAX_TASKS_WITH_OUTBOX,
   MAX_TRACKED_TASKS,
   type OutgoingAttachment,
 } from "../src/client.ts";
@@ -25,7 +24,7 @@ import {
   type TaskActivity,
 } from "../src/runs.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
-import { agentEvent, KEY, openTask } from "./client-harness.ts";
+import { agentEvent, KEY, openTask, questionRecord } from "./client-harness.ts";
 import { GatewayError, deferred, sleep, until } from "./fake-gateway.ts";
 
 const refuse = () => {
@@ -70,22 +69,6 @@ describe("every message an outbox holds counts (A5, B2)", () => {
       client.cancelQueued(KEY, id);
     }
     expect(() => client.sendMessage(KEY, "one more", { mode: "queue" })).toThrow(/already holds/);
-    client.stop();
-  });
-
-  it(`lets at most MAX_TASKS_WITH_OUTBOX (${MAX_TASKS_WITH_OUTBOX}) tasks hold failed messages`, async () => {
-    const { client, gateway } = await openTask();
-    gateway.handlers["chat.send"] = refuse;
-    for (let i = 0; i <= MAX_TASKS_WITH_OUTBOX; i += 1) client.openSession(`agent:otto:f${i}`);
-    for (let i = 0; i < MAX_TASKS_WITH_OUTBOX; i += 1) client.sendMessage(`agent:otto:f${i}`, "x");
-    await until(() =>
-      Array.from({ length: MAX_TASKS_WITH_OUTBOX }, (_, i) => `agent:otto:f${i}`).every(
-        (key) => client.state.transcripts[key]?.outbox[0]?.status === "failed",
-      ),
-    );
-    expect(() => client.sendMessage(`agent:otto:f${MAX_TASKS_WITH_OUTBOX}`, "x")).toThrow(
-      /waiting in/,
-    );
     client.stop();
   });
 });
@@ -172,9 +155,14 @@ describe("operations a viewer leaves waiting for access (A5, B2)", () => {
     gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
     gateway.handlers["device.scopes.waitUpgrade"] = () => new Promise(() => {});
     // Spread over tasks: each shows at most MAX_PENDING_APPROVALS_PER_TASK.
-    const where = (i: number) => `agent:otto:w${Math.floor(i / MAX_PENDING_APPROVALS_PER_TASK)}`;
-    for (let i = 0; i <= MAX_ACCESS_WAITERS; i += 1) client.openSession(where(i));
-    for (let i = 0; i <= MAX_ACCESS_WAITERS; i += 1) {
+    // The task already open is the first.
+    const where = (i: number) => {
+      const n = Math.floor(i / MAX_PENDING_APPROVALS_PER_TASK);
+      return n === 0 ? KEY : `agent:otto:w${n}`;
+    };
+    for (let i = MAX_PENDING_APPROVALS_PER_TASK; i < MAX_ACCESS_WAITERS; i += 1)
+      client.openSession(where(i));
+    for (let i = 0; i < MAX_ACCESS_WAITERS; i += 1) {
       gateway.emit("exec.approval.requested", {
         id: `ap-${i}`,
         request: { command: "ls", sessionKey: where(i), allowedDecisions: ["allow-once", "deny"] },
@@ -182,19 +170,23 @@ describe("operations a viewer leaves waiting for access (A5, B2)", () => {
         expiresAtMs: 9_000_000_000_000,
       });
     }
-    await until(() =>
-      client.state.transcripts[where(MAX_ACCESS_WAITERS)]!.approvals.some(
-        (each) => each.id === `ap-${MAX_ACCESS_WAITERS}`,
-      ),
+    // One more operation, in a task already open: answering a question.
+    gateway.emit("agent", agentEvent("asking", 1, "lifecycle", { phase: "start" }, where(0)));
+    gateway.emit("question.requested", questionRecord("ask_more", "asking", where(0)));
+    await until(
+      () =>
+        client.state.transcripts[where(MAX_ACCESS_WAITERS - 1)]!.approvals.some(
+          (each) => each.id === `ap-${MAX_ACCESS_WAITERS - 1}`,
+        ) && client.state.transcripts[where(0)]!.questions.length === 1,
     );
     const waiting = Array.from({ length: MAX_ACCESS_WAITERS }, (_, i) =>
       client.resolveApproval(where(i), `ap-${i}`, "deny").catch(() => {}),
     );
     void waiting;
     await until(() => client.pendingAccessWaiters === MAX_ACCESS_WAITERS);
-    await expect(
-      client.resolveApproval(where(MAX_ACCESS_WAITERS), `ap-${MAX_ACCESS_WAITERS}`, "deny"),
-    ).rejects.toThrow(/Too many operations/);
+    await expect(client.answerQuestion(where(0), "ask_more", { color: ["Blue"] })).rejects.toThrow(
+      /Too many operations/,
+    );
     client.stop();
   });
 });

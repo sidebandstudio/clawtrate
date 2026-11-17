@@ -7,7 +7,7 @@ import {
   type AttachmentInfo,
   type AttachmentStore,
 } from "./attachments.ts";
-import { MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
+import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { QuestionAnswer, StepRead } from "./runs.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 
@@ -129,7 +129,7 @@ const SESSION_KEY_PATTERN = /^[\w:.@+-]{1,512}$/;
  * bounded strings without control characters, never parsed.
  */
 export const MAX_OPAQUE_ID_CHARS = 512;
-/** Tasks one viewer may hold open at once. */
+/** Tasks one viewer may hold open at once: the default, and the most a host may set (`BridgePolicy.maxOpenTasks`). */
 export const MAX_VIEWER_OPEN_TASKS = 4;
 /** Commands one viewer may have in flight at once. */
 export const MAX_VIEWER_PENDING_COMMANDS = 16;
@@ -365,6 +365,8 @@ export type BridgePolicy = {
    * recorded as read: that approval stays deny-only for the viewer.
    */
   maxResultChars?: number;
+  /** Tasks one viewer may hold open: `MAX_VIEWER_OPEN_TASKS` unless the host sets fewer. */
+  maxOpenTasks?: number;
 };
 
 /**
@@ -393,7 +395,7 @@ export function createBridgeSession(
  * find any it does not name.
  */
 class ViewerSession implements BridgeSession {
-  /** The tasks this viewer has open, at most `MAX_VIEWER_OPEN_TASKS`. */
+  /** The tasks this viewer has open, at most `openLimit`. */
   private readonly open = new Set<string>();
   /** Task creations under way: they count against this viewer's open tasks before the gateway is asked. */
   private creating = 0;
@@ -404,9 +406,13 @@ class ViewerSession implements BridgeSession {
   private readonly client: ClawtrateClient;
   private readonly policy: BridgePolicy;
 
+  /** Tasks this viewer may hold open: the host's count, at most `MAX_VIEWER_OPEN_TASKS`. */
+  private readonly openLimit: number;
+
   constructor(client: ClawtrateClient, policy: BridgePolicy) {
     this.client = client;
     this.policy = policy;
+    this.openLimit = hostLimit(policy.maxOpenTasks, MAX_VIEWER_OPEN_TASKS, "maxOpenTasks");
   }
 
   /** Task commands act only on tasks this viewer has open. */
@@ -416,8 +422,8 @@ class ViewerSession implements BridgeSession {
   }
 
   private checkRoom(): void {
-    if (this.open.size + this.creating >= MAX_VIEWER_OPEN_TASKS) {
-      throw new Error(`A view can hold ${MAX_VIEWER_OPEN_TASKS} tasks open at once.`);
+    if (this.open.size + this.creating >= this.openLimit) {
+      throw new Error(`A view can hold ${this.openLimit} tasks open at once.`);
     }
   }
 

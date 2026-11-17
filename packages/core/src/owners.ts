@@ -19,7 +19,6 @@ import {
   MAX_OUTCOME_LOOKUPS,
   MAX_SPAWN_LINKS,
   MAX_STREAMS_PER_TASK,
-  MAX_TASKS_WITH_OUTBOX,
 } from "./client.ts";
 import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
 import { emptyActivity } from "./runs.ts";
@@ -121,7 +120,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   accessWaiters: { max: MAX_ACCESS_WAITERS, each: SHORT, row: "bookkeeping" },
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
   attachmentContent: {
-    max: MAX_TASKS_WITH_OUTBOX * MAX_OUTBOX,
+    max: T * MAX_OUTBOX,
     each: 2 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
     row: "outboxFiles",
   },

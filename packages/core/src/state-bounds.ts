@@ -110,8 +110,11 @@ export const MAX_MESSAGE_LINE_CHARS = 2_048;
 
 // Counts ---------------------------------------------------------------------------
 
-/** Tasks the client follows at once (also `MAX_TRACKED_TASKS` in the client). */
-export const MAX_TRACKED_TASKS = 16;
+/**
+ * Tasks the client follows at once: the default, and the most a host may set
+ * (`ClientOptions.limits.trackedTasks`); a host on a smaller device sets fewer.
+ */
+export const MAX_TRACKED_TASKS = 8;
 /** Runs one task keeps, finished or not; finished ones are at most `MAX_RUNS_PER_TASK`. */
 export const MAX_RUN_LIST = 32;
 /** Steps one task keeps across its runs. */

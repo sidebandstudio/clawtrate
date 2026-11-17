@@ -196,8 +196,6 @@ export const MAX_TRACKED_TASKS = TRACKED_TASKS;
  * dropped to make room.
  */
 export const MAX_OUTBOX_PER_TASK = MAX_OUTBOX;
-/** Tasks whose outbox may hold messages at once. */
-export const MAX_TASKS_WITH_OUTBOX = 8;
 /**
  * Decoded bytes of files the client keeps for messages in outboxes, across
  * every task, until history confirms them or the user deletes them. With the
@@ -304,6 +302,12 @@ export type ClientOptions = {
   requestTimeoutMs?: number;
   /** First wait before a creation without an answer is asked again; `CREATION_CHECK_MS` unless a test shortens it. */
   creationCheckMs?: number;
+  /**
+   * Counts the host sets for its device. Each defaults to the bound the
+   * retention arithmetic assumes and may only be lower: `trackedTasks`, the
+   * tasks followed at once (`MAX_TRACKED_TASKS`).
+   */
+  limits?: { trackedTasks?: number };
 };
 
 /** A file sent with a message, as `chat.send` takes it: base64 content. */
@@ -665,9 +669,13 @@ export class ClawtrateClient {
   /** Whole reads from history in flight (`MAX_FULL_READS`). */
   private fullReads = 0;
 
+  /** Tasks followed at once: the host's count, at most `MAX_TRACKED_TASKS`. */
+  private readonly trackedLimit: number;
+
   constructor(host: ClawtrateHost, options: ClientOptions = {}) {
     this.host = host;
     this.options = options;
+    this.trackedLimit = hostLimit(options.limits?.trackedTasks, MAX_TRACKED_TASKS, "trackedTasks");
   }
 
   get state(): ClawtrateState {
@@ -738,8 +746,8 @@ export class ClawtrateClient {
     // A task's key is kept, and keys every map of the task, only within the id cap.
     if (jsonTextLength(key) > MAX_ID_CHARS) throw new Error("That task key is too long.");
     const taken = this.openSessions.size + this.retained.size + this.reservedTasks;
-    if (!this.tracked(key) && !reservation && taken >= MAX_TRACKED_TASKS) {
-      throw new Error(`At most ${MAX_TRACKED_TASKS} tasks can be open at once.`);
+    if (!this.tracked(key) && !reservation && taken >= this.trackedLimit) {
+      throw new Error(`At most ${this.trackedLimit} tasks can be open at once.`);
     }
     const count = this.openSessions.get(key) ?? 0;
     this.openSessions.set(key, count + 1);
@@ -1164,19 +1172,6 @@ export class ClawtrateClient {
         `This task already holds ${MAX_OUTBOX_PER_TASK} messages waiting to be sent, confirmed, retried or deleted.`,
       );
     }
-    if (here === 0) this.checkOutboxTaskRoom();
-  }
-
-  /** Refuse a message in one more task once `MAX_TASKS_WITH_OUTBOX` tasks hold messages, counting tasks being created. */
-  private checkOutboxTaskRoom(): void {
-    const busy =
-      Object.values(this.state.transcripts).filter((transcript) => transcript.outbox.length > 0)
-        .length + this.reservedTasks;
-    if (busy >= MAX_TASKS_WITH_OUTBOX) {
-      throw new Error(
-        `Messages are waiting in ${MAX_TASKS_WITH_OUTBOX} tasks; let some of them go out first.`,
-      );
-    }
   }
 
   /** Forget a message's file content and give its bytes back. */
@@ -1372,10 +1367,9 @@ export class ClawtrateClient {
       throw new Error("Too many task creations are still unsettled; dismiss some first.");
     }
     // The new task's slot is held before anything is asked of the gateway, and given back on failure.
-    if (this.openSessions.size + this.retained.size + this.reservedTasks >= MAX_TRACKED_TASKS) {
-      throw new Error(`At most ${MAX_TRACKED_TASKS} tasks can be open at once.`);
+    if (this.openSessions.size + this.retained.size + this.reservedTasks >= this.trackedLimit) {
+      throw new Error(`At most ${this.trackedLimit} tasks can be open at once.`);
     }
-    this.checkOutboxTaskRoom();
     // Owned before anything is awaited: its key, its task slot and its place in the count are
     // taken now, so the same request asked meanwhile joins it rather than sending a second key.
     this.reservedTasks += 1;
@@ -3770,6 +3764,14 @@ function strongerResync(
   if (!a) return b;
   if (!b) return a;
   return RESYNC_STRENGTH[b] > RESYNC_STRENGTH[a] ? b : a;
+}
+
+/** A count a host sets: the default when it sets none, and never above it. */
+export function hostLimit(value: number | undefined, max: number, name: string): number {
+  if (value === undefined) return max;
+  if (!Number.isInteger(value) || value < 1 || value > max)
+    throw new RangeError(`${name} must be a whole number from 1 to ${max}.`);
+  return value;
 }
 
 function errorMessage(error: unknown): string {
