@@ -825,6 +825,40 @@ describe("sequence numbers (F-107)", () => {
 });
 
 describe("rebuilding from history (F-107, F-093)", () => {
+  it("F-120: a run a message from another bot started is anchored to that message's row, by the run's key", () => {
+    // As chat.history shows it in the recipient's task: the incoming message is an assistant
+    // row with inter-session provenance and the key `${runId}:user` of the run it started.
+    const rows = [
+      { role: "user", content: "Reply with a note.", __openclaw: { id: "u1", seq: 1 } },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "A note." }],
+        __openclaw: { id: "a1", seq: 2, runId: "run-1" },
+      },
+      {
+        role: "assistant",
+        content: "Could you look over the plan?",
+        idempotencyKey: "run-2:user",
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:atlas:main",
+          sourceTool: "sessions_send",
+        },
+        __openclaw: { id: "m1", seq: 3, idempotencyKey: "run-2:user" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Happy to help." }],
+        __openclaw: { id: "a2", seq: 4, runId: "run-2" },
+      },
+    ];
+    const runs = runsFromHistory(rows, null, ctx());
+    expect(runs.map((run) => [run.id, run.anchorItemId])).toEqual([
+      ["run-1", "u1:0"],
+      ["run-2", "m1:2"],
+    ]);
+  });
+
   it("gives the same runs and steps a reload shows as the live stream did", () => {
     const live = only(play(toolRun()).activity);
     raw = new RawTable();

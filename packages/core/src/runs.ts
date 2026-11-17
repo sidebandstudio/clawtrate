@@ -1909,6 +1909,13 @@ export function runsFromHistory(
   /** Runs whose last persisted content is a thinking block: that segment may still be streaming. */
   const trailingThinking = new Map<string, boolean>();
   let anchor: string | null = null;
+  /**
+   * Runs that a message from another session started, by run id: `chat.history`
+   * shows such a message as an assistant row with `provenance.kind:
+   * "inter_session"` and, like a user row, the key `${runId}:user` of the run
+   * it started (OpenClaw 2026.10.6), not as a user row.
+   */
+  const startedBy = new Map<string, string>();
   const rows = Array.isArray(messages) ? messages : [];
   const first = asRecord(rows[0]);
   const cutRunId =
@@ -1923,6 +1930,13 @@ export function runsFromHistory(
       anchor = historyItemId(message, index);
       return;
     }
+    const provenance = asRecord(message.provenance) ?? asRecord(meta(message).provenance);
+    if (provenance?.kind === "inter_session" && !str(meta(message).runId)) {
+      const key = rowIdempotencyKey(message);
+      if (key?.endsWith(":user"))
+        startedBy.set(key.slice(0, -":user".length), historyItemId(message, index));
+      return;
+    }
     // The gateway's injected aborted-partial row names its run in `openclawAbort`.
     const runId = str(meta(message).runId) ?? str(asRecord(message.openclawAbort)?.runId);
     if (!runId) return;
@@ -1935,7 +1949,7 @@ export function runsFromHistory(
           state: "running",
           origin: "history",
           bound: true,
-          anchorItemId: anchor,
+          anchorItemId: startedBy.get(runId) ?? anchor,
           reasoningAnchor: runId === cutRunId ? "c" : null,
         },
         at,
