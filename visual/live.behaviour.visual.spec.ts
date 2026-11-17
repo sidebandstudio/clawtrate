@@ -3,6 +3,8 @@
 // and attachments (docs/design/conversation.md). The fixture answers the
 // engine's commands closely enough for the interface; what depends on the
 // gateway is proven in e2e/. Each title starts with the rows it covers.
+import type { Run } from "../packages/core/src/runs.ts";
+import type { ClawtrateState } from "../packages/core/src/types.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { openFixture, OTTO_DISK, settle } from "./fixture.ts";
 
@@ -16,18 +18,20 @@ const announcer = (page: Page) => page.getByTestId("announcer");
 async function setRun(page: Page, change: Record<string, unknown>) {
   await page.evaluate((patch) => {
     const fixture = (
-      window as unknown as { clawtrateFixture: { setState: (f: (s: any) => any) => void } }
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
     ).clawtrateFixture;
     fixture.setState((state) => {
       const key = "agent:otto:disk-space";
-      const transcript = state.transcripts[key];
+      const transcript = state.transcripts[key]!;
       return {
         ...state,
         transcripts: {
           ...state.transcripts,
           [key]: {
             ...transcript,
-            runs: transcript.runs.map((run: any) =>
+            runs: transcript.runs.map((run: Run) =>
               run.id === "run-live" ? { ...run, ...patch } : run,
             ),
           },
@@ -260,7 +264,9 @@ test.describe("the status line", () => {
     });
     await page.evaluate(() => {
       const fixture = (
-        window as unknown as { clawtrateFixture: { setState: (f: (s: any) => any) => void } }
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
       ).clawtrateFixture;
       fixture.setState((state) => {
         const key = "agent:otto:disk-space";
@@ -268,7 +274,7 @@ test.describe("the status line", () => {
           ...state,
           transcripts: {
             ...state.transcripts,
-            [key]: { ...state.transcripts[key], approvals: [] },
+            [key]: { ...state.transcripts[key]!, approvals: [] },
           },
         };
       });
@@ -656,7 +662,9 @@ test.describe("errors and resync", () => {
     await expect(page.getByTestId("outgoing")).toHaveCount(1);
     await page.evaluate(() => {
       const fixture = (
-        window as unknown as { clawtrateFixture: { setState: (f: (s: any) => any) => void } }
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
       ).clawtrateFixture;
       fixture.setState((state) => ({
         ...state,
@@ -666,13 +674,15 @@ test.describe("errors and resync", () => {
     await expect(page.getByTestId("status-strip")).toContainText("Reconnecting");
     await page.evaluate(() => {
       const fixture = (
-        window as unknown as { clawtrateFixture: { setState: (f: (s: any) => any) => void } }
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
       ).clawtrateFixture;
       // History now holds the message: it leaves the outbox and the run is anchored to it.
       fixture.setState((state) => {
         const key = "agent:otto:disk-space";
-        const transcript = state.transcripts[key];
-        const sent = transcript.outbox[0];
+        const transcript = state.transcripts[key]!;
+        const sent = transcript.outbox[0]!;
         return {
           ...state,
           connection: { ...state.connection, status: "connected", connectedAt: Date.now() + 1 },
@@ -692,7 +702,7 @@ test.describe("errors and resync", () => {
                   model: null,
                 },
               ],
-              runs: transcript.runs.map((run: any) => ({
+              runs: transcript.runs.map((run: Run) => ({
                 ...run,
                 messageId: null,
                 anchorItemId: "h-sent",
