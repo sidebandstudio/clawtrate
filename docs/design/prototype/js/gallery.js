@@ -680,10 +680,10 @@
         { name: "Offline", note: "Send works: the host holds the message and sends it once on reconnect.", still: true, html: CT.composer({ bot: "otto", run: "offline", text: "Is the disk still at 61%?" }) },
         { name: "With attachments", still: true, html: CT.composer({ bot: "otto", text: "Here is the usage chart.", files: [{ name: "disk-usage.png", size: 1.4, image: true }, { name: "backup-2026-11-15.log", size: 0.2 }] }) },
         {
-          name: "An attachment over its limit",
-          note: "The refusal shows before anything is sent. Send is disabled until the file is removed.",
+          name: "Attachments over their own limits",
+          note: "6 MB for an image, 20 MB for any other file. The refusal shows before anything is sent, and Send is disabled until the files are removed.",
           still: true,
-          html: CT.composer({ bot: "otto", text: "Here is the scan.", files: [{ name: "scan.png", size: 8.2, image: true }, { name: "transcode-cache.tar", size: 24 }] }),
+          html: CT.composer({ bot: "otto", text: "Here is the scan.", files: [{ name: "scan.png", size: 8.2, image: true }, { name: "logs.tar", size: 21 }, { name: "notes.txt", size: 0.1 }] }),
         },
         {
           name: "Attachments over the limit for one message",

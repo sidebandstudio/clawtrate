@@ -2434,3 +2434,11 @@ dl.standing-grid {
 .turn-error-actions .spacer {
   flex: 1;
 }
+
+/* A disabled button on a card keeps a fill that shows on the card, and readable text. */
+.request > .request-actions .button:disabled {
+  background: var(--bg-selected);
+  color: var(--text-faint);
+  opacity: 1;
+  cursor: default;
+}

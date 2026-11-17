@@ -435,7 +435,8 @@
       (stopped && made ? CT.note("<b>The call was made. Work handed to T3 Code may continue there.</b>") : "") +
       CT.cardFoot(
         made && link
-          ? `<a class="link-button" href="${S.t3Link}" data-action="open-thread" aria-label="Open the T3 Code thread in your browser">Open thread${CT.icon("external")}</a>`
+          ? // In the app this is a link to the address the result carries. Here it only says so.
+            `<a class="link-button" href="#" data-href="${S.t3Link}" data-action="open-thread" aria-label="Open the T3 Code thread in your browser">Open thread${CT.icon("external")}</a>`
           : "",
         {
           tool: "t3code__send_message",

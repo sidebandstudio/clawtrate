@@ -87,6 +87,14 @@
   // keep: something the reader just opened. Following never pushes its first line out of view.
   function follow(keep) {
     if (state.view !== "otto") return;
+    if (!state.pinned && keep) {
+      // Not following: what the reader opened is brought into view by the smallest
+      // scroll that shows it, and never past its first line.
+      const box = transcript.getBoundingClientRect();
+      const rect = keep.getBoundingClientRect();
+      const down = Math.min(rect.bottom - box.bottom + 12, rect.top - box.top - TOP_BAND);
+      if (down > 0) transcript.scrollTop += down;
+    }
     if (state.pinned) {
       let top = transcript.scrollHeight - transcript.clientHeight;
       if (keep) {
@@ -1246,7 +1254,7 @@
     if (action === "send") send("plain");
     if (action === "attach") {
       // The prototype adds sample files: an image within its limit, then a file over its own.
-      const samples = [{ name: "disk-usage.png", size: 1.4, image: true }, { name: "transcode-cache.tar", size: 24, image: false }, { name: "scan.png", size: 8.2, image: true }];
+      const samples = [{ name: "disk-usage.png", size: 1.4, image: true }, { name: "logs.tar", size: 21, image: false }, { name: "scan.png", size: 8.2, image: true }];
       state.files.push(samples[state.files.length % samples.length]);
       renderComposer();
     }

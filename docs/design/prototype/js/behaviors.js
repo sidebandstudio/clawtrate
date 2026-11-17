@@ -346,7 +346,7 @@
     // A link from a tool result opens the system browser. The prototype stays on the page.
     if (action === "open-thread") {
       event.preventDefault();
-      return CT.toast(`Opens ${actor.getAttribute("href")} in your browser. Nothing is fetched before that; the prototype stays on this page.`);
+      return CT.toast(`Opens ${actor.dataset.href} in your browser. Nothing is fetched before that; the prototype stays on this page.`);
     }
 
     if (action === "elsewhere") return CT.toast(actor.dataset.where || "That belongs to another part of the app.");
