@@ -1247,19 +1247,32 @@ test("F-058: two tasks of one bot run at the same time", async ({ page }) => {
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
   await openTask(page, "Otto", "Disk almost full on the media box");
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
-  // The gateway's own record: the second task's run began before the first's ended.
+  // The gateway's own record: the second task's message arrived before the
+  // first task's reply to its own message was recorded.
+  type Row = { role: string; content?: unknown; __openclaw?: { recordTimestampMs?: number } };
   const rows = async (key: string) =>
-    (
-      await gatewayCall<{
-        messages: Array<{ role: string; __openclaw?: { recordTimestampMs?: number } }>;
-      }>("chat.history", { sessionKey: key, limit: 20 })
-    ).messages;
-  const at = (row: { __openclaw?: { recordTimestampMs?: number } } | undefined) =>
-    row?.__openclaw?.recordTimestampMs ?? Number.NaN;
-  const first = await rows("agent:otto:disk-space");
+    (await gatewayCall<{ messages: Row[] }>("chat.history", { sessionKey: key, limit: 40 }))
+      .messages;
+  const at = (row: Row | undefined) => row?.__openclaw?.recordTimestampMs ?? Number.NaN;
+  const said = (row: Row, text: string) => JSON.stringify(row.content ?? "").includes(text);
+  /** The first reply recorded after the user's row that says `text`. */
+  const replyTo = (list: Row[], text: string) => {
+    const asked = list.findLastIndex((row) => row.role === "user" && said(row, text));
+    return asked < 0 ? undefined : list.slice(asked + 1).find((row) => row.role === "assistant");
+  };
+  let firstReplied = Number.NaN;
+  await expect
+    .poll(
+      async () => (firstReplied = at(replyTo(await rows("agent:otto:disk-space"), "First of two"))),
+      {
+        timeout: 30_000,
+      },
+    )
+    .not.toBeNaN();
   const second = await rows("agent:otto:cert-renewal");
-  const firstReplied = at(first.findLast((row) => row.role === "assistant"));
-  const secondAsked = at(second.findLast((row) => row.role === "user"));
+  const secondAsked = at(
+    second.findLast((row) => row.role === "user" && said(row, "Second of two")),
+  );
   expect(secondAsked).toBeLessThan(firstReplied);
   await expect(
     page.getByTestId("transcript-turn").filter({ hasText: "First of two at once." }),
