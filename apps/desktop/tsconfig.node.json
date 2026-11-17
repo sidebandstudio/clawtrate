@@ -8,6 +8,7 @@
     "src/preload/**/*.ts",
     "src/host/**/*.ts",
     "src/web-host/**/*.ts",
+    "packaging/**/*.ts",
     "electron.vite.config.ts",
     "vite.web.config.ts",
     "vite.fixture.config.ts",
