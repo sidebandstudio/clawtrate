@@ -53,3 +53,38 @@ export function patchCounts(hunks: Hunk[]): { added: number; removed: number } {
     }
   return { added, removed };
 }
+
+/**
+ * The numbered form of a change the gateway's history keeps (`details.diff`):
+ * "+3 text" added as line 3, "-3 text" removed from line 3, " 4 text"
+ * unchanged at line 4, and a line of "..." between distant parts. Unchanged
+ * and added lines are numbered in the new file, removed lines in the old one.
+ */
+export function parseNumberedDiff(diff: string): Hunk[] {
+  const hunks: Hunk[] = [];
+  let hunk: Hunk | null = null;
+  const start = (line: number) => {
+    hunk = { oldStart: line, newStart: line, newEnd: line, lines: [] };
+    hunks.push(hunk);
+    return hunk;
+  };
+  for (const raw of diff.split("\n")) {
+    if (/^\s*\.\.\.\s*$/.test(raw)) {
+      hunk = null;
+      continue;
+    }
+    const match = /^([+\- ])\s*(\d+) ?(.*)$/.exec(raw);
+    if (!match) continue;
+    const number = Number(match[2]);
+    const current: Hunk = hunk ?? start(number);
+    const kind = match[1] === "+" ? "add" : match[1] === "-" ? "del" : "same";
+    current.lines.push({
+      kind,
+      text: match[3] ?? "",
+      oldLine: kind === "add" ? null : number,
+      newLine: kind === "del" ? null : number,
+    });
+    if (kind !== "del") current.newEnd = Math.max(current.newEnd, number);
+  }
+  return hunks;
+}

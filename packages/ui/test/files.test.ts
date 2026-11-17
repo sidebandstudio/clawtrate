@@ -1,0 +1,83 @@
+// The Files tab's words and change parsing (work-pane.md, sections 4, 7 and 8).
+import { describe, expect, it } from "vitest";
+import { formatSize, limitSentence, nameParts } from "../src/work/files-format.ts";
+import { parseNumberedDiff, parsePatch, patchCounts } from "../src/work/patch.ts";
+
+describe("sizes and names", () => {
+  it("writes sizes in binary units with one decimal below 10", () => {
+    expect(formatSize(820)).toBe("820 B");
+    expect(formatSize(2_458)).toBe("2.4 KB");
+    expect(formatSize(1_363_149)).toBe("1.3 MB");
+    expect(formatSize(14_680_064)).toBe("14 MB");
+    expect(formatSize(3_565_158)).toBe("3.4 MB");
+    expect(formatSize(262_144)).toBe("256 KB");
+    expect(formatSize(1_048_576)).toBe("1 MB");
+    expect(formatSize(null)).toBe("");
+  });
+
+  it("cuts a long name in the middle so its end and extension stay", () => {
+    expect(nameParts("notes.md")).toEqual({ start: "notes.md", end: "" });
+    const { start, end } = nameParts("disk-report-for-the-media-box-final.md");
+    expect(start + end).toBe("disk-report-for-the-media-box-final.md");
+    expect(end.endsWith(".md")).toBe(true);
+  });
+
+  it("F-449: names the limit the file met", () => {
+    expect(
+      limitSentence(
+        "bundle.js",
+        { code: "script-too-large", size: 2_411_725, limit: 1_048_576 },
+        "Otto",
+      ),
+    ).toBe(
+      "bundle.js is 2.3 MB. The gateway sends stylesheets and scripts from a task's folder up to 1 MB.",
+    );
+    expect(
+      limitSentence(
+        "photo.png",
+        { code: "picture-too-large", size: 3_250_586, limit: 1_048_576, where: "task" },
+        "Otto",
+      ),
+    ).toBe("photo.png is 3.1 MB. From this task's folder the gateway sends pictures up to 1 MB.");
+    expect(
+      limitSentence(
+        "photo.heic",
+        { code: "picture-too-large", size: 7_549_747, limit: 5_242_880, where: "workspace" },
+        "Otto",
+      ),
+    ).toBe("photo.heic is 7.2 MB. The gateway sends pictures from the workspace up to 5 MB.");
+    expect(limitSentence("memo.m4a", { code: "media-outside-task", media: "audio" }, "Otto")).toBe(
+      "This recording is in Otto's workspace, outside this task's folder. The gateway sends recordings only from a task's folder, so it can't be played here.",
+    );
+  });
+});
+
+describe("changes", () => {
+  it("reads a unified patch into hunks, with old and new line numbers", () => {
+    const hunks = parsePatch(
+      "diff --git a/a.md b/a.md\n--- a/a.md\n+++ b/a.md\n@@ -1,2 +1,2 @@\n # A\n-old\n+new\n",
+    );
+    expect(hunks).toHaveLength(1);
+    expect(
+      hunks[0]!.lines.map((line) => [line.kind, line.oldLine, line.newLine, line.text]),
+    ).toEqual([
+      ["same", 1, 1, "# A"],
+      ["del", 2, null, "old"],
+      ["add", null, 2, "new"],
+    ]);
+    expect(patchCounts(hunks)).toEqual({ added: 1, removed: 1 });
+  });
+
+  it("F-152: reads the numbered diff the gateway's history keeps, part by part", () => {
+    const hunks = parseNumberedDiff(
+      "      ...\n 2347 line 2347\n 2348 line 2348\n+2349 line 2349\n+2350 line 2350\n      ...\n-9 gone\n+9 here",
+    );
+    expect(hunks).toHaveLength(2);
+    expect(hunks[0]!.newStart).toBe(2347);
+    expect(hunks[0]!.newEnd).toBe(2350);
+    expect(patchCounts(hunks)).toEqual({ added: 3, removed: 1 });
+    expect(parseNumberedDiff("+1 Leave at 9:00.")[0]!.lines).toEqual([
+      { kind: "add", text: "Leave at 9:00.", oldLine: null, newLine: 1 },
+    ]);
+  });
+});

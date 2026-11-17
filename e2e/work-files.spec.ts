@@ -46,7 +46,12 @@ async function openShell(page: Page) {
   await page.goto(process.env.CLAWTRATE_E2E_URL!);
   const connect = page.getByRole("button", { name: "Use the development gateway" });
   const bots = page.getByTestId("bot");
-  await expect(connect.or(bots.first())).toBeVisible({ timeout: 20_000 });
+  // On a phone the list may be behind the open conversation: present, not shown.
+  await expect
+    .poll(async () => (await connect.isVisible()) || (await bots.count()) === 4, {
+      timeout: 20_000,
+    })
+    .toBe(true);
   if (await connect.isVisible()) {
     await connect.click();
     await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible();
@@ -59,13 +64,16 @@ const botRow = (page: Page, bot: string) =>
   page.getByTestId("bot-list").getByRole("button", { name: new RegExp(`^${bot}\\b`) });
 
 async function openTask(page: Page, bot: string, task: string) {
+  const back = page.getByRole("button", { name: "Back to bots" });
+  if (await back.isVisible()) await back.click();
   const row = botRow(page, bot);
   if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
   const rows = page.getByRole("list", { name: `${bot}'s tasks` }).getByTestId("task");
   const all = page.getByRole("button", { name: /^Show all/ });
   if (await all.isVisible()) await all.click();
   if ((await rows.count()) > 0) await rows.filter({ hasText: task }).click();
-  await expect(page.getByRole("heading", { level: 1, name: task })).toBeVisible();
+  // The title pill names the bot and the task, whatever the transcript shows.
+  await expect(page.getByRole("button", { name: new RegExp(`^${bot}, ${task}\\.`) })).toBeVisible();
 }
 
 const files = (page: Page) => page.locator("#work-tabpanel-files");
@@ -206,6 +214,11 @@ test("F-152: a task started in a git checkout compares its file with the last co
     "Compared with the last commit · +1 −0",
   );
   await expect(page.getByTestId("changes")).toContainText("2 changes in this task");
+  // Each change of the task shows its lines, from the numbered diff the gateway's history keeps.
+  const edited = page.locator(".change[data-step]").first();
+  await expect(edited).toContainText("Edited edit-me.md");
+  await expect(edited.locator('.diff-line[data-kind="del"]')).toContainText("Leave at 9:00.");
+  await expect(edited.locator('.diff-line[data-kind="add"]')).toContainText("Leave at 8:30.");
   await expect(page.locator('.diff-line[data-kind="add"]').last()).toContainText("Leave at 8:30.");
   await shoot(page, "files-changes-1440");
 });
@@ -224,14 +237,12 @@ test("on a phone the Files tab is the pane's sheet", async ({ page }) => {
   await shoot(page, "files-open-390");
   await page.getByRole("button", { name: "Back to this task's files" }).click();
   await page.getByRole("button", { name: "Close work panel" }).last().click();
-  await page.getByRole("button", { name: "Back to bots" }).click();
   await openTask(page, "Otto", "A long log from the end-to-end run");
   await page.getByRole("button", { name: "Show work panel" }).click();
   await fileRow(page, "transcode.log").click();
   await expect(page.getByTestId("reader-cannot")).toBeVisible();
   await shoot(page, "files-too-large-390");
   await page.getByRole("button", { name: "Close work panel" }).last().click();
-  await page.getByRole("button", { name: "Back to bots" }).click();
   await openTask(page, "Pip", "A change in the trail guide");
   await page.getByRole("button", { name: "Show work panel" }).click();
   await fileRow(page, "edit-me.md").click();

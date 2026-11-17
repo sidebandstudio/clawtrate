@@ -1141,19 +1141,27 @@ export function fileChanges(transcript: Pick<Transcript, "runs">, path: string):
     .reverse();
 }
 
-/** A change's patch from a step's raw result, live (`result.details`) or from history (`details`). */
+/**
+ * A change from a step's raw result, live (`result.details`) or from history
+ * (`details`). The live result carries the unified `patch`; the gateway's
+ * history keeps only `diff`, the same change as numbered lines ("+3 text",
+ * "-3 text", " 4 text", and "..." between distant parts).
+ */
 export function stepPatch(raw: StepRaw | null): {
   patch: string | null;
+  diff: string | null;
   created: boolean | null;
   tooLarge: boolean;
 } {
   const result = asRecord(raw?.result);
   const details = asRecord(asRecord(result?.result)?.details) ?? asRecord(result?.details) ?? null;
   const patch = typeof details?.patch === "string" ? details.patch : null;
+  const diff = typeof details?.diff === "string" ? details.diff : null;
   return {
     patch,
+    diff,
     created: typeof details?.created === "boolean" ? details.created : null,
-    tooLarge: details?.truncated === true && patch === null,
+    tooLarge: details?.truncated === true && patch === null && diff === null,
   };
 }
 

@@ -23,7 +23,7 @@ import { Markdown } from "../Markdown.tsx";
 import { collect, isShown, type Shown } from "./content.ts";
 import { downloadBytes } from "./download.ts";
 import { folderOf, formatSize, limitSentence } from "./files-format.ts";
-import { parsePatch, patchCounts, type Hunk } from "./patch.ts";
+import { parseNumberedDiff, parsePatch, patchCounts, type Hunk } from "./patch.ts";
 
 /** Where the file is read from. */
 export type ReaderSource =
@@ -656,9 +656,11 @@ function ChangesView({
             stepId: source.stepId,
           });
           if (read && (read.status === "available" || read.status === "cut-by-gateway")) {
-            const { patch, tooLarge } = stepPatch(read.raw);
-            next = patch
-              ? { source, hunks: parsePatch(patch), state: "ready" }
+            const { patch, diff, tooLarge } = stepPatch(read.raw);
+            // The live result's patch, or the numbered diff the gateway's history keeps.
+            const hunks = patch ? parsePatch(patch) : diff ? parseNumberedDiff(diff) : null;
+            next = hunks
+              ? { source, hunks, state: "ready" }
               : {
                   source,
                   hunks: null,

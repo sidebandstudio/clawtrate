@@ -665,7 +665,7 @@ describe("the run markers and the step behind a file", () => {
     expect(fileChanges({ runs }, "notes/a.md").map((each) => each.stepId)).toEqual(["tool:b"]);
   });
 
-  it("a change's patch is read from a live result and from history alike", () => {
+  it("F-152: a change is read from a live result's patch and from the diff history keeps", () => {
     expect(
       stepPatch({
         source: "live",
@@ -673,15 +673,24 @@ describe("the run markers and the step behind a file", () => {
         call: null,
         result: { result: { details: { patch: "@@", created: true } } },
       }),
-    ).toEqual({ patch: "@@", created: true, tooLarge: false });
+    ).toEqual({ patch: "@@", diff: null, created: true, tooLarge: false });
     expect(
       stepPatch({
         source: "history",
         runId: "r",
         call: null,
-        result: { details: { patch: "@@x" } },
+        // As the gateway's history keeps a write's result: its diff, not its patch.
+        result: {
+          role: "toolResult",
+          details: { changed: true, diff: "-1 Leave at 9:00.\n+1 Leave at 8:30." },
+        },
       }),
-    ).toEqual({ patch: "@@x", created: null, tooLarge: false });
+    ).toEqual({
+      patch: null,
+      diff: "-1 Leave at 9:00.\n+1 Leave at 8:30.",
+      created: null,
+      tooLarge: false,
+    });
   });
 
   it("the paths a file tool's call names, as the gateway's list reads them", () => {
