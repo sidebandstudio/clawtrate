@@ -92,7 +92,11 @@ export function Shell({
   // except off what has just become inert.
   const drawerWasOpen = useRef(false);
   useEffect(() => {
-    if (drawerOpen) {
+    // Right after a resize the last measurement can lag a frame behind, so
+    // focus is decided from the pane's width as it is now.
+    const main = mainRef.current;
+    const drawerNow = panelOpen && (main ? main.clientWidth < DOCK_FROM : drawerOpen);
+    if (drawerNow) {
       if (!panelRef.current?.contains(document.activeElement)) closeRef.current?.focus();
     } else if (drawerWasOpen.current && !panelOpen) {
       const opener = openerRef.current;
@@ -101,8 +105,8 @@ export function Shell({
         : toggleRef.current
       )?.focus();
     }
-    drawerWasOpen.current = drawerOpen;
-  }, [drawerOpen, panelOpen]);
+    drawerWasOpen.current = drawerNow;
+  }, [drawerOpen, panelOpen, mainWidth]);
 
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
