@@ -304,4 +304,73 @@ describe("reconciling sent messages with history (F-075, F-107)", () => {
     ];
     expect(reconcileOutbox(activity, rows).outbox.map((m) => m.id)).toEqual(["m4"]);
   });
+
+  it("matches the row the gateway keeps under the send's key with :user after it", () => {
+    // chat.send and sessions.create: the run id is the idempotency key, and the user row is
+    // recorded as `${runId}:user`, on the row and under its metadata (OpenClaw 2026.10.6).
+    const activity: TaskActivity = {
+      ...emptyActivity,
+      outbox: [
+        message("4600bfb2-0000-4000-8000-000000000001", { status: "unconfirmed" }),
+        message("4600bfb2-0000-4000-8000-000000000002", { messageSeq: 7 }),
+        message("4600bfb2-0000-4000-8000-000000000003"),
+      ],
+    };
+    const rows = [
+      {
+        role: "user",
+        content: "hi",
+        idempotencyKey: "4600bfb2-0000-4000-8000-000000000001:user",
+        __openclaw: {
+          id: "u1",
+          seq: 6,
+          idempotencyKey: "4600bfb2-0000-4000-8000-000000000001:user",
+        },
+      },
+      {
+        role: "user",
+        content: "hi",
+        __openclaw: {
+          id: "u2",
+          seq: 7,
+          idempotencyKey: "4600bfb2-0000-4000-8000-000000000002:user",
+        },
+      },
+      // Another send's row, and a key that only starts like this one's, never match.
+      {
+        role: "user",
+        content: "hi",
+        __openclaw: {
+          id: "u3",
+          seq: 8,
+          idempotencyKey: "4600bfb2-0000-4000-8000-000000000003:userx",
+        },
+      },
+    ];
+    expect(reconcileOutbox(activity, rows).outbox.map((m) => m.id)).toEqual([
+      "4600bfb2-0000-4000-8000-000000000003",
+    ]);
+  });
+
+  it("matches a created task's first message by the run its sessions.create answer named, but never a steer by the run it joined", () => {
+    // sessions.create's idempotency key is the creation's own; the run it starts has another
+    // id, and the user row is recorded under that run: `${runId}:user`.
+    const created = message("creation-1", { messageSeq: 1, runId: "00f9fc21-run" });
+    const steer = message("steer-1", { mode: "steer", runId: "joined-run" });
+    const activity: TaskActivity = { ...emptyActivity, outbox: [created, steer] };
+    const rows = [
+      {
+        role: "user",
+        content: "hi",
+        __openclaw: { id: "u1", seq: 1, idempotencyKey: "00f9fc21-run:user" },
+      },
+      // The joined run's own row belongs to the message that started that run.
+      {
+        role: "user",
+        content: "earlier",
+        __openclaw: { id: "u2", seq: 2, idempotencyKey: "joined-run:user" },
+      },
+    ];
+    expect(reconcileOutbox(activity, rows).outbox.map((m) => m.id)).toEqual(["steer-1"]);
+  });
 });

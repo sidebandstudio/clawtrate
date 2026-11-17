@@ -2411,6 +2411,24 @@ function rowIdempotencyKey(message: RawRecord): string | null {
 }
 
 /**
+ * Whether a user row's key names this outgoing message. The gateway records
+ * a user row under the run it started for the message, with `:user` after it
+ * (`${clientRunId}:user` in OpenClaw 2026.10.6's chat-send-handler). For
+ * `chat.send` that run id is the send's idempotency key (`clientRunId =
+ * p.idempotencyKey`); for `sessions.create` it is the run the answer named,
+ * kept as the message's `runId`. A steer's `runId` is the run it joined, which
+ * names another message's row, so a steer is matched by its own key only.
+ * The bare key is accepted too.
+ */
+function namesOutgoing(rowKey: string | null, outgoing: OutgoingMessage): boolean {
+  if (rowKey === null) return false;
+  if (rowKey === outgoing.id || rowKey === `${outgoing.id}:user`) return true;
+  return (
+    outgoing.mode !== "steer" && outgoing.runId !== null && rowKey === `${outgoing.runId}:user`
+  );
+}
+
+/**
  * Match outgoing messages to the user rows history now holds, by identifiers
  * only: the row's idempotency key, or the `messageSeq` `chat.send` returned
  * when the row carries no contradicting key. Text is never evidence: a message
@@ -2435,7 +2453,7 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
       return true;
     }
     const byKey = rows.find(
-      (row) => !used.has(row.index) && rowIdempotencyKey(row.message) === outgoing.id,
+      (row) => !used.has(row.index) && namesOutgoing(rowIdempotencyKey(row.message), outgoing),
     );
     const bySeq =
       byKey ??
@@ -2445,7 +2463,7 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
             if (used.has(row.index) || num(meta(row.message).seq) !== outgoing.messageSeq)
               return false;
             const key = rowIdempotencyKey(row.message);
-            return key === null || key === outgoing.id;
+            return key === null || namesOutgoing(key, outgoing);
           })
         : undefined);
     if (!bySeq) return true;
