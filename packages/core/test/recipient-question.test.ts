@@ -138,6 +138,24 @@ describe("a recipient's run that asks its own user", () => {
     }
   });
 
+  it("carries no other run into a task opened after it was seen while the task was closed", async () => {
+    const { client, gateway } = await openTask();
+    try {
+      // Marlow's own runs, seen while nobody here had Marlow's task open: one finished, one going.
+      gateway.emit("agent", agentEvent("run-a", 1, "lifecycle", { phase: "start" }, PEER));
+      gateway.emit("agent", agentEvent("run-a", 2, "lifecycle", { phase: "end" }, PEER));
+      gateway.emit("agent", agentEvent("run-b", 1, "lifecycle", { phase: "start" }, PEER));
+      const kept = (client as unknown as { foreign: Map<string, { runs: unknown[] }> }).foreign;
+      await until(() => kept.get(PEER)?.runs.length === 2);
+      gateway.handlers["chat.history"] = () => new Promise(() => {});
+      client.openSession(PEER);
+      // Its history, still loading, rebuilds them: nothing carried stands in for it.
+      expect(client.state.transcripts[PEER]!.runs).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("leaves a question of a session this client follows no run of alone", async () => {
     const { client, gateway } = await openTask();
     try {

@@ -1238,6 +1238,16 @@ export function foreignQuestionRequested(
   return next.questions.length > 0 ? { ...next, questions: [] } : next;
 }
 
+/** The runs that hold a question known only by its id (`questionMarkers`). */
+export function runsWithQuestionMarkers(activity: TaskActivity): Run[] {
+  const ids = new Set(questionMarkers(activity));
+  return activity.runs.filter((run) =>
+    [...run.pendingCards, ...run.suspendedCards].some(
+      (card) => card.kind === "question" && ids.has(card.id),
+    ),
+  );
+}
+
 /**
  * Questions a task's runs wait on that the task holds no record of: a run that
  * waited on a question while nobody here had its task open keeps only the

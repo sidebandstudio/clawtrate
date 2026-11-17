@@ -94,6 +94,7 @@ import {
   foreignQuestionRequested,
   foreignQuestionResolved,
   questionMarkers,
+  runsWithQuestionMarkers,
   bindRun,
   cancelQueuedRun,
   dropUnboundRun,
@@ -4012,9 +4013,13 @@ export class ClawtrateClient {
   private openedTranscript(key: string): Transcript {
     const sessionKey = capId(key, MAX_ID_CHARS);
     const known = this.foreign.get(sessionKey);
-    this.foreign.delete(sessionKey);
     const empty = this.emptyTranscript(key);
-    return known ? { ...empty, runs: known.runs } : empty;
+    // Only a run known to wait on a question is carried; history rebuilds every other run.
+    const waiting = known ? runsWithQuestionMarkers(known) : [];
+    if (waiting.length === 0) return empty;
+    // The task holds them now, so they are not kept twice.
+    this.foreign.delete(sessionKey);
+    return { ...empty, runs: waiting };
   }
 
   private emptyTranscript(key: string): Transcript {
