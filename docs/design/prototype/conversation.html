@@ -26,45 +26,45 @@
             <!-- The rail. run.js fills the list so the rows can follow the run. -->
             <nav class="rail" aria-label="Bots">
               <div class="rail-top">
-                <button type="button" class="icon-button rail-status" aria-label="Settings. Home gateway, connected.">
+                <button type="button" class="icon-button rail-status" data-action="elsewhere" aria-label="Home gateway, connected. Open the gateway menu.">
                   <i data-icon="settings"></i>
                   <span class="status-dot" data-status="connected"></span>
                 </button>
-                <button type="button" class="icon-button" aria-label="Search" title="Search (⌘K)"><i data-icon="search"></i></button>
-                <button type="button" class="icon-button" aria-label="New bot" title="New bot (⌘N)"><i data-icon="plus"></i></button>
+                <button type="button" class="icon-button" data-action="elsewhere" aria-label="Search" title="Search (⌘K)"><i data-icon="search"></i></button>
+                <button type="button" class="icon-button" data-action="elsewhere" aria-label="New bot" title="New bot (⌘N)"><i data-icon="plus"></i></button>
               </div>
               <ul class="bot-list" id="rail-list"></ul>
               <div class="rail-footer">
-                <button type="button" class="gateway-pill" aria-label="Home gateway, connected. Open gateway settings.">
+                <div class="gateway-pill" role="status">
                   <span class="status-dot" data-status="connected"></span>
-                  <span class="gateway-pill-text"><strong>Home gateway</strong><span>Connected</span></span>
-                </button>
-                <button type="button" class="icon-button" data-variant="quiet" aria-label="Settings"><i data-icon="settings"></i></button>
+                  <span class="gateway-pill-text"><strong>Home gateway</strong><span id="gateway-state">Connected</span></span>
+                </div>
               </div>
             </nav>
 
             <div class="main-pane">
-            <section class="conversation" aria-label="Conversation">
-              <header class="conversation-header">
-                <div class="header-side">
-                  <button type="button" class="icon-button back-button" data-action="back" aria-label="Back to bots"><i data-icon="back"></i></button>
+              <div class="status-strip" id="status-strip" role="status" hidden></div>
+              <section class="conversation" aria-label="Conversation">
+                <header class="conversation-header">
+                  <div class="header-side">
+                    <button type="button" class="icon-button back-button" data-action="back" aria-label="Back to bots"><i data-icon="back"></i></button>
+                  </div>
+                  <!-- In the app this pill opens the Work pane, which app.html shows. -->
+                  <div class="title-pill" style="cursor: default">
+                    <span class="avatar" data-bot="otto"></span>
+                    <span class="title-pill-name">Otto</span>
+                    <span class="title-pill-task">Weekly backup check</span>
+                  </div>
+                  <div class="header-side" data-side="end"></div>
+                </header>
+                <div class="transcript-wrap">
+                  <div class="transcript" id="transcript" tabindex="0">
+                    <div class="transcript-inner" id="transcript-inner"></div>
+                  </div>
+                  <div id="jump-slot"></div>
                 </div>
-                <button type="button" class="title-pill" aria-label="Otto, Weekly backup check. Show details.">
-                  <span class="avatar" data-bot="otto"></span>
-                  <span class="title-pill-name">Otto</span>
-                  <span class="title-pill-task">Weekly backup check</span>
-                </button>
-                <div class="header-side" data-side="end">
-                  <button type="button" class="icon-button" aria-label="Show work pane" title="Work pane (⌘\)"><i data-icon="panel"></i></button>
-                </div>
-              </header>
-              <div class="transcript-wrap">
-                <div class="transcript" id="transcript" tabindex="0">
-                  <div class="transcript-inner" id="transcript-inner"></div>
-                </div>
-              </div>
-              <div id="composer-slot"></div>
-            </section>
+                <div id="composer-slot"></div>
+              </section>
             </div>
           </div>
         </div>

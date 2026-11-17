@@ -408,8 +408,8 @@
     },
     {
       id: "jump",
-      title: "Jump to latest and the connection strip",
-      note: "New output is followed only when the reader is near the bottom. Otherwise the position holds and this control appears above the composer.",
+      title: "Jump to latest and the status strip",
+      note: "New output is followed only when the reader is near the end. Otherwise their place holds and this control appears above the foot of the transcript.",
       specimens: [
         {
           name: "Jump to latest, every state",
@@ -424,8 +424,8 @@
             .join("")}</div>`,
         },
         {
-          name: "The connection strip, every state",
-          note: "After a reconnect that missed events, the strip says it caught up. Nothing in the conversation unmounts or folds.",
+          name: "The status strip, every state",
+          note: "It sits in the protected band under the title pill. After a reconnect that missed events it says it caught up; nothing in the conversation unmounts or folds.",
           html: `<div class="spec-row" style="gap:12px">${["reconnecting", "offline", "syncing", "synced", "failed"].map((b) => `<span class="spec-static">${CT.banner(b)}</span>`).join("")}</div>`,
         },
       ],
@@ -459,6 +459,7 @@
       specimens: [
         {
           name: "Bot rows",
+          note: "The avatar carries the run state; line two keeps the words and the unread dot.",
           rail: true,
           html: `<ul class="bot-list">${[
             { bot: "juniper", state: "idle", preview: "Ask these five, and get the answers in writing.", time: "5:24 PM" },
@@ -467,11 +468,17 @@
             { bot: "pip", state: "waiting", preview: "Waiting for you: a question", time: "2m" },
             { bot: "otto", state: "blocked", preview: "Can't reach media-box", time: "4m" },
             { bot: "marlow", state: "failed", preview: "Couldn't finish: provider overloaded", time: "9m" },
-            { bot: "juniper", state: "done", preview: "Verdict: usually worth it.", time: "5:02 PM", mark: "unread" },
-            { bot: "pip", state: "done", preview: "Finished with 1 failed step", time: "4:40 PM", mark: "failed" },
+            { bot: "juniper", state: "done", preview: "Verdict: usually worth it.", time: "5:02 PM", unread: true },
+            { bot: "pip", state: "done-failed", preview: "Finished with 1 failed step", time: "4:40 PM", unread: true, tone: "failed" },
           ]
             .map((row, i) => CT.botGroup({ ...row, i }))
             .join("")}</ul>`,
+        },
+        {
+          name: "A folded bot with work in two tasks",
+          note: "Working in one task and unread in another: the avatar and the dot say both.",
+          rail: true,
+          html: `<ul class="bot-list">${CT.botGroup({ bot: "otto", state: "working", preview: "Rotating logs on rack-2", time: "now", unread: true })}${CT.botGroup({ bot: "juniper", state: "waiting", preview: "Waiting for you: a question", time: "2m", unread: true, i: 1 })}</ul>`,
         },
         {
           name: "Task rows",
@@ -490,11 +497,10 @@
                 ["Router firmware", "done-failed"],
                 ["Printer offline again", "failed"],
                 ["NAS scrub", "blocked"],
-                ["Rotate the logs", "queued"],
-                ["Old tickets", "idle"],
               ]
                 .map(([title, status, current]) => CT.taskRow({ title, status, current }))
                 .join("") +
+              `<li><button type="button" class="task task-more"><span class="task-title">Show all 14</span></button></li>` +
               `<li><button type="button" class="task task-new">${CT.icon("plus")}<span class="task-title">New task</span></button></li>`,
           })}</ul>`,
         },

@@ -34,7 +34,8 @@
     mode: "steer",
     menu: false,
     queued: [],
-    marlow: { state: "idle", preview: "Tightened the intro and cut about 80 words.", time: "4:58 PM", mark: "" },
+    marlow: { state: "idle", preview: "Tightened the intro and cut about 80 words.", time: "4:58 PM", unread: false },
+    offline: false,
     t3Sent: false,
     instant: false,
     speed: 1,
@@ -55,23 +56,39 @@
 
   // Scrolling: follow new output only when the reader is near the bottom -----------
 
-  const nearBottom = () => transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 80;
+  const nearBottom = () => transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 96;
   transcript.addEventListener("scroll", () => {
-    state.pinned = nearBottom();
-    if (state.pinned) renderComposer();
+    const pinned = nearBottom();
+    if (pinned !== state.pinned) {
+      state.pinned = pinned;
+      renderJump();
+    }
   });
 
   function follow() {
     if (state.pinned) transcript.scrollTop = transcript.scrollHeight;
-    else renderComposer();
+    else renderJump();
+  }
+
+  // Jump to latest shows only while the reader is away from the end.
+  function renderJump() {
+    $("#jump-slot").innerHTML = state.pinned
+      ? ""
+      : state.run === "waiting"
+        ? CT.jump({ state: "needs-you", phrase: "Needs you" })
+        : state.run === "running" && !state.offline
+          ? CT.jump({ state: "live", bot: "otto", phrase: state.phrase || "Thinking" })
+          : CT.jump({ state: "latest" });
   }
 
   // Rendering ------------------------------------------------------------------------
 
   function renderRail() {
     const taskStatus = state.run === "waiting" ? "waiting" : state.run === "idle" ? "idle" : "running";
-    const ottoPreview =
-      state.run === "waiting"
+    const lost = state.offline && state.run !== "idle";
+    const ottoPreview = lost
+      ? "Reconnecting…"
+      : state.run === "waiting"
         ? "Waiting for you: approve a command"
         : state.run === "idle"
           ? state.lastPreview || "Yes. It finished at 3:25 AM, but it took 71 minutes."
@@ -79,7 +96,7 @@
     rail.innerHTML =
       CT.botGroup({
         bot: "otto",
-        state: state.phase,
+        state: lost ? "blocked" : state.phase,
         preview: ottoPreview,
         time: state.run === "idle" ? (state.lastPreview ? clockTime() : "5:02 PM") : "now",
         open: true,
@@ -91,18 +108,10 @@
       }) +
       CT.botGroup({ bot: "juniper", state: "idle", preview: "Ask these five, and get the answers in writing.", time: "5:24 PM", i: 1 }) +
       CT.botGroup({ bot: "marlow", ...state.marlow, i: 2 }) +
-      CT.botGroup({ bot: "pip", state: "idle", preview: "Here is the week, with Thursday kept clear.", time: "3:10 PM", mark: "unread", i: 3 });
+      CT.botGroup({ bot: "pip", state: "done", preview: "Here is the week, with Thursday kept clear.", time: "3:10 PM", unread: true, i: 3 });
   }
 
   function renderComposer() {
-    const showJump = !state.pinned;
-    const jump = showJump
-      ? state.run === "waiting"
-        ? CT.jump({ state: "needs-you", phrase: "Needs you" })
-        : state.run === "running"
-          ? CT.jump({ state: "live", bot: "otto", phrase: state.phrase || "Thinking" })
-          : CT.jump({ state: "latest" })
-      : "";
     let shelf = state.queued
       .map((text, index) =>
         CT.shelfRow({
@@ -125,7 +134,8 @@
       });
     }
     const hadFocus = document.activeElement?.classList.contains("composer-input");
-    composerSlot.innerHTML = CT.composer({ bot: "otto", run: state.run, text: state.text, shelf, jump, menu: state.menu, mode: state.mode });
+    composerSlot.innerHTML = CT.composer({ bot: "otto", run: state.offline ? "offline" : state.run, text: state.text, shelf, menu: state.menu, mode: state.mode });
+    renderJump();
     if (hadFocus) {
       const input = $(".composer-input");
       input.focus();
@@ -137,6 +147,10 @@
   function renderStatus(fresh = false) {
     $(".status-line", inner)?.remove();
     if (state.run === "idle") return;
+    // While the connection is down nothing here moves: the app cannot see the run.
+    const lost = state.offline
+      ? { state: "blocked", phrase: `Reconnecting. Last seen ${(state.phrase || "thinking").replace(/^./, (c) => c.toLowerCase())}`, elapsed: "" }
+      : null;
     inner.insertAdjacentHTML(
       "beforeend",
       CT.statusLine({
@@ -145,6 +159,7 @@
         phrase: state.phrase,
         elapsed: state.phrase ? elapsed() : "",
         fresh,
+        ...lost,
       }),
     );
   }
@@ -155,7 +170,7 @@
     state.phrase = phrase;
     renderStatus(fresh);
     renderRail();
-    if (!state.pinned) renderComposer();
+    renderJump();
   }
 
   // Add to the transcript, above the status line.
@@ -393,7 +408,7 @@
       wait: 600,
       sim: 1,
       fn() {
-        state.marlow = { state: "working", preview: "Reading the house log", time: "now", mark: "" };
+        state.marlow = { state: "working", preview: "Reading the house log", time: "now", unread: false };
         const card = $("#m-marlow");
         card.dataset.state = "working";
         $(".state", card).outerHTML = CT.state("working");
@@ -408,7 +423,7 @@
       wait: 2200,
       sim: 40,
       fn() {
-        state.marlow = { state: "done", preview: "Nov 16. Last night's backup ran long: 71 minutes…", time: clockTime(), mark: "unread" };
+        state.marlow = { state: "done", preview: "Nov 16. Last night's backup ran long: 71 minutes…", time: clockTime(), unread: true };
         const card = $("#m-marlow");
         card.dataset.state = "replied";
         $(".state", card).outerHTML = CT.state("replied");
@@ -579,7 +594,7 @@
     });
     const marlowRunning = state.marlow.state === "working";
     if (marlowRunning) {
-      state.marlow = { state: "idle", preview: "Stopped.", time: clockTime(), mark: "" };
+      state.marlow = { state: "stopped", preview: "Stopped.", time: clockTime(), unread: false };
       const card = $("#m-marlow");
       card.dataset.state = "recipient-stopped";
       $(".state", card).outerHTML = CT.state("recipient-stopped");
@@ -611,6 +626,64 @@
 
   let index = 0;
   let playing = false;
+  let resumeOnline = null;
+
+  // The connection: one state drives the strip, the footer, the status line and the composer.
+  const strip = $("#status-strip");
+  function setStrip(name) {
+    strip.hidden = !name;
+    $(".conversation").dataset.strip = String(Boolean(name));
+    if (name) strip.outerHTML = CT.banner(name, 'id="status-strip"');
+    const dot = { reconnecting: "reconnecting", syncing: "connecting" }[name] || "connected";
+    document.querySelectorAll(".rail .status-dot").forEach((node) => (node.dataset.status = dot));
+    $("#gateway-state").textContent = name === "reconnecting" ? "Reconnecting…" : name === "syncing" ? "Catching up" : "Connected";
+  }
+
+  function disconnect() {
+    if (state.offline) return;
+    state.offline = true;
+    setStrip("reconnecting");
+    renderStatus();
+    renderRail();
+    renderComposer();
+    caption("The connection drops. The shell stays as it was; the status line stops moving and says what it last saw.");
+  }
+
+  // Reconnecting: what was missed is fetched and merged in place, without
+  // animation and without moving the reader. Nothing that was open folds.
+  async function reconnect() {
+    if (!state.offline) return;
+    setStrip("syncing");
+    await new Promise((resolve) => setTimeout(resolve, state.instant ? 0 : 700));
+    state.offline = false;
+    let missed = 0;
+    const live = state.instant;
+    state.instant = true;
+    while (missed < 3 && index < script.length && !script[index].gate && !resolveGate && state.run !== "idle") {
+      const op = script[index];
+      state.clock += op.sim || 0;
+      index += 1;
+      await op.fn();
+      missed += 1;
+    }
+    state.instant = live;
+    renderStatus();
+    renderRail();
+    renderComposer();
+    document.querySelector("#status-strip").outerHTML = CT.banner("synced", 'id="status-strip"').replace("3 new in this task", missed ? `${missed} new in this task` : "nothing was missed");
+    $(".conversation").dataset.strip = "true";
+    document.querySelectorAll(".rail .status-dot").forEach((node) => (node.dataset.status = "connected"));
+    $("#gateway-state").textContent = "Connected";
+    setTimeout(() => {
+      if (!state.offline) {
+        document.querySelector("#status-strip").hidden = true;
+        $(".conversation").dataset.strip = "false";
+      }
+    }, 4000);
+    caption("Reconnected. Missed events are merged in place; open steps and cards stay open.");
+    resumeOnline?.();
+    resumeOnline = null;
+  }
 
   function caption(text) {
     const node = $("#run-caption");
@@ -621,6 +694,7 @@
     const op = script[index];
     if (!op) return false;
     await sleep(op.wait);
+    if (state.offline) await new Promise((resolve) => (resumeOnline = resolve)); // events do not arrive while offline
     if (state.halted) return false;
     state.clock += op.sim || 0;
     index += 1;
@@ -674,9 +748,16 @@
     if (action === "stop") stop();
     if (action === "jump") {
       state.pinned = true;
-      transcript.scrollTop = transcript.scrollHeight;
-      renderComposer();
+      const card = state.run === "waiting" && $("#approval");
+      if (card) {
+        card.scrollIntoView({ block: "center" });
+        card.focus();
+      } else {
+        transcript.scrollTop = transcript.scrollHeight;
+      }
+      renderJump();
     }
+    if (action === "elsewhere") caption("That control belongs to the shell. app.html shows it working.");
     if (action === "review") {
       const card = $("#approval");
       card.scrollIntoView({ block: "center" });
@@ -762,7 +843,7 @@
 
   // While the run plays, the elapsed time ticks once a second.
   setInterval(() => {
-    if (state.run === "idle" || state.instant || state.run === "stopping") return;
+    if (state.run === "idle" || state.instant || state.run === "stopping" || state.offline) return;
     state.clock += 1;
     const node = $(".status-elapsed", inner);
     if (node) node.textContent = elapsed();
@@ -783,7 +864,8 @@
   if (extra) {
     extra.innerHTML =
       `<span class="run-controls"><button type="button" id="run-play">Play the run</button>` +
-      `<button type="button" id="run-step">Step</button><button type="button" id="run-reset">Restart</button>` +
+      `<button type="button" id="run-step">Step</button><button type="button" id="run-net">Drop the connection</button>` +
+      `<button type="button" id="run-reset">Restart</button>` +
       `<span id="run-caption">A scripted run. Press Play, or Step to go one event at a time.</span></span>`;
     $("#run-play").addEventListener("click", () => play());
     $("#run-step").addEventListener("click", async () => {
@@ -794,6 +876,11 @@
       setControls();
     });
     $("#run-reset").addEventListener("click", () => location.reload());
+    $("#run-net").addEventListener("click", (event) => {
+      if (state.offline) reconnect();
+      else disconnect();
+      event.currentTarget.textContent = state.offline ? "Reconnect" : "Drop the connection";
+    });
   }
 
   // For tests and screenshots: run without waits up to a named moment.
@@ -808,7 +895,10 @@
       decision = choice;
       resolveGate?.();
     },
+    play,
     stop,
+    disconnect,
+    reconnect,
     state,
   };
 })();
