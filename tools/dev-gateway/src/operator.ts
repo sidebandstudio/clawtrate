@@ -9,7 +9,14 @@
 // that request id, through the tool's guarded runner, and the client's own
 // retry then connects with the scopes asked for.
 
-import { randomUUID, createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from "node:crypto";
+import {
+  randomUUID,
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  sign,
+} from "node:crypto";
 import { GatewayClient, type DeviceIdentity } from "@openclaw/gateway-client";
 
 export type GatewayEvent = { at: number; seq: number; event: string; payload: unknown };
@@ -48,6 +55,8 @@ export class OperatorSession {
   private readonly waiters = new Set<(event: GatewayEvent) => void>();
   private seq = 0;
   private client: GatewayClient | null = null;
+  /** This connection's device, as the gateway lists it. */
+  deviceId = "";
 
   private constructor() {}
 
@@ -60,76 +69,76 @@ export class OperatorSession {
     const identity = newDeviceIdentity();
     const tokens = new Map<string, { token: string; scopes: string[] }>();
     const session = new OperatorSession();
+    session.deviceId = identity.deviceId;
     const deadline = Date.now() + (options.timeoutMs ?? 60_000);
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const outcome = await new Promise<{ ok: true } | { ok: false; pairing?: string; error: Error }>(
-        (resolve) => {
-          let settled = false;
-          const settle = (value: { ok: true } | { ok: false; pairing?: string; error: Error }) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            resolve(value);
-          };
-          const timer = setTimeout(
-            () => settle({ ok: false, error: new Error("no hello before the time limit") }),
-            Math.max(1_000, deadline - Date.now()),
-          );
-          let pairing: string | undefined;
-          const client: GatewayClient = new GatewayClient({
-            url: options.url,
-            token: options.token,
-            clientName: "gateway-client",
-            mode: "ui",
-            clientDisplayName: options.displayName,
-            clientVersion: "0.0.0",
-            platform: process.platform,
-            role: "operator",
-            scopes: options.scopes,
-            caps: options.caps,
-            minProtocol: 4,
-            maxProtocol: 4,
-            deviceIdentity: identity,
-            hostDeps: {
-              signDevicePayload: (pem, payload) =>
-                sign(null, Buffer.from(payload), createPrivateKey(pem)).toString("base64url"),
-              publicKeyRawBase64UrlFromPem: (pem) =>
-                createPublicKey(pem)
-                  .export({ type: "spki", format: "der" })
-                  .subarray(-32)
-                  .toString("base64url"),
-              loadDeviceAuthToken: ({ deviceId, role }) =>
-                tokens.get(`${deviceId}:${role}`) ?? null,
-              storeDeviceAuthToken: ({ deviceId, role, token, scopes }) => {
-                tokens.set(`${deviceId}:${role}`, { token, scopes });
-              },
-              clearDeviceAuthToken: ({ deviceId, role }) => {
-                tokens.delete(`${deviceId}:${role}`);
-              },
+      const outcome = await new Promise<
+        { ok: true } | { ok: false; pairing?: string; error: Error }
+      >((resolve) => {
+        let settled = false;
+        const settle = (value: { ok: true } | { ok: false; pairing?: string; error: Error }) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        };
+        const timer = setTimeout(
+          () => settle({ ok: false, error: new Error("no hello before the time limit") }),
+          Math.max(1_000, deadline - Date.now()),
+        );
+        let pairing: string | undefined;
+        const client: GatewayClient = new GatewayClient({
+          url: options.url,
+          token: options.token,
+          clientName: "gateway-client",
+          mode: "ui",
+          clientDisplayName: options.displayName,
+          clientVersion: "0.0.0",
+          platform: process.platform,
+          role: "operator",
+          scopes: options.scopes,
+          caps: options.caps,
+          minProtocol: 4,
+          maxProtocol: 4,
+          deviceIdentity: identity,
+          hostDeps: {
+            signDevicePayload: (pem, payload) =>
+              sign(null, Buffer.from(payload), createPrivateKey(pem)).toString("base64url"),
+            publicKeyRawBase64UrlFromPem: (pem) =>
+              createPublicKey(pem)
+                .export({ type: "spki", format: "der" })
+                .subarray(-32)
+                .toString("base64url"),
+            loadDeviceAuthToken: ({ deviceId, role }) => tokens.get(`${deviceId}:${role}`) ?? null,
+            storeDeviceAuthToken: ({ deviceId, role, token, scopes }) => {
+              tokens.set(`${deviceId}:${role}`, { token, scopes });
             },
-            onEvent: (frame) => session.record(frame.event, frame.payload),
-            onConnectError: (error) => {
-              const details = asRecord((error as { details?: unknown }).details);
-              if (details.code === "PAIRING_REQUIRED" && typeof details.requestId === "string") {
-                pairing = details.requestId;
-              }
+            clearDeviceAuthToken: ({ deviceId, role }) => {
+              tokens.delete(`${deviceId}:${role}`);
             },
-            onReconnectPaused: () => {
-              void client.stopAndWait().catch(() => {});
-              settle({
-                ok: false,
-                ...(pairing ? { pairing } : {}),
-                error: new Error("the gateway refused the connection"),
-              });
-            },
-            onHelloOk: () => {
-              session.client = client;
-              settle({ ok: true });
-            },
-          });
-          client.start();
-        },
-      );
+          },
+          onEvent: (frame) => session.record(frame.event, frame.payload),
+          onConnectError: (error) => {
+            const details = asRecord((error as { details?: unknown }).details);
+            if (details.code === "PAIRING_REQUIRED" && typeof details.requestId === "string") {
+              pairing = details.requestId;
+            }
+          },
+          onReconnectPaused: () => {
+            void client.stopAndWait().catch(() => {});
+            settle({
+              ok: false,
+              ...(pairing ? { pairing } : {}),
+              error: new Error("the gateway refused the connection"),
+            });
+          },
+          onHelloOk: () => {
+            session.client = client;
+            settle({ ok: true });
+          },
+        });
+        client.start();
+      });
       if (outcome.ok) return session;
       if (!outcome.pairing) throw new Error(`${options.displayName}: ${outcome.error.message}`);
       await options.approvePairing(outcome.pairing);

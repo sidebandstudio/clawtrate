@@ -493,6 +493,115 @@ Call the pharmacy before you leave to confirm the order is filled.`),
   },
 ];
 
+/** The one bot whose shell commands are not denied: each one asks for approval. */
+export const SHELL_BOT = "otto";
+
+/** The two bots that may message each other. No other bot may message anyone. */
+export const MESSAGING_PAIR = ["marlow", "pip"] as const;
+
+/** The bot a messaging bot writes to, or null for a bot outside the pair. */
+export function messagingPartner(botId: string): string | null {
+  const [a, b] = MESSAGING_PAIR;
+  return botId === a ? b : botId === b ? a : null;
+}
+
 export function sessionKeyFor(botId: string, slug: string): string {
   return `agent:${botId}:${slug}`;
 }
+
+/**
+ * Finished examples of the live situations, seeded through a paired client
+ * after the scripted tasks, in this order. Each prompt is a scenario phrase
+ * (see scenarios.ts), so the same reply plays when someone sends it again.
+ * Where a person has to act, the seed answers the question or resolves the
+ * approval itself.
+ */
+export type ScenarioExample = {
+  botId: string;
+  slug: string;
+  label: string;
+  prompt: string;
+  finalText: string;
+  /** The tool calls the run makes, in order. */
+  toolCalls: string[];
+  /** How many of their results are errors. */
+  toolErrors: number;
+  /** What the seed does as the user while the run waits. */
+  interaction?:
+    | { kind: "question"; answers: Record<string, string[]> }
+    | { kind: "approval"; decision: "allow-once"; command: string };
+  /** A bot-to-bot message: the recipient's run must reply in this session. */
+  recipientSession?: string;
+};
+
+export const SCENARIO_EXAMPLES: ScenarioExample[] = [
+  {
+    // Opened by a person first: a bot may ask questions only in a session a
+    // person owns, and messages from Pip arrive here.
+    botId: "marlow",
+    slug: "main",
+    label: "Notes for Pip",
+    prompt: "Reply with a note on Saturday's plan.",
+    finalText: "Happy to help. The plan looks sound; I would leave half an hour earlier.",
+    toolCalls: [],
+    toolErrors: 0,
+  },
+  {
+    botId: "pip",
+    slug: "ask-marlow",
+    label: "Ask Marlow about the plan",
+    prompt: "Message your partner about Saturday's plan.",
+    finalText:
+      "Marlow replied:\n\n> Happy to help. The plan looks sound; I would leave half an hour earlier.",
+    toolCalls: ["sessions_send"],
+    toolErrors: 0,
+    recipientSession: "agent:marlow:main",
+  },
+  {
+    botId: "main",
+    slug: "show-your-work",
+    label: "Show your work",
+    prompt: "Show your work: what is in your workspace?",
+    finalText: "I listed my workspace and read my instructions. Both steps are shown above.",
+    toolCalls: ["ls", "read"],
+    toolErrors: 0,
+  },
+  {
+    botId: "main",
+    slug: "failed-step",
+    label: "A step that fails",
+    prompt: "Use a tool that fails, then carry on.",
+    finalText: "That file does not exist, so the step failed. I will carry on without it.",
+    toolCalls: ["read"],
+    toolErrors: 1,
+  },
+  {
+    botId: "main",
+    slug: "coding-handoff",
+    label: "Hand off to the coding agent",
+    prompt: "Ask the coding agent to add a dark mode toggle.",
+    finalText: "The coding agent picked it up: https://coding-agent.example/threads/thread-1",
+    toolCalls: ["coder__send_message"],
+    toolErrors: 0,
+  },
+  {
+    botId: "pip",
+    slug: "route-question",
+    label: "Which route on Saturday",
+    prompt: "Ask me a question before you plan the route.",
+    finalText: "Thanks. You answered:\n\n- route: Lake loop",
+    toolCalls: ["ask_user"],
+    toolErrors: 0,
+    interaction: { kind: "question", answers: { route: ["Lake loop"] } },
+  },
+  {
+    botId: SHELL_BOT,
+    slug: "list-workspace",
+    label: "List the workspace (approved)",
+    prompt: "Run a command I can approve: list your workspace.",
+    finalText: "The command ran once you approved it, and its output is shown above.",
+    toolCalls: ["exec"],
+    toolErrors: 0,
+    interaction: { kind: "approval", decision: "allow-once", command: "ls" },
+  },
+];

@@ -70,6 +70,7 @@ import {
   PROVIDER_ID,
   PROVIDER_PORT,
   assertInstanceStateDir,
+  devStateDir,
   gatedSpawn,
   instancePaths,
   parseJsonOutput,
@@ -87,8 +88,15 @@ import {
   type InstanceEntry,
   type InstancePorts,
 } from "./registry.ts";
+import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
+import { SEED_CAPS, SEED_SCOPES, seedExample, verifyExample } from "./examples.ts";
+import { OperatorSession } from "./operator.ts";
 import {
+  MESSAGING_PAIR,
+  messagingPartner,
+  SCENARIO_EXAMPLES,
   SEED_BOTS,
+  SHELL_BOT,
   sessionKeyFor,
   type SeedBot,
   type SeedTask,
@@ -159,6 +167,9 @@ export function openInstance(
 
 const DEFAULT_PORTS: InstancePorts = { gatewayPort: GATEWAY_PORT, providerPort: PROVIDER_PORT };
 
+/** The display name of the client the seed plays the user with. */
+const SEED_CLIENT = "Clawtrate seed";
+
 const label = (inst: { name: string | null }) =>
   inst.name === null ? "the default instance" : `instance "${inst.name}"`;
 
@@ -200,8 +211,37 @@ async function waitFor(label: string, check: () => Promise<boolean>, timeoutMs: 
   throw new Error(`timed out waiting for ${label}`);
 }
 
+/** The stand-in coding agent, run by the gateway as a stdio MCP server. */
+export const CODING_AGENT_SCRIPT = fileURLToPath(new URL("./coding-agent-mcp.ts", import.meta.url));
+
+/**
+ * Each bot's tool policy. Exec stays denied for every bot but the shell bot,
+ * which asks a person about every command it has no approved rule for. Only
+ * the messaging pair may message each other.
+ */
+function botEntries(stateDir: string) {
+  const entries: Record<string, { workspace: string; tools: Record<string, unknown> }> = {};
+  for (const bot of SEED_BOTS) {
+    const partner = messagingPartner(bot.id);
+    entries[bot.id] = {
+      // Where `agents add` used to put them: the built-in bot in workspace/, the others in workspaces/<id>.
+      workspace:
+        bot.id === "main" ? join(stateDir, "workspace") : join(stateDir, "workspaces", bot.id),
+      tools: {
+        ...(bot.id === SHELL_BOT ? { exec: { mode: "ask" } } : {}),
+        agentToAgent: { send: partner ? [partner] : [] },
+      },
+    };
+  }
+  return entries;
+}
+
 /** The config the development gateway runs with. Written fresh by every start. */
-export function devConfig(token: string, ports: InstancePorts = DEFAULT_PORTS) {
+export function devConfig(
+  token: string,
+  ports: InstancePorts = DEFAULT_PORTS,
+  stateDir: string = devStateDir(),
+) {
   return {
     gateway: {
       mode: "local",
@@ -236,7 +276,16 @@ export function devConfig(token: string, ports: InstancePorts = DEFAULT_PORTS) {
       },
     },
     agents: {
-      defaults: { model: { primary: MODEL_REF }, thinkingDefault: "low" },
+      defaults: {
+        model: { primary: MODEL_REF },
+        thinkingDefault: "low",
+        systemAgent: { agentId: "main" },
+        heartbeat: { agentId: "main" },
+      },
+      // The bots are declared here so their tool policy is part of the checked
+      // config from the first start. Several bots need explicit ownership.
+      ownership: "explicit",
+      entries: botEntries(stateDir),
     },
     tools: {
       // Offer tools directly instead of behind tool_search/tool_call wrappers,
@@ -244,8 +293,22 @@ export function devConfig(token: string, ports: InstancePorts = DEFAULT_PORTS) {
       toolSearch: false,
       // With no policy the gateway runs model shell commands without asking.
       // This global policy is inherited by every bot without its own override,
-      // including bots created later; the scripted model never needs a shell.
+      // including bots created later. Only the shell bot overrides it, with "ask".
       exec: { mode: "deny" },
+      // Bot-to-bot messages only between the pair; both ends must match.
+      agentToAgent: { enabled: true, allow: [...MESSAGING_PAIR] },
+    },
+    // The stand-in coding agent: a local command server, no network, run in
+    // the instance's own folder.
+    mcp: {
+      servers: {
+        [CODING_AGENT_SERVER]: {
+          transport: "stdio",
+          command: process.execPath,
+          args: [CODING_AGENT_SCRIPT],
+          cwd: stateDir,
+        },
+      },
     },
     // Memory search is outside `models` and defaults to a hosted embeddings
     // provider. Off, with no provider, so nothing can reach a paid API.
@@ -261,10 +324,48 @@ const at = (value: unknown, ...path: string[]): unknown =>
   path.reduce<unknown>((node, key) => (node as JsonRecord | undefined)?.[key], value);
 
 /**
- * The guarantees the development gateway must keep: only the scripted model,
- * no memory-search embeddings, and no shell for the model. Returns what is wrong.
+ * The only MCP server is the stand-in coding agent: a local command from this
+ * checkout, run in the instance's own folder, with no URL, headers or extra
+ * environment.
  */
-export function sandboxProblems(config: unknown, ports?: InstancePorts): string[] {
+function mcpProblems(mcp: unknown, stateDir?: string): string[] {
+  const servers = (at(mcp, "servers") as JsonRecord | undefined) ?? {};
+  const names = Object.keys(servers);
+  if (names.length !== 1 || names[0] !== CODING_AGENT_SERVER) {
+    return [`mcp.servers must contain only "${CODING_AGENT_SERVER}"`];
+  }
+  const server = servers[CODING_AGENT_SERVER] as JsonRecord;
+  const problems: string[] = [];
+  const extra = Object.keys(server).filter(
+    (key) => !["transport", "command", "args", "cwd"].includes(key),
+  );
+  if (extra.length > 0)
+    problems.push(`the ${CODING_AGENT_SERVER} MCP server may not set ${extra.join(", ")}`);
+  if (server.transport !== "stdio")
+    problems.push(`the ${CODING_AGENT_SERVER} MCP server must use stdio`);
+  if (
+    server.command !== process.execPath ||
+    JSON.stringify(server.args) !== JSON.stringify([CODING_AGENT_SCRIPT])
+  ) {
+    problems.push(`the ${CODING_AGENT_SERVER} MCP server must run the stand-in coding agent`);
+  }
+  if (stateDir !== undefined && server.cwd !== stateDir) {
+    problems.push(`the ${CODING_AGENT_SERVER} MCP server must run in the instance's folder`);
+  }
+  return problems;
+}
+
+/**
+ * The guarantees the development gateway must keep: only the scripted model,
+ * no memory-search embeddings, a shell only for the shell bot and only with
+ * approval, messages only between the messaging pair, and only the stand-in
+ * MCP server. Returns what is wrong.
+ */
+export function sandboxProblems(
+  config: unknown,
+  ports?: InstancePorts,
+  stateDir?: string,
+): string[] {
   const problems: string[] = [];
   if (ports) {
     if (at(config, "gateway", "port") !== ports.gatewayPort)
@@ -298,20 +399,49 @@ export function sandboxProblems(config: unknown, ports?: InstancePorts): string[
       // A legacy security/ask pair would replace the mode instead of deriving from it.
       problems.push("tools.exec must set only mode, not security or ask");
     }
+  const globalExec = (at(config, "tools", "exec") as JsonRecord | undefined) ?? {};
+  const extraExec = Object.keys(globalExec).filter(
+    (key) => !["mode", "security", "ask"].includes(key),
+  );
+  if (extraExec.length > 0)
+    problems.push(`tools.exec must set only mode (found ${extraExec.join(", ")})`);
   for (const [id, entry] of Object.entries(
     (at(config, "agents", "entries") as JsonRecord | undefined) ?? {},
   )) {
     const exec = at(entry, "tools", "exec") as JsonRecord | undefined;
-    if (
-      exec &&
-      (exec.mode !== undefined || exec.security !== undefined || exec.ask !== undefined)
-    ) {
+    if (id === SHELL_BOT) {
+      // The shell bot asks about every command; nothing may make it run without asking.
+      if (exec !== undefined && JSON.stringify(exec) !== JSON.stringify({ mode: "ask" })) {
+        problems.push(`agents.entries.${id}.tools.exec must be exactly { mode: "ask" }`);
+      }
+    } else if (exec !== undefined) {
       problems.push(`agents.entries.${id}.tools.exec overrides the global exec policy`);
+    }
+    const extraTools = Object.keys((at(entry, "tools") as JsonRecord | undefined) ?? {}).filter(
+      (key) => key !== "exec" && key !== "agentToAgent",
+    );
+    if (extraTools.length > 0) {
+      problems.push(
+        `agents.entries.${id}.tools may set only exec and agentToAgent (found ${extraTools.join(", ")})`,
+      );
+    }
+    const send = at(entry, "tools", "agentToAgent", "send");
+    const partner = messagingPartner(id);
+    if (send !== undefined && (!Array.isArray(send) || send.some((target) => target !== partner))) {
+      problems.push(`agents.entries.${id} may message only ${partner ?? "no other bot"}`);
     }
     if (at(entry, "memory", "search", "enabled") === true) {
       problems.push(`agents.entries.${id}.memory.search re-enables memory search`);
     }
   }
+  const allow = at(config, "tools", "agentToAgent", "allow");
+  if (
+    !Array.isArray(allow) ||
+    JSON.stringify([...(allow as string[])].sort()) !== JSON.stringify([...MESSAGING_PAIR].sort())
+  ) {
+    problems.push(`tools.agentToAgent.allow must be exactly ${MESSAGING_PAIR.join(" and ")}`);
+  }
+  problems.push(...mcpProblems(at(config, "mcp"), stateDir));
   if (at(config, "gateway", "bind") !== "loopback")
     problems.push('gateway.bind must be "loopback"');
   return problems;
@@ -327,7 +457,7 @@ function assertSandboxed(inst: DevInstance, ports: InstancePorts): void {
       { cause: error },
     );
   }
-  const problems = sandboxProblems(config, ports);
+  const problems = sandboxProblems(config, ports, inst.stateDir);
   if (problems.length > 0) {
     throw new Error(
       `the development gateway config is not sandboxed:\n  - ${problems.join("\n  - ")}\nRun \`pnpm dev-gateway reset${instanceFlag(inst)}\` to recreate it.`,
@@ -338,9 +468,13 @@ function assertSandboxed(inst: DevInstance, ports: InstancePorts): void {
 /** Write a new config and bootstrap token into the state folder `start` just created. */
 function writeFreshConfig(inst: DevInstance, ports: InstancePorts, runId: string): DevConnection {
   const token = randomBytes(24).toString("base64url");
-  writeFileSync(inst.configPath, `${JSON.stringify(devConfig(token, ports), null, 2)}\n`, {
-    mode: 0o600,
-  });
+  writeFileSync(
+    inst.configPath,
+    `${JSON.stringify(devConfig(token, ports, inst.stateDir), null, 2)}\n`,
+    {
+      mode: 0o600,
+    },
+  );
   const connection = {
     url: `ws://127.0.0.1:${ports.gatewayPort}`,
     token,
@@ -365,7 +499,31 @@ async function gatewayHealthy(inst: DevInstance): Promise<boolean> {
   return result.status === 0;
 }
 
-type ExecScope = { agentId?: string; security?: { effective?: string } };
+type ExecScope = {
+  agentId?: string;
+  mode?: { effective?: string };
+  security?: { effective?: string };
+  ask?: { effective?: string };
+  askFallback?: { effective?: string };
+};
+
+/** What the gateway must report for a bot: denied, or for the shell bot, asking on every miss. */
+export function execScopeProblem(scope: ExecScope): string | null {
+  const got = `security ${scope.security?.effective ?? "unknown"}, ask ${scope.ask?.effective ?? "unknown"}`;
+  if (scope.agentId === SHELL_BOT) {
+    const asks =
+      scope.mode?.effective === "ask" &&
+      scope.security?.effective === "allowlist" &&
+      scope.ask?.effective === "on-miss" &&
+      scope.askFallback?.effective === "deny";
+    return asks
+      ? null
+      : `exec for ${SHELL_BOT} must ask (allowlist, on-miss, fallback deny); it is ${got}`;
+  }
+  return scope.security?.effective === "deny"
+    ? null
+    : `exec for ${scope.agentId ?? "the default scope"} must be denied; it is ${got}`;
+}
 
 /** Ask the running gateway what exec policy each bot actually gets. */
 export async function execPolicyProblems(inst: DevInstance): Promise<string[]> {
@@ -374,17 +532,17 @@ export async function execPolicyProblems(inst: DevInstance): Promise<string[]> {
   );
   const scopes = snapshot.effectivePolicy?.scopes ?? [];
   if (scopes.length === 0) return ["the gateway reported no exec policy scopes"];
-  return scopes
-    .filter((scope) => scope.security?.effective !== "deny")
-    .map(
-      (scope) =>
-        `exec security for ${scope.agentId ?? "?"} is ${scope.security?.effective ?? "unknown"}`,
-    );
+  const problems = scopes.flatMap((scope) => execScopeProblem(scope) ?? []);
+  if (!scopes.some((scope) => scope.agentId === SHELL_BOT)) {
+    problems.push(`the gateway reported no exec policy for ${SHELL_BOT}`);
+  }
+  return problems;
 }
 
 async function assertExecDenied(inst: DevInstance): Promise<void> {
   const problems = await execPolicyProblems(inst);
-  if (problems.length > 0) throw new Error(`exec is not denied:\n  - ${problems.join("\n  - ")}`);
+  if (problems.length > 0)
+    throw new Error(`exec policy is not as configured:\n  - ${problems.join("\n  - ")}`);
 }
 
 /** Refuse, changing nothing, when processes this checkout cannot prove its own may run on it. */
@@ -980,9 +1138,81 @@ export async function seed(inst: DevInstance): Promise<void> {
   const agents = new Map(rows.map((row) => [row.id, row]));
   console.log("Seeding sample bots and conversations");
   for (const bot of SEED_BOTS) await configureBot(inst, bot, agents);
+  // Configuring the bots rewrote the config; it must still keep every guarantee.
+  assertSandboxed(inst, instancePorts(inst));
   await assertExecDenied(inst);
   await Promise.all(SEED_BOTS.map((bot) => seedConversations(inst, bot)));
+  await seedScenarioExamples(inst);
   console.log("Seed complete");
+}
+
+/** The ports an instance runs on: fixed for the default instance, from its marker otherwise. */
+function instancePorts(inst: DevInstance): InstancePorts {
+  if (inst.name === null) return DEFAULT_PORTS;
+  const marker = readMarker(inst.stateDir);
+  if (!marker?.gatewayPort || !marker.providerPort) {
+    throw new Error(`${inst.stateDir} records no ports`);
+  }
+  return { gatewayPort: marker.gatewayPort, providerPort: marker.providerPort };
+}
+
+/**
+ * Connect a paired operator client to the instance: a new device key, its
+ * pairing request approved by id through the guarded runner.
+ */
+export async function openOperator(
+  inst: DevInstance,
+  displayName: string,
+  scopes: string[],
+  caps: string[],
+): Promise<OperatorSession> {
+  const connection = readDevConnection(inst.connectionFile);
+  if (!connection) throw new Error(`${label(inst)} has no connection file; start it first`);
+  return OperatorSession.open({
+    url: connection.url,
+    token: connection.token,
+    scopes,
+    caps,
+    displayName,
+    approvePairing: async (requestId) => {
+      await must(inst, ["devices", "approve", requestId]);
+    },
+  });
+}
+
+/**
+ * The finished examples of live situations. A paired client plays the user:
+ * it sends each prompt, answers the question and resolves the approval. Runs
+ * one example at a time, after the scripted tasks, then unpairs itself.
+ */
+async function seedScenarioExamples(inst: DevInstance): Promise<void> {
+  const keys = new Map<string, Set<string>>();
+  for (const botId of new Set(SCENARIO_EXAMPLES.map((example) => example.botId))) {
+    keys.set(botId, await existingSessionKeys(inst, botId));
+  }
+  console.log(
+    `Seeding live examples as the user, through a paired client "${SEED_CLIENT}" (scopes ${SEED_SCOPES.join(", ")})`,
+  );
+  const op = await openOperator(inst, SEED_CLIENT, SEED_SCOPES, SEED_CAPS);
+  try {
+    for (const example of SCENARIO_EXAMPLES) {
+      const key = sessionKeyFor(example.botId, example.slug);
+      const bot = SEED_BOTS.find((b) => b.id === example.botId)?.name ?? example.botId;
+      if (keys.get(example.botId)?.has(key)) {
+        await verifyExample(op, example);
+        console.log(`  ${bot}: ${example.label} (already seeded, verified)`);
+        continue;
+      }
+      console.log(`  ${bot}: ${example.label}`);
+      await seedExample(op, example, console.log);
+    }
+  } finally {
+    await op.close();
+    // The seed's device is not left paired.
+    await must(inst, ["devices", "remove", op.deviceId]).catch((error: unknown) =>
+      console.log(`Could not unpair the seed client: ${String(error)}`),
+    );
+  }
 }
 
 type PendingDevice = { requestId: string; clientId?: string; displayName?: string };

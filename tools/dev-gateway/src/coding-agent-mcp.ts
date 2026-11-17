@@ -95,7 +95,9 @@ export function createCodingAgent() {
     if (name === "send_message") {
       const message = String(args.message ?? "");
       const threadId =
-        typeof args.threadId === "string" && args.threadId ? args.threadId : `thread-${threads.size + 1}`;
+        typeof args.threadId === "string" && args.threadId
+          ? args.threadId
+          : `thread-${threads.size + 1}`;
       const log = threads.get(threadId) ?? [];
       log.push(message);
       threads.set(threadId, log);
@@ -109,7 +111,9 @@ export function createCodingAgent() {
     }
     if (name === "run_checks") {
       return {
-        content: [{ type: "text", text: "Checks failed: 2 of 14 tests failed in the stand-in suite." }],
+        content: [
+          { type: "text", text: "Checks failed: 2 of 14 tests failed in the stand-in suite." },
+        ],
         isError: true,
       };
     }
@@ -136,7 +140,11 @@ export function createCodingAgent() {
       return null;
     }
     const reply = (result: unknown) => ({ jsonrpc: "2.0", id, result });
-    const fail = (code: number, text: string) => ({ jsonrpc: "2.0", id, error: { code, message: text } });
+    const fail = (code: number, text: string) => ({
+      jsonrpc: "2.0",
+      id,
+      error: { code, message: text },
+    });
     switch (method) {
       case "initialize":
         return reply({

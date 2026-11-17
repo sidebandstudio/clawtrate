@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CODING_AGENT_SCRIPT,
   checkHistory,
   checkTurnOutcome,
   devConfig,
@@ -38,11 +39,70 @@ describe("development gateway config", () => {
     expect(sandboxProblems(noPolicy)).toContain('tools.exec.mode must be "deny"');
     const override = {
       ...clone(config),
-      agents: { ...config.agents, entries: { otto: { tools: { exec: { security: "full" } } } } },
+      agents: { ...config.agents, entries: { marlow: { tools: { exec: { security: "full" } } } } },
     };
     expect(sandboxProblems(override)).toContain(
-      "agents.entries.otto.tools.exec overrides the global exec policy",
+      "agents.entries.marlow.tools.exec overrides the global exec policy",
     );
+  });
+
+  it("lets only the shell bot ask before each command, and nothing more", () => {
+    const entries = config.agents.entries as Record<string, { tools: Record<string, unknown> }>;
+    expect(entries.otto!.tools.exec).toEqual({ mode: "ask" });
+    for (const id of ["main", "marlow", "pip"]) expect(entries[id]!.tools.exec).toBeUndefined();
+    for (const exec of [
+      { mode: "full" },
+      { mode: "auto" },
+      { mode: "allowlist" },
+      { mode: "ask", safeBins: ["cat"] },
+      { security: "full", ask: "off" },
+    ]) {
+      const loose = clone(config) as typeof config;
+      (
+        loose.agents.entries as Record<string, { tools: Record<string, unknown> }>
+      ).otto!.tools.exec = exec;
+      expect(sandboxProblems(loose)).toContain(
+        'agents.entries.otto.tools.exec must be exactly { mode: "ask" }',
+      );
+    }
+    const extra = clone(config) as typeof config;
+    (extra.tools.exec as Record<string, unknown>).safeBins = ["cat"];
+    expect(sandboxProblems(extra)).toContain("tools.exec must set only mode (found safeBins)");
+  });
+
+  it("lets only the messaging pair message each other", () => {
+    expect(config.tools.agentToAgent).toEqual({ enabled: true, allow: ["marlow", "pip"] });
+    const entries = config.agents.entries as Record<string, { tools: Record<string, unknown> }>;
+    expect(entries.marlow!.tools.agentToAgent).toEqual({ send: ["pip"] });
+    expect(entries.pip!.tools.agentToAgent).toEqual({ send: ["marlow"] });
+    expect(entries.main!.tools.agentToAgent).toEqual({ send: [] });
+    expect(entries.otto!.tools.agentToAgent).toEqual({ send: [] });
+    const wider = clone(config) as typeof config;
+    wider.tools.agentToAgent.allow = ["*"];
+    expect(sandboxProblems(wider)).toContain(
+      "tools.agentToAgent.allow must be exactly marlow and pip",
+    );
+    const outward = clone(config) as typeof config;
+    (
+      outward.agents.entries as Record<string, { tools: Record<string, unknown> }>
+    ).main!.tools.agentToAgent = { send: ["pip"] };
+    expect(sandboxProblems(outward)).toContain("agents.entries.main may message only no other bot");
+  });
+
+  it("runs only the stand-in coding agent as a local MCP server", () => {
+    const server = config.mcp.servers.coder;
+    expect(server.transport).toBe("stdio");
+    expect(server.args).toEqual([CODING_AGENT_SCRIPT]);
+    expect(sandboxProblems(config, undefined, server.cwd)).toEqual([]);
+    expect(sandboxProblems(config, undefined, "/elsewhere")).toContain(
+      "the coder MCP server must run in the instance's folder",
+    );
+    const remote = clone(config) as Record<string, unknown> & typeof config;
+    (remote.mcp.servers as Record<string, unknown>).hosted = { url: "https://mcp.example.com" };
+    expect(sandboxProblems(remote)).toContain('mcp.servers must contain only "coder"');
+    const env = clone(config) as typeof config;
+    (env.mcp.servers.coder as Record<string, unknown>).env = { TOKEN: "x" };
+    expect(sandboxProblems(env)).toContain("the coder MCP server may not set env");
   });
 
   it("requires explicit pairing approval and a loopback bind", () => {

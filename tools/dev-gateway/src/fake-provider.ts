@@ -5,7 +5,7 @@
 import { writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { MODEL_ID } from "./env.ts";
-import { planReply, type ChatMessage, type ReplyStep } from "./scripts.ts";
+import { messageText, planReply, type ChatMessage, type ReplyStep } from "./scripts.ts";
 
 export const FAKE_MODEL_ID = MODEL_ID;
 
@@ -94,15 +94,18 @@ async function streamSteps(
   for (const step of steps) {
     if (step.kind === "reasoning") {
       for (const piece of chunkText(step.text)) {
+        if (res.destroyed) return;
         send({ reasoning_content: piece });
-        await sleep(delayMs);
+        await sleep(step.delayMs ?? delayMs);
       }
     } else if (step.kind === "text") {
       for (const piece of chunkText(step.text)) {
+        // A stopped run closes the request; stop streaming into it.
+        if (res.destroyed) return;
         send({ content: piece });
-        await sleep(delayMs);
+        await sleep(step.delayMs ?? delayMs);
       }
-    } else {
+    } else if (step.kind === "tool") {
       const args = JSON.stringify(step.arguments);
       send({
         tool_calls: [
@@ -206,8 +209,21 @@ export function startFakeProvider(options: FakeProviderOptions) {
         const steps = planReply(messages, new Set(toolNames));
         const model = body.model ?? FAKE_MODEL_ID;
         const id = completionId(messages);
+        const failure = steps.find((step) => step.kind === "fail");
+        if (failure) {
+          log(`completion messages=${messages.length} failing with ${failure.status}`);
+          sendJson(res, failure.status, {
+            error: {
+              message: failure.message,
+              type: "invalid_request_error",
+              code: "scripted_failure",
+            },
+          });
+          return;
+        }
+        const last = messages.at(-1);
         log(
-          `completion messages=${messages.length} tools=[${toolNames.join(",")}] steps=${steps.map((s) => s.kind).join(",")}`,
+          `completion messages=${messages.map((m) => m.role[0]).join("")} tools=${toolNames.length} steps=${steps.map((s) => s.kind).join(",")} last=${last?.role ?? "-"}:${JSON.stringify(messageText(last ?? { role: "user" }).slice(0, 200))}`,
         );
         if (body.stream === false) {
           sendJson(res, 200, nonStreamingBody(model, id, steps));

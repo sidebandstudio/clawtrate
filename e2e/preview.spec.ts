@@ -99,8 +99,10 @@ test("pairs with the development gateway and shows bots, tasks and a transcript"
 
   await openBot(page, "Otto");
   const tasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
-  await expect(tasks).toHaveCount(3);
+  // The three scripted tasks and the seeded approval example.
+  await expect(tasks).toHaveCount(4);
   await expect(tasks).toContainText([
+    "List the workspace (approved)",
     "Certificate renewal warning",
     "Weekly backup check",
     "Disk almost full on the media box",
@@ -246,7 +248,7 @@ test("the rail names every bot", async ({ page }) => {
   const ottoTasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
   await ottoTasks.filter({ hasText: "Disk almost full on the media box" }).focus();
   await expect(page.getByTestId("rail-tooltip")).toHaveText("Disk almost full on the media box");
-  await expect(ottoTasks.locator(".task-time")).toHaveCount(3);
+  await expect(ottoTasks.locator(".task-time")).toHaveCount(4);
   await expect(ottoTasks.first().locator(".task-time")).not.toHaveText("");
   // A title that fits shows no tooltip. Beside its time it fits the 280px rail.
   await page.setViewportSize({ width: 1440, height: 900 });
