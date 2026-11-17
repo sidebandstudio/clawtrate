@@ -11,19 +11,7 @@
     <link rel="stylesheet" href="fonts.local.css" />
     <script src="js/icons.js"></script>
     <script src="js/prototype.js"></script>
-    <script>
-      // ?state=error shows a failed attempt, ?state=busy a connection in progress.
-      document.addEventListener("DOMContentLoaded", () => {
-        const state = window.CT.params.get("state");
-        const button = document.querySelector("[data-connect]");
-        if (state === "error") document.querySelector(".form-error").hidden = false;
-        if (state === "busy") {
-          button.textContent = "Connecting…";
-          button.disabled = true;
-        }
-        if (state) document.querySelector(".input").value = "ws://gateway.local:18789";
-      });
-    </script>
+    <script src="js/connect.js" defer></script>
   </head>
   <body>
     <header class="proto-bar" id="proto-bar"></header>
@@ -34,26 +22,23 @@
             <div class="connect-drag"></div>
             <div class="connect-card">
               <header class="connect-brand">
-                <span class="brand-mark" data-brand></span>
+                <img src="../../../packages/ui/src/assets/logo-mark.png" alt="" width="56" height="56" data-mark />
                 <h1>Clawtrate</h1>
                 <p>Your OpenClaw agents, orchestrated.</p>
               </header>
-              <form class="panel" aria-label="Connect to your gateway" onsubmit="return false">
+              <form class="panel" id="connect-form" aria-label="Connect to your gateway" novalidate>
                 <label class="field">
                   <span class="visually-hidden">Gateway address</span>
-                  <input class="input" type="text" placeholder="Gateway address" autocomplete="off" spellcheck="false" />
+                  <input class="input" id="gateway-address" type="text" placeholder="Gateway address" autocomplete="off" spellcheck="false" />
                 </label>
                 <label class="field">
                   <span class="visually-hidden">Gateway token, needed for the first pairing only</span>
                   <input class="input" type="password" placeholder="Token, for the first pairing only" autocomplete="off" />
                 </label>
-                <div class="form-error" role="alert" hidden>
-                  <strong>Could not connect</strong>
-                  Nothing answered at that address. Check it, and check that the gateway is running.
-                </div>
+                <div class="form-error" id="connect-error" role="alert" hidden></div>
                 <div class="actions">
-                  <button type="submit" class="button" data-variant="primary" data-size="lg" data-connect>Connect</button>
-                  <button type="button" class="button" data-variant="quiet" data-size="lg">Use the development gateway</button>
+                  <button type="submit" class="button" data-variant="primary" data-size="lg" id="connect-button">Connect</button>
+                  <button type="button" class="button" data-variant="quiet" data-size="lg" id="dev-button">Use the development gateway</button>
                 </div>
                 <p class="field-hint">
                   Clawtrate works with an OpenClaw gateway you already run. It asks for read access only, and the token is used once.

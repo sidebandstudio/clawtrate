@@ -117,11 +117,6 @@
     );
   }
 
-  // A stand-in for the product mark, which lives in assets/brand in the app.
-  const brand =
-    '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b0e14"/>' +
-    '<path d="M9.5 23c1.2-6.8 5-11.6 12.8-13.6-1 6.9-4.9 11.4-9.3 12.4" fill="none" stroke="#3ee6c1" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
   const icon = (name, cls = "icon") =>
     `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true">${icons[name] || ""}</svg>`;
 
@@ -131,9 +126,6 @@
     });
     root.querySelectorAll("[data-bot]:empty").forEach((el) => {
       el.innerHTML = character(el.dataset.bot, el.dataset.state);
-    });
-    root.querySelectorAll("[data-brand]:empty").forEach((el) => {
-      el.innerHTML = brand;
     });
   }
 
