@@ -39,6 +39,7 @@ const WALKED = new Set([
   "RawTable",
   "ChatTextBaselines",
   "ObservableStore",
+  "FileTransfers",
 ]);
 /** Classes whose instances hold no collection of their own: handles. */
 const HANDLES = new Set(["Promise", "Timeout", "Immediate"]);

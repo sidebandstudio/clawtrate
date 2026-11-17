@@ -30,6 +30,7 @@ import {
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
 import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
+import { MAX_FILE_TRANSFERS, MAX_TRANSFER_BYTES } from "./files.ts";
 import { emptyActivity } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
@@ -188,6 +189,13 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
   // Viewers that went away; an entry lives only as long as the viewer's own object.
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
+  // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
+  // sends, its id and its counters; dropped once read, released, or idle past its time.
+  "fileTransfers.held": {
+    max: MAX_FILE_TRANSFERS,
+    each: ID + Math.ceil(MAX_TRANSFER_BYTES / 3) * 4 + 4 * N,
+    row: "fileTransfers",
+  },
 };
 
 /**
@@ -208,6 +216,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   foreignRaw: "RawTable",
   streams: "ChatTextBaselines",
   store: "ObservableStore",
+  fileTransfers: "FileTransfers",
 };
 
 /** One viewer's bridge session, per viewer (`MAX_WEB_VIEWERS` on the web host). */

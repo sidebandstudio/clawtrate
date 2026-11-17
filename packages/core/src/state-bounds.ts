@@ -47,8 +47,10 @@ import type {
   RunEnding,
   RunError,
   Step,
+  StepFiles,
   StepText,
 } from "./runs.ts";
+import { MAX_STEP_PATH_CHARS, MAX_STEP_PATHS } from "./file-paths.ts";
 import type { Digest } from "./bounds.ts";
 import type {
   Bot,
@@ -199,6 +201,12 @@ export const STEP: Bound = flagged<Step>()({
   // Inline only when its whole JSON fits; otherwise null and read with `readStepRaw`.
   raw: json(MAX_INLINE_RAW_CHARS),
   rawSize: NUMBER,
+  // A path is an id: never cut, since a cut path would name another file.
+  files: object<StepFiles>()({
+    paths: list(MAX_STEP_PATHS, id(MAX_STEP_PATH_CHARS)),
+    changed: FLAG,
+    created: FLAG,
+  }),
 });
 const pendingCard = object<PendingCard>()({ id: ID, kind: ENUM, since: NUMBER });
 const closedCard = object<ClosedCard>()({ id: ID, kind: ENUM, since: NUMBER, reason: ENUM });

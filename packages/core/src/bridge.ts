@@ -8,6 +8,7 @@ import {
   type AttachmentStore,
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
+import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
 import type { QuestionAnswer, StepRead } from "./runs.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 
@@ -81,7 +82,30 @@ export type BridgeCommand =
   /** Ask again, with its own key, for a task creation the gateway refused, or whose outcome is unknown (it may create a second task). */
   | { type: "retryCreation"; creationId: string }
   /** Forget a task creation that failed, settled or cannot be established. */
-  | { type: "dismissCreation"; creationId: string };
+  | { type: "dismissCreation"; creationId: string }
+  /** A task's files and its folder, read now. */
+  | { type: "listTaskFiles"; key: string }
+  /** One of a task's files, by the path its list gave, from the reader its place allows. */
+  | { type: "readTaskFile"; key: string; path: string }
+  /** One page of a folder of a bot's workspace ("" is its root). */
+  | { type: "listWorkspace"; botId: string; path: string; offset: number }
+  /**
+   * A file of a bot's workspace, with the size its listing gave. `key` names the
+   * open task whose asset reader may send media, when its folder is the workspace.
+   */
+  | {
+      type: "readWorkspaceFile";
+      botId: string;
+      path: string;
+      size: number | null;
+      key: string | null;
+    }
+  /** The checkout's patch for one of a task's files. */
+  | { type: "readCheckoutDiff"; key: string; path: string }
+  /** The next part of a file on its way to this viewer (`FileTransferStart`). */
+  | { type: "readFileChunk"; id: string; index: number }
+  /** Drop a file's transfer. */
+  | { type: "releaseFile"; id: string };
 
 /** What each command answers with. */
 export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
@@ -100,7 +124,17 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
               ? TranscriptItem | null
               : C extends { type: "retryCreation" }
                 ? { key: string }
-                : void;
+                : C extends { type: "listTaskFiles" }
+                  ? TaskFileList
+                  : C extends { type: "readTaskFile" | "readWorkspaceFile" }
+                    ? FileRead
+                    : C extends { type: "listWorkspace" }
+                      ? WorkspacePage
+                      : C extends { type: "readCheckoutDiff" }
+                        ? CheckoutDiff
+                        : C extends { type: "readFileChunk" }
+                          ? { data: string }
+                          : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -176,6 +210,33 @@ function id(value: unknown, what: string): string {
   ) {
     throw new Error(`invalid ${what}`);
   }
+  return value;
+}
+
+/** The longest file path a command may name. */
+const MAX_FILE_PATH_CHARS = 4096;
+
+/** A file path as a command names it: bounded, no control characters; "" only where allowed. */
+function filePath(value: unknown, allowRoot = false): string {
+  if (
+    typeof value !== "string" ||
+    (!allowRoot && value.length === 0) ||
+    value.length > MAX_FILE_PATH_CHARS ||
+    [...value].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f)
+  ) {
+    throw new Error("invalid path");
+  }
+  return value;
+}
+
+function count(value: unknown, max: number, what: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max)
+    throw new Error(`invalid ${what}`);
+  return value;
+}
+
+function botId(value: unknown): string {
+  if (typeof value !== "string" || !BOT_ID_PATTERN.test(value)) throw new Error("invalid bot id");
   return value;
 }
 
@@ -380,6 +441,37 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "openSession":
     case "closeSession":
       return { type: command.type, key: sessionKey(command.key) };
+    case "listTaskFiles":
+      return { type: "listTaskFiles", key: sessionKey(command.key) };
+    case "readTaskFile":
+    case "readCheckoutDiff":
+      return { type: command.type, key: sessionKey(command.key), path: filePath(command.path) };
+    case "listWorkspace":
+      return {
+        type: "listWorkspace",
+        botId: botId(command.botId),
+        path: filePath(command.path, true),
+        offset: count(command.offset, 1_000_000, "offset"),
+      };
+    case "readWorkspaceFile":
+      return {
+        type: "readWorkspaceFile",
+        botId: botId(command.botId),
+        path: filePath(command.path),
+        size:
+          command.size === null || command.size === undefined
+            ? null
+            : count(command.size, Number.MAX_SAFE_INTEGER, "size"),
+        key: command.key === null || command.key === undefined ? null : sessionKey(command.key),
+      };
+    case "readFileChunk":
+      return {
+        type: "readFileChunk",
+        id: id(command.id, "transfer id"),
+        index: count(command.index, 100_000, "index"),
+      };
+    case "releaseFile":
+      return { type: "releaseFile", id: id(command.id, "transfer id") };
     default:
       throw new Error("unknown command");
   }
@@ -450,6 +542,14 @@ class ViewerSession implements BridgeSession {
   private mine(key: string): string {
     if (!this.open.has(key)) throw new Error("This task is not open in this view.");
     return key;
+  }
+
+  /** File reads answer this viewer: its transfers are its own, sized to its channel. */
+  private fileOptions(): { owner: object; maxChars?: number } {
+    return {
+      owner: this.owner,
+      ...(this.policy.maxResultChars !== undefined ? { maxChars: this.policy.maxResultChars } : {}),
+    };
   }
 
   private checkRoom(): void {
@@ -591,6 +691,31 @@ class ViewerSession implements BridgeSession {
         return client.dismissCreation(command.creationId);
       case "readStepRaw":
         return client.readStepRaw(this.mine(command.key), command.stepId);
+      case "listTaskFiles":
+        return client.listTaskFiles(this.mine(command.key), this.fileOptions());
+      case "readTaskFile":
+        return client.readTaskFile(this.mine(command.key), command.path, this.fileOptions());
+      case "readCheckoutDiff":
+        return client.readCheckoutDiff(this.mine(command.key), command.path, this.fileOptions());
+      case "listWorkspace":
+        return client.listWorkspace(
+          command.botId,
+          command.path,
+          command.offset,
+          this.fileOptions(),
+        );
+      case "readWorkspaceFile":
+        return client.readWorkspaceFile(
+          command.botId,
+          command.path,
+          command.size,
+          command.key === null ? null : this.mine(command.key),
+          this.fileOptions(),
+        );
+      case "readFileChunk":
+        return client.readFileChunk(command.id, command.index, owner);
+      case "releaseFile":
+        return client.releaseFile(command.id, owner);
     }
   }
 
