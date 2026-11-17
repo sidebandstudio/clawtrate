@@ -409,8 +409,8 @@
     delete view.dataset.layout;
     view.innerHTML =
       `<div class="viewer-bar screen-bar"><span class="avatar" data-bot="juniper"></span><div class="viewer-title"><strong>${b.name}'s browser</strong>` +
-      `<span>${esc(tab.title)} · ${tab.domain}</span>${control ? "" : `<span class="screen-mode">Watching</span>`}</div>` +
-      (control || C.control === "draining" || readOnly() ? "" : `<button type="button" class="button" data-size="sm" data-cmp="take">${icon("hand")}Take control</button>`) +
+      `<span>${esc(tab.title)} · ${tab.domain}</span>${holding() ? "" : `<span class="screen-mode">Watching</span>`}</div>` +
+      (holding() || readOnly() ? "" : `<button type="button" class="button" data-size="sm" data-cmp="take">${icon("hand")}Take control</button>`) +
       `<button type="button" class="icon-button" data-cmp="close-full" aria-label="Close the full view (Esc)" title="Close (Esc)">${icon("collapse")}</button></div>` +
       controlBar(b) +
       `<div class="screen-pills" role="group" aria-label="Tabs">${tabs.map((x) => `<button type="button" class="screen-pill" data-cmp-tab="${x.id}" aria-pressed="${x.id === C.tab}">${esc(x.title)}</button>`).join("")}</div>` +
@@ -419,6 +419,11 @@
     CT.hydrate(view);
     if (focusKey) $(`[data-cmp="${focusKey}"]`, view)?.focus();
   }
+
+  // Until the gateway confirms the release, the lease may still be held: the bar
+  // never says "Watching" or offers Take control while control is asked for,
+  // held, being given back, or uncertain.
+  const holding = () => ["draining", "granted", "releasing", "uncertain"].includes(C.control);
 
   // The phone's full view (work-pane.md, section 18, "On the phone"): the page
   // zooms and pans on the device; in control it opens at the page's own size.
@@ -447,7 +452,7 @@
           : `<div class="control-bar"><button type="button" class="button" data-variant="primary" data-cmp="take">${icon("hand")}Take control</button></div>`;
     view.innerHTML =
       `<div class="viewer-bar screen-bar"><span class="avatar" data-bot="juniper"></span><div class="viewer-title"><strong aria-label="${b.name}'s browser">${b.name}</strong>` +
-      `<span class="screen-mode">${control ? "You have control" : "Watching"}</span></div>` +
+      `<span class="screen-mode">${control ? "You have control" : holding() ? "Control" : "Watching"}</span></div>` +
       (tabs.length > 1 ? `<button type="button" class="screen-pill" data-cmp="tabs-sheet" aria-expanded="${Boolean(C.tabsOpen)}" aria-label="${tabs.length} tabs, showing ${esc(tab.title)}">${tabs.length} tabs</button>` : "") +
       `<button type="button" class="icon-button" data-cmp="close-full" aria-label="Close the full view" title="Close">${icon("collapse")}</button></div>` +
       (C.tabsOpen

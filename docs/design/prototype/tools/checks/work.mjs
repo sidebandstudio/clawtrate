@@ -513,6 +513,8 @@ check("Escape in control never hands back: it moves to Give back control", await
 await p.click('.control-bar [data-answer="0"]');
 check("M7 an answer first gives control back, and says so; nothing is answered yet", await q(p, () =>
   document.querySelector(".control-bar").textContent === "Giving control back…" && document.querySelector("#q-library").dataset.state === "pending"));
+check("M7 until the release is confirmed, the bar neither says Watching nor offers Take control", await q(p, () =>
+  !document.querySelector(".screen-view .screen-mode") && !document.querySelector('.screen-view [data-cmp="take"]')));
 await p.waitForTimeout(500);
 check("M7 once the release is confirmed, the answer is sent", await q(p, () => document.querySelector(".control-bar").textContent === "Sending your answer…" && window.CT.work.computer.control === "answering"));
 await p.waitForTimeout(500);
