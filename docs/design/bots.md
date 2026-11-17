@@ -258,7 +258,141 @@ Under it: "<How it was made>. The gateway keeps the sign-in; Clawtrate can't rea
 - Removing an account follows where the gateway stores it: a bot that keeps its own copy of that sign-in keeps it. When that happens the confirmation says so: "Pip keeps its own copy of this sign-in and is not affected."
 - Below admin: the rows open read-only pages, "Connect an account", "Edit", "Sign in again" and "Disconnect…" are absent, and the access bar sits at the foot of the section.
 
-<!-- PART2 -->
+## 8. A bot's settings
+
+Grok Bot keeps a bot's profile in the panel that opens from the title pill: a large picture, the name, the label, then tabs. Clawtrate's Work pane is that panel (`visual-language.md` §9), and a bot's settings are its fourth tab, **Settings**, after Details, Files and Computer. Details stays about the open task; Settings is about the bot, whichever task is open. ⌘\ and the title pill open the pane; the tab list's arrows, Home and End reach Settings like any tab.
+
+**The frame**, top to bottom:
+
+| Where           | What                                                                                                                                                                        | Status here                                                                               |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| The pane's hero | The picture (click to edit), the name (click to edit in place), the label or "Add a label" in `--text-faint` (F-037, F-038, F-039)                                          | Outline. Editing them in place is a later task.                                           |
+| About           | A fact block: Description ("None" in `--text-faint`, or its first line) and Instructions ("From AGENTS.md, 42 lines") (F-040)                                               | Outline. Their editors are a later task; until then the rows show values and do not open. |
+| Model           | The account row, then model and effort side by side (sections 9 and 10)                                                                                                     | Designed here                                                                             |
+| Tools           | "Permissions", a summary of the bot's tool rules; then the tools that come with its account (section 14); then T3 Code for this bot when the integration is on (section 17) | The account's tools and T3 Code are designed here; the permissions screen is a later task |
+| Runs on         | The machine (F-046)                                                                                                                                                         | Outline                                                                                   |
+
+Group words (13, faint) head each block, as in Details. A row that opens something is a whole-row button with its value and a chevron; a row that does not is plain text. Pages inside the tab (Account, Change account, T3 Code) replace the tab's content with a quiet round Back and a title (15/500); Back returns to the settings with focus on the row that opened the page.
+
+**States of the tab.**
+
+| State          | It shows                                                                                                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Loading        | Three grey blocks the shape of the groups, pulsing, `aria-busy`                                                                                                                |
+| Could not load | The empty mark with a warning, "Couldn't load <Bot>'s settings", "The gateway did not answer." and "Try again"                                                                 |
+| Below admin    | Every value; selects disabled; no Change account, Remove fallbacks or Save; the access bar at the foot of the tab: "Changing <Bot>'s settings needs admin access." (section 2) |
+| Long content   | Values truncate with an ellipsis and keep their full text as a tooltip and in the row's name; labels wrap in the account page's fact block                                     |
+
+## 9. Model and effort
+
+Two selects side by side under the account row: **Model** and **Effort** (F-042, F-043). Each shows its label over its value and opens a `.menu` under itself with one `menuitemradio` per choice, the current one checked. Up and Down move, Enter chooses, Escape closes and returns focus to the select. A choice is saved at once and announced ("Model saved").
+
+- **Model** lists only the models of the bot's account's provider (F-478). Under the pair: "<Provider> models, as the gateway lists them for <account>." The gateway projects an account's own catalogue into the model list only for a conversation that has that account selected; before the bot has one, the list is the provider's models as the gateway lists them, and what an account may actually use is the provider's decision (section 20, row 20).
+- **Effort** lists the levels the gateway reports for the chosen model ("Off", "Low", "Medium", "High"); a model with none shows "Not offered" and is disabled.
+- A bot on the gateway's default shows that model, read-only, with "The gateway's default model. Choose an account to pick another."
+- On a phone the two stack, Model first.
+
+## 10. The bot's account: bound and locked
+
+The account row reads the account's name and, after it, one of these words. Opening it shows the **Account** page.
+
+| Word              | Meaning, in one sentence a person understands                                                                                             | What the page shows                                                                                                                          |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bound             | "<Bot> runs on <account>. If that account fails, the gateway may use another <Provider> account, such as <other>, for that run."          | That sentence on a neutral note with a shield; "Lock to this account" with the command; what this cannot see; the ways round; Change account |
+| Locked            | "<Bot> runs on <account> only. If it fails, <Bot>'s run fails and says why; the gateway doesn't use another account."                     | That sentence on a neutral note with a lock, "Confirmed by the gateway at 5:41 PM."; "Unlock", folded; the ways round; Change account        |
+| Lock out of date  | "The gateway still keeps <Bot> to <old account>, so <Bot> keeps using it until the lock is changed."                                      | That sentence on `--warn-soft`; "Lock to the new account" with the new command                                                               |
+| No account        | "<Bot>'s account was disconnected. Clawtrate won't start <Bot> until you choose one."                                                     | That sentence on `--warn-soft`; "Choose an account" (primary)                                                                                |
+| Gateway's default | "<Bot> has no model of its own. It uses the gateway's default model, and the gateway picks one of that provider's accounts for each run." | That sentence; "Choose an account" (primary)                                                                                                 |
+
+Above the note, a fact block: Account, Kind, State (as in Settings, section 7).
+
+When the provider has no other account, the bound sentence reads "…the gateway may use another <Provider> account, if one is added, for that run." The words are plain and the tone neutral: a bound bot is the gateway's ordinary behaviour, not a fault (F-476, F-480).
+
+**Locking.** Under "Lock to this account" (13, faint):
+
+1. "Clawtrate can't set the lock itself; only the gateway's command line can. Run this on the gateway's machine:"
+2. The command, in the pairing screen's command block, with a copy button named "Copy lock command": `openclaw models auth order set --provider openai --agent marlow openai:work`. It is built from the bot's id, its provider and its account's id on the gateway, in the gateway's own command-line form; when the host knows the gateway runs under a named profile, it adds that profile's option, as it does for the approve command.
+3. A line and "Check now". At rest: "When the gateway has the lock, this page shows Locked by itself." Once the command is copied, the line becomes the waiting line with the pulsing dot: "Checking the gateway for the lock, again in 4s". "Check now" checks at once; when nothing is found: "Not locked yet. Checked at 5:40 PM."
+4. When the gateway reports the one-account order for the bot, the page becomes Locked, focus stays on the page's title, the announcer says "Locked. The gateway confirmed it.", and the account row reads "Locked".
+
+Clawtrate looks for the lock whenever the page is open and when Settings is opened, and again after any sign-in it starts for that provider; a lock that widened becomes "Lock out of date" (section 6). It never runs the command itself.
+
+**Unlocking**, folded under the locked note: "Run this on the gateway's machine. Clawtrate sees the change by itself." and `openclaw models auth order clear --provider openai --agent marlow`.
+
+**What a lock doesn't cover**, folded, the same on both states, said as facts and without alarm:
+
+- A task or conversation set to another account, by another app or with the model command in chat. Clawtrate never does this.
+- A routine, or a helper bot, whose model names another account.
+- A message from another bot into a conversation that already uses another account.
+- A new <Provider> sign-in on the gateway can add itself to the lock. Clawtrate checks after every sign-in it starts.
+- Removing <account>: the gateway then uses <Provider>'s other accounts.
+- Commands run on the gateway's machine itself.
+- A lock is about accounts. Some providers can still switch the model inside a request.
+
+**What this cannot see**, on the bound state only, one line under the command: "What this cannot see: if <account> is pausing after a failure, a run can start on another <Provider> account without leaving a record Clawtrate can read." (F-489)
+
+**Checks.** Clawtrate keeps every bot it manages on its model with its account and an empty fallback list (F-490). When a bot's model on the gateway lists fallbacks, the Account page says so on `--warn-soft`: "**<Bot> can move to another model.** Its model on the gateway lists fallbacks (anthropic/claude-sonnet-5.5), so the gateway can move a run to them when this one fails." with "Remove fallbacks". A bot whose model has no account suffix while Clawtrate's record says it chose one shows a note on `--warn-soft`: "The gateway's model for <Bot> has no account. It now uses the gateway's choice of <Provider> account." with "Choose an account".
+
+## 11. Changing the account
+
+"Change account" at the foot of the Account page opens **Change account**: "Choose the account <Bot> runs on." and the same grouped radio list as New bot, the current account checked. Choosing another one adds, as they apply:
+
+| When                                                             | Shown before saving                                                                                                                                                               |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The new account's provider does not offer the bot's model        | "Model" and "Effort" side by side, Model reading "Choose", and "<Provider> doesn't offer gpt-5.5. Choose one of its models." Save stays disabled until a model is chosen. (F-478) |
+| A run is in progress                                             | "A run in progress finishes on <old>. The next run uses <new>." (F-473)                                                                                                           |
+| The bot is locked to the old account, same provider              | On `--warn-soft`: "<Bot> is locked to <old>. Until the lock is changed, the gateway keeps using it. After saving, Account shows the command for the new lock."                    |
+| The old provider brought tools                                   | "Search posts on X and Run code come with xAI and leave <Bot>'s tools."                                                                                                           |
+| Some of the bot's tasks or routines name an account of their own | "2 of <Bot>'s tasks keep the account they were set to."                                                                                                                           |
+
+"Save" (primary) and "Cancel" (quiet). Saving writes the bot's model with the new account and an empty fallback list, returns to the Account page with focus on its title, announces "<Bot> now runs on <new>", and posts a grey event line, centred, in the open task of that bot: "<Bot> now runs on OpenAI · Home, from the next run." or "…OpenAI · Home. The run in progress finishes on OpenAI · Work." The gateway records no such line, so Clawtrate draws it from its own write (section 20, row 15). A locked bot that changed within its provider becomes "Lock out of date"; one that changed provider becomes Bound on the new one.
+
+## 12. Served by another account
+
+When the gateway's log shows that a bot's run moved off its bound account, Clawtrate says so afterwards and never silently (F-489, F-479). It uses only things the conversation and the rail already have.
+
+**In the task**, a grey event line (`visual-language.md` §8) where the run's reply begins, aligned with the bubbles' text. It is the opening event line of `conversation.md` §9: a `summary` with a chevron.
+
+| The log and the run                                      | The line                                                                                                                           |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| A move off the bound account, and the run finished       | "OpenAI · Work failed (rate limited). The gateway finished this run on another OpenAI account."                                    |
+| The same, and the provider has exactly one other account | "…on another OpenAI account, likely Home."                                                                                         |
+| A move off the bound account, and the run then failed    | "OpenAI · Work failed (rate limited). The gateway tried another OpenAI account." followed by the run's own error card (section 13) |
+
+The reason is the gateway's failure reason in words: "signed out" (auth), "out of credit or quota" (billing), "rate limited", "provider busy" (overloaded), "timed out", otherwise "an error".
+
+**Opened**, the line shows a card: "The gateway's log for this run says it moved the run off <account> after a rate limit. It doesn't say which account served the run." When the line said "likely": "**Inferred:** OpenAI · Home is the only other OpenAI account, so it is likely. Clawtrate can't confirm it." Then "Lock <Bot> to <account>, in its settings, to have a failure stop the run instead.", "Open <Bot>'s settings" and "Raw", which shows the log record as the gateway wrote it (the failed account appears there as a hash).
+
+**On the bot's row**, line two takes the warning in `--warn`, in place of the latest message, when the bot is otherwise calm (done, stopped or idle; a waiting, failed, blocked or working row keeps its own line, `conversation.md` §20): "Used another account". The row's name adds ", used another account". No new mark and no badge: nothing went wrong in the run the person asked for. A pinned tile shows nothing extra.
+
+**It clears** when the person opens the task with the line, when the gateway's last-use time shows the bound account in use again after it (admin connections, accounts in the bot's own store), or when the bot is locked. The line in the transcript stays.
+
+**In settings**, the Model group carries a note on `--warn-soft`, "<Bot>'s last run was finished on another <Provider> account. See Account.", and the Account page a neutral line with a clock: "**Last run:** OpenAI · Work failed (rate limited) and the gateway finished the run on another OpenAI account, at 4:58 PM."
+
+What it never says: "this turn was answered by <account>". The turn record of F-044 names the bound account as "bound to OpenAI · Work", never "served by".
+
+## 13. An account that fails
+
+A run that fails because its account is out of quota, signed out or expired ends with the turn error of `conversation.md` §17, with the bound account named by Clawtrate, since the gateway's error names only the provider and model (F-480):
+
+| Cause                                           | Title and reason                                                                                                                                                                                                                                                     | The two ways forward                        |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Out of quota or credit                          | "Otto couldn't finish this turn". "Otto's account, OpenAI · Work, is out of credit or quota: OpenAI refused the run. Otto is locked to it, so the gateway didn't use another account. The gateway pauses an account after a billing error, for 10 minutes at first." | "Change account" (primary), "Try again"     |
+| Signed out or expired                           | "…is signed out: OpenAI didn't accept its sign-in. Otto is locked to it, so the gateway didn't use another account."                                                                                                                                                 | "Sign in again" (primary), "Change account" |
+| A later run refused while the account is paused | "…is paused by the gateway after an earlier failure." and the gateway's own message as given                                                                                                                                                                         | "Change account" (primary), "Try again"     |
+
+When the bot is bound, not locked, the second sentence is "The gateway tried Otto's other OpenAI accounts too." only when the log shows a move; otherwise it is left out. "Copy request ID" and "Raw" stay as in `conversation.md` §17.
+
+- "Sign in again" opens Settings on the connect component, starting the same provider's sign-in. "Change account" opens the bot's Settings tab on Change account.
+- **The bot's row** uses its failed state: the failed badge and line two "Couldn't finish: OpenAI · Work is out of quota" or "Couldn't finish: sign in to OpenAI · Work again" in `--danger`.
+- **The bot's settings** add, in the Model group, a note on `--danger-soft` with the same cause and the two ways forward in words.
+- **Settings, Accounts** shows the account's own state as the gateway reports it. The gateway does not report a pause or a billing failure there, so the account can read "Connected" while its runs are refused; the account's page then adds "Otto's last run on it failed: out of quota, 5:58 PM." from the run.
+
+## 14. Tools that come with an account
+
+Some accounts bring tools. An xAI account brings "Search posts on X" and "Run code" while the bot runs on xAI (F-481). They appear in the bot's Settings, in the Tools group, in their own block headed "With xAI", after "Permissions", one row each with the rule that applies ("Allowed", "Ask", "Denied"), and a line under the block: "These come with xAI accounts, while <Bot> runs on xAI. xAI bills them per call." The names are Clawtrate's plain words for the gateway's tool names (`x_search`, `code_execution`), shown in the row's tooltip. Choosing and changing those rules is the tool permissions screen, a later task; this section fixes only where they appear. Changing the bot to another provider removes the block, and Change account says so before saving (section 11).
+
+<!-- PART3 -->
 
 ## 20. What the gateway's facts drive
 
@@ -277,7 +411,20 @@ Sources: "research" is `docs/research/provider-accounts-and-t3-code.md`, by sect
 | 9   | A label is `auth.profiles.<id>.displayName`, written with `config.patch` (admin), returned only to admin connections.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Labels (section 6); ids below admin                                                        | research A.3 "Labels", C.1                                                                                       | source, probe                                                  |
 | 10  | Which bots use an account is not reported; Clawtrate derives it from `agents.list` model suffixes and `profileOrder`. Logout follows where the credential is stored, and strips `@<profileId>` from bot models that named it.                                                                                                                                                                                                                                                                                                                                                                                                                           | "Used by" and Disconnect (section 7)                                                       | research A.5 last paragraph, A.4 "A bot whose account is removed", F-477                                         | source, probe                                                  |
 
-<!-- FACTS2 -->
+| 11 | A bot pinned with `@<profileId>` and `fallbacks: []` moved to another account of the same provider on a 401, 402 and 429, in the same run, and stayed there while the first cooled down. | "Bound" and its sentence (section 10) | research A.13, C.1, A.4 "Neither selection is exclusive" | probe |
+| 12 | A stored one-account order for the bot fences its ordinary runs: they fail visibly instead of moving. No account method writes it (`models.authOrderSet` refuses an order that leaves out an available account); the gateway's command line does: `openclaw models auth order set --provider <p> --agent <bot> <profileId>`, which then asks the running gateway to refresh. It is read back from `models.authStatus {agentId}` `profileOrder`. | "Locked", the lock command, the check (section 10) | research C.2, A.4; `<openclaw>/dist/auth-order-DNR83ml4.mjs` lines 66-95; `<openclaw>/dist/models-auth-order-ReW5cT_z.mjs` lines 39-70 | source, probe |
+| 13 | The ways round a lock: a conversation or new task that selects another account, a routine or helper that names one, a message into a conversation that already has one, the gateway's command line on the host, a sign-in that promotes a new account into the order, and removal of the bound account, after which the order is repaired. | "What a lock doesn't cover" (section 10) | research C.2, table "Every way round it" | source; probe for task and routine |
+| 14 | The order is cleared with `openclaw models auth order clear --provider <p>`. | "Unlock" (section 10) | `<openclaw>/dist/auth-order-DNR83ml4.mjs` line 89 | source. Assumed: `--agent <bot>` applies to `clear` as it does to `set`, since both go through the same option parsing (`resolveAuthOrderContext`, same file line 67); not run |
+| 15 | `agents.update {model}` during a run: the run finished on the old account and the next run used the new one, and no history line records the change. If the bot has a one-account order, the order must change too, or the gateway keeps the old account. | Change account, its grey line, "Lock out of date" (section 11) | research A.4 "When a change takes effect"; parity F-473 cell; C.2 | probe |
+| 16 | `logs.tail` (`operator.read`) carries the run's `embedded_run_failover_decision` record with `decision: "rotate_profile"` and the failed account as `sha256:` plus 12 hex digits of its id; no record names the account that served; a run that starts on another account during a cooldown leaves no record. `models.authStatus` `lastUsedAt` per account, admin only, for accounts in the bot's own store. | Served by another account, and when it clears (section 12) | research C.3, A.9 | source, probe |
+| 17 | With `fallbacks: []` the run cannot move to another model, so a run that finished after a `rotate_profile` record was finished on another account of the same provider. | "The gateway finished this run on another <Provider> account" (section 12) | research C.3 "What Clawtrate can truthfully say" | inferred, as the research marks it; "likely <other>" is a further inference, labelled as one |
+| 18 | A failed run carries `errorMessage` and, on the failing attempt, `errorDetail {provider, model, failoverReason}` with `auth`, `billing`, `rate_limit` and others; no field names the account; a run refused during a pause has `errorMessage` only. A billing pause lasts 10 minutes at first and doubles up to 24 hours. `models.authStatus` does not show pauses. | Section 13 | research A.7, A.13 | probe, source |
+| 19 | The xAI plugin registers `x_search` and `code_execution`, exposed only with an active xAI model, usable xAI sign-in and permitting tool policy; they appear under the xAI plugin in `tools.effective {sessionKey}` and `tools.catalog`. xAI bills searches per call. | Section 14 | research A.10 | source; not observed (no xAI on the development gateway) |
+| 20 | `models.list {sessionKey}` projects a conversation's selected account into the catalogue; `models.list {agentId}` lists every configured provider's models; there is no per-account catalogue for a bot before it has a conversation. | The model list (section 9) | research A.6 | source, probe |
+| 21 | Effort levels come from `models.list` `thinkingLevels`; a bot's default effort is `thinkingDefault` through `config.patch` (admin). | Effort (section 9) | parity F-043 cell | source |
+| 22 | Codex's cyber escalation and Anthropic's in-request refusal fallback switch models outside the account order and cannot be turned off per bot. | The last line of "What a lock doesn't cover" | research A.7, C.1 | source |
+
+<!-- FACTS3 -->
 
 ## 21. Parity rows to reword
 
@@ -291,7 +438,14 @@ Only the Clawtrate column changes. Rows not listed are met as written.
 | F-475 | better: as written, with "the key is sent once to the gateway, which keeps it in its account store"; when the gateway already has a key for that provider, the form says the new key replaces it.                                                                                                                                                                                                                                                                                                                                                                                                | Keys go to the account store and replace the provider's key (research A.8).                                  |
 | F-476 | better: as written; below admin, where the gateway sends no labels, accounts are told apart by their id on the gateway.                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Labels reach admin connections only.                                                                         |
 
-<!-- ROWS2 -->
+| F-473 | better: a Bot's settings show its account and let the user change it; the change applies from the next run, a run in progress finishes on the account it started with, and the task shows a grey event line naming the new account, drawn by Clawtrate from its own change; a Bot locked to the old account of the same provider shows that its lock is out of date, with the command for the new lock. | The gateway records no change, and keeps an old lock. |
+| F-476 | better: as written, where a Bot's account has two states, "Bound" (the gateway may use another account of the same provider when this one fails) and "Locked" (it may not, for ordinary runs), each with one plain sentence; below admin, accounts are told apart by their id on the gateway. | Names the two states the design shows. |
+| F-479 | better: as written, where the turn record labels the account "bound to <label>" and the afterwards report is the grey line of F-489. | The record shows the binding, never the serving account. |
+| F-480 | better: when a run fails because its account is out of quota, signed out or expired, the conversation names the Bot's bound account (Clawtrate's, since the error names provider and model only) and why, with two ways forward: "Sign in again" and "Change account" when it is signed out or expired, "Change account" and "Try again" when it is out of quota; the Bot's row shows the failure; Clawtrate never moves a Bot to another account by itself, and while a Bot is bound and not locked its settings say that the gateway may. | Two ways forward per cause; "Sign in again" cannot help with quota. |
+| F-489 | better: as written, where the line names the reason in words, says "finished this run on another <Provider> account" when the run completed and "tried another <Provider> account" when it failed, adds "likely <label>" only when the provider has exactly one other account, and opens to say what is inferred; the Bot's row shows "Used another account" in place of its latest message while the Bot is otherwise calm, until the user opens that task, the gateway's last-use time shows the bound account in use again, or the Bot is locked. | "Until its next run on the bound account" cannot be established for shared accounts. |
+| F-490 | better: as written, where Clawtrate starts looking for the lock when the Account page opens and shows a waiting line once the command is copied, and a Bot whose model lists fallbacks is reported with "Remove fallbacks". | How "confirms by itself" looks. |
+
+<!-- ROWS3 -->
 
 ## 22. For builders
 
@@ -303,7 +457,12 @@ Only the Clawtrate column changes. Rows not listed are met as written.
 | Connect            | The pairing screen's command block and waiting line, the access bar, copy | Code, numbered steps, note, result, disclosure           |
 | Settings, Accounts | Fact block, group word, empty state, the access bar                       | Settings frame, choice list, confirmation                |
 
-<!-- BUILD2 -->
+| A bot's Settings tab | Tabs, fact block, group word, `.menu`, empty state, skeleton, the access bar, the pairing command block and waiting line, notes | Select, sub-page head, the lock's waiting row |
+| The served line | Event line, the opening event line and Raw (`conversation.md` §9) | Nothing |
+| An account's failure | The turn error (`conversation.md` §17), the bot row's failed state | Nothing |
+| The row's warning | Bot row line two (`conversation.md` §20), in `--warn` | Nothing |
+
+<!-- BUILD3 -->
 
 ### What the engine or the gateway must supply
 
@@ -322,8 +481,19 @@ Only the Clawtrate column changes. Rows not listed are met as written.
 3. New bot with its Account step and Create.
 4. Disconnect and Sign in again.
 
-<!-- ORDER2 -->
+5. A bot's Settings tab, read-only: the frame, the account row and Account page with Bound, Locked and the checks, model and effort.
+6. Changing model, effort and account, with the grey line.
+7. The lock: the command, looking for the order, Locked, Unlock, the re-check after a sign-in.
+8. The failure card on an account, and the row's failed line.
+9. The log follower, the served line and the row's warning; last, because it depends on the gateway's log configuration.
+
+<!-- ORDER3 -->
 
 ## 23. Not covered here
 
 - The picture editor for an existing bot (generate, upload, crop), which F-037 and Grok Bot's "Bot" tab describe; New bot uses the body and colour picker only.
+- Editing the name and label in place, the description and the instructions (F-038, F-039, F-040, F-041); section 8 places them.
+- The tool permissions screen, where the rules for an account's tools are chosen (F-481, FC-02); section 14 places those tools.
+- Choosing a bot's machine (F-046) and the list of what a bot can reach (F-047).
+- Duplicate, export and delete (F-048, F-049, F-050).
+- A plugin that writes the one-account order and guards it (research C.4); with it, Lock would become a button, and "What a lock doesn't cover" would shrink.

@@ -976,6 +976,106 @@ button.b-open > .icon {
   color: var(--danger);
 }
 
+/* A bot's settings, in the Work pane ------------------------------------------- */
+
+/* The tab's groups: the Work pane's group word. */
+.b-tabgroup {
+  margin: 18px 2px 8px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text-faint);
+}
+
+#panel-settings > .b-tabgroup:first-child {
+  margin-top: 6px;
+}
+
+/* new: a page inside the tab: Back and a title, no band. */
+.b-subhead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px -8px;
+}
+
+.b-subhead h3 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.b-subhead h3:focus {
+  outline: none;
+}
+
+#panel-settings .b-lead {
+  margin-bottom: 10px;
+}
+
+#panel-settings .command-line {
+  margin: 0 0 8px;
+}
+
+/* A command breaks between words, never inside a flag. */
+#panel-settings .command-line code,
+.b-dialog .command-line code {
+  overflow-wrap: break-word;
+}
+
+.b-step {
+  margin: 0 2px 8px;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.b-faint {
+  color: var(--text-faint);
+}
+
+.b-note p.b-faint {
+  font-size: var(--text-sm);
+}
+
+.b-list {
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.b-list li + li {
+  margin-top: 6px;
+}
+
+.b-lockwait {
+  min-height: 32px;
+}
+
+.b-lockwait .b-hint {
+  flex: 1;
+}
+
+.b-panel-foot {
+  margin-top: 18px;
+}
+
+/* The served line, opened: the conversation's event body. */
+.event-body .b-p {
+  margin: 0 0 8px;
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+.event-body .b-p b {
+  font-weight: var(--weight-medium);
+}
+
+.event-body .b-raw {
+  margin-top: 10px;
+}
+
 /* Phone and narrow windows ------------------------------------------------------- */
 
 /* Below the one-pane width a dialog is a full-height sheet, as on the phone. */

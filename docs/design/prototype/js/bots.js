@@ -675,6 +675,7 @@
 
   // Re-render whichever dialog shows the connect component.
   function rerender(focus) {
+    CT.botsRender?.();
     if (createDialog.open) {
       renderCreate();
       if (focus) focusFirst(createDialog);
@@ -1115,7 +1116,6 @@
 
   // First paint from the address --------------------------------------------------------------------------
 
-  $("#tab-settings").hidden = true; // the bot's Settings tab arrives with part 2
   // The shell's own question, "may this connection write?", follows the tier.
   if (B.access === "read") {
     app.model.access = "read";
