@@ -77,7 +77,10 @@ With the plugin:
 
 4. Give those bots the `browser` tool (and keep it from bots that should not have one). A device can watch only a bot whose task policy allows the browser tool.
 
-The plugin refuses to load when its config does not match the gateway's browser config: an unknown setting, a profile or port given to two bots, an address that is not literal loopback, a bot profile that is not declared under `browser.profiles` on exactly that port, another profile on a bot's port, or a bot profile as the default. It checks the gateway's config again on every call; if a bot's profile was changed afterwards, the plugin ends that bot's views and held tabs and refuses its browser calls until the two agree again.
+The plugin refuses to load when its config does not match the gateway's browser config: an unknown setting, a profile or port given to two bots, an address that is not literal loopback, a bot profile that is not declared under `browser.profiles` on exactly that port, or a bot profile as the default. It reads the gateway's browser config the way the gateway resolves it (OpenClaw 2026.10.6), so it decides on endpoints, not on how a URL is written:
+
+- each bot's profile must resolve to exactly the plugin's endpoint for that bot (scheme, host and port), as a managed Chromium profile the gateway starts itself. A bot profile inherits its host and scheme from `browser.cdpUrl`, so a `browser.cdpUrl` on another host, `localhost`, `[::1]` or `https` makes it resolve elsewhere, and `attachOnly` makes the gateway attach to whatever answers on the port; each is refused with the two endpoints in the reason;
+- no other profile may reach a bot's browser: any profile, including the default one and the ones the gateway adds by itself (`openclaw` on `browser.cdpUrl`'s port or the first port of its range, `user`, `chrome`), that resolves to a bot's port on loopback, on the unspecified address or by any name (a name can point at this machine) is refused, however its URL is written (a leading zero in the port, a path, a query or a fragment, another spelling of a loopback address, another scheme) and whatever its driver. It checks the gateway's config again on every call; if a bot's profile was changed afterwards, the plugin ends that bot's views and held tabs and refuses its browser calls until the two agree again.
 
 ## What a device can do with it
 
@@ -134,7 +137,7 @@ It guarantees, for each configured bot:
 
 - the bot's `browser` calls go to its own profile on the gateway's machine (`target: "host"`), whatever profile, node, sandbox, dashboard or import destination the call asks for; such routing is refused, not redirected;
 - the bot may use only tab actions: `status`, `start`, `tabs`, `open`, `focus`, `close`, `snapshot`, `screenshot`, `navigate`, `text` and `act`. Profile import, downloads, uploads, `stop` and every other action are refused;
-- no other agent's `browser` call can name the bot's profile, by any spelling, as its profile or as an import destination, and no other agent may use browser dashboards while bots have browsers of their own;
+- no other agent's `browser` call can reach the bot's browser: not by naming its profile in any spelling, not through another profile or the default one that the gateway resolves to the bot's endpoint, and not as an import destination; and no other agent may use browser dashboards while bots have browsers of their own;
 - a device can list, watch and take only the tabs that the bot's own browser lists right now, for a task it may use; nothing in a tool result grants anything;
 - while a person holds a tab, every `browser` call of that bot, from all of its tasks, is refused with "A person has control of this bot's browser. Wait until they give it back."; one holder at a time, and only the holder's own connection, with the lease's generation, can send input or release.
 
