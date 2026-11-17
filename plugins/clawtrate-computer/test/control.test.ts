@@ -63,6 +63,23 @@ describe("C-02: taking control fails closed", () => {
 });
 
 describe("C-03: only the holder, with the lease's generation", () => {
+  it("the holder can withdraw its own waiting take with the draining event's generation; no one else can", async () => {
+    const h = load();
+    await h.before("atlas", "run-1", "c1", { action: "act" });
+    const take = h.call("control.take", tab, A);
+    await until(() => h.events.length === 1);
+    const generation = h.events[0]!.generation;
+    expect(
+      (await h.call("control.release", { ...tab, generation }, B)).error?.details?.reason,
+    ).toBe("not_holder");
+    expect((await h.call("control.release", { ...tab, generation }, A)).payload?.state).toBe(
+      "released",
+    );
+    expect((await take).error?.details?.reason).toBe("control_request_ended");
+    expect(h.statesOf(generation)).toEqual(["draining", "released"]);
+    expect(h.state.leases.size).toBe(0);
+  });
+
   it("C-03a: another connection cannot release, take or send input, with or without the generation", async () => {
     const h = load();
     const generation = await granted(h);
