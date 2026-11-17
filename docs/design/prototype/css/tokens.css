@@ -23,6 +23,7 @@
   --text-base: 15px; /* messages, bot names, inputs */
   --text-lg: 17px; /* phone inputs, dialog titles */
   --text-title: 28px; /* the connection screen's name */
+  --text-title-sm: 20px; /* bots.md: a Settings section's title; the Work pane's name size */
 
   --weight-regular: 400;
   --weight-medium: 500;
@@ -54,6 +55,7 @@
   --avatar-row: 40px;
   --avatar-pin: 56px;
   --avatar-hero: 64px;
+  --avatar-create: 104px; /* bots.md: the live preview in New bot */
   --avatar-pill: 22px;
 
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
