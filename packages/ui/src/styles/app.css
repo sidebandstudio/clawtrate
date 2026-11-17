@@ -170,6 +170,7 @@ textarea {
 
 /* Disabled keeps readable text: a grey fill and faint text, never opacity. */
 .button:disabled,
+.button[aria-disabled="true"],
 .button[data-variant="primary"]:disabled {
   background: var(--bg-bubble);
   color: var(--text-faint);
@@ -2133,6 +2134,11 @@ textarea {
 [data-input="touch"] .bubble {
   font-size: var(--text-lg);
   line-height: 1.4;
+}
+
+/* Fields take the same step up as message text on touch. */
+[data-input="touch"] .input {
+  font-size: var(--text-lg);
 }
 
 /* The strip keeps its size; its action gets a 44px hit area. */

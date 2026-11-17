@@ -72,7 +72,10 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
   const pairing = connection.pairing!;
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState(false);
+  // While it checks, the button stays focusable (aria-disabled, not disabled),
+  // so keyboard focus is still on it when a check finds nothing.
   const check = async () => {
+    if (checking) return;
     setChecking(true);
     try {
       await send({ type: "retry" });
@@ -110,7 +113,7 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
           type="button"
           className="button"
           data-size="lg"
-          disabled={checking}
+          aria-disabled={checking || undefined}
           onClick={() => void check()}
         >
           {checking ? "Checking…" : "Check now"}

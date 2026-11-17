@@ -497,3 +497,33 @@ test.describe("focus when Work closes", () => {
     await expect(page.getByRole("button", { name: "Show work panel" })).toBeFocused();
   });
 });
+
+test.describe("the connection screens", () => {
+  test.use(contextFor(WIDE, "light"));
+
+  test("a pairing check that finds nothing keeps focus on Check now", async ({ page }) => {
+    await openFixture(page, "scene=pairing", "light");
+    const check = page.getByRole("button", { name: /Check now|Checking…/ });
+    await check.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("status").filter({ hasText: "Not approved yet" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Check now" })).toBeFocused();
+    // Enter checks again; the fixture's second check is approved.
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("bot").first()).toBeVisible();
+  });
+});
+
+test.describe("the connection screen on a phone", () => {
+  test.use(contextFor(PHONE, "light"));
+
+  test("fields take the touch text size", async ({ page }) => {
+    await openFixture(page, "scene=connect", "light");
+    for (const field of await page.locator(".input").all()) {
+      expect(await field.evaluate((e) => getComputedStyle(e).fontSize)).toBe("17px");
+      expect(await field.evaluate((e) => getComputedStyle(e, "::placeholder").fontSize)).toBe(
+        "17px",
+      );
+    }
+  });
+});
