@@ -156,6 +156,19 @@ test.describe("sending", () => {
     await expect(page.getByTestId("outgoing")).toHaveCount(0);
   });
 
+  test("F-075: a send whose outcome is unknown is never shown as received, and Resend sends it again", async ({
+    page,
+  }) => {
+    await open(page, "send-unknown");
+    const bubble = page.getByTestId("outgoing");
+    await expect(bubble).toContainText("Not known whether the gateway received it");
+    await expect(bubble).not.toContainText(/took it|Sent|Steer/);
+    // Not in your colour: nothing establishes that the gateway took it.
+    await expect(bubble.locator(".msg")).toHaveAttribute("data-pending", "held");
+    await bubble.getByRole("button", { name: "Resend" }).click();
+    await expect(bubble).toHaveAttribute("data-status", "sending");
+  });
+
   test("F-287: a message written offline is held in the neutral fill and marked to send when reconnected", async ({
     page,
   }) => {

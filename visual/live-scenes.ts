@@ -132,6 +132,14 @@ export const LIVE_VIEWS: Array<{
     ready: (page) => expect(page.getByTestId("outgoing")).toContainText("Failed to send"),
   },
   {
+    scene: "send-unknown",
+    rows: "F-075",
+    ready: (page) =>
+      expect(page.getByTestId("outgoing")).toContainText(
+        "Not known whether the gateway received it",
+      ),
+  },
+  {
     scene: "offline-send",
     rows: "F-287 F-104",
     ready: (page) =>

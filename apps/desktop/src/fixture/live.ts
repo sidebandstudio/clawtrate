@@ -40,6 +40,7 @@ export const LIVE_SCENES = [
   "run-turn-limit",
   "stop-failed",
   "send-failed",
+  "send-unknown",
   "offline-send",
 ] as const;
 
@@ -427,6 +428,21 @@ export function liveScene(
               status: "failed",
               runId: null,
               error: "chat.send was refused: the session is archived.",
+            }),
+          ],
+        })),
+        steps: [],
+      };
+    case "send-unknown":
+      return {
+        initial: withTranscript(interactive(base), (transcript) => ({
+          ...transcript,
+          outbox: [
+            message("msg-1", ASK, now - 10 * SECOND, {
+              status: "unknown",
+              runId: null,
+              error:
+                "No answer came from the gateway, and its history does not show this message. Whether it was received is not known.",
             }),
           ],
         })),

@@ -62,6 +62,20 @@ export function OutgoingBubble({
     case "checking":
       caption = <span>No answer from the gateway yet. Checking whether it was sent…</span>;
       break;
+    case "unknown":
+      // No answer came and history does not hold it: never claimed as received.
+      caption = (
+        <>
+          <span>Not known whether the gateway received it</span>
+          <button type="button" className="link-button" onClick={retry}>
+            Resend
+          </button>
+          <button type="button" className="link-button" onClick={remove}>
+            Delete
+          </button>
+        </>
+      );
+      break;
     case "unconfirmed":
       caption = (
         <>
