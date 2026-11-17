@@ -835,3 +835,64 @@ describe("cards in the order the gateway's events establish", () => {
     ]);
   });
 });
+
+describe("a T3 Code card's state moves only as its own call's events establish", () => {
+  it("F-134: Delivery unknown is not final: the call's own result, read later from history, makes it Call made; Call made is final", () => {
+    const stopped = cards("t3-delivery-unknown");
+    const before = stopped.selected;
+    expect(before.mcpCalls[0]!.state).toBe("unknown");
+    // The same call, as history later holds it with its result (same call id, same run).
+    const made = cards("t3-call-made").transcript;
+    const later = selectCards(
+      {
+        ...stopped.transcript,
+        runs: stopped.transcript.runs.map((run) => ({ ...run, steps: made.runs[0]!.steps })),
+      },
+      [],
+      rawOf,
+      before,
+    );
+    expect(later.mcpCalls[0]).toMatchObject({ id: before.mcpCalls[0]!.id, state: "returned" });
+    // Call made is final: another result for the same call that is not the gateway's own
+    // correction (a `replace` frame) changes nothing.
+    const KEY = "agent:otto:final";
+    const raw = new RawTable();
+    const ctx = { sessionKey: KEY, now: 1, raw };
+    let seq = 0;
+    const tool = (activity: TaskActivity, data: Record<string, unknown>) =>
+      applyAgentEvent(
+        activity,
+        { runId: "r", seq: (seq += 1), stream: "tool", ts: seq, sessionKey: KEY, data },
+        ctx,
+      ).activity;
+    const name = "t3code__t3_thread_launch";
+    const details = { mcpServer: "t3code", mcpTool: "t3_thread_launch" };
+    let a = tool(emptyActivity, { phase: "start", name, toolCallId: "c", args: { message: "Go" } });
+    a = tool(a, {
+      phase: "result",
+      name,
+      toolCallId: "c",
+      isError: false,
+      result: { content: [{ type: "text", text: "ok" }], details },
+    });
+    const madeCards = selectCards(
+      { runs: a.runs, approvals: [], linkedRuns: {}, interSession: [] },
+      [],
+      rawOf,
+    );
+    a = tool(a, {
+      phase: "result",
+      name,
+      toolCallId: "c",
+      isError: true,
+      result: { content: [{ type: "text", text: "late" }], details },
+    });
+    const after = selectCards(
+      { runs: a.runs, approvals: [], linkedRuns: {}, interSession: [] },
+      [],
+      rawOf,
+      madeCards,
+    );
+    expect(after.mcpCalls[0]).toMatchObject({ state: "returned", error: null });
+  });
+});

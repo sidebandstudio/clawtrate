@@ -623,6 +623,70 @@ test.describe("question cards", () => {
     ]);
   });
 
+  test("F-113: once answered, the question is not repeated as a message, also after history brings the run's later rows", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=question-single", "light");
+    const card = questionCard(page);
+    await card.getByRole("radio", { name: /A week/ }).click();
+    await expect(card).toHaveAttribute("data-state", "answered");
+    // History then holds the ask_user call and the bot's next reply, as the gateway records them.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState(change: (state: Record<string, unknown>) => unknown): void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const transcripts = state.transcripts as Record<string, { items: unknown[] }>;
+        const key = "agent:otto:transcode-cache";
+        const transcript = transcripts[key]!;
+        const question = "How long should I keep the cache in /srv/scratch before deleting it?";
+        return {
+          ...state,
+          transcripts: {
+            ...transcripts,
+            [key]: {
+              ...transcript,
+              items: [
+                ...transcript.items,
+                {
+                  id: "h-ask:1",
+                  role: "assistant",
+                  timestamp: Date.now(),
+                  model: null,
+                  blocks: [
+                    {
+                      kind: "tool-call",
+                      callId: "call_ask",
+                      name: "ask_user",
+                      argumentsText: JSON.stringify({ questions: [{ question }] }, null, 2),
+                      result: { isError: false, text: JSON.stringify({ status: "answered" }) },
+                    },
+                  ],
+                },
+                {
+                  id: "h-reply:2",
+                  role: "assistant",
+                  timestamp: Date.now(),
+                  model: null,
+                  blocks: [{ kind: "text", text: "Keeping it for a week, then deleting it." }],
+                },
+              ],
+            },
+          },
+        };
+      });
+    });
+    await expect(page.getByText("Keeping it for a week, then deleting it.")).toBeVisible();
+    await expect(
+      page.locator(".bubble", { hasText: "How long should I keep the cache" }),
+    ).toHaveCount(0);
+    await expect(card.locator(".request-title")).toHaveText(
+      "How long should I keep the cache in /srv/scratch before deleting it?",
+    );
+  });
+
   test("F-114: several answers: Choose all that apply, two chosen, Send answer, both answered", async ({
     page,
   }) => {
