@@ -21,7 +21,7 @@ import {
 import { AccessBar } from "./AccessBar.tsx";
 import { useCommand } from "./bridge.tsx";
 import { Avatar, Presence } from "./Avatar.tsx";
-import { Composer, type NeedsYou, type Notice } from "./Composer.tsx";
+import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
 import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
 import { IncompleteCaption, OutgoingBubble, RunCards, RunEnding, RunReply } from "./LiveTurn.tsx";
 import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
@@ -809,7 +809,11 @@ export function Conversation({
   // ⌘J goes to what needs you.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "j" &&
+        reachable(sectionRef.current?.querySelector("[data-testid=transcript]") ?? null)
+      ) {
         event.preventDefault();
         review();
       }

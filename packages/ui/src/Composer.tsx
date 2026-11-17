@@ -255,6 +255,7 @@ export function Composer({
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (!command(event) || event.defaultPrevented) return;
+      if (!reachable(focusRef.current)) return;
       const target = event.target as Element | null;
       if (event.key === "." && !event.shiftKey) {
         if (view.stoppable) {
@@ -789,6 +790,18 @@ export function Composer({
       )}
     </footer>
   );
+}
+
+/**
+ * Whether the window's shortcuts may act on this conversation: it is shown,
+ * not inert behind a drawer, and no modal dialog is open over it.
+ */
+export function reachable(element: Element | null): boolean {
+  if (!element || !element.isConnected) return false;
+  if (element.closest("[inert]")) return false;
+  if (!element.checkVisibility()) return false;
+  const modal = document.querySelector('[aria-modal="true"]');
+  return !modal || modal.contains(element);
 }
 
 function isLive(run: Run): boolean {

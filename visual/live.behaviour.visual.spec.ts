@@ -1261,6 +1261,25 @@ test.describe("the phone", () => {
     ),
   );
 
+  test("F-072: a conversation that is not on screen does not answer Cmd/Ctrl+Enter, Cmd/Ctrl+. or Cmd/Ctrl+J", async ({
+    page,
+  }) => {
+    await open(page, "run-working");
+    await field(page).fill("Not from the list");
+    await page.getByRole("button", { name: "Back to bots" }).click();
+    await expect(page.getByTestId("bot-list")).toBeVisible();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await page.keyboard.press("ControlOrMeta+.");
+    await page.waitForTimeout(200);
+    await expect(page.getByTestId("outgoing").locator(".bubble")).toHaveText([
+      "Can you check the backup log from last night too?",
+    ]);
+    await expect(page.getByTestId("status-phrase")).not.toHaveText("Stopping…");
+    // Back on the conversation: the draft was not sent.
+    await page.getByTestId("task").filter({ hasText: "Disk almost full" }).click();
+    await expect(field(page)).toHaveValue("Not from the list");
+  });
+
   test("F-061 F-282: the Send menu opens as a sheet from the foot of the screen with 52 px rows, from the mode word or a long press on Send, and Escape returns focus", async ({
     page,
   }) => {
