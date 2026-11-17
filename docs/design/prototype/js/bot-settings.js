@@ -60,7 +60,7 @@
 
   function lockWord(id) {
     const b = binding[id];
-    if (!b.account) return b.removed ? `<span class="b-state" data-tone="warn">${icon("warning")}No account</span>` : `<span class="b-state">Gateway's default</span>`;
+    if (!b.account) return b.removed ? `<span class="b-state" data-tone="warn">${icon("warning")}No account</span>` : `<span class="b-state">Gateway chooses</span>`;
     const s = lockState(id);
     if (s === "locked") return `<span class="b-state">${icon("lock")}Locked</span>`;
     if (s === "stale") return `<span class="b-state" data-tone="warn">${icon("warning")}Lock out of date</span>`;
@@ -96,7 +96,7 @@
     const b = binding[id];
     const a = acct(b.account);
     const name = esc(botName(id));
-    const provider = a ? a.provider : null;
+    const provider = a ? a.provider : b.mode === "gateway" ? D.DEFAULT_MODEL.provider : null;
     const tools = (PROVIDER_TOOLS[provider] || []).map(([label]) => row(label, "Allowed")).join("");
     return (
       `<h3 class="b-tabgroup">About</h3><dl class="facts">` +
@@ -104,11 +104,11 @@
       row("Instructions", "From AGENTS.md, 42 lines") +
       `</dl>` +
       `<h3 class="b-tabgroup">Model</h3><dl class="facts">` +
-      row("Account", `<span>${esc(acctName(a))}</span>${lockWord(id)}`, `data-bs="account" aria-label="Account: ${esc(acctName(a))}, ${b.account ? lockState(id) : "none"}. Open."`) +
+      row("Account", `<span>${a ? esc(acctName(a)) : b.removed ? "" : esc(providerName(provider || D.DEFAULT_MODEL.provider))}</span>${lockWord(id)}`, `data-bs="account" aria-label="Account: ${a ? esc(acctName(a)) + ", " + lockState(id) : b.removed ? "no account" : "the gateway chooses"}. Open."`) +
       `</dl>` +
-      (a || b.inherits
-        ? `<div class="b-pair" style="margin-top:8px">${D.select("model", "Model", a ? b.model : "gpt-5.5")}${D.select("effort", "Effort", b.effort)}</div>` +
-          `<p class="b-hint">${a ? `${esc(providerName(a.provider))} models, as the gateway lists them for ${esc(acctName(a))}.` : "The gateway's default model. Choose an account to pick another."}</p>`
+      (a || b.mode === "gateway"
+        ? `<div class="b-pair" style="margin-top:8px">${D.select("model", "Model", b.model || D.DEFAULT_MODEL.model)}${D.select("effort", "Effort", b.effort)}</div>` +
+          `<p class="b-hint">${esc(providerName(provider || D.DEFAULT_MODEL.provider))}'s models, as the gateway lists them. Which ones ${a ? "this account" : "an account"} may use is ${esc(providerName(provider || D.DEFAULT_MODEL.provider))}'s decision.</p>`
         : "") +
       (b.served ? note(`<p>${name}'s last run was finished on another ${esc(providerName(provider))} account. See Account.</p>`, "warn") : "") +
       (b.failed ? note(`<p>${b.failed}</p>`, "danger") : "") +
@@ -131,10 +131,11 @@
     const s = lockState(id);
     let html = sub("Account", "main");
     if (!a) {
+      const who = esc(providerName(D.DEFAULT_MODEL.provider));
       html += b.removed
         ? note(`<p><b>No account.</b> ${name}'s account was disconnected. Clawtrate won't start ${name} until you choose one.</p>`, "warn")
-        : note(`<p><b>The gateway's default.</b> ${name} has no model of its own. It uses the gateway's default model, and the gateway picks one of that provider's accounts for each run.</p>`);
-      return html + (isAdmin() ? `<div class="b-actions" style="margin-top:14px">${button("Choose an account", 'data-bs="change" data-size="sm"', "primary")}</div>` : "");
+        : note(`<p><b>The gateway chooses.</b> ${name} has no fixed account: the gateway picks one of ${who}'s accounts for each run, so its runs can use any of them. ${name} keeps its own model and no fallbacks.</p>`, "", icon("approval"));
+      return html + (isAdmin() ? `<div class="b-actions" style="margin-top:14px">${button(b.removed ? "Choose an account" : "Bind to an account", 'data-bs="change" data-size="sm"', "primary")}</div>` : "");
     }
     const [tone, word] = stateOf(a);
     html +=
@@ -176,6 +177,11 @@
       `<li>Removing ${esc(acctName(a))}: the gateway then uses ${who}'s other accounts.</li>` +
       `<li>Commands run on the gateway's machine itself.</li>` +
       `<li>A lock is about accounts. Some providers can still switch the model inside a request.</li></ul></div></details>`;
+    if (b.fallbackWriteFailed)
+      html += note(
+        `<p>Clawtrate couldn't write ${name}'s empty fallback list. ${name} has no fallbacks of its own, so nothing moves it to another model; the list only makes that explicit.</p>` +
+          (isAdmin() ? `<div class="b-actions">${button("Try again", 'data-bs="write-fallbacks" data-size="sm"')}</div>` : ""),
+      );
     if (b.fallbacks?.length)
       html += note(
         `<p><b>${name} can move to another model.</b> Its model on the gateway lists fallbacks (${esc(b.fallbacks.join(", "))}), so the gateway can move a run to them when this one fails.</p>` +
@@ -376,6 +382,11 @@
       $("[data-bs-focus]", panel)?.focus();
       announce("Locked. The gateway confirmed it.");
       CT.botsChanged?.();
+    }
+    if (action === "write-fallbacks") {
+      b.fallbackWriteFailed = false;
+      render(true);
+      announce("Fallback list written");
     }
     if (action === "no-fallbacks") {
       b.fallbacks = [];

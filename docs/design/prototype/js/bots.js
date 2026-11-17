@@ -35,12 +35,15 @@
   // (an API key, or a sign-in that saves one), gateway (added on the gateway;
   // its storage type alone does not say how it is billed).
   let accounts = [
-    { id: "openai:work", provider: "openai", label: "Work", kind: "subscription", how: "ChatGPT sign-in with a code", status: "ok" },
-    { id: "openai:home", provider: "openai", label: "Home", kind: "subscription", how: "ChatGPT sign-in in the browser", status: "expiring", expiry: "in 3 days", expiryDate: "Nov 20" },
-    { id: "xai:default", provider: "xai", label: "Personal", kind: "subscription", how: "xAI sign-in with a code", status: "ok" },
-    { id: "github-copilot:github", provider: "github-copilot", label: "", kind: "subscription", how: "GitHub sign-in with a code", status: "ok" },
-    { id: "anthropic:manual", provider: "anthropic", label: "Lab key", kind: "key", how: "API key, entered in Clawtrate", status: "static" },
+    { id: "openai:work", provider: "openai", label: "Work", kind: "subscription", type: "oauth", how: "ChatGPT sign-in with a code", status: "ok" },
+    { id: "openai:home", provider: "openai", label: "Home", kind: "subscription", type: "oauth", how: "ChatGPT sign-in in the browser", status: "ok" },
+    { id: "xai:default", provider: "xai", label: "Personal", kind: "subscription", type: "oauth", how: "xAI sign-in with a code", status: "ok" },
+    { id: "github-copilot:github", provider: "github-copilot", label: "", kind: "subscription", type: "token", how: "GitHub sign-in with a code", status: "expiring", expiry: "in 3 days", expiryDate: "Nov 20" },
+    { id: "anthropic:manual", provider: "anthropic", label: "Lab key", kind: "key", type: "api_key", how: "API key, entered in Clawtrate", status: "static" },
+    // Kept in one bot's own store: only that bot can use it.
+    { id: "anthropic:pip", provider: "anthropic", label: "Pip's key", kind: "key", type: "api_key", how: "API key, added on the gateway for Pip", status: "static", owner: "pip" },
   ];
+  const shared = () => accounts.filter((a) => !a.owner);
   if (p("accounts") === "none") accounts = [];
 
   // Each bot's binding: its account, model and effort, and whether the gateway
@@ -51,7 +54,7 @@
     pip: { account: "openai:home", model: "gpt-5.5-mini", effort: "Low", locked: false },
     juniper: { account: "anthropic:manual", model: "claude-sonnet-5.5", effort: "High", locked: false },
   };
-  if (p("accounts") === "none") Object.values(binding).forEach((b) => (b.account = null));
+  if (p("accounts") === "none") Object.values(binding).forEach((b) => Object.assign(b, { account: null, mode: "gateway" }));
 
   // Models the gateway lists for each provider, and the effort levels it offers.
   const MODELS = {
@@ -63,7 +66,9 @@
     openrouter: ["openrouter/auto"],
   };
   const EFFORTS = ["Off", "Low", "Medium", "High"];
-  const DEFAULT_MODEL = { provider: "openai", model: "gpt-5.5" }; // agents.defaults.model.primary, with no @account
+  // agents.defaults.model.primary. defacct=<id> gives it an @account, as a gateway may.
+  const DEFAULT_MODEL = { provider: "openai", model: "gpt-5.5", account: p("defacct") || null };
+  const GATEWAY = "__gateway"; // "Let the gateway choose": the provider's model, no fixed account
 
   // The sign-in methods the gateway can start, as it lists them. flow is what
   // the person does: code (open a link, enter a code; the gateway polls), paste
@@ -95,15 +100,24 @@
   const B = {
     access: ["read", "write", "admin"].includes(p("access")) ? p("access") : "admin",
     req: p("req") || "none", // the request for admin access
-    draft: { name: p("name") ?? "", body: "drop", color: "#ff6f9c", account: p("chosen") || null, model: null, effort: "Medium" },
+    draft: { name: p("name") ?? "", body: "drop", color: "#ff6f9c", account: p("chosen") || DEFAULT_MODEL.account || null, model: null, effort: "Medium" },
     create: { step: p("step") || "look", status: p("create") || "idle", opener: null },
     connect: null, // { from, view, option, stage, ... }
     settings: { section: p("section") || "accounts", account: p("account") || null, pane: p("account") || p("section") ? "section" : "nav", edit: false },
     seconds: 4,
     grantedNote: false,
+    accountsState: p("accts") || "ready", // loading, error
   };
-  if (B.draft.account) B.draft.model = MODELS[acct(B.draft.account)?.provider]?.[0] || null;
+  if (B.draft.account) B.draft.model = firstModel(draftProvider());
 
+  function draftProvider() {
+    return B.draft.account === GATEWAY ? DEFAULT_MODEL.provider : acct(B.draft.account)?.provider;
+  }
+  // The gateway's default model when it belongs to the provider, else the provider's first.
+  function firstModel(provider) {
+    if (!provider) return null;
+    return provider === DEFAULT_MODEL.provider ? DEFAULT_MODEL.model : MODELS[provider][0];
+  }
   function acct(id) {
     return accounts.find((a) => a.id === id) || null;
   }
@@ -125,14 +139,14 @@
       .filter(([, b]) => b.account === id)
       .map(([bot]) => app.bots.find((x) => x.id === bot)?.name)
       .filter(Boolean);
-  const stateOf = (a) =>
-    ({
-      ok: ["", "Connected"],
-      static: ["", "Connected"],
-      expiring: ["warn", `Expires ${a.expiry}`],
-      expired: ["danger", "Expired"],
-      missing: ["warn", "Needs sign-in"],
-    })[a.status];
+  // A sign-in the gateway renews by itself (oauth) shows no expiry: an expired
+  // access token is refreshed when it is next used. Only a token it cannot renew does.
+  const stateOf = (a) => {
+    if (a.status === "missing") return ["warn", "Needs sign-in"];
+    if (a.type === "token" && a.status === "expiring") return ["warn", `Expires ${a.expiry}`];
+    if (a.type === "token" && a.status === "expired") return ["warn", "Expired"];
+    return ["", "Connected"];
+  };
   const ordered = () => [...accounts].sort((x, y) => ["subscription", "key", "gateway"].indexOf(x.kind) - ["subscription", "key", "gateway"].indexOf(y.kind));
 
   function announce(text) {
@@ -199,7 +213,7 @@
     const sub =
       `${kindWord(a)}` +
       (tone ? ` · <span data-tone="${tone}">${word}</span>` : "") +
-      ` · ${users.length ? esc(users.join(", ")) : "Not used yet"}`;
+      ` · ${a.owner ? `Only ${esc(app.bots.find((x) => x.id === a.owner)?.name || a.owner)} can use it` : users.length ? esc(users.join(", ")) : "Not used yet"}`;
     const text = `<span class="b-choice-text"><span class="b-choice-title">${acctTitle(a)}</span><span class="b-choice-sub">${sub}</span></span>`;
     if (choose)
       return `<li><button type="button" class="b-choice" role="radio" aria-checked="${checked}" tabindex="${checked ? 0 : -1}" data-b-choose="${a.id}"${isAdmin() ? "" : ' aria-disabled="true"'}>${text}${icon("check", "icon b-tick")}</button></li>`;
@@ -207,13 +221,57 @@
     return `<li><div class="b-choice">${text}</div></li>`;
   }
 
-  function accountGroups(render) {
+  // The account blocks. A caller that makes them a radio group wraps them in
+  // one element with role="radiogroup", so the group has one tab stop.
+  function accountGroups(render, list = shared()) {
     const groups = [
-      ["Subscriptions", accounts.filter((a) => a.kind === "subscription")],
-      ["API keys", accounts.filter((a) => a.kind === "key")],
-      ["Added on the gateway", accounts.filter((a) => a.kind === "gateway")],
-    ].filter(([, list]) => list.length);
-    return groups.map(([title, list]) => `<h4 class="b-group">${title}</h4><ul class="b-choices"${render.group || ""}>${list.map(render.row).join("")}</ul>`).join("");
+      ["Subscriptions", list.filter((a) => a.kind === "subscription" && !a.owner)],
+      ["API keys", list.filter((a) => a.kind === "key" && !a.owner)],
+      ["Added on the gateway", list.filter((a) => a.kind === "gateway" && !a.owner)],
+      ["Kept by one bot", list.filter((a) => a.owner)],
+    ].filter(([, l]) => l.length);
+    return groups.map(([title, l]) => `<h4 class="b-group">${title}</h4><ul class="b-choices">${l.map(render.row).join("")}</ul>`).join("");
+  }
+
+  // "Let the gateway choose": last in the group, set apart, in words.
+  function gatewayRow(checked, provider = DEFAULT_MODEL.provider) {
+    const who = esc(providerName(provider));
+    const line = shared().some((a) => a.provider === provider)
+      ? `No fixed account. The gateway picks one of ${who}'s accounts for each run, with its default model, ${esc(DEFAULT_MODEL.model)}.`
+      : `No fixed account. The gateway uses what it has for ${who}, with its default model, ${esc(DEFAULT_MODEL.model)}.`;
+    return (
+      `<ul class="b-choices b-gw"><li><button type="button" class="b-choice" role="radio" aria-checked="${checked}" tabindex="-1" data-b-choose="${GATEWAY}"${isAdmin() ? "" : ' aria-disabled="true"'}>` +
+      `<span class="b-choice-text"><span class="b-choice-title">Let the gateway choose</span><span class="b-choice-sub b-wrap">${line}</span></span>${icon("check", "icon b-tick")}</button></li></ul>`
+    );
+  }
+
+  // One tab stop per radio group: the checked radio, or the first when none is.
+  function rove(root) {
+    $$('[role="radiogroup"]', root).forEach((group) => {
+      const radios = $$('[role="radio"]', group);
+      const on = radios.find((r) => r.getAttribute("aria-checked") === "true") || radios[0];
+      radios.forEach((r) => (r.tabIndex = r === on ? 0 : -1));
+    });
+  }
+
+  // Re-rendering keeps focus on the same control: it is found again by its data.
+  const KEYS = ["bChoose", "bBody", "bColor", "bSelect", "bOption", "bAccount", "bSection", "t3", "bs", "b"];
+  function keep(root, render) {
+    const el = document.activeElement;
+    let selector = null;
+    if (el && root.contains(el) && el !== root) {
+      if (el.id) selector = `#${el.id}`;
+      else {
+        const key = KEYS.find((k) => el.dataset[k] !== undefined);
+        if (key) {
+          const attr = `data-${key.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase())}`;
+          selector = `[${attr}="${el.dataset[key]}"]` + (el.dataset.value ? `[data-value="${el.dataset.value}"]` : "");
+        }
+      }
+    }
+    render();
+    rove(root);
+    if (selector) $(selector, root)?.focus();
   }
 
   // New bot -------------------------------------------------------------------------------------------
@@ -260,47 +318,58 @@
       body =
         `<span class="b-preview" style="--avatar-create:56px;margin-bottom:10px" aria-hidden="true">${draftArt()}</span>` +
         `<p class="b-lead">Choose the account ${esc(name)} runs on. The sign-in stays on your gateway.</p>` +
-        (accounts.length
-          ? accountGroups({ group: ` role="radiogroup" aria-label="Accounts"`, row: (a) => accountRow(a, { choose: true, checked: a.id === B.draft.account }) }) +
-            `<ul class="b-choices" style="margin-top:12px"><li><button type="button" class="b-choice" data-kind="add" data-b="connect"${isAdmin() ? "" : ' aria-disabled="true" disabled'}>${icon("plus")}<span class="b-choice-text"><span class="b-choice-title">Connect another account</span></span></button></li></ul>` +
-            chosenPart(name)
-          : `<div class="work-empty"><span class="empty-mark">${icon("lock")}</span><h4>No accounts yet</h4><p>Sign in with a subscription you already have, and ${esc(name)} runs on it.</p></div>` +
-            note(`<p>Without an account, ${esc(name)} uses the gateway's default model, ${esc(providerName(DEFAULT_MODEL.provider))} ${esc(DEFAULT_MODEL.model)}, and the gateway picks one of that provider's accounts for each run.</p>`));
-      const busy = B.create.status === "creating" || B.create.status === "slow";
+        (B.accountsState === "loading"
+          ? `<div aria-busy="true" aria-label="Loading accounts"><div class="skeleton" style="height:58px;width:100%"></div><div class="skeleton" style="height:58px;width:100%"></div><div class="skeleton" style="height:58px;width:100%"></div></div>`
+          : B.accountsState === "error"
+            ? note(`<p><b>Couldn't load the gateway's accounts.</b></p><div class="b-actions">${button("Try again", 'data-b="accounts-retry" data-size="sm"')}</div>`, "danger")
+            : "") +
+        `<div role="radiogroup" aria-label="Accounts">` +
+        (B.accountsState === "loading" || B.accountsState === "error"
+          ? ""
+          : shared().length
+            ? accountGroups({ row: (a) => accountRow(a, { choose: true, checked: a.id === B.draft.account }) })
+            : `<div class="work-empty"><span class="empty-mark">${icon("lock")}</span><h4>No accounts yet</h4><p>Sign in with a subscription you already have, and ${esc(name)} runs on it.</p></div>`) +
+        gatewayRow(B.draft.account === GATEWAY) +
+        `</div>` +
+        (B.accountsState === "loading" || B.accountsState === "error"
+          ? ""
+          : `<ul class="b-choices" style="margin-top:12px"><li><button type="button" class="b-choice" data-kind="add" data-b="connect"${isAdmin() ? "" : ' aria-disabled="true" disabled'}>${icon("plus")}<span class="b-choice-text"><span class="b-choice-title">${shared().length ? "Connect another account" : "Connect an account"}</span></span></button></li></ul>`) +
+        (DEFAULT_MODEL.account && B.draft.account === DEFAULT_MODEL.account ? `<p class="b-hint">Chosen because the gateway's default model names it.</p>` : "") +
+        chosenPart(name);
+      const busy = ["creating", "slow", "checking"].includes(B.create.status);
+      const none = !B.draft.account;
       foot = !isAdmin()
         ? adminBar("Creating a bot changes the gateway's settings, which needs admin access. What you chose stays here while you ask.")
         : (B.create.status === "failed" ? note(`<p><b>Could not create the bot.</b> Please try again.</p>`, "danger") : "") +
-          (accounts.length || B.create.status !== "idle"
-            ? button(busy ? "Creating…" : "Create", `data-b="create" data-size="lg"${busy ? " disabled" : ""}`, "primary")
-            : button("Connect an account", 'data-b="connect" data-size="lg"', "primary") + button("Create without an account", 'data-b="create" data-size="lg"', "quiet")) +
-          (B.create.status === "slow" ? `<p class="b-hint" role="status" style="text-align:center;margin:0">Still creating. What you entered is kept.</p>` : "");
+          button(busy ? "Creating…" : "Create", `data-b="create" data-size="lg"${busy || none ? " disabled" : ""}`, "primary") +
+          (none && !busy ? `<p class="b-hint" style="text-align:center;margin:0">Choose an account, or let the gateway choose.</p>` : "") +
+          (B.create.status === "slow" ? `<p class="b-hint" role="status" style="text-align:center;margin:0">Still creating. What you entered is kept.</p>` : "") +
+          (B.create.status === "checking" ? `<p class="b-hint" role="status" style="text-align:center;margin:0">Checking whether ${esc(name)} was created…</p>` : "");
     } else {
       const view = renderConnect();
       head = `<header class="b-head">${back(view.backLabel, "connect-back")}<h2 id="create-title" tabindex="-1">${view.title}</h2>${close("Close")}</header>`;
       body = view.body;
       foot = view.foot;
     }
-    createDialog.innerHTML = `<div class="b-sheet">${head}<div class="b-body">${body}</div>${foot ? `<footer class="b-foot">${foot}</footer>` : ""}</div>`;
-    CT.hydrate(createDialog);
+    keep(createDialog, () => {
+      createDialog.innerHTML = `<div class="b-sheet">${head}<div class="b-body">${body}</div>${foot ? `<footer class="b-foot">${foot}</footer>` : ""}</div>`;
+      CT.hydrate(createDialog);
+    });
   }
 
   // Under the list: the model and effort once an account is chosen, or what
   // happens with nothing chosen.
   function chosenPart(name) {
+    const provider = draftProvider();
+    if (!provider) return "";
     const a = acct(B.draft.account);
-    if (!a)
-      return note(
-        `<p><b>No account chosen.</b> ${esc(name)} would use the gateway's default model, ${esc(providerName(DEFAULT_MODEL.provider))} ${esc(DEFAULT_MODEL.model)}, ` +
-          `and the gateway would pick one of ${esc(providerName(DEFAULT_MODEL.provider))}'s accounts for each run.</p>`,
-      );
-    const [tone] = stateOf(a);
+    const who = esc(providerName(provider));
+    const [tone, word] = a ? stateOf(a) : [""];
     return (
       `<h4 class="b-group">Model</h4>` +
       `<div class="b-pair">${select("model", "Model", B.draft.model)}${select("effort", "Effort", B.draft.effort)}</div>` +
-      `<p class="b-hint">${esc(providerName(a.provider))} models, as the gateway lists them. Change either later in ${esc(name)}'s settings.</p>` +
-      (tone === "warn" || tone === "danger"
-        ? note(`<p>${esc(acctName(a))} ${a.status === "expiring" ? `expires ${a.expiry}` : "needs signing in again"}. Sign in again before then, or ${esc(name)}'s runs will fail.</p>`, "warn")
-        : "")
+      `<p class="b-hint">${who}'s models, as the gateway lists them. Which ones ${a ? "this account" : "an account"} may use is ${who}'s decision. Change either later in ${esc(name)}'s settings.</p>` +
+      (tone ? note(`<p>${esc(acctName(a))}: ${word.toLowerCase()}. The gateway can't renew this kind of sign-in by itself; sign in again before then.</p>`, "warn") : "")
     );
   }
 
@@ -314,6 +383,15 @@
     B.create.status = "creating";
     renderCreate();
     announce("Creating the bot");
+    // A first write that timed out: look for the bot before anything is sent again.
+    if (want === "timeout") {
+      setTimeout(() => {
+        B.create.status = "checking";
+        renderCreate();
+        setTimeout(finishCreate, 700);
+      }, 500);
+      return;
+    }
     const slow = setTimeout(() => {
       if (B.create.status === "creating") {
         B.create.status = "slow";
@@ -341,7 +419,9 @@
     while (app.bots.some((b) => b.id === id)) id += "-2";
     CT.botArt[id] = { body: B.draft.body, color: B.draft.color, tilt: 0, look: [0.6, 0] };
     const a = acct(B.draft.account);
-    binding[id] = { account: a ? a.id : null, model: a ? B.draft.model : null, effort: B.draft.effort, locked: false, inherits: !a };
+    // An account: its model with @account. "Let the gateway choose": the model, no account.
+    // Both with an empty fallback list; create=partial shows that second write refused.
+    binding[id] = { account: a ? a.id : null, mode: a ? "account" : "gateway", model: B.draft.model, effort: B.draft.effort, locked: false, fallbackWriteFailed: p("create") === "partial" };
     app.bots.push({ id, name, label: "", tasks: [{ id: `${id}-1`, title: "Main", at: 3000, when: "now", preview: "No messages yet.", unread: false, status: "idle", html: "", fresh: true }] });
     B.create = { step: "look", status: "idle", opener: null, created: true };
     B.draft = { name: "", body: "drop", color: "#ff6f9c", account: null, model: null, effort: "Medium" };
@@ -534,11 +614,13 @@
       SECTIONS.map(([id, label]) => `<button type="button" class="b-nav-item" data-b-section="${id}"${id === s.section ? ' aria-current="page"' : ""}>${label}${icon("chevron")}</button>`).join("") +
       `</nav>`;
     const section = sectionView();
-    settingsDialog.innerHTML =
-      `<div class="b-settings" data-pane="${s.pane}">${nav}<section class="b-section" aria-labelledby="b-section-title">${close("Close settings")}` +
-      `<header class="b-section-head">${section.back || ""}<h3 id="b-section-title" tabindex="-1">${section.title}</h3></header>` +
-      `<div class="b-section-body">${section.body}</div>${section.foot ? `<footer class="b-section-foot">${section.foot}</footer>` : ""}</section></div>`;
-    CT.hydrate(settingsDialog);
+    keep(settingsDialog, () => {
+      settingsDialog.innerHTML =
+        `<div class="b-settings" data-pane="${s.pane}">${nav}<section class="b-section" aria-labelledby="b-section-title">${close("Close settings")}` +
+        `<header class="b-section-head">${section.back || ""}<h3 id="b-section-title" tabindex="-1">${section.title}</h3></header>` +
+        `<div class="b-section-body">${section.body}</div>${section.foot ? `<footer class="b-section-foot">${section.foot}</footer>` : ""}</section></div>`;
+      CT.hydrate(settingsDialog);
+    });
   }
 
   const toNav = () => back("Back to settings", "to-nav");
@@ -561,7 +643,7 @@
       `<div class="b-headrow"><p class="b-lead" style="margin:0">Your bots run on these. Your gateway signs in and keeps each sign-in; Clawtrate never sees a password or keeps a sign-in.</p>` +
       `${isAdmin() ? button("Connect an account", 'data-b="connect" data-size="sm"') : ""}</div>` +
       (accounts.length
-        ? accountGroups({ row: (a) => accountRow(a, { open: true }) })
+        ? accountGroups({ row: (a) => accountRow(a, { open: true }) }, accounts)
         : `<div class="work-empty"><span class="empty-mark">${icon("lock")}</span><h4>No accounts yet</h4><p>Connect a subscription you already have, and choose it when you create a bot.</p>` +
           (isAdmin() ? `<div style="margin-top:12px">${button("Connect an account", 'data-b="connect"', "primary")}</div>` : "") +
           `</div>`) +
@@ -749,14 +831,11 @@
       const group = radio.closest('[role="radiogroup"]');
       if (!group) return;
       event.preventDefault();
-      const radios = $$('[role="radio"]', group.closest(".b-body, .b-section-body") || group).filter((r) => r.closest('[role="radiogroup"]')?.getAttribute("aria-labelledby") === group.getAttribute("aria-labelledby") && r.closest('[role="radiogroup"]').getAttribute("aria-label") === group.getAttribute("aria-label"));
-      const container = radio.closest("dialog, aside");
+      const radios = $$('[role="radio"]', group).filter((r) => !r.disabled);
       const i = radios.indexOf(radio);
       const n = event.key === "Home" ? 0 : event.key === "End" ? radios.length - 1 : (i + (["ArrowDown", "ArrowRight"].includes(event.key) ? 1 : -1) + radios.length) % radios.length;
+      radios[n].focus();
       radios[n].click();
-      const d = radios[n].dataset;
-      const key = d.bBody ? `[data-b-body="${d.bBody}"]` : d.bColor ? `[data-b-color="${d.bColor}"]` : d.bChoose ? `[data-b-choose="${d.bChoose}"]` : `[data-t3="${d.t3}"][data-value="${d.value}"]`;
-      $(key, container)?.focus();
     }
     // An open select menu: arrows move, Escape closes it before anything else.
     if (menu && menu.contains(event.target)) {
@@ -845,12 +924,14 @@
     const inDialog = t.closest(".b-dialog");
     const shape = t.closest("[data-b-body]");
     if (shape) {
+      shape.focus();
       B.draft.body = shape.dataset.bBody;
       renderCreate();
       return;
     }
     const color = t.closest("[data-b-color]");
     if (color) {
+      color.focus();
       B.draft.color = color.dataset.bColor;
       renderCreate();
       return;
@@ -858,18 +939,18 @@
     const choose = t.closest("[data-b-choose]");
     if (choose && !choose.closest("aside")) {
       if (!isAdmin()) return;
+      choose.focus();
       B.draft.account = choose.dataset.bChoose;
-      const a = acct(B.draft.account);
-      if (!MODELS[a.provider].includes(B.draft.model)) B.draft.model = MODELS[a.provider][0];
+      const provider = draftProvider();
+      if (!MODELS[provider].includes(B.draft.model)) B.draft.model = firstModel(provider);
       renderCreate();
       return;
     }
     const sel = t.closest("[data-b-select]");
     if (sel && inDialog === createDialog) {
       if (menu && menu.opener === sel) return closeSelect(true);
-      const a = acct(B.draft.account);
       if (sel.dataset.bSelect === "model")
-        openSelect(sel, MODELS[a.provider].map((m) => [m, ""]), B.draft.model, (v) => {
+        openSelect(sel, MODELS[draftProvider()].map((m) => [m, ""]), B.draft.model, (v) => {
           B.draft.model = v;
           renderCreate();
           $('[data-b-select="model"]', createDialog).focus();
@@ -924,6 +1005,10 @@
         break;
       case "create":
         create();
+        break;
+      case "accounts-retry":
+        B.accountsState = "ready";
+        renderCreate();
         break;
       case "connect":
         startConnect(inDialog === createDialog ? "create" : "settings");
@@ -1115,7 +1200,7 @@
   }
 
   // Shared with the later parts of this file.
-  Object.assign(CT, { botsData: { B, accounts: () => accounts, binding, MODELS, EFFORTS, PROVIDERS, OPTIONS, acct, acctName, acctTitle, accountRow, accountGroups, providerName, stateOf, usedBy, kindWord, isAdmin, adminBar, button, note, copy, glyph, wait, result, back, close, select, announce, rerender, openSettings, openCreate, startConnect, beginSignIn, renderSettings, focusFirst, openSelect, closeSelect, confirmBox } });
+  Object.assign(CT, { botsKeep: keep, botsRove: rove, botsData: { B, GATEWAY, DEFAULT_MODEL, shared, firstModel, gatewayRow, accounts: () => accounts, binding, MODELS, EFFORTS, PROVIDERS, OPTIONS, acct, acctName, acctTitle, accountRow, accountGroups, providerName, stateOf, usedBy, kindWord, isAdmin, adminBar, button, note, copy, glyph, wait, result, back, close, select, announce, rerender, openSettings, openCreate, startConnect, beginSignIn, renderSettings, focusFirst, openSelect, closeSelect, confirmBox } });
 
   // First paint from the address --------------------------------------------------------------------------
 

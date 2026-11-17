@@ -38,7 +38,16 @@ check("P1 Next goes to the Account step", (await text(p, "#create-title")) === "
 check("P1 the step keeps the name", (await text(p, "#create-dialog .b-lead")).includes("Viral runs on"));
 const order = await p.evaluate(() => [...document.querySelectorAll("#create-dialog .b-group")].map((g) => g.textContent));
 check("P1 subscriptions are listed first", order[0] === "Subscriptions" && order[1] === "API keys", order.join(" / "));
-check("P1 nothing is chosen at first, and the step says what that means", await p.evaluate(() => !document.querySelector('#create-dialog [role="radio"][aria-checked="true"]') && document.querySelector("#create-dialog").textContent.includes("No account chosen. Viral would use the gateway's default model")));
+check("FM-01 nothing is chosen at first, and Create waits for a choice", await p.evaluate(() => !document.querySelector('#create-dialog [role="radio"][aria-checked="true"]') && document.querySelector('[data-b="create"]').disabled && document.querySelector("#create-dialog .b-foot").textContent.includes("Choose an account, or let the gateway choose.")));
+check("FM-01 Let the gateway choose is the last choice of the one radio group, in words", await p.evaluate(() => { const r = [...document.querySelectorAll('#create-dialog [role="radiogroup"] [role="radio"]')]; const last = r[r.length - 1]; return document.querySelectorAll('#create-dialog [role="radiogroup"]').length === 1 && last.dataset.bChoose === "__gateway" && last.textContent.includes("Let the gateway choose") && last.textContent.includes("picks one of OpenAI's accounts for each run"); }));
+check("FM-10 an account kept by one bot is not offered to a new bot", !(await text(p, "#create-dialog")).includes("Pip's key"));
+await p.focus("#create-title");
+await p.keyboard.press("Tab");
+await p.keyboard.press("Tab");
+check("FM-17 Tab reaches the account list with nothing chosen: its first row", await p.evaluate(() => document.activeElement.getAttribute("role") === "radio" && document.activeElement.dataset.bChoose === "openai:work"));
+await p.keyboard.press("Space");
+await p.waitForTimeout(60);
+check("FM-17 Space chooses the row and focus stays on it", await p.evaluate(() => document.activeElement.dataset.bChoose === "openai:work" && document.activeElement.getAttribute("aria-checked") === "true" && !document.querySelector('[data-b="create"]').disabled));
 check("P1 two accounts of one provider are told apart by label", await p.evaluate(() => { const t = [...document.querySelectorAll("#create-dialog .b-choice-title")].map((x) => x.textContent); return t.includes("OpenAI · Work") && t.includes("OpenAI · Home"); }));
 await p.click('[data-b-choose="xai:default"]');
 check("P1 choosing an account shows model and effort side by side", await p.evaluate(() => { const m = document.querySelector('#create-dialog [data-b-select="model"]'); const e = document.querySelector('#create-dialog [data-b-select="effort"]'); return m && e && Math.abs(m.getBoundingClientRect().top - e.getBoundingClientRect().top) < 2 && m.textContent.includes("grok-4.7"); }));
@@ -98,7 +107,7 @@ await p.close();
 
 // No account at all; creating fails; a connection that may not create.
 p = await open("open=create&step=account&name=Viral&accounts=none");
-check("P1 no accounts: the way to connect one, and the default named", await p.evaluate(() => document.querySelector('#create-dialog .b-foot [data-b="connect"]')?.dataset.variant === "primary" && document.querySelector("#create-dialog").textContent.includes("No accounts yet") && document.querySelector("#create-dialog").textContent.includes("default model")));
+check("P1 no accounts: the way to connect one, and Let the gateway choose with the default model", await p.evaluate(() => !!document.querySelector('#create-dialog [data-b="connect"]') && document.querySelector("#create-dialog").textContent.includes("No accounts yet") && document.querySelector('[data-b-choose="__gateway"]').textContent.includes("uses what it has for OpenAI, with its default model, gpt-5.5")));
 await p.close();
 p = await open("open=create&step=account&name=Viral&chosen=xai:default&create=failed");
 await p.click('[data-b="create"]');
@@ -116,6 +125,36 @@ check("P1 granted: Create appears, nothing chosen was lost", await p.evaluate(()
 await p.close();
 p = await open("access=read");
 check("P1 read-only: no way to create a bot", await p.evaluate(() => document.querySelector("#new-button").hidden));
+await p.close();
+
+// FM-01: Let the gateway choose, and the default model's own account.
+p = await open("open=create&step=account&name=Viral");
+await p.click('[data-b-choose="__gateway"]');
+check("FM-01 Let the gateway choose enables Create and shows the default model's provider", await p.evaluate(() => !document.querySelector('[data-b="create"]').disabled && document.querySelector('#create-dialog [data-b-select="model"]').textContent.includes("gpt-5.5")));
+await p.click('[data-b="create"]');
+await p.waitForTimeout(900);
+check("FM-01 the bot is created with no fixed account, in its own state", await p.evaluate(() => window.bots.binding.viral.mode === "gateway" && window.bots.binding.viral.account === null));
+await p.evaluate(() => { window.app.setPanel(true); document.querySelector("#tab-settings").click(); });
+check("FM-01 its settings say the gateway chooses, not No account", (await text(p, '#panel-settings [data-bs="account"]')).includes("Gateway chooses") && !(await text(p, "#panel-settings")).includes("No account"));
+await p.click('#panel-settings [data-bs="account"]');
+check("FM-01 its account page says what that means and how to bind it", (await text(p, "#panel-settings")).includes("The gateway chooses. Viral has no fixed account: the gateway picks one of OpenAI's accounts for each run") && !!(await p.evaluate(() => [...document.querySelectorAll('#panel-settings [data-bs="change"]')].find((b) => b.textContent === "Bind to an account"))));
+await p.close();
+p = await open("open=create&step=account&name=Viral&defacct=openai:work");
+check("FM-01 when the default model names an account, it is chosen, and the step says why", await p.evaluate(() => document.querySelector('[data-b-choose="openai:work"]').getAttribute("aria-checked") === "true" && document.querySelector("#create-dialog").textContent.includes("Chosen because the gateway's default model names it.")));
+await p.close();
+p = await open("open=create&step=account&name=Viral&chosen=xai:default&create=partial");
+await p.click('[data-b="create"]');
+await p.waitForTimeout(900);
+await p.evaluate(() => { window.app.setPanel(true); document.querySelector("#tab-settings").click(); });
+await p.click('#panel-settings [data-bs="account"]');
+check("FM-13 created but the fallback write refused: said on the account page, with Try again for that bot", (await text(p, "#panel-settings")).includes("Clawtrate couldn't write Viral's empty fallback list") && (await p.evaluate(() => !!document.querySelector('#panel-settings [data-bs="write-fallbacks"]'))));
+await p.close();
+p = await open("open=create&step=account&name=Viral&chosen=xai:default&create=timeout");
+await p.click('[data-b="create"]');
+await p.waitForTimeout(650);
+check("FM-13 a first write that timed out looks for the bot before anything is sent again", (await text(p, "#create-dialog .b-foot")).includes("Checking whether Viral was created"));
+await p.waitForTimeout(900);
+check("FM-13 and continues with the one it finds: one bot, not two", await p.evaluate(() => window.app.bots.filter((b) => b.name === "Viral").length === 1));
 await p.close();
 
 // Settings, Accounts.
