@@ -213,11 +213,13 @@
       .map((t) => {
         const current = b.id === model.selectedBot && t.id === model.selectedTask;
         const mark = stateMark(t.status) || (t.unread && !current ? `<span class="unread-dot" aria-hidden="true"></span>` : "");
-        const spoken = t.title + (t.status === "running" ? ", working" : t.status === "failed" ? ", last run failed" : t.unread && !current ? ", unread" : "");
+        const spoken =
+          `${t.title}, ${t.when}` + (t.status === "running" ? ", working" : t.status === "failed" ? ", last run failed" : t.unread && !current ? ", unread" : "");
         return (
           `<li><button type="button" class="task" data-bot="${b.id}" data-task="${t.id}" data-key="t:${t.id}" aria-current="${current}"` +
           ` data-status="${t.status}" data-unread="${t.unread && !current}" data-full="${esc(t.title)}"` +
-          ` aria-label="${esc(spoken)}" data-testid="task"><span class="task-title">${esc(t.title)}</span>${mark}</button></li>`
+          ` aria-label="${esc(spoken)}" data-testid="task"><span class="task-title">${esc(t.title)}</span>` +
+          `<time class="task-time">${t.when}</time>${mark}</button></li>`
         );
       })
       .join("");

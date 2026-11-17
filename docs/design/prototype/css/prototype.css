@@ -393,3 +393,61 @@ html[data-chrome="off"]:has(.proto-gallery) body {
   color: #b4b6b9;
   text-overflow: ellipsis;
 }
+
+/* Says where a control leads when its destination is outside this design. */
+.proto-toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  z-index: 90;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 9px 14px;
+  border-radius: 12px;
+  background: #16181b;
+  color: #f3f3f2;
+  font: 13px/1.45 var(--font-ui);
+  transform: translateX(-50%);
+}
+
+.proto-toast[hidden] {
+  display: none;
+}
+
+.spec-then {
+  margin: 12px 4px 6px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.sheet-specimen {
+  max-width: 390px;
+}
+
+/* The iPhone app's task list, as a still. */
+.phone-list {
+  width: 100%;
+  max-width: 390px;
+}
+
+.phone-list-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 4px 10px;
+}
+
+.phone-list-head b {
+  flex: 1;
+  font-weight: var(--weight-medium);
+}
+
+#run-owner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+#run-owner[hidden] {
+  display: none;
+}

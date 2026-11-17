@@ -7,8 +7,8 @@ Static pages for the design in `docs/design/`. Open `index.html` in a browser. T
 | `connect.html` | The first screen. `?state=error` and `?state=busy` show a failed and a running attempt. |
 | `pairing.html` | Waiting for the gateway's owner to approve this device. `?state=copied` and `?state=selected` show the copy button's two outcomes. |
 | `app.html` | The main view: bots with their tasks, a conversation, the Work pane. It runs on a small local model, so selecting, folding, pinning, the menus, sending, the connection states and the Work pane all work. Right-click a bot for its menu. |
-| `gallery.html` | Every conversation component in every state. |
-| `conversation.html` | One scripted turn, played inside the shell. |
+| `gallery.html` | Every conversation component in every state. Steps and cards work as they do in the app: they open, Raw opens, copy copies, approvals and questions resolve. The composer, the access bar and the rail rows are pictures of each state there. |
+| `conversation.html` | One scripted turn, played inside the shell: Play, Step, Drop the connection and Restart are in the bar. The approval and the question pause it until you answer; Stop, steer, queue, hold and the send menu work at any point. "Start read-only" plays it on a read-only connection, with the access bar and the request for access. |
 
 The dark bar at the top is prototype chrome, not part of the product. It switches the theme, the width of the frame the app sits in (full, 1100, 800, phone) and reduced motion.
 
@@ -32,6 +32,19 @@ Every setting can be given in the address, which is how the screenshots are take
 | `banner` | `reconnecting`, `offline`, `syncing`, `synced`, `failed` (app) |
 | `state` | `empty`, `loading`, `readonly`, `newtask`, `loaderror`, `nobots`, `discovering`, `zerotasks` (app); `error`, `busy` (connect); `copied`, `selected` (pairing) |
 | `section` | One section of the gallery, by id (gallery) |
+| `tier` | `read`, to start the scripted run on a read-only connection (scripted run) |
+| `stopfail` | `1`, to make the first Stop request fail (scripted run) |
+
+## Checks
+
+The pages' behaviour is checked in a headless browser, from disk, with no server and no network. From the repository root, after `pnpm install` and, once, `pnpm exec playwright install chromium`:
+
+```
+node docs/design/prototype/tools/checks/shell.mjs
+node docs/design/prototype/tools/checks/conversation.mjs
+```
+
+Each prints one line for every check, `ok` or `FAIL`, then a count, and exits with a failure when any check fails. `shell.mjs` covers the rail, tasks, pins, menus, the Work pane, the status strip and the pairing screen. `conversation.mjs` plays the scripted run through its visible controls and covers steps and Raw, copy, the Messaged cards, approvals and their form, questions, held and queued messages, Stop, a lost connection, the read-only tier, the phone width and the gallery.
 
 ## Files
 
@@ -45,9 +58,10 @@ Every setting can be given in the address, which is how the screenshots are take
 | `js/prototype.js` | The theme, width and motion controls. |
 | `js/app.js` | The local model behind `app.html`: bots, tasks, selection, folding, pins, menus, sending, the connection, the Work pane. |
 | `js/connect.js` | What the buttons on the connection screens do. |
-| `js/components.js`, `js/samples.js`, `js/behaviors.js` | The conversation components' markup, sample content and small behaviours. |
+| `js/components.js`, `js/samples.js`, `js/behaviors.js` | The conversation components' markup, their sample content, and their behaviour: the two views of a step, Raw, copy, the approval form, question cards and the keyboard paths. |
 | `js/gallery.js`, `js/run.js` | The gallery and the scripted run. |
 | `tools/make-local-fonts.mjs` | Builds the ignored local font stylesheet. |
+| `tools/checks/` | Headless checks of the pages' behaviour: `shell.mjs` for the app and pairing pages, `conversation.mjs` for the scripted run and the gallery. |
 
 ## Fonts
 
