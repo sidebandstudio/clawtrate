@@ -4,11 +4,14 @@
 // docs/research/grok-bot-flows.md §5.6. Every function here is pure apart from
 // the raw table, which keeps the exact gateway payloads off the state snapshots.
 
-import type {
-  ApprovalAccess,
-  ApprovalCard,
-  ApprovalKind,
-  ApprovalSourceAccess,
+import {
+  withRecords,
+  type ApprovalAccess,
+  type ApprovalCard,
+  type ApprovalKind,
+  type ApprovalSourceAccess,
+  type SentRequest,
+  type SettlingRecord,
 } from "./approvals.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
@@ -379,6 +382,10 @@ export type QuestionCard = {
    * options and text; any other is shown readable.
    */
   ordinary: boolean;
+  /** The answer or dismissal this client sent (`question.resolve`), as sent. */
+  sent: SentRequest | null;
+  /** The records the gateway sent that settled it, by source: `question.resolved`, the reply. */
+  settledBy: SettlingRecord[];
   /** Paths of fields cut to their bound. A cut option label is answered with its full text, read again. */
   cut?: string[];
 };
@@ -1141,6 +1148,8 @@ export function applyQuestionRequested(
     error: existing?.error ?? null,
     raw: record,
     ordinary: isOrdinaryQuestionRecord(record),
+    sent: existing?.sent ?? null,
+    settledBy: [],
   };
   let next: TaskActivity = {
     ...activity,
@@ -1191,7 +1200,15 @@ function closeCard(run: Run, cardId: string, reason: CardCloseReason): Run {
  * `running` once no other card is pending. A question cancelled by Stop is
  * already closed as cancelled on its run.
  */
-export function applyQuestionResolved(activity: TaskActivity, payload: RawRecord): TaskActivity {
+/**
+ * A question settled. `record` is what the gateway sent that says so, kept
+ * as the evidence; an outcome this client applied from its own answer has none.
+ */
+export function applyQuestionResolved(
+  activity: TaskActivity,
+  payload: RawRecord,
+  record?: SettlingRecord,
+): TaskActivity {
   const id = str(payload.id);
   const question = id ? activity.questions.find((each) => each.id === id) : undefined;
   if (!id || !question) return activity;
@@ -1217,6 +1234,7 @@ export function applyQuestionResolved(activity: TaskActivity, payload: RawRecord
             answers: readAnswers(payload.answers) ?? each.answers,
             submitting: false,
             error: null,
+            settledBy: record ? withRecords(each.settledBy, [record]) : each.settledBy,
           }
         : each,
     ),
@@ -1248,7 +1266,7 @@ export function settleQuestionsOfEndedRuns(activity: TaskActivity): TaskActivity
 export function markQuestion(
   activity: TaskActivity,
   id: string,
-  patch: Pick<QuestionCard, "submitting" | "error">,
+  patch: Pick<QuestionCard, "submitting" | "error"> & Partial<Pick<QuestionCard, "sent">>,
 ): TaskActivity {
   return {
     ...activity,

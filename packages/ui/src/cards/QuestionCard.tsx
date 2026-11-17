@@ -14,6 +14,7 @@ import {
   useRawDisclosure,
   type RawContent,
 } from "./parts.tsx";
+import { settlingRaw } from "./raw.ts";
 
 /**
  * Raw for a question: the record as the gateway sent it, which the engine keeps
@@ -24,18 +25,25 @@ import {
 function questionRaw(card: Question): RawContent {
   const notes: string[] = [];
   if (card.raw === null) notes.push("The question was too long for this app to keep as received.");
-  if (card.status !== "pending") notes.push("This app does not keep the event that settled it.");
+  const settling = settlingRaw(
+    card.status !== "pending",
+    card.settledBy,
+    card.sent ? [card.sent] : [],
+  );
+  notes.push(...settling.notes);
   return {
     state: "loaded",
-    events:
-      card.raw === null
+    events: [
+      ...(card.raw === null
         ? []
         : [
             [
               "The question record, as the gateway sent it (question.requested or question.list)",
               card.raw,
-            ],
-          ],
+            ] as [string, unknown],
+          ]),
+      ...settling.events,
+    ],
     ids: [
       { label: "Question", value: card.id },
       ...(card.runId ? [{ label: "Run", value: card.runId }] : []),

@@ -12,7 +12,9 @@ import {
   endDecision,
   endReadback,
   initialState,
+  noteSent,
   readbackPending,
+  resolveRequest,
   markQuestion,
   PAIRING_ENDED,
   type ApprovalCard,
@@ -29,6 +31,7 @@ import {
   CARD_SCENES,
   cardScene,
   isCardScene,
+  questionEvent,
   wholeApproval,
   type CardSceneName,
   type DecisionMode,
@@ -530,11 +533,12 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
           throw new Error("This approval's text was cut; read it whole before allowing it.");
         }
         let attempt = 0;
+        const sent = resolveRequest(card, decision, command.expiresInDays ?? null);
         set(
           inTask(state, key, (a) => {
             const begun = beginDecision(a, approvalId, decision);
             attempt = begun.attempt;
-            return begun.activity;
+            return noteSent(begun.activity, approvalId, sent);
           }),
         );
         const mode = decision === "deny" ? "apply" : decisions;
@@ -555,6 +559,23 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
                   lossy: false,
                   sessionKey: key,
                   runId: card.runId,
+                  // The gateway's reply and its event, as it sends them.
+                  records: [
+                    { via: sent.method, record: { ok: true } },
+                    {
+                      via:
+                        card.kind === "plugin"
+                          ? "plugin.approval.resolved"
+                          : "exec.approval.resolved",
+                      record: {
+                        id: approvalId,
+                        decision,
+                        resolvedBy: null,
+                        ts: Date.now(),
+                        request: (card.raw as { request?: unknown } | null)?.request ?? null,
+                      },
+                    },
+                  ],
                 }),
                 approvalId,
                 attempt,
@@ -603,11 +624,26 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
         const { key, questionId } = command;
         const answers = answerStrings(state.transcripts[key], questionId, command.answers);
         set(
-          inTask(state, key, (a) => markQuestion(a, questionId, { submitting: true, error: null })),
+          inTask(state, key, (a) =>
+            markQuestion(a, questionId, {
+              submitting: true,
+              error: null,
+              sent: {
+                method: "question.resolve",
+                params: { id: questionId, answers: { answers } },
+              },
+            }),
+          ),
         );
         later(300, (s) =>
           inTask(s, key, (a) =>
-            applyQuestionResolved(a, { id: questionId, status: "answered", answers: { answers } }),
+            questionEvent({ id: questionId, status: "answered", answers: { answers } })(
+              applyQuestionResolved(
+                a,
+                { id: questionId, status: "answered", answers: { answers } },
+                { via: "question.resolve", record: { status: "answered", answers: { answers } } },
+              ),
+            ),
           ),
         );
         return;
@@ -615,10 +651,24 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
       case "dismissQuestion": {
         const { key, questionId } = command;
         set(
-          inTask(state, key, (a) => markQuestion(a, questionId, { submitting: true, error: null })),
+          inTask(state, key, (a) =>
+            markQuestion(a, questionId, {
+              submitting: true,
+              error: null,
+              sent: { method: "question.resolve", params: { id: questionId, cancel: true } },
+            }),
+          ),
         );
         later(300, (s) =>
-          inTask(s, key, (a) => applyQuestionResolved(a, { id: questionId, status: "cancelled" })),
+          inTask(s, key, (a) =>
+            questionEvent({ id: questionId, status: "cancelled" })(
+              applyQuestionResolved(
+                a,
+                { id: questionId, status: "cancelled" },
+                { via: "question.resolve", record: { status: "cancelled" } },
+              ),
+            ),
+          ),
         );
         return;
       }

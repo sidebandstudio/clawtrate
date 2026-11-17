@@ -530,28 +530,83 @@ test.describe("approval cards", () => {
     await expect(raw).toBeFocused();
   });
 
-  test("F-163 F-113: Raw shows the gateway's own records only, and says what this app does not keep", async ({
+  test("F-163 F-113: Raw shows the request, the record that settled it and what this app sent, each labelled, and says what it does not have", async ({
     page,
   }) => {
+    const REQUEST =
+      "The request record, as the gateway sent it (exec.approval.requested or exec.approval.list)";
+    // Settled elsewhere: the gateway's event, and a line that this app sent nothing.
     await openFixture(page, "scene=approval-denied", "light");
     let card = approvalCard(page);
     await card.locator("summary").first().click();
     await card.getByRole("button", { name: "Raw" }).click();
     let panel = card.getByRole("region", { name: "What the gateway sent" });
-    await expect(panel).toContainText("This app does not keep the event that settled it.");
     await expect(panel.locator(".code-label")).toHaveText([
-      "The request record, as the gateway sent it (exec.approval.requested or exec.approval.list)",
+      REQUEST,
+      "The event that settled it, as the gateway sent it (exec.approval.resolved)",
       "Identifiers",
     ]);
+    await expect(panel.locator("pre").nth(1)).toContainText('"decision": "deny"');
+    await expect(panel).toContainText("This app sent nothing to settle it.");
+    await expect(panel).not.toContainText("did not receive");
 
-    await openFixture(page, "scene=question-answered", "light");
+    // No record of how it ended reached the engine: it says so, and shows nothing in its place.
+    await openFixture(page, "scene=approval-expired", "light");
+    card = approvalCard(page);
+    await card.locator("summary").first().click();
+    await card.getByRole("button", { name: "Raw" }).click();
+    panel = card.getByRole("region", { name: "What the gateway sent" });
+    await expect(panel).toContainText(
+      "This app did not receive the gateway's record of how it was settled.",
+    );
+    await expect(panel.locator("pre")).toHaveCount(1);
+
+    // Decided here: the parameters sent, the gateway's reply and its event.
+    await openFixture(page, "scene=approval-pending", "light");
+    card = approvalCard(page);
+    await card.getByRole("button", { name: "Allow once" }).click();
+    await expect(card.locator(".tag")).toHaveText("Allowed once");
+    await card.locator("summary").first().click();
+    await card.getByRole("button", { name: "Raw" }).click();
+    panel = card.getByRole("region", { name: "What the gateway sent" });
+    await expect(panel.locator(".code-label")).toHaveText([
+      REQUEST,
+      "The gateway's reply to this app's request, as sent (exec.approval.resolve)",
+      "The event that settled it, as the gateway sent it (exec.approval.resolved)",
+      "What this app sent (exec.approval.resolve)",
+      "Identifiers",
+    ]);
+    await expect(panel.locator("pre").nth(3)).toContainText('"decision": "allow-once"');
+    await expect(panel.locator("pre").nth(3)).toContainText('"id": "apr_5d2a"');
+    await expect(panel).not.toContainText("did not receive");
+    await expect(panel).not.toContainText("sent nothing");
+
+    // A question answered here: the same, with the answer as sent.
+    await openFixture(page, "scene=question-single", "light");
+    card = questionCard(page);
+    await card.getByRole("radio", { name: /A week/ }).click();
+    await expect(card).toHaveAttribute("data-state", "answered");
+    await card.getByRole("button", { name: "Raw" }).click();
+    panel = card.getByRole("region", { name: "What the gateway sent" });
+    await expect(panel.locator(".code-label")).toHaveText([
+      "The question record, as the gateway sent it (question.requested or question.list)",
+      "The gateway's reply to this app's request, as sent (question.resolve)",
+      "The event that settled it, as the gateway sent it (question.resolved)",
+      "What this app sent (question.resolve)",
+      "Identifiers",
+    ]);
+    await expect(panel.locator("pre").nth(2)).toContainText('"status": "answered"');
+    await expect(panel.locator("pre").nth(3)).toContainText('"A week"');
+
+    // Dismissed elsewhere: its event, and nothing sent from here.
+    await openFixture(page, "scene=question-dismissed", "light");
     card = questionCard(page);
     await card.getByRole("button", { name: "Raw" }).click();
     panel = card.getByRole("region", { name: "What the gateway sent" });
-    await expect(panel).toContainText("This app does not keep the event that settled it.");
-    await expect(panel).not.toContainText("Answers, as");
-    await expect(panel.locator("pre")).toHaveCount(1);
-    await expect(panel.locator("pre")).toContainText('"status": "pending"');
+    await expect(panel.locator(".code-label").nth(1)).toHaveText(
+      "The event that settled it, as the gateway sent it (question.resolved)",
+    );
+    await expect(panel).toContainText("This app sent nothing to settle it.");
 
     await openFixture(page, "scene=incoming-line", "light");
     const line = page.getByTestId("incoming-line");

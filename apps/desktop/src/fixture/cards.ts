@@ -11,6 +11,7 @@ import {
   applyApprovalResolved,
   applyQuestionRequested,
   applyQuestionResolved,
+  markQuestion,
   emptyActivity,
   beginDecision,
   beginReadback,
@@ -23,6 +24,7 @@ import {
   parsePluginApproval,
   RawTable,
   type ApprovalResolution,
+  type SettlingRecord,
   type ClawtrateState,
   type EngineContext,
   type LinkedRun,
@@ -244,6 +246,39 @@ function stillPending(activity: TaskActivity): TaskActivity {
   return endReadback(read.activity, "apr_5d2a", begun.attempt);
 }
 
+/**
+ * The event the gateway sends when a decision settles an exec request,
+ * `{id, decision, resolvedBy, ts, request}`, as `exec.approval.resolved` carries it.
+ */
+function resolvedEvent(
+  id: string,
+  decision: string,
+  at: number,
+  resolvedBy: string | null,
+  request: Record<string, unknown> = {},
+): SettlingRecord {
+  return {
+    via: "exec.approval.resolved",
+    record: {
+      id,
+      decision,
+      resolvedBy,
+      ts: at,
+      request: {
+        command: COMMAND,
+        cwd: "/srv/media",
+        host: "node",
+        nodeId: "media-box",
+        agentId: "otto",
+        sessionKey: CARD_TASK,
+        runId: CARD_RUN,
+        toolCallId: "call_mv",
+        ...request,
+      },
+    },
+  };
+}
+
 function resolution(
   status: ApprovalResolution["status"],
   decision: ApprovalResolution["decision"],
@@ -263,6 +298,8 @@ function resolution(
     lossy: false,
     sessionKey: CARD_TASK,
     runId: CARD_RUN,
+    // A decision's outcome arrives as the gateway's event; an expiry or cancellation here has none.
+    records: decision ? [resolvedEvent("apr_5d2a", decision, at, extra.resolvedBy ?? null)] : [],
     ...extra,
   };
 }
@@ -342,8 +379,26 @@ function asked(now: number, questions: unknown[] = [KEEP]): Builder {
     .question(questionRecord(now, questions));
 }
 
-const answer = (answers: Record<string, string[]>) => (activity: TaskActivity) =>
-  applyQuestionResolved(activity, { id: "qst_81f0", status: "answered", answers: { answers } });
+/** The gateway's `question.resolved` event, `{id, status, answers?}`, applied as the engine applies it. */
+export const questionEvent =
+  (payload: { id: string; status: string; answers?: unknown }) => (activity: TaskActivity) =>
+    applyQuestionResolved(activity, payload, { via: "question.resolved", record: payload });
+
+/** Answered from this app: what it sent, the gateway's reply, and its event. */
+const answer = (answers: Record<string, string[]>) => (activity: TaskActivity) => {
+  const params = { id: "qst_81f0", answers: { answers } };
+  const sent = markQuestion(activity, "qst_81f0", {
+    submitting: true,
+    error: null,
+    sent: { method: "question.resolve", params },
+  });
+  const replied = applyQuestionResolved(
+    sent,
+    { id: "qst_81f0", status: "answered", answers: { answers } },
+    { via: "question.resolve", record: { status: "answered", answers: { answers } } },
+  );
+  return questionEvent({ id: "qst_81f0", status: "answered", answers: { answers } })(replied);
+};
 
 // Messages to other bots ----------------------------------------------------------
 
@@ -684,15 +739,11 @@ function build(
       return { b: asked(now, [MACHINES]).update(answer({ machines: ["media-box", "attic-nas"] })) };
     case "question-dismissed":
       return {
-        b: asked(now).update((a) =>
-          applyQuestionResolved(a, { id: "qst_81f0", status: "cancelled" }),
-        ),
+        b: asked(now).update((a) => questionEvent({ id: "qst_81f0", status: "cancelled" })(a)),
       };
     case "question-expired":
       return {
-        b: asked(now).update((a) =>
-          applyQuestionResolved(a, { id: "qst_81f0", status: "expired" }),
-        ),
+        b: asked(now).update((a) => questionEvent({ id: "qst_81f0", status: "expired" })(a)),
       };
     case "question-cancelled":
       return {
@@ -705,7 +756,7 @@ function build(
               stopRequestedAt: ago(1),
             })),
           }))
-          .update((a) => applyQuestionResolved(a, { id: "qst_81f0", status: "cancelled" })),
+          .update((a) => questionEvent({ id: "qst_81f0", status: "cancelled" })(a)),
       };
     case "question-closed-ended":
       return { b: asked(now).end(ago(1)).update(closeQuestions) };

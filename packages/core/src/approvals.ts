@@ -14,7 +14,7 @@ import {
   type Step,
   type TaskActivity,
 } from "./runs.ts";
-import { APPROVAL } from "./state-bounds.ts";
+import { APPROVAL, MAX_SENT_DECISIONS, MAX_SETTLING_RECORDS } from "./state-bounds.ts";
 
 export type ApprovalKind = "exec" | "plugin" | "system-agent";
 export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
@@ -179,6 +179,10 @@ export type ApprovalCard = {
   unknownDeny: boolean;
   /** The attempt number of the latest read-back still on its way, or null. */
   readingAt: number | null;
+  /** The decisions this client sent, newest last, as sent. */
+  sent: SentRequest[];
+  /** The records the gateway sent that settled it, by source; empty while pending or when none arrived. */
+  settledBy: SettlingRecord[];
   error: string | null;
   /**
    * What the last failed resolution from this client establishes. `refused`:
@@ -203,6 +207,22 @@ export type ApprovalCard = {
  */
 /** One decision this client sent for an approval, and the attempt number it carries. */
 export type DecisionAttempt = { attempt: number; decision: ApprovalDecision };
+
+/**
+ * A record the gateway sent that settled a request, as it sent it, and where
+ * it came from: the event's name, or the method whose reply it is.
+ */
+export type SettlingRecord = { via: string; record: unknown };
+/** A request this client sent to settle a request: its method and its parameters, as sent. */
+export type SentRequest = { method: string; params: unknown };
+
+/** Add records to those kept: a newer record from the same source replaces the older one. */
+export function withRecords(kept: SettlingRecord[], added: SettlingRecord[]): SettlingRecord[] {
+  if (added.length === 0) return kept;
+  let out = kept;
+  for (const each of added) out = [...out.filter((one) => one.via !== each.via), each];
+  return out.slice(-MAX_SETTLING_RECORDS);
+}
 
 export type ApprovalAccess = "unavailable" | "loading" | "ready" | "partial" | "error";
 export type ApprovalSourceAccess = "unavailable" | "loading" | "ready" | "error";
@@ -297,6 +317,8 @@ function blank(id: string, kind: ApprovalKind, raw: unknown): ApprovalCard {
     unknownAt: null,
     unknownDeny: false,
     readingAt: null,
+    sent: [],
+    settledBy: [],
     error: null,
     decisionError: null,
     stillOpen: false,
@@ -515,6 +537,8 @@ export type ApprovalResolution = {
   /** The session the request named (`request.sessionKey`, or a terminal snapshot's `source.sessionKey`). */
   sessionKey: string | null;
   runId: string | null;
+  /** The gateway's records of it, as sent, by source; none for this client's own inference. */
+  records: SettlingRecord[];
 };
 
 /**
@@ -564,11 +588,25 @@ export function parseApprovalResolved(
     lossy,
     sessionKey: str(request?.sessionKey),
     runId: str(request?.runId),
+    records: [{ via: `${EVENT_OF[kind]}`, record: value }],
   };
 }
 
-/** The outcome a terminal `ApprovalSnapshot` reports, as `approval.resolve` returns it. */
-export function resolutionFromSnapshot(value: unknown): ApprovalResolution | null {
+const EVENT_OF: Record<ApprovalKind, string> = {
+  exec: "exec.approval.resolved",
+  plugin: "plugin.approval.resolved",
+  "system-agent": "openclaw.approval.resolved",
+};
+
+/**
+ * The outcome a terminal `ApprovalSnapshot` reports, as `approval.resolve`
+ * returns it. `record` is what the gateway sent, kept as the evidence: the
+ * reply or read-back named by `via`.
+ */
+export function resolutionFromSnapshot(
+  value: unknown,
+  record?: SettlingRecord,
+): ApprovalResolution | null {
   const card = parseApprovalSnapshot(value);
   if (!card || card.status === "pending") return null;
   return {
@@ -584,6 +622,7 @@ export function resolutionFromSnapshot(value: unknown): ApprovalResolution | nul
     lossy: false,
     sessionKey: card.sessionKey,
     runId: null,
+    records: record ? [record] : [],
   };
 }
 
@@ -601,10 +640,12 @@ export function mergeResolution(
   known: ApprovalResolution | undefined,
   next: ApprovalResolution,
 ): ApprovalResolution {
-  if (!known || rank(next) > rank(known)) return next;
-  if (rank(next) < rank(known)) return known;
+  const records = withRecords(known?.records ?? [], next.records);
+  if (!known || rank(next) > rank(known)) return { ...next, records };
+  if (rank(next) < rank(known)) return { ...known, records };
   return {
     ...known,
+    records,
     applicationStatus: next.applicationStatus ?? known.applicationStatus,
     resolver: known.resolver ?? next.resolver,
     resolvedBy: known.resolvedBy ?? next.resolvedBy,
@@ -638,6 +679,8 @@ export function applyApprovalRequested(activity: TaskActivity, card: ApprovalCar
         unknownAt: existing.unknownAt,
         unknownDeny: existing.unknownDeny,
         readingAt: existing.readingAt,
+        sent: existing.sent,
+        settledBy: existing.settledBy,
         error: existing.error,
         decisionError: existing.decisionError,
         stillOpen: existing.stillOpen,
@@ -715,6 +758,7 @@ export function applyApprovalResolved(
   const existing = activity.approvals.find((each) => each.id === resolution.id);
   if (!existing) return activity;
   let patch: Partial<ApprovalCard> | null = null;
+  const settledBy = withRecords(existing.settledBy, resolution.records);
   if (rank(resolution) > cardRank(existing)) {
     patch = {
       status: resolution.status,
@@ -732,6 +776,7 @@ export function applyApprovalResolved(
       unknownAt: null,
       unknownDeny: false,
       readingAt: null,
+      settledBy,
       error: null,
       decisionError: null,
       stillOpen: false,
@@ -747,6 +792,10 @@ export function applyApprovalResolved(
       applicationStatus: resolution.applicationStatus ?? existing.applicationStatus,
       resolver: existing.resolver ?? resolution.resolver,
     };
+  }
+  // A record from another source about a settled request is kept with it.
+  if (existing.status !== "pending" && settledBy !== existing.settledBy) {
+    patch = { ...patch, settledBy };
   }
   if (!patch) return activity;
   const approvals = activity.approvals.map((each) =>
@@ -861,6 +910,14 @@ export function endDecision(
   });
 }
 
+/** A decision left this client: keep what was sent, newest last. */
+export function noteSent(activity: TaskActivity, id: string, sent: SentRequest): TaskActivity {
+  return patchApproval(activity, id, (card) => ({
+    ...card,
+    sent: [...card.sent, sent].slice(-MAX_SENT_DECISIONS),
+  }));
+}
+
 /** A read-back is sent: it takes the next attempt number. */
 export function beginReadback(
   activity: TaskActivity,
@@ -932,6 +989,7 @@ function inferredResolution(
     lossy: false,
     sessionKey: null,
     runId: null,
+    records: [],
   };
 }
 

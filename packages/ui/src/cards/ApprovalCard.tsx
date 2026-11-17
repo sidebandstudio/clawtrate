@@ -29,6 +29,7 @@ import {
   WarningIcon,
   type RawContent,
 } from "./parts.tsx";
+import { settlingRaw } from "./raw.ts";
 
 /** The list method whose items carry the same record as the requested event. */
 const LIST_NAMES: Record<Approval["kind"], string> = {
@@ -57,10 +58,14 @@ function approvalRaw(card: Approval): RawContent {
   ];
   const notes: string[] = [];
   if (record === null) notes.push("The request was too long for this app to keep as received.");
-  if (card.status !== "pending") notes.push("This app does not keep the event that settled it.");
+  const settling = settlingRaw(card.status !== "pending", card.settledBy, card.sent);
+  notes.push(...settling.notes);
   return {
     state: "loaded",
-    events: record === null ? [] : [[label, record]],
+    events: [
+      ...(record === null ? [] : [[label, record] as [string, unknown]]),
+      ...settling.events,
+    ],
     ids,
     ...(notes.length ? { notes } : {}),
   };

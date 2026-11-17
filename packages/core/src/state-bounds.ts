@@ -11,6 +11,8 @@ import type {
   ApprovalResolver,
   DecisionAttempt,
   ExecApprovalDetail,
+  SentRequest,
+  SettlingRecord,
   PluginApprovalDetail,
   SystemAgentApprovalDetail,
 } from "./approvals.ts";
@@ -144,6 +146,10 @@ export const MAX_QUESTION_OPTIONS = 8;
 export const MAX_ANSWERS_PER_QUESTION = 8;
 /** Pending approvals per task (also `MAX_PENDING_APPROVALS_PER_TASK`), settled ones kept. */
 export const MAX_PENDING_APPROVAL_COUNT = 16;
+/** Records the gateway sent that settled a request, kept per request: one per source (event, reply, read-back). */
+export const MAX_SETTLING_RECORDS = 3;
+/** Decisions this client sent, kept per approval: the newest. */
+export const MAX_SENT_DECISIONS = 4;
 export const MAX_SETTLED_APPROVAL_COUNT = 8;
 export const MAX_COMMAND_ARGS = 16;
 /** Recipient runs a task's sends name. */
@@ -265,6 +271,10 @@ const questionItem = object<QuestionItem>()({
   multiSelect: FLAG,
   allowsOther: FLAG,
 });
+/** A record the gateway sent that settled a request, and where it came from. */
+const settlingRecord = object<SettlingRecord>()({ via: NAME, record: json(MAX_RECORD_CHARS) });
+/** A request this client sent to settle one: its method and parameters. */
+const sentRequest = object<SentRequest>()({ method: NAME, params: json(MAX_RECORD_CHARS) });
 export const QUESTION: Bound = flagged<QuestionCard>()({
   id: ID,
   runId: ID,
@@ -281,6 +291,8 @@ export const QUESTION: Bound = flagged<QuestionCard>()({
   error: text(MAX_ERROR_JSON_CHARS),
   raw: json(MAX_RECORD_CHARS),
   ordinary: FLAG,
+  sent: sentRequest,
+  settledBy: list(MAX_SETTLING_RECORDS, settlingRecord),
 });
 const execDetail = object<ExecApprovalDetail>()({
   command: text(MAX_COMMAND_CHARS),
@@ -349,6 +361,8 @@ export const APPROVAL: Bound = flagged<ApprovalCard>()({
   unknownAt: NUMBER,
   unknownDeny: FLAG,
   readingAt: NUMBER,
+  sent: list(MAX_SENT_DECISIONS, sentRequest),
+  settledBy: list(MAX_SETTLING_RECORDS, settlingRecord),
   error: text(MAX_ERROR_JSON_CHARS),
   decisionError: ENUM,
   stillOpen: FLAG,
@@ -518,6 +532,7 @@ export const APPROVAL_OUTCOME: Bound = object<ApprovalResolution>()({
   lossy: FLAG,
   sessionKey: ID,
   runId: ID,
+  records: list(MAX_SETTLING_RECORDS, settlingRecord),
 });
 
 /** The session-row fields the task list reads; everything else in a row is not kept. */

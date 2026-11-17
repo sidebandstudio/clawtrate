@@ -27,6 +27,7 @@ import {
   decisionRefusal,
   endDecision,
   endReadback,
+  noteSent,
   patchError,
   readbackPending,
   mergeResolution,
@@ -1985,12 +1986,13 @@ export class ClawtrateClient {
         throw new Error("The approval changed or was settled while access was being approved.");
       }
       sent = true;
+      this.updateActivity(key, (activity) => noteSent(activity, approvalId, { method, params }));
       const result = asRecord(await this.request(method, params));
       let resolution: ApprovalResolution | null;
       let applied = true;
       if (method === "approval.resolve") {
         // `{applied, approval}`: the approval as it actually ended.
-        resolution = resolutionFromSnapshot(result?.approval);
+        resolution = resolutionFromSnapshot(result?.approval, { via: method, record: result });
         applied = result?.applied === true;
         if (!resolution) throw new Error("The gateway did not say how the approval ended.");
       } else {
@@ -2008,6 +2010,8 @@ export class ClawtrateClient {
           lossy: false,
           sessionKey: approval.sessionKey,
           runId: approval.runId,
+          // The reply as the gateway sent it (`{ok: true}`); its resolved event follows.
+          records: [{ via: method, record: result }],
         };
       }
       this.noteApprovalOutcome(resolution);
@@ -2073,7 +2077,10 @@ export class ClawtrateClient {
     }
     if (generation !== this.generation) return;
     const snapshot = asRecord(result?.approval);
-    const resolution = resolutionFromSnapshot(snapshot);
+    const resolution = resolutionFromSnapshot(snapshot, {
+      via: "approval.get",
+      record: result,
+    });
     const before = approval.decisionError;
     if (resolution && resolution.id === approvalId) {
       // A settled request is evidence of the winner whenever it was read.
@@ -2180,7 +2187,10 @@ export class ClawtrateClient {
     try {
       const result = asRecord(await this.request("approval.get", { id }));
       if (generation !== this.generation) return;
-      const resolution = resolutionFromSnapshot(result?.approval);
+      const resolution = resolutionFromSnapshot(result?.approval, {
+        via: "approval.get",
+        record: result,
+      });
       if (resolution && resolution.id === id) this.noteApprovalOutcome(resolution);
     } catch (error) {
       if (generation === this.generation) this.noteMissingScope(error);
@@ -2664,14 +2674,26 @@ export class ClawtrateClient {
       this.checkNotWithdrawn(owner);
       const now = this.state.transcripts[key]?.questions.find((each) => each.id === questionId);
       if (!now || now.status !== "pending") throw new Error("That question is no longer open.");
-      const result = asRecord(await this.request("question.resolve", params));
-      // Apply the answer at once; `question.resolved` repeats it.
       this.updateActivity(key, (activity) =>
-        applyQuestionResolved(activity, {
-          id: questionId,
-          status: result?.status ?? ("cancel" in params ? "cancelled" : "answered"),
-          ...(result?.answers ? { answers: result.answers } : {}),
+        markQuestion(activity, questionId, {
+          submitting: true,
+          error: null,
+          sent: { method: "question.resolve", params },
         }),
+      );
+      const reply = await this.request("question.resolve", params);
+      const result = asRecord(reply);
+      // Apply the answer at once; `question.resolved` repeats it. The reply is kept as sent.
+      this.updateActivity(key, (activity) =>
+        applyQuestionResolved(
+          activity,
+          {
+            id: questionId,
+            status: result?.status ?? ("cancel" in params ? "cancelled" : "answered"),
+            ...(result?.answers ? { answers: result.answers } : {}),
+          },
+          { via: "question.resolve", record: reply },
+        ),
       );
     } catch (error) {
       this.updateActivity(key, (activity) =>
@@ -3989,7 +4011,10 @@ export class ClawtrateClient {
         for (const transcript of Object.values(this.state.transcripts)) {
           if (transcript.questions.some((question) => question.id === id)) {
             this.updateActivity(transcript.sessionKey, (activity) =>
-              applyQuestionResolved(activity, payload),
+              applyQuestionResolved(activity, payload, {
+                via: "question.resolved",
+                record: event.payload,
+              }),
             );
           }
         }

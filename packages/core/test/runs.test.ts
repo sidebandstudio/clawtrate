@@ -1026,6 +1026,8 @@ describe("question cards", () => {
         error: null,
         raw: record,
         ordinary: true,
+        sent: null,
+        settledBy: [],
       },
     ]);
     // A question for a run not seen yet brings the run in, waiting.
