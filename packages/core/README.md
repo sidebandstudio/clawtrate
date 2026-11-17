@@ -95,7 +95,7 @@ Outgoing messages (`OutgoingStatus`): `sending`, then `sent` once the gateway ac
 
 Questions: `pending`, `answered`, `dismissed`, `expired`, `cancelled` (the run was stopped), or `closed` (no longer pending on the gateway, and this client did not see how it ended).
 
-Approvals: `pending`, `allowed`, `denied`, `expired`, `cancelled`, `closed`. `inferred` means the terminal status is this client's inference (expiry passed, or a reload no longer listed it); the gateway's own outcome replaces it. `outcomeUnknown` means the gateway said the approval is settled but not how. `runEnded` means the approval is still pending after its run ended, and allowing it may still act.
+Approvals: `pending`, `allowed`, `denied`, `expired`, `cancelled`, `closed`. `inferred` means the terminal status is this client's inference (expiry passed, or a reload no longer listed it); the gateway's own outcome replaces it. When the client makes that inference it reads the approval back once (`approval.get`, `operator.approvals`); the gateway's snapshot of a settled request gives its status, decision, resolution time and terminal `reason` (`user`, `timeout`, …), which replace the inference. The gateway keeps no reason of the kind "why the bot asked": `reason` is how it ended. `outcomeUnknown` means the gateway said the approval is settled but not how. `runEnded` means the approval is still pending after its run ended, and allowing it may still act.
 
 Task creations: `creating`, `checking` (no answer; asked again with the same key), `failed` (refused; retry or dismiss), `unknown` (nothing establishes whether the task exists; a retry may create a second task), `created`.
 

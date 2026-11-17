@@ -2631,6 +2631,7 @@ export class ClawtrateClient {
         this.keepUnrouted(placed);
       }
     }
+    const pendingNow = this.pendingApprovalIds(key);
     this.updateActivity(key, (activity) => {
       let next = activity;
       for (const card of mine) {
@@ -2645,6 +2646,7 @@ export class ClawtrateClient {
         pendingBefore,
       );
     });
+    this.lookUpInferred(key, pendingNow);
     // Another list may have been refused for the scope meanwhile: this one cannot be kept current then.
     this.setApprovalSource(key, source.kind, this.holds(APPROVALS_SCOPE) ? "ready" : "unavailable");
   }
@@ -2658,6 +2660,28 @@ export class ClawtrateClient {
       approvalSources,
       approvalAccess: approvalAccessOf(approvalSources),
     }));
+  }
+
+  private pendingApprovalIds(key: string): Set<string> {
+    return new Set(
+      (this.state.transcripts[key]?.approvals ?? [])
+        .filter((approval) => approval.status === "pending")
+        .map((approval) => approval.id),
+    );
+  }
+
+  /**
+   * Approvals this client has just closed by inference (past their expiry, or
+   * no longer listed) are read back one by one (`approval.get`): the gateway's
+   * snapshot of a settled request says how it ended, its decision and its
+   * terminal reason, which then replace the inference. Each is asked once, when
+   * the inference is made; one that cannot be read stays inferred.
+   */
+  private lookUpInferred(key: string, pendingBefore: ReadonlySet<string>): void {
+    for (const approval of this.state.transcripts[key]?.approvals ?? []) {
+      if (approval.inferred && approval.status !== "pending" && pendingBefore.has(approval.id))
+        void this.lookUpOutcome(approval.id);
+    }
   }
 
   /** Expire pending approvals at their `expiresAt`, then re-read the lists to confirm. */
@@ -2677,7 +2701,9 @@ export class ClawtrateClient {
       setTimeout(
         () => {
           this.expiryTimers.delete(key);
+          const pendingNow = this.pendingApprovalIds(key);
           this.updateActivity(key, (activity) => expireApprovals(activity, this.now()));
+          this.lookUpInferred(key, pendingNow);
           void this.backfillApprovals(key, this.generation);
         },
         // setTimeout fires at once past 2^31-1 ms; re-check at that horizon instead.
