@@ -1,75 +1,164 @@
-// Ownership of the development gateway's state folder. OpenClaw loads a
-// profile's own `.env` and auth stores at startup, after our environment
-// allowlist has been applied, so the folder must be one this tool created and
-// must not hold anything that could carry credentials.
+// The development gateway never runs on reused state. Every start deletes the
+// tool's own state folder and creates it again empty, so there is nothing old
+// to inspect for credentials. OpenClaw keeps secrets in SQLite stores that a
+// clean profile also has, so checking contents could never prove a folder clean.
+//
+// "The tool's own" is decided without following links: the state path is a real
+// directory, not a symlink, and holds the marker as a regular file. Anything
+// else is foreign and is never deleted or changed.
 
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { randomBytes } from "node:crypto";
+import { lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
-/** Written when this tool creates the state folder. */
 export const MARKER_FILE = ".clawtrate-dev-gateway";
+const CREATED_BY = "clawtrate tools/dev-gateway";
 
-/** Files OpenClaw reads credentials or settings from. This tool creates none of them. */
-export const FOREIGN_FILES = [
-  ".env",
-  "auth-profiles.json",
-  "auth.json",
-  "auth-state.json",
-  "oauth.json",
-  "credentials.json",
-] as const;
+export type Marker = {
+  createdBy: typeof CREATED_BY;
+  createdAt: string;
+  /** Unguessable id of the start that created this folder. */
+  runId: string;
+  /** The gateway started on this folder, once it is running. */
+  gatewayPid?: number;
+  providerPid?: number;
+};
 
-const SKIP_DIRS = new Set([".git", "node_modules"]);
+/** What `start` records in the tool's run file for the processes it spawned. */
+export type RunRecord = {
+  runId?: string | undefined;
+  gatewayPid?: number | undefined;
+  providerPid?: number | undefined;
+  startedAt: string;
+};
 
-/** Create the state folder with its ownership marker. Refuses an existing folder. */
-export function createStateDir(stateDir: string, now = new Date()): void {
-  if (existsSync(stateDir)) throw new Error(`${stateDir} already exists`);
-  mkdirSync(stateDir, { mode: 0o700 });
-  writeFileSync(
-    join(stateDir, MARKER_FILE),
-    `${JSON.stringify({ createdBy: "clawtrate tools/dev-gateway", createdAt: now.toISOString() }, null, 2)}\n`,
-    { mode: 0o600 },
-  );
-}
+export type Ownership = "absent" | "owned" | "foreign";
 
-function findFiles(dir: string, names: ReadonlySet<string>, depth: number, found: string[]): void {
-  if (depth < 0) return;
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) findFiles(join(dir, entry.name), names, depth - 1, found);
-    } else if (names.has(entry.name)) {
-      found.push(join(dir, entry.name));
-    }
-  }
-}
-
-/** What is wrong with the state folder, or [] when it is absent or ours and clean. */
-export function stateDirProblems(stateDir: string): string[] {
-  if (!existsSync(stateDir)) return [];
-  const problems: string[] = [];
-  if (!existsSync(join(stateDir, MARKER_FILE))) {
-    problems.push(`${stateDir} was not created by the dev-gateway tool`);
-  }
-  const found: string[] = [];
-  findFiles(stateDir, new Set(FOREIGN_FILES), 8, found);
-  for (const file of found.sort()) {
-    problems.push(`${relative(stateDir, file)} could load settings or credentials`);
-  }
-  return problems;
-}
-
-export function assertStateDirOwned(stateDir: string): void {
-  const problems = stateDirProblems(stateDir);
-  if (problems.length > 0) {
-    throw new Error(
-      `refusing to use the development gateway state:\n  - ${problems.join("\n  - ")}\n` +
-        "Run `pnpm dev-gateway reset` to delete it and start clean.",
+export class ForeignStateError extends Error {
+  constructor(stateDir: string) {
+    super(
+      `${stateDir} exists but was not created by the dev-gateway tool. ` +
+        "Nothing was deleted or changed. Move it away yourself if it is not needed.",
     );
+    this.name = "ForeignStateError";
   }
+}
+
+function lstatOrNull(path: string) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+export function readMarker(stateDir: string): Marker | null {
+  const path = join(stateDir, MARKER_FILE);
+  if (!lstatOrNull(path)?.isFile()) return null;
+  try {
+    const marker = JSON.parse(readFileSync(path, "utf8")) as Partial<Marker>;
+    if (marker.createdBy !== CREATED_BY) return null;
+    // Markers from before run ids existed are still the tool's own; they just
+    // never match a running gateway, so they can only be started over.
+    return { ...marker, runId: typeof marker.runId === "string" ? marker.runId : "" } as Marker;
+  } catch {
+    return null;
+  }
+}
+
+/** Decided with `lstat` only: no link is followed. */
+export function ownership(stateDir: string): Ownership {
+  const stat = lstatOrNull(stateDir);
+  if (!stat) return "absent";
+  if (stat.isSymbolicLink() || !stat.isDirectory()) return "foreign";
+  return readMarker(stateDir) ? "owned" : "foreign";
+}
+
+export function newRunId(): string {
+  return randomBytes(24).toString("hex");
+}
+
+function writeMarker(stateDir: string, marker: Marker): void {
+  writeFileSync(join(stateDir, MARKER_FILE), `${JSON.stringify(marker, null, 2)}\n`, {
+    mode: 0o600,
+  });
+}
+
+/**
+ * Leave the state folder empty apart from a new marker for `runId`. An owned
+ * folder is deleted first (links inside it are removed, never followed); a
+ * foreign one is refused untouched.
+ */
+export function prepareFreshState(stateDir: string, runId: string, now = new Date()): void {
+  const owner = ownership(stateDir);
+  if (owner === "foreign") throw new ForeignStateError(stateDir);
+  if (owner === "owned") rmSync(stateDir, { recursive: true });
+  // Fails if anything appeared in the meantime, rather than reusing it.
+  mkdirSync(stateDir, { mode: 0o700 });
+  writeMarker(stateDir, { createdBy: CREATED_BY, createdAt: now.toISOString(), runId });
+}
+
+/** Record the processes started on this folder, by the start that created it. */
+export function recordGateway(
+  stateDir: string,
+  runId: string,
+  pids: { gatewayPid: number; providerPid: number },
+): void {
+  const marker = readMarker(stateDir);
+  if (ownership(stateDir) !== "owned" || marker?.runId !== runId) {
+    throw new Error(`${stateDir} is no longer the state this start created`);
+  }
+  writeMarker(stateDir, { ...marker, ...pids });
+}
+
+export function readRunRecord(path: string): RunRecord | null {
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as RunRecord;
+  } catch {
+    return null;
+  }
+}
+
+export function isAlive(pid: number | undefined): pid is number {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why OpenClaw must not run now, or null when it may. It may run only against
+ * the tool's own state, and only during the start that just created it
+ * (`freshRunId`) or while the gateway recorded for that state is still running.
+ */
+export function spawnRefusal(params: {
+  stateDir: string;
+  run: RunRecord | null;
+  freshRunId: string | null;
+  isAlive: (pid: number | undefined) => boolean;
+}): string | null {
+  const owner = ownership(params.stateDir);
+  if (owner === "absent") {
+    return "There is no development gateway state. Run `pnpm dev-gateway start`.";
+  }
+  if (owner === "foreign") return new ForeignStateError(params.stateDir).message;
+  const marker = readMarker(params.stateDir)!;
+  if (params.freshRunId !== null && marker.runId !== "" && marker.runId === params.freshRunId) {
+    return null;
+  }
+  const { run } = params;
+  if (!run && marker.gatewayPid && !params.isAlive(marker.gatewayPid)) {
+    return `The development gateway started on this state (pid ${marker.gatewayPid}) is not running. Run \`pnpm dev-gateway start\`.`;
+  }
+  if (!run || !marker.runId || run.runId !== marker.runId || marker.gatewayPid !== run.gatewayPid) {
+    return "The development gateway state does not belong to the gateway this tool last started. Run `pnpm dev-gateway start`.";
+  }
+  if (!params.isAlive(marker.gatewayPid)) {
+    return `The development gateway started on this state (pid ${marker.gatewayPid ?? "?"}) is not running. Run \`pnpm dev-gateway start\`.`;
+  }
+  return null;
 }

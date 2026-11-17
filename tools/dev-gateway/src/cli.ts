@@ -1,12 +1,18 @@
-// Development gateway control: start, stop, seed, reset, status, approve.
+// Development gateway control.
 //
-//   pnpm dev-gateway start     start the scripted model and `openclaw --dev gateway run`
-//   pnpm dev-gateway seed      create the four sample bots and their conversations
-//   pnpm dev-gateway up        start, then seed
+//   pnpm dev-gateway start     a fresh, seeded gateway: stop the tool's own gateway,
+//                              delete its state, create it again empty, configure,
+//                              start the scripted model and `openclaw --dev gateway run`,
+//                              then seed the sample bots and conversations
+//   pnpm dev-gateway up        the same as start
+//   pnpm dev-gateway seed      seed the running gateway again (verifies what exists)
 //   pnpm dev-gateway approve   approve pending Clawtrate pairing requests
 //   pnpm dev-gateway status    show what is running
 //   pnpm dev-gateway stop      stop the processes this tool started
-//   pnpm dev-gateway reset     stop, then delete ~/.openclaw-dev
+//   pnpm dev-gateway reset     stop, then delete the tool's own ~/.openclaw-dev
+//
+// State is never reused: OpenClaw keeps credentials in SQLite stores that a
+// clean profile also has, so only a folder created empty by this start is safe.
 
 import { randomBytes } from "node:crypto";
 import {
@@ -19,10 +25,19 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createConnection } from "node:net";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderAvatar } from "./avatars.ts";
-import { assertStateDirOwned, createStateDir } from "./state-guard.ts";
+import {
+  ForeignStateError,
+  isAlive,
+  newRunId,
+  ownership,
+  prepareFreshState,
+  readRunRecord,
+  recordGateway,
+  type RunRecord,
+} from "./state-guard.ts";
 import {
   CONNECTION_FILE,
   DEV_CONFIG_PATH,
@@ -36,11 +51,10 @@ import {
   RUN_DIR,
   STATE_FILE,
   assertDevStateDir,
-  openclaw,
-  openclawSync,
+  defaultRunner,
   parseJsonOutput,
   providerEnv,
-  spawnOpenclawDetached,
+  type OpenclawRunner,
 } from "./env.ts";
 import {
   SEED_BOTS,
@@ -51,24 +65,9 @@ import {
 } from "./seed-data.ts";
 import { spawn, spawnSync } from "node:child_process";
 
-type RunState = {
-  providerPid?: number | undefined;
-  gatewayPid?: number | undefined;
-  startedAt: string;
-};
 export type DevConnection = { url: string; token: string };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function isAlive(pid: number | undefined): pid is number {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function assertInside(path: string, dir: string): void {
   const rel = relative(dir, path);
@@ -76,19 +75,18 @@ function assertInside(path: string, dir: string): void {
     throw new Error(`refusing to write outside ${dir}: ${path}`);
 }
 
-function readState(): RunState | null {
-  if (!existsSync(STATE_FILE)) return null;
-  return JSON.parse(readFileSync(STATE_FILE, "utf8")) as RunState;
+function readState(): RunRecord | null {
+  return readRunRecord(STATE_FILE);
 }
 
-function writeState(state: RunState): void {
+function writeState(state: RunRecord): void {
   mkdirSync(RUN_DIR, { recursive: true });
   writeFileSync(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`);
 }
 
-export function readDevConnection(): DevConnection | null {
-  if (!existsSync(CONNECTION_FILE)) return null;
-  return JSON.parse(readFileSync(CONNECTION_FILE, "utf8")) as DevConnection;
+export function readDevConnection(path = CONNECTION_FILE): DevConnection | null {
+  if (!existsSync(path)) return null;
+  return JSON.parse(readFileSync(path, "utf8")) as DevConnection;
 }
 
 function portOpen(port: number): Promise<boolean> {
@@ -111,7 +109,7 @@ async function waitFor(label: string, check: () => Promise<boolean>, timeoutMs: 
   throw new Error(`timed out waiting for ${label}`);
 }
 
-/** The config the development gateway runs with. Written once; `reset` removes it. */
+/** The config the development gateway runs with. Written fresh by every start. */
 export function devConfig(token: string) {
   return {
     gateway: {
@@ -237,32 +235,25 @@ function assertSandboxed(): void {
   }
 }
 
-function ensureConfig(): DevConnection {
-  assertDevStateDir(DEV_STATE_DIR);
-  assertStateDirOwned(DEV_STATE_DIR);
-  const existing = readDevConnection();
-  if (existsSync(DEV_CONFIG_PATH) && existing) return existing;
-  if (existsSync(DEV_STATE_DIR)) {
-    throw new Error(
-      `${DEV_STATE_DIR} exists but holds no config from this checkout. Run \`pnpm dev-gateway reset\` first.`,
-    );
-  }
+/** Write a new config and bootstrap token into the state folder `start` just created. */
+function writeFreshConfig(runner: OpenclawRunner): DevConnection {
   const token = randomBytes(24).toString("base64url");
-  createStateDir(DEV_STATE_DIR);
   writeFileSync(DEV_CONFIG_PATH, `${JSON.stringify(devConfig(token), null, 2)}\n`, { mode: 0o600 });
   const connection = { url: GATEWAY_URL, token };
   mkdirSync(RUN_DIR, { recursive: true });
   writeFileSync(CONNECTION_FILE, `${JSON.stringify(connection, null, 2)}\n`, { mode: 0o600 });
-  const validation = openclawSync(["config", "validate"]);
+  const validation = runner.runSync(["config", "validate"]);
   if (validation.status !== 0) {
     throw new Error(`generated config is invalid:\n${validation.stdout}${validation.stderr}`);
   }
   return connection;
 }
 
-async function gatewayHealthy(): Promise<boolean> {
+/** Healthy means the guard allows OpenClaw and the gateway answers; a refusal spawns nothing. */
+async function gatewayHealthy(runner: OpenclawRunner = defaultRunner): Promise<boolean> {
+  if (runner.refusal()) return false;
   if (!(await portOpen(GATEWAY_PORT))) return false;
-  const result = await openclaw(["gateway", "call", "health", "--json", "--timeout", "3000"]);
+  const result = await runner.run(["gateway", "call", "health", "--json", "--timeout", "3000"]);
   return result.status === 0;
 }
 
@@ -288,55 +279,72 @@ async function assertExecDenied(): Promise<void> {
   if (problems.length > 0) throw new Error(`exec is not denied:\n  - ${problems.join("\n  - ")}`);
 }
 
+/**
+ * The only way to start the gateway: on a state folder this command has just
+ * created empty. The tool's own gateway is stopped and its state deleted first;
+ * foreign state is refused untouched. Ends with a seeded, verified gateway.
+ */
 export async function start(): Promise<void> {
-  assertStateDirOwned(DEV_STATE_DIR);
-  const state = readState();
-  if (state && isAlive(state.gatewayPid) && isAlive(state.providerPid)) {
-    console.log(`Development gateway already running on ${GATEWAY_URL}`);
-    return;
-  }
+  assertDevStateDir(DEV_STATE_DIR);
+  if (ownership(DEV_STATE_DIR) === "foreign") throw new ForeignStateError(DEV_STATE_DIR);
+  await stop();
   if (await portOpen(GATEWAY_PORT)) {
     throw new Error(`port ${GATEWAY_PORT} is in use by a process this tool did not start`);
   }
   if (await portOpen(PROVIDER_PORT)) {
     throw new Error(`port ${PROVIDER_PORT} is in use by a process this tool did not start`);
   }
-  ensureConfig();
-  assertSandboxed();
-  mkdirSync(RUN_DIR, { recursive: true });
+  const runner = defaultRunner;
+  const runId = newRunId();
+  prepareFreshState(DEV_STATE_DIR, runId);
+  runner.freshRunId = runId;
+  try {
+    writeFreshConfig(runner);
+    assertSandboxed();
+    mkdirSync(RUN_DIR, { recursive: true });
 
-  const providerLog = openSync(join(RUN_DIR, "provider.log"), "w");
-  const provider = spawn(
-    process.execPath,
-    [fileURLToPath(new URL("./provider-main.ts", import.meta.url))],
-    {
-      detached: true,
-      stdio: ["ignore", providerLog, providerLog],
-      env: providerEnv(),
-    },
-  );
-  provider.unref();
-  closeSync(providerLog);
-  writeState({ providerPid: provider.pid, startedAt: new Date().toISOString() });
-  await waitFor("the scripted provider", () => portOpen(PROVIDER_PORT), 10_000);
+    const providerLog = openSync(join(RUN_DIR, "provider.log"), "w");
+    const provider = spawn(
+      process.execPath,
+      [fileURLToPath(new URL("./provider-main.ts", import.meta.url))],
+      {
+        detached: true,
+        stdio: ["ignore", providerLog, providerLog],
+        env: providerEnv(),
+      },
+    );
+    provider.unref();
+    closeSync(providerLog);
+    writeState({ runId, providerPid: provider.pid, startedAt: new Date().toISOString() });
+    await waitFor("the scripted provider", () => portOpen(PROVIDER_PORT), 10_000);
 
-  const gatewayLog = openSync(join(RUN_DIR, "gateway.log"), "w");
-  const gateway = spawnOpenclawDetached(
-    ["gateway", "run", "--port", String(GATEWAY_PORT), "--bind", "loopback"],
-    { stdio: ["ignore", gatewayLog, gatewayLog] },
-  );
-  gateway.unref();
-  closeSync(gatewayLog);
-  writeState({
-    providerPid: provider.pid,
-    gatewayPid: gateway.pid,
-    startedAt: new Date().toISOString(),
-  });
-  await waitFor("the development gateway", gatewayHealthy, 90_000);
+    const gatewayLog = openSync(join(RUN_DIR, "gateway.log"), "w");
+    const gateway = runner.spawnDetached(
+      ["gateway", "run", "--port", String(GATEWAY_PORT), "--bind", "loopback"],
+      { stdio: ["ignore", gatewayLog, gatewayLog] },
+    );
+    gateway.unref();
+    closeSync(gatewayLog);
+    writeState({
+      runId,
+      providerPid: provider.pid,
+      gatewayPid: gateway.pid,
+      startedAt: new Date().toISOString(),
+    });
+    recordGateway(DEV_STATE_DIR, runId, { gatewayPid: gateway.pid!, providerPid: provider.pid! });
+  } finally {
+    // From here on OpenClaw runs only while this start's gateway is alive.
+    runner.freshRunId = null;
+  }
+  await waitFor("the development gateway", () => gatewayHealthy(runner), 90_000);
   await assertExecDenied();
+  const record = readState();
   console.log(`Development gateway ready on ${GATEWAY_URL}`);
-  console.log(`  scripted model  http://127.0.0.1:${PROVIDER_PORT}/v1 (pid ${provider.pid})`);
-  console.log(`  gateway         pid ${gateway.pid}, logs in ${RUN_DIR}`);
+  console.log(
+    `  scripted model  http://127.0.0.1:${PROVIDER_PORT}/v1 (pid ${record?.providerPid})`,
+  );
+  console.log(`  gateway         pid ${record?.gatewayPid}, logs in ${RUN_DIR}`);
+  await seed();
 }
 
 /** Direct children of a process we started, so none outlive it. */
@@ -380,30 +388,42 @@ export async function stop(): Promise<void> {
   rmSync(STATE_FILE, { force: true });
 }
 
+/** Stop, then delete the state folder if it is the tool's own. Foreign state is left alone. */
 export async function reset(): Promise<void> {
-  await stop();
   assertDevStateDir(DEV_STATE_DIR);
-  rmSync(DEV_STATE_DIR, { recursive: true, force: true });
+  const owner = ownership(DEV_STATE_DIR);
+  if (owner === "foreign") throw new ForeignStateError(DEV_STATE_DIR);
+  await stop();
   rmSync(CONNECTION_FILE, { force: true });
-  console.log(`Removed ${DEV_STATE_DIR}`);
+  if (owner === "owned") {
+    rmSync(DEV_STATE_DIR, { recursive: true });
+    console.log(`Removed ${DEV_STATE_DIR}`);
+  }
 }
 
-async function status(): Promise<void> {
-  const state = readState();
-  const connection = readDevConnection();
-  console.log(`state dir   ${DEV_STATE_DIR} ${existsSync(DEV_STATE_DIR) ? "" : "(absent)"}`);
-  console.log(
-    `provider    ${state?.providerPid && isAlive(state.providerPid) ? `running, pid ${state.providerPid}` : "stopped"}`,
+/** Report what is running. OpenClaw is asked only when the guard allows it. */
+export async function status(
+  runner: OpenclawRunner = defaultRunner,
+  log: (line: string) => void = console.log,
+): Promise<void> {
+  const record = readRunRecord(runner.runFile);
+  const connection = readDevConnection(join(dirname(runner.runFile), "connection.json"));
+  const owner = ownership(runner.stateDir);
+  log(`state dir   ${runner.stateDir} (${owner})`);
+  log(
+    `provider    ${record?.providerPid && isAlive(record.providerPid) ? `running, pid ${record.providerPid}` : "stopped"}`,
   );
-  console.log(
-    `gateway     ${state?.gatewayPid && isAlive(state.gatewayPid) ? `running, pid ${state.gatewayPid}` : "stopped"}`,
+  log(
+    `gateway     ${record?.gatewayPid && isAlive(record.gatewayPid) ? `running, pid ${record.gatewayPid}` : "stopped"}`,
   );
-  console.log(`healthy     ${(await gatewayHealthy()) ? "yes" : "no"}`);
-  if (connection) console.log(`url         ${connection.url}`);
+  const refusal = runner.refusal();
+  if (refusal) log(`healthy     no (not checked: ${refusal})`);
+  else log(`healthy     ${(await gatewayHealthy(runner)) ? "yes" : "no"}`);
+  if (connection) log(`url         ${connection.url}`);
 }
 
 async function must(args: string[]): Promise<string> {
-  const result = await openclaw(args);
+  const result = await defaultRunner.run(args);
   if (result.status !== 0) {
     throw new Error(`openclaw --dev ${args.join(" ")} failed:\n${result.stdout}${result.stderr}`);
   }
@@ -556,9 +576,7 @@ async function seedConversations(bot: SeedBot): Promise<void> {
     );
     const problems = checkHistory(history.messages ?? [], task);
     if (problems.length > 0) {
-      const advice = alreadySeeded
-        ? " (left by an earlier seed; run `pnpm dev-gateway reset`)"
-        : "";
+      const advice = alreadySeeded ? " (run `pnpm dev-gateway start` for a fresh gateway)" : "";
       throw new Error(`${bot.name} / ${task.label}: ${problems.join("; ")}${advice}`);
     }
     console.log(
@@ -568,7 +586,8 @@ async function seedConversations(bot: SeedBot): Promise<void> {
 }
 
 export async function seed(): Promise<void> {
-  assertStateDirOwned(DEV_STATE_DIR);
+  const refusal = defaultRunner.refusal();
+  if (refusal) throw new Error(refusal);
   if (!(await gatewayHealthy())) {
     throw new Error("the development gateway is not running. Run `pnpm dev-gateway start` first.");
   }
@@ -587,7 +606,6 @@ export async function seed(): Promise<void> {
 type PendingDevice = { requestId: string; clientId?: string; displayName?: string };
 
 export async function approve(requestId?: string): Promise<string[]> {
-  assertStateDirOwned(DEV_STATE_DIR);
   const listed = parseJsonOutput<{ pending?: PendingDevice[] }>(
     await must(["devices", "list", "--json"]),
   );
@@ -615,8 +633,7 @@ async function main(argv: string[]): Promise<void> {
     case "seed":
       return seed();
     case "up":
-      await start();
-      return seed();
+      return start();
     case "reset":
       return reset();
     case "status":

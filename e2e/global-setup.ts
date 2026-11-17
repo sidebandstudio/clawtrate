@@ -1,6 +1,6 @@
 // Starts what the end-to-end test needs and returns the teardown that stops it:
-// the development gateway (unless one this tool started is already running),
-// the seeded bots, and a preview host with a fresh device identity.
+// a fresh, seeded development gateway (unless one this tool started is already
+// running) and a preview host with a fresh device identity.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -46,10 +46,12 @@ export default async function globalSetup() {
   if (startedGateway) {
     if (await portOpen(19001))
       throw new Error("port 19001 is in use by something this tool did not start");
+    // Every start is a fresh, seeded gateway.
     devGateway("start");
+  } else {
+    // Reusing the gateway this tool is running: seeding verifies what exists.
+    devGateway("seed");
   }
-  // Seeding is idempotent: it creates what is missing and verifies what exists.
-  devGateway("seed");
 
   execFileSync("pnpm", ["--filter", "@clawtrate/desktop", "build:web"], {
     cwd: ROOT,
