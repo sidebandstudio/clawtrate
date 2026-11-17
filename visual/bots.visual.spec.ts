@@ -1,7 +1,7 @@
 // Parity rows for the bots list: pinned tiles, the primary bot, what a row
 // shows, a working bot, hidden bots, the sort order and the manual order.
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
+import { contextFor, openFixture, OTTO_DISK, settle, showList, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 
@@ -22,6 +22,17 @@ const tokenColor = (page: Page, token: string) =>
     probe.style.color = `var(${name})`;
     document.querySelector(".rail")!.append(probe);
     const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  }, token);
+
+/** A colour token used as a fill, resolved the way the browser resolves it. */
+const tokenBackground = (page: Page, token: string) =>
+  page.evaluate((name) => {
+    const probe = document.createElement("span");
+    probe.style.backgroundColor = `var(${name})`;
+    document.querySelector(".rail")!.append(probe);
+    const color = getComputedStyle(probe).backgroundColor;
     probe.remove();
     return color;
   }, token);
@@ -164,7 +175,20 @@ test("F-019: a bot's label is a small grey pill beside its name", async ({ page 
   expect(Math.abs(pill.y + pill.height / 2 - (name.y + name.height / 2))).toBeLessThanOrEqual(1);
   expect(await style(label, "border-radius")).toBe("999px");
   expect(await style(label, "font-size")).toBe("12px");
-  expect(await style(label, "background-color")).not.toBe("rgba(0, 0, 0, 0)");
+  // Grey: the neutral code fill, with muted text, in both themes.
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
+    const fill = await style(label, "background-color");
+    expect(fill).toBe(await tokenBackground(page, "--bg-code"));
+    const [r, g, b, a] = fill.match(/[\d.]+/g)!.map(Number);
+    expect(
+      Math.max(r!, g!, b!) - Math.min(r!, g!, b!),
+      `${theme} fill ${fill} is grey`,
+    ).toBeLessThanOrEqual(2);
+    expect(a).toBeGreaterThan(0);
+    expect(await style(label, "color")).toBe(await tokenColor(page, "--text-muted"));
+  }
+  await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
   // A bot without a label has no pill.
   await page.evaluate(() => {
     (
@@ -179,6 +203,42 @@ test("F-019: a bot's label is a small grey pill beside its name", async ({ page 
     }));
   });
   await expect(pip.locator(".bot-label")).toHaveCount(0);
+});
+
+test("F-019: a short name stays whole beside its label at every rail width; the label gives way first", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+  // Around the rail's narrowing below 900, the drawer widths and one pane.
+  for (const width of [1440, 1240, 1100, 901, 899, 800, 760, 700, 600, 390]) {
+    await page.setViewportSize({ width, height: 800 });
+    await showList(page);
+    await settle(page);
+    const rows = await page.locator(".bot-list .bot").evaluateAll((elements) =>
+      elements.map((element) => {
+        const name = element.querySelector<HTMLElement>(".bot-name")!;
+        const label = element.querySelector<HTMLElement>(".bot-label");
+        return {
+          name: name.textContent!,
+          nameCut: name.scrollWidth > name.clientWidth,
+          labelWidth: label?.getBoundingClientRect().width ?? null,
+          labelCut: label ? label.scrollWidth > label.clientWidth : false,
+          fontSize: label ? parseFloat(getComputedStyle(label).fontSize) : null,
+        };
+      }),
+    );
+    for (const row of rows) {
+      expect(row.labelWidth, `${width}: ${row.name} keeps its label`).not.toBeNull();
+      const long = row.name.startsWith("Quartermaster");
+      // A short name is never cut; a long one is cut only once its label is down to a few letters.
+      if (!long) expect(row.nameCut, `${width}: ${row.name} is whole`).toBe(false);
+      if (row.nameCut) {
+        expect(row.labelWidth!, `${width}: ${row.name}'s label gave way first`).toBeLessThanOrEqual(
+          row.fontSize! * 3.5 + 0.5,
+        );
+      }
+    }
+  }
 });
 
 test("F-020: a working bot's avatar animates, and its row is named <Bot>, working", async ({

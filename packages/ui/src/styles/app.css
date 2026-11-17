@@ -2380,11 +2380,14 @@ textarea {
   background: var(--glyph-ink);
 }
 
-/* A bot's label: a small grey pill beside its name. */
+/* A bot's label: a small grey pill beside its name. The name is the bot's
+   identity, so when the line is short the label gives way first, down to a
+   few letters, and only then is the name cut. */
 .bot-label {
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: 0 100000 auto;
+  min-width: 3.5em;
   max-width: 45%;
+  text-align: center;
   overflow: hidden;
   padding: 0 7px;
   border-radius: var(--radius-pill);
