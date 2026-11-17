@@ -442,7 +442,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         avatar:
           command.avatar === null || command.avatar === undefined
             ? null
-            : shortText(command.avatar, 16_384, "picture"),
+            : shortText(command.avatar, 32_768, "picture"),
         account:
           command.account === null || command.account === undefined
             ? null

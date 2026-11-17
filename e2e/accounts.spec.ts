@@ -220,10 +220,12 @@ test("F-034 F-472: New bot asks for admin access, then creates a bot on the seco
   const created = entry(await config(), "second")!;
   expect(created.model).toEqual({ primary: "acme/dev-1@acme:home", fallbacks: [] });
   expect(String((created.identity as Json | undefined)?.avatar ?? "")).toMatch(
-    /^data:image\/svg\+xml;base64,/,
+    /^data:image\/png;base64,/,
   );
   // The new bot is selected, on its first, empty task, with the composer ready.
   await expect(botRow("Second")).toHaveAttribute("aria-current", "true", { timeout: 20_000 });
+  // Drawn with the picture chosen, which the gateway keeps with the bot.
+  await expect(botRow("Second").locator("img")).toHaveAttribute("src", /^data:image\/png;base64,/);
   const field = page.getByTestId("composer-input");
   await expect(field).toBeVisible({ timeout: 20_000 });
 

@@ -313,7 +313,7 @@ describe("creating a bot", () => {
     const { client, fake, accounts } = await accountsClient();
     const { botId } = await client.createBot({
       name: "Viral",
-      avatar: "data:image/svg+xml;base64,PHN2Zy8+",
+      avatar: "data:image/png;base64,iVBORw0KGgo=",
       account: "acme:home",
       provider: "acme",
       model: "dev-1",
@@ -324,7 +324,7 @@ describe("creating a bot", () => {
       {
         name: "Viral",
         model: "acme/dev-1@acme:home",
-        avatar: "data:image/svg+xml;base64,PHN2Zy8+",
+        avatar: "data:image/png;base64,iVBORw0KGgo=",
       },
     ]);
     const patch = fake.gateway.calls("config.patch").at(-1) as {

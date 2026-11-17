@@ -81,7 +81,7 @@ export class AdminNeededError extends Error {
 
 export type CreateBotInput = {
   name: string;
-  /** A `data:image/svg+xml` picture of the chosen body and colour, or null. */
+  /** A `data:image/png` picture of the chosen body and colour, or null. */
   avatar: string | null;
   /** The account, or null for "Let the gateway choose". */
   account: string | null;
@@ -93,7 +93,7 @@ export type CreateBotInput = {
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** The longest picture New bot sends. */
-export const MAX_CREATE_AVATAR_CHARS = 16_384;
+export const MAX_CREATE_AVATAR_CHARS = 32_768;
 
 export class AccountsEngine {
   /** How each account was made, from Clawtrate's own record of the sign-ins it started. */
@@ -885,7 +885,7 @@ export class AccountsEngine {
       throw new Error("That account belongs to another provider.");
     const avatar =
       input.avatar &&
-      input.avatar.startsWith("data:image/svg+xml") &&
+      input.avatar.startsWith("data:image/png;base64,") &&
       input.avatar.length <= MAX_CREATE_AVATAR_CHARS
         ? input.avatar
         : null;

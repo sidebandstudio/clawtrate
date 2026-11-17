@@ -51,13 +51,32 @@ const freshDraft = (): Draft => ({
 type Kept = { draft: Draft; step: "look" | "account" | "connect" };
 const KEPT = "new-bot";
 
-/** The picture of a drawn character, as a data URL the gateway keeps with the bot. */
-function pictureOf(svg: SVGElement | null | undefined): string | null {
+/** The size of the picture New bot sends: the drawn character, rasterised. */
+const PICTURE_PX = 128;
+
+/**
+ * The picture of a drawn character, as a PNG data URL the gateway keeps with
+ * the bot. A raster, because the app shows only raster pictures from the
+ * gateway (`safeAvatarUrl`). Null when it cannot be drawn: the bot then gets
+ * the character its id gives.
+ */
+async function pictureOf(svg: SVGElement | null | undefined): Promise<string | null> {
   if (!svg) return null;
   let markup = svg.outerHTML;
   if (!markup.includes("xmlns="))
     markup = markup.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
-  return `data:image/svg+xml;base64,${btoa(markup)}`;
+  try {
+    const image = new Image(PICTURE_PX, PICTURE_PX);
+    image.src = `data:image/svg+xml;base64,${btoa(markup)}`;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = PICTURE_PX;
+    canvas.height = PICTURE_PX;
+    canvas.getContext("2d")?.drawImage(image, 0, 0, PICTURE_PX, PICTURE_PX);
+    return canvas.toDataURL("image/png");
+  } catch {
+    return null;
+  }
 }
 
 /** A radio group of one tab stop: arrows move and choose, Home and End go to the ends. */
@@ -177,7 +196,7 @@ export function NewBot({
       const { botId } = await bridge.invoke({
         type: "createBot",
         name: draft.name.trim(),
-        avatar: pictureOf(previewRef.current?.querySelector("svg")),
+        avatar: await pictureOf(previewRef.current?.querySelector("svg")),
         account: draft.account === GATEWAY_CHOICE ? null : draft.account,
         provider,
         model: draft.model,

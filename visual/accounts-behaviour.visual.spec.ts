@@ -140,7 +140,7 @@ test("F-472: Create writes the bot on the account chosen, with its model and eff
     model: "grok-build-0.1",
     effort: null,
   });
-  expect(String(create!.avatar)).toMatch(/^data:image\/svg\+xml;base64,/);
+  expect(String(create!.avatar)).toMatch(/^data:image\/png;base64,/);
   await expect(
     page.getByTestId("bot-list").getByRole("button", { name: /^Viral\b/ }),
   ).toBeVisible();
