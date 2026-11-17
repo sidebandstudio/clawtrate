@@ -403,6 +403,10 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
         const { key, approvalId, decision } = command;
         const card = approval(key, approvalId);
         if (!card || card.status !== "pending") throw new Error("That approval is no longer open.");
+        // As the engine: Deny goes out while another decision is on its way; a second allow does not.
+        if (card.submitting && decision !== "deny") {
+          throw new Error("An answer to that approval is already on its way.");
+        }
         if (decision !== "deny" && card.decisionError === "unknown") {
           throw new Error("Whether the last decision was applied is not known yet.");
         }

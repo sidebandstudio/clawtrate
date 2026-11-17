@@ -361,7 +361,7 @@ function PendingApproval({
       {sending && chosen === "allow-once" ? "Sending…" : allowLabel(view)}
     </button>
   );
-  const alwaysAllow = view.always && sendable.has("allow-always") && (
+  const alwaysAllow = view.always && sendable.has("allow-always") && !sending && (
     <button
       ref={alwaysButton}
       type="button"
