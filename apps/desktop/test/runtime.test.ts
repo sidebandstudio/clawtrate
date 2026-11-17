@@ -219,6 +219,14 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
     refused("gateway gone", provenCheckout("alpha", { gateway: deadProcess() }).read);
     const reused = { pid: liveProcess().pid, identity: "Thu Jan  1 00:00:00 1970" };
     refused("gateway pid reused", provenCheckout("alpha", { gateway: reused }).read);
+    const unknowable = provenCheckout("alpha");
+    refused("gateway alive but its lookup failed", () =>
+      readDevConnection(unknowable.repoRoot, {
+        instance: "alpha",
+        home: unknowable.home,
+        identify: () => ({ state: "unknown", reason: "ps failed" }),
+      }),
+    );
     refused(
       "another checkout's marker",
       provenCheckout("alpha", { checkout: OTHER_CHECKOUT }).read,
