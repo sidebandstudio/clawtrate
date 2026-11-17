@@ -1502,10 +1502,12 @@ test("F-488 F-090: a real run of 42 actions shows all 42, live and after the pag
   test.setTimeout(180_000);
   await openShell(page);
   await openTask(page, "Pip", "Two days in the mountains");
+  // This run's line is one more than the task has now; earlier checks left runs here.
+  const lines = await page.getByTestId("run-line").count();
   await composer(page).fill(`Read it all. ${Array(7).fill("#read-six").join(" ")}`);
   await page.keyboard.press("Enter");
-  const status = page.getByTestId("status-line");
-  await expect(status).toHaveCount(0, { timeout: 120_000 });
+  await expect(page.getByTestId("run-line")).toHaveCount(lines + 1, { timeout: 120_000 });
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 120_000 });
   const run = page.getByTestId("run-line").last();
   await expect(run.locator("summary")).toHaveAccessibleName(/^Worked for \d+s · 42 actions$/);
   /** The reads after the last message of this check, counted through their folds. */
