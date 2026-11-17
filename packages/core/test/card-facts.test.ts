@@ -49,7 +49,6 @@ const event = (
 };
 
 const MCP: CardOptions = {
-  codingServers: ["coder"],
   mcpTools: { coder__send_message: { server: "coder", tool: "send_message" } },
 };
 const rawOf = (step: Step) => step.raw ?? raw.get(KEY, step.id);

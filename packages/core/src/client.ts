@@ -55,6 +55,7 @@ import {
 import {
   interSessionMessages,
   linkedRunOf,
+  mcpToolMap,
   recipientLinks,
   recipientRunIds,
   type LinkedRun,
@@ -90,6 +91,10 @@ import {
   applyChatEvent,
   applyQuestionRequested,
   applyQuestionResolved,
+  foreignQuestionRequested,
+  foreignQuestionResolved,
+  questionMarkers,
+  runsWithQuestionMarkers,
   bindRun,
   cancelQueuedRun,
   dropUnboundRun,
@@ -150,6 +155,7 @@ import {
   MAX_CREATIONS,
   MAX_ID_CHARS,
   MAX_LINKED_RUNS,
+  MAX_MCP_TOOLS,
   MAX_LISTED_TASKS,
   MAX_MESSAGE_JSON_CHARS,
   MAX_OUTBOX,
@@ -702,6 +708,8 @@ export class ClawtrateClient {
   /** Per task and list (`<key>\0<kind>`): the last list requested, and the newest applied. */
   private readonly listRequested = new Map<string, number>();
   private readonly listApplied = new Map<string, number>();
+  /** Per task: its `tools.effective` read in flight, and whether another was asked for meanwhile. */
+  private readonly toolReads = new Map<string, { again: boolean }>();
   /** Whole reads from history in flight (`MAX_FULL_READS`). */
   private fullReads = 0;
   /**
@@ -827,7 +835,7 @@ export class ClawtrateClient {
     const kept = this.retained.delete(key);
     if (!kept || !this.incarnations.has(key))
       this.incarnations.set(key, (this.nextIncarnation += 1));
-    this.setTranscript(key, (current) => current ?? this.emptyTranscript(key));
+    this.setTranscript(key, (current) => current ?? this.openedTranscript(key));
     // An approval waiting for a task that can show it may belong here now.
     this.routeUnrouted();
     if (this.state.connection.status === "connected") void this.loadTranscript(key, !kept, null);
@@ -895,6 +903,7 @@ export class ClawtrateClient {
       for (const listKey of [...map.keys()])
         if (listKey.startsWith(`${key}\u0000`)) map.delete(listKey);
     }
+    this.toolReads.delete(key);
     if (this.state.connection.status === "connected") {
       this.request("sessions.messages.unsubscribe", { key }).catch(() => {});
     }
@@ -2707,6 +2716,56 @@ export class ClawtrateClient {
     return undefined;
   }
 
+  /**
+   * Read the gateway's current map from tool-server tools' effective names to
+   * their servers and tools for a task (`tools.effective`, `operator.read`),
+   * after its history loads and whenever the gateway reports its plugins
+   * changed. Evidence for a call before its result only; a failed read keeps
+   * the map there was. One read of a task at a time: one asked for while it
+   * is in flight is made once it has answered, so a newer answer is always the
+   * one applied last.
+   */
+  private async readToolMap(key: string, generation: number): Promise<void> {
+    const running = this.toolReads.get(key);
+    if (running) {
+      running.again = true;
+      return;
+    }
+    const read = { again: false };
+    this.toolReads.set(key, read);
+    try {
+      do {
+        read.again = false;
+        await this.readToolMapOnce(key, generation);
+      } while (read.again && generation === this.generation && this.tracked(key));
+    } finally {
+      if (this.toolReads.get(key) === read) this.toolReads.delete(key);
+    }
+  }
+
+  private async readToolMapOnce(key: string, generation: number): Promise<void> {
+    const incarnation = this.incarnations.get(key);
+    let answer: unknown;
+    try {
+      answer = await this.request("tools.effective", { sessionKey: key });
+    } catch (error) {
+      if (generation === this.generation)
+        this.log("warn", `tools.effective failed: ${errorMessage(error)}`);
+      return;
+    }
+    if (
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation
+    ) {
+      return;
+    }
+    const map = mcpToolMap(answer, MAX_MCP_TOOLS);
+    const current = this.state.transcripts[key];
+    if (!current || JSON.stringify(current.mcpTools) === JSON.stringify(map)) return;
+    this.setTranscript(key, () => ({ ...this.state.transcripts[key]!, mcpTools: map }));
+  }
+
   /** Copy the state of every recipient run a task's `sessions_send` results name, where it is known. */
   private refreshLinkedRuns(key: string): void {
     const transcript = this.state.transcripts[key];
@@ -2922,11 +2981,13 @@ export class ClawtrateClient {
       !this.tracked(key) ||
       this.incarnations.get(key) !== incarnation ||
       (this.listApplied.get(listKey) ?? 0) > revision;
-    const pendingBefore = new Set(
-      (this.state.transcripts[key]?.questions ?? [])
+    const before = this.state.transcripts[key];
+    const pendingBefore = new Set([
+      ...(before?.questions ?? [])
         .filter((question) => question.status === "pending")
         .map((question) => question.id),
-    );
+      ...(before ? questionMarkers(before) : []),
+    ]);
     try {
       const result = asRecord(await this.request("question.list", {}));
       if (stale()) return;
@@ -3598,6 +3659,7 @@ export class ClawtrateClient {
     this.foreign.clear();
     this.listRequested.clear();
     this.listApplied.clear();
+    this.toolReads.clear();
     this.approvalReads.clear();
     for (const { bytes } of this.attachmentContent.values()) this.attachmentBytes -= bytes;
     this.attachmentContent.clear();
@@ -3959,6 +4021,25 @@ export class ClawtrateClient {
 
   // Transcripts ----------------------------------------------------------------
 
+  /**
+   * A task opened now. What the engine already knows of its runs, from
+   * following them while nobody had the task open (a recipient's run, and the
+   * question it waits on, by id), is its from the first moment: an outgoing
+   * message is held behind that question at once, and the history read and the
+   * question list settle it by the same rules as any other.
+   */
+  private openedTranscript(key: string): Transcript {
+    const sessionKey = capId(key, MAX_ID_CHARS);
+    const known = this.foreign.get(sessionKey);
+    const empty = this.emptyTranscript(key);
+    // Only a run known to wait on a question is carried; history rebuilds every other run.
+    const waiting = known ? runsWithQuestionMarkers(known) : [];
+    if (waiting.length === 0) return empty;
+    // The task holds them now, so they are not kept twice.
+    this.foreign.delete(sessionKey);
+    return { ...empty, runs: waiting };
+  }
+
   private emptyTranscript(key: string): Transcript {
     return {
       ...emptyActivity,
@@ -3970,6 +4051,7 @@ export class ClawtrateClient {
       live: null,
       linkedRuns: {},
       interSession: [],
+      mcpTools: {},
       loadedAt: null,
     };
   }
@@ -4113,6 +4195,7 @@ export class ClawtrateClient {
       this.afterActivity(key);
       void this.backfillQuestions(key, generation);
       void this.backfillApprovals(key, generation);
+      void this.readToolMap(key, generation);
     } catch (error) {
       if (stale()) return;
       this.setTranscript(key, (current) => ({
@@ -4199,6 +4282,12 @@ export class ClawtrateClient {
       case "sessions.changed":
         this.handleSessionsChanged(event.payload, generation);
         return;
+      case "plugins.changed":
+        // Tool-server tools come from the gateway's bundle-mcp plugin: read each task's map again.
+        for (const key of Object.keys(this.state.transcripts)) {
+          if (this.tracked(key)) void this.readToolMap(key, generation);
+        }
+        return;
       case "session.message": {
         const key = asRecord(event.payload)?.sessionKey;
         if (typeof key === "string" && this.tracked(key)) this.scheduleHistory(key);
@@ -4216,6 +4305,16 @@ export class ClawtrateClient {
         if (record && key && this.tracked(key)) {
           this.updateActivity(key, (activity, ctx) =>
             applyQuestionRequested(activity, record, ctx),
+          );
+        } else if (
+          record &&
+          key &&
+          typeof record.runId === "string" &&
+          this.foreign.get(capId(key, MAX_ID_CHARS))?.runs.some((run) => run.id === record.runId)
+        ) {
+          // A recipient's run this client follows asks its own user: it waits.
+          this.updateForeign(key, (activity, ctx) =>
+            foreignQuestionRequested(activity, record, ctx),
           );
         }
         return;
@@ -4250,6 +4349,10 @@ export class ClawtrateClient {
         const payload = asRecord(event.payload);
         const id = payload?.id;
         if (!payload || typeof id !== "string") return;
+        for (const [key, activity] of [...this.foreign.entries()]) {
+          if (activity.runs.some((run) => run.pendingCards.some((card) => card.id === id)))
+            this.updateForeign(key, (each) => foreignQuestionResolved(each, payload));
+        }
         for (const transcript of Object.values(this.state.transcripts)) {
           if (transcript.questions.some((question) => question.id === id)) {
             this.updateActivity(transcript.sessionKey, (activity) =>
@@ -4257,6 +4360,11 @@ export class ClawtrateClient {
                 via: "question.resolved",
                 record: event.payload,
               }),
+            );
+          } else if (questionMarkers(transcript).includes(id)) {
+            // Known only by its id, from before the task was opened: its run goes on.
+            this.updateActivity(transcript.sessionKey, (activity) =>
+              foreignQuestionResolved(activity, payload),
             );
           }
         }

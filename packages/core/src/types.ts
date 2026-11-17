@@ -2,7 +2,7 @@
 // mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
 
 import type { ApprovalCard } from "./approvals.ts";
-import type { InterSessionMessage, LinkedRun } from "./cards.ts";
+import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
 
 export type ConnectionStatus =
@@ -195,6 +195,14 @@ export type Transcript = TaskActivity & {
   linkedRuns: Record<string, LinkedRun>;
   /** Messages from other sessions in this task's history (inter-session provenance). */
   interSession: InterSessionMessage[];
+  /**
+   * The gateway's current map from a tool-server tool's effective name to its
+   * server and tool, as `tools.effective` reports it for this task. Evidence
+   * of a call's tool before its result only: the gateway rebuilds it from the
+   * current catalog, which need not be the one a running attempt captured, and
+   * a result's own `details` overrule it.
+   */
+  mcpTools: Record<string, McpToolIdentity>;
   /** Paths of fields cut to their bound that no item beneath records itself. */
   cut?: string[];
   /** Epoch ms of the latest successful history load. */
