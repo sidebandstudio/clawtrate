@@ -143,6 +143,32 @@ async function reload(on: Page): Promise<void> {
   await expect(on.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
 }
 
+/**
+ * Ask the page's host to read the gateway's bots and tasks again (the bridge's
+ * `retry`, which reloads them while connected): the host lists bots when it
+ * connects, and a reload of the page keeps that connection.
+ */
+async function rereadBots(on: Page): Promise<void> {
+  await on.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const socket = new WebSocket(`ws://${location.host}/bridge`);
+        socket.onmessage = (event) => {
+          const message = JSON.parse(String(event.data)) as { type: string; id?: string };
+          if (message.type === "hello")
+            socket.send(
+              JSON.stringify({ type: "command", id: "reread", command: { type: "retry" } }),
+            );
+          else if (message.id === "reread") {
+            socket.close();
+            resolve();
+          }
+        };
+        socket.onerror = () => reject(new Error("bridge socket error"));
+      }),
+  );
+}
+
 async function shot(on: Page, name: string): Promise<void> {
   if (!SHOTS) return;
   await on.screenshot({ path: join(SHOTS, `${name}.png`) });
@@ -518,7 +544,7 @@ test("F-424: the gateway keeps a bot's main session unarchived; a bot without on
       label: `Only task ${STAMP}`,
     });
     made.add(only.key);
-    await page.reload();
+    await rereadBots(page);
     await expect(page.getByTestId("bot")).toHaveCount(5, { timeout: 60_000 });
     const scout = botRow(page, name).first();
     await expect(scout).toHaveAccessibleName(new RegExp(`^${name}, 1 task`), { timeout: 20_000 });
@@ -548,7 +574,7 @@ test("F-424: the gateway keeps a bot's main session unarchived; a bot without on
         { timeout: 60_000, intervals: [1000] },
       )
       .toBe(false);
-    await page.reload();
+    await rereadBots(page);
     await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 60_000 });
   }
 });
