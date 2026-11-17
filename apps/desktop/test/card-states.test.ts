@@ -2,7 +2,11 @@
 // scene is built by the engine's reducers from gateway-shaped events, and the
 // card's words come from the same selection and wording the interface uses.
 import {
+  applyAgentEvent,
+  emptyActivity,
   initialState,
+  RawTable,
+  type TaskActivity,
   type ApprovalCard,
   type ClawtrateState,
   type QuestionCard,
@@ -438,5 +442,143 @@ describe("every card scene", () => {
       expect(transcript.status, name).toBe("ready");
       expect([CARD_TASK, RECEIVING_TASK]).toContain(transcript.sessionKey);
     }
+  });
+});
+
+describe("cards follow the gateway's identifiers, forward only", () => {
+  const KEY = "agent:otto:order";
+  const raw = new RawTable();
+  let seq = 0;
+  const event = (activity: TaskActivity, data: Record<string, unknown>, runId = "run-o") => {
+    seq += 1;
+    return applyAgentEvent(
+      activity,
+      { runId, seq, stream: "tool", ts: 1_000 + seq, sessionKey: KEY, data },
+      { sessionKey: KEY, now: 5_000, raw },
+    ).activity;
+  };
+  const start = (activity: TaskActivity, name: string, id: string, message: string) =>
+    event(activity, {
+      phase: "start",
+      name,
+      toolCallId: id,
+      args: { message, sessionKey: "agent:marlow:main" },
+    });
+  const result = (
+    activity: TaskActivity,
+    name: string,
+    id: string,
+    details: Record<string, unknown>,
+  ) =>
+    event(activity, {
+      phase: "result",
+      name,
+      toolCallId: id,
+      isError: false,
+      result: { content: [{ type: "text", text: "ok" }], details },
+    });
+  const select = (
+    activity: TaskActivity,
+    previous?: ReturnType<typeof selectCards>,
+    linkedRuns = {},
+  ) =>
+    selectCards(
+      { runs: activity.runs, approvals: [], linkedRuns, interSession: [] },
+      [T3_SERVER],
+      rawOf,
+      previous,
+    );
+
+  it("F-443 F-441: two simultaneous calls whose results arrive in the opposite order each land on the card their identifiers name", () => {
+    let a = start(emptyActivity, "t3code__send_message", "c1", "First change");
+    a = start(a, "t3code__send_message", "c2", "Second change");
+    a = event(a, {
+      phase: "result",
+      name: "t3code__send_message",
+      toolCallId: "c2",
+      isError: true,
+      result: {
+        content: [{ type: "text", text: "second failed" }],
+        details: { mcpServer: T3_SERVER, mcpTool: "send_message" },
+      },
+    });
+    a = result(a, "t3code__send_message", "c1", { mcpServer: T3_SERVER, mcpTool: "send_message" });
+    const calls = select(a).mcpCalls;
+    expect(calls.map((card) => [card.text, card.state, card.error])).toEqual([
+      ["First change", "returned", null],
+      ["Second change", "failed", "second failed"],
+    ]);
+  });
+
+  it("F-313: a later call with its own identifier never changes an earlier card; nothing is matched by project or thread", () => {
+    let a = start(emptyActivity, "t3code__send_message", "c1", "Fix the check");
+    a = result(a, "t3code__send_message", "c1", {
+      mcpServer: T3_SERVER,
+      mcpTool: "send_message",
+      structuredContent: { threadId: 18 },
+    });
+    const before = select(a);
+    a = start(a, "t3code__check_thread", "c3", "How is thread 18 going?");
+    a = event(a, {
+      phase: "result",
+      name: "t3code__check_thread",
+      toolCallId: "c3",
+      isError: true,
+      result: {
+        content: [{ type: "text", text: "thread 18 failed" }],
+        details: {
+          mcpServer: T3_SERVER,
+          mcpTool: "check_thread",
+          structuredContent: { threadId: 18 },
+        },
+      },
+    });
+    const after = select(a, before).mcpCalls;
+    expect(after.find((card) => card.toolCallId === "c1")).toMatchObject({
+      state: "returned",
+      error: null,
+    });
+    expect(after.find((card) => card.toolCallId === "c3")).toMatchObject({ state: "failed" });
+  });
+
+  it("F-435: a send result that arrives after the recipient's run started never moves the card back to Sent, and a final state never changes", () => {
+    let a = start(emptyActivity, "sessions_send", "m1", "Write the entry");
+    a = result(a, "sessions_send", "m1", {
+      status: "accepted",
+      runId: "run-r",
+      sessionKey: "agent:marlow:main",
+    });
+    const running = {
+      "run-r": {
+        id: "run-r",
+        sessionKey: "agent:marlow:main",
+        state: "running" as const,
+        outcomeKnown: true,
+        startedAt: 1,
+        endedAt: null,
+      },
+    };
+    const working = select(a, undefined, running);
+    expect(botMessageKey(working.botMessages[0]!)).toBe("working");
+    // The recipient's run is no longer known here: the card does not fall back to Sent.
+    const later = select(a, working, {});
+    expect(botMessageKey(later.botMessages[0]!)).toBe("working");
+    // The same call, as a connection that saw its result carry the reply reads it.
+    const withReply = result(
+      start(emptyActivity, "sessions_send", "m1", "Write the entry"),
+      "sessions_send",
+      "m1",
+      {
+        status: "ok",
+        runId: "run-r",
+        sessionKey: "agent:marlow:main",
+        reply: "Done.",
+      },
+    );
+    const replied = withReply;
+    const final = select(replied, later, running);
+    expect(botMessageKey(final.botMessages[0]!)).toBe("replied");
+    const failedAfter = { "run-r": { ...running["run-r"], state: "failed" as const, endedAt: 2 } };
+    expect(botMessageKey(select(replied, final, failedAfter).botMessages[0]!)).toBe("replied");
   });
 });
