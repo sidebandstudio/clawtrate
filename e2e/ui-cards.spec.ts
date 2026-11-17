@@ -11,8 +11,9 @@
 // a paired test client with the official gateway client, as the scenario check
 // sends them. Decisions and answers are made by clicking the cards.
 //
-// It runs after the scenario check: its "Always allow" adds a rule to Otto's
-// allowlist that the check's own `#approve` must not find.
+// The commands it asks approval for (`sleep 2`, 3, 4 and 6) are its own: the
+// scenario check saves an "Always allow" rule for `ls` and uses `sleep 1` and
+// `sleep 5`, and this spec saves one for `sleep 6`.
 import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -282,13 +283,13 @@ test.describe("tasks this app creates", () => {
 
 test.describe("approval cards on a real gateway", () => {
   test("F-163 F-170: a command that needs approval, allowed once: the card, the decision, Raw, and after reading history again", async () => {
-    const { title } = await hostTask("otto", "Approve once", "run a command I can approve");
+    const { title } = await hostTask("otto", "Approve once", "#sleep 2");
     await openTask(page, "Otto", title);
     const approval = card(page, "approval-card");
     await expect(approval).toHaveCount(1, { timeout: 30_000 });
     await expect(approval.locator(".request-title")).toHaveText("Otto wants to run a command");
     await expect(approval.locator(".tag")).toHaveText("Needs approval");
-    await expect(approval).toContainText("Run ls on the gateway's machine.");
+    await expect(approval).toContainText("Run sleep 2 on the gateway's machine.");
     for (const name of ["Allow once", "Always allow…", "Deny"]) {
       await expect(approval.getByRole("button", { name })).toBeVisible();
     }
@@ -296,12 +297,12 @@ test.describe("approval cards on a real gateway", () => {
     await shot(approval, "approval-pending");
     // On a read-only connection the gateway sends no pending approvals: none is shown.
     await openTask(reader, "Otto", title);
-    await expect(transcript(reader)).toContainText("run a command I can approve");
+    await expect(transcript(reader)).toContainText("#sleep 2");
     await expect(card(reader, "approval-card")).toHaveCount(0);
 
     await approval.getByRole("button", { name: "Allow once" }).click();
     await expect(approval.locator(".tag")).toHaveText("Allowed once", { timeout: 30_000 });
-    await expect(transcript(page)).toContainText("The command ran once you approved it", {
+    await expect(transcript(page)).toContainText("The slow command finished.", {
       timeout: 30_000,
     });
     await approval.locator("summary").first().click();
@@ -318,13 +319,13 @@ test.describe("approval cards on a real gateway", () => {
     // The page reloaded: the host let the task go and reads it again from history, which
     // keeps no approval record; the gateway lists only pending requests.
     await reload(page, "Otto", title);
-    await expect(transcript(page)).toContainText("The command ran once you approved it");
+    await expect(transcript(page)).toContainText("The slow command finished.");
     await expect(card(page, "approval-card")).toHaveCount(0);
-    later.push({ bot: "Otto", title, reply: "The command ran once you approved it" });
+    later.push({ bot: "Otto", title, reply: "The slow command finished." });
   });
 
   test("F-163 F-165: denied: the card says the command was not run", async () => {
-    const { title } = await hostTask("otto", "Approve deny", "run a command I can approve");
+    const { title } = await hostTask("otto", "Approve deny", "#sleep 3");
     await openTask(page, "Otto", title);
     const approval = card(page, "approval-card");
     await expect(approval).toHaveCount(1, { timeout: 30_000 });
@@ -352,11 +353,7 @@ test.describe("approval cards on a real gateway", () => {
   });
 
   test("F-163 F-168: resolved by another client: the card shows how it ended and offers nothing", async () => {
-    const { title, key } = await hostTask(
-      "otto",
-      "Approve elsewhere",
-      "run a command I can approve",
-    );
+    const { title, key } = await hostTask("otto", "Approve elsewhere", "#sleep 4");
     await openTask(page, "Otto", title);
     const approval = card(page, "approval-card");
     await expect(approval).toHaveCount(1, { timeout: 30_000 });
@@ -369,21 +366,23 @@ test.describe("approval cards on a real gateway", () => {
   });
 
   test("F-167: allowed always: the form, the saved rule, and the same command no longer asking", async () => {
-    const { title } = await hostTask("otto", "Approve always", "run a command I can approve");
+    const { title } = await hostTask("otto", "Approve always", "#sleep 6");
     await openTask(page, "Otto", title);
     const approval = card(page, "approval-card");
     await expect(approval).toHaveCount(1, { timeout: 30_000 });
     await approval.getByRole("button", { name: "Always allow…" }).click();
     const form = approval.getByRole("group", { name: "Always allow" });
-    await expect(form.locator("dd").first()).toHaveText("ls");
+    await expect(form.locator("dd").first()).toHaveText("sleep 6");
     await shot(approval, "approval-always-form");
     await form.getByRole("button", { name: "Allow and save" }).click();
     await expect(approval.locator(".tag")).toHaveText("Always allowed", { timeout: 30_000 });
     await shot(approval, "approval-always-allowed");
     // The gateway keeps the rule: the same command in Otto's workspace runs without asking.
-    const again = await hostTask("otto", "Approve saved", "run a command I can approve");
+    const again = await hostTask("otto", "Approve saved", "#sleep 6");
     await openTask(page, "Otto", again.title);
-    await expect(transcript(page)).toContainText("The command ran", { timeout: 30_000 });
+    await expect(transcript(page)).toContainText("The slow command finished.", {
+      timeout: 30_000,
+    });
     await expect(card(page, "approval-card")).toHaveCount(0);
   });
 });
