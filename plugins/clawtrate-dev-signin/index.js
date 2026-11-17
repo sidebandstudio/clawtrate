@@ -108,13 +108,30 @@ function signinBase(api) {
   return url.href.replace(/\/$/, "");
 }
 
+/**
+ * One request to the scripted sign-in. The address is checked as loopback
+ * when the request is made, and a redirect is never followed: it ends the
+ * sign-in as a failure, so nothing the plugin sends can reach another address.
+ */
 async function call(api, path, body, signal) {
-  const response = await fetch(`${signinBase(api)}${path}`, {
+  const url = new URL(`${signinBase(api)}${path}`);
+  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1") {
+    throw new Error(
+      `${LABEL} sign-in failed: ${url.origin} is not the scripted model on 127.0.0.1`,
+    );
+  }
+  const response = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
     signal,
+    redirect: "manual",
   });
+  if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+    throw new Error(
+      `${LABEL} sign-in failed: the scripted sign-in answered with a redirect, which this plugin never follows`,
+    );
+  }
   const answer = await response.json();
   if (!response.ok) {
     throw new Error(answer?.error?.message ?? `scripted sign-in answered ${response.status}`);

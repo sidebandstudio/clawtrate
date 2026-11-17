@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer, type Server } from "node:http";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CHECKOUT_DIR } from "../src/env.ts";
@@ -192,6 +193,75 @@ describe("the sign-in plugin outside a development instance", () => {
         method.id,
       ).rejects.toThrow(/clawtrate-dev-signin refuses to sign in: .*has no readable marker/);
     }
+    expect(fetched).not.toHaveBeenCalled();
+    fetched.mockRestore();
+  });
+});
+
+describe("the sign-in plugin's requests", () => {
+  const servers: Server[] = [];
+  afterEach(async () => {
+    for (const server of servers.splice(0)) await new Promise((done) => server.close(done));
+  });
+
+  /** A loopback server; returns its address and the bodies it received. */
+  async function serve(
+    answer: (body: string) => { status: number; headers?: Record<string, string>; body?: string },
+  ) {
+    const received: string[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk: Buffer) => (body += chunk.toString("utf8")));
+      req.on("end", () => {
+        received.push(body);
+        const reply = answer(body);
+        res.writeHead(reply.status, { "content-type": "application/json", ...reply.headers });
+        res.end(reply.body ?? "{}");
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    const address = server.address();
+    return {
+      url: `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`,
+      received,
+    };
+  }
+
+  async function registered(signinUrl: string) {
+    const { copy } = instance();
+    const gateway = api(signinUrl);
+    (await load(copy)).register(gateway);
+    const method = (id: string) => gateway.providers[0]!.auth.find((m) => m.id === id)!;
+    return { gateway, method };
+  }
+
+  it("never follows a redirect: the sign-in fails and the key goes nowhere else", async () => {
+    // Both ends on loopback, so nothing leaves the machine even if it were followed.
+    const elsewhere = await serve(() => ({
+      status: 200,
+      body: JSON.stringify({ status: "approved", account: "acme:caught" }),
+    }));
+    const scripted = await serve(() => ({
+      status: 307,
+      headers: { location: `${elsewhere.url}/capture` },
+    }));
+    const { method } = await registered(`${scripted.url}/scripted/signin`);
+    const key = "clawtrate-dev-key.acme.review";
+    await expect(method("api-key").run({ prompter: { text: async () => key } })).rejects.toThrow(
+      /answered with a redirect, which this plugin never follows/,
+    );
+    expect(scripted.received).toHaveLength(1);
+    expect(elsewhere.received).toEqual([]);
+  });
+
+  it("checks the address as loopback when each request is made, not only at registration", async () => {
+    const { gateway, method } = await registered("http://127.0.0.1:9/scripted/signin");
+    gateway.pluginConfig.signinUrl = "http://192.0.2.1/scripted/signin";
+    const fetched = vi.spyOn(globalThis, "fetch");
+    await expect(
+      method("api-key").run({ prompter: { text: async () => "clawtrate-dev-key.acme.x" } }),
+    ).rejects.toThrow(/must be the scripted model on 127\.0\.0\.1/);
     expect(fetched).not.toHaveBeenCalled();
     fetched.mockRestore();
   });
