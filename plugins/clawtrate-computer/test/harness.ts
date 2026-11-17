@@ -229,6 +229,8 @@ export function load(
     timeouts?: { discoveryMs: number; connectMs: number; commandMs: number };
     renewTimeoutMs?: number;
     ticketTtlMs?: number;
+    quietWindowMs?: number;
+    quietTimeoutMs?: number;
   } = {},
 ) {
   const browser = options.browser ?? new FakeBrowser();
@@ -257,6 +259,9 @@ export function load(
     timeouts: options.timeouts ?? { discoveryMs: 300, connectMs: 300, commandMs: 300 },
     ticketTtlMs: options.ticketTtlMs,
     env: {},
+    // Short, so a take is quick; quiet.test.ts sets its own.
+    quietWindowMs: options.quietWindowMs ?? 20,
+    quietTimeoutMs: options.quietTimeoutMs,
     renewTimeoutMs: options.renewTimeoutMs,
     fetchImpl: browser.fetchImpl,
     WebSocketImpl: browser.WebSocketImpl,

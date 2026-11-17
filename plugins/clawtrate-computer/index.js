@@ -53,6 +53,22 @@ export const STATE_KEY = Symbol.for("clawtrate-computer.state.v1");
 export const STREAM_PATH = `/${PLUGIN_ID}/stream`;
 /** How long a view ticket can be used. A late or unused ticket is harmless. */
 export const TICKET_TTL_MS = 60_000;
+/**
+ * A take is granted only once the tab has stayed quiet this long after the
+ * plugin stopped whatever it was loading, and is refused if that does not
+ * happen within QUIET_TIMEOUT_MS.
+ */
+export const QUIET_WINDOW_MS = 500;
+export const QUIET_TIMEOUT_MS = 5000;
+/** Events that mean a frame of the tab started, or committed, a navigation. */
+const NAVIGATION_EVENTS = new Set([
+  "Page.frameStartedLoading",
+  "Page.frameStartedNavigating",
+  "Page.frameRequestedNavigation",
+  "Page.frameScheduledNavigation",
+  "Page.frameNavigated",
+  "Page.navigatedWithinDocument",
+]);
 /** The longest a release, expiry or shutdown waits for queued input to settle. */
 const SETTLE_CAP_MS = 1000;
 const MAX_STREAMS = 64;
@@ -178,6 +194,8 @@ export function createComputer(api, options = {}) {
   // Tests may use shorter times than the config's bounds allow.
   const drainTimeoutMs = options.drainTimeoutMs ?? config.drainTimeoutMs;
   const renewTimeoutMs = options.renewTimeoutMs ?? config.renewTimeoutMs;
+  const quietWindowMs = options.quietWindowMs ?? QUIET_WINDOW_MS;
+  const quietTimeoutMs = options.quietTimeoutMs ?? QUIET_TIMEOUT_MS;
   const logger = api.logger ?? {};
   const warn = (message) => logger.warn?.(`${PLUGIN_ID}: ${message}`);
   const registration = Symbol("registration");
@@ -268,6 +286,53 @@ export function createComputer(api, options = {}) {
     lease.expiry = unref(
       setTimeout(() => void endLease(lease, "expired", "not-renewed"), renewTimeoutMs),
     );
+  }
+
+  /**
+   * Bring the lease's tab to rest before it is granted. A finished tool
+   * result, an aborted call or a stopped run is not proof that the browser is
+   * quiet: the gateway's own browser work (a navigation, say) can go on after
+   * all three. So the plugin stops loading at the browser itself, turns on
+   * the tab's page events, stops again, and watches: any navigation starting
+   * or committing within the quiet window is stopped again and the window
+   * starts over. True once a whole window passes quietly; false at the
+   * deadline, when a command fails or is not answered, or when the lease
+   * ends.
+   */
+  async function quiesce(lease) {
+    const { cdp } = lease;
+    const { signal } = lease.abort;
+    let activity = 0;
+    const off = cdp.on((message) => {
+      if (NAVIGATION_EVENTS.has(message.method)) {
+        activity += 1;
+        changed();
+      }
+    });
+    const deadline = Date.now() + quietTimeoutMs;
+    try {
+      // Stopped first: Chromium answers Page.enable on a new connection only
+      // once a pending navigation has committed, but answers a stop at once
+      // and cancels that navigation.
+      await cdp.send("Page.stopLoading", {}, { signal });
+      await cdp.send("Page.enable", {}, { signal });
+      for (;;) {
+        const seen = activity;
+        await cdp.send("Page.stopLoading", {}, { signal });
+        if (Date.now() + quietWindowMs > deadline) return false;
+        const disturbed = await waitUntil(
+          () => activity !== seen || lease.ending,
+          quietWindowMs,
+          signal,
+        );
+        if (lease.ending || signal.aborted) return false;
+        if (!disturbed) return true;
+      }
+    } catch {
+      return false;
+    } finally {
+      off();
+    }
   }
 
   /** Run `fn` after everything already queued on this lease (input, release, expiry). */
@@ -703,6 +768,24 @@ export function createComputer(api, options = {}) {
     lease.cdp.onClose(() => void endLease(lease, "tab-closed", "target-closed"));
     if (lease.ending)
       refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
+    const quiet = await quiesce(lease);
+    if (lease.ending)
+      refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
+    if (!quiet) {
+      if (!stillCurrent(caller, lease.retained)) {
+        await endLease(lease, "revoked", "access-revoked");
+        accessEnded();
+      }
+      // Never granted while the tab may still be loading what the bot started.
+      await endLease(lease, "busy", "browser-not-quiet");
+      opts.respond(true, {
+        state: "busy",
+        reason: "the bot's browser is still loading a page",
+        runningCalls: runningCalls(bot.profile),
+        generation: lease.generation,
+      });
+      return;
+    }
     // Connecting waited: the grant goes out only while the access still holds.
     if (!stillCurrent(caller, lease.retained)) {
       await endLease(lease, "revoked", "access-revoked");

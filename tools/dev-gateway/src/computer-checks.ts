@@ -10,7 +10,7 @@
 
 import type { OperatorSession, GatewayEvent } from "./operator.ts";
 import { OTHER_LOOPBACK, OUTSIDE_ADDRESS } from "./scenarios.ts";
-import { PAGES_RECORD_PATH, REFUSED_TITLE, type Refusal } from "./scripted-pages.ts";
+import { PAGES_RECORD_PATH, REFUSED_TITLE, SLOW_PAGE_MS, type Refusal } from "./scripted-pages.ts";
 
 type JsonRecord = Record<string, unknown>;
 const rec = (value: unknown): JsonRecord =>
@@ -230,6 +230,43 @@ const withTimeout = <T>(promise: Promise<T>, ms: number, what: string): Promise<
       ),
     ),
   ]);
+
+/**
+ * The check's own connection to one tab of a bot's browser, through its
+ * debugging port on loopback, recording when each frame starts loading and
+ * commits a navigation. It sends nothing to the page but `Page.enable`.
+ */
+async function watchTab(cdpPort: number, targetId: string) {
+  const list = (await (
+    await fetch(`http://127.0.0.1:${cdpPort}/json/list`, { signal: AbortSignal.timeout(10_000) })
+  ).json()) as JsonRecord[];
+  const target = list.find((t) => t.id === targetId);
+  expect(target, `the bot's browser does not list tab ${targetId}`);
+  const url = String(target.webSocketDebuggerUrl);
+  expect(
+    url === `ws://127.0.0.1:${cdpPort}/devtools/page/${targetId}`,
+    `unexpected debugger URL ${url}`,
+  );
+  const socket = new WebSocket(url);
+  const seen: { at: number; method: string; url: string }[] = [];
+  socket.addEventListener("message", (event) => {
+    const message = rec(JSON.parse(String(event.data)));
+    const method = String(message.method ?? "");
+    if (["Page.frameStartedLoading", "Page.frameNavigated"].includes(method)) {
+      seen.push({ at: Date.now(), method, url: String(rec(rec(message.params).frame).url ?? "") });
+    }
+  });
+  await withTimeout(
+    new Promise<void>((resolve, reject) => {
+      socket.addEventListener("open", () => resolve(), { once: true });
+      socket.addEventListener("error", () => reject(new ComputerCheckFailure("no CDP connection")));
+    }),
+    10_000,
+    "the check's connection to the tab",
+  );
+  socket.send(JSON.stringify({ id: 1, method: "Page.enable", params: {} }));
+  return { seen, close: () => socket.close() };
+}
 
 /** Shared between the checks, which run in order. */
 type World = {
@@ -691,6 +728,93 @@ export const COMPUTER_CHECKS: ComputerCheck[] = [
         null,
         "the lease after busy",
       );
+    },
+  },
+  {
+    name: "a stopped task's slow navigation does not commit after a person is granted control",
+    covers: ["#browse-slow"],
+    async run(ctx, world) {
+      const { holder, reader } = ctx.clients;
+      const bot = ctx.bots[0]!;
+      const { key, targetId } = world.tabs.get(bot.id)!;
+      const tab = await watchTab(bot.cdpPort, targetId);
+      let generation: string | null = null;
+      try {
+        const from = holder.lastSeq;
+        const sent = await holder.send(key, "#browse-slow");
+        const runId = String(sent.runId);
+        await holder.waitFor(
+          "the slow browser call to start",
+          (e) =>
+            e.event === "agent" &&
+            rec(e.payload).runId === runId &&
+            rec(e.payload).stream === "tool" &&
+            rec(rec(e.payload).data).phase === "start",
+          60_000,
+          from,
+        );
+        // The navigation has really started in Chromium before the task is stopped.
+        await until(
+          "Chromium to start loading the slow page",
+          () => tab.seen.some((e) => e.method === "Page.frameStartedLoading"),
+          15_000,
+        );
+        const loadingAt = Date.now();
+        same(
+          rec(await holder.request("chat.abort", { sessionKey: key, runId })).aborted,
+          true,
+          "stopping the task",
+        );
+        const taken = answered(
+          await call(holder, "control.take", { sessionKey: key, targetId }),
+          "control.take after the task was stopped",
+        );
+        expect(
+          taken.state === "granted",
+          `the take after the task was stopped: ${show(taken)}; the tab: ${show(tab.seen)}`,
+        );
+        generation = String(taken.generation);
+        const grantedAt = Date.now();
+        // Held past the moment the slow page would have answered.
+        while (Date.now() < loadingAt + SLOW_PAGE_MS + 3000) {
+          const renewal = answered(
+            await call(holder, "view.renew", { sessionKey: key, targetId, generation }),
+            "view.renew while held",
+          );
+          same(renewal.leaseRenewed, true, "the lease while held");
+          await sleep(1000);
+        }
+        const committed = tab.seen.filter(
+          (e) => e.method === "Page.frameNavigated" && e.at >= grantedAt,
+        );
+        same(committed, [], "navigations committed after the grant");
+        const listed = (await tabsOf(holder, key)).find((t) => t.targetId === targetId);
+        expect(
+          !String(listed?.url ?? "").includes("/scripted/pages/slow"),
+          `the tab is on ${String(listed?.url)} after the grant`,
+        );
+        same(rec(await holder.terminal(runId, 30_000)).state, "aborted", "the stopped task's run");
+        same(
+          answered(
+            await call(holder, "control.release", { sessionKey: key, targetId, generation }),
+            "control.release",
+          ).state,
+          "released",
+          "the release",
+        );
+        await controlEvent(reader, generation, "released");
+        same(
+          controlStates(reader, generation),
+          ["draining", "granted", "released"],
+          "the lease's events",
+        );
+        generation = null;
+      } finally {
+        tab.close();
+        if (generation) {
+          await call(holder, "control.release", { sessionKey: key, targetId, generation });
+        }
+      }
     },
   },
   {

@@ -259,7 +259,11 @@ export async function openCdp(bot, targetId, options = {}) {
         }
       });
     },
-    on: (listener) => listeners.add(listener),
+    /** Call `listener` with every event; returns the function that stops it. */
+    on: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     onClose: (listener) => {
       if (closed) queueMicrotask(listener);
       else closeListeners.add(listener);
