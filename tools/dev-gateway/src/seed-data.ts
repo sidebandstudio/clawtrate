@@ -532,7 +532,28 @@ export type ScenarioExample = {
     | { kind: "approval"; decision: "allow-once"; command: string };
   /** A bot-to-bot message: the recipient's run must reply in this session. */
   recipientSession?: string;
+  /**
+   * Each tool result as `chat.history` keeps it, in order: its error flag, its
+   * text blocks (a string exactly, a pattern where the home folder, a run id
+   * or a thread number varies) and its details (exactly, a pattern or "number"
+   * per key, or undefined when history keeps none).
+   */
+  results: ExampleResult[];
 };
+
+export type ExampleResult = {
+  toolName: string;
+  isError: boolean;
+  content: (string | RegExp)[];
+  details?: Record<string, unknown>;
+};
+
+const quoted = (names: string[]) => names.map((name) => JSON.stringify(name)).join("\n");
+const answered = (header: string, id: string, value: string) =>
+  `${header}: ${value}\n\n${JSON.stringify({ status: "answered", answers: { answers: { [id]: [value] } } }, null, 2)}`;
+
+const JUNIPER_INSTRUCTIONS = SEED_BOTS.find((bot) => bot.id === "main")!.instructions;
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export const SCENARIO_EXAMPLES: ScenarioExample[] = [
   {
@@ -545,6 +566,7 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
     finalText: "Happy to help. The plan looks sound; I would leave half an hour earlier.",
     toolCalls: [],
     toolErrors: 0,
+    results: [],
   },
   {
     botId: "pip",
@@ -556,6 +578,30 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
     toolCalls: ["sessions_send"],
     toolErrors: 0,
     recipientSession: "agent:marlow:main",
+    results: [
+      {
+        toolName: "sessions_send",
+        isError: false,
+        content: [
+          new RegExp(
+            `^${escape(
+              JSON.stringify(
+                {
+                  runId: "RUNID",
+                  sessionKey: "agent:marlow:main",
+                  status: "ok",
+                  delivery: { status: "skipped" },
+                  reply: "Happy to help. The plan looks sound; I would leave half an hour earlier.",
+                },
+                null,
+                2,
+              ),
+            ).replace("RUNID", "[0-9a-f-]{36}")}$`,
+          ),
+        ],
+        details: { sessionKey: "agent:marlow:main" },
+      },
+    ],
   },
   {
     botId: "main",
@@ -565,6 +611,17 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
     finalText: "I listed my workspace and read my instructions. Both steps are shown above.",
     toolCalls: ["ls", "read"],
     toolErrors: 0,
+    results: [
+      {
+        toolName: "ls",
+        isError: false,
+        // The seeded workspace: the gateway's starting files and the brief's notes/.
+        content: [
+          quoted(["AGENTS.md", "BOOTSTRAP.md", "IDENTITY.md", "SOUL.md", "USER.md", "notes/"]),
+        ],
+      },
+      { toolName: "read", isError: false, content: [JUNIPER_INSTRUCTIONS] },
+    ],
   },
   {
     botId: "main",
@@ -574,6 +631,15 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
     finalText: "That file does not exist, so the step failed. I will carry on without it.",
     toolCalls: ["read"],
     toolErrors: 1,
+    results: [
+      {
+        toolName: "read",
+        isError: true,
+        content: [
+          /^\{\n {2}"status": "error",\n {2}"tool": "read",\n {2}"error": "File not found: \S+\/workspace\/missing\/old-notes\.md\."\n\}$/,
+        ],
+      },
+    ],
   },
   {
     botId: "main",
@@ -583,6 +649,16 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
     finalText: "The coding agent picked it up: https://coding-agent.example/threads/thread-1",
     toolCalls: ["coder__send_message"],
     toolErrors: 0,
+    results: [
+      {
+        toolName: "coder__send_message",
+        isError: false,
+        content: [
+          /^structuredContent:\n\{\n {2}"reply": "Opened a branch and drafted the change for: Add a dark mode toggle to the settings page\.",\n {2}"threadId": "(thread-\d+)",\n {2}"url": "https:\/\/coding-agent\.example\/threads\/\1"\n\}$/,
+          "Opened a branch and drafted the change.",
+        ],
+      },
+    ],
   },
   {
     botId: "pip",
@@ -593,6 +669,9 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
     toolCalls: ["ask_user"],
     toolErrors: 0,
     interaction: { kind: "question", answers: { route: ["Lake loop"] } },
+    results: [
+      { toolName: "ask_user", isError: false, content: [answered("Route", "route", "Lake loop")] },
+    ],
   },
   {
     botId: SHELL_BOT,
@@ -603,5 +682,14 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
     toolCalls: ["exec"],
     toolErrors: 0,
     interaction: { kind: "approval", decision: "allow-once", command: "ls" },
+    results: [
+      {
+        toolName: "exec",
+        isError: false,
+        // Otto's starting files and the changes/ folder its disk-space task wrote.
+        content: ["AGENTS.md\nBOOTSTRAP.md\nIDENTITY.md\nSOUL.md\nUSER.md\nchanges"],
+        details: { exitCode: 0, durationMs: "number", cwd: /\/workspaces\/otto$/ },
+      },
+    ],
   },
 ];

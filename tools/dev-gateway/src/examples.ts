@@ -6,7 +6,12 @@
 
 import { TERMINAL_CHAT_STATES, type OperatorSession } from "./operator.ts";
 import { resolveRound, scenarioRounds, selectScenarios } from "./scenarios.ts";
-import { SCENARIO_EXAMPLES, sessionKeyFor, type ScenarioExample } from "./seed-data.ts";
+import {
+  SCENARIO_EXAMPLES,
+  sessionKeyFor,
+  type ExampleResult,
+  type ScenarioExample,
+} from "./seed-data.ts";
 
 type JsonRecord = Record<string, unknown>;
 const rec = (value: unknown): JsonRecord =>
@@ -23,6 +28,7 @@ export const SEED_SCOPES = [
 export const SEED_CAPS = ["tool-events", "approvals", "exec-approvals"];
 
 export type HistoryRow = {
+  details?: unknown;
   role?: string;
   provenance?: unknown;
   stopReason?: string;
@@ -71,6 +77,55 @@ function assistantBlocks(rows: HistoryRow[]) {
   };
 }
 
+/** A value as an example expects it: exactly, by a pattern, or "number" for any number. */
+function matches(value: unknown, expected: unknown): boolean {
+  if (expected instanceof RegExp) return typeof value === "string" && expected.test(value);
+  if (expected === "number") return typeof value === "number";
+  return JSON.stringify(value) === JSON.stringify(expected);
+}
+
+/** Each tool result row against its expectation: tool, error flag, every text block, details. */
+export function resultProblems(rows: HistoryRow[], expected: ExampleResult[]): string[] {
+  const problems: string[] = [];
+  if (rows.length !== expected.length) {
+    problems.push(`expected ${expected.length} tool results, found ${rows.length}`);
+  }
+  for (const [i, want] of expected.entries()) {
+    const row = rows[i];
+    const where = `result ${i + 1} (${want.toolName})`;
+    if (!row) continue;
+    if (row.toolName !== want.toolName) problems.push(`${where} is from ${String(row.toolName)}`);
+    if (Boolean(row.isError) !== want.isError)
+      problems.push(`${where} has isError ${String(row.isError)}`);
+    const blocks = Array.isArray(row.content) ? (row.content as JsonRecord[]) : [];
+    const texts = blocks.map((b) => (b.type === "text" ? String(b.text) : `<${String(b.type)}>`));
+    if (
+      texts.length !== want.content.length ||
+      !want.content.every((c, k) => matches(texts[k], c))
+    ) {
+      problems.push(
+        `${where} text differs from the script: ${JSON.stringify(texts).slice(0, 160)}`,
+      );
+    }
+    const details = (row as { details?: unknown }).details;
+    if (want.details === undefined) {
+      if (details !== undefined) problems.push(`${where} has details, expected none`);
+    } else {
+      const got = rec(details);
+      const keys = Object.keys(want.details).sort();
+      if (JSON.stringify(Object.keys(got).sort()) !== JSON.stringify(keys)) {
+        problems.push(
+          `${where} details keys ${JSON.stringify(Object.keys(got))}, expected ${JSON.stringify(keys)}`,
+        );
+      }
+      for (const key of keys) {
+        if (!matches(got[key], want.details[key])) problems.push(`${where} details.${key} differs`);
+      }
+    }
+  }
+  return problems;
+}
+
 /** Check an example session's history against what it should hold. Returns what is wrong. */
 export function checkExampleHistory(rows: HistoryRow[], example: ScenarioExample): string[] {
   const problems: string[] = [];
@@ -87,9 +142,9 @@ export function checkExampleHistory(rows: HistoryRow[], example: ScenarioExample
       `expected the scripted calls and arguments ${JSON.stringify(scripted.calls)}, found ${JSON.stringify(found.calls)}`,
     );
   }
+  // The person's own turn; a message from another bot is not a user row in chat.history.
   const users = rows.filter((row) => row.role === "user").length;
-  // Messages from another bot also arrive as user rows; the person's own turn is the first.
-  if (users < 1) problems.push("no user turn");
+  if (users !== 1) problems.push(`expected one user turn, found ${users}`);
   const calls = rows.flatMap((row) =>
     row.role === "assistant" && Array.isArray(row.content)
       ? row.content.flatMap((part) =>
@@ -102,39 +157,18 @@ export function checkExampleHistory(rows: HistoryRow[], example: ScenarioExample
       `expected tool calls ${JSON.stringify(example.toolCalls)}, found ${JSON.stringify(calls)}`,
     );
   }
-  const results = rows.filter((row) => row.role === "toolResult");
-  if (results.length !== example.toolCalls.length) {
-    problems.push(`expected ${example.toolCalls.length} tool results, found ${results.length}`);
-  }
-  const resultNames = results.map((row) => row.toolName);
-  if (JSON.stringify(resultNames) !== JSON.stringify(example.toolCalls)) {
-    problems.push(
-      `expected results of ${JSON.stringify(example.toolCalls)}, found ${JSON.stringify(resultNames)}`,
-    );
-  }
-  if (results.some((row) => !row.isError && textOf(row).trim() === "")) {
-    problems.push("a successful tool result is empty");
-  }
-  const errors = results.filter((row) => row.isError).length;
-  if (errors !== example.toolErrors) {
-    problems.push(`expected ${example.toolErrors} failed tool results, found ${errors}`);
-  }
-  // History rows keep the result's text but not always its `details`, so the text is checked.
-  if (example.interaction?.kind === "question") {
-    const answered = results.find((row) => row.toolName === "ask_user");
-    if (!answered || answered.isError || !/"status": "answered"/.test(textOf(answered))) {
-      problems.push("the question was not answered");
-    }
-  }
-  if (example.interaction?.kind === "approval") {
-    const ran = results.find((row) => row.toolName === "exec");
-    if (!ran || ran.isError || /exec denied/i.test(textOf(ran))) {
-      problems.push("the approved command did not run");
-    }
-  }
-  const finals = rows.filter((row) => row.role === "assistant" && row.stopReason === "stop");
-  if (!finals.some((row) => textOf(row).trim() === example.finalText)) {
-    problems.push("no completed reply with the scripted text");
+  problems.push(
+    ...resultProblems(
+      rows.filter((row) => row.role === "toolResult"),
+      example.results,
+    ),
+  );
+  // Every completed reply of the bot's own (not a forwarded message) is the scripted one.
+  const finals = rows.filter(
+    (row) => row.role === "assistant" && row.stopReason === "stop" && !row.provenance,
+  );
+  if (finals.length === 0 || finals.some((row) => textOf(row).trim() !== example.finalText)) {
+    problems.push("a completed reply differs from the scripted text");
   }
   return problems;
 }
@@ -241,24 +275,38 @@ export async function seedExample(
 export function checkRecipientExchange(
   rows: HistoryRow[],
   senderKey: string,
-  request: string,
+  message: string,
   reply: string,
 ): string[] {
-  const incoming = rows.findIndex(
-    (row) =>
-      // Recorded with role "assistant" and inter-session provenance, not as a user turn.
-      rec(row.provenance).kind === "inter_session" &&
-      rec(row.provenance).sourceSessionKey === senderKey &&
-      textOf(row).includes(request),
-  );
-  if (incoming < 0) return [`the recipient has no message from ${senderKey}`];
+  // `chat.history` is a display projection: it shows a message forwarded by
+  // sessions_send as an assistant row with inter-session provenance, although
+  // the gateway builds the stored input as a user message.
+  const incoming = rows.filter((row) => rec(row.provenance).sourceSessionKey === senderKey);
+  if (incoming.length !== 1) {
+    return [
+      `expected one message from ${senderKey} in the recipient's history, found ${incoming.length}`,
+    ];
+  }
+  const row = incoming[0]!;
+  const problems: string[] = [];
+  const provenance = rec(row.provenance);
+  if (row.role !== "assistant") problems.push(`the forwarded message has role ${String(row.role)}`);
+  if (provenance.kind !== "inter_session" || provenance.sourceTool !== "sessions_send") {
+    problems.push(`the forwarded message's provenance is ${JSON.stringify(provenance)}`);
+  }
+  if (row.content !== message)
+    problems.push(`the forwarded message is ${JSON.stringify(row.content)}`);
   const answered = rows
-    .slice(incoming + 1)
+    .slice(rows.indexOf(row) + 1)
     .some(
-      (row) =>
-        row.role === "assistant" && row.stopReason === "stop" && textOf(row).trim() === reply,
+      (r) =>
+        r.role === "assistant" &&
+        r.stopReason === "stop" &&
+        !r.provenance &&
+        textOf(r).trim() === reply,
     );
-  return answered ? [] : ["the recipient's reply is not after the message"];
+  if (!answered) problems.push("the recipient's reply is not after the message");
+  return problems;
 }
 
 /** Verify an example's session from its history alone; used again by `seed`. */
@@ -273,12 +321,7 @@ export async function verifyExample(op: OperatorSession, example: ScenarioExampl
       SCENARIO_EXAMPLES.find((e) => sessionKeyFor(e.botId, e.slug) === example.recipientSession)
         ?.finalText ?? "";
     problems.push(
-      ...checkRecipientExchange(
-        await history(op, example.recipientSession),
-        key,
-        message.replace(/^#\S+\s*/, ""),
-        reply,
-      ),
+      ...checkRecipientExchange(await history(op, example.recipientSession), key, message, reply),
     );
   }
   if (problems.length > 0) {
