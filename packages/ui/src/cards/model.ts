@@ -88,7 +88,15 @@ export type ApprovalView = {
   /** "Otto wants to run a command". */
   title: string;
   /** One sentence: what will happen, the machine in bold. */
-  summary: { lead: string; code: string | null; middle: string; machine: string | null };
+  summary: {
+    lead: string;
+    /** A compact form of the command: its first line, shortened; the whole is in the full request. */
+    code: string | null;
+    /** The command in full, for a tooltip, when `code` shows less of it. */
+    codeFull: string | null;
+    middle: string;
+    machine: string | null;
+  };
   /** Who is asking, when it is not the task's own bot. */
   askerLine: string | null;
   warnings: string[];
@@ -132,9 +140,12 @@ export function approvalView(
   if (card.exec) {
     // The command as the request gives it; its arguments are never joined into a stand-in for it.
     const command = card.exec.command;
+    const shown = command ?? argv?.[0] ?? null;
+    const code = shown ? compact(shown) : null;
     summary = {
       lead: "Run ",
-      code: command ? firstLine(command) : null,
+      code,
+      codeFull: shown && code !== shown ? shown : null,
       middle: machine ? " on " : "",
       machine,
     };
@@ -150,6 +161,7 @@ export function approvalView(
         [card.plugin.title, card.plugin.description].filter(Boolean).join(". ") ||
         "A plugin asks for approval.",
       code: null,
+      codeFull: null,
       middle: "",
       machine: null,
     };
@@ -163,6 +175,7 @@ export function approvalView(
     summary = {
       lead: change?.description ?? change?.title ?? "A change to the gateway asks for approval.",
       code: null,
+      codeFull: null,
       middle: "",
       machine: null,
     };
@@ -172,7 +185,8 @@ export function approvalView(
 
   const formRows: Row[] = [];
   if (card.exec) {
-    if (card.exec.command) formRows.push({ label: "Command", value: card.exec.command, mono: true });
+    if (card.exec.command)
+      formRows.push({ label: "Command", value: card.exec.command, mono: true });
     if (argv) formRows.push({ label: "Arguments", value: argv.join(" "), list: argv, mono: true });
     if (card.exec.cwd) formRows.push({ label: "Folder", value: card.exec.cwd, mono: true });
     if (machine) formRows.push({ label: "Runs on", value: machine });
@@ -215,8 +229,15 @@ function possessive(name: string): string {
   return name === "the gateway's machine" ? "the gateway's" : `${name}'s`;
 }
 
-function firstLine(text: string): string {
-  return text.split("\n")[0] ?? text;
+/** Characters of a command the summary shows; the full request holds the rest. */
+export const SUMMARY_COMMAND_CHARS = 72;
+
+/** The first line of a command, shortened to the summary's length, marked when anything is left out. */
+function compact(text: string): string {
+  const lines = text.split("\n");
+  const first = lines[0] ?? "";
+  const cut = first.length > SUMMARY_COMMAND_CHARS;
+  return cut || lines.length > 1 ? `${first.slice(0, SUMMARY_COMMAND_CHARS).trimEnd()}…` : first;
 }
 
 /** The decision buttons' words: "Allow" when there is no reusable rule to offer. */

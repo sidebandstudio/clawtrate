@@ -423,7 +423,11 @@ function PendingApproval({
       </header>
       <p className="request-summary">
         {view.summary.lead}
-        {view.summary.code && <code className="request-code">{view.summary.code}</code>}
+        {view.summary.code && (
+          <code className="request-code" title={view.summary.codeFull ?? undefined}>
+            {view.summary.code}
+          </code>
+        )}
         {view.summary.middle}
         {view.summary.machine && <b>{view.summary.machine}</b>}
         {view.summary.code ? "." : ""}
