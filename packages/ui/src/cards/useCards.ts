@@ -6,6 +6,7 @@
 import {
   BOT_MESSAGE_TOOL,
   selectMessageCards,
+  T3_CODE_TOOLS,
   type ClawtrateBridge,
   type SelectedCards,
   type Step,
@@ -57,26 +58,11 @@ type Read =
   | { status: "failed" };
 
 /**
- * T3 Code's published tool names. A tool-server call is a T3 Code call when
- * its own tool, as its result names it (`details.mcpTool`), is one of these,
- * whatever the server is called.
- */
-export const T3_CODE_TOOLS: readonly string[] = [
-  "t3_project_list",
-  "t3_thread_launch",
-  "t3_thread_send",
-  "t3_thread_read",
-  "t3_thread_wait",
-  "t3_thread_list",
-  "t3_thread_interrupt",
-];
-
-/**
  * The engine's card selection for a task, and which calls are T3 Code. That
  * is decided per call, never per server, and the call's own result decides:
  * a call is T3 Code when its result names its own tool (`details.mcpTool`) as
- * one of T3 Code's published tools, or its server (`details.mcpServer`) as one
- * a host configured as T3 Code (`codingServers`, the only whole-server rule).
+ * one of T3 Code's published tools (`T3_CODE_TOOLS`), whatever the server is
+ * called. Nothing makes a server as a whole T3 Code.
  *
  * Before its result, the gateway's map from effective names to tools
  * (`mcpTools`, from `tools.effective`) is the evidence: a call whose effective
@@ -95,7 +81,6 @@ export function selectCards(
   transcript: Pick<Transcript, "runs" | "approvals" | "linkedRuns" | "interSession"> & {
     mcpTools?: Transcript["mcpTools"];
   },
-  codingServers: readonly string[],
   rawOf: (step: Step) => StepRaw | null,
   previous?: SelectedCards,
 ): SelectedCards {
@@ -107,23 +92,19 @@ export function selectCards(
       interSession: transcript.interSession,
     },
     {
-      codingServers,
       mcpTools: transcript.mcpTools ?? {},
       rawOf,
       ...(previous ? { previous } : {}),
     },
   );
   const steps = new Map(transcript.runs.flatMap((run) => run.steps.map((step) => [step.id, step])));
-  const isT3 = (server: string, tool: string) =>
-    codingServers.includes(server) || T3_CODE_TOOLS.includes(tool);
+  const isT3 = (tool: string) => T3_CODE_TOOLS.includes(tool);
   const mcpCalls = selected.mcpCalls.map((card) => {
     const step = steps.get(card.stepId);
     const raw = step ? rawOf(step) : null;
     const named = resultTool(raw);
     // A result that does not name its tool leaves the map's word, but never for Call made.
-    const t3 = named
-      ? isT3(named.server, named.tool)
-      : isT3(card.server, card.tool) && card.state !== "returned";
+    const t3 = named ? isT3(named.tool) : isT3(card.tool) && card.state !== "returned";
     return t3 === card.codingAgent ? card : { ...card, codingAgent: t3 };
   });
   return { ...selected, mcpCalls };
@@ -171,7 +152,6 @@ function withRead(current: Map<string, Read>, stepId: string, read: Read): Map<s
 export function useCards(
   taskKey: string,
   transcript: Transcript,
-  codingServers: readonly string[],
   invoke: ClawtrateBridge["invoke"],
 ) {
   const [reads, setReads] = useState<Map<string, Read>>(() => new Map());
@@ -226,14 +206,8 @@ export function useCards(
   const [previous, setPrevious] = useState<SelectedCards | undefined>(undefined);
   const { runs, approvals, linkedRuns, interSession, mcpTools } = transcript;
   const selected = useMemo(
-    () =>
-      selectCards(
-        { runs, approvals, linkedRuns, interSession, mcpTools },
-        codingServers,
-        rawOf,
-        previous,
-      ),
-    [runs, approvals, linkedRuns, interSession, mcpTools, codingServers, rawOf, previous],
+    () => selectCards({ runs, approvals, linkedRuns, interSession, mcpTools }, rawOf, previous),
+    [runs, approvals, linkedRuns, interSession, mcpTools, rawOf, previous],
   );
   // Adjusted while rendering, as React does for state that follows other state;
   // the engine keeps states forward-only, so this settles after one pass.

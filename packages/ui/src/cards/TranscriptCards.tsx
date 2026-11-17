@@ -22,7 +22,6 @@ import {
   OpenTaskContext,
   StepHandoverContext,
   useCardEnv,
-  useCardSettings,
   type CardEnv,
   type StepHandover,
   type StepState,
@@ -65,14 +64,13 @@ export function CardScope({
 }) {
   const state = useClawtrateState();
   const bridge = useBridge();
-  const settings = useCardSettings();
   const openTask = useContext(OpenTaskContext);
   const task = Object.values(state.tasksByBot)
     .flat()
     .find((each) => each.key === taskKey);
   const bot = state.bots.find((each) => each.id === task?.botId);
   const invoke = bridge.invoke;
-  const cards = useCards(taskKey, transcript, settings.codingServers, invoke);
+  const cards = useCards(taskKey, transcript, invoke);
   const placement = useMemo(
     () =>
       placeCards(

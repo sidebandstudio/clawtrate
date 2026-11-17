@@ -141,7 +141,11 @@ export type McpCallCard = {
   runId: string;
   server: string;
   tool: string;
-  /** The server is one of the configured coding-agent servers. */
+  /**
+   * The call is T3 Code's: its tool, as identified, is one of T3 Code's
+   * published tools (`T3_CODE_TOOLS`), on whatever server. Decided per call;
+   * no server is T3 Code as a whole.
+   */
   codingAgent: boolean;
   /** `args.message`, when the call has one. */
   text: string | null;
@@ -184,6 +188,22 @@ export type CardInput = {
   interSession?: InterSessionMessage[];
 };
 
+/**
+ * T3 Code's published tools. A tool-server call is T3 Code's when its own
+ * tool is one of these, on any server: by the result's `details.mcpTool`, or
+ * before its result by the gateway's map of effective names, which the result
+ * overrules. Nothing makes a server as a whole T3 Code.
+ */
+export const T3_CODE_TOOLS: readonly string[] = [
+  "t3_project_list",
+  "t3_thread_launch",
+  "t3_thread_send",
+  "t3_thread_read",
+  "t3_thread_wait",
+  "t3_thread_list",
+  "t3_thread_interrupt",
+];
+
 /** A tool-server tool, by its server and its own name. */
 export type McpToolIdentity = { server: string; tool: string };
 
@@ -215,11 +235,6 @@ export function mcpToolMap(value: unknown, max: number): Record<string, McpToolI
 }
 
 export type CardOptions = {
-  /**
-   * MCP server names (`details.mcpServer`) to treat as the coding agent. No
-   * product name is built in.
-   */
-  codingServers: readonly string[];
   /**
    * Exact tool names known to be MCP tools, with their server and tool, for
    * example from the gateway's tool catalog. Tool names are sanitized,
@@ -539,7 +554,6 @@ function mcpCallCard(
   raw: StepRaw | null,
   identity: { server: string; tool: string },
   input: CardInput,
-  codingServers: readonly string[],
 ): McpCallCard {
   const args = callArgs(raw);
   const body = resultBody(raw);
@@ -565,7 +579,7 @@ function mcpCallCard(
     runId: run.id,
     server: identity.server,
     tool: identity.tool,
-    codingAgent: codingServers.includes(identity.server),
+    codingAgent: T3_CODE_TOOLS.includes(identity.tool),
     text: str(args?.message),
     args: args ?? null,
     result: step.result,
@@ -613,7 +627,7 @@ export function selectMessageCards(input: CardInput, options: CardOptions): Sele
       }
       const identity = mcpIdentity(step, resultBody(raw), options);
       if (!identity) continue;
-      const card = mcpCallCard(step, run, raw, identity, input, options.codingServers);
+      const card = mcpCallCard(step, run, raw, identity, input);
       card.state = advanceMcpCallState(prior(previousMcp, card), card.state);
       mcpCalls.push(card);
     }

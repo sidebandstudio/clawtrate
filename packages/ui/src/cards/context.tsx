@@ -12,20 +12,6 @@ import type {
 } from "@clawtrate/core";
 import { createContext, useContext, useEffect, useState } from "react";
 
-export type CardSettings = {
-  /**
-   * The tool servers configured as T3 Code, by the name a call's result gives
-   * its server (`details.mcpServer`): every call such a result names is a T3
-   * Code call. Nothing is built in; without it, a call is T3 Code by its own
-   * tool, as its result names it.
-   */
-  codingServers: readonly string[];
-};
-
-export const CardSettingsContext = createContext<CardSettings>({ codingServers: [] });
-
-export const useCardSettings = () => useContext(CardSettingsContext);
-
 /**
  * How the reader left a call's ordinary step or its T3 Code card (`from`):
  * open or closed, and whether focus was in it.

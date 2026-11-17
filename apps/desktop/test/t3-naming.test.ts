@@ -103,7 +103,6 @@ const cards = (
       interSession: [],
       mcpTools: map,
     },
-    [],
     rawOf,
   ).mcpCalls.filter((card) => card.codingAgent);
 

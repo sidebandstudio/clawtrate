@@ -89,7 +89,7 @@ function sendResult(
   });
 }
 
-const OPTIONS: CardOptions = { codingServers: ["coder"] };
+const OPTIONS: CardOptions = {};
 const select = (activity: TaskActivity, extra: Partial<CardInput> = {}, options = OPTIONS) =>
   selectMessageCards({ runs: activity.runs, approvals: activity.approvals, ...extra }, options);
 const linked = (state: LinkedRun["state"]): Record<string, LinkedRun> => ({
@@ -482,7 +482,7 @@ function mcpResult(
 
 const coderDetails = {
   mcpServer: "coder",
-  mcpTool: "send_message",
+  mcpTool: "t3_thread_send",
   structuredContent: { threadId: "thread-1", reply: "On it." },
 };
 
@@ -492,16 +492,35 @@ describe("MCP and coding-agent cards (F-132, F-133, F-135, F-137, F-313, F-314)"
     expect(select(activity).mcpCalls).toEqual([]);
     const mapped = selectMessageCards(
       { runs: activity.runs },
-      {
-        codingServers: ["coder"],
-        mcpTools: { coder__send_message: { server: "coder", tool: "send_message" } },
-      },
+      { mcpTools: { coder__send_message: { server: "coder", tool: "t3_thread_send" } } },
     );
     expect(mapped.mcpCalls[0]).toMatchObject({
       state: "started",
       server: "coder",
-      tool: "send_message",
+      tool: "t3_thread_send",
       codingAgent: true,
+    });
+  });
+
+  it("decides the coding agent per call by its tool, never by its server", () => {
+    // Before the result, the map names one of T3 Code's tools on a server called "coder".
+    const mapped = { mcpTools: { coder__launch: { server: "coder", tool: "t3_thread_launch" } } };
+    const started = mcpStart(emptyActivity, "m1", "coder__launch");
+    expect(selectMessageCards({ runs: started.runs }, mapped).mcpCalls[0]).toMatchObject({
+      tool: "t3_thread_launch",
+      codingAgent: true,
+    });
+    // The result names an ordinary tool on that same server: it decides, and the call is not T3 Code's.
+    const ordinary = mcpResult(
+      started,
+      "m1",
+      { mcpServer: "coder", mcpTool: "read_file" },
+      { name: "coder__launch" },
+    );
+    expect(selectMessageCards({ runs: ordinary.runs }, mapped).mcpCalls[0]).toMatchObject({
+      server: "coder",
+      tool: "read_file",
+      codingAgent: false,
     });
   });
 
@@ -517,7 +536,7 @@ describe("MCP and coding-agent cards (F-132, F-133, F-135, F-137, F-313, F-314)"
     expect(select(activity).mcpCalls[0]).toMatchObject({
       state: "returned",
       server: "coder",
-      tool: "send_message",
+      tool: "t3_thread_send",
       codingAgent: true,
       text: "Fix the failing login test",
       args: { message: "Fix the failing login test" },
@@ -567,8 +586,7 @@ describe("MCP and coding-agent cards (F-132, F-133, F-135, F-137, F-313, F-314)"
 
   it("Unknown, with the returned error kept, when the result says the call was aborted; work may continue only after it returned (F-137, F-470)", () => {
     const known = {
-      codingServers: ["coder"],
-      mcpTools: { coder__send_message: { server: "coder", tool: "send_message" } },
+      mcpTools: { coder__send_message: { server: "coder", tool: "t3_thread_send" } },
     };
     let aborted = requestStop(mcpStart(emptyActivity, "m1"), "run-s", 2_000);
     aborted = mcpResult(
