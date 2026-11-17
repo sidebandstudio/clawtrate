@@ -1,0 +1,18 @@
+import { connect, sleep } from "./probe-lib.mjs";
+const A = await connect({ name: "EF", scopes: ["operator.read", "operator.write"] });
+const s = await A.call("sessions.create", { agentId: "pixel", label: `eff ${Date.now()}` });
+await A.call("sessions.messages.subscribe", { key: s.key });
+const t0 = Date.now();
+const run = await A.send(s.key, "effort check", { thinking: "high" }); const f = await run.done;
+const lc = [];
+console.log("lifecycle:", lc.join("\n  "));
+console.log("final keys:", Object.keys(f).join(","), "message keys:", Object.keys(f.message ?? {}).join(","), "usage:", String(JSON.stringify(f.usage ?? f.message?.usage)).slice(0, 300));
+const h = await A.call("chat.history", { sessionKey: s.key, limit: 4 });
+const last = h.messages.at(-1);
+console.log("row keys:", Object.keys(last).join(","), "__openclaw:", JSON.stringify(last.__openclaw).slice(0, 400));
+const rows = await A.call("sessions.list", { limit: 5 });
+const row = rows.sessions.find((x) => x.key === s.key);
+console.log("row thinking:", JSON.stringify({ thinkingLevel: row.thinkingLevel, effectiveResponseUsage: row.effectiveResponseUsage, effectiveFastMode: row.effectiveFastMode, model: row.model }));
+const ml = await A.call("models.list", { agentId: "pixel", includeDetails: true });
+console.log("models.list[0]:", JSON.stringify(ml.models?.[0]).slice(0, 900));
+await A.close();

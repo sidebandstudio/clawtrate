@@ -1,0 +1,11 @@
+import { connect, sleep } from "./probe-lib.mjs";
+const A = await connect({ name: "N3", scopes: ["operator.read", "operator.pairing", "operator.admin"] });
+const pl = await A.call("node.pair.list", {});
+console.log("pending:", JSON.stringify(pl.pending).slice(0, 600));
+for (const p of pl.pending ?? []) console.log("approve:", JSON.stringify(await A.call("node.pair.approve", { requestId: p.requestId }).catch((e) => e.message)).slice(0, 300));
+await sleep(70000);
+const nl = await A.call("node.list", {});
+const n = nl.nodes?.[0] ?? {};
+console.log("node.list keys:", Object.keys(n).join(","), "commands:", JSON.stringify(n.commands));
+for (const e of A.events.filter((e) => e.event.startsWith("node."))) console.log(" event", e.event, JSON.stringify(e.payload).slice(0, 500));
+await A.close();

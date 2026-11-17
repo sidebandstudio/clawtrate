@@ -1,0 +1,13 @@
+import { connect } from "./probe-lib.mjs";
+const A = await connect({ name: "U", scopes: ["operator.read"] });
+const u = await A.call("sessions.usage", { agentId: "atlas", range: "7d" });
+console.log("top keys:", Object.keys(u).join(","));
+const s0 = (u.sessions ?? [])[0];
+console.log("session entry keys:", s0 ? Object.keys(s0).join(",") : "none");
+console.log("session entry usage keys:", s0?.usage ? Object.keys(s0.usage).join(",") : "");
+console.log("totals:", JSON.stringify(u.totals ?? u.aggregates ?? {}).slice(0, 500));
+console.log("aggregates keys:", u.aggregates ? Object.keys(u.aggregates).join(",") : "");
+const c = await A.call("usage.cost", { agentId: "atlas" });
+console.log("usage.cost keys:", Object.keys(c).join(","), "daily0:", JSON.stringify(c.daily?.[0] ?? {}).slice(0, 300), "totals:", JSON.stringify(c.totals ?? {}).slice(0, 300));
+console.log("usage.status:", JSON.stringify(await A.call("usage.status", {})).slice(0, 300));
+await A.close();

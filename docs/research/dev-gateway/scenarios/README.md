@@ -28,3 +28,16 @@ OPENCLAW_DEV_TOKEN="$(cat "$RUN_DIR/token")" node questions.mjs
 | `metadata.mjs`, `search.mjs` | `users.prefs`, reactions, reply references, time fields, `sessions.search` |
 | `attachments.mjs` | image, file and frame ceilings |
 | `talk-selection.mjs` | Talk bot selection by session key |
+
+Row 20 scripts:
+
+| Script | Row 20 topic |
+| --- | --- |
+| `members-mcpcancel-settings.mjs` | `node … members`: agents as session members; `mcpcancel`: MCP `notifications/cancelled`; `settings [permissionMode,configFull,sessionsPatchExecAsk]`: settings changes during a pending approval |
+| `helper-and-recipient-approvals.mjs` | `helper`: a sub-agent's exec approval and parent abort; `recipient`: a `sessions_send` recipient's exec approval |
+| `files-computer-presence.mjs` | workspace, session files, diff, artifacts, `computer.status`, nodes, presence |
+| `node-pairing-hoststats.mjs` | approves a pending node and waits for `node.hostStats`. Needs a node host (see row 20) |
+| `node-routed-exec.mjs` | routes a task's exec to the first node |
+| `exec-auto-review.mjs` | `exec.mode: "auto"` verdicts with the scripted reviewer; changes and restores Atlas's exec mode |
+| `memory-save-search.mjs` | a bot writing memory, `memory.status`, `memory.search` |
+| `usage-fields.mjs`, `effort-and-models.mjs` | usage result fields; effort per turn and `models.list` details |
