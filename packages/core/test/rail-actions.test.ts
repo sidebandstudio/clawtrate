@@ -6,6 +6,7 @@ import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { SIDEBAR_PREF_KEY } from "../src/sidebar.ts";
+import { MAX_LISTED_TASKS } from "../src/state-bounds.ts";
 import { FAST, grantingGateway, URL_A } from "./client-harness.ts";
 import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 
@@ -98,6 +99,61 @@ describe("the rail's actions through the client", () => {
       { key: "agent:pip:main", unread: false, expectedMarkedUnreadAt: 9 },
     ]);
     writer.client.stop();
+  });
+
+  it("F-022: two reads on opening at once make one clear on the gateway", async () => {
+    const { client, gateway } = await connected(INTERACTIVE_SCOPES);
+    let release: () => void = () => {};
+    gateway.handlers["sessions.patch"] = () =>
+      new Promise((resolve) => {
+        release = () => resolve({ ok: true });
+      });
+    const first = client.markTask("agent:pip:main", false, { opened: true });
+    const second = client.markTask("agent:pip:main", false, { opened: true });
+    await until(() => gateway.calls("sessions.patch").length === 1);
+    release();
+    await Promise.all([first, second]);
+    expect(gateway.calls("sessions.patch")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("a created task never takes the task cache past its bound", async () => {
+    const gateway = grantingGateway();
+    const rows = Array.from({ length: MAX_LISTED_TASKS }, (_, index) => ({
+      key: `agent:pip:t${index}`,
+      agentId: "pip",
+      updatedAt: 1000 + index,
+    }));
+    gateway.handlers["agents.list"] = () => ({ defaultId: "pip", agents: [{ id: "pip" }] });
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: rows, hasMore: false },
+    });
+    gateway.handlers["users.prefs.get"] = () => ({ status: "no_durable_identity" });
+    let made = 0;
+    gateway.handlers["sessions.create"] = () => ({
+      ok: true,
+      key: `agent:pip:dashboard:${String((made += 1)).padStart(8, "0")}-new`,
+      entry: { sessionId: `s-${made}`, updatedAt: 9_000 + made, createdAt: 9_000 + made },
+    });
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: INTERACTIVE_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+      }),
+    });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.tasksByBot.pip?.length === MAX_LISTED_TASKS);
+    const first = await client.newTask("pip");
+    await client.newTask("pip");
+    const kept = (client as unknown as { rows: Map<string, unknown> }).rows;
+    expect(kept.size).toBe(MAX_LISTED_TASKS);
+    expect(client.state.tasksByBot.pip).toHaveLength(MAX_LISTED_TASKS);
+    expect(client.state.tasksByBot.pip!.some((task) => task.key === first)).toBe(true);
+    client.stop();
   });
 
   it("F-014: the arrangement is read at connect and changed with a compare-and-set; users.prefs.changed reads it again", async () => {

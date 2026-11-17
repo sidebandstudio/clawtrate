@@ -273,6 +273,8 @@ export const MAX_OUTBOX_PER_TASK = MAX_OUTBOX;
 export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 /** Operations waiting for access at once; past it a new one is refused. */
 export const MAX_ACCESS_WAITERS = 128;
+/** Reads on opening a task on their way at once; past it, one more waits for the next opening. */
+export const MAX_OPENED_READS = 16;
 /**
  * Approval outcomes the gateway reported, kept by id apart from the visible
  * cards so a request or list entry that arrives after its resolution can never
@@ -656,6 +658,8 @@ export class ClawtrateClient {
   private rows = new Map<string, RawRecord>();
   /** Which tasks wait for the person, across every bot (`waiting.ts`), for the rail. */
   private readonly waiting = new WaitingIndex();
+  /** Tasks whose read on opening is on its way: one per task at a time, however often it is asked. */
+  private readonly openedReads = new Set<string>();
   /** Open transcripts, counted, so several viewers can share one. */
   private readonly openSessions = new Map<string, number>();
   /** The streaming reply text of each task's newest `MAX_STREAMS_PER_TASK` runs, only while they stream. */
@@ -4620,10 +4624,17 @@ export class ClawtrateClient {
   ): Promise<void> {
     if (options.opened) {
       if (!this.holds(WRITE_SCOPE) || this.options.readOnly) return;
-      const row = this.rows.get(capId(key, MAX_ID_CHARS));
-      if (!row || row.unread !== true) return;
+      const id = capId(key, MAX_ID_CHARS);
+      const row = this.rows.get(id);
+      if (!row || row.unread !== true || this.openedReads.has(id)) return;
+      if (this.openedReads.size >= MAX_OPENED_READS) return;
       const marker = typeof row.markedUnreadAt === "number" ? row.markedUnreadAt : null;
-      await markTask(this.actionContext(options.owner ?? null), key, false, marker);
+      this.openedReads.add(id);
+      try {
+        await markTask(this.actionContext(options.owner ?? null), key, false, marker);
+      } finally {
+        this.openedReads.delete(id);
+      }
       return;
     }
     await markTask(this.actionContext(options.owner ?? null), key, unread);
