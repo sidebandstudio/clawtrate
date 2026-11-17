@@ -296,16 +296,20 @@ describe("sending (F-075, F-081, F-106)", () => {
     client.stop();
   });
 
-  it("drops the optimistic run when the send's outcome is unknown, checks history, and offers retry only then", async () => {
+  it("F-075: a send whose answer never came stays unknown through the reconnect and history, is never called accepted, and is retried only on request", async () => {
     const { client, gateway, transcript } = await openTask();
     gateway.handlers["chat.send"] = () => new Promise(() => {});
     const id = client.sendMessage(KEY, "Lost in transit");
     await until(() => gateway.calls("chat.send").length === 1);
+    // The connection drops before any answer: whether the frame reached the gateway is not known.
     gateway.dropAll();
     // Not failed: unknown, while history is read again after the reconnect.
     await until(() => transcript().outbox[0]?.status === "checking");
     expect(transcript().runs).toEqual([]);
-    await until(() => transcript().outbox[0]?.status === "unconfirmed");
+    // History holds no row with its key: still unknown, never unconfirmed (which means accepted).
+    await until(() => transcript().outbox[0]?.status === "unknown");
+    await sleep(50);
+    expect(transcript().outbox[0]!.status).toBe("unknown");
     expect(gateway.calls("chat.send")).toHaveLength(1);
     client.retryMessage(KEY, id);
     await until(() => gateway.calls("chat.send").length === 2);

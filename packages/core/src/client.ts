@@ -1237,13 +1237,19 @@ export class ClawtrateClient {
   }
 
   /**
-   * Send a failed or unconfirmed message again, with the same idempotency key,
+   * Send a failed, unconfirmed or unknown message again, with the same idempotency key,
    * so the gateway delivers it at most once. It already counts against the
    * outbox bounds, so a retry is never refused for room.
    */
   retryMessage(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);
-    if (!message || (message.status !== "failed" && message.status !== "unconfirmed")) return;
+    if (
+      !message ||
+      (message.status !== "failed" &&
+        message.status !== "unconfirmed" &&
+        message.status !== "unknown")
+    )
+      return;
     const transcript = this.state.transcripts[key]!;
     const active = activeRun(transcript);
     const mode = !active ? "new" : active.state === "stopping" ? "queue" : "steer";
@@ -1278,6 +1284,7 @@ export class ClawtrateClient {
       (message.status !== "failed" &&
         message.status !== "cancelled" &&
         message.status !== "unconfirmed" &&
+        message.status !== "unknown" &&
         message.status !== "handled")
     )
       return;

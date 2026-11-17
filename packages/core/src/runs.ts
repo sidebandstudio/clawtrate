@@ -271,6 +271,14 @@ export type OutgoingStatus =
    */
   | "unconfirmed"
   /**
+   * No answer came, and the history read since does not hold it: whether the
+   * gateway took it is not known. Nothing establishes acceptance, so it is
+   * never shown as accepted. It can be retried with the same idempotency key,
+   * so the gateway delivers it at most once, or deleted; a later history
+   * read that holds its key still settles it.
+   */
+  | "unknown"
+  /**
    * The gateway handled it as a command without starting a run (a `/stop`
    * answered `{ok, aborted, runIds}`): nothing more comes of it, and no
    * history row is expected. It can be dismissed.
@@ -2290,6 +2298,7 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
       outgoing.status !== "sent" &&
       outgoing.status !== "checking" &&
       outgoing.status !== "unconfirmed" &&
+      outgoing.status !== "unknown" &&
       outgoing.status !== "failed"
     ) {
       return true;
@@ -2325,15 +2334,25 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
 export const UNCONFIRMED_ERROR =
   "The gateway accepted this message, but its history does not show it. It may not have been delivered.";
 
+/** Shown on a message no answer came for and history does not hold. */
+export const UNKNOWN_ERROR =
+  "No answer came from the gateway, and its history does not show this message. Whether it was received is not known.";
+
 /**
  * After a history read: a message the gateway accepted whose run has ended,
  * and that the read did not tie to a row, is `unconfirmed`. Its run ending
  * means history should hold it; without a row nothing establishes delivery.
+ * A message no answer came for (`checking`) was never shown to be accepted:
+ * the read not finding it makes it `unknown`, never `unconfirmed`.
  */
 export function markUnconfirmed(activity: TaskActivity): TaskActivity {
   let changed = false;
   const outbox = activity.outbox.map((message) => {
-    if (message.status !== "sent" && message.status !== "checking") return message;
+    if (message.status === "checking") {
+      changed = true;
+      return { ...message, status: "unknown" as const, error: UNKNOWN_ERROR };
+    }
+    if (message.status !== "sent") return message;
     const run = message.runId ? findRun(activity, message.runId) : undefined;
     if (run && !isTerminal(run.state)) return message;
     changed = true;
