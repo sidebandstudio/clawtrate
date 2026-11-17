@@ -6,9 +6,9 @@ import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts"
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
 
-/** A bot's row: its name, then its number of tasks ("Otto, 14 tasks, working"). */
+/** A bot's row in the rail, by its name ("Otto, working, 14 tasks, unread"). */
 const bot = (page: Page, name: string) =>
-  page.getByRole("button", { name: new RegExp(`^${name}[^,]*, \\d+ tasks?`) });
+  page.getByTestId("bot-list").getByRole("button", { name: new RegExp(`^${name}\\b`) });
 
 test.describe("the rail", () => {
   test.use(contextFor(WIDE, "light"));
@@ -19,7 +19,9 @@ test.describe("the rail", () => {
     await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
     const otto = bot(page, "Otto");
     await expect(otto).toHaveAttribute("aria-expanded", "true");
-    await expect(otto).toHaveAccessibleName("Otto, 14 tasks, working, unread");
+    await expect(otto).toHaveAccessibleName(
+      "Otto, working, 14 tasks, unread, home server operations",
+    );
     const tasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
     await expect(tasks).toHaveCount(6);
     await page.getByRole("button", { name: "Show all 14" }).click();
@@ -36,7 +38,7 @@ test.describe("the rail", () => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(
       "Disk almost full on the media box",
     );
-    await expect(bot(page, "Otto").locator(".glyph[data-state='working']")).toBeVisible();
+    await expect(bot(page, "Otto").locator(".presence[data-state='working']")).toBeVisible();
     await expect(bot(page, "Otto").locator(".unread-dot")).toBeVisible();
   });
 
@@ -70,8 +72,9 @@ test.describe("the rail", () => {
     await expect(bot(page, "Juniper")).toHaveAttribute("aria-expanded", "false");
     await page.keyboard.press("End");
     await expect(bot(page, "Quartermaster")).toBeFocused();
+    // Recent activity first: Otto's run is the newest.
     await page.keyboard.press("Home");
-    await expect(bot(page, "Juniper")).toBeFocused();
+    await expect(bot(page, "Otto")).toBeFocused();
   });
 
   test("a truncated task title shows in full on keyboard focus", async ({ page }) => {
@@ -114,7 +117,8 @@ test.describe("the rail", () => {
   test("shows nothing that would do nothing on a read-only connection", async ({ page }) => {
     await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
     await expect(page.getByRole("button", { name: /^New/ })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: /Search/ })).toHaveCount(0);
+    // Search exists, so it is shown; nothing that creates is.
+    await expect(page.getByRole("button", { name: /Search/ })).toHaveCount(1);
     await expect(page.getByRole("textbox")).toHaveCount(0);
     await expect(page.locator(".composer")).toContainText("Read-only connection.");
   });

@@ -6,14 +6,44 @@ import { isUnread, markSeen, type SeenMap } from "./unread.ts";
 /** Rows shown under an unfolded bot before "Show all". */
 export const TASK_CAP = 6;
 
+export type RunState = "waiting" | "failed" | "blocked" | "done-with-failures" | "working";
+
 export type BotSummary = {
   /** The task with the latest activity, across all of the bot's tasks. */
   latest: Task | null;
   /** Any task is unread, other than the one on screen. */
   unread: boolean;
-  /** The most urgent run state among the tasks: failed before working. */
-  state: "failed" | "working" | null;
+  /**
+   * The most urgent state among the tasks: waiting for you, failed or blocked,
+   * done with failures (until that task is opened), working. Done and unread is
+   * the unread dot; idle is nothing.
+   */
+  state: RunState | null;
 };
+
+/** Not opened since its latest activity. */
+function unseen(task: Task, seen: SeenMap): boolean {
+  const lastSeen = seen[task.key];
+  return lastSeen === undefined || (task.updatedAt ?? 0) > lastSeen;
+}
+
+/** A task's own state, as its row's mark says it. Opening a task clears done with failures. */
+export function taskState(task: Task, seen: SeenMap, onScreenKey: string | null): RunState | null {
+  switch (task.status) {
+    case "running":
+      return "working";
+    case "waiting":
+    case "failed":
+    case "blocked":
+      return task.status;
+    case "done-with-failures":
+      return task.key !== onScreenKey && unseen(task, seen) ? "done-with-failures" : null;
+    default:
+      return null;
+  }
+}
+
+const URGENCY: RunState[] = ["waiting", "failed", "blocked", "done-with-failures", "working"];
 
 /**
  * What a bot's row says about all of its tasks. The three signals are
@@ -24,27 +54,42 @@ export function summarize(tasks: Task[], seen: SeenMap, onScreenKey: string | nu
   for (const task of tasks) {
     if (!latest || (task.updatedAt ?? 0) > (latest.updatedAt ?? 0)) latest = task;
   }
+  const states = new Set(tasks.map((task) => taskState(task, seen, onScreenKey)));
   return {
     latest,
     unread: tasks.some((task) => task.key !== onScreenKey && isUnread(task, seen)),
-    state: tasks.some((task) => task.status === "failed")
-      ? "failed"
-      : tasks.some((task) => task.status === "running")
-        ? "working"
-        : null,
+    // Failed and blocked share a place; failed is named first.
+    state: URGENCY.find((state) => states.has(state)) ?? null,
   };
 }
 
-/** A bot's accessible name: "Otto, 14 tasks, working, unread". */
-export function botLabel(bot: Bot, count: number, summary: BotSummary): string {
+/** How a state is spoken in a row's name. */
+export const STATE_WORDS: Record<RunState, string> = {
+  waiting: "waiting for you",
+  failed: "a run failed",
+  blocked: "blocked",
+  "done-with-failures": "done with failures",
+  working: "working",
+};
+
+/**
+ * A bot's accessible name: its name and state first, as assistive tools read a
+ * busy bot ("Otto, working"), then its tasks and what else is true: "Otto,
+ * working, 14 tasks, unread".
+ */
+export function botLabel(
+  bot: Bot,
+  count: number,
+  summary: BotSummary,
+  extra: { primary?: boolean; label?: string | null } = {},
+): string {
   return (
-    `${bot.name}, ${count} ${count === 1 ? "task" : "tasks"}` +
-    (summary.state === "working"
-      ? ", working"
-      : summary.state === "failed"
-        ? ", a run failed"
-        : "") +
-    (summary.unread ? ", unread" : "")
+    bot.name +
+    (summary.state ? `, ${STATE_WORDS[summary.state]}` : "") +
+    `, ${count} ${count === 1 ? "task" : "tasks"}` +
+    (summary.unread ? ", unread" : "") +
+    (extra.label ? `, ${extra.label}` : "") +
+    (extra.primary ? ", primary bot" : "")
   );
 }
 
@@ -167,6 +212,34 @@ export function useSelection(state: ClawtrateState) {
     [state.tasksByBot, isOpen, updateHeld, bot, setFolded],
   );
 
+  /** Make one bot the only one unfolded among `group` (the pinned bots: their block has one owner). */
+  const unfoldOnly = useCallback(
+    (id: string, group: string[]) => {
+      updateHeld((ids) => {
+        for (const other of group) if (other !== id) ids.delete(other);
+        if ((state.tasksByBot[id]?.length ?? 0) > 1) ids.add(id);
+      });
+      if (bot && bot.id !== id && group.includes(bot.id)) setFolded(true);
+      if (bot?.id === id) setFolded(false);
+    },
+    [updateHeld, state.tasksByBot, bot, setFolded],
+  );
+
+  /** Forget that these bots were unfolded by hand. */
+  const release = useCallback(
+    (ids: string[]) => updateHeld((held) => ids.forEach((id) => held.delete(id))),
+    [updateHeld],
+  );
+
+  /** The task a bot opens to: its remembered task, or else its most recent. */
+  const taskFor = useCallback(
+    (id: string): Task | null => {
+      const list = state.tasksByBot[id] ?? [];
+      return list.find((t) => t.key === taskByBot[id]) ?? list[0] ?? null;
+    },
+    [state.tasksByBot, taskByBot],
+  );
+
   const toggleShowAll = useCallback((id: string) => {
     setShowAll((current) => {
       const next = new Set(current);
@@ -186,6 +259,9 @@ export function useSelection(state: ClawtrateState) {
     selectTask,
     toggleFold,
     toggleShowAll,
+    unfoldOnly,
+    release,
+    taskFor,
   };
 }
 

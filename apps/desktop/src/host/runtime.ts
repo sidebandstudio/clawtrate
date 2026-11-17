@@ -173,6 +173,7 @@ export async function startHostRuntime(options: {
     info: {
       kind: options.kind,
       version: APP_VERSION,
+      deviceName: options.displayName,
       devGateway: devGateway ? { url: devGateway.url } : null,
     },
     // Files viewers add before sending, held in this process until a message takes them.
