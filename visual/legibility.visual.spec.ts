@@ -3,7 +3,15 @@
 // translucent fills composited over their real parents. Text behind the Work
 // drawer's scrim is inert and deliberately concealed, so it is not measured.
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import {
+  contextFor,
+  openFixture,
+  OTTO_DISK,
+  settle,
+  SIZES,
+  STATE_SCENES,
+  THEMES,
+} from "./fixture.ts";
 
 type Finding = { text: string; size: number; ratio: number; color: string; background: string };
 
@@ -159,17 +167,16 @@ const SCENES: Scene[] = [
       await expect(page.getByRole("menu", { name: "Gateway" })).toBeVisible();
     },
   },
+  ...STATE_SCENES,
 ];
 
-const WIDE = SIZES.find((size) => size.name === "1440")!;
-const PHONE = SIZES.find((size) => size.phone)!;
-
-for (const size of [WIDE, PHONE]) {
+// Every width the screenshots are taken at: 1440, 1100, 800 and the phone.
+for (const size of SIZES) {
   for (const theme of THEMES) {
     test.describe(`legibility ${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
       for (const scene of SCENES) {
-        test(scene.name, async ({ page }) => {
+        test(`F-471: legibility, ${scene.name}`, async ({ page }) => {
           await openFixture(page, scene.query, theme);
           await settle(page);
           await scene.prepare?.(page);

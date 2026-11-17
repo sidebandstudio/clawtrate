@@ -9,6 +9,13 @@ const components: Components = {
       {children}
     </a>
   ),
+  // A table may be wider than the bubble's text: it takes the room beside the
+  // message, and scrolls inside itself when even that is not enough.
+  table: ({ children }) => (
+    <div className="table-wrap">
+      <table>{children}</table>
+    </div>
+  ),
   // Transcripts are untrusted; never load remote images from them.
   img: ({ alt }) => <span>{alt ? `[image: ${alt}]` : "[image]"}</span>,
 };

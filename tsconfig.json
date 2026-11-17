@@ -7,8 +7,11 @@
   "include": [
     "e2e/**/*.ts",
     "visual/**/*.ts",
+    "e2e-packaged/**/*.ts",
+    "test/**/*.ts",
     "playwright.config.ts",
     "playwright.visual.config.ts",
+    "playwright.packaged.config.ts",
     "vitest.config.ts",
     "eslint.config.js"
   ]

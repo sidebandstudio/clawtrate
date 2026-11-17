@@ -67,3 +67,25 @@ describe("chunkText", () => {
     expect(pieces.length).toBeGreaterThan(3);
   });
 });
+
+describe("the end-to-end runs the seed does not leave behind", () => {
+  it("are scenarios: one narrates between its tool calls, one streams slowly", () => {
+    // Three rounds: text and a listing, text and a write, then text.
+    const narrate = planReply(
+      [{ role: "user", content: "[Mon 09:00] #text #list #write" }],
+      ALL_TOOLS,
+    );
+    expect(narrate.map((step) => step.kind)).toEqual(["text", "tool"]);
+    const slow = planReply([{ role: "user", content: "#slow 8" }], ALL_TOOLS);
+    // About ten seconds at its own pace.
+    const ms = slow.reduce(
+      (sum, step) =>
+        step.kind === "text" || step.kind === "reasoning"
+          ? sum + chunkText(step.text).length * (step.delayMs ?? 0)
+          : sum,
+      0,
+    );
+    expect(ms).toBeGreaterThan(9_000);
+    expect(ms).toBeLessThan(14_000);
+  });
+});

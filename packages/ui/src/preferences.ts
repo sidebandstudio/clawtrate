@@ -51,6 +51,29 @@ export function useTheme(): [ThemeChoice, (choice: ThemeChoice) => void] {
   return [choice, choose];
 }
 
+export type BubbleChoice = "accent" | "neutral";
+
+/**
+ * Your messages' fill: the accent, or neutral (`--bg-inverse`). `?bubbles=`
+ * overrides the stored choice. Neutral sets `data-bubbles` on the root.
+ */
+export function useBubbles(): [BubbleChoice, (choice: BubbleChoice) => void] {
+  const [choice, setChoice] = useState<BubbleChoice>(() => {
+    const fromUrl = new URLSearchParams(globalThis.location?.search ?? "").get("bubbles");
+    return (fromUrl ?? readPreference("bubbles")) === "neutral" ? "neutral" : "accent";
+  });
+  useEffect(() => {
+    const root = document.documentElement;
+    if (choice === "neutral") root.dataset.bubbles = "neutral";
+    else delete root.dataset.bubbles;
+  }, [choice]);
+  const choose = useCallback((next: BubbleChoice) => {
+    writePreference("bubbles", next === "accent" ? null : next);
+    setChoice(next);
+  }, []);
+  return [choice, choose];
+}
+
 /** A set of ids kept as a JSON array in a preference. */
 export function readIdSet(key: string): Set<string> {
   try {
