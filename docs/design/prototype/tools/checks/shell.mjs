@@ -31,7 +31,7 @@ await p.keyboard.press('Enter'); check('enter with empty draft does nothing', aw
 // docked at 1300: main 1020 >= 960
 await p.click('.task[data-task="o1"]');
 await p.evaluate(() => { const t = document.querySelector('#transcript'); t.scrollTop = t.scrollHeight; });
-await p.click('#panel-button'); 
+await p.click('#panel-button');
 check('docked at 1300, not modal', await p.evaluate(() => getComputedStyle(document.querySelector('#work-panel')).position === 'relative' && !document.querySelector('.rail').inert));
 check('bottom stays bottom on open', await p.evaluate(() => { const t = document.querySelector('#transcript'); return t.scrollHeight - t.scrollTop - t.clientHeight < 4; }));
 await p.click('#panel-button');

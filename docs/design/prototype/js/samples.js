@@ -142,13 +142,16 @@
   S.command = "mv /srv/media/transcode-cache /srv/scratch/transcode-cache";
   S.reviewAsk = "Reviewed automatically: not approved. Medium risk. Moves a folder that is outside the bot's workspace.";
 
-  // The review's record, in the tool event the gateway emits for it.
+  // The review's record, in the tool event the gateway emits for it. The gateway adds
+  // `seq` and `ts` to every agent event before it publishes it.
   const reviewEvent = (status, decided) => {
     const toolCallId = decided?.toolCallId || "call_01HXKB";
     return json({
       runId: "run_7f3a91c2",
-      sessionKey: "agent:otto:weekly-backup-check",
+      seq: status === "in_progress" ? 41 : 42,
       stream: "tool",
+      ts: status === "in_progress" ? 1794787263120 : 1794787264870,
+      sessionKey: "agent:otto:weekly-backup-check",
       data: {
         phase: "review",
         name: "exec",
