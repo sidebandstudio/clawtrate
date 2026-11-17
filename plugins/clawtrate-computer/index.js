@@ -1056,9 +1056,11 @@ export function createComputer(api, options = {}) {
         };
       }
       const key = callKey(runId, toolCallId);
-      const record = { agentId: bot.agentId, profile: bot.profile };
+      const record = { agentId: bot.agentId, profile: bot.profile, unbind: () => {} };
       state.inflight.set(key, record);
-      // A cancelled call is no longer running.
+      // A cancelled call no longer counts as running (a take still brings the
+      // tab to rest, see quiesce). The listener goes when the call completes,
+      // so a long run does not gather one per call on its signal.
       const signal = ctx?.abortSignal;
       if (isSignal(signal)) {
         const forget = () => {
@@ -1068,7 +1070,10 @@ export function createComputer(api, options = {}) {
           }
         };
         if (signal.aborted) forget();
-        else signal.addEventListener("abort", forget, { once: true });
+        else {
+          signal.addEventListener("abort", forget, { once: true });
+          record.unbind = () => signal.removeEventListener("abort", forget);
+        }
       }
       // target "host": never a node or sandbox browser; when host control is
       // not allowed for the session, the browser tool refuses the call.
@@ -1089,6 +1094,7 @@ export function createComputer(api, options = {}) {
       // Only the matching record, and only for the same agent.
       if (record && record.agentId === ctx?.agentId) {
         state.inflight.delete(key);
+        record.unbind();
         changed();
         const ran = profileSelector(event.params?.profile);
         if (ran !== undefined && ran !== record.profile) {

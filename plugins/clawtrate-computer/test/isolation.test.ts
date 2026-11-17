@@ -112,6 +112,26 @@ describe("R3-02: bot calls are tracked by run id and tool call id together", () 
     expect((await take(h)).payload?.state).toBe("granted");
   });
 
+  it("a call that completes takes its abort listener off the run's signal", async () => {
+    const h = load();
+    const listeners = new Set<unknown>();
+    const signal = {
+      aborted: false,
+      addEventListener: (_type: string, fn: unknown) => listeners.add(fn),
+      removeEventListener: (_type: string, fn: unknown) => listeners.delete(fn),
+    };
+    for (let i = 0; i < 50; i += 1) {
+      await h.before("atlas", "run-long", `call_${i}`, { action: "tabs" }, { abortSignal: signal });
+      expect(listeners.size).toBe(1);
+      await h.after("atlas", "run-long", `call_${i}`);
+      expect(listeners.size, `after call ${i}`).toBe(0);
+    }
+    // Another agent's completion with the same ids leaves the listener in place.
+    await h.before("atlas", "run-long", "call_x", { action: "tabs" }, { abortSignal: signal });
+    await h.after("ledger", "run-long", "call_x");
+    expect(listeners.size).toBe(1);
+  });
+
   it("a cancelled call stops counting as running", async () => {
     const h = load();
     const abort = new AbortController();
