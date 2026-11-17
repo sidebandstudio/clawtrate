@@ -1,5 +1,5 @@
 // Exposes a narrow, typed IPC surface to the renderer. No Node or Electron
-// objects cross the bridge, only plain data and four functions.
+// objects cross the bridge, only plain data, four functions and the platform name.
 
 import type { AttachmentInfo, BridgeCommand, ClawtrateState, HostInfo } from "@clawtrate/core";
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";

@@ -88,7 +88,9 @@ test("opens its window from the packaged app on the connect screen", async () =>
   }));
   expect(page_.require).toBe("undefined");
   expect(page_.process).toBe("undefined");
-  expect(page_.host).toEqual(["hello", "onState", "platform", "send"]);
+  // The whole bridge: four functions and the platform name. `attach` hands a file's
+  // bytes to the main process for a later message; anything else here is a regression.
+  expect(page_.host).toEqual(["attach", "hello", "onState", "platform", "send"]);
   expect(page_.csp).toContain("default-src 'self'");
   expect(page_.csp).toContain("script-src 'self'");
 });
