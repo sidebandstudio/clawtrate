@@ -26,7 +26,7 @@ pnpm install
 pnpm dev-gateway start
 ```
 
-This runs `openclaw --dev gateway run` on `ws://127.0.0.1:19001` with its state in `~/.openclaw-dev`, so it never touches a gateway you use day to day. It talks only to a scripted model server on `127.0.0.1:19091`; no model provider account is used. It then seeds four sample bots, each with its own instructions, and eleven conversations with reasoning and tool calls. Each seeded run is checked against its script. `pnpm dev-gateway up` does the same.
+This runs `openclaw --dev gateway run` on `ws://127.0.0.1:19001` with its state in `~/.openclaw-dev`, so it never touches a gateway you use day to day. It talks only to a scripted model server on `127.0.0.1:19091`; no model provider account is used. It then seeds four sample bots, each with its own instructions, eleven conversations with reasoning and tool calls, and seven finished examples of the live situations (see [Scenarios](#scenarios)). Each seeded run is checked against its script. `pnpm dev-gateway up` does the same.
 
 Every start is a fresh, seeded gateway. It stops the gateway this checkout started before, deletes `~/.openclaw-dev` and creates it again empty. OpenClaw keeps credentials in the same SQLite stores a clean profile has, so the tool never reuses state rather than trying to prove old state clean. If `~/.openclaw-dev` was not created by this tool, or is a symlink, `start` refuses and changes nothing. The tool records every process it starts by PID and start time, and it deletes a state folder only with proof that nothing runs on it: every recorded process is gone and nothing listens on the instance's ports. A process counts as gone only when the system says there is no such process, or shows it as a zombie. When the tool cannot tell, for example because `ps` fails or prints something it cannot read, it treats the process as running, signals and deletes nothing, and says what it could not determine. So if the folder's gateway may be running and this checkout cannot prove it started it, `start` and `reset` refuse, say which instance is in use, and change nothing. `stop` signals only processes it can prove this checkout started; anything it cannot prove, it reports and leaves alone. A state folder made by an older version of the tool is refused for good; see [Migrating from an older version](#migrating-from-an-older-version). Because the gateway is new each time, preview hosts and the desktop app pair again after a start.
 
@@ -58,6 +58,49 @@ Earlier versions of the tool recorded no process start times, so this version ca
 5. `pnpm dev-gateway start` now creates a new folder and succeeds.
 
 For a named instance it is the same with `~/.openclaw-clawtrate-dev-<name>`, `tools/dev-gateway/.run/instances/<name>/state.json` and the ports its run file records. The tool never adopts, lists or deletes the folder you moved aside. Delete it yourself once you no longer need it.
+
+#### Scenarios
+
+The scripted model can put a run into every situation the live conversation has to show. Start a task with any bot and send a directive such as `#steps`, or a phrase from the table anywhere in a message ("Please show your work"). Several directives in one message run one after the other, so `#think #mcp #ask` reasons, calls the coding agent, then asks you a question. A number after `#slow`, `#slow-tool`, `#sleep` or `#mcp-slow` sets its length in seconds. `#help` lists them all. Directives take precedence over phrases; with several phrases, the longest wins.
+
+| Directive        | Phrase                                 | What happens                                                                                                                          | Send it to    |
+| ---------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `#help`          | what scenarios can you play            | Lists every directive and phrase.                                                                                                     | any bot       |
+| `#text`          | reply in plain text                    | Streamed text, no reasoning.                                                                                                          | any bot       |
+| `#think`         | think before you answer                | Reasoning, then text.                                                                                                                 | any bot       |
+| `#think-only`    | think without answering                | Reasoning only: no text and no tool. The gateway asks twice more for a visible answer, then ends the run in an error.                 | any bot       |
+| `#steps`         | show your work                         | Reasoning, a tool call, more reasoning, another tool call, then text.                                                                 | any bot       |
+| `#slow [N]`      | take your time                         | Reasoning, then text streamed slowly for N seconds (default 20): stop it, or queue a message behind it.                               | any bot       |
+| `#slow-tool [N]` | run a slow tool                        | A tool call that takes N seconds (default 20): steer into it, stop it or queue behind it.                                             | any bot       |
+| `#tool-fail`     | use a tool that fails                  | A tool call that fails (reading a file that does not exist), then text.                                                               | any bot       |
+| `#long-output`   | print a long output                    | A tool whose output is long enough for the gateway to cut it (20,000 lines).                                                          | any bot       |
+| `#approve`       | run a command I can approve            | Asks to run `ls` in Otto's workspace. The approval offers a reusable rule (allow-always).                                             | Otto          |
+| `#approve-once`  | run a command I approve every time     | Asks to run `echo 'Hello from Otto.'` with per-call ask "always": the approval offers no reusable rule.                               | Otto          |
+| `#exit-code`     | run a command that fails               | Asks to run `ls missing-folder`, which exits non-zero.                                                                                | Otto          |
+| `#exec-timeout`  | run a command that times out           | Asks to run `sleep 5` with a 1 second limit, so it is stopped.                                                                        | Otto          |
+| `#sleep [N]`     | run a slow command                     | Asks to run `sleep N` (default 20, at most 120): a slow shell command.                                                                | Otto          |
+| `#ask`           | ask me a question                      | One question with options, through the gateway's question tool.                                                                       | any bot       |
+| `#ask-many`      | ask me several questions               | Three questions in one card.                                                                                                          | any bot       |
+| `#ask-multi`     | let me pick several                    | One multi-select question.                                                                                                            | any bot       |
+| `#ask-text`      | ask me to type an answer               | A question meant to be answered in free text (every question also accepts typed text).                                                | any bot       |
+| `#reply`         | reply with a note                      | A short note; what a bot answers when the other bot messages it.                                                                      | any bot       |
+| `#message`       | message your partner                   | A message to the other bot of the pair, answered in the same call.                                                                    | Marlow or Pip |
+| `#message-slow`  | message your slow partner              | A message to the other bot, which takes 15 seconds; the call returns before it answers, and the reply arrives later in the same task. | Marlow or Pip |
+| `#message-fail`  | message your failing partner           | A message to the other bot, whose run ends in a model error.                                                                          | Marlow or Pip |
+| `#message-ask`   | message your partner who asks          | A message to the other bot, which asks its own user a question before replying.                                                       | Marlow or Pip |
+| `#mcp`           | ask the coding agent                   | A call to the stand-in coding agent over MCP; the result carries a link.                                                              | any bot       |
+| `#mcp-slow [N]`  | ask the coding agent something slow    | A call to the coding agent that takes N seconds (default 20) to reply.                                                                | any bot       |
+| `#mcp-error`     | ask the coding agent to run the checks | A call to the coding agent that returns an error.                                                                                     | any bot       |
+| `#mcp-stop`      | start a coding task I can stop         | A call to the coding agent that does not finish for an hour: stop the run mid-call.                                                   | any bot       |
+| `#model-error`   | fail with a model error                | The model request fails, so the run ends in an error.                                                                                 | any bot       |
+
+Where it matters which bot you ask:
+
+- **Shell commands** run only for Otto, and only after you approve each one. Every other bot's shell is denied, so `#approve` sent to Pip shows a denied step instead. Otto's scripted model only ever asks for the commands in the table. An approval with "allow always" lets that exact command run in Otto's workspace without asking again, until the instance is started over. [What can run](docs/decisions.md#what-can-run) says exactly what is allowed.
+- **Bot-to-bot messages** go only between Marlow and Pip. A bot outside the pair asks Marlow, and the gateway refuses. A message goes to the other bot's main task ("Notes for Pip" in Marlow's list), and a bot may ask its user a question only in a task a person has written in, which the seed's example does.
+- **Questions and approvals** need a client with the right scopes. The read-only preview does not show them yet; answer from a client with `operator.questions` or `operator.approvals`.
+
+After `start`, the seed has left finished examples, played through a paired client called "Clawtrate seed" that answers and approves as the user and is unpaired afterwards: Juniper's "Show your work" (reasoning and steps), "A step that fails" and "Hand off to the coding agent" (an MCP call); Pip's "Ask Marlow about the plan" (a bot-to-bot exchange) and "Which route on Saturday" (an answered question); Marlow's "Notes for Pip", where Pip's message arrived; and Otto's "List the workspace (approved)" (a resolved approval).
 
 ### 2. Open the web preview
 
@@ -98,7 +141,10 @@ pnpm typecheck
 pnpm test
 pnpm exec playwright install chromium   # once
 pnpm e2e
+pnpm scenarios
 ```
+
+`pnpm scenarios` is the scenario check on an instance of its own. It starts an unseeded named instance, connects with the official gateway client as three paired operators (read and write; plus `operator.approvals`; plus `operator.questions`), triggers every scenario above, and asserts what the gateway emitted: each run's lifecycle, the reasoning and tool events in order, the question cards and their answers, the approval requests with the decisions they offer and their resolution, the bot-to-bot tool results and the recipients' runs, the MCP results, stops, steers and queued messages. Event payloads are checked against the schemas in `@openclaw/gateway-protocol`. It prints one line per check and resets its instance afterwards, also on Ctrl-C. `pnpm e2e` runs the same checks on its own seeded instance (`e2e/scenarios.spec.ts`). What the checks found about the gateway is in [What the scenario check observed](docs/decisions.md#what-the-scenario-check-observed).
 
 ### Without a gateway: the fixture mode and the visual tests
 
