@@ -46,7 +46,7 @@
   --list-width: 0px; /* retired: tasks moved into the rail */
   --panel-width: 360px;
   --header-height: 56px; /* the band the title pill and round buttons float in */
-  --strip-band: 40px; /* the band under it, kept clear for the status strip */
+  --strip-band: 42px; /* the band under it, kept clear for the status strip */
   --transcript-max: 760px;
   --conversation-min: 440px;
   --tap-min: 44px;
@@ -78,7 +78,7 @@
   /* Two surfaces and one raised fill. Neutral, no tint. */
   --bg: #ffffff; /* the stage: conversation, connection screen */
   --bg-rail: #f6f6f5; /* the sidebar */
-  --bg-list: var(--bg-rail); /* retired alias */
+  --bg-list: #f6f6f5; /* the rail's value, written out; retired with the task column */
   --bg-pane: #ffffff;
   --bg-raised: #ffffff; /* floating pills, menus, round buttons */
   --bg-bubble: #f0f0ee; /* the bot's bubbles, cards */
@@ -128,7 +128,7 @@
 
   --bg: #101112;
   --bg-rail: #0b0c0d;
-  --bg-list: var(--bg-rail);
+  --bg-list: #0b0c0d;
   --bg-pane: #101112;
   --bg-raised: #1c1d1f;
   --bg-bubble: #1f2022;

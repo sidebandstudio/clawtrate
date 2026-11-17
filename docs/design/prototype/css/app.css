@@ -701,9 +701,33 @@ textarea {
   background: var(--bg-selected);
 }
 
+/* A pinned bot whose tasks are showing but which is not the open bot. */
+.pin[aria-expanded="true"]:not([aria-current="true"]) {
+  background: color-mix(in srgb, var(--bg-hover) 55%, transparent);
+}
+
 .pin .avatar {
   width: var(--avatar-pin);
   height: var(--avatar-pin);
+}
+
+/* The run state sits on the avatar's corner; the unread dot sits beside the
+   name. The two are independent, as on a bot row. */
+.pin-avatar {
+  position: relative;
+  display: grid;
+}
+
+.pin-avatar .glyph {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  box-shadow: 0 0 0 2.5px var(--bg-rail);
+}
+
+/* The working ring sits on a disc of the rail's colour, so it reads on any avatar. */
+.pin-avatar .glyph[data-state="working"] {
+  background: var(--bg-rail);
 }
 
 .pin-name {
@@ -722,12 +746,44 @@ textarea {
   text-overflow: ellipsis;
 }
 
-/* The tasks of an open pinned bot sit in a block right under the tiles. */
+/* The pin grid has one task block. It belongs to one pinned bot at a time and
+   says whose it is. */
 .pin-tasks {
   margin-bottom: 6px;
-  padding: 6px 0;
+  padding: 4px 0 6px;
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-hover) 55%, transparent);
+}
+
+.pin-tasks-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  margin: 0;
+  padding: 0 26px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.pin-tasks-label .avatar {
+  width: 16px;
+  height: 16px;
+}
+
+/* When the gateway has no bots, or is still listing them. */
+.rail-empty {
+  padding: var(--space-6) var(--space-4);
+  font-size: var(--text-md);
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.rail-empty strong {
+  display: block;
+  margin-bottom: 2px;
+  font-weight: var(--weight-medium);
+  color: var(--text);
 }
 
 /* The gateway: one quiet row at the foot. It opens the gateway menu. */
@@ -879,6 +935,24 @@ textarea {
   background: var(--border);
 }
 
+/* The "+" menu, under its button, and a bot's context menu, at the pointer. */
+.rail-menu {
+  position: fixed;
+  z-index: 30;
+  width: 232px;
+}
+
+.rail-menu[hidden] {
+  display: none;
+}
+
+.menu-item kbd {
+  margin-left: auto;
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
 /* The gateway menu opens upward from the footer row. */
 .gateway-menu {
   position: absolute;
@@ -1000,8 +1074,12 @@ textarea {
   mask-image: linear-gradient(to bottom, transparent calc(var(--clear) - 34px), #000 var(--clear));
 }
 
+/* While the strip shows, text stays fully hidden through the strip's bottom
+   edge and its gap, and appears over the last 8px of the band. */
 .conversation[data-strip="true"] .transcript {
   --clear: calc(var(--header-height) + var(--strip-band));
+  -webkit-mask-image: linear-gradient(to bottom, transparent calc(var(--clear) - 8px), #000 var(--clear));
+  mask-image: linear-gradient(to bottom, transparent calc(var(--clear) - 8px), #000 var(--clear));
 }
 
 .transcript-inner {
@@ -1016,8 +1094,24 @@ textarea {
   margin: 0 auto 4px;
   font-size: var(--text-md);
   font-weight: var(--weight-medium);
+  line-height: 1.45;
   text-align: center;
   text-wrap: balance;
+}
+
+/* One transcript item: its bubbles and its folded work, in order. The shell's
+   .turn, now only a wrapper. */
+.turn + .turn {
+  margin-top: var(--space-4);
+}
+
+.turn[data-role="assistant"] + .turn[data-role="assistant"],
+.turn[data-role="user"] + .turn[data-role="user"] {
+  margin-top: 4px;
+}
+
+.turn > :first-child {
+  margin-top: 0;
 }
 
 /* new: time is a centred stamp between blocks, never beside a message. */
@@ -1090,15 +1184,36 @@ textarea {
   height: 13px;
 }
 
+/* A message written offline has not been sent, so it is not yet in your colour. */
+.turn[data-waiting="true"] .msg[data-role="user"] .bubble {
+  background: var(--bg-bubble);
+  color: var(--text);
+}
+
+.event-line[data-side="end"] {
+  margin-left: auto;
+}
+
+/* A system message: the same quiet line, centred. */
+.event-line[data-side="center"] {
+  margin-right: auto;
+  margin-left: auto;
+}
+
 /* Until the conversation components are built, a turn's thoughts and tool
-   calls fold into one line that opens to plain rows. */
-.steps > summary {
+   calls fold into one line. Opened, each is still its own row, and each row
+   still opens to what the shell shows today: the full reasoning, or the call's
+   arguments and result. The row rules are scoped to .steps-list, so the
+   conversation components can bring their own .step later. */
+.steps > summary,
+.steps-list .step > summary {
   list-style: none;
   cursor: pointer;
   user-select: none;
 }
 
-.steps > summary::-webkit-details-marker {
+.steps > summary::-webkit-details-marker,
+.steps-list .step > summary::-webkit-details-marker {
   display: none;
 }
 
@@ -1107,27 +1222,54 @@ textarea {
   color: var(--text);
 }
 
-.steps[open] > summary .icon {
+.steps[open] > summary .icon,
+.steps-list .step[open] > summary .step-chevron {
   transform: rotate(90deg);
 }
 
 .steps-list {
+  width: 100%;
+  max-width: min(86%, 640px); /* the width of an assistant bubble */
   margin: 2px 0 6px;
-  padding: 0;
-  list-style: none;
+  padding: 4px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
 }
 
 .step {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-height: 28px;
-  padding: 4px 14px;
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
-.step-tool-name {
+.steps-list .step > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.steps-list .step > summary:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.steps-list .step-chevron {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--text-faint);
+}
+
+.steps-list .step-kind {
+  flex: none;
+  font-weight: var(--weight-medium);
+}
+
+.steps-list .step-tool-name {
   flex: none;
   padding: 1px 7px;
   border-radius: 6px;
@@ -1136,11 +1278,40 @@ textarea {
   font-size: var(--text-xs);
 }
 
-.step-summary {
+.steps-list .step-summary,
+.steps-list .step-reasoning-preview {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.steps-list .step-state {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.steps-list .step-state[data-error="true"] {
+  color: var(--danger);
+}
+
+.steps-list .step-body {
+  padding: 4px 10px 10px 30px;
+}
+
+.steps-list .step-body .reasoning {
+  max-width: 62ch;
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  color: var(--text-muted);
+}
+
+.steps-list .step-body .code-block {
+  background: var(--bg-pane);
 }
 
 /* The shell's .jump-latest: a pill centred over the foot of the transcript,
@@ -1170,6 +1341,8 @@ textarea {
   color: var(--text-muted);
 }
 
+.title-pill[hidden],
+.icon-button[hidden],
 .jump-latest[hidden] {
   display: none;
 }
@@ -1393,6 +1566,7 @@ textarea {
   margin-bottom: 14px;
 }
 
+.empty h1,
 .empty h3 {
   margin: 0 0 4px;
   font-size: var(--text-lg);
@@ -1449,9 +1623,10 @@ textarea {
 
 /* Status strip ------------------------------------------------------------- */
 
-/* The shell's .status-strip: one compact pill. It sits in the protected band
-   under the title pill and overlays the conversation, so nothing moves when
-   it appears, and the shell stays mounted behind it. */
+/* The shell's .status-strip: one compact pill, rendered inside the
+   conversation so it is centred on the conversation at every width, docked
+   Work pane or not. It sits in the protected band under the title pill and
+   overlays, so nothing moves when it appears. */
 .status-strip {
   position: absolute;
   top: calc(var(--header-height) - 2px);
@@ -1475,6 +1650,24 @@ textarea {
   display: none;
 }
 
+/* The strip's dot shows the strip's own state, which may differ from the
+   gateway's presence in the rail: a task can fail to sync while connected. */
+.status-strip .status-dot {
+  background: var(--warn);
+}
+
+.status-strip[data-tone="warn"] .status-dot {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.status-strip[data-tone="danger"] .status-dot {
+  background: var(--danger);
+}
+
+.status-strip[data-tone="ok"] .status-dot {
+  background: var(--accent-line);
+}
+
 /* The state always shows in full. The explanation after it shortens first. */
 .status-strip-text {
   display: flex;
@@ -1494,6 +1687,7 @@ textarea {
 }
 
 .status-strip button {
+  position: relative;
   flex: none;
   height: 26px;
   padding: 0 11px;
@@ -1851,7 +2045,8 @@ textarea {
   overflow-wrap: anywhere;
 }
 
-/* The shell's .copy-status: says "Copied" for a moment, in a live region. */
+/* The shell's .copy-status, a live region: "Copied." after a real copy, or how
+   to copy the selected command when the clipboard refused. */
 .copy-status {
   min-height: 18px;
   margin: 0;
@@ -2044,7 +2239,8 @@ textarea {
     padding: 0 var(--space-3) var(--space-3);
   }
 
-  .bubble {
+  .bubble,
+  .steps-list {
     max-width: 88%;
   }
 
@@ -2109,6 +2305,13 @@ textarea {
 
 [data-input="touch"] .tab {
   height: 36px;
+}
+
+/* The strip keeps its size; its action gets a 44px hit area. */
+[data-input="touch"] .status-strip button::after {
+  content: "";
+  position: absolute;
+  inset: -9px 0;
 }
 
 [data-input="touch"] .menu-item {

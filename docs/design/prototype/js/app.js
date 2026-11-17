@@ -1,20 +1,23 @@
 // The app page, driven by a small local model. No gateway, no network.
 //
-// Three things are tracked separately, as the design specifies: which bot is
-// selected, which task is selected, and which bots are unfolded. One state
-// object also holds the connection, so the status strip, the rail's footer,
-// the title pill and the composer always agree.
+// Tracked separately, as the design specifies: the selected bot, the selected
+// task, which bots in the list are unfolded, and which pinned bot owns the pin
+// grid's one task block. One state object also holds the connection, so the
+// status strip, the rail's footer and the composer always agree.
 //
 // States can be set from the address, which is how the screenshots are taken:
 //   ?bot=juniper&task=j2      open a bot and one of its tasks
-//   ?unfold=juniper,pip       unfold more bots than the selected one
+//   ?unfold=juniper           unfold more bots than the selected one
 //   ?fold=otto                fold the selected bot
 //   ?showall=otto             lift the six-row cap for a bot
-//   ?rail=pinned              pin Pip and Juniper
+//   ?pin=pip,juniper,otto     pin bots (?rail=pinned pins Pip and Juniper)
+//   ?pinopen=juniper          which pinned bot's tasks show
 //   ?panel=open&tab=files     the Work pane and its tab
 //   ?view=list                the one-pane layout's list
 //   ?banner=reconnecting      the connection: reconnecting, offline, syncing, synced, failed
-//   ?state=empty              no task selected; also: loading, readonly, newtask, loaderror
+//   ?state=empty              no task selected; also: loading, readonly, newtask,
+//                             loaderror, nobots, discovering, zerotasks
+//   ?menu=new                 open a menu: new, bot, gateway
 
 (function () {
   const CT = window.CT;
@@ -24,33 +27,85 @@
   const esc = (text) =>
     String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   const icon = (name, cls) => CT.icon(name, cls);
+  const list = (name) => (params.get(name) || "").split(",").filter(Boolean);
+  const state0 = params.get("state");
 
   // Fixtures --------------------------------------------------------------------
-  // at: minutes, for ordering by latest activity. when: how the time reads.
+
+  // One transcript item: its bubbles and its folded work, in order.
+  const turn = (role, html) => `<div class="turn" data-role="${role}" data-testid="transcript-turn">${html}</div>`;
+  const bubble = (role, html, md = false) => `<div class="msg" data-role="${role}"><div class="bubble${md ? " md" : ""}">${html}</div></div>`;
+
+  // A turn's thoughts and tool calls: one folded line. Each row inside still
+  // opens to the full reasoning, or to the call's arguments and result.
+  const tool = (name, summary, args, result, error = false) =>
+    `<details class="step" data-testid="tool-call"><summary>${icon("chevron", "icon step-chevron")}<span class="step-tool-name">${name}</span>` +
+    `<span class="step-summary">${esc(summary)}</span><span class="step-state" data-error="${error}">${error ? "failed" : result === null ? "no result" : "done"}</span></summary>` +
+    `<div class="step-body"><p class="code-label">Arguments</p><pre class="code-block">${esc(args)}</pre>` +
+    (result === null ? "" : `<p class="code-label">${error ? "Error" : "Result"}</p><pre class="code-block">${esc(result)}</pre>`) +
+    `</div></details>`;
+  const thought = (text) =>
+    `<details class="step"><summary>${icon("chevron", "icon step-chevron")}<span class="step-kind">Thought</span>` +
+    `<span class="step-reasoning-preview">${esc(text.split("\n")[0])}</span></summary><div class="step-body"><p class="reasoning">${esc(text)}</p></div></details>`;
+  const steps = (label, rows) =>
+    `<details class="steps"><summary class="event-line">${label} ${icon("chevron")}</summary><div class="steps-list">${rows.join("")}</div></details>`;
 
   const diskTranscript =
     `<div class="stamp">Today 5:31 PM</div>` +
-    `<div class="msg" data-role="user"><div class="bubble">The media box says the disk is 94% full. What is eating the space?</div></div>` +
-    `<details class="steps"><summary class="event-line">Used 2 tools ${icon("chevron")}</summary><ul class="steps-list">` +
-    `<li class="step"><span class="step-tool-name">ls</span><span class="step-summary">path: .</span></li>` +
-    `<li class="step"><span class="step-tool-name">read</span><span class="step-summary">path: AGENTS.md</span></li></ul></details>` +
-    `<div class="msg" data-role="assistant"><div class="bubble md"><h3>Found</h3><p>The usual suspects on a media box, largest first:</p>` +
-    `<ol><li><code>/var/lib/transcode-cache</code>, about 180 GB of temporary transcodes that were never cleaned up.</li>` +
-    `<li>Old container images, about 40 GB across 12 unused tags.</li><li>Rotated logs, about 6 GB, mostly from one noisy service.</li></ol>` +
-    `<h3>Changed</h3><p>Nothing yet.</p><h3>Left</h3><ul><li>Clearing the transcode cache is safe and frees the most. Its files are regenerated on demand.</li>` +
-    `<li>Pruning unused images is also safe, but the next update will download them again.</li></ul></div></div>` +
-    `<div class="msg" data-role="assistant"><div class="bubble">Should I clear the transcode cache? I will move it aside first so it can be restored.</div></div>` +
+    turn("user", bubble("user", "The media box says the disk is 94% full. What is eating the space?")) +
+    turn(
+      "assistant",
+      steps("Thought, used 2 tools", [
+        thought("I should look at the workspace inventory I keep for the server before guessing.\nThen re-read my instructions so I report in the agreed order."),
+        tool("ls", "path: .", '{\n  "path": "."\n}', "AGENTS.md\ninventory.md\nnotes/"),
+        tool("read", "path: AGENTS.md", '{\n  "path": "AGENTS.md"\n}', "# Otto\n\nYou are Otto, the operator for a small home server.\n\n- Check before you change. Read logs and configs first.\n- Report in this order: what you found, what you changed, what is left."),
+      ]) +
+        bubble(
+          "assistant",
+          `<h3>Found</h3><p>The usual suspects on a media box, largest first:</p>` +
+            `<ol><li><code>/var/lib/transcode-cache</code>, about 180 GB of temporary transcodes that were never cleaned up.</li>` +
+            `<li>Old container images, about 40 GB across 12 unused tags.</li><li>Rotated logs, about 6 GB, mostly from one noisy service.</li></ol>` +
+            `<h3>Changed</h3><p>Nothing yet.</p><h3>Left</h3><ul><li>Clearing the transcode cache is safe and frees the most. Its files are regenerated on demand.</li>` +
+            `<li>Pruning unused images is also safe, but the next update will download them again.</li></ul>` +
+            `<p>Should I clear the transcode cache? I will move it aside first so it can be restored.</p>`,
+          true,
+        ),
+    ) +
     `<div class="stamp">Today 5:36 PM</div>` +
-    `<div class="msg" data-role="user"><div class="bubble">Yes, clear the transcode cache.</div></div>` +
-    `<details class="steps"><summary class="event-line">Used 1 tool ${icon("chevron")}</summary><ul class="steps-list">` +
-    `<li class="step"><span class="step-tool-name">write</span><span class="step-summary">path: notes/disk-2026-11-16.md</span></li></ul></details>` +
-    `<div class="msg" data-role="assistant"><div class="bubble md"><p>Done. The disk is now at 61%.</p><table><thead><tr><th>What</th><th>Before</th><th>After</th></tr></thead>` +
-    `<tbody><tr><td>Disk used</td><td>94%</td><td>61%</td></tr><tr><td>Transcode cache</td><td>180 GB</td><td>0 GB</td></tr><tr><td>Free space</td><td>33 GB</td><td>213 GB</td></tr></tbody></table>` +
-    `<p>I moved the cache to <code>transcode-cache.old</code> instead of deleting it. To undo, move it back. I will remove it in a week unless you say otherwise.</p></div></div>`;
+    turn("user", bubble("user", "Yes, clear the transcode cache.")) +
+    turn(
+      "assistant",
+      steps("Used 1 tool", [tool("write", "path: notes/disk-2026-11-16.md", '{\n  "path": "notes/disk-2026-11-16.md",\n  "content": "Moved the transcode cache aside…"\n}', "Wrote 6 lines.")]) +
+        bubble(
+          "assistant",
+          `<p>Done. The disk is now at 61%.</p><table><thead><tr><th>What</th><th>Before</th><th>After</th></tr></thead>` +
+            `<tbody><tr><td>Disk used</td><td>94%</td><td>61%</td></tr><tr><td>Transcode cache</td><td>180 GB</td><td>0 GB</td></tr><tr><td>Free space</td><td>33 GB</td><td>213 GB</td></tr></tbody></table>` +
+            `<p>I moved the cache to <code>transcode-cache.old</code> instead of deleting it. To undo, move it back. I will remove it in a week unless you say otherwise.</p>`,
+          true,
+        ),
+    );
 
+  // at: minutes, for ordering by latest activity. when: how the time reads.
   const task = (id, title, at, when, preview, extra = {}) => ({ id, title, at, when, preview, unread: false, status: "idle", ...extra });
 
-  const bots = [
+  // Bots keep the order the gateway gives them; only tasks are ordered by activity.
+  let bots = [
+    {
+      id: "juniper",
+      name: "Juniper",
+      label: "Research",
+      tasks: [
+        task("j1", "Heat pump vs. gas furnace", 1044, "5:24 PM", "Ask these five, and get the answers in writing.", { ask: "What should I ask an installer before signing anything?" }),
+        task("j2", "Library e-book apps compared", 902, "3:02 PM", "Most public libraries use one of three lending platforms.", { unread: true, ask: "Which e-book app does my library use, and is it any good?" }),
+        task("j3", "Caffeine cutoff time", -3, "Sun", "Short answer: stop about 8 hours before bed."),
+      ],
+    },
+    {
+      id: "marlow",
+      name: "Marlow",
+      label: "Writing",
+      tasks: [task("m1", "Main", 1018, "4:58 PM", "Tightened the intro and cut about 80 words.", { ask: "Can you tighten the intro of the newsletter draft?" })],
+    },
     {
       id: "otto",
       name: "Otto",
@@ -73,48 +128,36 @@
       ],
     },
     {
-      id: "juniper",
-      name: "Juniper",
-      label: "Research",
-      tasks: [
-        task("j1", "Heat pump vs. gas furnace", 1044, "5:24 PM", "Ask these five, and get the answers in writing.", { ask: "What should I ask an installer before signing anything?" }),
-        task("j2", "Library e-book apps compared", 902, "3:02 PM", "Most public libraries use one of three lending platforms.", { unread: true, ask: "Which e-book app does my library use, and is it any good?" }),
-        task("j3", "Caffeine cutoff time", -3, "Sun", "Short answer: stop about 8 hours before bed."),
-      ],
-    },
-    {
-      id: "marlow",
-      name: "Marlow",
-      label: "Writing",
-      tasks: [task("m1", "Main", 1018, "4:58 PM", "Tightened the intro and cut about 80 words.", { ask: "Can you tighten the intro of the newsletter draft?" })],
-    },
-    {
       id: "pip",
       name: "Pip",
       label: "Planning",
       tasks: [
         task("p1", "Plan the week", 910, "3:10 PM", "Here is the week, with Thursday kept clear.", { unread: true, ask: "Plan my week. Keep Thursday clear." }),
-        task("p2", "Trip to the coast in March", -1, "Mon", "Two options, both under four hours by train."),
+        task("p2", "Trip to the coast in March", -1, "Mon", "Two options, both under four hours by train.", { status: "failed" }),
         task("p3", "Birthday dinner", -4, "Sat", "Booked for eight people at 7:30."),
         task("p4", "Reading list for the spring", -9, "Nov 2", "Twelve books, shortest first."),
       ],
     },
   ];
+  if (state0 === "nobots" || state0 === "discovering") bots = [];
+  if (state0 === "zerotasks") bots.find((b) => b.id === "marlow").tasks = [];
 
   // The model ------------------------------------------------------------------------
 
   const model = {
-    selectedBot: params.get("bot") || "otto",
-    selectedTask: null, // set below
-    remembered: { otto: "o1" }, // the last task opened for each bot
-    unfolded: new Set(), // bots unfolded because they are open
-    held: new Set(), // bots the user unfolded by hand; they stay unfolded
-    showAll: new Set((params.get("showall") || "").split(",").filter(Boolean)),
-    pinned: new Set(params.get("rail") === "pinned" ? ["pip", "juniper"] : []),
+    selectedBot: params.get("bot") || (state0 === "zerotasks" ? "marlow" : "otto"),
+    selectedTask: null, // set at first paint
+    remembered: { otto: "o1" }, // the last task opened for each bot; it wins over the most recent
+    unfolded: new Set(), // list bots unfolded because they are open
+    held: new Set(), // list bots the user unfolded by hand; they stay unfolded
+    pinOwner: params.get("pinopen") || null, // the pinned bot whose tasks the pin grid's one block shows
+    pinHeld: Boolean(params.get("pinopen")), // true when that block was opened by hand
+    showAll: new Set(list("showall")),
+    pinned: new Set(params.get("rail") === "pinned" ? ["pip", "juniper"] : list("pin")),
     connection: "connected",
-    access: params.get("state") === "readonly" ? "read" : "write",
-    loading: params.get("state") === "loading",
-    loadError: params.get("state") === "loaderror",
+    access: state0 === "readonly" ? "read" : "write",
+    loading: state0 === "loading",
+    loadError: state0 === "loaderror",
     panel: false,
     tab: params.get("tab") || "details",
     drafts: {},
@@ -123,21 +166,29 @@
 
   const bot = (id = model.selectedBot) => bots.find((b) => b.id === id);
   const sorted = (b) => [...b.tasks].sort((x, y) => y.at - x.at);
-  const currentTask = () => bot().tasks.find((t) => t.id === model.selectedTask) || null;
+  const currentTask = () => bot()?.tasks.find((t) => t.id === model.selectedTask) || null;
+  const canWrite = () => model.access === "write"; // may this connection send and create tasks
+  const offline = () => model.connection === "reconnecting" || model.connection === "offline";
 
-  // What a bot's row says about all of its tasks.
+  // What a bot's row or tile says about all of its tasks. The three signals are
+  // independent, and safe for a bot with no tasks.
   function summary(b) {
     const tasks = sorted(b);
     const latest = tasks[0];
-    const others = (t) => !(b.id === model.selectedBot && t.id === model.selectedTask);
-    const state = tasks.some((t) => t.status === "failed") ? "failed" : tasks.some((t) => t.status === "running") ? "running" : "idle";
+    const onScreen = (t) => b.id === model.selectedBot && t.id === model.selectedTask;
     return {
-      preview: latest.preview, // from the latest activity in any task
-      when: latest.when,
-      unread: tasks.some((t) => t.unread && others(t)), // if any task is unread
-      state, // by priority across tasks: failed, then running, then idle
+      preview: latest ? latest.preview : "No tasks yet", // the latest activity in any task
+      when: latest ? latest.when : "",
+      unread: tasks.some((t) => t.unread && !onScreen(t)), // any unread task
+      state: tasks.some((t) => t.status === "failed") ? "failed" : tasks.some((t) => t.status === "running") ? "running" : "idle", // by priority
     };
   }
+  const stateMark = (state) =>
+    state === "running"
+      ? `<span class="glyph" data-state="working" aria-hidden="true"></span>`
+      : state === "failed"
+        ? `<span class="glyph" data-state="failed" aria-hidden="true"></span>`
+        : "";
 
   // The rows shown under an unfolded bot: six, then "Show all".
   function visible(b) {
@@ -149,7 +200,9 @@
     return top;
   }
 
-  const isOpen = (b) => b.tasks.length > 1 && (model.unfolded.has(b.id) || model.held.has(b.id));
+  const isPinned = (b) => model.pinned.has(b.id);
+  const isOpen = (b) =>
+    b.tasks.length > 1 && (isPinned(b) ? model.pinOwner === b.id : model.unfolded.has(b.id) || model.held.has(b.id));
   const onePane = () => getComputedStyle($(".back-button")).display !== "none";
   const shell = $(".shell");
 
@@ -159,18 +212,11 @@
     const rows = visible(b)
       .map((t) => {
         const current = b.id === model.selectedBot && t.id === model.selectedTask;
-        const mark =
-          t.status === "running"
-            ? `<span class="glyph" data-state="working" aria-hidden="true"></span>`
-            : t.status === "failed"
-              ? `<span class="glyph" data-state="failed" aria-hidden="true"></span>`
-              : t.unread && !current
-                ? `<span class="unread-dot" aria-hidden="true"></span>`
-                : "";
+        const mark = stateMark(t.status) || (t.unread && !current ? `<span class="unread-dot" aria-hidden="true"></span>` : "");
         const spoken = t.title + (t.status === "running" ? ", working" : t.status === "failed" ? ", last run failed" : t.unread && !current ? ", unread" : "");
         return (
           `<li><button type="button" class="task" data-bot="${b.id}" data-task="${t.id}" data-key="t:${t.id}" aria-current="${current}"` +
-          ` data-status="${t.status}" data-unread="${t.unread && !current}" data-full="${esc(t.title)}" data-when="${esc(t.when)}"` +
+          ` data-status="${t.status}" data-unread="${t.unread && !current}" data-full="${esc(t.title)}"` +
           ` aria-label="${esc(spoken)}" data-testid="task"><span class="task-title">${esc(t.title)}</span>${mark}</button></li>`
         );
       })
@@ -180,27 +226,11 @@
         ? `<li><button type="button" class="task task-more" data-more="${b.id}" data-key="more:${b.id}"><span class="task-title">` +
           `${model.showAll.has(b.id) ? "Show fewer" : `Show all ${b.tasks.length}`}</span></button></li>`
         : "";
-    return (
-      rows +
-      more +
-      `<li><button type="button" class="task task-new" data-new="${b.id}" data-key="new:${b.id}">${icon("plus")}<span class="task-title">New task</span></button></li>`
-    );
-  }
-
-  function botLines(b) {
-    const s = summary(b);
-    const lead =
-      s.state === "running"
-        ? `<span class="glyph" data-state="working" aria-hidden="true"></span>`
-        : s.state === "failed"
-          ? `<span class="glyph" data-state="failed" aria-hidden="true"></span>`
-          : "";
-    return {
-      s,
-      html:
-        `<span class="bot-text"><span class="bot-line"><span class="bot-name">${b.name}</span><time class="bot-time">${s.when}</time></span>` +
-        `<span class="bot-line">${lead}<span class="bot-preview">${esc(s.preview)}</span>${s.unread ? '<span class="unread-dot"></span>' : ""}</span></span>`,
-    };
+    // New task is offered only where the connection may create one.
+    const fresh = canWrite()
+      ? `<li><button type="button" class="task task-new" data-new="${b.id}" data-key="new:${b.id}">${icon("plus")}<span class="task-title">New task</span></button></li>`
+      : "";
+    return rows + more + fresh;
   }
 
   const spokenBot = (b, s) =>
@@ -210,9 +240,16 @@
 
   function renderRail() {
     const focusKey = document.activeElement?.dataset?.key;
-    const list = $("#bot-list");
-    const pinned = bots.filter((b) => model.pinned.has(b.id));
-    const rest = bots.filter((b) => !model.pinned.has(b.id)).sort((x, y) => sorted(y)[0].at - sorted(x)[0].at);
+    const el = $("#bot-list");
+    if (!bots.length) {
+      el.innerHTML =
+        state0 === "discovering"
+          ? `<li class="rail-empty" aria-busy="true"><strong>Loading bots</strong>Loading this gateway's bots.</li>`
+          : `<li class="rail-empty"><strong>No bots</strong>Bots appear here once the gateway has one.</li>`;
+      return;
+    }
+    const pinned = bots.filter(isPinned);
+    const rest = bots.filter((b) => !isPinned(b));
     let html = "";
 
     if (pinned.length) {
@@ -221,70 +258,78 @@
         pinned
           .map((b) => {
             const s = summary(b);
-            const selected = b.id === model.selectedBot;
-            const mark =
-              s.state === "running"
-                ? `<span class="glyph" data-state="working" aria-hidden="true"></span>`
-                : s.unread
-                  ? `<span class="unread-dot" aria-hidden="true"></span>`
-                  : "";
+            // The run state on the avatar and the unread dot by the name are independent.
             return (
-              `<li><button type="button" class="pin" data-bot="${b.id}" data-key="b:${b.id}" aria-current="${selected}"` +
+              `<li><button type="button" class="pin" data-bot="${b.id}" data-key="b:${b.id}" aria-current="${b.id === model.selectedBot}"` +
               `${b.tasks.length > 1 ? ` aria-expanded="${isOpen(b)}"` : ""} aria-label="${esc(spokenBot(b, s))}" data-testid="bot">` +
-              `<span class="avatar" data-bot="${b.id}"></span><span class="pin-name"><span>${b.name}</span>${mark}</span></button></li>`
+              `<span class="pin-avatar"><span class="avatar" data-bot="${b.id}"></span>${stateMark(s.state)}</span>` +
+              `<span class="pin-name"><span>${b.name}</span>${s.unread ? '<span class="unread-dot" aria-hidden="true"></span>' : ""}</span></button></li>`
             );
           })
           .join("") +
         `</ul></li>`;
-      // The tasks of an open pinned bot sit in a block right under the tiles.
-      const open = pinned.find((b) => isOpen(b));
-      if (open) html += `<li class="pin-tasks"><ul class="task-list" aria-label="${open.name}'s tasks" data-testid="task-list">${taskRows(open)}</ul></li>`;
+      // One task block for the grid, owned by one pinned bot, and labelled with its name.
+      const owner = pinned.find((b) => isOpen(b));
+      if (owner) {
+        html +=
+          `<li class="pin-tasks"><p class="pin-tasks-label" id="pin-tasks-label"><span class="avatar" data-bot="${owner.id}"></span>${owner.name}</p>` +
+          `<ul class="task-list" aria-labelledby="pin-tasks-label" data-testid="task-list">${taskRows(owner)}</ul></li>`;
+      }
     }
 
     html += rest
       .map((b) => {
-        const { s, html: lines } = botLines(b);
+        const s = summary(b);
         const open = isOpen(b);
-        const single = b.tasks.length === 1;
+        const several = b.tasks.length > 1;
         const selected = b.id === model.selectedBot;
         return (
           `<li class="bot-group"${open ? ' data-open="true"' : ""}>` +
-          `<button type="button" class="bot" data-bot="${b.id}" data-key="b:${b.id}" aria-current="${selected && (single || !open)}"` +
-          `${single ? "" : ` aria-expanded="${open}"`} aria-label="${esc(spokenBot(b, s))}" data-testid="bot">` +
-          `<span class="avatar" data-bot="${b.id}"></span>${lines}</button>` +
-          (single
-            ? ""
-            : `<button type="button" class="icon-button bot-toggle" data-toggle="${b.id}" tabindex="-1" aria-label="${open ? "Hide" : "Show"} ${b.name}'s tasks">${icon("chevron")}</button>`) +
+          `<button type="button" class="bot" data-bot="${b.id}" data-key="b:${b.id}" aria-current="${selected && !open}"` +
+          `${several ? ` aria-expanded="${open}"` : ""} aria-label="${esc(spokenBot(b, s))}" data-testid="bot">` +
+          `<span class="avatar" data-bot="${b.id}"></span>` +
+          `<span class="bot-text"><span class="bot-line"><span class="bot-name">${b.name}</span><time class="bot-time">${s.when}</time></span>` +
+          `<span class="bot-line">${stateMark(s.state)}<span class="bot-preview">${esc(s.preview)}</span>${s.unread ? '<span class="unread-dot"></span>' : ""}</span></span></button>` +
+          (several
+            ? `<button type="button" class="icon-button bot-toggle" data-toggle="${b.id}" tabindex="-1" aria-label="${open ? "Hide" : "Show"} ${b.name}'s tasks">${icon("chevron")}</button>`
+            : "") +
           (open ? `<ul class="task-list" aria-label="${b.name}'s tasks" data-testid="task-list">${taskRows(b)}</ul>` : "") +
           `</li>`
         );
       })
       .join("");
 
-    list.innerHTML = html;
-    CT.hydrate(list);
-    if (focusKey) $(`[data-key="${focusKey}"]`, list)?.focus();
+    el.innerHTML = html;
+    CT.hydrate(el);
+    if (focusKey) $(`[data-key="${focusKey}"]`, el)?.focus();
   }
 
   // Selecting, folding, new task ---------------------------------------------------------
 
+  // Opening a bot: its remembered task, or else its most recent one.
   function selectBot(id) {
     const b = bot(id);
-    if (id !== model.selectedBot) {
-      model.unfolded.clear();
-      model.selectedBot = id;
-      // The task last opened for this bot, or else its most recent one.
-      model.selectedTask = b.tasks.find((t) => t.id === model.remembered[id])?.id || sorted(b)[0].id;
-    }
-    model.unfolded.add(id);
-    openTask(id, model.selectedTask);
+    const taskId = b.tasks.find((t) => t.id === model.remembered[id])?.id || sorted(b)[0]?.id || null;
+    openTask(id, taskId);
   }
 
+  // One atomic selection: the bot, its task, and what unfolds with it.
   function openTask(botId, taskId) {
+    const b = bot(botId);
+    if (botId !== model.selectedBot) model.unfolded.clear(); // a bot unfolded by being open folds when another opens
     model.selectedBot = botId;
     model.selectedTask = taskId;
-    model.remembered[botId] = taskId;
-    model.unfolded.add(botId);
+    if (taskId) model.remembered[botId] = taskId;
+    if (isPinned(b)) {
+      // The pin grid's one block follows the open pinned bot.
+      if (b.tasks.length > 1) {
+        model.pinOwner = botId;
+        model.pinHeld = false;
+      } else if (!model.pinHeld) model.pinOwner = null;
+    } else {
+      model.unfolded.add(botId);
+      if (!model.pinHeld) model.pinOwner = null; // a block opened by selection folds when another bot opens
+    }
     const t = currentTask();
     if (t) t.unread = false; // opening a task marks it read
     model.loading = false;
@@ -295,10 +340,16 @@
     transcript.scrollTop = transcript.scrollHeight;
   }
 
+  // Fold or unfold by hand, without changing what is selected.
   function toggleFold(id) {
     const b = bot(id);
     if (b.tasks.length < 2) return;
-    if (isOpen(b)) {
+    if (isPinned(b)) {
+      // Only one pinned bot owns the block: unfolding one takes it from another.
+      if (model.pinOwner === id) model.pinOwner = null;
+      else model.pinOwner = id;
+      model.pinHeld = model.pinOwner !== null;
+    } else if (isOpen(b)) {
       model.unfolded.delete(id);
       model.held.delete(id);
     } else {
@@ -307,14 +358,31 @@
     renderRail();
   }
 
+  function togglePin(id) {
+    const b = bot(id);
+    const wasOpen = isOpen(b);
+    if (isPinned(b)) {
+      model.pinned.delete(id);
+      if (model.pinOwner === id) model.pinOwner = null;
+      if (wasOpen) model.held.add(id);
+    } else {
+      model.pinned.add(id);
+      model.unfolded.delete(id);
+      model.held.delete(id);
+      if (wasOpen || id === model.selectedBot) model.pinOwner = b.tasks.length > 1 ? id : model.pinOwner;
+    }
+    renderRail();
+  }
+
   function newTask(id) {
+    if (!canWrite()) return note("This device can read but not start tasks.");
     const b = bot(id);
     model.newCount += 1;
     const t = task(`n${model.newCount}`, "New task", 2000 + model.newCount, "now", "No messages yet.", { html: "", fresh: true });
     b.tasks.push(t);
     openTask(id, t.id);
     $(".composer-input")?.focus();
-    note("New task: an empty task under the bot, selected, with the composer focused.");
+    note(`New task: ${b.name} now has ${b.tasks.length} tasks. The new one is selected and the composer has focus.`);
   }
 
   // Conversation -------------------------------------------------------------------------
@@ -323,6 +391,9 @@
     const b = bot();
     const t = currentTask();
     const pill = $("#title-pill");
+    pill.hidden = !b;
+    $("#panel-button").hidden = !b; // with no bot there is nothing for the Work pane to describe
+    if (!b) return;
     pill.innerHTML =
       `<span class="avatar" data-bot="${b.id}"></span><span class="title-pill-name">${b.name}</span>` +
       (t ? `<span class="title-pill-task">${esc(t.title)}</span>` : "");
@@ -331,38 +402,43 @@
     CT.hydrate(pill);
   }
 
+  const emptyState = (b, title, text, actions = "") =>
+    `<div class="empty"><div>${b ? `<span class="avatar" data-bot="${b.id}"></span>` : ""}<h1>${title}</h1><p>${text}</p>` +
+    (actions ? `<div class="empty-actions">${actions}</div>` : "") +
+    `</div></div>`;
+
   function renderTranscript() {
     const b = bot();
     const t = currentTask();
     const el = $("#transcript");
-    if (!t) {
-      el.innerHTML =
-        `<div class="empty"><div><span class="avatar" data-bot="${b.id}"></span><h3>Pick a task</h3>` +
-        `<p>Choose one of ${b.name}'s tasks, or start a new one.</p>` +
-        `<div class="empty-actions"><button type="button" class="button" data-variant="primary" data-new="${b.id}">New task</button>` +
-        (onePane() ? `<button type="button" class="button" data-action="back">Choose a task</button>` : "") +
-        `</div></div></div>`;
+    const newButton = b && canWrite() ? `<button type="button" class="button" data-variant="primary" data-new="${b.id}">New task</button>` : "";
+    const choose = onePane() ? `<button type="button" class="button" data-action="back">Choose a task</button>` : "";
+    if (!b) {
+      el.innerHTML = emptyState(null, state0 === "discovering" ? "Loading" : "No bots to show", state0 === "discovering" ? "Loading this gateway's bots." : "This gateway has no bots yet.");
+    } else if (!b.tasks.length) {
+      el.innerHTML = emptyState(b, "No tasks yet", canWrite() ? `Start a task and ${b.name} will take it from there.` : `Conversations with ${b.name} will be listed here.`, newButton);
+    } else if (!t) {
+      el.innerHTML = emptyState(b, "Pick a task", canWrite() ? `Choose one of ${b.name}'s tasks, or start a new one.` : `Choose one of ${b.name}'s tasks to read the conversation.`, newButton + choose);
     } else if (model.loading) {
       el.innerHTML =
-        `<div class="transcript-inner" aria-busy="true" aria-label="Loading conversation"><p class="task-line">${esc(t.title)}</p>` +
+        `<div class="transcript-inner" aria-busy="true" aria-label="Loading conversation"><h1 class="task-line">${esc(t.title)}</h1>` +
         `<div class="skeleton" style="width:46%;margin-left:auto;margin-top:22px"></div>` +
         `<div class="skeleton" style="width:62%;height:88px;margin-top:16px"></div><div class="skeleton" style="width:38%"></div></div>`;
     } else if (t.fresh && !t.html) {
-      el.innerHTML =
-        `<div class="empty"><div><span class="avatar" data-bot="${b.id}"></span><h3>Nothing here yet</h3>` +
-        `<p>Say what you need, and ${b.name} will take it from there.</p></div></div>`;
+      el.innerHTML = emptyState(b, "Nothing here yet", `Say what you need, and ${b.name} will take it from there.`);
     } else {
       const body =
         t.html ??
         `<div class="stamp">${t.at > 0 ? "Today " : ""}${t.when}</div>` +
-          `<div class="msg" data-role="user"><div class="bubble">${esc(t.ask || t.title + "?")}</div></div>` +
-          `<div class="msg" data-role="assistant"><div class="bubble">${esc(t.preview)}</div></div>`;
+          turn("user", bubble("user", esc(t.ask || t.title + "?"))) +
+          turn("assistant", bubble("assistant", esc(t.preview)));
       // When a refresh fails, what was last loaded stays, under one line that says so.
       const error = model.loadError
         ? `<p class="load-note" role="alert">Couldn't refresh this conversation. Showing what was loaded before.` +
           `<button type="button" class="button" data-size="sm" data-action="reload">Try again</button></p>`
         : "";
-      el.innerHTML = `<div class="transcript-inner"><p class="task-line">${esc(t.title)}</p>${error}${body}</div>`;
+      // The task's own name is the conversation's heading.
+      el.innerHTML = `<div class="transcript-inner"><h1 class="task-line">${esc(t.title)}</h1>${error}${body}</div>`;
     }
     CT.hydrate(el);
   }
@@ -373,8 +449,7 @@
     const el = $("#composer");
     el.hidden = !t; // with no task there is nothing to send to
     if (!t) return;
-    const offline = model.connection === "reconnecting" || model.connection === "offline";
-    if (model.access === "read") {
+    if (!canWrite()) {
       el.dataset.readonly = "true";
       el.innerHTML = `<div class="composer-inner"><div class="composer-box">${icon("eye")}<span>This device can read but not send. Ask the gateway owner for write access.</span></div></div>`;
       return;
@@ -384,18 +459,29 @@
     el.innerHTML =
       `<div class="composer-inner"><div class="composer-box">` +
       `<button type="button" class="icon-button" data-action="attach" aria-label="Attach files">${icon("plus")}</button>` +
-      `<textarea class="composer-input" rows="1" aria-label="Message ${b.name}" placeholder="${offline ? "Offline. You can keep writing." : `Message ${b.name}`}">${esc(draft)}</textarea>` +
-      `<button type="button" class="icon-button send-button" data-action="send" aria-label="Send"${draft && !offline ? "" : " disabled"}>${icon("arrow-up")}</button>` +
+      `<textarea class="composer-input" rows="1" aria-label="Message ${b.name}" placeholder="${offline() ? "Offline. Messages send when you reconnect." : `Message ${b.name}`}">${esc(draft)}</textarea>` +
+      `<button type="button" class="icon-button send-button" data-action="send" aria-label="Send"${canSend() ? "" : " disabled"}>${icon("arrow-up")}</button>` +
       `</div></div>`;
   }
 
-  function send() {
+  // One guard for every way of sending: the button, Enter, anything else.
+  function canSend() {
     const t = currentTask();
-    const text = (model.drafts[t.id] || "").trim();
-    if (!text) return;
-    t.html = (t.html ?? $("#transcript .transcript-inner").innerHTML.replace(/<p class="task-line">.*?<\/p>/, "")) +
-      `<div class="msg" data-role="user"><div class="bubble">${esc(text)}</div></div>` +
-      `<div class="event-line">Sent. This prototype has no gateway, so nothing answers.</div>`;
+    return Boolean(t && canWrite() && (model.drafts[t.id] || "").trim());
+  }
+
+  function send() {
+    if (!canSend()) return false; // nothing changes: no bubble, and the draft stays
+    const t = currentTask();
+    const text = model.drafts[t.id].trim();
+    const existing = t.html ?? $("#transcript .transcript-inner").innerHTML.replace(/<h1 class="task-line">.*?<\/h1>/, "");
+    // Offline, the message is accepted and waits; it is sent once on reconnect.
+    t.html =
+      existing +
+      (offline()
+        ? `<div class="turn" data-role="user" data-waiting="true" data-testid="transcript-turn"><div class="msg" data-role="user"><div class="bubble">${esc(text)}</div></div>` +
+          `<div class="event-line" data-side="end">Sends when reconnected</div></div>`
+        : turn("user", bubble("user", esc(text))) + `<div class="event-line">Sent. This prototype has no gateway, so nothing answers.</div>`);
     t.preview = text;
     t.fresh = false;
     model.drafts[t.id] = "";
@@ -403,6 +489,7 @@
     const transcript = $("#transcript");
     transcript.scrollTop = transcript.scrollHeight;
     $(".composer-input")?.focus();
+    return true;
   }
 
   // Work pane ---------------------------------------------------------------------------------
@@ -414,6 +501,7 @@
   function renderPanel() {
     const b = bot();
     const t = currentTask();
+    if (!b) return;
     $("#work-hero").innerHTML = `<span class="avatar" data-bot="${b.id}"></span><h2>${b.name}</h2><p>${b.label}</p>`;
     CT.hydrate($("#work-hero"));
     $("#panel-details").innerHTML = t
@@ -453,6 +541,7 @@
 
   // As a drawer the pane is modal: focus moves in and stays in, and what is
   // behind it is inert. Docked, it is an ordinary part of the page.
+  let wasModal = false;
   function applyModality() {
     const modal = model.panel && overlaying();
     $(".rail").inert = modal;
@@ -460,14 +549,18 @@
     if (modal) {
       panel.setAttribute("role", "dialog");
       panel.setAttribute("aria-modal", "true");
+      // Entering drawer mode with the pane already open: focus must not be left
+      // on something that has just become inert.
+      if (!wasModal && !panel.contains(document.activeElement)) $(".work-close").focus();
     } else {
       panel.removeAttribute("role");
       panel.removeAttribute("aria-modal");
     }
+    wasModal = modal;
     return modal;
   }
 
-  function setPanel(open, { focus = true } = {}) {
+  function setPanel(open) {
     if (open === model.panel) return;
     if (open) opener = document.activeElement;
     holdPlace(() => {
@@ -476,10 +569,10 @@
     });
     const button = $("#panel-button");
     button.setAttribute("aria-pressed", String(open));
-    button.setAttribute("aria-label", open ? "Hide work pane" : "Show work pane");
-    const modal = applyModality();
-    if (open && modal && focus) $(".work-close").focus();
-    if (!open && opener && document.contains(opener)) opener.focus();
+    button.setAttribute("aria-label", open ? "Hide work panel" : "Show work panel");
+    const closedModal = !open && wasModal;
+    applyModality();
+    if (closedModal) (opener && document.contains(opener) ? opener : button).focus(); // a drawer gives focus back
   }
 
   // Crossing the docking width while the pane is open changes whether it is modal.
@@ -490,10 +583,11 @@
   }).observe($(".main-pane"));
 
   // Connection ------------------------------------------------------------------------------------
+  // dot: the gateway's presence, shown in the rail. tone: the strip's own state.
 
   const connections = {
     connected: { dot: "connected", footer: "Connected" },
-    reconnecting: { dot: "reconnecting", footer: "Reconnecting…", tone: "warn", text: "Reconnecting", more: "showing saved messages", action: "Retry now" },
+    reconnecting: { dot: "reconnecting", footer: "Reconnecting…", tone: "warn", text: "Reconnecting in 4s", more: "showing saved messages", action: "Retry now" },
     offline: { dot: "error", footer: "Can't reach the gateway", tone: "danger", text: "Can't reach Home gateway", more: "showing saved messages", action: "Retry now" },
     syncing: { dot: "connecting", footer: "Catching up", tone: "warn", text: "Connected", more: "catching up" },
     synced: { dot: "connected", footer: "Connected", tone: "ok", text: "Synced", more: "1 new in this task" },
@@ -505,18 +599,20 @@
     clearTimeout(connectionTimer);
     model.connection = name;
     const c = connections[name];
-    // One state drives the strip, both status dots, the footer and the composer.
+    // One state drives the strip, both rail dots, the footer and the composer.
     $$(".rail .status-dot").forEach((dot) => (dot.dataset.status = c.dot));
     $("#gateway-state").textContent = c.footer;
     $("#gateway-menu-state").textContent = `${c.footer} · gateway.local`;
-    $$('[data-action="gateway-menu"]').forEach((button) => button.setAttribute("aria-label", `Home gateway, ${c.footer.toLowerCase()}. Open the gateway menu.`));
+    $$('[data-action="gateway-menu"]').forEach((button) => button.setAttribute("aria-label", `Home gateway, ${c.footer.toLowerCase().replace("…", "")}. Open the gateway menu.`));
     const strip = $("#status-strip");
     strip.hidden = !c.text;
     $(".conversation").dataset.strip = String(Boolean(c.text));
     if (c.text) {
       strip.dataset.tone = c.tone;
+      strip.title = c.more ? `${c.text} · ${c.more}` : c.text; // the explanation can shorten; the tooltip never does
+      // The strip's dot takes the strip's tone, not the gateway's presence.
       strip.innerHTML =
-        `<span class="status-dot" data-status="${c.dot}"></span><span class="status-strip-text">${c.text}` +
+        `<span class="status-dot"></span><span class="status-strip-text">${c.text}` +
         `${c.more ? `<span>· ${c.more}</span>` : ""}</span>${c.action ? `<button type="button" data-action="retry">${c.action}</button>` : ""}`;
     }
     renderComposer();
@@ -525,12 +621,18 @@
   }
 
   // What was missed arrives: merged into the open task, without moving the reader.
+  // Messages written offline are sent now, once.
   function arrive() {
     const t = currentTask();
     const el = $("#transcript");
     const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
+    bots.forEach((b) =>
+      b.tasks.forEach((other) => {
+        if (other.html) other.html = other.html.replace(/ data-waiting="true"/g, "").replace(/<div class="event-line" data-side="end">Sends when reconnected<\/div>/g, "");
+      }),
+    );
     if (t && t.html !== undefined && !t.fresh) {
-      t.html += `<div class="msg" data-role="assistant"><div class="bubble">While you were offline: the old cache folder is still untouched. I will remove it next Monday.</div></div>`;
+      t.html += turn("assistant", bubble("assistant", "While you were offline: the old cache folder is still untouched. I will remove it next Monday."));
       const top = el.scrollTop;
       renderTranscript();
       el.scrollTop = atEnd ? el.scrollHeight : top;
@@ -542,6 +644,7 @@
   // Everything ------------------------------------------------------------------------------------
 
   function render() {
+    $("#new-button").hidden = !canWrite(); // creating is offered only where the connection may write
     renderRail();
     renderHeader();
     renderTranscript();
@@ -554,33 +657,75 @@
     if (node) node.textContent = text;
   }
 
-  // Gateway menu ------------------------------------------------------------------------------------
+  // Menus ------------------------------------------------------------------------------------------
 
-  const menu = $("#gateway-menu");
+  const gatewayMenu = $("#gateway-menu");
+  const railMenu = $("#rail-menu");
   let menuOpener = null;
 
-  function setMenu(open, from) {
-    menu.hidden = !open;
+  function setGatewayMenu(open, from) {
+    gatewayMenu.hidden = !open;
     $$('[data-action="gateway-menu"]').forEach((button) => button.setAttribute("aria-expanded", String(open)));
     if (open) {
       menuOpener = from;
       const stored = CT.settings.followSystem ? "system" : CT.settings.theme;
       $$("[data-theme-choice]").forEach((item) => item.setAttribute("aria-checked", String(item.dataset.themeChoice === stored)));
-      ($('[data-theme-choice][aria-checked="true"]') || $(".menu-item", menu)).focus();
+      ($('[data-theme-choice][aria-checked="true"]') || $(".menu-item", gatewayMenu)).focus();
     } else if (menuOpener) {
       menuOpener.focus();
       menuOpener = null;
     }
   }
 
+  const item = (label, attrs, keys = "", tone = "") =>
+    `<li role="none"><button type="button" class="menu-item" role="menuitem"${tone ? ` data-tone="${tone}"` : ""} ${attrs}>${label}${keys ? `<kbd>${keys}</kbd>` : ""}</button></li>`;
+
+  // The "+" menu: a new task for the open bot, and a new bot.
+  // A bot's context menu: new task, fold, pin.
+  function openRailMenu(kind, from, x, y) {
+    const b = kind === "new" ? bot() : bot(from.dataset.bot);
+    railMenu.innerHTML =
+      kind === "new"
+        ? (b && canWrite() ? item(`New task for ${b.name}`, `data-new="${b.id}"`, "⌘T") : "") + item("New bot", 'data-action="new-bot"', "⌘N")
+        : (canWrite() ? item("New task", `data-new="${b.id}"`) : "") +
+          (b.tasks.length > 1 ? item(isOpen(b) ? "Hide tasks" : "Show tasks", `data-toggle="${b.id}"`) : "") +
+          item(isPinned(b) ? "Unpin" : "Pin", `data-pin="${b.id}"`);
+    railMenu.setAttribute("aria-label", kind === "new" ? "New" : `${b.name}`);
+    railMenu.hidden = false;
+    railMenu.style.left = `${Math.max(8, Math.min(x, innerWidth - 244))}px`;
+    railMenu.style.top = `${Math.min(y, innerHeight - railMenu.offsetHeight - 8)}px`;
+    menuOpener = from;
+    if (kind === "new") from.setAttribute("aria-expanded", "true");
+    $(".menu-item", railMenu).focus();
+  }
+
+  function closeRailMenu(refocus = true) {
+    if (railMenu.hidden) return;
+    railMenu.hidden = true;
+    $("#new-button").setAttribute("aria-expanded", "false");
+    if (refocus && menuOpener && document.contains(menuOpener)) menuOpener.focus();
+    menuOpener = null;
+  }
+
   // Wiring --------------------------------------------------------------------------------------------
 
   document.addEventListener("click", (event) => {
     const target = event.target;
-    if (!menu.hidden && !target.closest("#gateway-menu, [data-action='gateway-menu']")) setMenu(false);
+    if (!gatewayMenu.hidden && !target.closest("#gateway-menu, [data-action='gateway-menu']")) setGatewayMenu(false);
+    const inRailMenu = target.closest("#rail-menu");
+    if (!railMenu.hidden && !inRailMenu && !target.closest('[data-action="new-menu"]')) closeRailMenu(false);
+
+    const pin = target.closest("[data-pin]");
+    if (pin) {
+      closeRailMenu(false);
+      return togglePin(pin.dataset.pin);
+    }
 
     const toggle = target.closest("[data-toggle]");
-    if (toggle) return toggleFold(toggle.dataset.toggle);
+    if (toggle) {
+      closeRailMenu(false);
+      return toggleFold(toggle.dataset.toggle);
+    }
 
     const more = target.closest("[data-more]");
     if (more) {
@@ -591,7 +736,10 @@
     }
 
     const fresh = target.closest("[data-new]");
-    if (fresh) return newTask(fresh.dataset.new);
+    if (fresh) {
+      closeRailMenu(false);
+      return newTask(fresh.dataset.new);
+    }
 
     const row = target.closest(".task[data-task]");
     if (row) return openTask(row.dataset.bot, row.dataset.task);
@@ -600,7 +748,7 @@
     if (botRow) {
       const id = botRow.dataset.bot;
       const b = bot(id);
-      if (b.tasks.length === 1) return selectBot(id);
+      if (b.tasks.length < 2) return selectBot(id);
       // One pane: a bot with several tasks unfolds in place; a task opens.
       if (onePane()) return toggleFold(id);
       // Two panes: opening a bot opens its task and unfolds it; the open bot folds and unfolds.
@@ -611,7 +759,7 @@
     const theme = target.closest("[data-theme-choice]");
     if (theme) {
       CT.setTheme(theme.dataset.themeChoice);
-      return setMenu(false);
+      return setGatewayMenu(false);
     }
 
     const tab = target.closest("[data-tab]");
@@ -624,7 +772,13 @@
       shell.dataset.view = "list";
       renderRail();
     }
-    if (action === "gateway-menu") setMenu(menu.hidden, target.closest("button"));
+    if (action === "gateway-menu") setGatewayMenu(gatewayMenu.hidden, target.closest("button"));
+    if (action === "new-menu") {
+      const button = target.closest("button");
+      if (!railMenu.hidden) return closeRailMenu();
+      const rect = button.getBoundingClientRect();
+      openRailMenu("new", button, rect.right - 232, rect.bottom + 6);
+    }
     if (action === "disconnect") location.href = "connect.html" + location.search;
     if (action === "retry") setConnection("syncing");
     if (action === "reload") {
@@ -638,16 +792,26 @@
       el.scrollTop = el.scrollHeight;
     }
     if (action === "search") note("Search is not part of this prototype.");
-    if (action === "new-bot") note("Creating a bot is not part of this prototype.");
+    if (action === "new-bot") {
+      closeRailMenu();
+      note("Creating a bot is not part of this prototype.");
+    }
     if (action === "attach") note("Attaching files is not part of this prototype.");
+  });
+
+  // A bot's context menu: right-click, or the menu key on a focused row.
+  document.addEventListener("contextmenu", (event) => {
+    const row = event.target.closest("#bot-list .bot, #bot-list .pin");
+    if (!row) return;
+    event.preventDefault();
+    const rect = row.getBoundingClientRect();
+    openRailMenu("bot", row, event.clientX || rect.left + 40, event.clientY || rect.bottom);
   });
 
   document.addEventListener("input", (event) => {
     if (!event.target.classList.contains("composer-input")) return;
-    const t = currentTask();
-    model.drafts[t.id] = event.target.value;
-    const offline = model.connection === "reconnecting" || model.connection === "offline";
-    $(".send-button").disabled = !event.target.value.trim() || offline;
+    model.drafts[currentTask().id] = event.target.value;
+    $(".send-button").disabled = !canSend();
   });
 
   $("#transcript").addEventListener("scroll", (event) => {
@@ -664,10 +828,17 @@
       event.preventDefault();
       return setPanel(!model.panel);
     }
+    // New task: ⌘T in the desktop app. A browser keeps ⌘T for itself, so ⌥T does the same there.
+    if ((event.metaKey || event.ctrlKey || event.altKey) && event.code === "KeyT" && bot()) {
+      event.preventDefault();
+      return newTask(model.selectedBot);
+    }
     if (event.key === "Escape") {
-      if (!menu.hidden) return setMenu(false);
+      if (!railMenu.hidden) return closeRailMenu();
+      if (!gatewayMenu.hidden) return setGatewayMenu(false);
       if (model.panel && overlaying()) return setPanel(false);
     }
+    // Enter and the Send button are the same guarded operation.
     if (event.key === "Enter" && !event.shiftKey && target.classList?.contains("composer-input")) {
       event.preventDefault();
       return send();
@@ -696,13 +867,24 @@
       return setTab(tabs[next].dataset.tab, true);
     }
 
-    // The menu: Up and Down move between items.
-    if (!menu.hidden && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    // The gateway menu opens from its button with Up or Down, as well as Enter and Space.
+    if (gatewayMenu.hidden && target.matches?.('[data-action="gateway-menu"]') && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
       event.preventDefault();
-      const items = $$(".menu-item", menu);
+      return setGatewayMenu(true, target);
+    }
+
+    // An open menu: Up and Down move between items; Tab closes it.
+    const openMenu = !gatewayMenu.hidden ? gatewayMenu : !railMenu.hidden ? railMenu : null;
+    if (openMenu && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const items = $$(".menu-item", openMenu);
       const index = items.indexOf(document.activeElement);
       const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
       return items[next].focus();
+    }
+    if (openMenu && event.key === "Tab") {
+      if (openMenu === railMenu) closeRailMenu();
+      else setGatewayMenu(false);
     }
 
     // The rail: Up and Down move through the rows; Right unfolds a bot, Left folds it.
@@ -710,13 +892,14 @@
     if (row) {
       const rows = $$("#bot-list .bot, #bot-list .pin, #bot-list .task");
       const index = rows.indexOf(row);
+      const isBot = row.dataset.bot && !row.dataset.task;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         rows[Math.min(rows.length - 1, Math.max(0, index + (event.key === "ArrowDown" ? 1 : -1)))].focus();
       } else if (event.key === "Home" || event.key === "End") {
         event.preventDefault();
         rows[event.key === "Home" ? 0 : rows.length - 1].focus();
-      } else if (event.key === "ArrowRight" && row.dataset.bot && !row.dataset.task && !isOpen(bot(row.dataset.bot))) {
+      } else if (event.key === "ArrowRight" && isBot && !isOpen(bot(row.dataset.bot))) {
         event.preventDefault();
         toggleFold(row.dataset.bot);
       } else if (event.key === "ArrowLeft") {
@@ -727,6 +910,10 @@
         } else if (isOpen(bot(row.dataset.bot))) {
           toggleFold(row.dataset.bot);
         }
+      } else if (isBot && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
+        event.preventDefault();
+        const rect = row.getBoundingClientRect();
+        openRailMenu("bot", row, rect.left + 40, rect.bottom);
       }
     }
   });
@@ -761,21 +948,33 @@
   // First paint -----------------------------------------------------------------------------------------
 
   const startBot = bot();
-  model.selectedTask =
-    params.get("state") === "empty" ? null : params.get("task") || model.remembered[startBot.id] || sorted(startBot)[0].id;
-  if (!(params.get("fold") || "").split(",").includes(startBot.id)) model.unfolded.add(startBot.id);
-  (params.get("unfold") || "").split(",").filter(Boolean).forEach((id) => model.held.add(id));
+  if (startBot) {
+    model.selectedTask = state0 === "empty" ? null : params.get("task") || model.remembered[startBot.id] || sorted(startBot)[0]?.id || null;
+    if (isPinned(startBot)) {
+      if (!params.get("pinopen") && startBot.tasks.length > 1 && !list("fold").includes(startBot.id)) model.pinOwner = startBot.id;
+    } else if (!list("fold").includes(startBot.id)) model.unfolded.add(startBot.id);
+    list("unfold").forEach((id) => model.held.add(id));
+    const opened = currentTask();
+    if (opened) opened.unread = false;
+  } else {
+    model.selectedBot = null;
+  }
   if (params.get("view")) shell.dataset.view = params.get("view");
-  const opened = currentTask();
-  if (opened) opened.unread = false;
 
   render();
   setConnection(params.get("banner") || "connected");
-  if (params.get("state") === "newtask") newTask(startBot.id);
-  if (params.get("panel") === "open") setPanel(true, { focus: false });
+  if (state0 === "newtask") newTask(startBot.id);
+  if (params.get("panel") === "open") setPanel(true);
   const transcript = $("#transcript");
   transcript.scrollTop = transcript.scrollHeight;
   transcript.dataset.atEnd = "true";
+  if (params.get("menu") === "new") $("#new-button").click();
+  if (params.get("menu") === "gateway") $(".gateway-pill").click();
+  if (params.get("menu") === "bot") {
+    const row = $(`[data-key="b:${params.get("menubot") || "marlow"}"]`);
+    const rect = row.getBoundingClientRect();
+    openRailMenu("bot", row, rect.left + 60, rect.bottom - 6);
+  }
 
   // Controls in the prototype's bar, for the states that have no control in the app.
   const extra = $("#proto-extra");
@@ -785,18 +984,24 @@
       `<button type="button" data-fixture="offline">Go offline</button>` +
       `<button type="button" data-fixture="readonly">Read-only</button>` +
       `<button type="button" data-fixture="notask">No task</button>` +
-      `<span id="run-caption">Click bots and tasks. Arrow keys move through the rail.</span></span>`;
+      `<span id="run-caption">Click bots and tasks; right-click a bot for its menu. Arrow keys move through the rail.</span></span>`;
     extra.addEventListener("click", (event) => {
       const fixture = event.target.closest("[data-fixture]")?.dataset.fixture;
       if (fixture === "pins") {
-        if (model.pinned.size) model.pinned.clear();
-        else ["pip", "juniper"].forEach((id) => model.pinned.add(id));
+        if (model.pinned.size) {
+          model.pinned.clear();
+          model.pinOwner = null;
+          model.unfolded.add(model.selectedBot);
+        } else {
+          ["pip", "juniper"].forEach((id) => model.pinned.add(id));
+          if (isPinned(bot())) model.pinOwner = model.selectedBot;
+        }
         renderRail();
       }
       if (fixture === "offline") setConnection(model.connection === "connected" ? "reconnecting" : "connected");
       if (fixture === "readonly") {
-        model.access = model.access === "read" ? "write" : "read";
-        renderComposer();
+        model.access = canWrite() ? "read" : "write";
+        render();
       }
       if (fixture === "notask") {
         model.selectedTask = null;
@@ -805,5 +1010,5 @@
     });
   }
 
-  window.app = { model, setConnection, setPanel, openTask, selectBot, toggleFold, newTask };
+  window.app = { model, bots, setConnection, setPanel, openTask, selectBot, toggleFold, togglePin, newTask, send };
 })();

@@ -32,7 +32,7 @@
                 <button type="button" class="icon-button" data-action="search" aria-label="Search" title="Search (⌘K)">
                   <i data-icon="search"></i>
                 </button>
-                <button type="button" class="icon-button" data-action="new-bot" aria-label="New bot" title="New bot (⌘N)">
+                <button type="button" class="icon-button" id="new-button" data-action="new-menu" aria-haspopup="menu" aria-expanded="false" aria-label="New" title="New">
                   <i data-icon="plus"></i>
                 </button>
               </div>
@@ -65,9 +65,10 @@
             </nav>
 
             <div class="main-pane">
-              <div class="status-strip" id="status-strip" role="status" data-testid="status-strip" hidden></div>
-
               <section class="conversation" aria-label="Conversation">
+                <!-- The status strip is rendered inside the conversation, so it is
+                     centred on the conversation whether or not Work is docked. -->
+                <div class="status-strip" id="status-strip" role="status" data-testid="status-strip" hidden></div>
                 <header class="conversation-header">
                   <div class="header-side">
                     <button type="button" class="icon-button back-button" data-action="back" aria-label="Back to bots">
@@ -76,7 +77,7 @@
                   </div>
                   <button type="button" class="title-pill" id="title-pill" data-action="panel"></button>
                   <div class="header-side" data-side="end">
-                    <button type="button" class="icon-button" id="panel-button" data-action="panel" aria-pressed="false" aria-label="Show work pane" title="Work pane (⌘\)">
+                    <button type="button" class="icon-button" id="panel-button" data-action="panel" aria-pressed="false" aria-label="Show work panel" title="Work panel (⌘\)">
                       <i data-icon="panel"></i>
                     </button>
                   </div>
@@ -92,14 +93,14 @@
                 <footer class="composer" id="composer"></footer>
               </section>
 
-              <button type="button" class="drawer-scrim" data-action="panel-close" aria-label="Close work pane" tabindex="-1"></button>
+              <button type="button" class="drawer-scrim" data-action="panel-close" aria-label="Close work panel" tabindex="-1"></button>
 
-              <aside class="work-panel" id="work-panel" aria-label="Work pane" data-testid="work-panel">
-                <button type="button" class="icon-button work-close" data-action="panel-close" aria-label="Close work pane">
+              <aside class="work-panel" id="work-panel" aria-label="Work" data-testid="work-panel">
+                <button type="button" class="icon-button work-close" data-action="panel-close" aria-label="Close work panel">
                   <i data-icon="x"></i>
                 </button>
                 <div class="work-hero" id="work-hero"></div>
-                <div class="tabs" role="tablist" aria-label="Work pane">
+                <div class="tabs" role="tablist" aria-label="Work">
                   <button type="button" class="tab" role="tab" id="tab-details" aria-controls="panel-details" aria-selected="true" data-tab="details">Details</button>
                   <button type="button" class="tab" role="tab" id="tab-files" aria-controls="panel-files" aria-selected="false" tabindex="-1" data-tab="files">Files</button>
                   <button type="button" class="tab" role="tab" id="tab-computer" aria-controls="panel-computer" aria-selected="false" tabindex="-1" data-tab="computer">Computer</button>
@@ -124,7 +125,9 @@
               </aside>
             </div>
           </div>
-          <div class="rail-tooltip" id="rail-tooltip" role="tooltip" hidden></div>
+          <div class="rail-tooltip" id="rail-tooltip" role="tooltip" data-testid="rail-tooltip" hidden></div>
+          <!-- One menu element serves the "+" button and a bot's context menu. -->
+          <ul class="menu rail-menu" id="rail-menu" role="menu" hidden></ul>
         </div>
       </div>
     </main>
