@@ -13,6 +13,7 @@ import {
   type GatewayBrowserDeviceTokenStore,
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
+import { isRefusedDecision } from "./approval-refusals.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import {
   admitApproval,
@@ -1976,10 +1977,12 @@ export class ClawtrateClient {
       }
     } catch (error) {
       // A gateway error is a refusal of this decision; anything else after sending leaves it unknown.
+      // Refused only when the answer establishes the decision was not applied
+      // (`approval-refusals.ts`); every other answer after sending is unknown.
       const decisionError =
         !sent || error instanceof NotSentError
           ? null
-          : error instanceof GatewayProtocolRequestError
+          : isRefusedDecision(method, error)
             ? "refused"
             : "unknown";
       this.updateActivity(key, (activity) =>

@@ -3,6 +3,8 @@
 // refused that decision; no answer leaves it unknown, and nothing but deny is
 // accepted until the request's state is read back with `approval.get`.
 import { describe, expect, it } from "vitest";
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { isRefusedDecision, REFUSED_DECISION_ANSWERS } from "../src/approval-refusals.ts";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import { grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { GatewayError, until } from "./fake-gateway.ts";
@@ -123,7 +125,11 @@ describe("a decision that failed, read back", () => {
   it("refused: the reason shows, and the request is said to be open only once read back as pending", async () => {
     const gateway = gatewayWith();
     gateway.handlers["exec.approval.resolve"] = () => {
-      throw new GatewayError({ code: "INVALID_REQUEST", message: "grant scope not allowed" });
+      throw new GatewayError({
+        code: "INVALID_REQUEST",
+        message: "allow-always is unavailable for this command",
+        details: { reason: "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE" },
+      });
     };
     let reads = 0;
     gateway.handlers["approval.get"] = () => {
@@ -133,11 +139,11 @@ describe("a decision that failed, read back", () => {
     const { client, transcript } = await openTask({ gateway });
     await until(() => transcript().approvals.length === 1);
     await expect(client.resolveApproval(KEY, "ap-1", "allow-always")).rejects.toThrow(
-      /grant scope/,
+      /allow-always is unavailable/,
     );
     expect(transcript().approvals[0]).toMatchObject({
       decisionError: "refused",
-      error: expect.stringMatching(/grant scope/),
+      error: expect.stringMatching(/allow-always is unavailable/),
     });
     await until(() => transcript().approvals[0]!.stillOpen);
     expect(reads).toBe(1);
@@ -151,7 +157,11 @@ describe("a decision that failed, read back", () => {
   it("refused because it was already settled: the read-back shows the winner, and says the decision was not applied", async () => {
     const gateway = gatewayWith();
     gateway.handlers["exec.approval.resolve"] = () => {
-      throw new GatewayError({ code: "APPROVAL_ALREADY_RESOLVED", message: "already resolved" });
+      throw new GatewayError({
+        code: "INVALID_REQUEST",
+        message: "approval already resolved",
+        details: { reason: "APPROVAL_ALREADY_RESOLVED" },
+      });
     };
     gateway.handlers["approval.get"] = () =>
       snapshot("ap-1", "denied", { decision: "deny", reason: "user", resolvedAtMs: 9 });
@@ -191,5 +201,100 @@ describe("a decision that failed, read back", () => {
     expect(gateway.calls("approval.get")).toEqual([]);
     viewer.dispose();
     client.stop();
+  });
+
+  it("an answer that does not establish the decision was not applied stays unknown: no allow is sent again before read-back", async () => {
+    for (const shape of [
+      // The gateway's storage failure, also sent when committing a decision failed after it may have applied.
+      { code: "UNAVAILABLE", message: "approval resolve unavailable" },
+      // Also sent after a decision was applied when the resolver's authority lapsed.
+      {
+        code: "INVALID_REQUEST",
+        message: "unknown or expired approval id",
+        details: { reason: "APPROVAL_NOT_FOUND" },
+      },
+      // An error this client does not know.
+      { code: "SOMETHING_NEW", message: "something new went wrong" },
+    ]) {
+      const gateway = gatewayWith();
+      gateway.handlers["exec.approval.resolve"] = () => {
+        throw new GatewayError(shape);
+      };
+      gateway.handlers["approval.get"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "approval get unavailable" });
+      };
+      const { client, transcript } = await openTask({ gateway });
+      await until(() => transcript().approvals.length === 1);
+      await expect(client.resolveApproval(KEY, "ap-1", "allow-once")).rejects.toThrow();
+      expect(transcript().approvals[0], shape.message).toMatchObject({
+        status: "pending",
+        decisionError: "unknown",
+        stillOpen: false,
+      });
+      await until(() => gateway.calls("approval.get").length >= 1);
+      await expect(client.resolveApproval(KEY, "ap-1", "allow-once")).rejects.toThrow(/not known/);
+      expect(gateway.calls("exec.approval.resolve"), shape.message).toHaveLength(1);
+      client.stop();
+    }
+  });
+
+  it("a refusal the gateway gives before deciding is refused: missing scope, an unoffered decision, invalid parameters", async () => {
+    for (const [shape, method] of [
+      [
+        {
+          code: "FORBIDDEN",
+          message: "missing scope: operator.approvals",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.approvals",
+            requiredScopes: ["operator.approvals"],
+          },
+        },
+        "exec.approval.resolve",
+      ],
+      [
+        {
+          code: "INVALID_REQUEST",
+          message: "invalid exec.approval.resolve params: /id must be string",
+        },
+        "exec.approval.resolve",
+      ],
+      [{ code: "INVALID_REQUEST", message: "invalid decision" }, "exec.approval.resolve"],
+      [
+        {
+          code: "INVALID_REQUEST",
+          message: "allow-always is unavailable for this plugin approval",
+          details: { allowedDecisions: ["allow-once", "deny"] },
+        },
+        "plugin.approval.resolve",
+      ],
+    ] as const) {
+      expect(isRefusedDecision(method, new GatewayProtocolRequestError(shape)), shape.message).toBe(
+        true,
+      );
+    }
+    // The same parameter error from the generic method is not a refusal: it turns a malformed decision into a deny.
+    expect(
+      isRefusedDecision(
+        "approval.resolve",
+        new GatewayProtocolRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid approval.resolve params: x",
+        }),
+      ),
+    ).toBe(false);
+    // A plugin's list of decisions is no refusal from another method.
+    expect(
+      isRefusedDecision(
+        "exec.approval.resolve",
+        new GatewayProtocolRequestError({
+          code: "INVALID_REQUEST",
+          message: "x",
+          details: { allowedDecisions: [] },
+        }),
+      ),
+    ).toBe(false);
+    expect(isRefusedDecision("exec.approval.resolve", new Error("socket closed"))).toBe(false);
+    expect(REFUSED_DECISION_ANSWERS.every((each) => each.source && each.why)).toBe(true);
   });
 });
