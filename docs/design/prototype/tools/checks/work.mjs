@@ -517,7 +517,8 @@ p = await open(comp + "&computer=noplugin");
 check("without the plugin: a calm empty state that says what is missing and what adds it", await q(p, () =>
   document.querySelector(".computer-empty h4").textContent === "Watching isn't set up on this gateway" &&
   document.querySelector(".computer-empty p").textContent.includes("installs Clawtrate's computer plugin") && !document.querySelector(".screen")));
-check("F-275 without the plugin the tab says every bot shares one browser", await q(p, () => document.querySelector(".computer-shared").textContent.startsWith("Without it, every bot on this gateway shares one browser")));
+check("F-275 M5 without the plugin the tab says only what is established about sharing", await q(p, () => document.querySelector(".computer-shared").textContent === "Without it, nothing here gives Juniper a browser of its own. By default, bots that use the browser share one profile, with its sign-ins."));
+check("M5 without the plugin the browser's machine is not reported", await q(p, () => [...document.querySelectorAll("#panel-computer .facts div")].some((d) => d.textContent === "BrowserNot reported.")));
 check("without the plugin the machine and actions still show", await q(p, () => [...document.querySelectorAll("#panel-computer h3")].map((h) => h.textContent).join() === "Screen,Machine,Recent actions" && !document.querySelector(".computer-banner")));
 await p.close();
 p = await open(comp + "&computer=unconfigured");
@@ -527,7 +528,10 @@ p = await open(comp + "&state=readonly");
 check("read-only: no frames, and a way to ask for access", await q(p, () => document.querySelector('.screen[data-state="blocked"]').textContent.includes("Watching needs a connection that can send") && !document.querySelector('[data-cmp="watch"]') && !!document.querySelector('[data-cmp="request"]')));
 await p.close();
 p = await open(comp + "&computer=closed");
-check("F-141 a browser with no tabs: it starts when the bot uses it, and no Wake", await q(p, () => document.querySelector('.screen[data-state="closed"]').textContent.includes("isn't open. It starts when Juniper next uses it.") && !/wake/i.test(document.querySelector("#panel-computer").textContent)));
+check("F-141 M5 no tabs: only that, with no stopped state and no Wake", await q(p, () => {
+  const t = document.querySelector('.screen[data-state="closed"]').textContent;
+  return t.includes("Juniper's browser has no tabs open.") && !/isn't open|starts when|stopped/i.test(t) && !/wake/i.test(document.querySelector("#panel-computer").textContent);
+}));
 await p.close();
 p = await open(comp + "&computer=stuck");
 check("a browser that stays busy offers Stop in this task", await q(p, () => document.querySelector(".computer .files-alert").textContent.includes("A call that never finished") && !!document.querySelector('[data-cmp="stop-task"]')));
@@ -539,23 +543,35 @@ await p.close();
 
 // The machine, actions and commands.
 p = await open("&panel=open&tab=computer");
-check("F-147 the tab names where commands and the browser run", await q(p, () => {
-  const rows = [...document.querySelectorAll("#panel-computer .facts")[0].querySelectorAll("div")].map((d) => d.textContent);
-  return rows[0] === "Commands run onmedia-box" && rows[1] === "Browser runs onThe gateway's machine, shared with every bot";
+check("F-147 M5 where commands ran comes from evidence; the setting is labelled as one", await q(p, () => {
+  const rows = [...document.querySelectorAll("#panel-computer .facts")[0].querySelectorAll(":scope > div")].map((d) => d.textContent);
+  return rows[0] === "Commands ran onmedia-boxNamed by the approval at 5:31 PM" && rows[1] === "Set for OttoCommands: media-boxA setting for Otto. A task can run somewhere else." && rows[2] === "BrowserNot reported.";
 }));
-check("F-148 the node's state and last heartbeat", await q(p, () => {
+check("F-148 M5 the node's state, when it was last seen, and the stats' time; never a heartbeat", await q(p, () => {
   const t = document.querySelector("#panel-computer").textContent;
-  return t.includes("StateConnected") && t.includes("Last heartbeat40 s ago") && t.includes("Disk780 GB of 2 TB free");
+  return t.includes("StateConnected") && t.includes("Last seen40 s ago") && t.includes("Disk780 GB of 2 TB free") && t.includes("As of 5:40 PM") && !/heartbeat/i.test(t);
 }));
 check("F-153 commands with how each ended", await q(p, () => document.querySelectorAll(".command-row").length === 3 && document.querySelector(".command-row span").textContent === "exit 0 · 2.1s"));
 await p.click('.action-row[data-show-step="st-du"]');
 check("F-154 an action leads to its step", await q(p, () => document.querySelector("#st-du").open && document.activeElement === document.querySelector("#st-du > summary")));
 await p.close();
 p = await open("&panel=open&tab=computer&computer=offline");
-check("F-148 F-150 an offline node: its state, last heartbeat with reason, and Check again", await q(p, () => {
+check("F-148 F-150 a node that isn't connected: its state, when last seen with its reason, and Check again", await q(p, () => {
   const t = document.querySelector("#panel-computer").textContent;
-  return t.includes("StateOffline") && t.includes("5:12 PM, while going to sleep") && document.querySelector("#panel-computer [role=alert]").textContent.startsWith("Can't reach media-box") && !/recover|reset/i.test(t);
+  return t.includes("StateNot connected") && t.includes("Last seen5:12 PM, while going to sleep") && document.querySelector("#panel-computer [role=alert]").textContent.startsWith("media-box isn't connected to the gateway") && !/recover|reset|offline/i.test(t);
 }));
+await p.click('[data-cmp="check"]');
+await p.waitForTimeout(800);
+check("Check again reads the node again and says when", await q(p, () => document.querySelector("#panel-computer [role=alert]").textContent.includes("Checked 5:42 PM")));
+await p.close();
+p = await open("&panel=open&tab=computer&computer=nodeunknown");
+check("M5 a node whose record couldn't be read is Unknown, with the last value read, never Not connected", await q(p, () => {
+  const t = document.querySelector("#panel-computer").textContent;
+  return t.includes("StateUnknownConnected when last read, 5:38 PM") && !t.includes("Not connected");
+}));
+await p.close();
+p = await open(comp);
+check("M5 a task with no approval says where its commands ran is not reported", await q(p, () => [...document.querySelectorAll("#panel-computer .facts div")].some((d) => d.textContent === "Commands ran onNot reported in this task.")));
 await p.close();
 
 p = await open(comp + "&computer=watching&motion=reduce");

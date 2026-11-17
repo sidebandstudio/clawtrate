@@ -95,14 +95,14 @@
         `<div class="work-empty computer-empty"><span class="empty-mark">${icon("plugin")}</span><h4>Watching isn't set up on this gateway</h4>` +
         `<p>To watch ${name}'s browser here, the gateway's owner installs Clawtrate's computer plugin and gives ${name} a browser of its own.</p>` +
         `${CT.linkButton("What the plugin adds", { icon: "external", attrs: 'data-cmp="docs"' })}</div>` +
-        `<p class="computer-shared">Without it, every bot on this gateway shares one browser, so a site one bot signs in to is signed in for all of them.</p>`
+        `<p class="computer-shared">Without it, nothing here gives ${name} a browser of its own. By default, bots that use the browser share one profile, with its sign-ins.</p>`
       );
     }
     if (!C.configured) {
       return (
         `<div class="work-empty computer-empty"><span class="empty-mark">${icon("screen")}</span><h4>${name} has no browser of its own yet</h4>` +
-        `<p>The gateway's owner adds ${name} to the computer plugin's list of bots. Until then ${name} uses the shared browser, which can't be watched here.</p></div>` +
-        `<p class="computer-shared">Every bot without a browser of its own shares one, so a site one of them signs in to is signed in for all of them.</p>`
+        `<p>The gateway's owner adds ${name} to the computer plugin's list of bots. Until then ${name}'s browser can't be watched here.</p></div>` +
+        `<p class="computer-shared">Nothing here gives ${name} a browser of its own. By default, bots that use the browser share one profile, with its sign-ins.</p>`
       );
     }
     if (!C.used) {
@@ -116,7 +116,7 @@
       );
     }
     if (!C.open) {
-      return `<div class="screen" data-state="closed"><div class="screen-blank">${icon("screen")}<p>${name}'s browser isn't open. It starts when ${name} next uses it.</p></div></div>`;
+      return `<div class="screen" data-state="closed"><div class="screen-blank">${icon("screen")}<p>${name}'s browser has no tabs open. If ${name} opens one, it appears here.</p></div></div>`;
     }
     const tab = tabNow();
     const note =
@@ -169,26 +169,47 @@
     );
   }
 
+  // Where the task's work runs: only what the gateway established (work-pane.md, section 16).
   function machine(b) {
+    const name = b.name;
+    const row = (k, v, sub = "") => `<div><dt>${k}</dt><dd>${v}${sub ? `<span class="machine-sub">${sub}</span>` : ""}</dd></div>`;
+    const browser = C.plugin && C.configured && b.id === "juniper" ? `The gateway's machine, in ${name}'s own browser` : "Not reported.";
     if (b.id === "otto") {
       const off = C.nodeOffline;
+      const unknown = mode === "nodeunknown";
+      const state = unknown
+        ? `${glyph("queued")}Unknown<span class="machine-sub">Connected when last read, 5:38 PM. Couldn't read it again.</span>`
+        : off
+          ? `${glyph("failed")}Not connected`
+          : `${glyph("done")}Connected`;
       return (
         (off
-          ? `<p class="files-alert" role="alert">Can't reach media-box. It reconnects by itself when it can; check that it's on and online.` +
-            `<button type="button" class="button" data-size="sm" data-cmp="check">${C.checking ? "Checking…" : "Check again"}</button></p>`
+          ? `<p class="files-alert" role="alert">media-box isn't connected to the gateway. Nodes reconnect by themselves when they can; check that it's on and online.` +
+            `<button type="button" class="button" data-size="sm" data-cmp="check">${C.checking ? "Checking…" : "Check again"}</button>` +
+            (C.checked ? `<span class="machine-sub">Checked ${C.checked}</span>` : "") +
+            `</p>`
           : "") +
-        `<dl class="facts"><div><dt>Commands run on</dt><dd>media-box</dd></div><div><dt>Browser runs on</dt><dd>The gateway's machine, shared with every bot</dd></div></dl>` +
+        `<dl class="facts">` +
+        row("Commands ran on", "media-box", "Named by the approval at 5:31 PM") +
+        row(`Set for ${name}`, "Commands: media-box", `A setting for ${name}. A task can run somewhere else.`) +
+        row("Browser", browser) +
+        `</dl>` +
         `<p class="machine-name">${icon("machine")}media-box</p>` +
         `<dl class="facts">` +
-        `<div><dt>State</dt><dd class="machine-state">${off ? glyph("failed") + "Offline" : glyph("done") + "Connected"}</dd></div>` +
-        `<div><dt>Last heartbeat</dt><dd>${off ? "5:12 PM, while going to sleep" : "40 s ago"}</dd></div>` +
-        (off ? "" : `<div><dt>Load</dt><dd>4 cores, 0.6 average</dd></div><div><dt>Memory</dt><dd>3.1 of 8 GB free</dd></div><div><dt>Disk</dt><dd>780 GB of 2 TB free</dd></div>`) +
-        `</dl><p class="machine-foot"><span>Otto and Pip both run commands here.</span>${CT.linkButton("Node settings", { attrs: 'data-cmp="node-settings"' })}</p>`
+        `<div><dt>State</dt><dd class="machine-state">${state}</dd></div>` +
+        row("Last seen", off ? "5:12 PM, while going to sleep" : "40 s ago") +
+        (off || unknown ? "" : row("Load", "4 cores, 0.6 average") + row("Memory", "3.1 of 8 GB free") + row("Disk", "780 GB of 2 TB free")) +
+        `</dl>` +
+        (off || unknown ? "" : `<p class="machine-asof">As of 5:40 PM</p>`) +
+        `<p class="machine-foot"><span>Pip is also set to run commands here.</span>${CT.linkButton("Node settings", { attrs: 'data-cmp="node-settings"' })}</p>`
       );
     }
     return (
-      `<dl class="facts"><div><dt>Commands run on</dt><dd>The gateway's machine</dd></div>` +
-      `<div><dt>Browser runs on</dt><dd>${C.plugin && C.configured ? "The gateway's machine" : "The gateway's machine, shared with every bot"}</dd></div></dl>`
+      `<dl class="facts">` +
+      row("Commands ran on", "Not reported in this task.") +
+      row(`Set for ${name}`, "Commands: the gateway's machine", `A setting for ${name}. A task can run somewhere else.`) +
+      row("Browser", browser) +
+      `</dl>`
     );
   }
 
@@ -523,7 +544,9 @@
       return setTimeout(() => {
         C.checking = false;
         rerenderComputer();
-        CT.announce("media-box is still offline");
+        C.checked = "5:42 PM";
+        rerenderComputer();
+        CT.announce("media-box is still not connected");
       }, 700);
     }
     if (cmp === "stop-task") return confirmStop(t.closest("button"));

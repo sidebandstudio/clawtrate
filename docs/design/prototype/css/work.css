@@ -1777,3 +1777,16 @@
 .screen-caption span {
   color: var(--text-faint);
 }
+
+.machine-sub {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  white-space: normal;
+}
+
+.machine-asof {
+  margin: 6px 4px 0;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
