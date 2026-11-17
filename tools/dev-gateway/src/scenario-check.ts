@@ -1590,27 +1590,30 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         .request("exec.approval.resolve", { id: approval.id, decision: "allow-once" });
       await h.wait(view);
       const result = view.result("exec");
-      same(
-        [result.isError, result.details.status, result.details.exitCode],
-        [false, "completed", 1],
-        "exec result",
-      );
+      same([result.isError, result.details.status], [false, "completed"], "exec result");
+      // `ls` of a missing folder exits 1 on BSD and 2 on GNU, and words its message differently.
+      const code = Number(result.details.exitCode);
       expect(
-        result.text.endsWith("(Command exited with code 1)"),
-        "the result text names the exit code",
+        code === 1 || code === 2,
+        `ls of a missing folder exits 1 or 2 (got ${String(result.details.exitCode)})`,
+      );
+      const exited = result.text;
+      expect(
+        /^ls: .*missing-folder.*No such file or directory\n\n\(Command exited with code (\d+)\)$/.exec(
+          exited,
+        )?.[1] === String(code),
+        `the result text is ls's own message and names the exit code (${JSON.stringify(exited)})`,
       );
       const end = view.agent("command_output").find((e) => view.data(e).phase === "end");
       expect(end, "command_output end");
-      same(view.data(end).exitCode, 1, "command_output exitCode");
-      const exited =
-        "ls: missing-folder: No such file or directory\n\n(Command exited with code 1)";
+      same(view.data(end).exitCode, code, "command_output exitCode");
       view.expectCalls([
         execCall(scriptedArgs("#exit-code", "exec", SHELL_BOT) as JsonRecord, {
           isError: false,
           content: [exited],
           details: {
             status: "completed",
-            exitCode: 1,
+            exitCode: code,
             exitSignal: null,
             exitReason: "exit",
             durationMs: isNumberAtLeast(0),

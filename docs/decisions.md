@@ -392,7 +392,7 @@ The gateway's config cannot both ask before every command and restrict Otto to a
 | ------------------------- | ------------------------------ | --------------------------------- |
 | `ls`                      | `#approve`, the seeded example | lists Otto's workspace            |
 | `echo 'Hello from Otto.'` | `#approve-once`                | per-call `ask: "always"`          |
-| `ls missing-folder`       | `#exit-code`                   | exits 1                           |
+| `ls missing-folder`       | `#exit-code`                   | exits 1 (BSD `ls`) or 2 (GNU)     |
 | `sleep 5`                 | `#exec-timeout`                | with `timeoutSeconds: 1`          |
 | `sleep N`                 | `#sleep N`                     | N is a whole number from 1 to 120 |
 
