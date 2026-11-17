@@ -1042,7 +1042,7 @@ test.describe("errors and resync", () => {
     page,
   }) => {
     await open(page, "stop-failed");
-    const notices = page.locator(".composer-shelf [role=alert]");
+    const notices = page.getByRole("group", { name: "Notifications" }).getByRole("alert");
     await expect(notices).toHaveCount(1);
     await expect(notices).toContainText("Couldn't stop Otto.");
     await notices.getByRole("button", { name: "Dismiss" }).click();
@@ -1067,6 +1067,35 @@ test.describe("errors and resync", () => {
     );
     await page.getByRole("button", { name: "Clear all" }).click();
     await expect(notices).toHaveCount(0);
+  });
+
+  test("F-103: a notice belongs to its task: another task does not show it, and it is there on return", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+        }
+      ).clawtrateFixture;
+      const original = fixture.invoke.bind(fixture);
+      fixture.invoke = (command: unknown) =>
+        (command as { type: string }).type === "sendMessage"
+          ? Promise.reject(new Error("The message is too long."))
+          : original(command);
+    });
+    await field(page).fill("Too long for the gateway");
+    await page.keyboard.press("Enter");
+    const notices = page.getByRole("group", { name: "Notifications" });
+    await expect(notices.getByRole("alert")).toContainText("Couldn't send this message.");
+    await page.getByTestId("task").filter({ hasText: "Weekly backup check" }).click();
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Weekly backup check" }),
+    ).toBeVisible();
+    await expect(page.getByRole("group", { name: "Notifications" })).toHaveCount(0);
+    await page.getByTestId("task").filter({ hasText: "Disk almost full" }).click();
+    await expect(notices.getByRole("alert")).toContainText("Couldn't send this message.");
   });
 
   test("F-104: while the connection is lost nothing moves, the status line says what was last seen, and the composer is offline", async ({

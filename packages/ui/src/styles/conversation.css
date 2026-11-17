@@ -1200,3 +1200,9 @@
   height: max(100%, 44px);
   transform: translate(-50%, -50%);
 }
+
+.shelf-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

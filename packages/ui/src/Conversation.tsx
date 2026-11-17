@@ -721,7 +721,8 @@ export function Conversation({
   const send = useCommand();
   const sectionRef = useRef<HTMLElement>(null);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
-  const [notices, setNotices] = useState<Notice[]>([]);
+  // Each notice belongs to the task it was raised in, and shows only there.
+  const [notices, setNotices] = useState<Array<Notice & { task: string }>>([]);
   const [dismissedStops, setDismissedStops] = useState<Set<string>>(() => new Set());
   const pillName = bot
     ? task
@@ -817,9 +818,17 @@ export function Conversation({
     return () => window.removeEventListener("keydown", onKey);
   }, [review]);
 
-  const addNotice = useCallback((notice: Omit<Notice, "id">) => {
-    setNotices((current) => [...current, { ...notice, id: `${Date.now()}:${Math.random()}` }]);
-  }, []);
+  const taskKey = task?.key ?? null;
+  const addNotice = useCallback(
+    (notice: Omit<Notice, "id">) => {
+      if (!taskKey) return;
+      setNotices((current) => [
+        ...current,
+        { ...notice, task: taskKey, id: `${Date.now()}:${Math.random()}` },
+      ]);
+    },
+    [taskKey],
+  );
   const stopNotices: Notice[] =
     transcript && bot
       ? transcript.runs.flatMap((run) =>
@@ -1008,7 +1017,7 @@ export function Conversation({
                 if (run && task) void send({ type: "stopRun", key: task.key, runId: run.id });
               },
             })),
-            ...notices,
+            ...notices.filter((notice) => notice.task === task.key),
           ]}
           needsYou={needsYouOf(bot, transcript, interactive)}
           onReview={review}
@@ -1018,7 +1027,7 @@ export function Conversation({
             setDismissedStops((current) => new Set(current).add(id));
           }}
           onClearNotices={() => {
-            setNotices([]);
+            setNotices((current) => current.filter((notice) => notice.task !== task.key));
             setDismissedStops((current) => {
               const next = new Set(current);
               for (const notice of stopNotices) next.add(notice.id);

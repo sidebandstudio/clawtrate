@@ -526,8 +526,9 @@ export function Composer({
       </div>,
     );
   }
+  const noticeRows: ReactNode[] = [];
   for (const notice of notices) {
-    rows.push(
+    noticeRows.push(
       <div className="shelf-row" data-tone="danger" key={notice.id} role="alert">
         <span className="shelf-text">
           <b>{notice.title}</b> {notice.reason && <span>{notice.reason}</span>}
@@ -551,11 +552,18 @@ export function Composer({
     );
   }
   if (notices.length > 1) {
-    rows.push(
+    noticeRows.push(
       <div className="shelf-clear" key="clear-all">
         <button type="button" className="link-button" onClick={() => act(onClearNotices)}>
           Clear all
         </button>
+      </div>,
+    );
+  }
+  if (noticeRows.length > 0) {
+    rows.push(
+      <div className="shelf-notices" role="group" aria-label="Notifications" key="notices">
+        {noticeRows}
       </div>,
     );
   }
