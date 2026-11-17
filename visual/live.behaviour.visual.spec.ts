@@ -323,6 +323,23 @@ test("F-074: files can be dragged into the composer or pasted into its field", a
   await expect(page.getByTestId("outgoing")).toContainText("dragged.txt, pasted.png");
 });
 
+test("F-282: Start as new task with files attached keeps the words and the files, and says why", async ({
+  page,
+}) => {
+  await open(page, "composer");
+  await page
+    .locator('.composer input[type="file"]')
+    .setInputFiles([{ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") }]);
+  await field(page).fill("Start this elsewhere");
+  await page.keyboard.press("ControlOrMeta+Shift+Enter");
+  await expect(page.locator(".composer-shelf [role=alert]")).toContainText(
+    "A new task can't take files yet.",
+  );
+  await expect(field(page)).toHaveValue("Start this elsewhere");
+  await expect(page.locator(".attachments .chip")).toHaveText([/notes\.txt/]);
+  await expect(announcer(page)).not.toHaveText("Started as a new task");
+});
+
 test.describe("the status line", () => {
   test("F-082 F-086 F-087: a running step's title is the phrase, the avatar works, and the phrase is its own tooltip", async ({
     page,
@@ -607,6 +624,8 @@ test.describe("steering, queueing and holding", () => {
     await expect(field(page)).toHaveValue(
       "A draft in progress\nAlso keep anything from this month.",
     );
+    // Its file comes back with it, as one record.
+    await expect(page.locator(".attachments .chip")).toHaveText([/keep-list\.txt/]);
     await expect(held).toHaveCount(1);
   });
 
@@ -745,6 +764,43 @@ test.describe("errors and resync", () => {
     await expect(page.getByTestId("turn-error")).toBeVisible();
     await page.getByTestId("turn-error").getByRole("button", { name: "Try again" }).click();
     await expect(page.getByTestId("status-line")).toBeVisible();
+  });
+
+  test("F-102: Try again sends the failed turn's message again with its files", async ({
+    page,
+  }) => {
+    await open(page, "run-failed");
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (f: (s: ClawtrateState) => ClawtrateState) => void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              outbox: transcript.outbox.map((each) => ({
+                ...each,
+                attachments: [{ fileName: "backup.log", mimeType: "text/plain", sizeBytes: 900 }],
+              })),
+            },
+          },
+        };
+      });
+    });
+    await page.getByTestId("turn-error").getByRole("button", { name: "Try again" }).click();
+    const again = page.getByTestId("outgoing");
+    await expect(again).toHaveCount(2);
+    await expect(again.last()).toContainText("Can you check the backup log from last night too?");
+    await expect(again.last()).toContainText("backup.log");
   });
 
   test("F-103 F-300: errors collect above the composer, each can be dismissed, and Clear all clears them", async ({

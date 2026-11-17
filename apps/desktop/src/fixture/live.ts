@@ -315,6 +315,9 @@ export function liveScene(
               message("msg-2", "Also keep anything from this month.", now - 2 * SECOND, {
                 mode: "steer",
                 status: "held",
+                attachments: [
+                  { fileName: "keep-list.txt", mimeType: "text/plain", sizeBytes: 2048 },
+                ],
               }),
             ],
           },
@@ -485,7 +488,7 @@ export function liveCommand(
   command: BridgeCommand,
   get: () => ClawtrateState,
   set: (state: ClawtrateState) => void,
-  files: ReadonlyMap<string, OutgoingMessage["attachments"][number]> = new Map(),
+  files: Map<string, OutgoingMessage["attachments"][number]> = new Map(),
 ): Promise<unknown> | undefined {
   const now = Date.now();
   const update = (change: (t: Transcript) => Transcript) => set(withTranscript(get(), change));
@@ -601,6 +604,49 @@ export function liveCommand(
         runs: transcript.runs.filter((each) => each.id !== command.messageId),
       }));
       return Promise.resolve();
+    case "takeBackMessage": {
+      const taken = get().transcripts[OPEN_TASK]?.outbox.find(
+        (each) => each.id === command.messageId,
+      );
+      if (!taken || (taken.status !== "held" && taken.status !== "queued"))
+        return Promise.reject(new Error("That message can no longer be edited."));
+      update((transcript) => ({
+        ...transcript,
+        outbox: transcript.outbox.map((each) =>
+          each.id === command.messageId ? { ...each, status: "cancelled" } : each,
+        ),
+        runs: transcript.runs.map((each) =>
+          each.id === command.messageId && each.state === "queued"
+            ? { ...each, state: "cancelled" }
+            : each,
+        ),
+      }));
+      const attachments = taken.attachments.map((file, index) => {
+        const info = { id: `back-${command.messageId}-${index}`, ...file };
+        files.set(info.id, file);
+        return info;
+      });
+      return Promise.resolve({ text: taken.text, attachments });
+    }
+    case "sendAgain": {
+      const original = get().transcripts[OPEN_TASK]?.outbox.find(
+        (each) => each.id === command.messageId,
+      );
+      if (!original) return Promise.reject(new Error("That message is no longer held here."));
+      const id = `msg-${Math.random().toString(36).slice(2, 8)}`;
+      update((transcript) => ({
+        ...transcript,
+        outbox: [
+          ...transcript.outbox,
+          message(id, original.text, now, { runId: id, attachments: original.attachments }),
+        ],
+        runs: [
+          ...transcript.runs,
+          newRun(id, { state: "running", origin: "local", bound: true, messageId: id }, now),
+        ],
+      }));
+      return Promise.resolve({ messageId: id });
+    }
     case "retryMessage":
       update((transcript) => ({
         ...transcript,

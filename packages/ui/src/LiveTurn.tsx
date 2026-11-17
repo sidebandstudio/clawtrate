@@ -229,6 +229,7 @@ export function RunEnding({
 }) {
   const bridge = useBridge();
   const [dismissed, setDismissed] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
   // Dismiss and the line swap places; focus follows to what replaced it.
   const moved = useRef(false);
   const lineRef = useRef<HTMLButtonElement>(null);
@@ -311,23 +312,35 @@ export function RunEnding({
         <CloseIcon />
       </button>
       <p className="turn-error-reason">{reason}</p>
+      {retryError && (
+        <p className="turn-error-reason" data-testid="retry-error">
+          Couldn't send it again: {retryError}
+        </p>
+      )}
       {text && (
         <div className="turn-error-actions">
           <button
             type="button"
             className="button"
             data-size="sm"
-            onClick={() =>
-              void bridge
-                .invoke({
-                  type: "sendMessage",
-                  key: taskKey,
-                  text,
-                  mode: "auto",
-                  attachmentIds: [],
-                })
-                .catch(() => {})
-            }
+            onClick={() => {
+              setRetryError(null);
+              // The engine still holds the message: its words and files go again together.
+              // Otherwise only history has it, and history gives the words alone.
+              const held = transcript.outbox.some((message) => message.id === run.messageId);
+              const again = held
+                ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: run.messageId! })
+                : bridge.invoke({
+                    type: "sendMessage",
+                    key: taskKey,
+                    text,
+                    mode: "auto",
+                    attachmentIds: [],
+                  });
+              void again.catch((error: unknown) =>
+                setRetryError(error instanceof Error ? error.message : String(error)),
+              );
+            }}
           >
             Try again
           </button>

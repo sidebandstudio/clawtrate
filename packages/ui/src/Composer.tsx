@@ -367,9 +367,36 @@ export function Composer({
             className="button"
             data-size="sm"
             onClick={() => {
-              act(() => bridge.send({ type: "cancelQueued", key: taskKey, messageId: message.id }));
-              // Unsent words are never lost: an existing draft keeps its place above them.
-              setText(text.trim() ? `${text}\n${message.text}` : message.text);
+              // The message comes back as one record: its words and its files.
+              void bridge
+                .invoke({ type: "takeBackMessage", key: taskKey, messageId: message.id })
+                .then(
+                  (back) => {
+                    // Unsent words are never lost: an existing draft keeps its place above them.
+                    setTextState((current) => {
+                      const next = current.trim() ? `${current}\n${back.text}` : back.text;
+                      writeDraft(draftKey, next);
+                      return next;
+                    });
+                    setFiles((current) => [
+                      ...current,
+                      ...back.attachments.map((info) => ({
+                        key: info.id,
+                        name: info.fileName,
+                        bytes: info.sizeBytes,
+                        image: info.mimeType.startsWith("image/"),
+                        info,
+                        refusal: null,
+                        uploading: false,
+                      })),
+                    ]);
+                  },
+                  (error: unknown) =>
+                    onNotice({
+                      title: "Couldn't take this message back.",
+                      reason: error instanceof Error ? error.message : String(error),
+                    }),
+                );
               focusRef.current?.focus();
             }}
           >
