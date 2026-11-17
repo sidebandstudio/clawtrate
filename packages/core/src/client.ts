@@ -324,6 +324,23 @@ export class ClawtrateClient {
 
     this.protocol = new GatewayProtocolClient<Plan>({
       createSocket: (handlers) => {
+        // Asked again before every attempt, including the protocol's own
+        // retries: a gateway that stops being allowed is never reopened, and
+        // throwing here ends the retries.
+        if (!this.isAllowed(settings.url)) {
+          if (generation === this.generation) {
+            this.setConnection({
+              status: "error",
+              retryAt: null,
+              error: {
+                code: "GATEWAY_NOT_ALLOWED",
+                message: new GatewayNotAllowedError(settings.url).message,
+                hint: null,
+              },
+            });
+          }
+          throw new GatewayNotAllowedError(settings.url);
+        }
         const socket = this.host.createWebSocket(settings.url);
         socket.onopen = () => handlers.open();
         socket.onmessage = (event) => handlers.message(String(event.data));

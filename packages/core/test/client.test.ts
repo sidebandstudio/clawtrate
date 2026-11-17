@@ -93,6 +93,37 @@ describe("allowed gateways (A1)", () => {
   });
 });
 
+describe("allowed gateways on every reconnect (A2)", () => {
+  it("checks before every automatic retry and stops retrying once a gateway is refused", async () => {
+    const gateway = new FakeGateway();
+    let allowed = true;
+    let checks = 0;
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), {
+      ...FAST,
+      allowGatewayUrl: (url) => {
+        checks += 1;
+        return allowed && url === URL_A;
+      },
+    });
+    await client.start();
+    await client.connect({ url: URL_A, token: "bootstrap" });
+    await until(() => client.state.discovery.status === "ready");
+    expect(gateway.sockets).toHaveLength(1);
+    // The proof is lost, then the connection drops: the protocol's own retry
+    // must ask again and open nothing.
+    allowed = false;
+    const before = checks;
+    gateway.dropAll();
+    await until(() => client.state.connection.error?.code === "GATEWAY_NOT_ALLOWED");
+    await sleep(150);
+    expect(checks).toBeGreaterThan(before);
+    expect(gateway.sockets).toHaveLength(1);
+    expect(client.state.connection.status).toBe("error");
+    expect(client.state.connection.retryAt).toBeNull();
+    client.stop();
+  });
+});
+
 describe("pairing instructions (A3)", () => {
   function pairingGateway() {
     const gateway = new FakeGateway();
