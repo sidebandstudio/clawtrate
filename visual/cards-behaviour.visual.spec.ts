@@ -681,6 +681,54 @@ test.describe("question cards", () => {
     await expect(questionCard(page).locator(".answer")).toHaveText(["Dismissed"]);
   });
 
+  test("F-112 F-303 F-302: after a typed answer, its send button or Dismiss, focus is on the settled card", async ({
+    page,
+  }) => {
+    const settledFocused = () =>
+      page.evaluate(() => {
+        const active = document.activeElement as HTMLElement | null;
+        return active?.dataset.testid === "question-card" && active.dataset.state !== "pending";
+      });
+    await openFixture(page, "scene=question-single", "light");
+    const field = questionCard(page).getByPlaceholder("Type your own answer");
+    await field.fill("Two weeks");
+    await field.press("Enter");
+    await expect(questionCard(page)).toHaveAttribute("data-state", "answered");
+    expect(await settledFocused()).toBe(true);
+
+    await openFixture(page, "scene=question-single", "light");
+    await questionCard(page).getByPlaceholder("Type your own answer").fill("Two weeks");
+    await questionCard(page).getByRole("button", { name: "Send this answer" }).click();
+    await expect(questionCard(page)).toHaveAttribute("data-state", "answered");
+    expect(await settledFocused()).toBe(true);
+
+    await openFixture(page, "scene=question-single", "light");
+    await questionCard(page).getByRole("button", { name: "Dismiss Otto's question" }).click();
+    await expect(questionCard(page)).toHaveAttribute("data-state", "dismissed");
+    expect(await settledFocused()).toBe(true);
+
+    await openFixture(page, "scene=question-three", "light");
+    const card = questionCard(page);
+    await card.locator(".question").nth(0).getByRole("radio").first().click();
+    await card.locator(".question").nth(1).getByRole("checkbox").first().click();
+    await card.locator(".question").nth(2).getByRole("radio").first().click();
+    await card.getByRole("button", { name: "Send answers" }).click();
+    await expect(card).toHaveAttribute("data-state", "answered");
+    expect(await settledFocused()).toBe(true);
+  });
+
+  test("F-303: ⌘↵ in a single question's typed field sends the answer once", async ({ page }) => {
+    await openFixture(page, "scene=question-single", "light");
+    await recordCommands(page);
+    const field = questionCard(page).getByPlaceholder("Type your own answer");
+    await field.fill("Two weeks");
+    await field.press("ControlOrMeta+Enter");
+    await expect(questionCard(page)).toHaveAttribute("data-state", "answered");
+    expect((await sent(page)).filter((command) => command.type === "answerQuestion")).toHaveLength(
+      1,
+    );
+  });
+
   test("F-112: with three questions nothing is sent until each has an answer", async ({ page }) => {
     await openFixture(page, "scene=question-three", "light");
     await recordCommands(page);

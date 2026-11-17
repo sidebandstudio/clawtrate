@@ -300,7 +300,7 @@ function PendingQuestion({
             data-variant="quiet"
             aria-label={`Dismiss ${name}'s question${several ? "s" : ""}`}
             title="Dismiss"
-            disabled={busy}
+            aria-disabled={busy || undefined}
             onClick={dismiss}
           >
             <CloseIcon />
@@ -365,13 +365,17 @@ function PendingQuestion({
                   type="text"
                   placeholder="Type your own answer"
                   value={draft.own}
-                  disabled={busy}
+                  readOnly={busy}
+                  aria-disabled={busy || undefined}
                   onChange={(event) => type(item, event.target.value)}
                   onKeyDown={(event) => {
+                    // ⌘↵ is the card's own shortcut; plain Enter sends a single question's answer.
                     if (
                       instant &&
                       event.key === "Enter" &&
                       !event.shiftKey &&
+                      !event.metaKey &&
+                      !event.ctrlKey &&
                       draft.own.trim() !== ""
                     ) {
                       event.preventDefault();
@@ -384,7 +388,8 @@ function PendingQuestion({
                     type="button"
                     className="icon-button"
                     aria-label="Send this answer"
-                    disabled={busy || draft.own.trim() === ""}
+                    disabled={draft.own.trim() === ""}
+                    aria-disabled={busy || undefined}
                     onClick={() => submit()}
                   >
                     <ArrowUpIcon />
@@ -423,7 +428,8 @@ function PendingQuestion({
             type="button"
             className="button"
             data-variant="primary"
-            disabled={!ready || busy}
+            disabled={!ready}
+            aria-disabled={busy || undefined}
             onClick={() => submit()}
           >
             {busy ? "Sending…" : several ? "Send answers" : "Send answer"}
