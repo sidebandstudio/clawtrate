@@ -4,6 +4,7 @@
 // always passes `--dev` and a scrubbed environment.
 
 import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +17,13 @@ import {
   stateDirFor,
   validateInstanceName,
 } from "./instance.ts";
-import { isAlive, readMarker, readRunRecord, spawnRefusal } from "./state-guard.ts";
+import {
+  processIdentity,
+  readMarker,
+  readRunRecord,
+  spawnRefusal,
+  type Identify,
+} from "./state-guard.ts";
 
 /** The default instance's ports. Named instances record their own. */
 export const GATEWAY_PORT = DEFAULT_GATEWAY_PORT;
@@ -33,7 +40,7 @@ export function devStateDir(home: string = homedir()): string {
 
 const TOOL_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 /** The checkout this tool belongs to. Recorded in markers, never committed. */
-export const CHECKOUT_DIR = join(TOOL_DIR, "../..");
+export const CHECKOUT_DIR = realpathSync(join(TOOL_DIR, "../.."));
 /** Run state for processes this tool started (PIDs, logs). Git-ignored. */
 export const RUN_DIR = join(TOOL_DIR, ".run");
 
@@ -142,7 +149,9 @@ export type RunnerOptions = {
   bin?: string;
   spawnImpl?: typeof spawn;
   spawnSyncImpl?: typeof spawnSync;
-  isAlive?: (pid: number | undefined) => boolean;
+  identify?: Identify;
+  /** The checkout whose run file proves ownership. */
+  checkout?: string;
 };
 
 /**
@@ -159,7 +168,8 @@ export class OpenclawRunner {
   private readonly bin: string;
   private readonly spawnImpl: typeof spawn;
   private readonly spawnSyncImpl: typeof spawnSync;
-  private readonly alive: (pid: number | undefined) => boolean;
+  private readonly identify: Identify;
+  private readonly checkout: string;
 
   constructor(options: RunnerOptions) {
     this.instance = options.instance ?? null;
@@ -168,7 +178,8 @@ export class OpenclawRunner {
     this.bin = options.bin ?? OPENCLAW_BIN;
     this.spawnImpl = options.spawnImpl ?? spawn;
     this.spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
-    this.alive = options.isAlive ?? isAlive;
+    this.identify = options.identify ?? processIdentity;
+    this.checkout = options.checkout ?? CHECKOUT_DIR;
   }
 
   /** Why OpenClaw must not run now, or null. */
@@ -177,8 +188,9 @@ export class OpenclawRunner {
       stateDir: this.stateDir,
       run: readRunRecord(this.runFile),
       freshRunId: this.freshRunId,
-      isAlive: this.alive,
       instance: this.instance,
+      checkout: this.checkout,
+      identify: this.identify,
     });
   }
 
@@ -275,15 +287,6 @@ export function instancePaths(
     // Read by the preview host's `--dev-gateway` mode.
     connectionFile: join(runDir, "connection.json"),
   };
-}
-
-/** The runner for one instance's real profile. */
-export function runnerFor(paths: InstancePaths): OpenclawRunner {
-  return new OpenclawRunner({
-    instance: paths.name,
-    stateDir: paths.stateDir,
-    runFile: paths.runFile,
-  });
 }
 
 /** Parse the first JSON document in CLI output, tolerating leading log lines. */

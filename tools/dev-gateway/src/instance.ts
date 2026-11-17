@@ -120,8 +120,3 @@ export function isNamedInstancePort(port: unknown): port is number {
     !RESERVED_PORTS.has(port)
   );
 }
-
-/** The gateway endpoint a named instance on `port` has, or null if the port is not one. */
-export function namedGatewayUrl(port: unknown): string | null {
-  return isNamedInstancePort(port) ? `ws://127.0.0.1:${port}` : null;
-}

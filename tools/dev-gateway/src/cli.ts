@@ -11,9 +11,10 @@
 //   pnpm dev-gateway stop      stop the processes this tool started
 //   pnpm dev-gateway reset     stop, then delete the instance's state folder
 //   pnpm dev-gateway list      the instances this tool created on this machine
-//   pnpm dev-gateway prune     remove named instances nothing is running on
+//   pnpm dev-gateway prune     remove named instances nothing is running on, on the
+//                              whole machine (deliberate maintenance; no --instance)
 //
-// Every command takes `--instance <name>` (or CLAWTRATE_DEV_INSTANCE). Without
+// The instance commands take `--instance <name>` (or CLAWTRATE_DEV_INSTANCE). Without
 // one it addresses the default instance: `openclaw --dev`, ~/.openclaw-dev,
 // ports 19001 and 19091. A named instance is `openclaw --profile
 // clawtrate-dev-<name>` in ~/.openclaw-clawtrate-dev-<name>, on free ports the
@@ -26,9 +27,11 @@ import { randomBytes } from "node:crypto";
 import {
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -38,15 +41,23 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { renderAvatar } from "./avatars.ts";
 import {
+  activityRefusal,
   ForeignStateError,
   inUseRefusal,
-  isAlive,
+  isLegacyMarker,
+  markerProblems,
   newRunId,
   ownership,
   prepareFreshState,
+  processIdentity,
+  processState,
+  readMarker,
   readRunRecord,
-  recordGateway,
+  recordProcess,
+  runMatches,
   StateInUseError,
+  validPid,
+  type Identify,
   type RunRecord,
 } from "./state-guard.ts";
 import {
@@ -54,24 +65,21 @@ import {
   GATEWAY_PORT,
   MODEL_ID,
   MODEL_REF,
+  OpenclawRunner,
   PROVIDER_ID,
   PROVIDER_PORT,
-  RUN_DIR,
   assertInstanceStateDir,
   instancePaths,
   parseJsonOutput,
   providerEnv,
-  runnerFor,
   type InstancePaths,
-  type OpenclawRunner,
 } from "./env.ts";
-import { profileArgs, runDirFor, selectInstance } from "./instance.ts";
+import { isNamedInstancePort, profileArgs, selectInstance } from "./instance.ts";
+import { instanceLockPath, portLockPath, withLock } from "./lock.ts";
 import {
   choosePorts,
   listInstances,
   portOpen,
-  pruneInstances,
-  withPortLock,
   type InstanceEntry,
   type InstancePorts,
 } from "./registry.ts";
@@ -84,21 +92,54 @@ import {
 } from "./seed-data.ts";
 import { spawn, spawnSync } from "node:child_process";
 
-export type DevConnection = { url: string; token: string; instance?: string | null };
+export type DevConnection = {
+  url: string;
+  token: string;
+  instance?: string | null;
+  runId?: string;
+};
 
-/** One instance as a command sees it: its paths, its guarded runner and the home it is under. */
-export type DevInstance = InstancePaths & { home: string; runner: OpenclawRunner };
+/**
+ * One instance as a command sees it: its paths, its guarded runner, the home it
+ * is under and the checkout it acts for. `identify` and `listening` are the
+ * process and port probes, replaceable in tests.
+ */
+export type DevInstance = InstancePaths & {
+  home: string;
+  checkout: string;
+  runner: OpenclawRunner;
+  identify: Identify;
+  listening: (port: number) => Promise<boolean>;
+};
 
 export function openInstance(
   name: string | null,
-  options: { home?: string; runRoot?: string; runner?: OpenclawRunner } = {},
+  options: {
+    home?: string;
+    runRoot?: string;
+    runner?: OpenclawRunner;
+    checkout?: string;
+    identify?: Identify;
+    listening?: (port: number) => Promise<boolean>;
+  } = {},
 ): DevInstance {
   const home = options.home ?? homedir();
   const paths = instancePaths(name, {
     home,
     ...(options.runRoot ? { runRoot: options.runRoot } : {}),
   });
-  return { ...paths, home, runner: options.runner ?? runnerFor(paths) };
+  const checkout = options.checkout ?? CHECKOUT_DIR;
+  const identify = options.identify ?? processIdentity;
+  const runner =
+    options.runner ??
+    new OpenclawRunner({
+      instance: name,
+      stateDir: paths.stateDir,
+      runFile: paths.runFile,
+      checkout,
+      identify,
+    });
+  return { ...paths, home, checkout, runner, identify, listening: options.listening ?? portOpen };
 }
 
 const DEFAULT_PORTS: InstancePorts = { gatewayPort: GATEWAY_PORT, providerPort: PROVIDER_PORT };
@@ -118,9 +159,16 @@ function assertInside(path: string, dir: string): void {
     throw new Error(`refusing to write outside ${dir}: ${path}`);
 }
 
+/** Write a file whole and rename it into place; a link at the path is replaced, not followed. */
+function writeFileAtomic(path: string, contents: string): void {
+  const temp = `${path}.${process.pid}.tmp`;
+  writeFileSync(temp, contents, { mode: 0o600 });
+  renameSync(temp, path);
+}
+
 function writeState(inst: DevInstance, state: RunRecord): void {
   mkdirSync(inst.runDir, { recursive: true });
-  writeFileSync(inst.runFile, `${JSON.stringify(state, null, 2)}\n`);
+  writeFileAtomic(inst.runFile, `${JSON.stringify(state, null, 2)}\n`);
 }
 
 export function readDevConnection(path: string): DevConnection | null {
@@ -273,14 +321,19 @@ function assertSandboxed(inst: DevInstance, ports: InstancePorts): void {
 }
 
 /** Write a new config and bootstrap token into the state folder `start` just created. */
-function writeFreshConfig(inst: DevInstance, ports: InstancePorts): DevConnection {
+function writeFreshConfig(inst: DevInstance, ports: InstancePorts, runId: string): DevConnection {
   const token = randomBytes(24).toString("base64url");
   writeFileSync(inst.configPath, `${JSON.stringify(devConfig(token, ports), null, 2)}\n`, {
     mode: 0o600,
   });
-  const connection = { url: `ws://127.0.0.1:${ports.gatewayPort}`, token, instance: inst.name };
+  const connection = {
+    url: `ws://127.0.0.1:${ports.gatewayPort}`,
+    token,
+    instance: inst.name,
+    runId,
+  };
   mkdirSync(inst.runDir, { recursive: true });
-  writeFileSync(inst.connectionFile, `${JSON.stringify(connection, null, 2)}\n`, { mode: 0o600 });
+  writeFileAtomic(inst.connectionFile, `${JSON.stringify(connection, null, 2)}\n`);
   const validation = inst.runner.runSync(["config", "validate"]);
   if (validation.status !== 0) {
     throw new Error(`generated config is invalid:\n${validation.stdout}${validation.stderr}`);
@@ -318,164 +371,306 @@ async function assertExecDenied(inst: DevInstance): Promise<void> {
   if (problems.length > 0) throw new Error(`exec is not denied:\n  - ${problems.join("\n  - ")}`);
 }
 
-/** Refuse, changing nothing, when another checkout runs this instance's gateway. */
+/** Refuse, changing nothing, when processes this checkout cannot prove its own may run on it. */
 function assertNotInUse(inst: DevInstance): void {
-  const reason = inUseRefusal(inst.stateDir, readRunRecord(inst.runFile), isAlive);
+  const reason = inUseRefusal(
+    inst.stateDir,
+    inst.name,
+    readRunRecord(inst.runFile),
+    inst.checkout,
+    inst.identify,
+  );
   if (reason) throw new StateInUseError(reason);
 }
+
+/** The ports a listener on would mean the instance may still be in use. */
+function instancePortsToCheck(inst: DevInstance): number[] {
+  if (inst.name === null) return [GATEWAY_PORT, PROVIDER_PORT];
+  const marker = readMarker(inst.stateDir);
+  return [marker?.gatewayPort, marker?.providerPort].filter(isNamedInstancePort);
+}
+
+/**
+ * Why the instance's folder must not be deleted, or null. Deleting needs proof
+ * that nothing is running: a valid marker naming this instance, every recorded
+ * process proven gone, and nothing listening on the instance's ports.
+ */
+async function deletionRefusal(inst: DevInstance): Promise<string | null> {
+  if (ownership(inst.stateDir) !== "owned") return null;
+  const busy = activityRefusal(inst.stateDir, inst.name, inst.identify);
+  if (busy) return busy;
+  for (const port of instancePortsToCheck(inst)) {
+    if (await inst.listening(port)) {
+      return `${label(inst)} (${inst.stateDir}) may still be in use: something is listening on its port ${port}. Nothing was changed.`;
+    }
+  }
+  return null;
+}
+
+/** Hold the instance's lifecycle lock, shared by start, stop, reset and prune. */
+function withInstanceLock<T>(inst: DevInstance, fn: () => Promise<T>): Promise<T> {
+  return withLock(instanceLockPath(inst.home, inst.name), fn, {
+    what: `the lifecycle lock of ${label(inst)}`,
+  });
+}
+
+const RUN_ID_PATTERN = /^[0-9a-f]{48}$/;
 
 /**
  * The only way to start the gateway: on a state folder this command has just
  * created empty. The tool's own gateway is stopped and its state deleted first;
- * foreign state, and state whose gateway another checkout runs, is refused
- * untouched. Ends with a seeded, verified gateway.
+ * foreign state, and state whose processes this checkout cannot prove its own,
+ * is refused untouched. Ends with a seeded, verified gateway. `runId` lets a
+ * caller that must clean up later (the end-to-end tests) know it in advance.
  */
-export async function start(inst: DevInstance, options: { seed?: boolean } = {}): Promise<void> {
+export async function start(
+  inst: DevInstance,
+  options: { seed?: boolean; runId?: string } = {},
+): Promise<void> {
   assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
-  if (ownership(inst.stateDir) === "foreign") throw new ForeignStateError(inst.stateDir);
-  assertNotInUse(inst);
-  await stop(inst);
+  const runId = options.runId ?? newRunId();
+  if (!RUN_ID_PATTERN.test(runId)) throw new Error("--run-id must be 48 lowercase hex digits");
   const runner = inst.runner;
-  const runId = newRunId();
-  // Ports are chosen and recorded in the new marker under one lock, so two
-  // starts on this machine never take the same ones.
-  const ports = await withPortLock(inst.home, async () => {
-    const chosen = inst.name === null ? DEFAULT_PORTS : await choosePorts(inst.name, inst.home);
-    for (const port of [chosen.gatewayPort, chosen.providerPort]) {
-      if (await portOpen(port)) {
-        throw new Error(`port ${port} is in use by a process this tool did not start`);
-      }
-    }
-    prepareFreshState(
-      inst.stateDir,
-      runId,
-      new Date(),
-      { instance: inst.name, ...chosen, checkout: CHECKOUT_DIR, startPid: process.pid },
-      { run: readRunRecord(inst.runFile), isAlive },
+  const ports = await withInstanceLock(inst, async () => {
+    if (ownership(inst.stateDir) === "foreign") throw new ForeignStateError(inst.stateDir);
+    assertNotInUse(inst);
+    await stopLocked(inst);
+    const blocked = await deletionRefusal(inst);
+    if (blocked) throw new StateInUseError(blocked);
+    // Ports are chosen and recorded in the new marker under one lock, so two
+    // starts on this machine never take the same ones.
+    const chosen = await withLock(
+      portLockPath(inst.home),
+      async () => {
+        const picked = inst.name === null ? DEFAULT_PORTS : await choosePorts(inst.name, inst.home);
+        for (const port of [picked.gatewayPort, picked.providerPort]) {
+          if (await inst.listening(port)) {
+            throw new Error(`port ${port} is in use by a process this tool did not start`);
+          }
+        }
+        prepareFreshState(
+          inst.stateDir,
+          runId,
+          {
+            instance: inst.name,
+            ...picked,
+            checkout: inst.checkout,
+            startPid: process.pid,
+            startIdentity: inst.identify(process.pid) ?? "",
+          },
+          inst.identify,
+        );
+        return picked;
+      },
+      { what: "the dev-gateway port lock" },
     );
+    writeState(inst, {
+      runId,
+      instance: inst.name,
+      checkout: inst.checkout,
+      ...chosen,
+      startedAt: new Date().toISOString(),
+    });
+    runner.freshRunId = runId;
+    try {
+      writeFreshConfig(inst, chosen, runId);
+      assertSandboxed(inst, chosen);
+      // Each spawn is recorded in the same synchronous step. Signal handlers
+      // run only between steps, so an interrupted start never leaves a process
+      // it did not record.
+      const providerLog = openSync(join(inst.runDir, "provider.log"), "w");
+      const provider = spawn(
+        process.execPath,
+        [fileURLToPath(new URL("./provider-main.ts", import.meta.url))],
+        {
+          detached: true,
+          stdio: ["ignore", providerLog, providerLog],
+          env: providerEnv(process.env, chosen.providerPort),
+        },
+      );
+      provider.unref();
+      closeSync(providerLog);
+      recordProcess(inst.stateDir, runId, "provider", provider.pid, inst.identify);
+      await waitFor("the scripted provider", () => portOpen(chosen.providerPort), 10_000);
+
+      const gatewayLog = openSync(join(inst.runDir, "gateway.log"), "w");
+      const gateway = runner.spawnDetached(
+        ["gateway", "run", "--port", String(chosen.gatewayPort), "--bind", "loopback"],
+        { stdio: ["ignore", gatewayLog, gatewayLog] },
+      );
+      gateway.unref();
+      closeSync(gatewayLog);
+      recordProcess(inst.stateDir, runId, "gateway", gateway.pid, inst.identify);
+    } finally {
+      // From here on OpenClaw runs only while this start's gateway is alive.
+      runner.freshRunId = null;
+    }
     return chosen;
   });
-  runner.freshRunId = runId;
-  try {
-    writeFreshConfig(inst, ports);
-    assertSandboxed(inst, ports);
-    mkdirSync(inst.runDir, { recursive: true });
-
-    const providerLog = openSync(join(inst.runDir, "provider.log"), "w");
-    const provider = spawn(
-      process.execPath,
-      [fileURLToPath(new URL("./provider-main.ts", import.meta.url))],
-      {
-        detached: true,
-        stdio: ["ignore", providerLog, providerLog],
-        env: providerEnv(process.env, ports.providerPort),
-      },
-    );
-    provider.unref();
-    closeSync(providerLog);
-    writeState(inst, {
-      runId,
-      providerPid: provider.pid,
-      ...ports,
-      startedAt: new Date().toISOString(),
-    });
-    await waitFor("the scripted provider", () => portOpen(ports.providerPort), 10_000);
-
-    const gatewayLog = openSync(join(inst.runDir, "gateway.log"), "w");
-    const gateway = runner.spawnDetached(
-      ["gateway", "run", "--port", String(ports.gatewayPort), "--bind", "loopback"],
-      { stdio: ["ignore", gatewayLog, gatewayLog] },
-    );
-    gateway.unref();
-    closeSync(gatewayLog);
-    writeState(inst, {
-      runId,
-      providerPid: provider.pid,
-      gatewayPid: gateway.pid,
-      ...ports,
-      startedAt: new Date().toISOString(),
-    });
-    recordGateway(inst.stateDir, runId, { gatewayPid: gateway.pid!, providerPid: provider.pid! });
-  } finally {
-    // From here on OpenClaw runs only while this start's gateway is alive.
-    runner.freshRunId = null;
-  }
   await waitFor("the development gateway", () => gatewayHealthy(runner), 90_000);
   await assertExecDenied(inst);
-  const record = readRunRecord(inst.runFile);
+  const marker = readMarker(inst.stateDir);
   console.log(`Development gateway (${label(inst)}) ready on ws://127.0.0.1:${ports.gatewayPort}`);
   console.log(`  profile         openclaw ${profileArgs(inst.name).join(" ")}`);
   console.log(`  state           ${inst.stateDir}`);
   console.log(
-    `  scripted model  http://127.0.0.1:${ports.providerPort}/v1 (pid ${record?.providerPid})`,
+    `  scripted model  http://127.0.0.1:${ports.providerPort}/v1 (pid ${marker?.providerPid})`,
   );
-  console.log(`  gateway         pid ${record?.gatewayPid}, logs in ${inst.runDir}`);
+  console.log(`  gateway         pid ${marker?.gatewayPid}, logs in ${inst.runDir}`);
   // Unseeded starts are for checks that need a running gateway, not its data.
   if (options.seed !== false) await seed(inst);
 }
 
-/** Direct children of a process we started, so none outlive it. */
-function childPids(pid: number): number[] {
+/** Direct children of a process, each with its identity at the time it was listed. */
+function childProcesses(pid: number, identify: Identify): { pid: number; identity: string }[] {
   const result = spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8" });
   return result.stdout
     .split(/\s+/)
     .filter(Boolean)
     .map(Number)
-    .filter((child) => Number.isInteger(child) && child > 0);
+    .filter(validPid)
+    .flatMap((child) => {
+      const identity = identify(child);
+      return identity === null ? [] : [{ pid: child, identity }];
+    });
 }
 
-async function stopPid(pid: number, label: string): Promise<void> {
-  if (!isAlive(pid)) return;
-  const children = childPids(pid);
-  process.kill(pid, "SIGTERM");
+type StopTarget = { role: string; pid: number; identity: string };
+
+/**
+ * Stop one proven process: its identity is checked again right before every
+ * signal, so a PID the system reused is never signalled. Its direct children
+ * are listed while it is still the proven parent, and each is signalled only
+ * if it is still that same process.
+ */
+async function stopProcess(target: StopTarget, identify: Identify): Promise<void> {
+  const same = () => identify(target.pid) === target.identity;
+  if (!same()) return;
+  const children = childProcesses(target.pid, identify);
+  if (!same()) return;
+  process.kill(target.pid, "SIGTERM");
   const deadline = Date.now() + 15_000;
-  while (isAlive(pid) && Date.now() < deadline) await sleep(200);
-  if (isAlive(pid)) {
-    process.kill(pid, "SIGKILL");
-    console.log(`Stopped ${label} (pid ${pid}) after a forced kill`);
+  while (same() && Date.now() < deadline) await sleep(200);
+  if (same()) {
+    process.kill(target.pid, "SIGKILL");
+    console.log(`Stopped the ${target.role} (pid ${target.pid}) after a forced kill`);
   } else {
-    console.log(`Stopped ${label} (pid ${pid})`);
+    console.log(`Stopped the ${target.role} (pid ${target.pid})`);
   }
   for (const child of children) {
-    if (isAlive(child)) {
-      process.kill(child, "SIGTERM");
-      console.log(`Stopped a leftover child of ${label} (pid ${child})`);
+    if (identify(child.pid) === child.identity) {
+      process.kill(child.pid, "SIGTERM");
+      console.log(`Stopped a leftover child of the ${target.role} (pid ${child.pid})`);
     }
   }
 }
 
-/** Stop the processes this checkout recorded for the instance, by PID. Nothing else. */
-export async function stop(inst: DevInstance): Promise<void> {
-  const state = readRunRecord(inst.runFile);
-  if (!state) {
+/**
+ * Stop the processes of this checkout's run of the instance, with the
+ * lifecycle lock held. A process is signalled only when the folder is the
+ * tool's own, its marker is valid, the marker's run id, instance and checkout
+ * agree with this checkout's run file, and the live process has the PID and
+ * start time the marker recorded at spawn. Anything else is refused, says what
+ * disagrees, and signals nothing.
+ */
+async function stopLocked(inst: DevInstance): Promise<void> {
+  if (!lstatOrNull(inst.runFile)) {
     console.log(
       `Nothing to stop: this checkout has no running processes on record for ${label(inst)}.`,
     );
     return;
   }
-  if (state.gatewayPid) await stopPid(state.gatewayPid, "development gateway");
-  if (state.providerPid) await stopPid(state.providerPid, "scripted provider");
+  const refuse = (why: string): never => {
+    throw new StateInUseError(`Not stopping ${label(inst)}: ${why}. Nothing was signalled.`);
+  };
+  const run = readRunRecord(inst.runFile);
+  if (!run) {
+    refuse(
+      `${inst.runFile} is not a run file this version of the tool wrote. ` +
+        "Stop its processes yourself if they are still running, then delete it",
+    );
+  }
+  const owner = ownership(inst.stateDir);
+  if (owner === "foreign") throw new ForeignStateError(inst.stateDir);
+  const marker = owner === "owned" ? readMarker(inst.stateDir)! : null;
+  if (!marker || marker.runId !== run!.runId) {
+    // The folder is gone or holds another run: the file proves nothing about
+    // any process, so it is dropped and nothing is signalled.
+    rmSync(inst.runFile, { force: true });
+    console.log(
+      `Discarded this checkout's stale run file for ${label(inst)}: ` +
+        `${marker ? "its folder now holds another run" : "its folder is gone"}. Nothing was signalled.`,
+    );
+    return;
+  }
+  if (isLegacyMarker(marker)) refuse("its marker records no process identities");
+  const problems = markerProblems(marker, inst.name);
+  if (problems.length > 0) refuse(`its marker cannot be trusted: ${problems.join("; ")}`);
+  if (!runMatches(run, marker, inst.name, inst.checkout)) {
+    refuse(
+      `this checkout's run file and the marker disagree (run file: instance ${JSON.stringify(run!.instance)}, ` +
+        `checkout ${run!.checkout}; marker: instance ${JSON.stringify(marker.instance ?? null)}, ` +
+        `checkout ${marker.checkout}; this checkout: ${inst.checkout})`,
+    );
+  }
+  const targets: StopTarget[] = [];
+  for (const role of ["gateway", "provider"] as const) {
+    const pid = marker[`${role}Pid`];
+    const identity = marker[`${role}Identity`];
+    const state = processState(pid, identity, inst.identify);
+    if (state === "unknown") refuse(`its ${role} process record cannot identify a process`);
+    if (state === "alive") targets.push({ role, pid: pid!, identity: identity! });
+  }
+  for (const target of targets) await stopProcess(target, inst.identify);
   rmSync(inst.runFile, { force: true });
 }
 
-/**
- * Stop, then delete the instance's state folder if it is the tool's own and no
- * other checkout runs its gateway. Foreign state is left alone. Only this one
- * instance is affected.
- */
-export async function reset(inst: DevInstance): Promise<void> {
-  assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
-  const owner = ownership(inst.stateDir);
-  if (owner === "foreign") throw new ForeignStateError(inst.stateDir);
-  assertNotInUse(inst);
-  await stop(inst);
-  rmSync(inst.connectionFile, { force: true });
-  if (owner === "owned") {
-    assertNotInUse(inst);
-    rmSync(inst.stateDir, { recursive: true });
-    console.log(`Removed ${inst.stateDir}`);
+function lstatOrNull(path: string) {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
   }
-  if (inst.name !== null) rmSync(inst.runDir, { recursive: true, force: true });
+}
+
+/** Stop the processes this checkout started for the instance, once proven. Nothing else. */
+export async function stop(inst: DevInstance): Promise<void> {
+  await withInstanceLock(inst, () => stopLocked(inst));
+}
+
+/**
+ * Stop, then delete the instance's state folder, if it is the tool's own, its
+ * marker names this instance and nothing can still be running on it. Foreign
+ * state is left alone. Only this one instance is affected. With `runId`, only
+ * the folder of that run is removed.
+ */
+export async function reset(inst: DevInstance, options: { runId?: string } = {}): Promise<void> {
+  assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
+  if (options.runId !== undefined && !RUN_ID_PATTERN.test(options.runId)) {
+    throw new Error("--run-id must be 48 lowercase hex digits");
+  }
+  await withInstanceLock(inst, async () => {
+    const owner = ownership(inst.stateDir);
+    if (owner === "foreign") throw new ForeignStateError(inst.stateDir);
+    if (owner === "owned" && options.runId !== undefined) {
+      const runId = readMarker(inst.stateDir)!.runId;
+      if (runId !== options.runId) {
+        throw new StateInUseError(
+          `${label(inst)} (${inst.stateDir}) holds another run than ${options.runId}. Nothing was changed.`,
+        );
+      }
+    }
+    assertNotInUse(inst);
+    await stopLocked(inst);
+    if (ownership(inst.stateDir) === "owned") {
+      const blocked = await deletionRefusal(inst);
+      if (blocked) throw new StateInUseError(blocked);
+      rmSync(inst.stateDir, { recursive: true });
+      console.log(`Removed ${inst.stateDir}`);
+    }
+    rmSync(inst.connectionFile, { force: true });
+    if (inst.name !== null) rmSync(inst.runDir, { recursive: true, force: true });
+  });
 }
 
 /** Report what is running. OpenClaw is asked only when the guard allows it. */
@@ -484,18 +679,29 @@ export async function status(
   log: (line: string) => void = console.log,
 ): Promise<void> {
   const runner = inst.runner;
-  const record = readRunRecord(runner.runFile);
   const connection = readDevConnection(inst.connectionFile);
   const owner = ownership(runner.stateDir);
   log(`instance    ${inst.name ?? "(default)"}`);
   log(`state dir   ${runner.stateDir} (${owner})`);
-  log(
-    `provider    ${record?.providerPid && isAlive(record.providerPid) ? `running, pid ${record.providerPid}` : "stopped"}`,
+  const marker = owner === "owned" ? readMarker(runner.stateDir) : null;
+  for (const role of ["provider", "gateway"] as const) {
+    const pid = marker?.[`${role}Pid`];
+    const state = processState(pid, marker?.[`${role}Identity`], inst.identify);
+    const shown =
+      state === "alive"
+        ? `running, pid ${pid}`
+        : state === "unknown"
+          ? `unknown (pid ${String(pid)})`
+          : "stopped";
+    log(`${role.padEnd(12)}${shown}`);
+  }
+  const inUse = inUseRefusal(
+    runner.stateDir,
+    inst.name,
+    readRunRecord(runner.runFile),
+    inst.checkout,
+    inst.identify,
   );
-  log(
-    `gateway     ${record?.gatewayPid && isAlive(record.gatewayPid) ? `running, pid ${record.gatewayPid}` : "stopped"}`,
-  );
-  const inUse = inUseRefusal(runner.stateDir, record, isAlive);
   if (inUse) log(`in use      ${inUse}`);
   const refusal = runner.refusal();
   if (refusal) log(`healthy     no (not checked: ${refusal})`);
@@ -717,26 +923,26 @@ export async function approve(inst: DevInstance, requestId?: string): Promise<st
 export type ListedInstance = {
   name: string | null;
   stateDir: string;
+  runId: string | null;
   gatewayPort: number | null;
   providerPort: number | null;
   gatewayPid: number | null;
   gatewayRunning: boolean;
-  /** Started from this checkout, by its run file. */
+  /** Started from this checkout, by its marker. */
   thisCheckout: boolean;
   checkout: string | null;
 };
 
-function describeEntry(entry: InstanceEntry, runRoot: string): ListedInstance {
-  const run = readRunRecord(join(runDirFor(entry.name, runRoot), "state.json"));
+function describeEntry(entry: InstanceEntry, checkout: string): ListedInstance {
   return {
     name: entry.name,
     stateDir: entry.stateDir,
+    runId: typeof entry.marker.runId === "string" ? entry.marker.runId : null,
     gatewayPort: entry.gatewayPort ?? null,
     providerPort: entry.providerPort ?? null,
     gatewayPid: entry.marker.gatewayPid ?? null,
     gatewayRunning: entry.gatewayRunning,
-    thisCheckout:
-      (run !== null && run.runId === entry.marker.runId) || entry.marker.checkout === CHECKOUT_DIR,
+    thisCheckout: entry.marker.checkout === checkout,
     checkout: entry.marker.checkout ?? null,
   };
 }
@@ -745,14 +951,15 @@ function describeEntry(entry: InstanceEntry, runRoot: string): ListedInstance {
 export function list(
   options: {
     home?: string;
-    runRoot?: string;
+    checkout?: string;
+    identify?: Identify;
     json?: boolean;
     log?: (line: string) => void;
   } = {},
 ): ListedInstance[] {
   const log = options.log ?? console.log;
-  const rows = listInstances(options.home ?? homedir()).map((entry) =>
-    describeEntry(entry, options.runRoot ?? RUN_DIR),
+  const rows = listInstances(options.home ?? homedir(), options.identify).map((entry) =>
+    describeEntry(entry, options.checkout ?? CHECKOUT_DIR),
   );
   if (options.json) {
     log(JSON.stringify(rows, null, 2));
@@ -771,21 +978,52 @@ export function list(
   return rows;
 }
 
-/** Remove named instances whose gateway, scripted model and start are all gone. */
-export function prune(
-  options: { home?: string; runRoot?: string; log?: (line: string) => void } = {},
-): string[] {
+/**
+ * Machine-wide maintenance: remove every named instance, whichever checkout
+ * created it, that is proven idle (see `deletionRefusal`), each under its
+ * lifecycle lock with its marker read again after the lock is taken. The
+ * default instance is never removed. Tests never call this.
+ */
+export async function prune(
+  options: {
+    home?: string;
+    runRoot?: string;
+    identify?: Identify;
+    listening?: (port: number) => Promise<boolean>;
+    log?: (line: string) => void;
+  } = {},
+): Promise<string[]> {
   const log = options.log ?? console.log;
-  const removed = pruneInstances(options.home ?? homedir(), {
-    runDirFor: (name) => runDirFor(name, options.runRoot ?? RUN_DIR),
-    log,
-  });
+  const home = options.home ?? homedir();
+  const removed: string[] = [];
+  for (const entry of listInstances(home, () => null)) {
+    if (entry.name === null) continue;
+    const inst = openInstance(entry.name, {
+      home,
+      ...(options.runRoot ? { runRoot: options.runRoot } : {}),
+      ...(options.identify ? { identify: options.identify } : {}),
+      ...(options.listening ? { listening: options.listening } : {}),
+    });
+    await withInstanceLock(inst, async () => {
+      if (ownership(inst.stateDir) !== "owned") return;
+      const blocked = await deletionRefusal(inst);
+      if (blocked) {
+        log(`Kept ${blocked}`);
+        return;
+      }
+      rmSync(inst.stateDir, { recursive: true });
+      rmSync(inst.runDir, { recursive: true, force: true });
+      log(`Removed instance "${entry.name}" (${inst.stateDir})`);
+      removed.push(entry.name!);
+    });
+  }
   if (removed.length === 0) log("No stopped instances to remove.");
   return removed;
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|approve [requestId]|status|stop|reset|list|prune> [--instance <name>] [--json] [--no-seed]";
+  "usage: pnpm dev-gateway <start|up|seed|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>]\n" +
+  "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -794,17 +1032,22 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       instance: { type: "string" },
       json: { type: "boolean", default: false },
       "no-seed": { type: "boolean", default: false },
+      "run-id": { type: "string" },
     },
     allowPositionals: true,
     strict: true,
   });
+  // The selector is validated before any command runs or any path is built.
+  const selected = selectInstance(values.instance, env);
   const [command, ...rest] = positionals;
-  if (command === "list") {
-    list({ json: values.json });
-    return;
-  }
-  if (command === "prune") {
-    prune();
+  if (command === "list" || command === "prune") {
+    if (selected !== null) {
+      throw new Error(
+        `${command} covers every instance on this machine; it does not take --instance or CLAWTRATE_DEV_INSTANCE`,
+      );
+    }
+    if (command === "list") list({ json: values.json });
+    else await prune();
     return;
   }
   const known = ["start", "up", "stop", "seed", "reset", "status", "approve"];
@@ -813,18 +1056,18 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     process.exitCode = command ? 1 : 0;
     return;
   }
-  // The name is validated here, before any path is built or touched.
-  const inst = openInstance(selectInstance(values.instance, env));
+  const inst = openInstance(selected);
+  const runId = values["run-id"];
   switch (command) {
     case "start":
     case "up":
-      return start(inst, { seed: !values["no-seed"] });
+      return start(inst, { seed: !values["no-seed"], ...(runId ? { runId } : {}) });
     case "stop":
       return stop(inst);
     case "seed":
       return seed(inst);
     case "reset":
-      return reset(inst);
+      return reset(inst, runId ? { runId } : {});
     case "status":
       return status(inst);
     case "approve":
@@ -834,6 +1077,18 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  // A signal ends the command at its next step, never inside one: a spawn and
+  // its record, or a check and the change it allows, are each one synchronous
+  // step. Locks are released by the operating system when the process exits.
+  for (const [signal, code] of [
+    ["SIGINT", 130],
+    ["SIGTERM", 143],
+  ] as const) {
+    process.once(signal, () => {
+      console.error(`Interrupted by ${signal}.`);
+      process.exit(code);
+    });
+  }
   main(process.argv.slice(2)).catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;

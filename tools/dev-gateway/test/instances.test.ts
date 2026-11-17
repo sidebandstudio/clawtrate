@@ -1,22 +1,12 @@
-// Named instances. Every test runs under a fresh temporary HOME and run folder;
-// no real profile is read and no OpenClaw process is started. The only
-// processes started are `sleep` stand-ins for gateways, stopped by PID.
+// Named instances, process proof, locks and deletion. Every test runs under a
+// fresh temporary HOME and run folder; no real profile is read and no OpenClaw
+// process is started. The only processes started are `sleep` stand-ins and
+// lock workers, stopped by PID.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  readlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
-import { list, openInstance, reset, sandboxProblems, devConfig, start, stop } from "../src/cli.ts";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { devConfig, list, prune, reset, sandboxProblems, start, stop } from "../src/cli.ts";
 import { guardArgs, OpenclawRunner, openclawEnv, providerEnv } from "../src/env.ts";
 import {
   INSTANCE_ENV,
@@ -29,67 +19,39 @@ import {
   stateDirFor,
   validateInstanceName,
 } from "../src/instance.ts";
-import {
-  candidateBlocks,
-  choosePorts,
-  listInstances,
-  portLockPath,
-  pruneInstances,
-  withPortLock,
-} from "../src/registry.ts";
+import { instanceLockPath, portLockPath, withLock } from "../src/lock.ts";
+import { candidateBlocks, choosePorts } from "../src/registry.ts";
 import {
   inUseRefusal,
   MARKER_FILE,
   newRunId,
-  prepareFreshState,
   readMarker,
-  recordGateway,
   spawnRefusal,
   StateInUseError,
-  type MarkerOrigin,
 } from "../src/state-guard.ts";
+import {
+  CHECKOUT,
+  childFor,
+  children,
+  deadProcess,
+  liveProcess,
+  OTHER_CHECKOUT,
+  seedInstance,
+  snapshot,
+  stopChildren,
+  tempDir,
+  testInstance,
+  writeRun,
+} from "./fixtures.ts";
 
-const tempDir = (prefix: string) => mkdtempSync(join(tmpdir(), prefix));
+afterAll(stopChildren);
+afterEach(() => vi.restoreAllMocks());
 
-/** Every entry under a folder with its type, mode and content hash, without following links. */
-function snapshot(root: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  const walk = (dir: string, rel: string) => {
-    for (const name of readdirSync(dir).sort()) {
-      const path = join(dir, name);
-      const key = rel ? `${rel}/${name}` : name;
-      const stat = lstatSync(path);
-      if (stat.isSymbolicLink()) out[key] = `link ${readlinkSync(path)}`;
-      else if (stat.isDirectory()) {
-        out[key] = `dir ${stat.mode} ${stat.mtimeMs}`;
-        walk(path, key);
-      } else {
-        const hash = createHash("sha256").update(readFileSync(path)).digest("hex");
-        out[key] = `file ${stat.mode} ${stat.mtimeMs} ${hash}`;
-      }
-    }
-  };
-  walk(root, "");
-  return out;
-}
+const WORKER = join(import.meta.dirname, "lock-worker.ts");
+const CLI = join(import.meta.dirname, "../src/cli.ts");
 
-/** Stand-ins for gateways another checkout started. Stopped by PID after the tests. */
-const children: ChildProcess[] = [];
-function liveProcess(): number {
-  const child = spawn("sleep", ["120"], { stdio: "ignore" });
-  children.push(child);
-  return child.pid!;
-}
-function deadPid(): number {
-  const result = spawnSync("true");
-  return result.pid!;
-}
-afterAll(() => {
-  for (const child of children) if (child.exitCode === null) child.kill("SIGTERM");
-});
-
-/** A runner whose spawns are recorded and never executed. */
-function recordingRunner(home: string, name: string | null, runRoot: string) {
+/** An instance whose OpenClaw spawns are recorded and never executed. */
+function recordingInstance(home: string, name: string | null, runRoot: string) {
   const calls: { args: string[]; env: NodeJS.ProcessEnv; cwd: string }[] = [];
   const record = (_bin: string, args: string[], options: { env: NodeJS.ProcessEnv; cwd: string }) =>
     calls.push({ args, env: options.env, cwd: options.cwd });
@@ -101,43 +63,61 @@ function recordingRunner(home: string, name: string | null, runRoot: string) {
     record(bin, args, options);
     throw new Error("a test must never reach a real spawn");
   }) as unknown as typeof spawn;
-  const inst = openInstance(name, { home, runRoot });
+  const base = testInstance(home, runRoot, name);
   const runner = new OpenclawRunner({
     instance: name,
-    stateDir: inst.stateDir,
-    runFile: inst.runFile,
+    stateDir: base.stateDir,
+    runFile: base.runFile,
+    checkout: CHECKOUT,
     spawnImpl: fakeSpawn,
     spawnSyncImpl: fakeSpawnSync,
   });
-  return { inst: { ...inst, runner }, runner, calls };
+  return { inst: testInstance(home, runRoot, name, { runner }), runner, calls };
 }
 
-/** An instance folder as a start would leave it, with its processes recorded. */
-function seedInstance(
-  home: string,
-  name: string | null,
-  options: { gatewayPid?: number; providerPid?: number; origin?: MarkerOrigin } = {},
-) {
-  const stateDir = stateDirFor(name, home);
-  const runId = newRunId();
-  const ports = name === null ? {} : { gatewayPort: 19240, providerPort: 19250 };
-  prepareFreshState(stateDir, runId, new Date(), {
-    instance: name,
-    ...ports,
-    checkout: "/elsewhere/other-checkout",
-    ...options.origin,
+/** Every signal the code under test sends. Signal 0, a liveness probe, is not counted. */
+function watchSignals() {
+  const real = process.kill.bind(process);
+  const sent: [number, string | number | undefined][] = [];
+  vi.spyOn(process, "kill").mockImplementation((pid: number, signal?: string | number) => {
+    if (signal !== 0) sent.push([pid, signal]);
+    return real(pid, signal);
   });
-  writeFileSync(join(stateDir, "openclaw.json"), '{"gateway":{}}\n');
-  mkdirSync(join(stateDir, "agents/main/agent"), { recursive: true });
-  writeFileSync(join(stateDir, "agents/main/agent/openclaw-agent.sqlite"), "SQLite format 3\0");
-  if (options.gatewayPid) {
-    recordGateway(stateDir, runId, {
-      gatewayPid: options.gatewayPid,
-      providerPid: options.providerPid ?? deadPid(),
-    });
-  }
-  return { stateDir, runId };
+  return sent;
 }
+
+function worker(...args: string[]): ChildProcess {
+  const child = spawn(process.execPath, [WORKER, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+  children.push(child);
+  return child;
+}
+
+function output(child: ChildProcess, text: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let all = "";
+    child.stdout!.on("data", (chunk: Buffer) => {
+      all += chunk.toString("utf8");
+      if (all.includes(text)) resolve(all);
+    });
+    child.once("exit", (code) =>
+      all.includes(text) ? resolve(all) : reject(new Error(`exit ${code}: ${all}`)),
+    );
+  });
+}
+
+const exited = (child: ChildProcess) =>
+  new Promise<number | null>((resolve) =>
+    child.exitCode !== null ? resolve(child.exitCode) : child.once("exit", (code) => resolve(code)),
+  );
+
+const runRecord = (runId: string, checkout = CHECKOUT) => ({
+  runId,
+  instance: "alpha",
+  checkout,
+  gatewayPort: 19240,
+  providerPort: 19250,
+  startedAt: "",
+});
 
 describe("instance names", () => {
   it("accepts short lowercase names with inner hyphens", () => {
@@ -176,7 +156,6 @@ describe("instance names", () => {
   });
 
   it("never resolves to the default profile, the --dev profile or an unprefixed one", () => {
-    // Names that try to reach the default or --dev profile.
     for (const name of ["default", "Default", "DEFAULT", "dev", "DEV", "Dev"]) {
       expect(() => validateInstanceName(name)).toThrow(/refusing instance name/);
     }
@@ -211,26 +190,38 @@ describe("instance names", () => {
     }
   });
 
-  it("the CLI refuses a bad name and creates nothing", () => {
+  it("the CLI validates the selector before any command and creates nothing (A4)", () => {
     const home = tempDir("clawtrate-home-");
-    const cli = join(import.meta.dirname, "../src/cli.ts");
+    const run = (args: string[], env: NodeJS.ProcessEnv = {}) =>
+      spawnSync(process.execPath, [CLI, ...args], {
+        env: { PATH: process.env.PATH, HOME: home, ...env },
+        encoding: "utf8",
+      });
     for (const args of [
       ["start", "--instance", "../../.openclaw"],
       ["reset", "--instance", "default"],
       ["status", "--instance", "DEV"],
+      ["prune", "--instance", "../bad"],
+      ["list", "--instance", "../bad"],
     ]) {
-      const result = spawnSync(process.execPath, [cli, ...args], {
-        env: { PATH: process.env.PATH, HOME: home },
-        encoding: "utf8",
-      });
-      expect(result.status).toBe(1);
+      const result = run(args);
+      expect(result.status, args.join(" ")).toBe(1);
       expect(result.stderr).toMatch(/refusing instance name/);
     }
-    const viaEnv = spawnSync(process.execPath, [cli, "stop"], {
-      env: { PATH: process.env.PATH, HOME: home, [INSTANCE_ENV]: "a/b" },
-      encoding: "utf8",
-    });
-    expect(viaEnv.status).toBe(1);
+    expect(run(["stop"], { [INSTANCE_ENV]: "a/b" }).status).toBe(1);
+    // A valid selector on the machine-wide commands is refused, not ignored.
+    for (const [args, env] of [
+      [["prune", "--instance", "alpha"], {}],
+      [["prune"], { [INSTANCE_ENV]: "beta" }],
+      [["list", "--instance", "alpha"], {}],
+    ] as const) {
+      const result = run([...args], env);
+      expect(result.status, args.join(" ")).toBe(1);
+      expect(result.stderr).toMatch(/covers every instance on this machine/);
+    }
+    const disagree = run(["prune", "--instance", "alpha"], { [INSTANCE_ENV]: "beta" });
+    expect(disagree.status).toBe(1);
+    expect(disagree.stderr).toMatch(/disagree/);
     expect(readdirSync(home)).toEqual([]);
   });
 });
@@ -239,26 +230,23 @@ describe("per-instance folders, markers and the spawn boundary", () => {
   it("gives each instance its own state folder, run folder and marker", () => {
     const home = tempDir("clawtrate-home-");
     const runRoot = tempDir("clawtrate-run-");
-    const alpha = openInstance("alpha", { home, runRoot });
-    const dflt = openInstance(null, { home, runRoot });
+    const alpha = testInstance(home, runRoot, "alpha");
+    const dflt = testInstance(home, runRoot, null);
     expect(alpha.stateDir).toBe(join(home, ".openclaw-clawtrate-dev-alpha"));
     expect(alpha.runFile).toBe(join(runRoot, "instances/alpha/state.json"));
     expect(alpha.connectionFile).toBe(join(runRoot, "instances/alpha/connection.json"));
     expect(dflt.stateDir).toBe(join(home, ".openclaw-dev"));
     expect(dflt.runFile).toBe(join(runRoot, "state.json"));
-
     seedInstance(home, "alpha");
-    const marker = readMarker(alpha.stateDir)!;
-    expect(marker.instance).toBe("alpha");
-    expect(marker.gatewayPort).toBe(19240);
+    expect(readMarker(alpha.stateDir)!.instance).toBe("alpha");
     expect(existsSync(dflt.stateDir)).toBe(false);
   });
 
   it("runs OpenClaw with the instance's profile, folder and recorded port only", () => {
     const home = tempDir("clawtrate-home-");
     const runRoot = tempDir("clawtrate-run-");
-    const { stateDir, runId } = seedInstance(home, "alpha");
-    const { runner, calls } = recordingRunner(home, "alpha", runRoot);
+    const { stateDir, runId } = seedInstance(home, "alpha", { runRoot });
+    const { runner, calls } = recordingInstance(home, "alpha", runRoot);
     runner.freshRunId = runId;
     runner.runSync(["config", "validate"]);
     expect(calls).toHaveLength(1);
@@ -267,7 +255,6 @@ describe("per-instance folders, markers and the spawn boundary", () => {
     expect(call!.cwd).toBe(stateDir);
     expect(call!.env.OPENCLAW_PROFILE).toBe("clawtrate-dev-alpha");
     expect(call!.env.OPENCLAW_STATE_DIR).toBe(stateDir);
-    expect(call!.env.OPENCLAW_CONFIG_PATH).toBe(join(stateDir, "openclaw.json"));
     expect(call!.env.OPENCLAW_GATEWAY_PORT).toBe("19240");
   });
 
@@ -307,9 +294,7 @@ describe("per-instance folders, markers and the spawn boundary", () => {
 
   it("checks the generated config against the instance's own ports", () => {
     const ports = { gatewayPort: 19240, providerPort: 19250 };
-    const config = devConfig("t", ports);
-    expect(sandboxProblems(config, ports)).toEqual([]);
-    expect(config.models.providers.scripted.baseUrl).toBe("http://127.0.0.1:19250/v1");
+    expect(sandboxProblems(devConfig("t", ports), ports)).toEqual([]);
     expect(sandboxProblems(devConfig("t"), ports)).toEqual([
       "gateway.port must be this instance's 19240",
       "the scripted provider must be this instance's port 19250",
@@ -318,30 +303,101 @@ describe("per-instance folders, markers and the spawn boundary", () => {
 
   it("refuses a folder whose marker names another instance or a port outside the range", () => {
     const home = tempDir("clawtrate-home-");
-    // Beta's marker copied into alpha's folder.
     const { stateDir: beta } = seedInstance(home, "beta");
     const alphaDir = stateDirFor("alpha", home);
     mkdirSync(alphaDir);
     writeFileSync(join(alphaDir, MARKER_FILE), readFileSync(join(beta, MARKER_FILE)));
-    const check = (stateDir: string, instance: string) =>
-      spawnRefusal({ stateDir, run: null, freshRunId: null, isAlive: () => true, instance });
-    expect(check(alphaDir, "alpha")).toMatch(/belongs to another instance/);
+    const check = (stateDir: string, instance: string, freshRunId: string | null = null) =>
+      spawnRefusal({ stateDir, run: null, freshRunId, instance, checkout: CHECKOUT });
+    expect(check(alphaDir, "alpha")).toMatch(/names instance "beta", not "alpha"/);
 
-    // A forged marker pointing a named instance at the default profile's port.
     const { stateDir: gamma, runId } = seedInstance(home, "gamma", {
-      origin: { gatewayPort: 18789 },
+      marker: { gatewayPort: 18789 },
     });
-    expect(
-      spawnRefusal({
-        stateDir: gamma,
-        run: null,
-        freshRunId: runId,
-        isAlive: () => true,
-        instance: "gamma",
-      }),
-    ).toMatch(/does not record valid ports/);
+    expect(check(gamma, "gamma", runId)).toMatch(/records no valid ports/);
     expect(isNamedInstancePort(18789)).toBe(false);
     expect(isNamedInstancePort(19001)).toBe(false);
+  });
+});
+
+describe("stop signals only processes it can prove are this checkout's (A1)", () => {
+  it("never signals a PID of -1, 0, 1 or a non-integer, and then signals nothing at all", async () => {
+    for (const pid of [-1, 0, 1, 1.5, "123"]) {
+      const home = tempDir("clawtrate-home-");
+      const runRoot = tempDir("clawtrate-run-");
+      const provider = liveProcess();
+      seedInstance(home, "alpha", {
+        runRoot,
+        provider,
+        marker: { gatewayPid: pid, gatewayIdentity: "x" },
+      });
+      const sent = watchSignals();
+      await expect(stop(testInstance(home, runRoot, "alpha")), String(pid)).rejects.toThrow(
+        /Nothing was signalled/,
+      );
+      expect(sent).toEqual([]);
+      expect(childFor(provider.pid).exitCode).toBeNull();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("never signals a recorded PID the system has given to another process", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const unrelated = liveProcess();
+    seedInstance(home, "alpha", {
+      runRoot,
+      gateway: { pid: unrelated.pid, identity: "Thu Jan  1 00:00:00 1970" },
+    });
+    const sent = watchSignals();
+    const inst = testInstance(home, runRoot, "alpha");
+    await stop(inst);
+    expect(sent).toEqual([]);
+    expect(childFor(unrelated.pid).exitCode).toBeNull();
+    expect(existsSync(inst.runFile)).toBe(false);
+  });
+
+  it("signals nothing for a run file without a marker, or in an older format", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const victim = liveProcess();
+    const inst = testInstance(home, runRoot, "alpha");
+    const sent = watchSignals();
+    // Only a run file, naming a live process, with no state folder at all.
+    writeRun(inst.runFile, { runId: newRunId(), gatewayPid: victim.pid, startedAt: "" });
+    await expect(stop(inst)).rejects.toThrow(/not a run file this version of the tool wrote/);
+    writeRun(inst.runFile, { ...runRecord(newRunId()), gatewayPid: victim.pid });
+    // The folder is gone, so the file proves nothing and is dropped.
+    await stop(inst);
+    expect(existsSync(inst.runFile)).toBe(false);
+    expect(sent).toEqual([]);
+    expect(childFor(victim.pid).exitCode).toBeNull();
+  });
+
+  it("refuses when the run file and the marker disagree on the checkout", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const gateway = liveProcess();
+    const { runId } = seedInstance(home, "alpha", { gateway, checkout: OTHER_CHECKOUT });
+    const inst = testInstance(home, runRoot, "alpha");
+    writeRun(inst.runFile, runRecord(runId));
+    const sent = watchSignals();
+    await expect(stop(inst)).rejects.toThrow(/run file and the marker disagree/);
+    expect(sent).toEqual([]);
+    expect(childFor(gateway.pid).exitCode).toBeNull();
+  });
+
+  it("stops the processes it proves, and only those", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const gateway = liveProcess();
+    const provider = liveProcess();
+    seedInstance(home, "alpha", { runRoot, gateway, provider });
+    const bystander = liveProcess();
+    const sent = watchSignals();
+    await stop(testInstance(home, runRoot, "alpha"));
+    expect(sent.map(([pid]) => pid).sort()).toEqual([gateway.pid, provider.pid].sort());
+    expect(childFor(bystander.pid).exitCode).toBeNull();
   });
 });
 
@@ -352,109 +408,237 @@ describe("a gateway another checkout started", () => {
     it(`start and reset refuse ${which} and leave it byte for byte untouched`, async () => {
       const home = tempDir("clawtrate-home-");
       const runRoot = tempDir("clawtrate-run-");
-      const gatewayPid = liveProcess();
-      const { stateDir } = seedInstance(home, name, { gatewayPid });
-      const before = snapshot(home);
-      const { inst, calls } = recordingRunner(home, name, runRoot);
+      const gateway = liveProcess();
+      const { stateDir } = seedInstance(home, name, { gateway, checkout: OTHER_CHECKOUT });
+      const before = snapshot(stateDir);
+      const { inst, calls } = recordingInstance(home, name, runRoot);
+      const sent = watchSignals();
 
       await expect(start(inst)).rejects.toBeInstanceOf(StateInUseError);
       await expect(start(inst)).rejects.toThrow(
         new RegExp(
           `${name === null ? "the default instance" : 'instance "alpha"'} \\(${stateDir}\\) is in use: ` +
-            `its gateway \\(pid ${gatewayPid}\\) is running and was started by another checkout`,
+            `its gateway process \\(pid ${gateway.pid}\\) may still be running and was started by another checkout \\(${OTHER_CHECKOUT}\\)`,
         ),
       );
       await expect(reset(inst)).rejects.toBeInstanceOf(StateInUseError);
 
-      expect(snapshot(home)).toEqual(before);
+      expect(snapshot(stateDir)).toEqual(before);
       expect(calls).toEqual([]);
+      expect(sent).toEqual([]);
       expect(readdirSync(runRoot)).toEqual([]);
-      expect(children.find((c) => c.pid === gatewayPid)!.exitCode).toBeNull();
-    });
-
-    it(`start refuses ${which} even when this checkout's run file is stale`, async () => {
-      const home = tempDir("clawtrate-home-");
-      const runRoot = tempDir("clawtrate-run-");
-      const gatewayPid = liveProcess();
-      seedInstance(home, name, { gatewayPid });
-      const { inst } = recordingRunner(home, name, runRoot);
-      // An older run of this checkout, whose processes are gone.
-      mkdirSync(inst.runDir, { recursive: true });
-      const stale = { runId: newRunId(), gatewayPid: deadPid(), startedAt: "" };
-      writeFileSync(inst.runFile, JSON.stringify(stale));
-      const before = snapshot(home);
-      await expect(start(inst)).rejects.toBeInstanceOf(StateInUseError);
-      expect(snapshot(home)).toEqual(before);
-      expect(JSON.parse(readFileSync(inst.runFile, "utf8"))).toEqual(stale);
+      expect(childFor(gateway.pid).exitCode).toBeNull();
     });
   }
 
-  it("does not count this checkout's own gateway as another checkout's", () => {
+  it("does not count this checkout's own run as another checkout's", () => {
     const home = tempDir("clawtrate-home-");
-    const gatewayPid = liveProcess();
-    const { stateDir, runId } = seedInstance(home, "alpha", { gatewayPid });
-    const ours = { runId, gatewayPid, startedAt: "" };
-    expect(inUseRefusal(stateDir, ours, () => true)).toBeNull();
-    expect(inUseRefusal(stateDir, null, () => true)).toMatch(/in use/);
-    expect(inUseRefusal(stateDir, { ...ours, runId: newRunId() }, () => true)).toMatch(/in use/);
-    // Once that gateway is gone the folder may be started over.
-    expect(inUseRefusal(stateDir, null, () => false)).toBeNull();
-  });
-
-  it("refuses while another process is still preparing the folder", () => {
-    const home = tempDir("clawtrate-home-");
-    const startPid = liveProcess();
-    const { stateDir } = seedInstance(home, "alpha", { origin: { startPid } });
-    expect(inUseRefusal(stateDir, null, (pid) => pid === startPid)).toMatch(
-      new RegExp(`a start in another process \\(pid ${startPid}\\)`),
-    );
-  });
-
-  it("prepareFreshState itself refuses a live foreign gateway", () => {
-    const home = tempDir("clawtrate-home-");
-    const { stateDir } = seedInstance(home, "alpha", { gatewayPid: liveProcess() });
-    const before = snapshot(stateDir);
-    expect(() => prepareFreshState(stateDir, newRunId())).toThrow(StateInUseError);
-    expect(snapshot(stateDir)).toEqual(before);
+    const { stateDir, runId } = seedInstance(home, "alpha", { gateway: liveProcess() });
+    const ours = runRecord(runId);
+    expect(inUseRefusal(stateDir, "alpha", ours, CHECKOUT)).toBeNull();
+    expect(inUseRefusal(stateDir, "alpha", null, CHECKOUT)).toMatch(/in use/);
+    expect(inUseRefusal(stateDir, "alpha", runRecord(newRunId()), CHECKOUT)).toMatch(/in use/);
+    expect(inUseRefusal(stateDir, "alpha", ours, OTHER_CHECKOUT)).toMatch(/in use/);
   });
 });
 
-describe("instances side by side", () => {
-  it("stop and reset of one instance leave the other's folder and processes alone", async () => {
+describe("deletion needs proof that nothing runs (A5)", () => {
+  it("refuses a marker with missing process fields", async () => {
+    for (const name of [null, "alpha"]) {
+      const home = tempDir("clawtrate-home-");
+      const runRoot = tempDir("clawtrate-run-");
+      const stateDir = stateDirFor(name, home);
+      mkdirSync(stateDir);
+      // Ownership magic and a run id, but nothing that identifies the processes.
+      writeFileSync(
+        join(stateDir, MARKER_FILE),
+        JSON.stringify({
+          createdBy: "clawtrate tools/dev-gateway",
+          runId: newRunId(),
+          instance: name,
+        }),
+      );
+      writeFileSync(join(stateDir, "openclaw.json"), "{}");
+      liveProcess(); // the gateway it no longer identifies
+      const before = snapshot(stateDir);
+      await expect(reset(testInstance(home, runRoot, name))).rejects.toThrow(
+        /cannot trust: .*records no start process/,
+      );
+      if (name !== null) {
+        const lines: string[] = [];
+        await prune({ home, runRoot, listening: async () => false, log: (l) => lines.push(l) });
+        expect(lines.join("\n")).toMatch(/Kept .*cannot trust/);
+      }
+      expect(snapshot(stateDir)).toEqual(before);
+    }
+  });
+
+  it("refuses a marker whose process record is incomplete", async () => {
+    const home = tempDir("clawtrate-home-");
+    const { stateDir } = seedInstance(home, "alpha", { marker: { gatewayPid: liveProcess().pid } });
+    const before = snapshot(stateDir);
+    await expect(reset(testInstance(home, tempDir("clawtrate-run-"), "alpha"))).rejects.toThrow(
+      /gateway process record is incomplete/,
+    );
+    expect(snapshot(stateDir)).toEqual(before);
+  });
+
+  it("refuses a marker that names another instance", async () => {
+    const home = tempDir("clawtrate-home-");
+    const { stateDir: beta } = seedInstance(home, "beta");
+    const alphaDir = stateDirFor("alpha", home);
+    mkdirSync(alphaDir);
+    writeFileSync(join(alphaDir, MARKER_FILE), readFileSync(join(beta, MARKER_FILE)));
+    const before = snapshot(alphaDir);
+    await expect(reset(testInstance(home, tempDir("clawtrate-run-"), "alpha"))).rejects.toThrow(
+      /names instance "beta", not "alpha"/,
+    );
+    expect(snapshot(alphaDir)).toEqual(before);
+  });
+
+  it("refuses an old marker whose recorded PID is alive", async () => {
+    const home = tempDir("clawtrate-home-");
+    const stateDir = stateDirFor(null, home);
+    mkdirSync(stateDir);
+    writeFileSync(
+      join(stateDir, MARKER_FILE),
+      JSON.stringify({
+        createdBy: "clawtrate tools/dev-gateway",
+        runId: "old",
+        gatewayPid: liveProcess().pid,
+      }),
+    );
+    const before = snapshot(stateDir);
+    await expect(reset(testInstance(home, tempDir("clawtrate-run-"), null))).rejects.toThrow(
+      /may still be running/,
+    );
+    expect(snapshot(stateDir)).toEqual(before);
+  });
+
+  it("refuses while anything listens on the instance's ports, 19001 for the default instance", async () => {
+    for (const [name, port] of [
+      [null, 19001],
+      ["alpha", 19240],
+    ] as const) {
+      const home = tempDir("clawtrate-home-");
+      const runRoot = tempDir("clawtrate-run-");
+      const { stateDir } = seedInstance(home, name);
+      const before = snapshot(stateDir);
+      const listening = async (p: number) => p === port;
+      await expect(reset(testInstance(home, runRoot, name, { listening }))).rejects.toThrow(
+        new RegExp(`listening on its port ${port}`),
+      );
+      if (name !== null) {
+        const lines: string[] = [];
+        await prune({ home, runRoot, listening, log: (line) => lines.push(line) });
+        expect(lines.join("\n")).toMatch(/Kept .*listening on its port 19240/);
+      }
+      expect(snapshot(stateDir)).toEqual(before);
+    }
+  });
+
+  it("removes an instance once everything recorded on it is proven gone", async () => {
     const home = tempDir("clawtrate-home-");
     const runRoot = tempDir("clawtrate-run-");
-    const alphaPid = liveProcess();
-    const betaPid = liveProcess();
-    const alpha = seedInstance(home, "alpha", { gatewayPid: alphaPid });
-    const beta = seedInstance(home, "beta", {
-      gatewayPid: betaPid,
-      origin: { gatewayPort: 19260, providerPort: 19270 },
+    const { stateDir } = seedInstance(home, "alpha", {
+      runRoot,
+      gateway: deadProcess(),
+      provider: deadProcess(),
     });
-    const alphaInst = recordingRunner(home, "alpha", runRoot).inst;
-    const betaInst = recordingRunner(home, "beta", runRoot).inst;
-    for (const [inst, seeded, pid] of [
-      [alphaInst, alpha, alphaPid],
-      [betaInst, beta, betaPid],
-    ] as const) {
-      mkdirSync(inst.runDir, { recursive: true });
-      writeFileSync(
-        inst.runFile,
-        JSON.stringify({ runId: seeded.runId, gatewayPid: pid, startedAt: "" }),
-      );
+    const inst = testInstance(home, runRoot, "alpha");
+    await reset(inst);
+    expect(existsSync(stateDir)).toBe(false);
+    expect(existsSync(inst.runDir)).toBe(false);
+  });
+
+  it("reset with a run id removes only that run's folder (A4)", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const { stateDir, runId } = seedInstance(home, "alpha");
+    const other = seedInstance(home, "other-checkout", { checkout: OTHER_CHECKOUT });
+    const otherBefore = snapshot(other.stateDir);
+    const before = snapshot(stateDir);
+    await expect(
+      reset(testInstance(home, runRoot, "alpha"), { runId: newRunId() }),
+    ).rejects.toThrow(/holds another run/);
+    expect(snapshot(stateDir)).toEqual(before);
+    await reset(testInstance(home, runRoot, "alpha"), { runId });
+    expect(existsSync(stateDir)).toBe(false);
+    // A stopped instance of another checkout is not this run's to remove.
+    expect(snapshot(other.stateDir)).toEqual(otherBefore);
+  });
+});
+
+describe("one lock for the life of an instance (A3, A6)", () => {
+  it("a crashed holder's lock goes to one contender at a time, across processes", async () => {
+    const home = tempDir("clawtrate-home-");
+    const lock = portLockPath(home);
+    const holder = worker("hold", lock);
+    await output(holder, "held");
+    // While the holder lives, nobody else gets the lock.
+    await expect(withLock(lock, async () => "got it", { timeoutMs: 300 })).rejects.toThrow(
+      /timed out/,
+    );
+    holder.kill("SIGKILL");
+    await exited(holder);
+    const log = join(home, "contention.log");
+    writeFileSync(log, "");
+    const contenders = ["a", "b", "c", "d"].map((id) => worker("contend", lock, log, id, "150"));
+    expect(await Promise.all(contenders.map(exited))).toEqual([0, 0, 0, 0]);
+    const events = readFileSync(log, "utf8").trim().split("\n");
+    expect(events).toHaveLength(8);
+    for (let i = 0; i < events.length; i += 2) {
+      const [kindIn, id] = events[i]!.split(" ");
+      const [kindOut, idOut] = events[i + 1]!.split(" ");
+      expect([kindIn, kindOut, idOut]).toEqual(["in", "out", id]);
     }
-    const betaBefore = snapshot(beta.stateDir);
-    const betaRunBefore = snapshot(betaInst.runDir);
+  });
 
-    await stop(alphaInst);
-    expect(children.find((c) => c.pid === alphaPid)!.signalCode).not.toBeNull();
-    await reset(alphaInst);
-    expect(existsSync(alpha.stateDir)).toBe(false);
-    expect(existsSync(alphaInst.runDir)).toBe(false);
+  it("two starts after a crashed holder never get the same ports", async () => {
+    const home = tempDir("clawtrate-home-");
+    const holder = worker("hold", portLockPath(home));
+    await output(holder, "held");
+    holder.kill("SIGKILL");
+    await exited(holder);
+    // These two names begin at the same port block.
+    expect(candidateBlocks("locka0")[0]).toBe(candidateBlocks("lockb20")[0]);
+    const a = worker("allocate", home, "locka0");
+    const b = worker("allocate", home, "lockb20");
+    const [outA, outB] = await Promise.all([output(a, "}"), output(b, "}")]);
+    const portsA = JSON.parse(outA) as { gatewayPort: number };
+    const portsB = JSON.parse(outB) as { gatewayPort: number };
+    expect(portsA.gatewayPort).not.toBe(portsB.gatewayPort);
+  });
 
-    expect(children.find((c) => c.pid === betaPid)!.exitCode).toBeNull();
-    expect(children.find((c) => c.pid === betaPid)!.signalCode).toBeNull();
-    expect(snapshot(beta.stateDir)).toEqual(betaBefore);
-    expect(snapshot(betaInst.runDir)).toEqual(betaRunBefore);
+  it("reset and prune wait for a start in progress, then leave its new folder alone", async () => {
+    for (const command of ["reset", "prune"] as const) {
+      const home = tempDir("clawtrate-home-");
+      const runRoot = tempDir("clawtrate-run-");
+      // A stopped run that reset or prune would otherwise remove.
+      const old = seedInstance(home, "race", { runRoot, gateway: deadProcess() });
+      const starter = worker("replace", home, "race");
+      await output(starter, "locked");
+      if (command === "reset") {
+        await expect(reset(testInstance(home, runRoot, "race"))).rejects.toThrow(
+          /start process .* may still be running/,
+        );
+      } else {
+        await expect(
+          prune({ home, runRoot, listening: async () => false, log: () => {} }),
+        ).resolves.toEqual([]);
+      }
+      const marker = readMarker(old.stateDir)!;
+      expect(marker.runId).not.toBe(old.runId);
+      expect(marker.startPid).toBe(starter.pid);
+      starter.kill("SIGTERM");
+    }
+  });
+
+  it("locks each instance on its own and the ports separately", () => {
+    const home = "/h";
+    expect(instanceLockPath(home, null)).toBe("/h/.clawtrate-dev-gateway/locks/default.lock");
+    expect(instanceLockPath(home, "alpha")).toMatch(/\/instance-\d+\.lock$/);
+    expect(portLockPath(home)).toBe("/h/.clawtrate-dev-gateway/locks/ports.lock");
   });
 
   it("chooses ports that no other instance has recorded and that are free", async () => {
@@ -463,87 +647,82 @@ describe("instances side by side", () => {
     const first = await choosePorts("alpha", home, free);
     expect(first.gatewayPort).toBe(candidateBlocks("alpha")[0]);
     expect(first.providerPort).toBe(first.gatewayPort + 10);
-    seedInstance(home, "alpha", { origin: first });
-    // The same block is now recorded, so even the same name gets another one.
+    seedInstance(home, "alpha", { marker: first });
     const second = await choosePorts("alpha", home, free);
     expect(second.gatewayPort).not.toBe(first.gatewayPort);
-    // A block with any port in use is skipped.
     const busy = new Set([second.gatewayPort + 2]);
     const third = await choosePorts("alpha", home, async (port) => !busy.has(port));
     expect([first.gatewayPort, second.gatewayPort]).not.toContain(third.gatewayPort);
     for (const ports of [first, second, third]) {
       expect(isNamedInstancePort(ports.gatewayPort)).toBe(true);
-      expect(isNamedInstancePort(ports.providerPort)).toBe(true);
       expect(ports.gatewayPort).toBeGreaterThanOrEqual(NAMED_PORT_RANGE.first);
     }
     await expect(choosePorts("alpha", home, async () => false)).rejects.toThrow(/no free port/);
   });
+});
 
-  it("lets one start at a time choose ports, and takes over a dead holder's lock", async () => {
+describe("instances side by side", () => {
+  it("stop and reset of one instance leave the other's folder and processes alone", async () => {
     const home = tempDir("clawtrate-home-");
-    const events: string[] = [];
-    const hold = (id: string) =>
-      withPortLock(home, async () => {
-        events.push(`in ${id}`);
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        events.push(`out ${id}`);
-      });
-    await Promise.all([hold("a"), hold("b"), hold("c")]);
-    expect(events).toHaveLength(6);
-    for (let i = 0; i < events.length; i += 2) {
-      expect(events[i + 1]).toBe(events[i]!.replace("in ", "out "));
-    }
-    expect(existsSync(portLockPath(home))).toBe(false);
+    const runRoot = tempDir("clawtrate-run-");
+    const alphaGateway = liveProcess();
+    const betaGateway = liveProcess();
+    const alpha = seedInstance(home, "alpha", { runRoot, gateway: alphaGateway });
+    const beta = seedInstance(home, "beta", {
+      runRoot,
+      gateway: betaGateway,
+      marker: { gatewayPort: 19260, providerPort: 19270 },
+    });
+    const betaInst = testInstance(home, runRoot, "beta");
+    const betaBefore = snapshot(beta.stateDir);
+    const betaRunBefore = snapshot(betaInst.runDir);
 
-    mkdirSync(portLockPath(home));
-    writeFileSync(join(portLockPath(home), "pid"), String(deadPid()));
-    await expect(withPortLock(home, async () => "taken", { timeoutMs: 2000 })).resolves.toBe(
-      "taken",
-    );
+    const alphaInst = testInstance(home, runRoot, "alpha");
+    await stop(alphaInst);
+    expect(childFor(alphaGateway.pid).signalCode).not.toBeNull();
+    await reset(alphaInst);
+    expect(existsSync(alpha.stateDir)).toBe(false);
+
+    expect(childFor(betaGateway.pid).exitCode).toBeNull();
+    expect(childFor(betaGateway.pid).signalCode).toBeNull();
+    expect(snapshot(beta.stateDir)).toEqual(betaBefore);
+    expect(snapshot(betaInst.runDir)).toEqual(betaRunBefore);
   });
 });
 
-describe("listing and removing stopped instances", () => {
-  it("lists only the tool's folders and removes only named instances nothing runs on", () => {
+describe("listing and machine-wide pruning", () => {
+  it("lists only the tool's folders and prunes only proven-idle named instances", async () => {
     const home = tempDir("clawtrate-home-");
     const runRoot = tempDir("clawtrate-run-");
-    const livePid = liveProcess();
-    const startPid = liveProcess();
-    seedInstance(home, null, { gatewayPid: deadPid() });
-    const stale = seedInstance(home, "stale", { gatewayPid: deadPid() });
-    const failed = seedInstance(home, "failed", { origin: { startPid: deadPid() } });
-    const live = seedInstance(home, "live", { gatewayPid: livePid });
-    const starting = seedInstance(home, "starting", { origin: { startPid } });
-    // Not the tool's: the default profile, another tool's profile, an unmarked folder.
+    const live = liveProcess();
+    seedInstance(home, null, { gateway: deadProcess() });
+    const stale = seedInstance(home, "stale", { runRoot, gateway: deadProcess() });
+    const other = seedInstance(home, "other-checkout", {
+      gateway: deadProcess(),
+      checkout: OTHER_CHECKOUT,
+    });
+    seedInstance(home, "live", { gateway: live, checkout: OTHER_CHECKOUT });
+    seedInstance(home, "starting", { start: liveProcess() });
     for (const dir of [".openclaw", ".openclaw-roster-probe", ".openclaw-clawtrate-dev-unmarked"]) {
       mkdirSync(join(home, dir));
       writeFileSync(join(home, dir, "openclaw.json"), "{}");
     }
-    mkdirSync(join(runRoot, "instances/stale"), { recursive: true });
-    writeFileSync(join(runRoot, "instances/stale/state.json"), "{}");
-    mkdirSync(join(runRoot, "instances/live"), { recursive: true });
-    writeFileSync(
-      join(runRoot, "instances/live/state.json"),
-      JSON.stringify({ runId: live.runId }),
-    );
 
     const lines: string[] = [];
-    const rows = list({ home, runRoot, json: true, log: (line) => lines.push(line) });
-    expect(rows.map((row) => row.name)).toEqual([null, "failed", "live", "stale", "starting"]);
+    const rows = list({ home, checkout: CHECKOUT, json: true, log: (line) => lines.push(line) });
+    expect(rows.map((row) => row.name)).toEqual([
+      null,
+      "live",
+      "other-checkout",
+      "stale",
+      "starting",
+    ]);
     expect(JSON.parse(lines.join("\n"))).toEqual(rows);
-    const liveRow = rows.find((row) => row.name === "live")!;
-    expect(liveRow).toMatchObject({
-      stateDir: live.stateDir,
-      gatewayPort: 19240,
-      providerPort: 19250,
-      gatewayPid: livePid,
+    expect(rows.find((row) => row.name === "live")).toMatchObject({
+      gatewayPid: live.pid,
       gatewayRunning: true,
-      thisCheckout: true,
-    });
-    expect(rows.find((row) => row.name === null)).toMatchObject({
-      gatewayPort: 19001,
-      providerPort: 19091,
-      gatewayRunning: false,
+      thisCheckout: false,
+      checkout: OTHER_CHECKOUT,
     });
 
     const keep = [
@@ -555,16 +734,11 @@ describe("listing and removing stopped instances", () => {
       ".openclaw-clawtrate-dev-starting",
     ];
     const before = Object.fromEntries(keep.map((dir) => [dir, snapshot(join(home, dir))]));
-    const removed = pruneInstances(home, {
-      runDirFor: (name) => join(runRoot, "instances", name),
-    });
-    expect(removed.sort()).toEqual(["failed", "stale"]);
+    // Deliberate maintenance: proven-idle named instances of any checkout go.
+    const removed = await prune({ home, runRoot, listening: async () => false, log: () => {} });
+    expect(removed.sort()).toEqual(["other-checkout", "stale"]);
     expect(existsSync(stale.stateDir)).toBe(false);
-    expect(existsSync(failed.stateDir)).toBe(false);
-    expect(existsSync(join(runRoot, "instances/stale"))).toBe(false);
-    expect(existsSync(join(runRoot, "instances/live"))).toBe(true);
-    expect(existsSync(starting.stateDir)).toBe(true);
+    expect(existsSync(other.stateDir)).toBe(false);
     for (const dir of keep) expect(snapshot(join(home, dir)), dir).toEqual(before[dir]);
-    expect(listInstances(home).map((entry) => entry.name)).toEqual([null, "live", "starting"]);
   });
 });

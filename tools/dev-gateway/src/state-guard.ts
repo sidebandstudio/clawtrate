@@ -7,17 +7,22 @@
 // directory, not a symlink, and holds the marker as a regular file. Anything
 // else is foreign and is never deleted or changed.
 //
-// Every instance has its own folder and marker, and the marker records the
-// processes started on it. A folder whose gateway is alive is never deleted by
-// a checkout that did not start that gateway.
+// The marker records every process a start spawned on the folder, each by PID
+// and by its start time, so a PID the system has since reused never counts as
+// the tool's process. A process the marker cannot identify is unknown, and
+// unknown is treated as running: nothing is deleted or signalled on its account.
 
 import { randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isNamedInstancePort } from "./instance.ts";
+import { isNamedInstancePort, validateInstanceName } from "./instance.ts";
 
 export const MARKER_FILE = ".clawtrate-dev-gateway";
 const CREATED_BY = "clawtrate tools/dev-gateway";
+
+export type ProcessRole = "start" | "provider" | "gateway";
+export const PROCESS_ROLES: readonly ProcessRole[] = ["start", "provider", "gateway"];
 
 /** What a start records about itself when it creates the folder. */
 export type MarkerOrigin = {
@@ -29,6 +34,7 @@ export type MarkerOrigin = {
   checkout?: string;
   /** The `start` process, alive while the folder is being prepared. */
   startPid?: number;
+  startIdentity?: string;
 };
 
 export type Marker = MarkerOrigin & {
@@ -36,18 +42,22 @@ export type Marker = MarkerOrigin & {
   createdAt: string;
   /** Unguessable id of the start that created this folder. */
   runId: string;
-  /** The gateway started on this folder, once it is running. */
-  gatewayPid?: number;
   providerPid?: number;
+  providerIdentity?: string;
+  gatewayPid?: number;
+  gatewayIdentity?: string;
 };
 
-/** What `start` records in the tool's run file for the processes it spawned. */
+/**
+ * This checkout's claim on an instance, written by `start` once the folder is
+ * created and never changed. Processes are proven through the marker.
+ */
 export type RunRecord = {
-  runId?: string | undefined;
-  gatewayPid?: number | undefined;
-  providerPid?: number | undefined;
-  gatewayPort?: number | undefined;
-  providerPort?: number | undefined;
+  runId: string;
+  instance: string | null;
+  checkout: string;
+  gatewayPort: number;
+  providerPort: number;
   startedAt: string;
 };
 
@@ -63,6 +73,14 @@ export class ForeignStateError extends Error {
   }
 }
 
+/** Thrown instead of deleting, restarting or signalling when that cannot be proven safe. */
+export class StateInUseError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "StateInUseError";
+  }
+}
+
 function lstatOrNull(path: string) {
   try {
     return lstatSync(path);
@@ -72,18 +90,23 @@ function lstatOrNull(path: string) {
   }
 }
 
-export function readMarker(stateDir: string): Marker | null {
-  const path = join(stateDir, MARKER_FILE);
+/** A regular file's JSON object, never through a link; null otherwise. */
+export function readJsonFile(path: string): Record<string, unknown> | null {
   if (!lstatOrNull(path)?.isFile()) return null;
   try {
-    const marker = JSON.parse(readFileSync(path, "utf8")) as Partial<Marker>;
-    if (marker.createdBy !== CREATED_BY) return null;
-    // Markers from before run ids existed are still the tool's own; they just
-    // never match a running gateway, so they can only be started over.
-    return { ...marker, runId: typeof marker.runId === "string" ? marker.runId : "" } as Marker;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
+}
+
+export function readMarker(stateDir: string): Marker | null {
+  const marker = readJsonFile(join(stateDir, MARKER_FILE));
+  if (marker?.createdBy !== CREATED_BY) return null;
+  return marker as Marker;
 }
 
 /** Decided with `lstat` only: no link is followed. */
@@ -98,32 +121,207 @@ export function newRunId(): string {
   return randomBytes(24).toString("hex");
 }
 
+/** A PID that may be checked or signalled: an integer above 1. Never 0, 1 or a group. */
+export function validPid(pid: unknown): pid is number {
+  return typeof pid === "number" && Number.isInteger(pid) && pid > 1;
+}
+
+/** What identifies a process beyond its PID: its start time, or null if it is not running. */
+export type Identify = (pid: number) => string | null;
+
+export const processIdentity: Identify = (pid) => {
+  if (!validPid(pid)) return null;
+  const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" });
+  const identity = result.status === 0 ? result.stdout.trim() : "";
+  return identity === "" ? null : identity;
+};
+
+/** "none": not recorded. "unknown": recorded but not identifiable, so treated as running. */
+export type ProcessState = "none" | "dead" | "alive" | "unknown";
+
+export function processState(pid: unknown, identity: unknown, identify: Identify): ProcessState {
+  if (pid === undefined && identity === undefined) return "none";
+  if (!validPid(pid) || typeof identity !== "string" || identity === "") return "unknown";
+  const now = identify(pid);
+  if (now === null) return "dead";
+  // A different start time is a reused PID: the recorded process is gone.
+  return now === identity ? "alive" : "dead";
+}
+
+/** Markers written before process identities were recorded: the default instance only. */
+export function isLegacyMarker(marker: Marker): boolean {
+  return marker.startIdentity === undefined && marker.instance === undefined;
+}
+
+/**
+ * Everything wrong with a marker for the instance whose folder it sits in.
+ * Legacy markers are checked by `activityRefusal` instead, conservatively.
+ */
+export function markerProblems(marker: Marker, instance: string | null): string[] {
+  const problems: string[] = [];
+  if (typeof marker.runId !== "string" || !/^[0-9a-f]{48}$/.test(marker.runId)) {
+    problems.push("its run id is missing or malformed");
+  }
+  if (marker.instance !== instance) {
+    problems.push(
+      `it names instance ${JSON.stringify(marker.instance ?? null)}, not ${JSON.stringify(instance)}`,
+    );
+  } else if (instance !== null) {
+    try {
+      validateInstanceName(instance);
+    } catch {
+      problems.push("its instance name is invalid");
+    }
+  }
+  if (typeof marker.checkout !== "string" || marker.checkout === "") {
+    problems.push("it records no checkout");
+  }
+  if (instance !== null) {
+    if (!isNamedInstancePort(marker.gatewayPort) || !isNamedInstancePort(marker.providerPort)) {
+      problems.push("it records no valid ports");
+    }
+  }
+  for (const role of PROCESS_ROLES) {
+    const pid = marker[`${role}Pid`];
+    const identity = marker[`${role}Identity`];
+    const recorded = pid !== undefined || identity !== undefined;
+    if (role === "start" && !recorded) problems.push("it records no start process");
+    if (recorded && (!validPid(pid) || typeof identity !== "string" || identity === "")) {
+      problems.push(`its ${role} process record is incomplete or invalid`);
+    }
+  }
+  return problems;
+}
+
+function instanceLabel(instance: string | null, stateDir: string): string {
+  const name = instance === null ? "the default instance" : `instance "${instance}"`;
+  return `${name} (${stateDir})`;
+}
+
+type Activity =
+  | { kind: "idle" }
+  | { kind: "untrusted"; reason: string }
+  | { kind: "running"; role: ProcessRole; pid: number; marker: Marker };
+
+/**
+ * Whether anything recorded on an owned folder could still be running. Every
+ * recorded process must be proven gone for "idle". An invalid marker, or one
+ * that names another instance, is "untrusted". Legacy markers count a recorded
+ * PID as running whenever any process has it.
+ */
+function activity(stateDir: string, instance: string | null, identify: Identify): Activity {
+  if (ownership(stateDir) !== "owned") return { kind: "idle" };
+  const marker = readMarker(stateDir)!;
+  if (instance === null && isLegacyMarker(marker)) {
+    for (const role of ["gateway", "provider"] as const) {
+      const pid = marker[`${role}Pid`];
+      if (pid === undefined) continue;
+      if (!validPid(pid)) {
+        return { kind: "untrusted", reason: `its old marker records an invalid ${role} pid` };
+      }
+      if (identify(pid) !== null) return { kind: "running", role, pid, marker };
+    }
+    return { kind: "idle" };
+  }
+  const problems = markerProblems(marker, instance);
+  if (problems.length > 0) return { kind: "untrusted", reason: problems.join("; ") };
+  for (const role of PROCESS_ROLES) {
+    const pid = marker[`${role}Pid`];
+    const state = processState(pid, marker[`${role}Identity`], identify);
+    if (state === "alive" || state === "unknown") {
+      return { kind: "running", role, pid: pid as number, marker };
+    }
+  }
+  return { kind: "idle" };
+}
+
+/** Why the folder must not be deleted because something on it may run, or null. */
+export function activityRefusal(
+  stateDir: string,
+  instance: string | null,
+  identify: Identify = processIdentity,
+): string | null {
+  const found = activity(stateDir, instance, identify);
+  const label = instanceLabel(instance, stateDir);
+  if (found.kind === "untrusted") {
+    return `${label} has a marker this tool cannot trust: ${found.reason}. Nothing was changed.`;
+  }
+  if (found.kind === "running") {
+    const where = found.marker.checkout ? `, started from ${found.marker.checkout}` : "";
+    return `${label} is in use: its ${found.role} process (pid ${found.pid}${where}) may still be running. Nothing was changed.`;
+  }
+  return null;
+}
+
+/** True when this checkout's run file proves the folder's current run is this checkout's. */
+export function runMatches(
+  run: RunRecord | null,
+  marker: Marker | null,
+  instance: string | null,
+  checkout: string,
+): boolean {
+  return (
+    run !== null &&
+    marker !== null &&
+    typeof marker.runId === "string" &&
+    marker.runId !== "" &&
+    run.runId === marker.runId &&
+    run.instance === instance &&
+    marker.instance === instance &&
+    run.checkout === checkout &&
+    marker.checkout === checkout
+  );
+}
+
+/**
+ * Why this checkout must not touch the folder because processes it cannot
+ * prove its own may run on it, or null. Processes of this checkout's own run
+ * are for `stop` to prove and stop.
+ */
+export function inUseRefusal(
+  stateDir: string,
+  instance: string | null,
+  run: RunRecord | null,
+  checkout: string,
+  identify: Identify = processIdentity,
+): string | null {
+  const found = activity(stateDir, instance, identify);
+  if (found.kind === "idle") return null;
+  if (found.kind === "running" && runMatches(run, found.marker, instance, checkout)) return null;
+  if (found.kind === "untrusted") return activityRefusal(stateDir, instance, identify);
+  const where = found.marker.checkout ? ` (${found.marker.checkout})` : "";
+  return (
+    `${instanceLabel(instance, stateDir)} is in use: its ${found.role} process (pid ${found.pid}) ` +
+    `may still be running and was started by another checkout${where}, not by this one. ` +
+    "Nothing was changed. Use another instance name, or stop it from the checkout that started it."
+  );
+}
+
 function writeMarker(stateDir: string, marker: Marker): void {
-  writeFileSync(join(stateDir, MARKER_FILE), `${JSON.stringify(marker, null, 2)}\n`, {
-    mode: 0o600,
-  });
+  // Written whole and renamed into place, so a reader never sees half a marker.
+  const temp = join(stateDir, `${MARKER_FILE}.${process.pid}.tmp`);
+  writeFileSync(temp, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
+  renameSync(temp, join(stateDir, MARKER_FILE));
 }
 
 /**
  * Leave the state folder empty apart from a new marker for `runId`. An owned
- * folder is deleted first (links inside it are removed, never followed); a
- * foreign one is refused untouched.
+ * folder is deleted first only when nothing recorded on it can still be
+ * running (links inside it are removed, never followed); a foreign one is
+ * refused untouched. Callers hold the instance's lifecycle lock and check for
+ * listeners first.
  */
 export function prepareFreshState(
   stateDir: string,
   runId: string,
+  origin: MarkerOrigin,
+  identify: Identify = processIdentity,
   now = new Date(),
-  origin: MarkerOrigin = {},
-  guard: { run: RunRecord | null; isAlive: (pid: number | undefined) => boolean } = {
-    run: null,
-    isAlive,
-  },
 ): void {
   const owner = ownership(stateDir);
   if (owner === "foreign") throw new ForeignStateError(stateDir);
   if (owner === "owned") {
-    // Checked again right before deleting, whatever the caller checked earlier.
-    const busy = inUseRefusal(stateDir, guard.run, guard.isAlive);
+    const busy = activityRefusal(stateDir, origin.instance ?? null, identify);
     if (busy) throw new StateInUseError(busy);
     rmSync(stateDir, { recursive: true });
   }
@@ -132,100 +330,55 @@ export function prepareFreshState(
   writeMarker(stateDir, { ...origin, createdBy: CREATED_BY, createdAt: now.toISOString(), runId });
 }
 
-/** Thrown instead of deleting a folder whose gateway another checkout runs. */
-export class StateInUseError extends Error {
-  constructor(reason: string) {
-    super(reason);
-    this.name = "StateInUseError";
-  }
-}
-
-function instanceLabel(marker: Marker, stateDir: string): string {
-  const name = marker.instance ? `instance "${marker.instance}"` : "the default instance";
-  return `${name} (${stateDir})`;
-}
-
-/**
- * Why an owned folder must not be deleted or restarted by this checkout, or
- * null. It is in use when its marker records a gateway that is still running
- * and is not the one in this checkout's run file, or a start in another
- * process that is still preparing it.
- */
-export function inUseRefusal(
-  stateDir: string,
-  run: RunRecord | null,
-  alive: (pid: number | undefined) => boolean,
-  selfPid: number = process.pid,
-): string | null {
-  if (ownership(stateDir) !== "owned") return null;
-  const marker = readMarker(stateDir)!;
-  const label = instanceLabel(marker, stateDir);
-  const where = marker.checkout ? ` (${marker.checkout})` : "";
-  const ours =
-    run !== null &&
-    marker.runId !== "" &&
-    run.runId === marker.runId &&
-    run.gatewayPid !== undefined &&
-    run.gatewayPid === marker.gatewayPid;
-  if (marker.gatewayPid && alive(marker.gatewayPid) && !ours) {
-    return (
-      `${label} is in use: its gateway (pid ${marker.gatewayPid}) is running and was started ` +
-      `by another checkout${where}, not by this one. Nothing was changed. ` +
-      "Use another instance name, or stop it from the checkout that started it."
-    );
-  }
-  if (marker.startPid && marker.startPid !== selfPid && alive(marker.startPid) && !ours) {
-    return (
-      `${label} is in use: a start in another process (pid ${marker.startPid})${where} ` +
-      "is preparing it. Nothing was changed."
-    );
-  }
-  return null;
-}
-
-/** Record the processes started on this folder, by the start that created it. */
-export function recordGateway(
+/** Record a process the start that created this folder has just spawned. */
+export function recordProcess(
   stateDir: string,
   runId: string,
-  pids: { gatewayPid: number; providerPid: number },
+  role: "provider" | "gateway",
+  pid: number | undefined,
+  identify: Identify = processIdentity,
 ): void {
   const marker = readMarker(stateDir);
   if (ownership(stateDir) !== "owned" || marker?.runId !== runId) {
     throw new Error(`${stateDir} is no longer the state this start created`);
   }
-  writeMarker(stateDir, { ...marker, ...pids });
+  const identity = validPid(pid) ? identify(pid) : null;
+  if (!validPid(pid) || identity === null) {
+    throw new Error(`the ${role} process (pid ${String(pid)}) exited before it was recorded`);
+  }
+  writeMarker(stateDir, { ...marker, [`${role}Pid`]: pid, [`${role}Identity`]: identity });
 }
 
+/** A run file, if it is a regular file with every field of the current format. */
 export function readRunRecord(path: string): RunRecord | null {
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as RunRecord;
-  } catch {
+  const run = readJsonFile(path);
+  if (
+    !run ||
+    typeof run.runId !== "string" ||
+    !(run.instance === null || typeof run.instance === "string") ||
+    typeof run.checkout !== "string" ||
+    typeof run.gatewayPort !== "number" ||
+    typeof run.providerPort !== "number" ||
+    typeof run.startedAt !== "string"
+  ) {
     return null;
   }
-}
-
-export function isAlive(pid: number | undefined): pid is number {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  return run as RunRecord;
 }
 
 /**
  * Why OpenClaw must not run now, or null when it may. It may run only against
  * the tool's own state, and only during the start that just created it
- * (`freshRunId`) or while the gateway recorded for that state is still running.
+ * (`freshRunId`) or while the gateway this checkout's run recorded is running.
  */
 export function spawnRefusal(params: {
   stateDir: string;
   run: RunRecord | null;
   freshRunId: string | null;
-  isAlive: (pid: number | undefined) => boolean;
   /** The instance this folder must belong to; null is the default instance. */
-  instance?: string | null;
+  instance: string | null;
+  checkout: string;
+  identify?: Identify;
 }): string | null {
   const owner = ownership(params.stateDir);
   if (owner === "absent") {
@@ -233,34 +386,29 @@ export function spawnRefusal(params: {
   }
   if (owner === "foreign") return new ForeignStateError(params.stateDir).message;
   const marker = readMarker(params.stateDir)!;
-  const expected = params.instance ?? null;
-  if ((marker.instance ?? null) !== expected) {
-    return `${params.stateDir} belongs to another instance (${JSON.stringify(marker.instance ?? null)}), not ${JSON.stringify(expected)}.`;
+  const { instance } = params;
+  if (isLegacyMarker(marker)) {
+    return "The development gateway state predates this tool version. Run `pnpm dev-gateway start`.";
   }
-  if (
-    expected !== null &&
-    (!isNamedInstancePort(marker.gatewayPort) || !isNamedInstancePort(marker.providerPort))
-  ) {
-    return `${params.stateDir} does not record valid ports for instance "${expected}". Run \`pnpm dev-gateway start\`.`;
+  const problems = markerProblems(marker, instance);
+  if (problems.length > 0) {
+    return `${params.stateDir} has a marker this tool cannot trust: ${problems.join("; ")}.`;
   }
-  if (params.freshRunId !== null && marker.runId !== "" && marker.runId === params.freshRunId) {
-    return null;
-  }
+  if (params.freshRunId !== null && marker.runId === params.freshRunId) return null;
   const { run } = params;
-  if (!run && marker.gatewayPid && !params.isAlive(marker.gatewayPid)) {
-    return `The development gateway started on this state (pid ${marker.gatewayPid}) is not running. Run \`pnpm dev-gateway start\`.`;
-  }
   if (
-    !run ||
-    !marker.runId ||
-    run.runId !== marker.runId ||
-    marker.gatewayPid !== run.gatewayPid ||
-    (expected !== null &&
-      (run.gatewayPort !== marker.gatewayPort || run.providerPort !== marker.providerPort))
+    !runMatches(run, marker, instance, params.checkout) ||
+    run!.gatewayPort !== (instance === null ? run!.gatewayPort : marker.gatewayPort) ||
+    run!.providerPort !== (instance === null ? run!.providerPort : marker.providerPort)
   ) {
-    return "The development gateway state does not belong to the gateway this tool last started. Run `pnpm dev-gateway start`.";
+    return "The development gateway state does not belong to the gateway this checkout last started. Run `pnpm dev-gateway start`.";
   }
-  if (!params.isAlive(marker.gatewayPid)) {
+  const state = processState(
+    marker.gatewayPid,
+    marker.gatewayIdentity,
+    params.identify ?? processIdentity,
+  );
+  if (state !== "alive") {
     return `The development gateway started on this state (pid ${marker.gatewayPid ?? "?"}) is not running. Run \`pnpm dev-gateway start\`.`;
   }
   return null;
