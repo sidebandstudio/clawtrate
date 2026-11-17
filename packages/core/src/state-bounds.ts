@@ -6,6 +6,7 @@
 // characters (`bounds.ts`).
 
 import type {
+  ApprovalAttempts,
   ApprovalCard,
   ApprovalResolution,
   ApprovalResolver,
@@ -516,6 +517,19 @@ const retentionAlarm = object<ClawtrateState["retention"]>()({
   estimated: NUMBER,
   bound: NUMBER,
   near: FLAG,
+});
+
+/** An approval's attempts the client keeps by id while any are outstanding (`MAX_APPROVAL_ATTEMPTS`). */
+export const APPROVAL_ATTEMPTS: Bound = object<ApprovalAttempts>()({
+  attempt: NUMBER,
+  inFlight: list(2, decisionAttempt),
+  unknownAt: NUMBER,
+  unknownDeny: FLAG,
+  readingAt: NUMBER,
+  decisionError: ENUM,
+  stillOpen: FLAG,
+  submitting: FLAG,
+  submittingDecision: ENUM,
 });
 
 /** An approval outcome the client keeps by id (`MAX_APPROVAL_OUTCOMES` of them). */

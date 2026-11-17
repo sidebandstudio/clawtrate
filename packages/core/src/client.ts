@@ -22,14 +22,20 @@ import {
   APPROVAL_KINDS,
   decisionText,
   expireApprovals,
-  beginDecision,
-  beginReadback,
+  attemptsOf,
+  attemptsSettled,
   decisionRefusal,
-  endDecision,
-  endReadback,
+  finishDecision,
+  finishReadback,
+  NO_ATTEMPTS,
   noteSent,
   patchError,
-  readbackPending,
+  readbackStillPending,
+  reopenAttempts,
+  sameAttempts,
+  startDecision,
+  startReadback,
+  type ApprovalAttempts,
   mergeResolution,
   normalizeApprovals,
   parseApprovalResolved,
@@ -135,6 +141,7 @@ import {
 } from "./scopes.ts";
 import { capId, enforce, jsonLength, jsonTextLength } from "./bounds.ts";
 import {
+  APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
   CREATION,
   enforceState,
@@ -225,6 +232,12 @@ export const MAX_ACCESS_WAITERS = 128;
  * make it actionable again. The oldest give way; switching gateways clears them.
  */
 export const MAX_APPROVAL_OUTCOMES = 512;
+/**
+ * Approvals whose attempts are kept apart from any task: those with a decision
+ * on its way, an unknown outcome or a read-back on its way. Past it, a
+ * decision on another approval is refused until one settles.
+ */
+export const MAX_APPROVAL_ATTEMPTS = 256;
 /**
  * Pending approvals kept while no followed task can show them, or while the
  * task they belong to already shows `MAX_PENDING_APPROVALS_PER_TASK`
@@ -670,6 +683,14 @@ export class ClawtrateClient {
   private readonly checkingSlots = new Set<string>();
   /** What the gateway reported about approvals, by id, newest last (`MAX_APPROVAL_OUTCOMES`). */
   private readonly approvalOutcomes = new Map<string, ApprovalResolution>();
+  /**
+   * Each unsettled approval's attempts, by id, kept for as long as anything is
+   * outstanding whether or not a task shows it (`MAX_APPROVAL_ATTEMPTS`). Every
+   * card of a pending approval is drawn from it.
+   */
+  private readonly approvalAttempts = new Map<string, ApprovalAttempts>();
+  /** The last attempt number given, to any approval: numbers never repeat in this client. */
+  private attemptSeq = 0;
   /** Pending approvals no followed task can show yet, oldest first (`MAX_UNROUTED_APPROVALS`). */
   private readonly unrouted = new Map<string, ApprovalCard>();
   private unroutedOmitted = 0;
@@ -1937,8 +1958,13 @@ export class ClawtrateClient {
       throw new Error("That approval is no longer open.");
     // One decision on its way at a time, but a Deny may follow an allow; no allow while
     // an outcome is unknown, and no Deny again while an earlier Deny's is (`decisionRefusal`).
-    const refusal = decisionRefusal(approval, decision);
+    const refusal = decisionRefusal({ ...approval, ...this.attemptsFor(approvalId) }, decision);
     if (refusal) throw new Error(refusal);
+    if (this.attemptsFull(approvalId)) {
+      throw new Error(
+        "Too many decisions are waiting for an outcome; check them again before deciding another.",
+      );
+    }
     // Text cut to its bound is allowed only by a viewer this host gave the whole text to, naming
     // the digest of what it was given. A digest the state already carries proves nothing.
     const owner = options.owner ?? DIRECT_CALLER;
@@ -1964,12 +1990,8 @@ export class ClawtrateClient {
     }
     const { method, params } = resolveRequest(approval, decision, days);
     // This decision's attempt: its response settles only it.
-    let attempt = 0;
-    this.updateActivity(key, (activity) => {
-      const begun = beginDecision(activity, approvalId, decision);
-      attempt = begun.attempt;
-      return begun.activity;
-    });
+    const attempt = this.nextAttempt();
+    this.changeAttempts(approvalId, (each) => startDecision(each, decision, attempt), null);
     // Whether the decision left this client: before that, a failure means nothing was sent.
     let sent = false;
     try {
@@ -2015,15 +2037,7 @@ export class ClawtrateClient {
         };
       }
       this.noteApprovalOutcome(resolution);
-      this.updateActivity(key, (activity) =>
-        endDecision(
-          activity,
-          approvalId,
-          attempt,
-          "answered",
-          applied ? null : "It had already been settled; this is how it ended.",
-        ),
-      );
+      this.changeAttempts(approvalId, (each) => finishDecision(each, attempt, "answered"));
       if (!applied) {
         this.updateActivity(key, (activity) =>
           patchError(activity, approvalId, "It had already been settled; this is how it ended."),
@@ -2040,8 +2054,11 @@ export class ClawtrateClient {
             ? "refused"
             : "unknown";
       // Only this attempt is settled; a decision that lost to one already settled changes nothing.
-      this.updateActivity(key, (activity) =>
-        endDecision(activity, approvalId, attempt, outcome, errorMessage(error)),
+      // Kept with the approval, so it holds even when no task shows it any more.
+      this.changeAttempts(
+        approvalId,
+        (each) => finishDecision(each, attempt, outcome),
+        errorMessage(error),
       );
       this.noteMissingScope(error);
       // Neither answer says whether the request is still open: read it back.
@@ -2058,22 +2075,23 @@ export class ClawtrateClient {
    * leaves the card as it is.
    */
   async checkApproval(key: string, approvalId: string): Promise<void> {
-    const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
-    if (!approval || approval.status !== "pending" || approval.decisionError === null) return;
+    const card = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
+    if (card && card.status !== "pending") return;
+    if (this.approvalOutcomes.get(capId(approvalId, MAX_ID_CHARS))?.status) return;
+    // The approval's own attempts: they hold whether or not a task shows it now.
+    const before = this.attemptsFor(approvalId);
+    if (before.decisionError === null) return;
     if (!this.holds(APPROVALS_SCOPE)) throw new NotSentError();
+    if (this.attemptsFull(approvalId)) throw new NotSentError();
     const generation = this.generation;
     // The read-back's attempt: its pending answer counts only if nothing newer began.
-    let attempt = 0;
-    this.updateActivity(key, (activity) => {
-      const begun = beginReadback(activity, approvalId);
-      attempt = begun.attempt;
-      return begun.activity;
-    });
+    const attempt = this.nextAttempt();
+    this.changeAttempts(approvalId, (each) => startReadback(each, attempt));
     let result: Record<string, unknown> | null;
     try {
       result = asRecord(await this.request("approval.get", { id: approvalId }));
     } finally {
-      this.updateActivity(key, (activity) => endReadback(activity, approvalId, attempt));
+      this.changeAttempts(approvalId, (each) => finishReadback(each, attempt));
     }
     if (generation !== this.generation) return;
     const snapshot = asRecord(result?.approval);
@@ -2081,13 +2099,14 @@ export class ClawtrateClient {
       via: "approval.get",
       record: result,
     });
-    const before = approval.decisionError;
     if (resolution && resolution.id === approvalId) {
       // A settled request is evidence of the winner whenever it was read.
       this.noteApprovalOutcome(resolution);
-      if (before === "refused") {
-        this.updateActivity(key, (activity) =>
-          patchError(activity, approvalId, "It had already been settled; this is how it ended."),
+      if (before.decisionError === "refused") {
+        this.forEachCard(approvalId, (key) =>
+          this.updateActivity(key, (activity) =>
+            patchError(activity, approvalId, "It had already been settled; this is how it ended."),
+          ),
         );
       }
       return;
@@ -2096,22 +2115,125 @@ export class ClawtrateClient {
       throw new Error("The gateway did not say whether the request is still open.");
     }
     let stale = false;
-    this.updateActivity(key, (activity) => {
-      const read = readbackPending(activity, approvalId, attempt);
+    let cleared = false;
+    this.changeAttempts(approvalId, (each) => {
+      const read = readbackStillPending(each, attempt);
       stale = read.stale;
-      return read.activity;
+      cleared = read.cleared;
+      return read.card;
     });
+    if (cleared) {
+      this.forEachCard(approvalId, (key) =>
+        this.updateActivity(key, (activity) => patchError(activity, approvalId, null)),
+      );
+    }
     // A newer attempt began while this was read: its answer proves nothing now. Read again,
     // unless a newer read-back is already on its way to decide it.
-    const now = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
-    if (
-      stale &&
-      now?.status === "pending" &&
-      now.decisionError === "unknown" &&
-      now.readingAt === null
-    ) {
+    const now = this.attemptsFor(approvalId);
+    if (stale && now.decisionError === "unknown" && now.readingAt === null) {
       void this.checkApproval(key, approvalId).catch(() => undefined);
     }
+  }
+
+  // Attempts kept with the approval --------------------------------------------
+
+  private nextAttempt(): number {
+    this.attemptSeq += 1;
+    return this.attemptSeq;
+  }
+
+  /** An approval's attempts: those kept for it, else those its card shows, else none. */
+  private attemptsFor(approvalId: string): ApprovalAttempts {
+    const kept = this.approvalAttempts.get(capId(approvalId, MAX_ID_CHARS));
+    if (kept) return kept;
+    for (const transcript of Object.values(this.state.transcripts)) {
+      const card = transcript.approvals.find((each) => each.id === approvalId);
+      if (card && card.status === "pending") return attemptsOf(card);
+    }
+    return NO_ATTEMPTS;
+  }
+
+  /** Whether keeping one more approval's attempts would pass the bound. */
+  private attemptsFull(approvalId: string): boolean {
+    return (
+      !this.approvalAttempts.has(capId(approvalId, MAX_ID_CHARS)) &&
+      this.approvalAttempts.size >= MAX_APPROVAL_ATTEMPTS
+    );
+  }
+
+  /** Every followed task that shows this approval. */
+  private forEachCard(approvalId: string, fn: (key: string) => void): void {
+    for (const transcript of Object.values(this.state.transcripts)) {
+      if (transcript.approvals.some((each) => each.id === approvalId)) fn(transcript.sessionKey);
+    }
+  }
+
+  /**
+   * Change an approval's attempts where they are kept, then on every card
+   * that shows it. Kept while anything is outstanding and the approval is not
+   * settled; `error`, when given, is what its cards say.
+   */
+  private changeAttempts(
+    approvalId: string,
+    change: (attempts: ApprovalAttempts) => ApprovalAttempts,
+    error?: string | null,
+  ): void {
+    const id = capId(approvalId, MAX_ID_CHARS);
+    const next = enforce(APPROVAL_ATTEMPTS, attemptsOf(change(this.attemptsFor(approvalId))));
+    this.approvalAttempts.delete(id);
+    const settled = this.approvalOutcomes.get(id) !== undefined;
+    if (!settled && !attemptsSettled(next) && this.approvalAttempts.size < MAX_APPROVAL_ATTEMPTS) {
+      this.approvalAttempts.set(id, next);
+    }
+    this.forEachCard(approvalId, (key) =>
+      this.updateActivity(key, (activity) => ({
+        ...activity,
+        approvals: activity.approvals.map((card) => {
+          // A settled card shows how it ended: a late answer changes nothing on it.
+          if (card.id !== approvalId || card.status !== "pending") return card;
+          const shown = { ...card, ...next };
+          return error === undefined ? shown : { ...shown, error };
+        }),
+      })),
+    );
+  }
+
+  /**
+   * Draw every pending card from its approval's kept attempts. A card that a
+   * task admits while something is outstanding (the task opened again, or the
+   * approval came back in a list) starts a new attempt: its outcome is unknown
+   * until a read-back sent after this answers.
+   */
+  private withKeptAttempts(before: TaskActivity | undefined, activity: TaskActivity): TaskActivity {
+    if (this.approvalAttempts.size === 0) return activity;
+    let changed = false;
+    const approvals = activity.approvals.map((card) => {
+      if (card.status !== "pending") return card;
+      const id = capId(card.id, MAX_ID_CHARS);
+      let kept = this.approvalAttempts.get(id);
+      if (!kept) return card;
+      if (!before?.approvals.some((each) => each.id === card.id)) {
+        kept = reopenAttempts(kept, this.nextAttempt());
+        this.approvalAttempts.set(id, kept);
+        // Read back after this, outside the change being made.
+        const approvalId = card.id;
+        void Promise.resolve().then(() =>
+          this.checkApproval(this.keyShowing(approvalId), approvalId).catch(() => undefined),
+        );
+      }
+      if (sameAttempts(card, kept)) return card;
+      changed = true;
+      return { ...card, ...kept };
+    });
+    return changed ? { ...activity, approvals } : activity;
+  }
+
+  /** A followed task that shows this approval, or "" when none does. */
+  private keyShowing(approvalId: string): string {
+    for (const transcript of Object.values(this.state.transcripts)) {
+      if (transcript.approvals.some((each) => each.id === approvalId)) return transcript.sessionKey;
+    }
+    return "";
   }
 
   /**
@@ -2128,6 +2250,8 @@ export class ClawtrateClient {
     if (known.lossy) void this.lookUpOutcome(known.id);
     this.approvalOutcomes.delete(known.id);
     this.approvalOutcomes.set(known.id, known);
+    // Settled: nothing about it is outstanding any more.
+    this.approvalAttempts.delete(known.id);
     while (this.approvalOutcomes.size > MAX_APPROVAL_OUTCOMES) {
       this.approvalOutcomes.delete(this.approvalOutcomes.keys().next().value as string);
     }
@@ -2926,7 +3050,10 @@ export class ClawtrateClient {
     if (!current) return;
     const next = retainActivity(
       settleQuestionsOfEndedRuns(
-        normalizeApprovals(fn(current, this.context(key)), (runId) => this.otherRun(runId)),
+        normalizeApprovals(
+          this.withKeptAttempts(current, fn(current, this.context(key))),
+          (runId) => this.otherRun(runId),
+        ),
       ),
     );
     if (next === current) return;
@@ -3526,13 +3653,18 @@ export class ClawtrateClient {
 
   /** After a connect, read back every approval whose last decision got no answer. */
   private checkUnknownDecisions(): void {
+    const ids = new Set<string>();
     for (const transcript of Object.values(this.state.transcripts)) {
       for (const approval of transcript.approvals) {
-        if (approval.status === "pending" && approval.decisionError === "unknown") {
-          void this.checkApproval(transcript.sessionKey, approval.id).catch(() => undefined);
-        }
+        if (approval.status === "pending" && approval.decisionError === "unknown")
+          ids.add(approval.id);
       }
     }
+    // And those no task shows now: their outcome is the approval's, not a task's.
+    for (const [id, attempts] of this.approvalAttempts) {
+      if (attempts.decisionError === "unknown") ids.add(id);
+    }
+    for (const id of ids) void this.checkApproval(this.keyShowing(id), id).catch(() => undefined);
   }
 
   private setDiscovery(patch: Partial<DiscoveryState>): void {

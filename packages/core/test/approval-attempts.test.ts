@@ -5,6 +5,7 @@
 // until a read-back sent after it returns. At most one decision is on its way,
 // except that a Deny may follow an allow.
 import { describe, expect, it } from "vitest";
+import { createBridgeSession } from "../src/bridge.ts";
 import { grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { GatewayError, until, type FakeGateway } from "./fake-gateway.ts";
 
@@ -187,6 +188,173 @@ describe("F-163: decision attempts", () => {
   });
 });
 
+describe("F-163: decision attempts belong to the approval, not to the task showing it", () => {
+  const busy = () => {
+    throw unavailable("approval get");
+  };
+
+  it("a Deny on its way still holds its guard after the task is closed and opened again", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["exec.approval.list"] = () => [item];
+    gateway.handlers["exec.approval.resolve"] = () => new Promise(() => undefined);
+    gateway.handlers["approval.get"] = busy;
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      await until(() => transcript().approvals.length === 1);
+      void client.resolveApproval(KEY, item.id, "deny").catch(() => undefined);
+      await until(() => decisions(gateway).length === 1);
+      client.closeSession(KEY);
+      expect(client.state.transcripts[KEY]).toBeUndefined();
+      client.openSession(KEY);
+      await until(() => transcript()?.approvals.length === 1);
+      expect(transcript().approvals[0]).toMatchObject({
+        inFlight: [{ decision: "deny" }],
+        decisionError: "unknown",
+        unknownDeny: true,
+      });
+      await expect(client.resolveApproval(KEY, item.id, "deny")).rejects.toThrow(/on its way/);
+      await expect(client.resolveApproval(KEY, item.id, "allow-once")).rejects.toThrow(
+        /on its way/,
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(decisions(gateway)).toEqual(["deny"]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("an outcome that became unknown while the task was closed is not cleared by the list read on opening it again", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["exec.approval.list"] = () => [item];
+    let failOld!: (error: unknown) => void;
+    gateway.handlers["exec.approval.resolve"] = () =>
+      new Promise((_, reject) => (failOld = reject));
+    const reads: Array<(value: unknown) => void> = [];
+    gateway.handlers["approval.get"] = () => new Promise((resolve) => reads.push(resolve));
+    const { client, transcript } = await openTask({ gateway, client: { requestTimeoutMs: 5000 } });
+    try {
+      await until(() => transcript().approvals.length === 1);
+      const old = client.resolveApproval(KEY, item.id, "allow-once").catch((e: unknown) => e);
+      await until(() => decisions(gateway).length === 1);
+      let answerList: ((value: unknown) => void) | undefined;
+      gateway.handlers["exec.approval.list"] = () =>
+        new Promise((resolve) => (answerList = resolve));
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      await until(() => answerList !== undefined);
+      // The outcome becomes unknown while no task shows the approval; the list was asked before.
+      failOld(unavailable("approval resolve"));
+      await old;
+      answerList!([item]);
+      await until(() => transcript()?.approvals.length === 1);
+      expect(transcript().approvals[0]!.decisionError).toBe("unknown");
+      await expect(client.resolveApproval(KEY, item.id, "allow-once")).rejects.toThrow(
+        /not known yet/,
+      );
+      expect(decisions(gateway)).toEqual(["allow-once"]);
+      // The read-back sent when it became unknown predates the task's reopening: only the one
+      // sent after it, once the card was admitted again, settles it.
+      await until(() => reads.length === 2);
+      reads[0]!(pending());
+      await tick();
+      await tick();
+      expect(transcript().approvals[0]!.decisionError).toBe("unknown");
+      reads[1]!(pending());
+      await until(() => transcript().approvals[0]!.decisionError === null);
+      void client.resolveApproval(KEY, item.id, "allow-once").catch(() => undefined);
+      await until(() => decisions(gateway).length === 2);
+      expect(decisions(gateway)).toEqual(["allow-once", "allow-once"]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a read-back sent before the task opened again does not clear the outcome after it", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["exec.approval.list"] = () => [item];
+    gateway.handlers["exec.approval.resolve"] = () => {
+      throw unavailable("approval resolve");
+    };
+    const reads: Array<(value: unknown) => void> = [];
+    gateway.handlers["approval.get"] = () => new Promise((resolve) => reads.push(resolve));
+    const { client, transcript } = await openTask({ gateway, client: { requestTimeoutMs: 5000 } });
+    try {
+      await until(() => transcript().approvals.length === 1);
+      await client.resolveApproval(KEY, item.id, "allow-once").catch(() => undefined);
+      await until(() => reads.length === 1);
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      await until(() => transcript()?.approvals.length === 1 && reads.length === 2);
+      reads[0]!(pending());
+      await tick();
+      await tick();
+      expect(transcript().approvals[0]!.decisionError).toBe("unknown");
+      reads[1]!(pending());
+      await until(() => transcript().approvals[0]!.decisionError === null);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("an Allow on its way when the task opened again, then refused, still leaves no Allow until a read-back sent after the opening", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["exec.approval.list"] = () => [item];
+    let refuseOld!: (error: unknown) => void;
+    gateway.handlers["exec.approval.resolve"] = () =>
+      new Promise((_, reject) => (refuseOld = reject));
+    const reads: Array<(value: unknown) => void> = [];
+    gateway.handlers["approval.get"] = () => new Promise((resolve) => reads.push(resolve));
+    const { client, transcript } = await openTask({ gateway, client: { requestTimeoutMs: 5000 } });
+    try {
+      await until(() => transcript().approvals.length === 1);
+      const old = client.resolveApproval(KEY, item.id, "allow-once").catch((e: unknown) => e);
+      await until(() => decisions(gateway).length === 1);
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      await until(() => transcript()?.approvals.length === 1 && reads.length === 1);
+      refuseOld(refused());
+      await old;
+      expect(transcript().approvals[0]!.decisionError).toBe("unknown");
+      await expect(client.resolveApproval(KEY, item.id, "allow-once")).rejects.toThrow(
+        /not known yet/,
+      );
+      // The refusal is read back too; the read-back sent at the opening is then not the latest.
+      await until(() => reads.length === 2);
+      reads[0]!(pending());
+      await tick();
+      expect(transcript().approvals[0]!.decisionError).toBe("unknown");
+      reads[1]!(pending());
+      await until(() => transcript().approvals[0]!.decisionError === null);
+      void client.resolveApproval(KEY, item.id, "allow-once").catch(() => undefined);
+      await until(() => decisions(gateway).length === 2);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a second viewer keeps the task, and the guard, when the first closes it", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["exec.approval.list"] = () => [item];
+    gateway.handlers["exec.approval.resolve"] = () => new Promise(() => undefined);
+    gateway.handlers["approval.get"] = busy;
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      await until(() => transcript().approvals.length === 1);
+      client.openSession(KEY);
+      void client.resolveApproval(KEY, item.id, "deny").catch(() => undefined);
+      await until(() => decisions(gateway).length === 1);
+      client.closeSession(KEY);
+      expect(transcript().approvals[0]!.inFlight).toEqual([
+        { attempt: expect.any(Number), decision: "deny" },
+      ]);
+      await expect(client.resolveApproval(KEY, item.id, "deny")).rejects.toThrow(/on its way/);
+      expect(decisions(gateway)).toEqual(["deny"]);
+    } finally {
+      client.stop();
+    }
+  });
+});
+
 // Interleavings --------------------------------------------------------------------
 
 /** A small seeded generator, so a failing interleaving can be run again by its seed. */
@@ -201,81 +369,144 @@ function random(seed: number): () => number {
   };
 }
 
+/** One decision as the gateway received it, and what it did with it. */
 type Sent = {
   decision: string;
-  /** What the gateway did with it: no answer yet, refused it, or left its outcome unknown. */
+  /** No answer yet, refused, or its outcome unknown to the client. */
   state: "pending" | "refused" | "unknown";
-  /** When its outcome became unknown. */
+  /** When its outcome became unknown, on the gateway's clock of requests and answers. */
   unknownSince: number;
-  /** A read-back sent after it became unknown answered that the request is still pending. */
+  /**
+   * Its outcome stays unknown, though answered: it was on its way when the task
+   * showing it opened again, so only a read-back sent after that settles it.
+   */
+  reopened: boolean;
+  /** A fresh read-back sent after it became unknown answered that the request is still pending. */
   cleared: boolean;
-  answer: ((value: unknown) => void) | null;
   fail: ((error: unknown) => void) | null;
 };
+/** One read-back as the gateway received it. */
 type Read = { sentAt: number; answer: (value: unknown) => void; fail: (error: unknown) => void };
 
-const SEQUENCES = 150;
-const STEPS = 16;
+const SEQUENCES = 200;
+const STEPS = 18;
 
 describe("F-163: decision attempts over interleavings", () => {
   it(`hold over ${SEQUENCES} seeded interleavings of ${STEPS} steps`, async () => {
     for (let seed = 1; seed <= SEQUENCES; seed += 1) {
       await interleaving(seed);
     }
-  }, 120_000);
+  }, 240_000);
 });
 
+/**
+ * Decisions, their answers, read-backs and their answers in any order, dropped
+ * connections, the task closed and opened again by the direct caller, a
+ * second viewer opening and closing it through its own bridge session, and
+ * the approval lists of each opening answered late. The gateway's clock
+ * counts every request it receives and every answer it gives; a read-back
+ * is fresh when nothing else reached the gateway between it and its answer,
+ * and the task did not show the approval anew meanwhile.
+ */
 async function interleaving(seed: number): Promise<void> {
   const next = random(seed);
   const pick = <T>(list: readonly T[]): T => list[Math.floor(next() * list.length)]!;
   let clock = 0;
+  /** When the gateway last received anything, or the task last showed the approval anew. */
+  let lastBegun = 0;
   const sent: Sent[] = [];
   let reads: Read[] = [];
+  let lists: Array<(value: unknown) => void> = [];
   const violations: string[] = [];
-  const blocking = (each: Sent) =>
-    each.state === "pending" || (each.state === "unknown" && !each.cleared);
+  const unsettled = (each: Sent) =>
+    each.state === "pending" || ((each.state === "unknown" || each.reopened) && !each.cleared);
 
   const gateway = grantingGateway();
-  gateway.handlers["exec.approval.list"] = () => [item];
+  gateway.handlers["exec.approval.list"] = () => new Promise((resolve) => lists.push(resolve));
   gateway.handlers["exec.approval.resolve"] = (params) => {
     const decision = (params as { decision: string }).decision;
     clock += 1;
+    lastBegun = clock;
     // No decision leaves twice: none while an earlier one of the same kind has no known outcome.
-    if (sent.some((each) => each.decision === decision && blocking(each))) {
+    if (sent.some((each) => each.decision === decision && unsettled(each))) {
       violations.push(`seed ${seed}: ${decision} sent again before the first's outcome was known`);
     }
     // No Allow leaves while any decision is on its way or its outcome is unknown.
-    if (decision !== "deny" && sent.some(blocking)) {
+    if (decision !== "deny" && sent.some(unsettled)) {
       violations.push(`seed ${seed}: ${decision} sent while another outcome was not known`);
     }
     const record: Sent = {
       decision,
       state: "pending",
       unknownSince: 0,
+      reopened: false,
       cleared: false,
-      answer: null,
       fail: null,
     };
     sent.push(record);
-    return new Promise((resolve, reject) => {
-      record.answer = resolve;
-      record.fail = reject;
-    });
+    return new Promise((_, reject) => (record.fail = reject));
   };
   gateway.handlers["approval.get"] = () => {
     clock += 1;
+    lastBegun = clock;
     const sentAt = clock;
-    return new Promise((resolve, reject) => {
-      reads.push({ sentAt, answer: resolve, fail: reject });
-    });
+    return new Promise((resolve, reject) => reads.push({ sentAt, answer: resolve, fail: reject }));
   };
-  const { client, transcript } = await openTask({ gateway, client: { requestTimeoutMs: 60_000 } });
+
+  // The direct caller holds the task open; a second viewer may too.
+  const { client } = await openTask({ gateway, client: { requestTimeoutMs: 60_000 } });
+  const viewer = createBridgeSession(client);
+  let direct = true;
+  let viewing = false;
   const settle = async () => {
     for (let i = 0; i < 4; i += 1) await tick();
   };
+  const card = () => client.state.transcripts[KEY]?.approvals.find((each) => each.id === item.id);
+  /** Answer the approval lists asked for; the task shows the approval anew if it did not before. */
+  const answerLists = async (which: Array<(value: unknown) => void>) => {
+    const before = card() !== undefined;
+    clock += which.length;
+    const shownAt = clock;
+    for (const answer of which) answer([item]);
+    await settle();
+    if (!before && card()) {
+      // Shown anew with something outstanding: only a read-back sent after this settles it.
+      lastBegun = Math.max(lastBegun, shownAt);
+      for (const each of sent) {
+        if (each.state === "pending") {
+          each.reopened = true;
+          each.cleared = false;
+          each.unknownSince = shownAt;
+        } else if ((each.state === "unknown" || each.reopened) && !each.cleared) {
+          each.unknownSince = shownAt;
+        }
+      }
+    }
+  };
 
-  /** Deny is always possible: refused only while an earlier Deny is on its way or was unknown. */
+  /** A read-back answers that the request is still pending. */
+  const stillPending = (read: Read) => {
+    const fresh = lastBegun === read.sentAt;
+    clock += 1;
+    if (fresh) {
+      for (const each of sent) {
+        if ((each.state === "unknown" || each.reopened) && each.unknownSince < read.sentAt)
+          each.cleared = true;
+      }
+    }
+    read.answer(pending());
+  };
+
+  const unknown = (each: Sent) => {
+    each.state = "unknown";
+    each.unknownSince = clock;
+    each.cleared = false;
+  };
+
+  /** Deny is always possible: refused only while an earlier Deny is on its way or not known. */
   const deny = async (mustLeave: boolean) => {
+    const shown = card();
+    if (!shown || shown.status !== "pending") return;
     const before = sent.length;
     let error: unknown = null;
     void client.resolveApproval(KEY, item.id, "deny").catch((e: unknown) => (error = e));
@@ -283,10 +514,7 @@ async function interleaving(seed: number): Promise<void> {
     const left = sent.length > before;
     const earlierDeny = sent
       .slice(0, before)
-      .some(
-        (each) =>
-          each.decision === "deny" && (each.state === "pending" || each.state === "unknown"),
-      );
+      .some((each) => each.decision === "deny" && unsettled(each));
     if (!left && !earlierDeny) {
       violations.push(
         `seed ${seed}: Deny refused with no earlier Deny unsettled: ${String(error)}`,
@@ -295,23 +523,10 @@ async function interleaving(seed: number): Promise<void> {
     if (mustLeave && !left) violations.push(`seed ${seed}: Deny did not leave once all was known`);
   };
 
-  /** A read-back answers that the request is still pending. */
-  const stillPending = (read: Read) => {
-    clock += 1;
-    // Every decision whose outcome became unknown before this read-back was sent was not applied.
-    for (const each of sent) {
-      if (each.state === "unknown" && each.unknownSince < read.sentAt) each.cleared = true;
-    }
-    read.answer(pending());
-  };
-
-  const unknown = (each: Sent) => {
-    each.state = "unknown";
-    each.unknownSince = clock;
-  };
-
   try {
-    await until(() => transcript().approvals.length === 1);
+    await until(() => lists.length > 0);
+    await answerLists(lists.splice(0));
+    await until(() => card() !== undefined);
     for (let step = 0; step < STEPS; step += 1) {
       const action = pick([
         "allow-once",
@@ -322,7 +537,12 @@ async function interleaving(seed: number): Promise<void> {
         "answer-decision",
         "answer-read",
         "answer-read",
+        "answer-list",
         "drop",
+        "close",
+        "open",
+        "viewer-open",
+        "viewer-close",
       ] as const);
       if (action === "deny") {
         await deny(false);
@@ -354,41 +574,59 @@ async function interleaving(seed: number): Promise<void> {
             read.fail(unavailable("approval get"));
           }
         }
-      } else {
+      } else if (action === "answer-list") {
+        if (lists.length > 0) await answerLists(lists.splice(0, 1));
+      } else if (action === "drop") {
         clock += 1;
         for (const each of sent) if (each.state === "pending") unknown(each);
         reads = [];
+        lists = [];
         gateway.dropAll();
         await until(() => client.state.connection.status === "connected");
+      } else if (action === "close") {
+        if (direct) client.closeSession(KEY);
+        direct = false;
+      } else if (action === "open") {
+        if (!direct) client.openSession(KEY);
+        direct = true;
+      } else if (action === "viewer-open") {
+        if (!viewing) await viewer.apply({ type: "openSession", key: KEY });
+        viewing = true;
+      } else {
+        if (viewing) await viewer.apply({ type: "closeSession", key: KEY });
+        viewing = false;
       }
       await settle();
     }
 
-    // Everything answered and read back: Deny leaves.
+    // Everything answered, the task open and read back: Deny leaves.
+    if (!direct) client.openSession(KEY);
+    direct = true;
+    await settle();
     for (const each of sent.filter((one) => one.state === "pending")) {
       clock += 1;
       each.state = "refused";
       each.fail!(refused());
     }
     await settle();
-    for (const read of reads) stillPending(read);
-    reads = [];
+    for (let round = 0; round < 6 && (lists.length > 0 || !card()); round += 1) {
+      await until(() => lists.length > 0 || card() !== undefined);
+      await answerLists(lists.splice(0));
+    }
+    for (const read of reads.splice(0)) stillPending(read);
     await settle();
-    for (
-      let round = 0;
-      round < 4 && transcript().approvals[0]!.decisionError === "unknown";
-      round += 1
-    ) {
-      void client.checkApproval(KEY, item.id).catch(() => undefined);
+    for (let round = 0; round < 6 && card()?.decisionError === "unknown"; round += 1) {
+      if (card()?.readingAt === null) {
+        void client.checkApproval(KEY, item.id).catch(() => undefined);
+      }
       await until(() => reads.length > 0);
-      const all = reads;
-      reads = [];
-      for (const read of all) stillPending(read);
+      for (const read of reads.splice(0)) stillPending(read);
       await settle();
     }
-    expect(transcript().approvals[0]!.decisionError, `seed ${seed}`).not.toBe("unknown");
+    expect(card()?.decisionError, `seed ${seed}`).not.toBe("unknown");
     await deny(true);
   } finally {
+    viewer.dispose();
     client.stop();
   }
   expect(violations).toEqual([]);
