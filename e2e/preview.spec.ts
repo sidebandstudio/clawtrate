@@ -1427,10 +1427,13 @@ test("F-468: a real question holds a message typed while it is pending, and answ
 });
 
 test("leaves every other instance's gateway as it found it", () => {
-  // Same processes on the same ports as before this run's instance started.
-  const before = JSON.parse(process.env.CLAWTRATE_E2E_OTHERS!) as string[];
-  expect(before.some((row) => row.startsWith(`${process.env.CLAWTRATE_E2E_SENTINEL} `))).toBe(true);
-  expect(runningOthers([INSTANCE], [process.env.CLAWTRATE_E2E_SENTINEL!])).toEqual(
-    expect.arrayContaining(before),
+  // Same processes on the same ports as before this run's instance started: the default
+  // instance and this run's sentinel. Another named instance belongs to other work on the
+  // machine and may stop or restart meanwhile.
+  const sentinel = process.env.CLAWTRATE_E2E_SENTINEL!;
+  const before = (JSON.parse(process.env.CLAWTRATE_E2E_OTHERS!) as string[]).filter(
+    (row) => row.startsWith("(default) ") || row.startsWith(`${sentinel} `),
   );
+  expect(before.some((row) => row.startsWith(`${sentinel} `))).toBe(true);
+  expect(runningOthers([INSTANCE], [sentinel])).toEqual(expect.arrayContaining(before));
 });
