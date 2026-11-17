@@ -64,6 +64,12 @@ import {
   type RawRecord,
 } from "./mapping.ts";
 import {
+  PAIRING_ENDED,
+  pairingEnded,
+  protocolMessage,
+  protocolMismatch,
+} from "./connect-errors.ts";
+import {
   activeRun,
   activitySize,
   applyAgentEvent,
@@ -280,7 +286,12 @@ const PAIRING_RETRY_MS = 3000;
 
 const SETTINGS_KEY = "connection";
 
-export type ConnectionSettings = { url: string; token: string | null };
+export type ConnectionSettings = {
+  url: string;
+  token: string | null;
+  /** The user chose Disconnect: stay disconnected, across restarts, until Reconnect. */
+  suspended?: boolean;
+};
 
 export type ConnectOptions = { url: string; token?: string | null };
 
@@ -613,6 +624,10 @@ export class ClawtrateClient {
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapping = false;
   private changedDuringBootstrap = false;
+  /** The pairing request this client last saw pending, and when. */
+  private pairingSeen: string | null = null;
+  /** The current attempt reached hello. */
+  private attemptGreeted = false;
   /** Set by the protocol client's gap callback; the reconnect it forces reloads with this reason. */
   private pendingResync: CaughtUp["reason"] | null = null;
   /** The next hello follows a reconnect this client made on purpose, so it is not a resync. */
@@ -693,11 +708,20 @@ export class ClawtrateClient {
     return raw ? (JSON.parse(raw) as ConnectionSettings) : null;
   }
 
-  /** Resume the saved gateway, if any and if allowed. */
+  private async saveSettings(settings: ConnectionSettings): Promise<void> {
+    this.settings = settings;
+    await this.host.storage.set(SETTINGS_KEY, JSON.stringify(settings));
+  }
+
+  /** Resume the saved gateway, if any and if allowed, unless the user disconnected from it. */
   async start(): Promise<void> {
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
     this.settings = await this.savedSettings();
+    if (this.settings?.suspended) {
+      this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
+      return;
+    }
     if (this.settings) await this.open();
   }
 
@@ -708,6 +732,7 @@ export class ClawtrateClient {
     const token = options.token?.trim() || null;
     if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
     this.settings = { url, token };
+    this.pairingSeen = null;
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
     await this.open();
   }
@@ -717,6 +742,7 @@ export class ClawtrateClient {
     this.abandonAccessRequest("Disconnected from the gateway.");
     this.close();
     this.settings = null;
+    this.pairingSeen = null;
     this.rows = new Map();
     this.raw.clear();
     this.retained.clear();
@@ -738,7 +764,23 @@ export class ClawtrateClient {
       await this.bootstrap(this.generation, null);
       return;
     }
+    if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
     await this.open();
+  }
+
+  /**
+   * Close the connection and keep everything else: the gateway, the device's
+   * pairing and what is on screen. `retryNow` reconnects.
+   */
+  async suspend(): Promise<void> {
+    if (!this.settings) return;
+    // Saved, so a restart does not reconnect by itself.
+    await this.saveSettings({ ...this.settings, suspended: true });
+    // The connection stops: writes waiting for access fail, as on any lost connection.
+    // Runs are kept as they are and reconciled with history after Reconnect.
+    this.abandonAccessRequest("Disconnected from the gateway.");
+    this.close();
+    this.setConnection({ status: "disconnected", retryAt: null, error: null, pairing: null });
   }
 
   /** Stop without forgetting anything. Used when the host process exits. */
@@ -2982,6 +3024,7 @@ export class ClawtrateClient {
         requestedScopes: stored ? [...stored.heldScopes] : [...READ_SCOPES],
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
         serverVersion: sameGateway ? state.connection.serverVersion : null,
+        gatewayId: sameGateway ? state.connection.gatewayId : null,
       },
       transcripts: sameGateway
         ? state.transcripts
@@ -3029,6 +3072,9 @@ export class ClawtrateClient {
           }
           throw new GatewayNotAllowedError(settings.url);
         }
+        this.attemptGreeted = false;
+        // An attempt is under way: no retry is waiting any more.
+        if (this.state.connection.retryAt !== null) this.setConnection({ retryAt: null });
         const socket = this.host.createWebSocket(settings.url);
         socket.onopen = () => handlers.open();
         socket.onmessage = (event) => handlers.message(String(event.data));
@@ -3086,6 +3132,25 @@ export class ClawtrateClient {
       },
       onHello: (hello) => {
         if (generation !== this.generation) return;
+        this.attemptGreeted = true;
+        if (hello.protocol !== PROTOCOL_VERSION) {
+          // Outside this client's range: nothing else is asked of this gateway.
+          const protocol = { gateway: hello.protocol, client: PROTOCOL_VERSION };
+          this.close();
+          this.setConnection({
+            status: "error",
+            retryAt: null,
+            protocol: hello.protocol,
+            serverVersion: hello.server.version,
+            error: {
+              code: "PROTOCOL_MISMATCH",
+              message: protocolMessage(protocol),
+              hint: null,
+              protocol,
+            },
+          });
+          return;
+        }
         this.handleHello(hello, generation);
       },
       onConnectFailure: async (error) =>
@@ -3103,8 +3168,20 @@ export class ClawtrateClient {
         const status = this.state.connection.status;
         if (status !== "pairing" && status !== "error") {
           // Once this gateway has answered, every later drop is a reconnect, not a first connect.
+          // An attempt that never got an answer says so, unless the gateway gave a reason.
+          const unanswered =
+            !this.attemptGreeted && !this.state.connection.error
+              ? {
+                  error: {
+                    code: "UNREACHABLE",
+                    message: `Nothing answered at ${hostOf(settings.url)}.`,
+                    hint: "Check that the gateway is running and that the address is right.",
+                  },
+                }
+              : {};
           this.setConnection({
             status: this.everConnected ? "reconnecting" : "connecting",
+            ...unanswered,
             // No connection, no effective access; the next hello says what is granted.
             canWrite: false,
             canAnswer: false,
@@ -3199,8 +3276,37 @@ export class ClawtrateClient {
     const code = typeof details.code === "string" ? details.code : error.gatewayCode;
     const hint = typeof details.remediationHint === "string" ? details.remediationHint : null;
 
+    const mismatch = protocolMismatch(details);
+    if (mismatch) {
+      this.setConnection({
+        status: "error",
+        pairing: null,
+        retryAt: null,
+        error: {
+          code: "PROTOCOL_MISMATCH",
+          message: protocolMessage(mismatch),
+          hint,
+          protocol: mismatch,
+        },
+      });
+      return { closeCode: 1000, closeReason: "protocol mismatch", stop: true };
+    }
+
     if (code === "PAIRING_REQUIRED") {
       const requestId = typeof details.requestId === "string" ? details.requestId : "";
+      // The request this client was waiting on is gone: the gateway's owner
+      // rejected it, or it expired. Stop, and let the user ask again.
+      if (pairingEnded(this.pairingSeen, requestId)) {
+        this.pairingSeen = null;
+        this.setConnection({
+          status: "error",
+          pairing: null,
+          retryAt: null,
+          error: { ...PAIRING_ENDED, hint: null },
+        });
+        return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
+      }
+      if (requestId) this.pairingSeen = requestId;
       const scopes = Array.isArray(details.requestedScopes)
         ? details.requestedScopes.filter((s): s is string => typeof s === "string")
         : [...REQUESTED_SCOPES];
@@ -3257,6 +3363,7 @@ export class ClawtrateClient {
   private handleHello(hello: HelloOk, generation: number): void {
     const wasConnected = this.everConnected;
     this.everConnected = true;
+    this.pairingSeen = null;
     // The protocol gives a boot id at most 96 characters; anything else names no start.
     const bootId = asRecord(hello.server)?.bootId;
     this.gatewayBootId =
@@ -3311,17 +3418,36 @@ export class ClawtrateClient {
     this.bootstrapping = true;
     this.changedDuringBootstrap = false;
     this.setDiscovery({ status: "loading", error: null });
+    // The gateway's identity comes with its bots, so what this device keeps
+    // per gateway (pins, hidden bots, order) is known when the bots appear.
+    const gatewayId = this.request("gateway.identity.get", {}).then(
+      (result) => {
+        const id = asRecord(result)?.deviceId;
+        return typeof id === "string" && id ? id : null;
+      },
+      () => null,
+    );
+    // Bots are published as soon as they arrive, so the app can open on them
+    // while tasks are still loading.
     const [agents, sessions] = await Promise.allSettled([
-      this.request("agents.list", {}),
+      this.request("agents.list", {}).then(async (result) => {
+        const id = await gatewayId;
+        if (generation === this.generation) {
+          this.store.update((state) => ({
+            ...state,
+            connection: { ...state.connection, gatewayId: id },
+            bots: mapAgents(result),
+          }));
+        }
+        return result;
+      }),
       this.loadAllSessions(generation, "sessions.subscribe"),
     ]);
     this.bootstrapping = false;
     if (generation !== this.generation) return;
 
     const failures: string[] = [];
-    if (agents.status === "fulfilled") {
-      this.store.update((state) => ({ ...state, bots: mapAgents(agents.value) }));
-    } else {
+    if (agents.status !== "fulfilled") {
       failures.push(`bots: ${errorMessage(agents.reason)}`);
     }
     if (sessions.status === "fulfilled") {
@@ -3862,6 +3988,14 @@ export class ClawtrateClient {
 
   private log(level: "debug" | "info" | "warn" | "error", message: string): void {
     this.host.log?.(level, message);
+  }
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
   }
 }
 

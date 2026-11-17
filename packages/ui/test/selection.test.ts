@@ -1,6 +1,6 @@
 import type { Bot, Task } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { botLabel, summarize, visibleTasks } from "../src/selection.ts";
+import { botLabel, summarize, taskState, visibleTasks } from "../src/selection.ts";
 
 const bot: Bot = {
   id: "otto",
@@ -42,7 +42,7 @@ describe("a bot's summary of all its tasks", () => {
     expect(summary.latest?.key).toBe("newest");
     expect(summary.unread).toBe(true);
     expect(summary.state).toBe("working");
-    expect(botLabel(bot, 3, summary)).toBe("Otto, 3 tasks, working, unread");
+    expect(botLabel(bot, 3, summary)).toBe("Otto, working, 3 tasks, unread");
   });
 
   it("does not count the task on screen as unread, and ranks failed before working", () => {
@@ -53,7 +53,7 @@ describe("a bot's summary of all its tasks", () => {
     const summary = summarize(tasks, {}, "a");
     expect(summary.unread).toBe(false);
     expect(summary.state).toBe("failed");
-    expect(botLabel(bot, 2, summary)).toBe("Otto, 2 tasks, a run failed");
+    expect(botLabel(bot, 2, summary)).toBe("Otto, a run failed, 2 tasks");
   });
 
   it("forgets unread once the viewer has seen the latest activity", () => {
@@ -87,5 +87,54 @@ describe("the rows under an unfolded bot", () => {
 
   it("shows all when asked", () => {
     expect(visibleTasks(fourteen, null, true)).toHaveLength(14);
+  });
+});
+
+describe("F-020 F-426: a bot row's state", () => {
+  it("F-020: names a working bot first by its state, as assistive tools read it", () => {
+    const summary = summarize([task("a", 1, { status: "running" })], {}, null);
+    expect(botLabel(bot, 1, summary)).toMatch(/^Otto, working\b/);
+    expect(botLabel(bot, 1, summary, { primary: true, label: "operations" })).toBe(
+      "Otto, working, 1 task, operations, primary bot",
+    );
+  });
+
+  it("F-426: one waiting and one working task shows waiting", () => {
+    const tasks = [task("w", 2, { status: "waiting" }), task("r", 1, { status: "running" })];
+    expect(summarize(tasks, {}, null).state).toBe("waiting");
+  });
+
+  it("F-426: follows waiting, failed or blocked, done with failures, working, then the unread dot", () => {
+    const order: Array<[Task["status"], string | null]> = [
+      ["waiting", "waiting"],
+      ["failed", "failed"],
+      ["blocked", "blocked"],
+      ["done-with-failures", "done-with-failures"],
+      ["running", "working"],
+    ];
+    for (let i = 0; i < order.length; i += 1) {
+      const tasks = order.slice(i).map(([status], j) => task(`t${j}`, 10 - j, { status }));
+      expect(summarize(tasks, {}, null).state).toBe(order[i]![1]);
+    }
+    // Failed and blocked share a place: whichever is present shows.
+    expect(summarize([task("b", 2, { status: "blocked" })], {}, null).state).toBe("blocked");
+    const done = summarize([task("d", 1, { unread: true })], {}, null);
+    expect([done.state, done.unread]).toEqual([null, true]);
+    expect(summarize([task("i", 1)], {}, null)).toMatchObject({ state: null, unread: false });
+  });
+
+  it("F-426: opening the done-with-failures task clears it, and the row shows working", () => {
+    const tasks = [
+      task("dwf", 5, { status: "done-with-failures" }),
+      task("run", 4, { status: "running" }),
+    ];
+    expect(summarize(tasks, {}, null).state).toBe("done-with-failures");
+    // On screen, it is cleared at once; after it is left, the seen map keeps it cleared.
+    expect(summarize(tasks, {}, "dwf").state).toBe("working");
+    expect(summarize(tasks, { dwf: 5 }, "run").state).toBe("working");
+    expect(taskState(tasks[0]!, { dwf: 5 }, null)).toBe(null);
+    // New activity in that task after it was seen brings the marker back.
+    const later = [{ ...tasks[0]!, updatedAt: 9 }, tasks[1]!];
+    expect(summarize(later, { dwf: 5 }, null).state).toBe("done-with-failures");
   });
 });

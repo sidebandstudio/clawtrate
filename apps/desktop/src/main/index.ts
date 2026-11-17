@@ -8,10 +8,11 @@ import {
   type ClawtrateState,
   type HostInfo,
 } from "@clawtrate/core";
-import { app, BrowserWindow, ipcMain, nativeTheme, session, shell } from "electron";
+import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, session, shell } from "electron";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
 import {
   readDevConnection,
   selectInstance,
@@ -204,6 +205,27 @@ async function main(): Promise<void> {
     const meta = { fileName: file?.name, mimeType: file?.type };
     store.check(meta, data.byteLength);
     return store.add(meta, data.byteLength, () => Buffer.from(data).toString("base64"));
+  });
+  // Unread activity on the dock (macOS, Linux) or the taskbar button (Windows).
+  const dot = nativeImage.createFromBitmap(Buffer.from(dotBitmap(16, [10, 110, 92])), {
+    width: 16,
+    height: 16,
+  });
+  ipcMain.on("clawtrate:badge", (_event, raw: unknown) => {
+    const count = parseBadgeCount(raw);
+    if (count === null) return;
+    applyUnreadBadge(
+      {
+        platform: process.platform,
+        setBadgeCount: (value) => app.setBadgeCount(value),
+        setOverlay: (icon, description) => {
+          for (const win of BrowserWindow.getAllWindows()) {
+            win.setOverlayIcon(icon ? dot : null, description);
+          }
+        },
+      },
+      count,
+    );
   });
   batchSnapshots(client.store.subscribe, (state) => {
     // A snapshot can fire after the window closed, during quit for one.

@@ -15,7 +15,7 @@ const VIEWS: View[] = [
   {
     name: "connect",
     query: "scene=connect",
-    ready: (page) => expect(page.getByRole("button", { name: "Connect" })).toBeVisible(),
+    ready: (page) => expect(page.getByRole("button", { name: "Connect a gateway" })).toBeVisible(),
   },
   {
     name: "pairing",
@@ -40,7 +40,7 @@ for (const size of SIZES) {
       test.use(contextFor(size, theme));
 
       for (const view of VIEWS) {
-        test(view.name, async ({ page }) => {
+        test(`F-471: ${view.name}`, async ({ page }) => {
           await openFixture(page, view.query, theme);
           await view.ready(page);
           await settle(page);
@@ -49,7 +49,7 @@ for (const size of SIZES) {
       }
 
       if (size.phone) {
-        test("bot list", async ({ page }) => {
+        test("F-471: bot list", async ({ page }) => {
           await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed`, theme);
           await page.getByRole("button", { name: "Back to bots" }).click();
           await expect(page.getByTestId("bot-list")).toBeVisible();
