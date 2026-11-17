@@ -27,6 +27,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/runs.ts:TERMINAL_RUN_STATES": "static, the terminal run states",
   "packages/core/src/runs.ts:TIMEOUT_PHASES": "static, five phases",
   "packages/core/src/runs.ts:HARD_TIMEOUT_PHASES": "static, three phases",
+  "packages/core/src/runs.ts:UNORDINARY_QUESTION_FIELDS":
+    "static, the eight question fields the ordinary card cannot show",
   "packages/core/src/scopes.ts:READ_SCOPES": "static, one scope",
   "packages/core/src/scopes.ts:INTERACTIVE_SCOPES": "static, four scopes",
   "packages/core/src/scopes.ts:IMPLIED_BY_WRITE": "static, the scopes write implies",
