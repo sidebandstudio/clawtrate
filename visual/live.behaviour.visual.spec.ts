@@ -65,6 +65,99 @@ test.describe("sending", () => {
     await expect(field(page)).toBeFocused();
   });
 
+  test("F-068 F-073: one submit sends once, and a send still on its way never clears the next draft", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    // The host answers slowly.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as { clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> } }
+      ).clawtrateFixture;
+      const original = fixture.invoke.bind(fixture);
+      (window as unknown as { __calls: number }).__calls = 0;
+      fixture.invoke = (command: unknown) => {
+        if ((command as { type: string }).type === "sendMessage")
+          (window as unknown as { __calls: number }).__calls += 1;
+        return new Promise((resolve) => setTimeout(resolve, 600)).then(() => original(command));
+      };
+    });
+    await field(page).fill("Only once, please");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await expect(field(page)).toHaveValue("");
+    await page.keyboard.type("The next thought");
+    await expect(page.getByTestId("outgoing")).toHaveCount(1);
+    await page.waitForTimeout(800);
+    expect(await page.evaluate(() => (window as unknown as { __calls: number }).__calls)).toBe(1);
+    await expect(page.getByTestId("outgoing").locator(".bubble")).toHaveText(["Only once, please"]);
+    await expect(field(page)).toHaveValue("The next thought");
+  });
+
+  test("F-073: a refused send gives its words and files back, ahead of anything typed since", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as { clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> } }
+      ).clawtrateFixture;
+      const original = fixture.invoke.bind(fixture);
+      fixture.invoke = (command: unknown) =>
+        (command as { type: string }).type === "sendMessage"
+          ? new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("The message is too long.")), 300),
+            )
+          : original(command);
+    });
+    await page
+      .locator('.composer input[type="file"]')
+      .setInputFiles([{ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") }]);
+    await expect(page.locator(".attachments .chip")).toHaveCount(1);
+    await field(page).fill("Refused words");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".attachments .chip")).toHaveCount(0);
+    await page.keyboard.type("typed meanwhile");
+    await expect(page.locator(".composer-shelf [role=alert]")).toContainText(
+      "Couldn't send this message.",
+    );
+    await expect(field(page)).toHaveValue("Refused words\ntyped meanwhile");
+    await expect(page.locator(".attachments .chip")).toHaveText([/notes\.txt/]);
+  });
+
+  test("F-073: a draft belongs to one gateway as well as one task", async ({ page }) => {
+    await open(page, "composer");
+    await field(page).fill("Draft on the first gateway");
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (f: (s: { connection: { gatewayUrl: string | null } }) => unknown) => void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, gatewayUrl: "ws://127.0.0.1:18790" },
+      }));
+    });
+    await expect(field(page)).toHaveValue("");
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (f: (s: { connection: { gatewayUrl: string | null } }) => unknown) => void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, gatewayUrl: "ws://127.0.0.1:18789" },
+      }));
+    });
+    await expect(field(page)).toHaveValue("Draft on the first gateway");
+  });
+
   test("F-072: Cmd/Ctrl+Enter sends from anywhere in the window", async ({ page }) => {
     await open(page, "composer");
     await field(page).fill("Sent from the transcript");

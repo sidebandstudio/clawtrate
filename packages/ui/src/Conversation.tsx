@@ -934,8 +934,9 @@ export function Conversation({
       {body}
       {task && bot && interactive && (
         <Composer
-          key={`composer:${task.key}`}
+          key={`composer:${connection.gatewayUrl ?? ""}:${task.key}`}
           bot={bot}
+          gateway={connection.gatewayUrl}
           taskKey={task.key}
           transcript={transcript}
           connected={online}

@@ -56,8 +56,8 @@ export function refusalFor(file: { size: number; type: string }): string | null 
   return null;
 }
 
-// Drafts are the person's unsent words: kept per task for this viewer, in
-// memory and, where the browser allows it, across reloads.
+// Drafts are the person's unsent words: kept per gateway and task for this
+// viewer, in memory and, where the browser allows it, across reloads.
 const drafts = new Map<string, string>();
 function readDraft(key: string): string {
   if (drafts.has(key)) return drafts.get(key)!;
@@ -89,6 +89,7 @@ export type NeedsYou = { kind: "approval" | "question"; text: string } | null;
 
 export function Composer({
   bot,
+  gateway,
   taskKey,
   transcript,
   connected,
@@ -102,6 +103,8 @@ export function Composer({
   focusRef,
 }: {
   bot: Bot;
+  /** The gateway's address: drafts are kept per gateway and per task. */
+  gateway: string | null;
   taskKey: string;
   transcript: Transcript | undefined;
   connected: boolean;
@@ -115,13 +118,15 @@ export function Composer({
   focusRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
   const bridge = useBridge();
-  const [text, setTextState] = useState(() => readDraft(taskKey));
+  // A draft belongs to one task on one gateway.
+  const draftKey = `${gateway ?? ""}|${taskKey}`;
+  const [text, setTextState] = useState(() => readDraft(draftKey));
   const setText = useCallback(
     (next: string) => {
       setTextState(next);
-      writeDraft(taskKey, next);
+      writeDraft(draftKey, next);
     },
-    [taskKey],
+    [draftKey],
   );
   const [files, setFiles] = useState<Attached[]>([]);
   const [menu, setMenuState] = useState<null | "mode" | "send">(null);
@@ -157,12 +162,32 @@ export function Composer({
       : "Remove the files that are too large to send."
     : null;
 
-  /** The one send operation: Enter, Send, the menu and "Send now" all come here. */
+  // One submit sends once: while a send is on its way, another does nothing.
+  const submitting = useRef(false);
+
+  /**
+   * The one send operation: Enter, Send and the menu all come here. The send
+   * takes the draft and its files at once, so the field is free for the next
+   * words while it goes out and nothing later clears them. If the host
+   * refuses it, the words and files come back, ahead of anything typed since.
+   */
   const sendAs = useCallback(
     async (how: SendMode | "new-task") => {
-      if (!canSend) return;
+      if (!canSend || submitting.current) return;
+      if (how === "new-task" && files.length > 0) {
+        // Task creation takes no files yet; nothing is sent, and nothing is lost.
+        onNotice({
+          title: "Couldn't start a new task.",
+          reason: "A new task can't take files yet. Send them in this task, or remove them first.",
+        });
+        return;
+      }
+      submitting.current = true;
       const body = text;
-      const attachmentIds = files.flatMap((file) => (file.info ? [file.info.id] : []));
+      const taken = files;
+      const attachmentIds = taken.flatMap((file) => (file.info ? [file.info.id] : []));
+      setText("");
+      setFiles([]);
       try {
         if (how === "new-task") {
           const { key } = await bridge.invoke({
@@ -173,8 +198,6 @@ export function Composer({
           });
           // The new task runs on its own; this viewer stays on this one.
           void bridge.send({ type: "closeSession", key });
-          setText("");
-          setFiles([]);
           onAnnounce("Started as a new task");
           return;
         }
@@ -185,19 +208,24 @@ export function Composer({
           mode: how === "queue" ? "queue" : "auto",
           attachmentIds,
         });
-        setText("");
-        setFiles([]);
-        if (how === "queue" && view.stoppable) onAnnounce("Queued");
-        else if (view.stopping) onAnnounce("Queued");
-        else if (how === "hold") onAnnounce("Held until you answer");
+        if (how === "hold") onAnnounce("Held until you answer");
+        else if (how === "queue" || view.stopping) onAnnounce("Queued");
       } catch (error) {
+        setTextState((current) => {
+          const back = current.trim() ? `${body}\n${current}` : body;
+          writeDraft(draftKey, back);
+          return back;
+        });
+        setFiles((current) => [...taken, ...current]);
         onNotice({
           title: how === "new-task" ? "Couldn't start a new task." : "Couldn't send this message.",
           reason: error instanceof Error ? error.message : String(error),
         });
+      } finally {
+        submitting.current = false;
       }
     },
-    [canSend, text, files, bridge, bot.id, taskKey, setText, onAnnounce, onNotice, view],
+    [canSend, text, files, bridge, bot.id, taskKey, draftKey, setText, onAnnounce, onNotice, view],
   );
 
   const stop = useCallback(
