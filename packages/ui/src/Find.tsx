@@ -51,13 +51,10 @@ function reveal(node: Node): void {
 
 export function FindBar({
   scope,
-  version,
   onClose,
 }: {
   /** The conversation whose transcript is searched. */
   scope: RefObject<HTMLElement | null>;
-  /** Changes whenever the transcript does, so matches are found again. */
-  version: string;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -67,13 +64,27 @@ export function FindBar({
 
   useEffect(() => inputRef.current?.focus(), []);
 
-  // Find again when the query or the transcript changes.
-  useLayoutEffect(() => {
-    const root = scope.current?.querySelector(".transcript-inner");
-    const found = root ? findRanges(root, query) : [];
+  // Find on every keystroke, and again whenever the transcript's text changes.
+  const show = (found: Range[]) => {
     setMatches(found);
     setCurrent((index) => (found.length === 0 ? 0 : Math.min(index, found.length - 1)));
-  }, [query, version, scope]);
+  };
+  const queryRef = useRef(query);
+  useEffect(() => {
+    queryRef.current = query;
+  }, [query]);
+  useEffect(() => {
+    const section = scope.current;
+    if (!section) return;
+    const observer = new MutationObserver(() => {
+      const root = section.querySelector(".transcript-inner");
+      const found = root ? findRanges(root, queryRef.current) : [];
+      setMatches(found);
+      setCurrent((index) => (found.length === 0 ? 0 : Math.min(index, found.length - 1)));
+    });
+    observer.observe(section, { childList: true, characterData: true, subtree: true });
+    return () => observer.disconnect();
+  }, [scope]);
 
   // Draw the highlights and bring the current match into view.
   useLayoutEffect(() => {
@@ -142,6 +153,8 @@ export function FindBar({
         onChange={(event) => {
           setQuery(event.target.value);
           setCurrent(0);
+          const root = scope.current?.querySelector(".transcript-inner");
+          show(root ? findRanges(root, event.target.value) : []);
         }}
         onKeyDown={onKey}
         placeholder="Find in conversation"

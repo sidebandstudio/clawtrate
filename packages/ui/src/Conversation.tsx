@@ -604,11 +604,7 @@ export function Conversation({
           </button>
         </div>
         {finding && canFind ? (
-          <FindBar
-            scope={sectionRef}
-            version={`${task?.key}:${itemCount}:${transcript?.live?.text.length ?? 0}`}
-            onClose={closeFind}
-          />
+          <FindBar scope={sectionRef} onClose={closeFind} />
         ) : bot ? (
           <button
             type="button"
