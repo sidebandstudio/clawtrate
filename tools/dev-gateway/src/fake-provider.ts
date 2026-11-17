@@ -7,6 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { MODEL_ID } from "./env.ts";
 import {
   messageText,
+  gatewayTurnPrompt,
   planReply,
   SILENT_REPLY,
   runtimeFacts,
@@ -199,7 +200,7 @@ function nonStreamingBody(model: string, id: string, steps: ReplyStep[]) {
 
 /** Where the scenario check reads the tools the gateway offered in a session. */
 export const OFFERED_TOOLS_PATH = "/scripted/offered-tools";
-/** How many turns the gateway started itself in a session, each answered quietly. */
+/** The turns the gateway started itself in a session and the scripted model answered quietly, by the prompt each was. */
 export const QUIET_TURNS_PATH = "/scripted/quiet-turns";
 
 export function startFakeProvider(options: FakeProviderOptions) {
@@ -209,7 +210,7 @@ export function startFakeProvider(options: FakeProviderOptions) {
   const offered = new Map<string, string[]>();
   // Gateway-started turns answered with the silent reply, which leave no trace
   // in the gateway's history, counted per session.
-  const quiet = new Map<string, number>();
+  const quiet = new Map<string, string[]>();
   const log = options.log ?? (() => {});
   const server = createServer((req, res) => {
     void (async () => {
@@ -232,7 +233,7 @@ export function startFakeProvider(options: FakeProviderOptions) {
       }
       if (req.method === "GET" && url.pathname === QUIET_TURNS_PATH) {
         const session = url.searchParams.get("session") ?? "";
-        sendJson(res, 200, { session, count: quiet.get(session) ?? 0 });
+        sendJson(res, 200, { session, prompts: quiet.get(session) ?? [] });
         return;
       }
       if (req.method === "POST" && url.pathname === WEB_SEARCH_PATH) {
@@ -270,7 +271,10 @@ export function startFakeProvider(options: FakeProviderOptions) {
           steps[0]!.kind === "text" &&
           steps[0]!.text === SILENT_REPLY
         ) {
-          quiet.set(session, (quiet.get(session) ?? 0) + 1);
+          quiet.set(session, [
+            ...(quiet.get(session) ?? []),
+            gatewayTurnPrompt(messages) ?? "other",
+          ]);
         }
         const model = body.model ?? FAKE_MODEL_ID;
         const id = completionId(messages);

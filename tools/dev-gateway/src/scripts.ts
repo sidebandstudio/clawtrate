@@ -96,21 +96,38 @@ const isReprompt = (message: ChatMessage) =>
 export const SILENT_REPLY = "NO_REPLY";
 
 /**
- * Prompts the gateway writes itself, not a person: the heartbeat prompt
- * (OpenClaw's HEARTBEAT_CONTEXT_PROMPT, which a wake also uses), the prompt
- * of a turn that is only runtime context (RUNTIME_EVENT_USER_PROMPT), and a
- * runtime context block that reaches the model as the prompt itself. A
- * person's text cannot start with the last: the gateway escapes that header
- * in user text.
+ * Prompts the gateway writes itself, not a person, for a turn it starts on
+ * its own: the heartbeat prompt (HEARTBEAT_CONTEXT_PROMPT, which a wake also
+ * uses), the prompt of a turn that is only runtime context
+ * (RUNTIME_EVENT_USER_PROMPT), a runtime context block that reaches the model
+ * as the prompt itself, the two prompts of a command that completed after its
+ * turn ended (buildExecEventPrompt), and the prompt of a scheduled event with
+ * no content (buildCronEventPrompt). Each says to reply NO_REPLY when there is
+ * nothing to report. A person's text cannot start with the runtime context
+ * header: the gateway escapes it in user text.
  */
 export const GATEWAY_TURN_PROMPTS = [
   "Follow the heartbeat monitor scratch context when provided.",
   "Continue the OpenClaw runtime event.",
   "OpenClaw runtime context:",
+  "An async command you ran earlier has completed.",
+  "An async command completion event was triggered",
+  "A scheduled cron event was triggered, but no event content was found.",
 ] as const;
+
+/** buildCronEventPrompt's reminder, which the gateway asks the bot to relay. */
+const REMINDER_PROMPT = "A scheduled reminder has been triggered. The reminder content is:\n\n";
+const REMINDER_RELAY = "Please relay this reminder to the user in a helpful and friendly way.";
 
 export const isGatewayTurn = (prompt: string) =>
   GATEWAY_TURN_PROMPTS.some((start) => prompt.startsWith(start));
+
+/** Which of GATEWAY_TURN_PROMPTS a request's prompt is, or null for any other prompt. */
+export function gatewayTurnPrompt(messages: ChatMessage[]): string | null {
+  const last = messages.findLast((m) => m.role === "user" && !isRuntimeContext(m));
+  const prompt = last ? normalizePrompt(messageText(last)) : "";
+  return GATEWAY_TURN_PROMPTS.find((start) => prompt.startsWith(start)) ?? null;
+}
 
 export function planReply(messages: ChatMessage[], tools: Set<string>): ReplyStep[] {
   let lastUserIndex = -1;
@@ -139,6 +156,26 @@ export function planReply(messages: ChatMessage[], tools: Set<string>): ReplySte
   const after = messages.slice(lastUserIndex + 1);
   // Each assistant message after the user's turn is one completed round.
   const roundIndex = after.filter((m) => m.role === "assistant").length;
+  // A reply another bot sent later, through sessions_send, in a runtime
+  // context block or as the prompt itself.
+  const forwarded = [
+    prompt,
+    ...messages.slice(lastUserIndex).filter(isRuntimeContext).map(messageText),
+  ]
+    .filter((text) => text.trimStart().startsWith("OpenClaw runtime context:"))
+    .find((text) => text.includes("[Inter-session message]") && text.includes("isUser=false"));
+
+  // A turn the gateway started itself (a heartbeat, a wake, a queued system
+  // event, a command that completed later) gets the gateway's own "nothing to
+  // say", whatever its event text holds, and never plays a scenario. Two
+  // continuations are meant to be seen and are answered: a reminder the
+  // gateway asks to relay, and another bot's reply arriving in the task.
+  if (prompt.startsWith(REMINDER_PROMPT)) {
+    const [content, instruction] = prompt.slice(REMINDER_PROMPT.length).split(/\n\n(?=[^\n]*$)/);
+    if (instruction === REMINDER_RELAY) return [{ kind: "text", text: `Reminder: ${content}` }];
+    return [{ kind: "text", text: SILENT_REPLY }];
+  }
+  if (isGatewayTurn(prompt) && !forwarded) return [{ kind: "text", text: SILENT_REPLY }];
 
   const scripted = scriptedTurns.get(prompt);
   if (scripted) {
@@ -168,20 +205,12 @@ export function planReply(messages: ChatMessage[], tools: Set<string>): ReplySte
     return resolveRound(round, ctx, `${facts.sessionKey ?? ""}:${lastUserIndex}:${roundIndex}`);
   }
 
-  // A reply another bot sent later, through sessions_send, gets a short acknowledgement.
-  const forwarded = after
-    .concat(messages.slice(lastUserIndex))
-    .map((m) => (isRuntimeContext(m) ? messageText(m) : ""))
-    .find((text) => text.includes("[Inter-session message]") && text.includes("isUser=false"));
+  // A reply another bot sent later gets a short acknowledgement.
   if (forwarded) {
     const from = /sourceSession=agent:([A-Za-z0-9_-]+):/.exec(forwarded)?.[1] ?? "another bot";
     const name = SEED_BOTS.find((bot) => bot.id === from)?.name ?? from;
     return [{ kind: "text", text: `${name}'s reply arrived. It is shown above.` }];
   }
-
-  // A turn the gateway started itself (a heartbeat, a wake, a queued system
-  // event) gets the gateway's own "nothing to say" answer, never the fallback.
-  if (isGatewayTurn(prompt)) return [{ kind: "text", text: SILENT_REPLY }];
 
   // Unscripted prompts get a short, stable answer so manual testing still works.
   return [
