@@ -160,6 +160,17 @@ export type ApprovalCard = {
   /** A resolution from this client is on its way, or the last one failed. */
   submitting: boolean;
   error: string | null;
+  /**
+   * What the last failed resolution from this client establishes. `refused`:
+   * the gateway answered with an error, so it did not apply that decision;
+   * it does not say the request is still open. `unknown`: no answer came
+   * after the decision was sent, so it may or may not have been applied, and
+   * no allow is accepted until the request's state has been read back
+   * (`checkApproval`). Null when nothing failed, or nothing was sent.
+   */
+  decisionError: "refused" | "unknown" | null;
+  /** A read-back after a refused decision found the request still pending. */
+  stillOpen: boolean;
   /** The record as received. */
   raw: unknown;
 };
@@ -258,6 +269,8 @@ function blank(id: string, kind: ApprovalKind, raw: unknown): ApprovalCard {
     decisionCut: false,
     submitting: false,
     error: null,
+    decisionError: null,
+    stillOpen: false,
     raw,
   };
 }
@@ -591,6 +604,8 @@ export function applyApprovalRequested(activity: TaskActivity, card: ApprovalCar
             : (existing.exec ?? card.exec),
         submitting: existing.submitting,
         error: existing.error,
+        decisionError: existing.decisionError,
+        stillOpen: existing.stillOpen,
         raw: existing.kind === card.kind && existing.raw ? existing.raw : card.raw,
         // Fields the earlier card set are kept, so its cut text may be what shows: the flag stays.
         decisionCut: existing.decisionCut || card.decisionCut,
@@ -678,6 +693,8 @@ export function applyApprovalResolved(
       outcomeUnknown: resolution.lossy,
       submitting: false,
       error: null,
+      decisionError: null,
+      stillOpen: false,
     };
   } else if (
     cardRank(existing) === 2 &&
@@ -701,7 +718,8 @@ export function applyApprovalResolved(
 export function markApproval(
   activity: TaskActivity,
   id: string,
-  patch: Pick<ApprovalCard, "submitting" | "error">,
+  patch: Pick<ApprovalCard, "submitting" | "error"> &
+    Partial<Pick<ApprovalCard, "decisionError" | "stillOpen">>,
 ): TaskActivity {
   return {
     ...activity,

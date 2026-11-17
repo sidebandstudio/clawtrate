@@ -339,6 +339,8 @@ export const APPROVAL: Bound = flagged<ApprovalCard>()({
   decisionCut: FLAG,
   submitting: FLAG,
   error: text(MAX_ERROR_JSON_CHARS),
+  decisionError: ENUM,
+  stillOpen: FLAG,
   raw: json(MAX_RECORD_CHARS),
 });
 const toolResult = object<ToolResult>()({ isError: FLAG, text: text(MAX_ITEM_TOOL_CHARS) });

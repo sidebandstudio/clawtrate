@@ -30,6 +30,7 @@ The desktop renderer gets one over IPC (`apps/desktop/src/renderer/bridge-deskto
 | Answer or dismiss a question         | `answerQuestion` with `answers` / `dismissQuestion`                    | none                                    |
 | Resolve an approval                  | `resolveApproval` with `decision`, `expiresInDays`, `shownDigest`      | none                                    |
 | Read an approval's whole text        | `readApprovalText` with `key`, `approvalId`                            | `{ text, digest }`                      |
+| Read back a decision that failed     | `checkApproval` with `key`, `approvalId`                               | none; the card's state changes          |
 | Read a step's whole raw call/result  | `readStepRaw` with `key`, `stepId`                                     | `StepRead`, or null for an unknown step |
 | Read a history item whole            | `readHistoryItem` with `key`, `itemId`                                 | `TranscriptItem`, or null               |
 | Request more access                  | `requestAccess`                                                        | none; progress in `connection.upgrade`  |
@@ -39,7 +40,7 @@ There is no separate steer command. `mode: "auto"` starts a new run when the tas
 
 A question answer maps each question id to its answers. Each answer is either text as typed or `{ option: index }`, where `index` is the option's `QuestionOption.index`. At most 3 questions and 8 answers each are accepted.
 
-An approval offers only the decisions in its `allowedDecisions`; deny is always among them. `expiresInDays` (1 to 3650) goes only with `allow-always`. When `decisionCut` is set, only deny is accepted until this viewer has called `readApprovalText` and passes the returned `digest` as `shownDigest`. Echoing the card's own `decisionDigest` does not count.
+An approval offers only the decisions in its `allowedDecisions`; deny is always among them. `expiresInDays` (1 to 3650) goes only with `allow-always`. When `decisionCut` is set, only deny is accepted until this viewer has called `readApprovalText` and passes the returned `digest` as `shownDigest`. Echoing the card's own `decisionDigest` does not count. A decision that failed sets `decisionError`: `refused` when the gateway answered with an error, `unknown` when no answer came after it was sent. While it is `unknown`, only deny is accepted until `checkApproval` (run once by itself, and again after a reconnect) reads the request back: still pending clears it, settled shows how it ended. `stillOpen` says a read-back found a refused request still pending.
 
 A step's text on the snapshot (`argsText`, `output`, `result`) is a `StepText`: up to 2,000 characters of `text` plus the whole length in `totalChars`. The exact gateway payload is `Step.raw`, a `StepRaw`, carried inline only when its JSON form is at most 2,048 characters; otherwise it is null, and `readStepRaw` reads it. `readStepRaw` answers `{ status: "available", raw }`, or `{ status: "not-available-yet", reason }` when the payload was too long to keep and history does not hold the step yet. Show the `reason`. A `TranscriptItem` whose `cut` names fields is read whole with `readHistoryItem`. None of these whole reads is kept in state.
 
