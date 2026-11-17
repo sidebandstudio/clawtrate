@@ -184,7 +184,7 @@ const SCENES: Scene[] = [
   },
   {
     name: "signin-checking",
-    query: ADMIN,
+    query: `${ADMIN}&signin=checking`,
     ready: signIn(/^ChatGPT in the browser/, async (page) => {
       await page.getByTestId("paste").fill("made-up-code");
       await page.getByRole("button", { name: "Continue" }).click();

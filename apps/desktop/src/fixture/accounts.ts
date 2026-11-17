@@ -9,7 +9,8 @@
 //   lock=locked|bound|stale|gone|failed|multi|old|gateway|retained|none|watching|differs|lost|unwritten
 //                             the open bot's binding and evidence
 //   signin=<stage>            where a sign-in that starts goes: waiting (default),
-//                             failed, expired, cancelled, ended, busy, unconfirmed, saving
+//                             failed, expired, cancelled, ended, busy, unconfirmed, saving,
+//                             checking (an answer stays checking)
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
 //   create=failed|slow|checking   how New bot's Create goes
@@ -753,7 +754,8 @@ export function accountCommand(
         return Promise.resolve();
       }
       signIn({ stage: "checking" });
-      later(400, () => connected());
+      // signin=checking: the gateway is still finishing, for a picture of that stage.
+      if (params.signin !== "checking") later(400, () => connected());
       return Promise.resolve();
     }
     case "cancelSignIn":
