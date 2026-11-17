@@ -491,7 +491,7 @@
     const words = lost ? `Last checked ${st.checked}` : st.checking ? "Checking…" : `Checked ${st.checked}`;
     return (
       `<div class="files-fresh"><span>${words}` +
-      (st.commands && !lost ? `<span class="files-fresh-note">Otto ran commands since then. Files they changed show after a refresh.</span>` : "") +
+      (st.commands && !lost ? `<span class="files-fresh-note">Otto ran commands since then. A refresh shows what they changed in the files listed here; a file only a command created isn't listed here, but is in Otto's workspace.</span>` : "") +
       `</span>` +
       (lost
         ? ""
