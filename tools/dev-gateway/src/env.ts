@@ -227,13 +227,14 @@ export class OpenclawRunner {
     return { cwd: this.stateDir, env: openclawEnv(process.env, instance) };
   }
 
-  /** Run an OpenClaw CLI command and wait for it. */
-  runSync(args: string[]): RunResult {
+  /** Run an OpenClaw CLI command and wait for it. `input` is written to its stdin. */
+  runSync(args: string[], options: { input?: string } = {}): RunResult {
     this.assertAllowed();
     const result = this.spawnSyncImpl(this.bin, guardArgs(args, this.instance), {
       ...this.baseOptions(),
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
+      ...(options.input === undefined ? {} : { input: options.input }),
     });
     if (result.error) throw result.error;
     return { status: result.status, stdout: String(result.stdout), stderr: String(result.stderr) };
