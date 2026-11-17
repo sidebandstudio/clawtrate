@@ -1,0 +1,1310 @@
+/* The cards in the transcript: approvals, questions, and the Messaged cards
+   for bots and for T3 Code (conversation.md sections 9 to 13). Taken from the
+   design's prototype (docs/design/prototype/css/conversation.css), on the
+   tokens in styles/tokens.css. Rules are scoped to the cards, so the rest of
+   the conversation keeps its own. State lives in attributes: data-state on a
+   card, the open attribute on anything that expands. */
+
+/* Shared parts ------------------------------------------------------------- */
+
+.card {
+  width: 100%;
+  max-width: 640px;
+  margin-top: 8px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  --presence-surface: var(--bg-bubble);
+}
+
+.card + .msg,
+.msg + .card {
+  margin-top: 8px;
+}
+
+.card .mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.card details > summary,
+.card.messaged > summary,
+.card.request[data-resolved] > summary,
+.event-details > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.card details > summary::-webkit-details-marker,
+.card > summary::-webkit-details-marker,
+.event-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.card .chevron,
+.event-details .chevron {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--text-faint);
+  transition: transform var(--dur-quick) var(--ease-out);
+}
+
+.card[open] > summary > .chevron,
+.card details[open] > summary > .chevron,
+.event-details[open] > summary > .chevron {
+  transform: rotate(90deg);
+}
+
+/* Controls on a card take the selection fill so they show on it. */
+.card .button:not([data-variant]) {
+  background: var(--bg-selected);
+}
+
+.card .button:not([data-variant]):hover {
+  background: color-mix(in srgb, var(--bg-selected) 80%, var(--text));
+}
+
+/* A disabled button on a card keeps a fill that shows on it, and readable text. */
+.card .button:disabled {
+  background: var(--bg-selected);
+  color: var(--text-muted);
+  opacity: 1;
+  cursor: default;
+}
+
+.card .link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.card .link-button:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.card .link-button:disabled {
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: default;
+}
+
+.card .link-button[data-tone="muted"] {
+  font-weight: var(--weight-regular);
+  color: var(--text-muted);
+}
+
+.card .link-button .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.card .tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-selected);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.card .tag[data-tone="warn"] {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.card .tag[data-tone="accent"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.card .copy {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.card .copy:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.card .copy .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.card .copy[data-copied="true"] {
+  color: var(--accent);
+}
+
+.card .copy[data-copied="failed"] {
+  color: var(--danger);
+}
+
+/* State marks the cards add to the shell's set. */
+:is(.card, .event-details) .glyph[data-state="sending"]::before {
+  inset: 0;
+  padding: 1.5px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from var(--orbit),
+    color-mix(in srgb, var(--ring) 20%, transparent) 0 45%,
+    var(--ring) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  animation: orbit var(--loop-work) linear infinite;
+}
+
+:is(.card, .event-details) .glyph[data-state="sending"] {
+  --ring: var(--text-muted);
+}
+
+:is(.card, .event-details) .glyph[data-state="waiting"] {
+  --ring: var(--warn);
+  background: var(--ring);
+}
+
+:is(.card, .event-details) .glyph[data-state="waiting"]::before {
+  inset: 0;
+  border-radius: 50%;
+  animation: card-ping var(--loop-nudge) var(--ease-out) infinite;
+}
+
+:is(.card, .event-details) .glyph[data-state="stopped"] {
+  --ring: var(--text-faint);
+  background: var(--ring);
+}
+
+:is(.card, .event-details) .glyph[data-state="stopped"]::after {
+  inset: 3.75px;
+  border-radius: 1px;
+  background: var(--glyph-ink);
+}
+
+:is(.card, .event-details) .glyph[data-state="queued"]::after {
+  inset: 1.5px;
+  border: 1.5px solid var(--text-faint);
+  border-radius: 50%;
+}
+
+@keyframes card-ping {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ring) 55%, transparent);
+  }
+  45%,
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@keyframes card-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Label and value rows. */
+.card .fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0 0 12px;
+  font-size: var(--text-sm);
+}
+
+.card .fields:last-child {
+  margin-bottom: 0;
+}
+
+.card .fields-row {
+  display: contents;
+}
+
+.card .fields dt {
+  color: var(--text-muted);
+}
+
+.card .fields dd {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 24px;
+  margin: 0;
+}
+
+.card .fields dd > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.card .code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  margin-bottom: 2px;
+}
+
+.card .code-label {
+  margin: 0 0 4px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.card .code-head .code-label {
+  margin: 0;
+}
+
+.card .code-block {
+  position: relative;
+  margin: 0 0 12px;
+  background: var(--bg-pane);
+}
+
+.card .code-block[data-tone="danger"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* Long output shows eight whole lines until asked for the rest. */
+.card .code-block[data-clipped="true"] {
+  max-height: calc(8 * 1.55em + 10px);
+  padding-bottom: 0;
+  overflow: hidden;
+}
+
+.card .code-block[data-all="true"] {
+  max-height: 280px;
+  overflow: auto;
+}
+
+.card .code-truncated {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -6px 0 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--warn-soft);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.card .code-truncated .icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--warn);
+}
+
+.card .code-more {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: -6px 0 12px;
+}
+
+.card .tool-name {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.card .card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 16px;
+  min-height: 26px;
+}
+
+.card .card-actions .spacer {
+  flex: 1;
+}
+
+/* Raw: what the gateway sent. On a card it opens under the actions. */
+.card .raw-panel {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-pane);
+  animation: card-fade-in var(--dur-quick) linear both;
+}
+
+.card .raw-panel .code-block:not([data-tone]) {
+  background: var(--bg-bubble);
+}
+
+.card .raw-state,
+.card .raw-note {
+  margin: 0 0 10px;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.card .raw-state:last-child {
+  margin-bottom: 0;
+}
+
+.card .raw-state[data-tone="danger"] {
+  color: var(--text);
+}
+
+.card .raw-running {
+  margin-bottom: 12px;
+}
+
+/* Messaged cards ------------------------------------------------------------ */
+
+.messaged > summary {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto 12px;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px 0 14px;
+  border-radius: var(--radius-lg);
+  font-size: var(--text-md);
+}
+
+.messaged > summary:hover {
+  background: var(--bg-hover);
+}
+
+.messaged-verb {
+  color: var(--text-muted);
+}
+
+.messaged-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: var(--weight-medium);
+}
+
+.messaged-who .avatar,
+.exchange-item > .avatar,
+.exchange-presence .avatar,
+.event-details .event-line .avatar {
+  width: 20px;
+  height: 20px;
+}
+
+/* The mark for T3 Code: code brackets in a rounded tile. */
+.card .agent-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+}
+
+.card .agent-mark .icon {
+  width: 13px;
+  height: 13px;
+  stroke-width: 1.8;
+}
+
+.messaged-first {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.messaged[open] .messaged-first {
+  visibility: hidden;
+}
+
+.card .state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.card .state[data-tone="accent"] {
+  color: var(--accent);
+}
+
+.card .state[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.card .state[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.messaged-body {
+  padding: 4px 14px 12px;
+  animation: card-fade-in var(--dur-quick) linear both;
+}
+
+.card .exchange {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card .exchange-item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  padding-bottom: 12px;
+}
+
+.card .exchange-presence {
+  position: relative;
+  width: 20px;
+  height: 20px;
+}
+
+.card .exchange-presence .glyph {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  box-shadow: 0 0 0 2px var(--bg-bubble);
+  border-radius: 50%;
+  background: var(--bg-bubble);
+}
+
+.card .exchange-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 20px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.card .exchange-meta b {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.card .exchange-live {
+  font-size: var(--text-md);
+}
+
+.card .exchange-text {
+  margin-top: 4px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-pane);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.card .exchange-note {
+  margin: 4px 0 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.card .exchange-note + .code-head {
+  margin-top: 8px;
+}
+
+.card .exchange-continue {
+  margin: 6px 0 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: 1.5;
+}
+
+.card .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.card .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-selected);
+  font-size: var(--text-sm);
+}
+
+.card .chip .icon {
+  width: 13px;
+  height: 13px;
+  color: var(--text-muted);
+}
+
+.card .chip span {
+  color: var(--text-muted);
+}
+
+.messaged-body > .chips {
+  margin: 0 0 12px 30px;
+}
+
+/* A message no card accounts for: a line that opens. */
+.event-details > summary.event-line {
+  width: fit-content;
+}
+
+.event-details .event-line b {
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+
+.event-details .event-body {
+  max-width: 640px;
+  margin-top: 2px;
+  padding: 12px 14px;
+}
+
+.event-details .event-body .card-actions {
+  margin-top: 10px;
+}
+
+/* Request cards: approvals and questions ---------------------------------- */
+
+.card.request {
+  padding: 16px;
+}
+
+.card.request[data-state="pending"] {
+  box-shadow: inset 0 0 0 1.5px var(--warn-line);
+}
+
+.card.request[data-kind="question"][data-state="pending"],
+.card.request[data-kind="question"][data-state="unanswerable"] {
+  box-shadow: none;
+}
+
+.request-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.card .request-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-strong);
+  line-height: 1.3;
+}
+
+.card .request-summary {
+  margin: 4px 0 0;
+  font-size: var(--text-base);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.card .request-summary b {
+  font-weight: var(--weight-strong);
+}
+
+.card .request-code {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+}
+
+.card .request-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card .request-warnings li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  color: var(--warn);
+}
+
+.card .request-warnings .icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.card .request-full {
+  margin-top: 8px;
+}
+
+.card .request-full > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+
+.card .request-full > summary:hover {
+  color: var(--text);
+}
+
+.card .request-full .when-open,
+.card .request-full[open] .when-closed {
+  display: none;
+}
+
+.card .request-full[open] .when-open {
+  display: inline;
+}
+
+.card .request-inset {
+  margin-top: 6px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-pane);
+  animation: card-fade-in var(--dur-quick) linear both;
+}
+
+.card .command-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0 0 10px;
+  padding: 8px 6px 8px 12px;
+  border-radius: 8px;
+  background: var(--bg-bubble);
+}
+
+.card .command-line code {
+  flex: 1;
+  min-width: 0;
+  max-height: 280px;
+  overflow: auto;
+  padding-top: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.card .request-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 14px;
+}
+
+.card .request-actions .spacer {
+  flex: 1;
+}
+
+.card .request-actions .button {
+  height: 36px;
+  padding: 0 16px;
+}
+
+.card .request-foot {
+  margin: 10px 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.card .request-asker {
+  margin: 4px 0 0;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+
+.card .request-ended {
+  margin: 10px 0 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: 1.5;
+}
+
+.card .request-cause {
+  margin: 0 0 10px;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.card.request > .card-actions,
+.card .request-resolved-body > .card-actions {
+  margin-top: 10px;
+}
+
+/* The standing-allow form. */
+.card .standing {
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-pane);
+}
+
+.card .standing-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: 10px 16px;
+  margin: 0;
+  font-size: var(--text-md);
+}
+
+.card .standing-row {
+  display: contents;
+}
+
+.card .standing-grid dt {
+  padding-top: 2px;
+  color: var(--text-muted);
+}
+
+.card .standing-grid dd {
+  min-width: 0;
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.card .standing-grid .tool-name {
+  display: block;
+  padding: 6px 9px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.card .standing-outcome {
+  margin: 14px 0 0;
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+.card .request-actions + .standing-outcome,
+.card .standing-outcome + .request-actions {
+  margin-top: 12px;
+}
+
+.card .days {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+
+.card .days input {
+  width: 72px;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.card .days input::placeholder {
+  color: var(--text-muted);
+}
+
+.card .days input:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
+.card .days-error {
+  margin: 4px 0 0;
+  font-size: var(--text-sm);
+  color: var(--danger);
+}
+
+.card .standing-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--warn-soft);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.card .standing-note .icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: var(--warn);
+}
+
+.card .standing-note b,
+.card .standing-error b {
+  font-weight: var(--weight-medium);
+}
+
+.card .standing-note .link-button {
+  display: inline;
+  min-height: 0;
+}
+
+.card .standing-error {
+  margin: 14px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+/* A resolved request folds to one line, like a Messaged card. */
+.card.request[data-resolved] {
+  padding: 0;
+}
+
+.card.request[data-resolved] > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto 12px;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 12px 0 8px;
+  border-radius: var(--radius-lg);
+  font-size: var(--text-md);
+}
+
+.card.request[data-resolved] > summary:hover {
+  background: var(--bg-hover);
+}
+
+.card .request-line {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.card .request-when {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.card .request-resolved-body {
+  padding: 4px 14px 14px;
+  animation: card-fade-in var(--dur-quick) linear both;
+}
+
+.card .request-resolved-body > p {
+  margin: 0 0 8px;
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+.card .request-resolved-body .request-full {
+  margin: 0 0 10px;
+}
+
+/* Questions --------------------------------------------------------------- */
+
+.card .request-hint {
+  margin: 2px 0 0;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+
+.card .question {
+  margin-top: 4px;
+}
+
+.card .question + .question {
+  margin-top: 16px;
+}
+
+.card .question-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 12px 0 2px;
+  font-size: var(--text-base);
+  font-weight: var(--weight-strong);
+  line-height: 1.35;
+}
+
+.card .question-title span {
+  flex: none;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  color: var(--text-muted);
+}
+
+.card .options {
+  margin: 12px 0 0;
+  padding: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-pane);
+  list-style: none;
+  overflow: hidden;
+}
+
+.card .option {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 14px 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  text-align: left;
+  cursor: pointer;
+}
+
+.card li + li > .option {
+  border-top: 1px solid var(--border);
+}
+
+.card .option:hover {
+  background: var(--bg-hover);
+}
+
+.card .option:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: -2px;
+}
+
+.card .option-key {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  background: var(--bg-bubble);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+
+.card .option[aria-checked="true"] .option-key {
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+}
+
+.card .option-sub {
+  display: block;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+
+.card .option .glyph {
+  visibility: hidden;
+}
+
+.card .option[aria-checked="true"] .glyph {
+  visibility: visible;
+}
+
+.card .own-answer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 0 5px 0 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-pane);
+}
+
+.card .own-answer:focus-within {
+  box-shadow: 0 0 0 2px var(--accent-line);
+}
+
+.card .own-answer input {
+  flex: 1;
+  min-width: 0;
+  height: 42px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+}
+
+.card .own-answer input::placeholder {
+  color: var(--text-muted);
+}
+
+.card .own-answer .icon-button {
+  background: var(--bg-inverse);
+  box-shadow: none;
+  color: var(--text-inverse);
+}
+
+.card .own-answer .icon-button:disabled {
+  background: var(--bg-bubble);
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+.card .question-count {
+  margin: 0 0 0 4px;
+}
+
+/* Settled: the titles stay, the options shrink to what was answered. */
+.card.request[data-kind="question"]:not([data-state="pending"], [data-state="unanswerable"]) {
+  padding: 12px 14px 14px;
+}
+
+.card.request[data-kind="question"]:not([data-state="pending"], [data-state="unanswerable"])
+  .request-title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-regular);
+  color: var(--text-muted);
+}
+
+.card .question-settled + .question-settled {
+  margin-top: 12px;
+}
+
+.card .answer {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  margin-top: 6px;
+  padding: 0 14px 0 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-pane);
+  font-size: var(--text-md);
+  color: var(--text-muted);
+  --presence-surface: var(--bg-pane);
+}
+
+.card .answer + .answer {
+  margin-top: 4px;
+}
+
+.card .answer .glyph {
+  color: var(--accent);
+}
+
+.card.request[data-kind="question"] > .card-actions {
+  margin-top: 12px;
+}
+
+/* Narrow column --------------------------------------------------------------- */
+
+/* The column the cards sit in is the container their narrow form answers to. */
+.transcript-inner {
+  container: cards / inline-size;
+}
+
+@container cards (max-width: 560px) {
+  .card .request-actions .button {
+    flex: 1 1 auto;
+  }
+
+  .card .request-actions .spacer {
+    display: none;
+  }
+
+  /* A Messaged card keeps its words: "Messaged", who and the state on the
+     first line; the message's first line on the second. */
+  .messaged > summary {
+    grid-template-columns: auto minmax(0, 1fr) auto 12px;
+    gap: 0 8px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .messaged-verb,
+  .messaged-who,
+  .messaged > summary > .state,
+  .messaged > summary > .chevron {
+    grid-row: 1;
+  }
+
+  .messaged-first {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin-top: 2px;
+  }
+
+  .messaged[open] .messaged-first {
+    display: none;
+  }
+
+  .card .standing-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .card .standing-grid dt:not(:first-child) {
+    margin-top: 8px;
+  }
+}
+
+/* Touch ---------------------------------------------------------------------- */
+
+[data-input="touch"] .messaged > summary,
+[data-input="touch"] .card.request[data-resolved] > summary,
+[data-input="touch"] .card .request-full > summary {
+  min-height: var(--tap-min);
+}
+
+[data-input="touch"] .messaged > summary,
+[data-input="touch"] .card.request[data-resolved] > summary {
+  font-size: var(--text-base);
+}
+
+[data-input="touch"] .card .option {
+  min-height: 52px;
+}
+
+[data-input="touch"] .card .own-answer {
+  min-height: 48px;
+}
+
+/* On a phone the buttons stack at full width, 48 px, Deny last. */
+[data-input="touch"] .card .request-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+[data-input="touch"] .card .request-actions .spacer {
+  display: none;
+}
+
+[data-input="touch"] .card .request-actions .button {
+  height: 48px;
+  font-size: var(--text-base);
+}
+
+[data-input="touch"] .card .request-actions .question-count {
+  margin: 0;
+  text-align: center;
+}
+
+[data-input="touch"] .card .copy {
+  width: 32px;
+  height: 32px;
+}
+
+[data-input="touch"] .card .link-button {
+  min-height: 28px;
+}
+
+/* The hit area is at least 44 px, extended invisibly where the drawing is smaller. */
+[data-input="touch"] .card .copy,
+[data-input="touch"] .card .link-button {
+  position: relative;
+  z-index: 1;
+}
+
+[data-input="touch"] .card .copy::after,
+[data-input="touch"] .card .link-button::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 44px);
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+
+/* Still forms ----------------------------------------------------------------- */
+
+/* Reduced motion: the arc holds one position, the ping becomes a fixed halo. */
+[data-motion="reduce"] :is(.card, .event-details) .glyph[data-state="sending"]::before,
+[data-motion="reduce"] :is(.card, .event-details) .glyph[data-state="working"]::before,
+[data-connection="lost"] :is(.card, .event-details) .glyph[data-state="sending"]::before,
+[data-connection="lost"] :is(.card, .event-details) .glyph[data-state="working"]::before,
+.card[data-connection="lost"] .glyph[data-state="sending"]::before,
+.card[data-connection="lost"] .glyph[data-state="working"]::before {
+  --orbit: 300deg;
+  animation: none !important;
+}
+
+[data-motion="reduce"] :is(.card, .event-details) .glyph[data-state="waiting"]::before,
+[data-connection="lost"] :is(.card, .event-details) .glyph[data-state="waiting"]::before,
+.card[data-connection="lost"] .glyph[data-state="waiting"]::before {
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--ring) 30%, transparent);
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.card, .event-details) .glyph[data-state="sending"]::before,
+  :is(.card, .event-details) .glyph[data-state="working"]::before {
+    --orbit: 300deg;
+  }
+
+  :is(.card, .event-details) .glyph[data-state="waiting"]::before {
+    box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--ring) 30%, transparent);
+  }
+}

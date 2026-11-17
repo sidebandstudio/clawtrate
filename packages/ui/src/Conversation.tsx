@@ -15,6 +15,7 @@ import {
   type RefObject,
 } from "react";
 import { Avatar } from "./Avatar.tsx";
+import { CardScope, CardSlot, TrailingCards } from "./cards/index.ts";
 import { daysAgo, fullDate, stampTime, summarizeArguments } from "./format.ts";
 import { ArrowDownIcon, BackIcon, ChevronIcon, EyeIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -317,13 +318,15 @@ function TranscriptView({
     }
     if (at !== null) previous = at;
     rows.push(
-      item.role === "system" ? (
-        <p className="event-line" data-side="center" key={item.id}>
-          {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
-        </p>
-      ) : (
-        <Turn key={item.id} item={item} />
-      ),
+      <CardSlot key={item.id} item={item}>
+        {item.role === "system" ? (
+          <p className="event-line" data-side="center">
+            {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
+          </p>
+        ) : (
+          <Turn item={item} />
+        )}
+      </CardSlot>,
     );
   }
 
@@ -339,11 +342,14 @@ function TranscriptView({
         data-testid="transcript"
       >
         <div className="transcript-inner">
-          <h1 className="task-line" tabIndex={-1}>
-            {task.title}
-          </h1>
-          {note}
-          {rows}
+          <CardScope taskKey={task.key} transcript={transcript}>
+            <h1 className="task-line" tabIndex={-1}>
+              {task.title}
+            </h1>
+            {note}
+            {rows}
+            <TrailingCards />
+          </CardScope>
           {transcript.live && (
             <div className="turn" data-role="assistant" data-testid="live-turn">
               <div className="msg" data-role="assistant">

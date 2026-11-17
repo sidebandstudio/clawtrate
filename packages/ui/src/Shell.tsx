@@ -1,5 +1,6 @@
 import type { ClawtrateState } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
+import { OpenTaskContext } from "./cards/index.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
@@ -189,33 +190,35 @@ export function Shell({
         inert={drawerOpen}
       />
       <div className="main-pane" ref={mainRef}>
-        <Conversation
-          task={task}
-          bot={bot}
-          taskCount={selection.tasks.length}
-          discovery={state.discovery}
-          transcript={transcript}
-          panelOpen={panelOpen}
-          onTogglePanel={togglePanel}
-          onOpenPanel={() => setPanel(true)}
-          onBack={backToList}
-          onReload={reload}
-          strip={
-            strip && (
-              <StatusStrip
-                strip={strip}
-                retryAt={state.connection.retryAt}
-                onRetry={() => void send({ type: "retry" })}
-                onReload={reload}
-              />
-            )
-          }
-          refreshNote={phase !== "dropped" && refreshFailed(transcript)}
-          readOnly={!canWrite(state.connection)}
-          online={state.connection.status === "connected"}
-          toggleRef={toggleRef}
-          inert={drawerOpen}
-        />
+        <OpenTaskContext.Provider value={selection.selectTask}>
+          <Conversation
+            task={task}
+            bot={bot}
+            taskCount={selection.tasks.length}
+            discovery={state.discovery}
+            transcript={transcript}
+            panelOpen={panelOpen}
+            onTogglePanel={togglePanel}
+            onOpenPanel={() => setPanel(true)}
+            onBack={backToList}
+            onReload={reload}
+            strip={
+              strip && (
+                <StatusStrip
+                  strip={strip}
+                  retryAt={state.connection.retryAt}
+                  onRetry={() => void send({ type: "retry" })}
+                  onReload={reload}
+                />
+              )
+            }
+            refreshNote={phase !== "dropped" && refreshFailed(transcript)}
+            readOnly={!canWrite(state.connection)}
+            online={state.connection.status === "connected"}
+            toggleRef={toggleRef}
+            inert={drawerOpen}
+          />
+        </OpenTaskContext.Provider>
         <button
           type="button"
           className="drawer-scrim"
