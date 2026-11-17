@@ -2115,6 +2115,14 @@ textarea {
   }
 }
 
+/* The narrowest phones: the strip's explanation shortens to nothing; it stays
+   in the strip's tooltip. */
+@container app (max-width: 359px) {
+  .status-strip-text > span {
+    display: none;
+  }
+}
+
 /* Touch: the same layout with larger targets. Set on the root by the app. */
 [data-input="touch"] {
   --avatar-row: 44px;
