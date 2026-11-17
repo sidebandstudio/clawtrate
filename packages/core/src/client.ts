@@ -1290,10 +1290,10 @@ export class ClawtrateClient {
     }));
   }
 
-  /** "Cancel" on a queued message's chip: it never runs. */
+  /** "Cancel" on a queued or held message's row: it is never sent. */
   cancelQueued(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);
-    if (!message || message.status !== "queued") return;
+    if (!message || (message.status !== "queued" && message.status !== "held")) return;
     // A cancelled message is never sent: its files are not kept.
     this.dropAttachments(messageId);
     this.updateActivity(key, (activity) =>

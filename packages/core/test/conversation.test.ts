@@ -375,6 +375,24 @@ describe("steering and questions (F-096, F-292, F-468)", () => {
     client.stop();
   });
 
+  it("cancels a held message, which is then never sent (F-281)", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    startRun(gateway);
+    gateway.emit("question.requested", question("ask_9", "run-x"));
+    await until(() => transcript().runs[0]?.state === "waiting");
+
+    const id = client.sendMessage(KEY, "Hold this one");
+    expect(transcript().outbox[0]).toMatchObject({ id, status: "held" });
+    client.cancelQueued(KEY, id);
+    expect(transcript().outbox[0]).toMatchObject({ id, status: "cancelled" });
+
+    await client.dismissQuestion(KEY, "ask_9");
+    await sleep(30);
+    expect(gateway.calls("chat.send")).toEqual([]);
+    client.stop();
+  });
+
   it("answers a question card with question.resolve", async () => {
     const { client, gateway, transcript } = await openTask();
     gateway.handlers["question.resolve"] = (params) => ({
