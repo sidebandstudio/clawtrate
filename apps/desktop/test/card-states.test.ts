@@ -26,6 +26,9 @@ import {
   expiryLine,
   mayDispatch,
   mcpKey,
+  MESSAGED_STATES,
+  sentVerb,
+  type MessagedKey,
   mcpNote,
   questionNote,
   resolvedView,
@@ -644,5 +647,33 @@ describe("the approval says what the request carries, as it carries it", () => {
     expect(mayDispatch({ type: "resolveApproval" }, { canApprove: true, canAnswer: false })).toBe(
       true,
     );
+  });
+});
+
+describe("the Messaged cards claim only what an event established", () => {
+  it("F-122 F-134: the outgoing row says sent only once the call returned and its result says the message went", () => {
+    const delivered = [
+      "sent",
+      "working",
+      "recipient-waiting",
+      "no-reply",
+      "replied",
+      "recipient-stopped",
+      "recipient-failed",
+      "call-made",
+    ];
+    const notDelivered = [
+      "call-started",
+      "approval",
+      "failed",
+      "blocked",
+      "not-sent",
+      "unknown",
+      "delivery-unknown",
+    ];
+    for (const key of delivered) expect(sentVerb(key as MessagedKey), key).toBe("sent");
+    for (const key of notDelivered) expect(sentVerb(key as MessagedKey), key).toBe("asked to send");
+    // Every state is one or the other.
+    expect([...delivered, ...notDelivered].sort()).toEqual(Object.keys(MESSAGED_STATES).sort());
   });
 });

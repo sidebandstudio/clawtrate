@@ -25,6 +25,7 @@ import {
   nameOf,
   recipientName,
   sentText,
+  sentVerb,
   targetChips,
   type MessagedKey,
 } from "./model.ts";
@@ -127,11 +128,14 @@ function callRaw(
 
 function SentItem({
   sender,
+  verb,
   at,
   text,
   chips,
 }: {
   sender: Bot;
+  /** "sent" only where an event established the message went; otherwise what the bot did. */
+  verb: string;
   at: number | null;
   text: string | null;
   chips?: ReactNode;
@@ -142,7 +146,7 @@ function SentItem({
       <div>
         <div className="exchange-meta">
           <b>{sender.name}</b>
-          <span>sent</span>
+          <span>{verb}</span>
           {at !== null && <time>{clock(at)}</time>}
         </div>
         {text !== null ? (
@@ -303,7 +307,7 @@ export function BotMessageCardView({
           </ol>
         ) : (
           <ol className="exchange">
-            <SentItem sender={sender} at={card.requestedAt} text={card.text} />
+            <SentItem sender={sender} verb={sentVerb(key)} at={card.requestedAt} text={card.text} />
             {cameBack}
           </ol>
         )}
@@ -458,6 +462,7 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
         <ol className="exchange">
           <SentItem
             sender={sender}
+            verb={sentVerb(key)}
             at={card.requestedAt}
             text={text}
             chips={
@@ -575,7 +580,7 @@ export function ReceivedCardView({
       </summary>
       <div className="messaged-body">
         <ol className="exchange">
-          <SentItem sender={sender} at={message.timestamp} text={message.text} />
+          <SentItem sender={sender} verb="sent" at={message.timestamp} text={message.text} />
           {state !== "working" && (
             <NoteItem lead={env.bot ? <Avatar bot={env.bot} /> : <span />} who={me}>
               <p className="exchange-note">
@@ -584,7 +589,7 @@ export function ReceivedCardView({
                     ? `${me} needs your approval below.`
                     : `${me} asked you a question below.`
                   : state === "completed"
-                    ? `This run finished without a reply to ${senderName}.`
+                    ? "This run has finished."
                     : state === "failed"
                       ? `This run failed${run?.error?.message ? `: ${run.error.message}` : "."}`
                       : state === "stopped"

@@ -501,6 +501,28 @@ export const MESSAGED_STATES: Record<
   "delivery-unknown": ["queued", "Delivery unknown", null],
 };
 
+/**
+ * States in which an event established that the message went: the call
+ * returned and its result says the recipient took it, or that it went before
+ * an error. Only these call the outgoing row "sent"; in every other state the
+ * bot only asked to send it (the time is when the call began).
+ */
+const DELIVERED: ReadonlySet<MessagedKey> = new Set([
+  "sent",
+  "working",
+  "recipient-waiting",
+  "no-reply",
+  "replied",
+  "recipient-stopped",
+  "recipient-failed",
+  "call-made",
+]);
+
+/** The verb of the outgoing row on a Messaged card. */
+export function sentVerb(key: MessagedKey): string {
+  return DELIVERED.has(key) ? "sent" : "asked to send";
+}
+
 /** States that the connection's loss turns into "Last seen …": they stand for work under way. */
 export const LIVE_STATES: ReadonlySet<MessagedKey> = new Set(["call-started", "working"]);
 

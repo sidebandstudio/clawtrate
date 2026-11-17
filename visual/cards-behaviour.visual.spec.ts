@@ -776,6 +776,50 @@ test.describe("Messaged cards", () => {
     );
   });
 
+  test("F-122 F-134: the outgoing row says sent only where the message is known to have gone; a finished recipient run claims no missing reply", async ({
+    page,
+  }) => {
+    const verb = async (scene: string, testId: string) => {
+      await openFixture(page, `scene=${scene}`, "light");
+      const card = page.getByTestId(testId).last();
+      await card.locator("summary").click();
+      return card
+        .locator(".exchange-item")
+        .first()
+        .locator(".exchange-meta span")
+        .first()
+        .textContent();
+    };
+    for (const scene of [
+      "messaged-started",
+      "messaged-approval",
+      "messaged-not-sent",
+      "messaged-unknown",
+      "messaged-failed",
+      "messaged-blocked",
+    ]) {
+      expect(await verb(scene, "messaged-card"), scene).toBe("asked to send");
+    }
+    for (const scene of ["messaged-sent", "messaged-replied", "messaged-no-reply"]) {
+      expect(await verb(scene, "messaged-card"), scene).toBe("sent");
+    }
+    for (const scene of [
+      "t3-started",
+      "t3-approval",
+      "t3-delivery-unknown",
+      "t3-failed",
+      "t3-not-sent",
+    ]) {
+      expect(await verb(scene, "t3-card"), scene).toBe("asked to send");
+    }
+    expect(await verb("t3-call-made", "t3-card")).toBe("sent");
+    await openFixture(page, "scene=received-completed", "light");
+    const received = page.getByTestId("received-card");
+    await received.locator("summary").click();
+    await expect(received.getByText("This run has finished.")).toBeVisible();
+    await expect(received).not.toContainText("without a reply");
+  });
+
   test("F-124: Open in Marlow opens Marlow's task at its Message from Otto card; Open in Otto comes back with the card still open", async ({
     page,
   }) => {

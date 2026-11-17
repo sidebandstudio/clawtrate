@@ -31,7 +31,7 @@ import {
   takeArrival,
   takeReturnPoint,
 } from "./MessagedCard.tsx";
-import { mayDispatch, nameOf } from "./model.ts";
+import { botMessageKey, mayDispatch, nameOf, sentVerb } from "./model.ts";
 import { Announcer } from "./parts.tsx";
 import { cardDomId, codingCalls, oldestPending, placeCards, type CardRef } from "./placement.ts";
 import { QuestionCardView } from "./QuestionCard.tsx";
@@ -247,7 +247,7 @@ function related(
         model: null,
         isDefault: false,
       },
-      verb: "sent",
+      verb: sentVerb(botMessageKey(card)),
       text: card.text!,
       at: card.requestedAt,
     }));
