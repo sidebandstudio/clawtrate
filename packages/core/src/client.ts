@@ -1886,7 +1886,10 @@ export class ClawtrateClient {
     const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
     if (!approval || approval.status !== "pending")
       throw new Error("That approval is no longer open.");
-    if (approval.submitting) throw new Error("An answer to that approval is already on its way.");
+    // Deny stays possible while an earlier decision is on its way: the gateway applies
+    // whichever arrives first and answers the other as already resolved. A second allow does not.
+    if (approval.submitting && decision !== "deny")
+      throw new Error("An answer to that approval is already on its way.");
     // A decision with no answer may have been applied: nothing but deny is sent until its state is read back.
     if (decision !== "deny" && approval.decisionError === "unknown") {
       throw new Error(
@@ -1986,12 +1989,15 @@ export class ClawtrateClient {
             ? "refused"
             : "unknown";
       this.updateActivity(key, (activity) =>
-        markApproval(activity, approvalId, {
-          submitting: false,
-          error: errorMessage(error),
-          decisionError,
-          stillOpen: false,
-        }),
+        // A decision that lost to another one already settled changes nothing on the settled card.
+        activity.approvals.find((each) => each.id === approvalId)?.status !== "pending"
+          ? activity
+          : markApproval(activity, approvalId, {
+              submitting: false,
+              error: errorMessage(error),
+              decisionError,
+              stillOpen: false,
+            }),
       );
       this.noteMissingScope(error);
       // Neither answer says whether the request is still open: read it back.

@@ -297,4 +297,82 @@ describe("a decision that failed, read back", () => {
     expect(isRefusedDecision("exec.approval.resolve", new Error("socket closed"))).toBe(false);
     expect(REFUSED_DECISION_ANSWERS.every((each) => each.source && each.why)).toBe(true);
   });
+
+  it("Deny goes out while an Allow is on its way; a second Allow does not; the card shows whichever the gateway applied", async () => {
+    // Deny wins: the gateway applies it and answers the Allow as already resolved.
+    let releaseAllow!: () => void;
+    const gateway = gatewayWith();
+    gateway.handlers["exec.approval.resolve"] = (params) => {
+      const { decision } = params as { decision: string };
+      if (decision === "deny") return { ok: true };
+      return new Promise((_, reject) => {
+        releaseAllow = () =>
+          reject(
+            new GatewayError({
+              code: "INVALID_REQUEST",
+              message: "approval already resolved",
+              details: { reason: "APPROVAL_ALREADY_RESOLVED" },
+            }),
+          );
+      });
+    };
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().approvals.length === 1);
+    const allow = client.resolveApproval(KEY, "ap-1", "allow-once").catch((error: Error) => error);
+    await until(() => transcript().approvals[0]!.submitting);
+    await expect(client.resolveApproval(KEY, "ap-1", "allow-always")).rejects.toThrow(/on its way/);
+    await client.resolveApproval(KEY, "ap-1", "deny");
+    expect(gateway.calls("exec.approval.resolve")).toEqual([
+      { id: "ap-1", decision: "allow-once" },
+      { id: "ap-1", decision: "deny" },
+    ]);
+    expect(transcript().approvals[0]).toMatchObject({ status: "denied", decision: "deny" });
+    releaseAllow();
+    expect(await allow).toBeInstanceOf(Error);
+    expect(transcript().approvals[0]).toMatchObject({
+      status: "denied",
+      decisionError: null,
+      submitting: false,
+    });
+    client.stop();
+  });
+
+  it("when the Allow on its way wins, the Deny sent after it changes nothing and the card shows the Allow", async () => {
+    let releaseAllow!: () => void;
+    const gateway = gatewayWith();
+    gateway.handlers["exec.approval.resolve"] = (params) => {
+      const { decision } = params as { decision: string };
+      if (decision === "allow-once")
+        return new Promise((resolve) => (releaseAllow = () => resolve({ ok: true })));
+      // By the time the Deny arrives the Allow was applied.
+      return new Promise((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new GatewayError({
+                code: "INVALID_REQUEST",
+                message: "approval already resolved",
+                details: { reason: "APPROVAL_ALREADY_RESOLVED" },
+              }),
+            ),
+          30,
+        ),
+      );
+    };
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().approvals.length === 1);
+    const allow = client.resolveApproval(KEY, "ap-1", "allow-once");
+    await until(() => transcript().approvals[0]!.submitting);
+    const deny = client.resolveApproval(KEY, "ap-1", "deny").catch((error: Error) => error);
+    await until(() => gateway.calls("exec.approval.resolve").length === 2);
+    releaseAllow();
+    await allow;
+    expect(await deny).toBeInstanceOf(Error);
+    expect(transcript().approvals[0]).toMatchObject({
+      status: "allowed",
+      decision: "allow-once",
+      decisionError: null,
+    });
+    client.stop();
+  });
 });
