@@ -508,7 +508,8 @@ function TaskLevel({
           )}
           {list && list.omitted > 0 && (
             <p className="files-note">
-              {list.omitted} more files didn't fit here. Filter by name to find one.
+              {list.omitted} more of this task's files didn't fit here. The filter searches only the
+              files listed above.
             </p>
           )}
         </div>

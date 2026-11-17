@@ -538,7 +538,8 @@ export function fileAnswers(now: number, params: FileParams) {
               ),
             ]
           : files.map((file) => toTaskFile(file, now)),
-    omitted: 0,
+    // A list longer than the viewer's channel: the gateway listed more than this answer carries.
+    omitted: params.state === "many" ? 7 : 0,
     checkedAt: params.state === "commands" && lists > 1 ? Date.now() : checkedAt,
   });
   const read = (path: string, workspace: boolean): FileRead => {

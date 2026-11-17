@@ -117,6 +117,23 @@ test.describe("the Files tab", () => {
     );
   });
 
+  test("F-152: past 12 files a filter narrows the files listed, and says it cannot reach those that didn't fit", async ({
+    page,
+  }) => {
+    await openFixture(page, `${FILES}&files=many`, "light");
+    await listed(page);
+    const note = filesPanel(page).locator(".files-note");
+    await expect(note).toHaveText(
+      "7 more of this task's files didn't fit here. The filter searches only the files listed above.",
+    );
+    await filesPanel(page)
+      .getByRole("searchbox", { name: "Filter this task's files by name" })
+      .fill("rotate-0");
+    await expect(
+      filesPanel(page).getByRole("list", { name: "Read" }).locator(".file-name"),
+    ).toHaveCount(9);
+  });
+
   test("F-321: changed last run on what the run's file tools changed, writing while a write runs, and nothing on a read", async ({
     page,
   }) => {
