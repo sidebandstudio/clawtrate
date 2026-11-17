@@ -95,14 +95,20 @@ export function App({
     if (document.activeElement && document.activeElement !== document.body) return;
     document.querySelector<HTMLElement>(FIRST_CONTROL)?.focus();
   }, [screen]);
+  // One flag for the whole window: while the connection is anything but
+  // connected, and after a reconnect until the open task has caught up,
+  // nothing that stands for the gateway's work moves; it is last seen.
+  const [caughtUp, setCaughtUp] = useState(true);
+  const lost = status !== "connected" || !caughtUp;
   return (
-    <div className="app">
+    <div className="app" data-connection={lost ? "lost" : undefined}>
       {settingsOpen && (
         <Settings connection={state.connection} info={info} onClose={closeSettings} />
       )}
       {screen === "shell" ? (
         <Shell
           state={state}
+          info={info}
           theme={theme}
           onTheme={setTheme}
           bubbles={bubbles}
@@ -110,6 +116,7 @@ export function App({
           onUnreadCount={onUnreadCount}
           onOpenSettings={openSettings}
           inert={settingsOpen}
+          onCaughtUp={setCaughtUp}
         />
       ) : (
         <ConnectScreen

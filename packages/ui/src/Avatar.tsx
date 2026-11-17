@@ -81,9 +81,49 @@ export function characterFor(id: string): CharacterSpec {
   };
 }
 
-export function Character({ spec }: { spec: CharacterSpec }) {
+/** The states a character's face can show (conversation.md, section 4). */
+export type FaceState =
+  "idle" | "thinking" | "working" | "waiting" | "blocked" | "done" | "failed" | "stopped";
+
+/**
+ * The eyes say the state. Idle and stopped: looking the bot's own way.
+ * Thinking: turned up. Working: straight ahead. Waiting: wide, on the viewer.
+ * Blocked and failed: half closed. Done: smiling.
+ */
+function Eyes({ state, look, y }: { state: FaceState; look: [number, number]; y: number }) {
+  let [lx, ly] = look;
+  if (state === "thinking") [lx, ly] = [lx * 0.4, -1.7];
+  if (state === "working" || state === "waiting" || state === "done") [lx, ly] = [0, 0];
+  if (state === "blocked" || state === "failed") [lx, ly] = [0, 0.8];
+  const eye = (x: number) => {
+    const cx = x + lx;
+    const cy = y + ly;
+    if (state === "waiting") return <circle key={x} cx={cx} cy={cy} r="2.65" />;
+    if (state === "blocked" || state === "failed")
+      return <ellipse key={x} cx={cx} cy={cy} rx="2.2" ry="0.85" />;
+    if (state === "done")
+      return (
+        <path
+          key={x}
+          d={`M${cx - 2.1} ${cy + 0.9}Q${cx} ${cy - 2.6} ${cx + 2.1} ${cy + 0.9}`}
+          fill="none"
+          stroke="#fff"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
+      );
+    return <circle key={x} cx={cx} cy={cy} r="2.05" />;
+  };
+  return (
+    <g className="eyes" fill="#fff">
+      {eye(15.8)}
+      {eye(24.2)}
+    </g>
+  );
+}
+
+export function Character({ spec, state = "idle" }: { spec: CharacterSpec; state?: FaceState }) {
   const y = 19.3 + (spec.lift ?? 0);
-  const [lx, ly] = spec.look;
   return (
     <svg viewBox="0 0 40 40" aria-hidden="true">
       <g fill={spec.color} stroke={spec.color} strokeWidth="0">
@@ -91,10 +131,7 @@ export function Character({ spec }: { spec: CharacterSpec }) {
       </g>
       <g transform={`rotate(${spec.tilt} 20 ${y})`}>
         <rect x="8.8" y={y - 4.8} width="22.4" height="9.6" rx="4.8" fill="#16181b" />
-        <g fill="#fff">
-          <circle cx={15.8 + lx} cy={y + ly} r="2.05" />
-          <circle cx={24.2 + lx} cy={y + ly} r="2.05" />
-        </g>
+        <Eyes state={state} look={spec.look} y={y} />
       </g>
     </svg>
   );
@@ -112,6 +149,55 @@ export function Avatar({ bot, className }: { bot: Bot; className?: string }) {
       ) : (
         <Character spec={characterFor(bot.id)} />
       )}
+    </span>
+  );
+}
+
+const STATE_WORDS: Record<FaceState, string> = {
+  idle: "idle",
+  thinking: "thinking",
+  working: "working",
+  waiting: "waiting for you",
+  blocked: "blocked",
+  done: "done",
+  failed: "failed",
+  stopped: "stopped",
+};
+
+/**
+ * A bot's avatar with its state (conversation.md, section 4): the face, the
+ * ring that travels while a tool runs, and a badge for the states that need
+ * the person or went wrong. Named "<Bot>, <state>" unless `hidden`, for where
+ * the control around it already says the state.
+ */
+export function Presence({
+  bot,
+  state,
+  badge = null,
+  hidden = false,
+}: {
+  bot: Bot;
+  state: FaceState;
+  badge?: "waiting" | "blocked" | "failed" | "stopped" | null;
+  hidden?: boolean;
+}) {
+  return (
+    <span
+      className="presence"
+      data-state={state}
+      data-kind={bot.avatarUrl ? "image" : "character"}
+      {...(hidden
+        ? { "aria-hidden": true }
+        : { role: "img", "aria-label": `${bot.name}, ${STATE_WORDS[state]}` })}
+    >
+      <span className="avatar" aria-hidden="true">
+        {bot.avatarUrl ? (
+          <img src={bot.avatarUrl} alt="" draggable={false} />
+        ) : (
+          <Character spec={characterFor(bot.id)} state={state} />
+        )}
+      </span>
+      {badge && <span className="glyph" data-state={badge} aria-hidden="true" />}
     </span>
   );
 }

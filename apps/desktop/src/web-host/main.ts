@@ -1,10 +1,12 @@
 // pnpm preview:web [--dev-gateway] [--no-access-token] [--instance <name>]
-//                  [--port 5310] [--host 0.0.0.0] [--data-dir <dir>]
+//                  [--port 5310] [--host 0.0.0.0] [--data-dir <dir>] [--read-only]
 //
 // Serves the Clawtrate renderer to a browser on another machine. The gateway
 // connection, the device key and pairing all stay in this process.
 // `--instance` (or CLAWTRATE_DEV_INSTANCE) selects the development instance
 // whose gateway the development-only modes accept; the default instance otherwise.
+// `--read-only` pins the connection to the read tier: the interface shows the
+// read-only conversation and never offers to ask for more access.
 
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces } from "node:os";
@@ -26,6 +28,7 @@ const { values } = parseArgs({
     "dev-gateway": { type: "boolean", default: false },
     "no-access-token": { type: "boolean", default: false },
     instance: { type: "string" },
+    "read-only": { type: "boolean", default: false },
   },
   allowPositionals: false,
 });
@@ -64,6 +67,7 @@ async function main(): Promise<void> {
     // retried or otherwise.
     devOnly: tokenDisabled,
     recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance }),
+    readOnly: values["read-only"],
   });
   const accessToken = tokenDisabled ? null : createAccessToken();
   const host = startWebHost({
@@ -86,6 +90,8 @@ async function main(): Promise<void> {
         ? "\nThe access token is shown once. Anyone with this link can read the connected gateway's sessions."
         : "\nAccess token disabled: this host only connects to the development gateway.",
     );
+    if (values["read-only"])
+      console.log("Read-only: this host never sends and never asks for more access.");
     if (devGateway) {
       const which = devGateway.instance === null ? "default" : `instance ${devGateway.instance}`;
       console.log(`Development gateway: ${devGateway.url} (${which})`);

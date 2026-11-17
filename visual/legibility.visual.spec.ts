@@ -14,6 +14,7 @@ import {
   STATE_SCENES,
   THEMES,
 } from "./fixture.ts";
+import { LIVE_VIEWS } from "./live-scenes.ts";
 
 type Finding = { text: string; size: number; ratio: number; color: string; background: string };
 
@@ -171,6 +172,43 @@ const SCENES: Scene[] = [
   },
   ...STATE_SCENES,
 ];
+
+// Every state of the live conversation, its menus and its shelf included.
+for (const view of LIVE_VIEWS) {
+  if (view.scene === "main") continue;
+  SCENES.push({
+    name: `${view.rows ? `${view.rows}: ` : ""}live ${view.scene}`,
+    query: `scene=${view.scene}&${OTTO_DISK}&panel=closed`,
+    prepare: view.ready,
+  });
+}
+SCENES.push({
+  name: "F-061 F-096: live send menu during a run",
+  query: `scene=run-working&${OTTO_DISK}&panel=closed`,
+  prepare: async (page) => {
+    await page.getByTestId("composer-input").fill("Also check the photos folder");
+    await page.getByRole("button", { name: "How to send: Steer" }).click();
+    await expect(page.getByRole("menu", { name: "How to send" })).toBeVisible();
+  },
+});
+
+SCENES.push({
+  name: "F-061: the send sheet on a phone, or the menu on the desktop",
+  query: `scene=run-working&${OTTO_DISK}&panel=closed`,
+  prepare: async (page) => {
+    await page.getByTestId("composer-input").fill("Then look at the photos");
+    await page.getByRole("button", { name: "How to send: Steer" }).click();
+    await expect(page.getByRole("menu", { name: "How to send" })).toBeVisible();
+  },
+});
+SCENES.push({
+  name: "F-467: the shortcut list",
+  query: `scene=composer&${OTTO_DISK}&panel=closed`,
+  prepare: async (page) => {
+    await page.keyboard.press("ControlOrMeta+/");
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+  },
+});
 
 /** Every card scene, with every card, full request and Raw panel open. */
 const openCards = async (page: Page) => {

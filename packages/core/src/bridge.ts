@@ -38,6 +38,10 @@ export type BridgeCommand =
   | { type: "deleteMessage"; key: string; messageId: string }
   | { type: "cancelQueued"; key: string; messageId: string }
   | { type: "sendQueuedNow"; key: string; messageId: string }
+  /** Take a held or queued message back to edit it: its words and files, files held again under new ids. */
+  | { type: "takeBackMessage"; key: string; messageId: string }
+  /** Send a held message's words and files again as a new message (Try again on a failed turn). */
+  | { type: "sendAgain"; key: string; messageId: string }
   /** A new task under a bot with its first message. The viewer then has it open. */
   | { type: "createTask"; botId: string; text: string; label: string | null }
   | { type: "stopRun"; key: string; runId: string }
@@ -82,17 +86,21 @@ export type BridgeCommand =
 /** What each command answers with. */
 export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
-  : C extends { type: "createTask" }
-    ? { key: string }
-    : C extends { type: "readStepRaw" }
-      ? StepRead | null
-      : C extends { type: "readApprovalText" }
-        ? { text: Record<string, string | string[] | null>; digest: string }
-        : C extends { type: "readHistoryItem" }
-          ? TranscriptItem | null
-          : C extends { type: "retryCreation" }
-            ? { key: string }
-            : void;
+  : C extends { type: "sendAgain" }
+    ? { messageId: string }
+    : C extends { type: "takeBackMessage" }
+      ? { text: string; attachments: AttachmentInfo[] }
+      : C extends { type: "createTask" }
+        ? { key: string }
+        : C extends { type: "readStepRaw" }
+          ? StepRead | null
+          : C extends { type: "readApprovalText" }
+            ? { text: Record<string, string | string[] | null>; digest: string }
+            : C extends { type: "readHistoryItem" }
+              ? TranscriptItem | null
+              : C extends { type: "retryCreation" }
+                ? { key: string }
+                : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -101,6 +109,11 @@ export type HostInfo = {
   devGateway: { url: string } | null;
   /** The name this device gives the gateway when it pairs, for example "Clawtrate Desktop". */
   deviceName?: string;
+  /**
+   * Set when the host pins its connection to the read tier: it never asks for
+   * more access and refuses every command that writes.
+   */
+  readOnly?: boolean;
 };
 
 /** Renderer-side view of the bridge, implemented over IPC or a WebSocket. */
@@ -142,6 +155,9 @@ export const MAX_VIEWER_PENDING_COMMANDS = 16;
 const BOT_ID_PATTERN = /^[\w.-]{1,128}$/;
 const QUESTION_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const MAX_LABEL_CHARS = 512;
+/** Why a held or queued message cannot be taken back to edit: its files would not fit. */
+export const TAKE_BACK_NO_ROOM =
+  "Too many files are waiting to be sent for this message's files to come back with it. The message stays as it is; send or remove some waiting files, then edit it.";
 const MAX_ANSWER_CHARS = 4000;
 
 function sessionKey(value: unknown): string {
@@ -263,6 +279,8 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "deleteMessage":
     case "cancelQueued":
     case "sendQueuedNow":
+    case "takeBackMessage":
+    case "sendAgain":
       return {
         type: command.type,
         key: sessionKey(command.key),
@@ -515,6 +533,22 @@ class ViewerSession implements BridgeSession {
         return client.cancelQueued(this.mine(command.key), command.messageId);
       case "sendQueuedNow":
         return client.sendQueuedNow(this.mine(command.key), command.messageId);
+      case "sendAgain":
+        return { messageId: client.sendAgain(this.mine(command.key), command.messageId) };
+      case "takeBackMessage": {
+        const key = this.mine(command.key);
+        if (!policy.attachments) {
+          const back = client.takeBack(key, command.messageId);
+          if (back.attachments.length > 0) throw new Error("This host does not take files.");
+          return { text: back.text, attachments: [] };
+        }
+        // All or nothing: the whole batch is checked, bytes and count, before the message
+        // is taken back; when it cannot fit, the message stays exactly as it was.
+        const files = client.peekTakeBack(key, command.messageId).attachments;
+        if (!policy.attachments.fits(files)) throw new Error(TAKE_BACK_NO_ROOM);
+        const back = client.takeBack(key, command.messageId);
+        return { text: back.text, attachments: policy.attachments.restore(back.attachments) };
+      }
       case "createTask":
         // Until the gateway is asked, a viewer that goes away takes its request with it.
         return this.created(() =>

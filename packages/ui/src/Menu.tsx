@@ -1,8 +1,22 @@
 import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
 export type MenuEntry =
-  | { kind: "item"; label: string; onSelect: () => void; tone?: "danger"; icon?: ReactNode }
-  | { kind: "radio"; label: string; checked: boolean; onSelect: () => void; note?: string }
+  | {
+      kind: "item";
+      label: string;
+      onSelect: () => void;
+      tone?: "danger";
+      icon?: ReactNode;
+      hint?: string;
+    }
+  | {
+      kind: "radio";
+      label: string;
+      checked: boolean;
+      onSelect: () => void;
+      note?: string;
+      hint?: string;
+    }
   | { kind: "head"; title: string; lines: string[] }
   | { kind: "label"; text: string }
   | { kind: "rule" };
@@ -116,6 +130,11 @@ export function Menu({
                     {entry.label}
                     {entry.note && <span className="menu-note">{entry.note}</span>}
                   </span>
+                  {entry.hint && (
+                    <kbd className="menu-hint" aria-hidden="true">
+                      {entry.hint}
+                    </kbd>
+                  )}
                   <span className="glyph" data-state="check" aria-hidden="true" />
                 </button>
               </li>
@@ -133,6 +152,11 @@ export function Menu({
                 >
                   {entry.icon}
                   {entry.label}
+                  {entry.hint && (
+                    <kbd className="menu-hint" aria-hidden="true">
+                      {entry.hint}
+                    </kbd>
+                  )}
                 </button>
               </li>
             );

@@ -262,6 +262,40 @@ describe("sending (F-075, F-081, F-106)", () => {
     client.stop();
   });
 
+  it("F-095 F-433: reopened in the middle of a run whose reasoning came first, the reply streamed so far shows and goes on streaming", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        { role: "user", content: "How did last night go?", __openclaw: { id: "u1", seq: 1 } },
+        {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Check the backup log first." }],
+          __openclaw: { id: "a1", seq: 2, runId: "run-1" },
+        },
+      ],
+      hasMore: false,
+      inFlightRun: { runId: "run-1", text: "The backup finished at 02:14" },
+    });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().runs.some((run) => run.id === "run-1"));
+    const run = () => transcript().runs.find((each) => each.id === "run-1")!;
+    expect(run()).toMatchObject({ state: "running", text: "The backup finished at 02:14" });
+    expect(run().textComplete).toBe(false);
+    expect(run().steps.map((step) => step.kind)).toEqual(["reasoning"]);
+    gateway.emit("chat", {
+      runId: "run-1",
+      sessionKey: KEY,
+      seq: 3,
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "The backup finished at 02:14 and wrote 41 GB." }],
+      },
+    });
+    await until(() => run().text === "The backup finished at 02:14 and wrote 41 GB.");
+    client.stop();
+  });
+
   it("retries a refused message with the same key, and deletes one", async () => {
     const { client, gateway, transcript } = await openTask();
     let refuse = true;
@@ -296,16 +330,20 @@ describe("sending (F-075, F-081, F-106)", () => {
     client.stop();
   });
 
-  it("drops the optimistic run when the send's outcome is unknown, checks history, and offers retry only then", async () => {
+  it("F-075: a send whose answer never came stays unknown through the reconnect and history, is never called accepted, and is retried only on request", async () => {
     const { client, gateway, transcript } = await openTask();
     gateway.handlers["chat.send"] = () => new Promise(() => {});
     const id = client.sendMessage(KEY, "Lost in transit");
     await until(() => gateway.calls("chat.send").length === 1);
+    // The connection drops before any answer: whether the frame reached the gateway is not known.
     gateway.dropAll();
     // Not failed: unknown, while history is read again after the reconnect.
     await until(() => transcript().outbox[0]?.status === "checking");
     expect(transcript().runs).toEqual([]);
-    await until(() => transcript().outbox[0]?.status === "unconfirmed");
+    // History holds no row with its key: still unknown, never unconfirmed (which means accepted).
+    await until(() => transcript().outbox[0]?.status === "unknown");
+    await sleep(50);
+    expect(transcript().outbox[0]!.status).toBe("unknown");
     expect(gateway.calls("chat.send")).toHaveLength(1);
     client.retryMessage(KEY, id);
     await until(() => gateway.calls("chat.send").length === 2);
@@ -334,6 +372,25 @@ describe("sending (F-075, F-081, F-106)", () => {
     expect(() => client.sendMessage(KEY, "x".repeat(5_000))).toThrow(/at most 4000/);
     expect(transcript().outbox).toEqual([]);
     expect(gateway.calls("chat.send")).toEqual([]);
+    client.stop();
+  });
+});
+
+describe("a run's start as the gateway reports it (F-081)", () => {
+  it("is unknown for a run this client started until the gateway's lifecycle start, then that start", async () => {
+    const { client, gateway, transcript } = await openTask();
+    client.sendMessage(KEY, "Count the files");
+    await until(() => transcript().runs[0]?.bound === true);
+    const run = transcript().runs[0]!;
+    // The client's own send time is not the gateway's word.
+    expect(run.startedAt).not.toBeNull();
+    expect(run.reportedStartAt).toBeNull();
+    gateway.emit(
+      "agent",
+      agentEvent(run.id, 1, "lifecycle", { phase: "start", startedAt: 1_700_000_000_000 }),
+    );
+    await until(() => transcript().runs[0]?.reportedStartAt !== null);
+    expect(transcript().runs[0]!.reportedStartAt).toBe(1_700_000_000_000);
     client.stop();
   });
 });
@@ -372,6 +429,24 @@ describe("steering and questions (F-096, F-292, F-468)", () => {
     await until(() => gateway.calls("chat.send").length === 1);
     expect(gateway.calls("chat.send")[0]).toMatchObject({ queueMode: "steer", idempotencyKey: id });
     expect(transcript().runs[0]!.state).toBe("running");
+    client.stop();
+  });
+
+  it("cancels a held message, which is then never sent (F-281)", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    startRun(gateway);
+    gateway.emit("question.requested", question("ask_9", "run-x"));
+    await until(() => transcript().runs[0]?.state === "waiting");
+
+    const id = client.sendMessage(KEY, "Hold this one");
+    expect(transcript().outbox[0]).toMatchObject({ id, status: "held" });
+    client.cancelQueued(KEY, id);
+    expect(transcript().outbox[0]).toMatchObject({ id, status: "cancelled" });
+
+    await client.dismissQuestion(KEY, "ask_9");
+    await sleep(30);
+    expect(gateway.calls("chat.send")).toEqual([]);
     client.stop();
   });
 
@@ -424,7 +499,7 @@ describe("steering and questions (F-096, F-292, F-468)", () => {
 });
 
 describe("queueing and stopping (F-097, F-419, F-420, F-421)", () => {
-  it("queues a message sent while stopping and starts it once the run is stopped", async () => {
+  it("F-468: queues a message sent while stopping; once the stop is confirmed it stays, not sent, until sent again", async () => {
     const { client, gateway, transcript } = await openTask();
     startRun(gateway);
     await until(() => transcript().runs.length === 1);
@@ -445,15 +520,21 @@ describe("queueing and stopping (F-097, F-419, F-420, F-421)", () => {
       state: "aborted",
       stopReason: "rpc",
     });
+    await until(() => transcript().outbox[0]?.status === "not-sent");
+    await sleep(30);
+    // Nothing starts by itself after a confirmed Stop.
+    expect(gateway.calls("chat.send")).toEqual([]);
+    expect(transcript().runs.map((run) => [run.id, run.state])).toEqual([
+      ["run-x", "stopped"],
+      [id, "cancelled"],
+    ]);
+    // Sending it is the person's choice: it starts a run with the same key.
+    client.retryMessage(KEY, id);
     await until(() => gateway.calls("chat.send").length === 1);
     expect(gateway.calls("chat.send")[0]).toMatchObject({
       queueMode: "followup",
       idempotencyKey: id,
     });
-    expect(transcript().runs.map((run) => [run.id, run.state])).toEqual([
-      ["run-x", "stopped"],
-      ["run-1", "running"],
-    ]);
     client.stop();
   });
 

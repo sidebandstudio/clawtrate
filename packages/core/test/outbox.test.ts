@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
 import {
   emptyActivity,
+  isActive,
   reconcileOutbox,
   startLocalRun,
   type OutgoingMessage,
@@ -39,6 +40,84 @@ describe("held messages (F-096, F-106)", () => {
   });
 });
 
+describe("a message written while the connection is down (F-287)", () => {
+  it("waits, marked, and is sent exactly once when the connection returns", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    const id = client.sendMessage(KEY, "Written offline");
+    await sleep(60);
+    expect(transcript().outbox[0]).toMatchObject({ id, status: "awaiting-access" });
+    expect(gateway.calls("chat.send")).toEqual([]);
+    gateway.refuseConnections = false;
+    await until(() => gateway.calls("chat.send").length === 1, 4_000);
+    await sleep(200);
+    // The gateway answered it: accepted (its run is not followed here, so it may read unconfirmed).
+    expect(["sent", "unconfirmed"]).toContain(transcript().outbox[0]?.status);
+    expect(sentTexts(gateway)).toEqual(["Written offline"]);
+    expect(gateway.calls("chat.send")[0]).toMatchObject({ idempotencyKey: id });
+    client.stop();
+  });
+});
+
+describe("a pending question holds every outgoing message (F-468)", () => {
+  it("holds a message queued with the modifier or the menu, and releases it into the queue", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    gateway.handlers["chat.send"] = (params) => ({
+      runId: `run-${(params as { message: string }).message}`,
+      status: "started",
+    });
+    start(gateway);
+    gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
+    await until(() => transcript().runs[0]?.state === "waiting");
+    const id = client.sendMessage(KEY, "after this turn", { mode: "queue" });
+    expect(transcript().outbox[0]).toMatchObject({ id, status: "held", mode: "queue" });
+    expect(transcript().runs.filter((run) => run.state === "queued")).toEqual([]);
+
+    await client.dismissQuestion(KEY, "ask_1");
+    // Released as a message queued now: it waits for the run, not steered into it.
+    await until(() => transcript().outbox[0]?.status === "queued");
+    await sleep(30);
+    expect(sentTexts(gateway)).toEqual([]);
+    gateway.emit("agent", agentEvent("run-x", 3, "lifecycle", { phase: "end" }));
+    await until(() => sentTexts(gateway).length === 1);
+    expect(gateway.calls("chat.send")[0]).toMatchObject({
+      message: "after this turn",
+      queueMode: "followup",
+    });
+    client.stop();
+  });
+
+  it("turns messages still held when the run ends by itself into queued ones, one run each, in order", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["chat.send"] = (params) => ({
+      runId: `run-${(params as { message: string }).message}`,
+      status: "started",
+    });
+    start(gateway);
+    gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
+    await until(() => transcript().runs[0]?.state === "waiting");
+    client.sendMessage(KEY, "one");
+    client.sendMessage(KEY, "two");
+    expect(transcript().outbox.map((m) => m.status)).toEqual(["held", "held"]);
+    gateway.emit("agent", agentEvent("run-x", 3, "lifecycle", { phase: "end" }));
+    await until(() => sentTexts(gateway).length === 1);
+    await sleep(30);
+    // The first starts its own run; the second waits for it, queued.
+    expect(sentTexts(gateway)).toEqual(["one"]);
+    expect(gateway.calls("chat.send")[0]).toMatchObject({ queueMode: "followup" });
+    expect(transcript().outbox.find((m) => m.text === "two")?.status).toBe("queued");
+    gateway.emit("agent", agentEvent("run-one", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("agent", agentEvent("run-one", 2, "lifecycle", { phase: "end" }));
+    await until(() => sentTexts(gateway).length === 2);
+    expect(sentTexts(gateway)).toEqual(["one", "two"]);
+    expect(gateway.calls("chat.send")[1]).toMatchObject({ queueMode: "followup" });
+    client.stop();
+  });
+});
+
 describe("queued messages (F-421, F-420)", () => {
   it("drains several queued messages in order after the run completes or fails", async () => {
     for (const ending of [
@@ -65,7 +144,7 @@ describe("queued messages (F-421, F-420)", () => {
     }
   });
 
-  it("starts the next queued message when the oldest one is refused", async () => {
+  it("F-061: starts the next queued message when the oldest one is refused, which keeps its queue origin", async () => {
     const { client, gateway, transcript } = await openTask();
     gateway.handlers["chat.send"] = (params) => {
       if ((params as { message: string }).message === "a") {
@@ -79,8 +158,43 @@ describe("queued messages (F-421, F-420)", () => {
     client.sendMessage(KEY, "b", { mode: "queue" });
     gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end" }));
     await until(() => sentTexts(gateway).length === 2);
-    expect(transcript().outbox.find((m) => m.text === "a")).toMatchObject({ status: "failed" });
+    // Refused as it started: still a queued message, so the shelf says "Couldn't start".
+    expect(transcript().outbox.find((m) => m.text === "a")).toMatchObject({
+      status: "failed",
+      mode: "queue",
+      error: expect.stringMatching(/budget exhausted/),
+    });
     expect(transcript().outbox.find((m) => m.text === "b")).toMatchObject({ status: "sent" });
+    client.stop();
+  });
+
+  it("F-061: a queued message keeps its queue origin through every refused Try again, and queues again behind a run", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["chat.send"] = () => {
+      throw new GatewayError({ code: "INVALID_REQUEST", message: "budget exhausted" });
+    };
+    start(gateway);
+    await until(() => transcript().runs.length === 1);
+    const id = client.sendMessage(KEY, "queued words", { mode: "queue" });
+    gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end" }));
+    await until(() => transcript().outbox[0]?.status === "failed");
+    for (let attempt = 2; attempt <= 3; attempt += 1) {
+      client.retryMessage(KEY, id);
+      await until(
+        () =>
+          gateway.calls("chat.send").length === attempt &&
+          transcript().outbox[0]?.status === "failed",
+      );
+      // Still from the queue: the shelf keeps it as "Couldn't start".
+      expect(transcript().outbox[0]).toMatchObject({ id, mode: "queue", status: "failed" });
+    }
+    // Tried again while another run works, it waits behind that run.
+    gateway.emit("agent", agentEvent("run-y", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.id === "run-y"));
+    client.retryMessage(KEY, id);
+    expect(transcript().outbox[0]).toMatchObject({ mode: "queue", status: "queued" });
+    expect(transcript().runs.find((run) => run.id === id)?.state).toBe("queued");
+    expect(gateway.calls("chat.send")).toHaveLength(3);
     client.stop();
   });
 
@@ -120,8 +234,12 @@ describe("queued messages (F-421, F-420)", () => {
       viewer.apply({ type: "sendQueuedNow", key: KEY, messageId: third.messageId }),
     ).rejects.toThrow(/unavailable while the run stops/);
     gateway.emit("agent", agentEvent("run-x", 3, "lifecycle", { phase: "end", aborted: true }));
-    await until(() => sentTexts(gateway).length === 2);
-    expect(sentTexts(gateway)).toEqual(["now", "third"]);
+    // The stop was confirmed: the queued message stays, not sent (§15–16).
+    await until(
+      () => transcript().outbox.find((m) => m.id === third.messageId)?.status === "not-sent",
+    );
+    await sleep(30);
+    expect(sentTexts(gateway)).toEqual(["now"]);
     viewer.dispose();
     client.stop();
   });
@@ -133,6 +251,77 @@ describe("queued messages (F-421, F-420)", () => {
     client.sendMessage(KEY, "later", { mode: "queue" });
     gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
     await until(() => transcript().outbox[0]?.status === "cancelled");
+    client.stop();
+  });
+});
+
+describe("after a confirmed Stop nothing starts by itself (F-468)", () => {
+  it("keeps queued and held messages as not sent, and Remove and Send act on each", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    start(gateway);
+    gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
+    await until(() => transcript().runs[0]?.state === "waiting");
+    const held = client.sendMessage(KEY, "held one");
+    expect(transcript().outbox[0]!.status).toBe("held");
+    await client.stopRun(KEY, "run-x");
+    const queued = client.sendMessage(KEY, "queued one");
+    expect(transcript().outbox[1]!.status).toBe("queued");
+    gateway.emit("chat", { runId: "run-x", sessionKey: KEY, seq: 9, state: "aborted" });
+    await until(() => transcript().outbox.every((m) => m.status === "not-sent"));
+    await sleep(30);
+    expect(sentTexts(gateway)).toEqual([]);
+    expect(transcript().runs.filter((run) => run.state === "queued")).toEqual([]);
+
+    client.deleteMessage(KEY, held);
+    expect(transcript().outbox.map((m) => m.id)).toEqual([queued]);
+    client.retryMessage(KEY, queued);
+    await until(() => sentTexts(gateway).length === 1);
+    expect(sentTexts(gateway)).toEqual(["queued one"]);
+    client.stop();
+  });
+
+  it("parks a released message still waiting behind an unanswered send; the one whose frame left settles", async () => {
+    const { client, gateway, transcript } = await openTask();
+    const firstAnswer = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => firstAnswer.promise;
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    start(gateway);
+    gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
+    await until(() => transcript().runs[0]?.state === "waiting");
+    client.sendMessage(KEY, "one");
+    client.sendMessage(KEY, "two");
+    // Dismissing releases both as steers; "one" goes out, "two" waits behind it.
+    await client.dismissQuestion(KEY, "ask_1");
+    await until(() => sentTexts(gateway).length === 1);
+    const waiting = transcript().outbox.find((m) => m.text === "two")!;
+    expect(waiting).toMatchObject({ status: "sending", leftAt: null });
+    expect(transcript().outbox.find((m) => m.text === "one")!.leftAt).not.toBeNull();
+    await client.stopRun(KEY, "run-x");
+    gateway.emit("chat", { runId: "run-x", sessionKey: KEY, seq: 20, state: "aborted" });
+    await until(() => transcript().runs[0]?.state === "stopped");
+    expect(transcript().outbox.find((m) => m.text === "two")).toMatchObject({
+      status: "not-sent",
+      runId: null,
+    });
+    firstAnswer.resolve({ runId: "steer-one", status: "started" });
+    await sleep(50);
+    expect(sentTexts(gateway)).toEqual(["one"]);
+    expect(transcript().outbox.find((m) => m.text === "two")!.status).toBe("not-sent");
+    expect(transcript().runs.filter((run) => isActive(run.state))).toEqual([]);
+    client.stop();
+  });
+
+  it("still starts queued messages when the run finished before the stop took effect", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: false, runIds: [] });
+    start(gateway);
+    await until(() => transcript().runs.length === 1);
+    client.sendMessage(KEY, "after it", { mode: "queue" });
+    await client.stopRun(KEY, "run-x");
+    gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end", aborted: false }));
+    await until(() => sentTexts(gateway).length === 1);
+    expect(sentTexts(gateway)).toEqual(["after it"]);
     client.stop();
   });
 });
@@ -245,6 +434,7 @@ describe("reconciling sent messages with history (F-075, F-107)", () => {
     status: "sent",
     runId: null,
     messageSeq: null,
+    leftAt: null,
     createdAt: 3_000,
     error: null,
     attachments: [],
@@ -303,5 +493,22 @@ describe("reconciling sent messages with history (F-075, F-107)", () => {
       },
     ];
     expect(reconcileOutbox(activity, rows).outbox.map((m) => m.id)).toEqual(["m4"]);
+  });
+
+  it("F-075 F-107: matches the user row the gateway keys as the send's key with :user appended", () => {
+    const activity: TaskActivity = {
+      ...emptyActivity,
+      outbox: [message("m1"), message("m2", { messageSeq: 7 })],
+    };
+    const rows = [
+      { role: "user", content: "hi", __openclaw: { id: "u1", seq: 6, idempotencyKey: "m1:user" } },
+      { role: "user", content: "hi", idempotencyKey: "m2:user", __openclaw: { id: "u2", seq: 7 } },
+      // Any other suffix is another key.
+      { role: "user", content: "hi", __openclaw: { id: "u3", seq: 8, idempotencyKey: "m3:other" } },
+    ];
+    const next = reconcileOutbox(activity, rows);
+    expect(next.outbox).toEqual([]);
+    const third = reconcileOutbox({ ...emptyActivity, outbox: [message("m3")] }, rows);
+    expect(third.outbox.map((m) => m.id)).toEqual(["m3"]);
   });
 });

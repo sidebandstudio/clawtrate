@@ -44,6 +44,7 @@ import {
   fixtureTranscripts,
   withTaskStates,
 } from "./data.ts";
+import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -87,6 +88,7 @@ export const SCENES = [
   "disconnected",
   "offline-unreachable",
   "offline-down",
+  ...LIVE_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -381,6 +383,8 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       };
     case "task-states":
       return { initial: { ...base, tasksByBot: withTaskStates(base.tasksByBot) }, steps: [] };
+    default:
+      return liveScene(name as LiveScene, base, now);
   }
 }
 
@@ -461,8 +465,17 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
   const approval = (key: string, id: string): ApprovalCard | undefined =>
     state.transcripts[key]?.approvals.find((each) => each.id === id);
 
-  async function apply(command: BridgeCommand): Promise<void> {
+  // Files are named and counted, never kept.
+  const files = new Map<string, { fileName: string; mimeType: string; sizeBytes: number }>();
+  async function apply(command: BridgeCommand): Promise<unknown> {
+    const live = liveCommand(
+      command,
+      () => state,
+      (next) => set(next),
+      files,
+    );
     sent.push(command);
+    if (live) return live;
     switch (command.type) {
       case "connect":
       case "connectDevGateway":
@@ -690,21 +703,32 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
         return (step?.raw ? { status: "available", raw: step.raw } : null) as BridgeResultFor<C>;
       }
       default:
-        await apply(command);
-        return undefined as BridgeResultFor<C>;
+        // The live scenes answer their own commands (takeBackMessage, sendAgain, sendMessage).
+        return (await apply(command)) as BridgeResultFor<C>;
     }
   }
 
   return {
-    info: FIXTURE_INFO,
+    info: name === "access-pinned" ? { ...FIXTURE_INFO, readOnly: true } : FIXTURE_INFO,
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    send: apply,
+    send: async (command) => {
+      await apply(command);
+    },
     invoke: answer,
-    attach: () => Promise.reject(new Error("the fixture does not hold files")),
+    attach: async (file) => {
+      const info = {
+        id: `file-${files.size + 1}`,
+        fileName: file.name,
+        mimeType: file.type,
+        sizeBytes: file.data.byteLength,
+      };
+      files.set(info.id, info);
+      return info;
+    },
     setState: (change) => set(change(state)),
     sent,
     badge: null,
