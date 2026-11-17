@@ -327,6 +327,9 @@ export function devConfig(
         },
       },
     },
+    // Routines can be created and removed, but the scheduler never runs one,
+    // so no job can run a turn, a script or a delivery (webhooks included).
+    cron: { enabled: false, triggers: { enabled: false } },
     // Memory search is outside `models` and defaults to a hosted embeddings
     // provider. Off, with no provider, so nothing can reach a paid API.
     memory: { search: { enabled: false, provider: "none" } },
@@ -356,6 +359,9 @@ export function searchBaseUrl(ports: InstancePorts): string {
 export const ALLOWED_TOOLS = [
   "read",
   "write",
+  // The gateway offers apply_patch with write whatever the list says; it is
+  // listed so the list says what is offered. Workspace only, like write.
+  "apply_patch",
   "edit",
   "ls",
   "exec",
@@ -394,6 +400,10 @@ export const DENIED_TOOLS = [
   "conversations_send",
   "conversations_turn",
   "github_publish",
+  // Offered even outside the allowlist unless denied; not needed here.
+  "skills_read",
+  "skills_search",
+  "skill_workshop",
 ] as const;
 
 /**
@@ -1148,7 +1158,7 @@ export async function seed(inst: DevInstance): Promise<void> {
 }
 
 /** The ports an instance runs on: fixed for the default instance, from its marker otherwise. */
-function instancePorts(inst: DevInstance): InstancePorts {
+export function instancePorts(inst: DevInstance): InstancePorts {
   if (inst.name === null) return DEFAULT_PORTS;
   const marker = readMarker(inst.stateDir);
   if (!marker?.gatewayPort || !marker.providerPort) {

@@ -5,7 +5,13 @@
 import { writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { MODEL_ID } from "./env.ts";
-import { messageText, planReply, type ChatMessage, type ReplyStep } from "./scripts.ts";
+import {
+  messageText,
+  planReply,
+  runtimeFacts,
+  type ChatMessage,
+  type ReplyStep,
+} from "./scripts.ts";
 
 export const FAKE_MODEL_ID = MODEL_ID;
 
@@ -190,8 +196,14 @@ function nonStreamingBody(model: string, id: string, steps: ReplyStep[]) {
   };
 }
 
+/** Where the scenario check reads the tools the gateway offered in a session. */
+export const OFFERED_TOOLS_PATH = "/scripted/offered-tools";
+
 export function startFakeProvider(options: FakeProviderOptions) {
   const delayMs = options.chunkDelayMs ?? 8;
+  // The tool names of the latest model request in each session, as evidence
+  // of which tools the gateway really offers a bot.
+  const offered = new Map<string, string[]>();
   const log = options.log ?? (() => {});
   const server = createServer((req, res) => {
     void (async () => {
@@ -205,6 +217,11 @@ export function startFakeProvider(options: FakeProviderOptions) {
           object: "list",
           data: [{ id: FAKE_MODEL_ID, object: "model", owned_by: "clawtrate-dev" }],
         });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === OFFERED_TOOLS_PATH) {
+        const session = url.searchParams.get("session") ?? "";
+        sendJson(res, 200, { session, tools: offered.get(session) ?? null });
         return;
       }
       if (req.method === "POST" && url.pathname === WEB_SEARCH_PATH) {
@@ -233,6 +250,8 @@ export function startFakeProvider(options: FakeProviderOptions) {
         const toolNames = (body.tools ?? [])
           .map((tool) => tool.function?.name)
           .filter((name): name is string => typeof name === "string");
+        const session = runtimeFacts(messages).sessionKey;
+        if (session) offered.set(session, [...toolNames].sort());
         const steps = planReply(messages, new Set(toolNames));
         const model = body.model ?? FAKE_MODEL_ID;
         const id = completionId(messages);
