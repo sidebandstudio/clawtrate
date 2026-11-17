@@ -214,7 +214,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             data-size="lg"
             disabled={busy}
           >
-            {busy ? "Connecting…" : "Connect"}
+            {busy ? "Connecting…" : "Connect a gateway"}
           </button>
           {info.devGateway && (
             <button

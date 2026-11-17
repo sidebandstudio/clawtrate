@@ -169,7 +169,7 @@ for (const size of [WIDE, PHONE]) {
     test.describe(`legibility ${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
       for (const scene of SCENES) {
-        test(scene.name, async ({ page }) => {
+        test(`F-471: legibility, ${scene.name}`, async ({ page }) => {
           await openFixture(page, scene.query, theme);
           await settle(page);
           await scene.prepare?.(page);
