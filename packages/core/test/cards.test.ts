@@ -267,6 +267,74 @@ describe("Messaged cards (F-119, F-122, F-123, F-309)", () => {
     expect(select({ ...emptyActivity, runs: history }).botMessages[0]!.state).toBe("unknown");
   });
 
+  it("an exchange read back from history is Replied: history keeps the send's status and reply only in the result's text (F-119)", () => {
+    // As chat.history returns it: the toolResult row keeps details.sessionKey alone.
+    const sent = {
+      runId: "1f3cfe7f-0000-4000-8000-000000000001",
+      sessionKey: "agent:atlas:main",
+      status: "ok",
+      delivery: { status: "skipped" },
+      reply: "Happy to help.",
+    };
+    const rows = (result: Record<string, unknown>) => [
+      { role: "user", content: "ask Atlas", __openclaw: { id: "u1", seq: 1 } },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "c9",
+            name: "sessions_send",
+            arguments: { agentId: "atlas", message: "Could you look?", timeoutSeconds: 30 },
+          },
+        ],
+        __openclaw: { id: "a1", seq: 2, runId: "run-h" },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c9",
+        toolName: "sessions_send",
+        isError: false,
+        ...result,
+        __openclaw: { id: "t1", seq: 3, runId: "run-h" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Atlas replied." }],
+        __openclaw: { id: "a2", seq: 4, runId: "run-h" },
+      },
+    ];
+    // What the engine keeps of each history row, as the client reads it for a card.
+    const card = (result: Record<string, unknown>) =>
+      select(
+        { ...emptyActivity, runs: runsFromHistory(rows(result), null, ctx()) },
+        {},
+        { ...OPTIONS, rawOf: (step) => step.raw ?? raw.get(KEY, step.id) },
+      ).botMessages[0]!;
+    const text = (value: unknown) => [{ type: "text", text: JSON.stringify(value, null, 2) }];
+    expect(
+      card({ details: { sessionKey: "agent:atlas:main" }, content: text(sent) }),
+    ).toMatchObject({
+      state: "replied",
+      reply: { text: "Happy to help." },
+      recipient: { sessionKey: "agent:atlas:main", agentId: "atlas" },
+    });
+    // The result's own details win over its text.
+    expect(
+      card({ details: { sessionKey: "agent:atlas:main", status: "queued" }, content: text(sent) })
+        .state,
+    ).toBe("sent");
+    // A text that is not exactly one JSON object with a status says nothing more.
+    for (const content of [
+      [{ type: "text", text: "Delivered." }],
+      [...text(sent), { type: "text", text: "and more" }],
+      text([sent]),
+      text({ reply: "no status" }),
+    ]) {
+      expect(card({ details: { sessionKey: "agent:atlas:main" }, content }).state).toBe("unknown");
+    }
+  });
+
   it("Waiting for approval, then Not sent when the approval is denied (F-312, F-436)", () => {
     let activity = startSend();
     activity = applyApprovalRequested(

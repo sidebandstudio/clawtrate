@@ -241,6 +241,31 @@ function resultBody(raw: StepRaw | null): RawRecord | null {
   return asRecord(result.result) ?? result;
 }
 
+/**
+ * What a bot-to-bot send's result says about the delivery: its `details`,
+ * live. `chat.history` keeps only `details.sessionKey` for `sessions_send`;
+ * the same fields (`status`, `runId`, `reply`, `error`, `sentBeforeError`)
+ * are then in the result's own text, the JSON object the tool returned. That
+ * object is read only when the text is exactly one, and `details` wins.
+ */
+function sendDetails(body: RawRecord | null): RawRecord | null {
+  const details = asRecord(body?.details);
+  if (str(details?.status)) return details;
+  const blocks = Array.isArray(body?.content) ? body.content : [];
+  const texts = blocks
+    .map((block) => asRecord(block))
+    .filter((block) => block?.type === "text" && typeof block.text === "string");
+  if (texts.length !== 1) return details;
+  let parsed: RawRecord | null;
+  try {
+    parsed = asRecord(JSON.parse(texts[0]!.text as string));
+  } catch {
+    return details;
+  }
+  if (!parsed || Array.isArray(parsed) || !str(parsed.status)) return details;
+  return { ...parsed, ...details };
+}
+
 function agentFromKey(key: string | null): string | null {
   return key ? (/^agent:([^:]+):/.exec(key)?.[1] ?? null) : null;
 }
@@ -335,7 +360,7 @@ function botMessageCard(
 ): BotMessageCard {
   const args = callArgs(raw);
   const body = resultBody(raw);
-  const details = asRecord(body?.details);
+  const details = sendDetails(body);
   const resultKey = str(details?.sessionKey);
   const argKey = str(args?.sessionKey);
   const recipient: Recipient = {
@@ -624,7 +649,7 @@ export function recipientLinks(
   for (const run of runs) {
     for (const step of run.steps) {
       if (step.toolName !== BOT_MESSAGE_TOOL) continue;
-      const details = asRecord(resultBody(rawOf(step))?.details);
+      const details = sendDetails(resultBody(rawOf(step)));
       const runId = str(details?.runId);
       const sessionKey = str(details?.sessionKey);
       if (runId || sessionKey) links.push({ runId, sessionKey });
@@ -639,7 +664,7 @@ export function recipientRunIds(runs: Run[], rawOf: (step: Step) => StepRaw | nu
   for (const run of runs) {
     for (const step of run.steps) {
       if (step.toolName !== BOT_MESSAGE_TOOL) continue;
-      const id = str(asRecord(resultBody(rawOf(step))?.details)?.runId);
+      const id = str(sendDetails(resultBody(rawOf(step)))?.runId);
       if (id) ids.push(id);
     }
   }
