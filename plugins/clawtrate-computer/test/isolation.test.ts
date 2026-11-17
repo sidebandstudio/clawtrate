@@ -532,7 +532,10 @@ describe("ownership is decided on the endpoint the gateway resolves, never on th
 describe("each bot's profile resolves, as the gateway resolves it, to the endpoint the plugin uses", () => {
   const profiles = BROWSER_CONFIG.browser.profiles;
   const parsed = parseConfig(BASE_CONFIG);
-  const problems = (browser: Record<string, unknown>, config = BASE_CONFIG) =>
+  const problems = (
+    browser: Record<string, unknown>,
+    config: Record<string, unknown> = BASE_CONFIG,
+  ) =>
     browserConfigProblems(
       { browser: { defaultProfile: "openclaw", profiles, ...browser } },
       parseConfig(config),
