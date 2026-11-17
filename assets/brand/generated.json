@@ -1,0 +1,14 @@
+{
+  "source": "assets/brand/logo.png",
+  "sourceSha256": "fe6a2b9e1a81a4c3e3c35ffcbff5ef738edcf55a3e0983f451788765d0ecceae",
+  "outputs": [
+    "apps/desktop/resources/icon-mac.png",
+    "apps/desktop/resources/icon.icns",
+    "apps/desktop/resources/icon.ico",
+    "apps/desktop/resources/icon.png",
+    "apps/desktop/src/renderer/public/apple-touch-icon.png",
+    "apps/desktop/src/renderer/public/favicon-32.png",
+    "apps/desktop/src/renderer/public/favicon.ico",
+    "packages/ui/src/assets/logo-mark.png"
+  ]
+}
