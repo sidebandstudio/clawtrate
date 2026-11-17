@@ -11,9 +11,9 @@ import type {
   Run,
   StepRaw,
 } from "@clawtrate/core";
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
 import { Avatar } from "../Avatar.tsx";
-import { useCardEnv } from "./context.tsx";
+import { useCardEnv, useStepHandover } from "./context.tsx";
 import {
   botMessageKey,
   botMessageNote,
@@ -382,7 +382,12 @@ export function BotMessageCardView({
 
 export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRawState }) {
   const env = useCardEnv();
-  const raw = useRawDisclosure(read.load);
+  // The ordinary step this call was drawn as until its result named it, as the reader left it.
+  const handover = useStepHandover();
+  const [handed] = useState(() =>
+    card.toolCallId ? handover?.stateOf(card.toolCallId) : undefined,
+  );
+  const raw = useRawDisclosure(read.load, handed?.open === true);
   const run = env.runOf(card.runId);
   const step = run?.steps.find((each) => each.id === card.stepId);
   const key = mcpKey(card, env.transcript.approvals, step?.status === "waiting");
@@ -394,6 +399,13 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
   const chips = targetChips(card.args);
   const link = resultLink(card);
   const domId = cardDomId({ kind: "t3-code", id: card.id });
+  useLayoutEffect(() => {
+    if (!handed?.open) return;
+    const element = document.getElementById(domId);
+    if (!(element instanceof HTMLDetailsElement)) return;
+    element.open = true;
+    if (handed.focused) element.querySelector("summary")?.focus({ preventScroll: true });
+  }, [handed, domId]);
 
   const agent = (
     <span className="exchange-agent">

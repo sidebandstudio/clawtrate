@@ -12,6 +12,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
@@ -19,9 +20,12 @@ import { ApprovalCardView } from "./ApprovalCard.tsx";
 import {
   CardEnvContext,
   OpenTaskContext,
+  StepHandoverContext,
   useCardEnv,
   useCardSettings,
   type CardEnv,
+  type StepHandover,
+  type StepState,
 } from "./context.tsx";
 import {
   BotMessageCardView,
@@ -45,6 +49,9 @@ type Scope = {
 };
 
 const ScopeContext = createContext<Scope | null>(null);
+
+/** Ordinary steps whose state a task's view remembers, for the cards they may become. */
+const MAX_STEP_STATES = 64;
 
 /** The cards of one open task. Mounted once per task, around its transcript. */
 export function CardScope({
@@ -80,6 +87,26 @@ export function CardScope({
       ),
     [transcript, cards.selected],
   );
+  // Ordinary steps' states, for the card a step becomes; the newest `MAX_STEP_STATES` kept.
+  const stepStates = useRef(new Map<string, StepState>());
+  const { selected, settledRaw } = cards;
+  const handover: StepHandover = useMemo(() => {
+    const drawn = new Set(
+      codingCalls(selected)
+        .filter((card) => card.toolCallId !== null && settledRaw(card.stepId))
+        .map((card) => card.toolCallId!),
+    );
+    return {
+      isCard: (callId) => drawn.has(callId),
+      note: (callId, value) => {
+        const states = stepStates.current;
+        states.delete(callId);
+        states.set(callId, value);
+        while (states.size > MAX_STEP_STATES) states.delete(states.keys().next().value as string);
+      },
+      stateOf: (callId) => stepStates.current.get(callId),
+    };
+  }, [selected, settledRaw]);
   const runOf = useCallback(
     (runId: string | null): Run | undefined =>
       runId ? transcript.runs.find((run) => run.id === runId) : undefined,
@@ -192,7 +219,9 @@ export function CardScope({
   return (
     <ScopeContext.Provider value={{ placement, cards }}>
       <CardEnvContext.Provider value={env}>
-        <Announcer>{children}</Announcer>
+        <StepHandoverContext.Provider value={handover}>
+          <Announcer>{children}</Announcer>
+        </StepHandoverContext.Provider>
       </CardEnvContext.Provider>
     </ScopeContext.Provider>
   );

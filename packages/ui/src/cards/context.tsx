@@ -26,6 +26,28 @@ export const CardSettingsContext = createContext<CardSettings>({ codingServers: 
 
 export const useCardSettings = () => useContext(CardSettingsContext);
 
+/** How the reader left an ordinary tool step: open or closed, and whether focus was in it. */
+export type StepState = { open: boolean; focused: boolean };
+
+/**
+ * An ordinary tool step that becomes a card once its result names it hands
+ * the card its state: the card opens if the step was open, with its Raw view
+ * open in place of the step's arguments and result as received, and takes
+ * focus if the step had it. The step is then not drawn beside the card.
+ */
+export type StepHandover = {
+  /** Whether this call is drawn as a card. */
+  isCard: (callId: string) => boolean;
+  /** The step's state, as the reader leaves it. */
+  note: (callId: string, state: StepState) => void;
+  /** The state the step had, if it was drawn. */
+  stateOf: (callId: string) => StepState | undefined;
+};
+
+export const StepHandoverContext = createContext<StepHandover | null>(null);
+
+export const useStepHandover = () => useContext(StepHandoverContext);
+
 /** Moving to another task, for "Open in <bot>". The shell supplies it. */
 export type OpenTask = (botId: string, key: string) => void;
 

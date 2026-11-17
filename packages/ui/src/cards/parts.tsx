@@ -390,8 +390,15 @@ export type RawDisclosure = {
  * thing in the card. Enter or Space opens and closes it with focus kept on
  * the button; Escape inside the panel closes it and returns focus there.
  */
-export function useRawDisclosure(load?: () => void): RawDisclosure {
-  const [open, setOpen] = useState(false);
+export function useRawDisclosure(load?: () => void, initiallyOpen = false): RawDisclosure {
+  const [open, setOpen] = useState(initiallyOpen);
+  // Open from the start: what it shows is read, once, as when opened.
+  const loadFirst = useRef(initiallyOpen);
+  useEffect(() => {
+    if (!loadFirst.current) return;
+    loadFirst.current = false;
+    load?.();
+  }, [load]);
   const id = useId();
   const toggle = () => {
     if (!open) load?.();
