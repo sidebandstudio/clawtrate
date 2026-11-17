@@ -457,16 +457,73 @@ describe("live, fresh rebuild and two resyncs agree on what is promised (A6, rul
     expect(ids(once)).toEqual(liveIds);
     expect(ids(twice)).toEqual(liveIds);
     expect(ids(freshTwice)).toEqual(ids(fresh));
-    const settled = (activity: TaskActivity, table: RawTable) =>
-      facts(activity, table).map((run) => ({
-        ...run,
-        steps: run.steps.map((step) => ({
-          ...step,
-          raw: step.raw && { ...step.raw, thinking: null },
-        })),
-      }));
-    expect(settled(twice, liveTable)).toEqual(settled(freshTwice, freshTable));
+    // The raw facts themselves, reasoning text included.
+    expect(facts(twice, liveTable)).toEqual(facts(freshTwice, freshTable));
+    const thinkingOf = (activity: TaskActivity, table: RawTable) =>
+      activity.runs[0]!.steps
+        .filter((step) => step.kind === "reasoning")
+        .map((step) => rawFacts(table.get(KEY, step.id))?.thinking);
+    expect(thinkingOf(twice, liveTable)).toEqual([
+      "first",
+      `${prefix}second`,
+      `${prefix}restart`,
+      "fourth",
+    ]);
+    expect(thinkingOf(freshTwice, freshTable)).toEqual(thinkingOf(twice, liveTable));
     expect(twice.runs[0]).toMatchObject({ state: "completed", outcomeKnown: true });
+  });
+
+  it("repeated reasoning text pairs in order, and a resync never moves an id to another segment", () => {
+    let n = 0;
+    const allocator = { next: () => n++ };
+    const liveTable = new RawTable();
+    const live = feed(
+      emptyActivity,
+      [
+        thinking(1, "abc"),
+        agentEvent("r", 2, "lifecycle", { phase: "model" }),
+        thinking(3, "abc"),
+      ],
+      liveTable,
+      allocator,
+    );
+    // The first segment's last character never reached the live view.
+    const repeatRows = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "abcd" },
+          { type: "thinking", thinking: "abc" },
+        ],
+        stopReason: "stop",
+        __openclaw: { id: "a1", seq: 1, runId: "r" },
+      },
+    ];
+    const once = resync(live, repeatRows, null, liveTable);
+    const twice = resync(once, repeatRows, null, liveTable);
+    const freshTable = new RawTable();
+    const fresh = { ...emptyActivity, runs: runsFromHistory(repeatRows, null, ctx(freshTable)) };
+    const freshTwice = resync(
+      resync(fresh, repeatRows, null, freshTable),
+      repeatRows,
+      null,
+      freshTable,
+    );
+    expect(ids(live)).toEqual(["reasoning:r:0", "reasoning:r:1"]);
+    expect(ids(once)).toEqual(ids(live));
+    expect(ids(twice)).toEqual(ids(live));
+    expect(ids(freshTwice)).toEqual(ids(fresh));
+    // Each id keeps its own segment's text, read raw.
+    const thinkingById = (activity: TaskActivity, table: RawTable) =>
+      activity.runs[0]!.steps.map((step) => [
+        step.id,
+        rawFacts(table.get(KEY, step.id))?.thinking,
+      ]);
+    expect(thinkingById(twice, liveTable)).toEqual([
+      ["reasoning:r:0", "abcd"],
+      ["reasoning:r:1", "abc"],
+    ]);
+    expect(facts(twice, liveTable)).toEqual(facts(freshTwice, freshTable));
   });
 
   it("after retention dropped the oldest steps, a resync drops the same ones again", () => {

@@ -1904,6 +1904,37 @@ function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "h
 }
 
 /**
+ * Pair history reasoning segments with live ones, preserving order: each
+ * history segment, in order, takes the first live segment after the last one
+ * taken whose whole text has the same length and digest; failing that, when
+ * both have the same number of segments, the live one at its own place, if
+ * that is after the last one taken (the live one may have missed its end in
+ * a gap). Ids therefore never cross, and repeated text pairs in order. A
+ * history segment left unpaired keeps its own history id.
+ */
+function alignReasoning(live: Step[], history: Step[]): Map<Step, Step> {
+  const pairs = new Map<Step, Step>();
+  let last = -1;
+  history.forEach((step, index) => {
+    let at = -1;
+    if (step.continuation !== null) {
+      for (let i = last + 1; i < live.length; i += 1) {
+        const evidence = live[i]!.continuation;
+        if (evidence !== null && sameDigest(evidence, step.continuation)) {
+          at = i;
+          break;
+        }
+      }
+    }
+    if (at === -1 && live.length === history.length && index > last) at = index;
+    if (at === -1) return;
+    pairs.set(step, live[at]!);
+    last = at;
+  });
+  return pairs;
+}
+
+/**
  * Merge one run's steps. Tool steps match by id. Live reasoning segments are
  * split by a heuristic (a model call, a tool, reply text, or text that does
  * not extend the last), so their ids need not match the transcript's
@@ -1930,38 +1961,12 @@ function mergeSteps(
       !live.steps.some((step) => step.kind === "reasoning"));
   if (complete) {
     // The transcript holds the whole run: its steps, all of them, replace the
-    // live ones, and retention counts again from there. A history segment
-    // whose whole text is a live segment's keeps that segment's id, so ids
-    // are stable while the task stays open.
+    // live ones, and retention counts again from there. History segments keep
+    // the ids of live ones in order, so ids are stable while the task stays
+    // open and never move to another segment.
     const liveReasoning = live.steps.filter((step) => step.kind === "reasoning");
     const historyReasoning = history.steps.filter((step) => step.kind === "reasoning");
-    // A history segment takes the id of the live segment with the same whole
-    // text; failing that, when both have the same segments, of the one at its
-    // place (the live one may have missed its end in a gap).
-    const pairs = new Map<Step, Step>();
-    const used = new Set<Step>();
-    for (const step of historyReasoning) {
-      const same = liveReasoning.find(
-        (each) =>
-          !used.has(each) &&
-          each.continuation !== null &&
-          step.continuation !== null &&
-          sameDigest(each.continuation, step.continuation),
-      );
-      if (same) {
-        pairs.set(step, same);
-        used.add(same);
-      }
-    }
-    if (liveReasoning.length === historyReasoning.length) {
-      historyReasoning.forEach((step, index) => {
-        const at = liveReasoning[index]!;
-        if (!pairs.has(step) && !used.has(at)) {
-          pairs.set(step, at);
-          used.add(at);
-        }
-      });
-    }
+    const pairs = alignReasoning(liveReasoning, historyReasoning);
     return {
       steps: history.steps.map((step) => {
         if (step.kind === "reasoning") {
