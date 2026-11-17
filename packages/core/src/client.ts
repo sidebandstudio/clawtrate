@@ -2849,7 +2849,11 @@ export class ClawtrateClient {
             steered.push(id);
           } else {
             next = updateMessage(next, id, { status: "queued", mode: "queue", runId: null });
-            next = queueLocalRun(next, next.outbox.find((each) => each.id === id)!, this.now());
+            next = queueLocalRun(
+              next,
+              next.outbox.find((each) => each.id === id)!,
+              this.now(),
+            );
           }
         }
         return next;
@@ -2863,9 +2867,10 @@ export class ClawtrateClient {
       : current.runs.find((run) => run.state === "queued");
     if (next) {
       this.updateActivity(key, (activity) =>
+        // It keeps `mode: "queue"`: if the gateway refuses to start it, the
+        // shelf says "Couldn't start" rather than a send failing.
         updateMessage(startQueuedRun(activity, next.id, this.now()), next.id, {
           status: "sending",
-          mode: "new",
         }),
       );
       this.enqueueDelivery(key, next.id);

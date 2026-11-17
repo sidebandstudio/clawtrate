@@ -122,7 +122,7 @@ describe("queued messages (F-421, F-420)", () => {
     }
   });
 
-  it("starts the next queued message when the oldest one is refused", async () => {
+  it("F-061: starts the next queued message when the oldest one is refused, which keeps its queue origin", async () => {
     const { client, gateway, transcript } = await openTask();
     gateway.handlers["chat.send"] = (params) => {
       if ((params as { message: string }).message === "a") {
@@ -136,7 +136,12 @@ describe("queued messages (F-421, F-420)", () => {
     client.sendMessage(KEY, "b", { mode: "queue" });
     gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end" }));
     await until(() => sentTexts(gateway).length === 2);
-    expect(transcript().outbox.find((m) => m.text === "a")).toMatchObject({ status: "failed" });
+    // Refused as it started: still a queued message, so the shelf says "Couldn't start".
+    expect(transcript().outbox.find((m) => m.text === "a")).toMatchObject({
+      status: "failed",
+      mode: "queue",
+      error: expect.stringMatching(/budget exhausted/),
+    });
     expect(transcript().outbox.find((m) => m.text === "b")).toMatchObject({ status: "sent" });
     client.stop();
   });

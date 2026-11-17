@@ -297,7 +297,11 @@ export type OutgoingMessage = {
   /** Also the `idempotencyKey`, so a retry can never deliver it twice. */
   id: string;
   text: string;
-  /** How it was delivered: a new run, a steer into the active run, or queued after it. */
+  /**
+   * How it was delivered: a new run, a steer into the active run, or queued
+   * after it. A queued message keeps `queue` once it starts, so a start the
+   * gateway refuses is told apart from a send that failed.
+   */
   mode: "new" | "steer" | "queue";
   status: OutgoingStatus;
   /** The run it started or was steered into. */
