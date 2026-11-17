@@ -383,6 +383,7 @@ function PendingApproval({
       className="card request"
       data-kind="approval"
       data-state="pending"
+      data-pending="true"
       id={domId}
       tabIndex={-1}
       role="region"

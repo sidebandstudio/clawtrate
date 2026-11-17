@@ -277,6 +277,7 @@ function PendingQuestion({
       className="card request"
       data-kind="question"
       data-state="pending"
+      data-pending="true"
       id={domId}
       tabIndex={-1}
       role="region"

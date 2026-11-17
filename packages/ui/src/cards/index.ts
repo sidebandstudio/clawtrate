@@ -8,5 +8,11 @@ export {
   type CardSettings,
   type OpenTask,
 } from "./context.tsx";
-export { CardScope, CardSlot, focusPending, TrailingCards } from "./TranscriptCards.tsx";
+export {
+  CardScope,
+  CardSlot,
+  focusPending,
+  RunCardList,
+  TrailingCards,
+} from "./TranscriptCards.tsx";
 export { oldestPending, placeCards, type CardPlacement, type CardRef } from "./placement.ts";

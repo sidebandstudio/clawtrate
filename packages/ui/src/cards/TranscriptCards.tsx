@@ -309,6 +309,21 @@ export function CardSlot({ item, children }: { item: TranscriptItem; children: R
   );
 }
 
+/**
+ * One run's cards, in order, for a transcript that draws each run itself.
+ * Use it or CardSlot's cards for a run, not both.
+ */
+export function RunCardList({ runId }: { runId: string }) {
+  const { placement } = useScope();
+  return (
+    <>
+      {(placement.byRun.get(runId) ?? []).map((ref) => (
+        <CardFor key={`${ref.kind}:${ref.id}`} cardRef={ref} />
+      ))}
+    </>
+  );
+}
+
 /** Cards whose run the transcript does not show yet, before the streaming reply. */
 export function TrailingCards() {
   const { placement } = useScope();

@@ -26,6 +26,8 @@ export type CardRef =
   | { kind: "t3-code"; id: string };
 
 export type CardPlacement = {
+  /** Every card of a run, in order, by run id: for a transcript that draws runs itself. */
+  byRun: Map<string, CardRef[]>;
   /** Cards drawn right after a transcript item, by item id. */
   afterItem: Map<string, CardRef[]>;
   /** Cards drawn after every item, before the streaming reply. */
@@ -105,7 +107,7 @@ export function placeCards(input: PlacementInput, selected: SelectedCards): Card
     const itemId = itemOf(message, input.items);
     if (itemId) incoming.set(itemId, message);
   }
-  return { afterItem, trailing, incoming };
+  return { byRun, afterItem, trailing, incoming };
 }
 
 /** The transcript item an inter-session message is: the engine gives both the history row's id. */
