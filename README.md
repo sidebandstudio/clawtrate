@@ -47,6 +47,16 @@ pnpm dev-gateway prune      # machine-wide: remove every idle named instance, an
 
 A name is 1 to 24 lowercase letters, digits and inner hyphens. The instance runs `openclaw --profile clawtrate-dev-<name>` with its state in `~/.openclaw-clawtrate-dev-<name>`, and `start` picks free ports for its gateway and scripted model between 19200 and 19999 and records them. Every rule above holds per instance: its own fresh folder and marker, its own run files in `tools/dev-gateway/.run/instances/<name>`, and no command for one instance acts on another instance's folder, gateway or processes. `reset` removes only the named instance. `start`, `stop`, `reset` and `prune` take a lock per instance, and port choice a lock for the machine, so no two of these commands act on the same instance at once. `start` holds its lock until the gateway is healthy, its exec policy checked and its bots seeded; a `stop` or `reset` issued meanwhile waits for it (up to ten minutes) and then acts on the finished instance. `status`, `seed`, `approve` and `list` take no lock. `list` and `prune` cover every instance on the machine and refuse `--instance`; `prune` is deliberate maintenance, removes only instances proven idle, and never the default one.
 
+#### Plugins of this project
+
+A named instance can load this checkout's own OpenClaw plugins, from `plugins/`, by name:
+
+```bash
+pnpm dev-gateway start --instance review --with-plugin <plugin> [--with-plugin <another>]
+```
+
+Each plugin needs a `clawtrate-dev-contract.json` beside its manifest that says exactly which config entry and tools it turns on. `start` refuses a name that is not a real folder directly under `plugins/`, and any addition that would turn on a real model, another profile, credentials, shell commands, network beyond loopback or a denied tool. The default instance and `pnpm e2e` load none. [The opening](docs/decisions.md#development-gateway) is described in `docs/decisions.md`.
+
 #### Migrating from an older version
 
 Earlier versions of the tool recorded no process start times, so this version cannot prove anything about the state they left and refuses it for good: it never signals its processes, starts it over or deletes it. Move it aside once, by hand, from the checkout that started it. For the default instance:
