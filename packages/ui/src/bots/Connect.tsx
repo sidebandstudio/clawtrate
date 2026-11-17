@@ -142,6 +142,19 @@ export function useConnect({
     setWhere({ view: "flow", method: id });
     await begin(id);
   };
+  // A new view or stage moves focus on purpose: to its field, or else to its title.
+  const shownView = `${where.view}:${where.view === "flow" ? (stage ?? "") : ""}`;
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      const dialogs = document.querySelectorAll<HTMLElement>("dialog[open]");
+      const top = dialogs[dialogs.length - 1];
+      if (!top) return;
+      (
+        top.querySelector<HTMLElement>("[data-b-focus]:not([disabled])") ??
+        top.querySelector<HTMLElement>("#create-title, #b-section-title")
+      )?.focus();
+    });
+  }, [shownView]);
   // "Sign in again" opens on the sign-in itself.
   const [startedWith] = useState(startWith && admin ? startWith : null);
   useEffect(() => {
@@ -401,7 +414,12 @@ export function useConnect({
       backLabel: "Back to sign-in methods",
       body: (
         <>
-          <Result tone="ok" mark="check" title={where.byKey ? "Key saved" : `Connected to ${who}`}>
+          <Result
+            tone="ok"
+            mark="check"
+            title={where.byKey ? "Key saved" : `Connected to ${who}`}
+            focus={false}
+          >
             {where.byKey ? "Your gateway keeps the key." : "Your gateway keeps the sign-in."}
           </Result>
           <p className="b-hint" role="status" style={{ textAlign: "center" }} data-testid="landed">

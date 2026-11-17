@@ -14,6 +14,7 @@
 //   kept=1                    the gateway has no main bot with a shared store
 //   create=failed|slow|checking   how New bot's Create goes
 //   admin=grant               a request for admin access is approved after a moment
+//   defacct=1                 the gateway's default model names an account (openai:work)
 
 import {
   ADMIN_SCOPES,
@@ -38,6 +39,8 @@ export type AccountParams = {
   create: string | null;
   admin: string | null;
   bot: string | null;
+  /** The gateway's default model names an account. */
+  defacct: boolean;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -54,6 +57,7 @@ export function accountParams(params: URLSearchParams): AccountParams {
     create: params.get("create"),
     admin: params.get("admin"),
     bot: params.get("bot"),
+    defacct: params.get("defacct") === "1",
   };
 }
 
@@ -67,6 +71,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   create: null,
   admin: null,
   bot: null,
+  defacct: false,
 };
 
 const MINUTE = 60_000;
@@ -190,7 +195,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
     status: "ready",
     readAt: now - MINUTE,
     labels: params.access === "admin",
-    defaultModel: "openai/gpt-5.5",
+    defaultModel: params.defacct ? "openai/gpt-5.5@openai:work" : "openai/gpt-5.5",
     mainShared: !params.kept,
     accounts,
     methods: [

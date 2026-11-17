@@ -44,11 +44,14 @@ export function Result({
   mark,
   title,
   children,
+  focus = true,
 }: {
   tone: "ok" | "warn" | "danger" | "";
   mark: "check" | "clock" | "warning" | "x";
   title: string;
   children?: ReactNode;
+  /** The title takes focus when the stage shows; not where a field after it should. */
+  focus?: boolean;
 }) {
   const icon =
     mark === "check" ? (
@@ -65,7 +68,7 @@ export function Result({
       <span className="empty-mark" data-tone={tone || undefined}>
         {icon}
       </span>
-      <h3 tabIndex={-1} data-b-focus="">
+      <h3 tabIndex={-1} data-b-focus={focus ? "" : undefined}>
         {title}
       </h3>
       {children && <p>{children}</p>}
@@ -149,8 +152,8 @@ export function CommandBlock({
 /** A code to type on the provider's page: large, mono, read in parts. */
 export function CodeBlock({ code }: { code: string }) {
   return (
-    <div className="b-code">
-      <code aria-label={`Code ${code.replace(/-/g, " ")}`}>{code}</code>
+    <div className="b-code" role="group" aria-label={`Code ${code.replace(/-/g, " ")}`}>
+      <code>{code}</code>
       <CopyValue value={code} label="Copy code" />
     </div>
   );

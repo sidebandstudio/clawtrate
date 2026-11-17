@@ -73,8 +73,11 @@ function onRadioKeys<T>(values: readonly T[], current: T, choose: (value: T) => 
     if (next === null) return;
     event.preventDefault();
     choose(values[next]!);
+    // The group, held now: the event's own target is gone once it is handled.
+    const group = event.currentTarget;
+    const index_ = next;
     requestAnimationFrame(() =>
-      event.currentTarget?.querySelectorAll<HTMLElement>('[role="radio"]')[next!]?.focus(),
+      group.querySelectorAll<HTMLElement>('[role="radio"]')[index_]?.focus(),
     );
   };
 }

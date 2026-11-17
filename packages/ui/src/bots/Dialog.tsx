@@ -56,8 +56,11 @@ export function Dialog({
       role={role}
       data-testid={testId}
       onCancel={(event) => {
-        // Escape: the dialog closes as the screen decides, not by itself.
+        // Escape: the dialog closes as the screen decides, not by itself; a dialog inside
+        // this one (a confirmation) handles its own.
         event.preventDefault();
+        event.stopPropagation();
+        if (event.target !== event.currentTarget) return;
         onCloseRef.current();
       }}
       onKeyDown={(event) => {

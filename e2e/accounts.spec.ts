@@ -13,6 +13,7 @@ import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ACCOUNT_CLIENTS, SIGNIN_CHOICES } from "../tools/dev-gateway/src/account-checks.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
@@ -96,6 +97,27 @@ async function approve(): Promise<void> {
     .toMatch(/^Approved /m);
 }
 
+/** One bridge command, over the host's own bridge socket, as another viewer of the page sends it. */
+async function hostCommand(command: Json): Promise<void> {
+  await page.evaluate(
+    (command) =>
+      new Promise<void>((resolve, reject) => {
+        const socket = new WebSocket(`ws://${location.host}/bridge`);
+        socket.onmessage = (event) => {
+          const message = JSON.parse(String(event.data)) as { type: string; id?: string };
+          if (message.type === "hello")
+            socket.send(JSON.stringify({ type: "command", id: "do", command }));
+          else if (message.id === "do") {
+            socket.close();
+            resolve();
+          }
+        };
+        socket.onerror = () => reject(new Error("bridge socket error"));
+      }),
+    command,
+  );
+}
+
 /** Every file under the host's data folder, as text: what the host keeps on disk. */
 function hostFiles(dir: string): string {
   let text = "";
@@ -116,8 +138,8 @@ test.beforeAll(async ({ browser }) => {
   admin = await openOperator(
     openInstance(INSTANCE),
     "Clawtrate accounts check",
-    ["operator.read", "operator.write", "operator.admin"],
-    [],
+    [...ACCOUNT_CLIENTS.admin.scopes],
+    [...ACCOUNT_CLIENTS.admin.caps],
   );
 
   const data = mkdtempSync(join(tmpdir(), "clawtrate-accounts-"));
@@ -146,24 +168,7 @@ test.beforeAll(async ({ browser }) => {
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
   // The interactive tier first, through the bridge's requestAccess, as the composer's access
   // bar asks for it ("+" needs it); these bots have no task yet, so no composer to ask from.
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        const socket = new WebSocket(`ws://${location.host}/bridge`);
-        socket.onmessage = (event) => {
-          const message = JSON.parse(String(event.data)) as { type: string; id?: string };
-          if (message.type === "hello")
-            socket.send(
-              JSON.stringify({ type: "command", id: "access", command: { type: "requestAccess" } }),
-            );
-          else if (message.id === "access") {
-            socket.close();
-            resolve();
-          }
-        };
-        socket.onerror = () => reject(new Error("bridge socket error"));
-      }),
-  );
+  await hostCommand({ type: "requestAccess" });
   await approve();
   await expect(page.getByTestId("plus")).toBeVisible({ timeout: 30_000 });
 });
@@ -480,4 +485,136 @@ test("F-473: changing a locked bot to another account of its provider shows the 
   // The gateway still keeps the old one-account order: the next run goes to the new account first.
   expect((await view("second", "acme"))?.profileOrder).toEqual(["acme:home"]);
   devGateway(INSTANCE, "unlock", "--agent", "second", "--provider", "acme");
+});
+
+test("F-490: a bot whose model on the gateway lists fallbacks, or lost its account, is reported with the way to correct it", async () => {
+  test.setTimeout(120_000);
+  // Fallbacks written on the gateway, not by Clawtrate.
+  await patchConfig({
+    agents: { entries: { second: { model: { fallbacks: ["globex/dev-1"] } } } },
+  });
+  const settings = await accountPage();
+  await settings.getByRole("button", { name: "Check now" }).click();
+  const note = settings.getByTestId("fallbacks-note");
+  await expect(note).toContainText(
+    "Second can move to another model. Its model on the gateway lists fallbacks (globex/dev-1)",
+    { timeout: 20_000 },
+  );
+  await note.getByRole("button", { name: "Remove fallbacks" }).click();
+  await expect(note).toHaveCount(0, { timeout: 20_000 });
+  expect(entry(await config(), "second")!.model).toEqual({
+    primary: "acme/dev-1@acme:work",
+    fallbacks: [],
+  });
+  // The account suffix removed on the gateway, where Clawtrate set one: reported as such,
+  // not as "Gateway chooses".
+  await patchConfig({ agents: { entries: { second: { model: { primary: "acme/dev-1" } } } } });
+  await settings.getByRole("button", { name: "Check now" }).click();
+  await expect(
+    settings.getByText(
+      "The gateway's model for Second has no account. It now uses the gateway's choice of Acme account.",
+    ),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(settings.getByRole("button", { name: "Choose an account" })).toBeVisible();
+  await patchConfig({
+    agents: { entries: { second: { model: { primary: "acme/dev-1@acme:work" } } } },
+  });
+});
+
+/** A merge patch of the gateway's config, as the gateway's owner might make it, applied. */
+async function patchConfig(patch: Json): Promise<void> {
+  const before = await admin.request<{ hash: string; configRevisionHash?: string }>(
+    "config.get",
+    {},
+  );
+  await admin.request("config.patch", { raw: JSON.stringify(patch), baseHash: before.hash });
+  await expect
+    .poll(
+      async () => {
+        const now = await admin.request<{
+          configRevisionHash?: string;
+          appliedConfigHash?: string;
+        }>("config.get", {});
+        return (
+          now.configRevisionHash !== before.configRevisionHash &&
+          now.appliedConfigHash === now.configRevisionHash
+        );
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(true);
+}
+
+/** An Acme account of its own, through the scripted API-key sign-in, for main (shared). */
+async function signInKey(name: string): Promise<string> {
+  const sessionId = `accounts-e2e-${name}`;
+  await admin.request("models.authLogin", {
+    sessionId,
+    authChoice: SIGNIN_CHOICES.apiKey,
+    agentId: "main",
+  });
+  let answer: { stepId: string; value: unknown } | undefined;
+  for (let i = 0; i < 20; i += 1) {
+    const next = await admin.request<{
+      done: boolean;
+      status?: string;
+      step?: { id: string; type: string; sensitive?: boolean };
+    }>("wizard.next", { sessionId, ...(answer ? { answer } : {}) });
+    answer = undefined;
+    if (next.done) {
+      expect(next.status).toBe("done");
+      return `acme:${name}`;
+    }
+    const step = next.step!;
+    answer =
+      step.type === "text" && step.sensitive
+        ? { stepId: step.id, value: `clawtrate-dev-key.acme.${name}` }
+        : { stepId: step.id, value: true };
+  }
+  throw new Error(`the sign-in of acme:${name} did not finish`);
+}
+
+test("F-476 F-490: a locked bot whose account answers 401, 402 or 429 fails the run, and no request reaches another account", async () => {
+  test.setTimeout(600_000);
+  const created = await admin.request<{ agentId: string }>("agents.create", {
+    name: "Fence",
+    model: "acme/dev-1@acme:work",
+  });
+  const bot = created.agentId;
+  for (const status of [401, 402, 429] as const) {
+    // A fresh account for each failure: the gateway rests an account after one.
+    const account = await signInKey(`fence${status}`);
+    await patchConfig({
+      agents: {
+        entries: { [bot]: { model: { primary: `acme/dev-1@${account}`, fallbacks: [] } } },
+      },
+    });
+    devGateway(INSTANCE, "lock", "--agent", bot, "--provider", "acme", account);
+    expect((await view(bot, "acme"))?.profileOrder).toEqual([account]);
+    await scripted("/scripted/accounts/fail", { account, status });
+    const session = `agent:${bot}:fence-${status}`;
+    const sent = await admin.send(session, "#text");
+    const end = await admin.terminal(String(sent.runId), 300_000);
+    expect(end.state, `the run on ${account} answering ${status}`).toBe("error");
+    const requests = await requestsFor(session);
+    expect(requests.length).toBeGreaterThan(0);
+    // Every request went to the locked account; none reached another Acme account.
+    expect(requests.map((each) => each.account)).toEqual(requests.map(() => account));
+    await scripted("/scripted/accounts/clear", { account });
+  }
+  // The interface says what the gateway's order shows, once it reads the bots again: a bot
+  // another client made appears with the next read of the gateway's bots.
+  await hostCommand({ type: "retry" });
+  await expect(botRow("Fence")).toBeVisible({ timeout: 30_000 });
+  await botRow("Fence").click();
+  if (!(await page.getByTestId("work-panel").isVisible()))
+    await page.keyboard.press("ControlOrMeta+\\");
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await page.getByRole("button", { name: /^Account: / }).click();
+  // Its account has no label: it is named by its provider alone.
+  await expect(page.getByTestId("locked-note")).toContainText(
+    "Locked. Fence's ordinary runs use Acme only",
+    { timeout: 30_000 },
+  );
+  devGateway(INSTANCE, "unlock", "--agent", bot, "--provider", "acme");
 });
