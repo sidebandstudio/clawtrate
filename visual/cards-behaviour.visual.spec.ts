@@ -172,6 +172,11 @@ test.describe("approval cards", () => {
   }) => {
     await openFixture(page, "scene=approval-pending", "light");
     await recordCommands(page);
+    // The gateway's answer is held until the check has seen the decision on its way: that state
+    // lasts only until the answer, so a fixed delay is never long enough on a loaded machine.
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
+    );
     const card = approvalCard(page);
     await card.getByRole("button", { name: "Allow once" }).focus();
     await page.keyboard.press("Enter");
@@ -180,6 +185,9 @@ test.describe("approval cards", () => {
     await expect(chosen).toBeFocused();
     await expect(card.getByText("Sending your decision…")).toBeVisible();
     await expect(card.getByRole("button", { name: "Deny" })).toBeEnabled();
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
+    );
     await expect(card.locator(".tag")).toHaveText("Allowed once");
     await expect(card).toHaveAttribute("data-state", "allowed");
     await expect(page.locator(":focus")).toHaveText(/Allowed once/);
