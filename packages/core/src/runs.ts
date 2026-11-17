@@ -2796,16 +2796,6 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
 export const UNCONFIRMED_ERROR =
   "The gateway accepted this message, but its history does not show it. It may not have been delivered.";
 
-/** The run that ended last: by its end time, and among equal or unknown ones, by its place. */
-function lastEnded(runs: readonly Run[]): Run | undefined {
-  let last: Run | undefined;
-  for (const run of runs) {
-    if (!isTerminal(run.state) || run.state === "cancelled") continue;
-    if (!last || (run.endedAt ?? -Infinity) >= (last.endedAt ?? -Infinity)) last = run;
-  }
-  return last;
-}
-
 /** Whether a message is unsent work this client still holds: its frame has not left. */
 function notLeft(message: OutgoingMessage): boolean {
   if (message.status === "queued" || message.status === "held") return true;
@@ -2816,20 +2806,29 @@ function notLeft(message: OutgoingMessage): boolean {
 }
 
 /**
- * After a confirmed Stop nothing starts by itself (conversation.md §15–16):
- * with no run active and the last one stopped, every message whose frame has
- * not left (`leftAt`) becomes `not-sent`, whatever its status said: queued,
- * held, or released and still waiting in the delivery chain. Queued runs are
- * cancelled. A message whose frame left is not touched; it settles as the
- * gateway answers it. Messages sent after the stop start a run of their own,
- * so this applies only to work left from before it.
+ * After a confirmed Stop nothing starts by itself (conversation.md §15–16).
+ * It is decided per stopped run, at the change that stops it: when a run that
+ * was active becomes `stopped`, every message whose frame has not left
+ * (`leftAt`) becomes `not-sent`, whatever its status said (queued, held, or
+ * released and still waiting in the delivery chain), and their queued runs are
+ * cancelled. Another run being active, or ending later, changes nothing. A
+ * message whose frame left is not touched; it settles as the gateway answers
+ * it. A message sent after the stop, or sent again by the person, was not
+ * waiting when it stopped, so it is never parked by it.
  */
-export function parkAfterStop(activity: TaskActivity, now: number): TaskActivity {
-  if (activity.runs.some((run) => isActive(run.state))) return activity;
-  if (lastEnded(activity.runs)?.state !== "stopped") return activity;
-  const parked = activity.outbox.filter(notLeft);
-  if (parked.length === 0) return activity;
-  let next = activity;
+export function parkAfterStop(
+  before: TaskActivity,
+  after: TaskActivity,
+  now: number,
+): TaskActivity {
+  const stopped = after.runs.some((run) => {
+    const was = findRun(before, run.id)?.state;
+    return run.state === "stopped" && was !== undefined && isActive(was);
+  });
+  if (!stopped) return after;
+  const parked = after.outbox.filter(notLeft);
+  if (parked.length === 0) return after;
+  let next = after;
   for (const message of parked) {
     next = updateMessage(cancelQueuedRun(next, message.id, now), message.id, {
       status: "not-sent",

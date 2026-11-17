@@ -3,7 +3,7 @@
 // connection, an acceptance that names no run, other runs active meanwhile.
 
 import { describe, expect, it } from "vitest";
-import { grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
 
 describe("a Stop pressed before the gateway named the run, when the send's answer is missing", () => {
@@ -96,6 +96,34 @@ describe("a Stop pressed before the gateway named the run, when the send's answe
     gateway.emit("session.message", { sessionKey: KEY });
     await until(() => gateway.calls("chat.abort").length === 1);
     expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: id }]);
+    client.stop();
+  });
+});
+
+describe("a confirmed Stop's own follow-ups, while another run is active", () => {
+  it("F-468: stay not sent when another device's run is active as the Stop is confirmed, and after it ends", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.emit("agent", agentEvent("stopped-run", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs[0]?.state === "running");
+    const later = client.sendMessage(KEY, "Queued behind it", { mode: "queue" });
+    await client.stopRun(KEY, "stopped-run");
+    // Another device starts a run in the same task before the stop is confirmed.
+    gateway.emit("agent", agentEvent("other-run", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("chat", { runId: "stopped-run", sessionKey: KEY, seq: 2, state: "aborted" });
+    await until(
+      () => transcript().runs.find((run) => run.id === "stopped-run")?.state === "stopped",
+    );
+    expect(transcript().outbox.find((m) => m.id === later)?.status).toBe("not-sent");
+    gateway.emit("chat", { runId: "other-run", sessionKey: KEY, seq: 2, state: "final" });
+    await until(
+      () => transcript().runs.find((run) => run.id === "other-run")?.state === "completed",
+    );
+    await sleep(30);
+    expect(transcript().outbox.find((m) => m.id === later)?.status).toBe("not-sent");
+    expect(gateway.calls("chat.send")).toEqual([]);
+    // Sent again by the person, it goes; the earlier Stop does not park it again.
+    client.retryMessage(KEY, later);
+    await until(() => gateway.calls("chat.send").length === 1);
     client.stop();
   });
 });

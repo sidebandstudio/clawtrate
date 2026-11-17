@@ -3385,10 +3385,14 @@ export class ClawtrateClient {
   ): void {
     const current = this.state.transcripts[key];
     if (!current) return;
+    // After a confirmed Stop nothing starts by itself: what was held or queued stays, not sent.
     const next = retainActivity(
       settleQuestionsOfEndedRuns(
         normalizeApprovals(
-          this.withKeptAttempts(current, fn(current, this.context(key))),
+          this.withKeptAttempts(
+            current,
+            parkAfterStop(current, fn(current, this.context(key)), this.now()),
+          ),
           (runId) => this.otherRun(runId),
         ),
       ),
@@ -3467,11 +3471,6 @@ export class ClawtrateClient {
           ),
         );
       }
-    }
-    // After a confirmed Stop nothing starts by itself: what was held or queued stays, not sent.
-    if (parkAfterStop(transcript, this.now()) !== transcript) {
-      this.updateActivity(key, (activity) => parkAfterStop(activity, this.now()));
-      return;
     }
     const active = activeRun(transcript);
     const held = transcript.outbox
@@ -4434,7 +4433,10 @@ export class ClawtrateClient {
           ((run.state === "stopping" && !findRun(current, run.id)?.bound) ||
             (run.state === "stopped" && !run.outcomeKnown)),
       );
-      const reconciled = reconcileOutbox({ ...current, runs }, messages);
+      const reconciled = reconcileOutbox(
+        parkAfterStop(current, { ...current, runs }, this.now()),
+        messages,
+      );
       // History holds these now: their files are no longer needed.
       for (const message of current.outbox) {
         if (!reconciled.outbox.some((each) => each.id === message.id))
