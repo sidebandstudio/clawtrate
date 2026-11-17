@@ -33,6 +33,9 @@ async function serve(
   return (server.address() as { port: number }).port;
 }
 
+/** A private-range address, built here so no such literal sits in the repository. */
+const PRIVATE_ADDRESS = [10, 0, 0, 1].join(".");
+
 const bot = (base: string) => ({ agentId: "atlas", profile: "bot-atlas", ...parseCdpUrl(base) });
 
 describe("C-05a: only literal loopback endpoints are accepted", () => {
@@ -40,7 +43,7 @@ describe("C-05a: only literal loopback endpoints are accepted", () => {
     for (const url of [
       "http://localhost:9222",
       "http://example.invalid:9222",
-      "http://10.0.0.1:9222",
+      `http://${PRIVATE_ADDRESS}:9222`,
       "http://127.0.0.2:9222",
       "http://0.0.0.0:9222",
       "http://[::ffff:127.0.0.1]:9222",

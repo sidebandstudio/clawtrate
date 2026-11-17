@@ -40,6 +40,8 @@ import { choosePorts } from "../src/registry.ts";
 import { PAGES_RECORD_PATH, REFUSED_TITLE, startScriptedPages } from "../src/scripted-pages.ts";
 
 const PORTS = { gatewayPort: 19400, providerPort: 19410 };
+/** A private-range address, built here so no such literal sits in the repository. */
+const PRIVATE_ADDRESS = [10, 0, 0, 1].join(".");
 const CHROMIUM = "/opt/chromium-for-tests/chrome";
 const temps: string[] = [];
 const servers: Server[] = [];
@@ -252,7 +254,10 @@ describe("the browser setup the tool writes", () => {
       ],
       [
         "a remote endpoint",
-        (c) => Object.assign(c.browser!.profiles["bot-pip"]!, { cdpUrl: "http://10.0.0.1:9222" }),
+        (c) =>
+          Object.assign(c.browser!.profiles["bot-pip"]!, {
+            cdpUrl: `http://${PRIVATE_ADDRESS}:9222`,
+          }),
       ],
       ["a profile added", (c) => Object.assign(c.browser!.profiles, { extra: { cdpPort: 19415 } })],
       [

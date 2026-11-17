@@ -1,0 +1,92 @@
+// The repository is public: no tracked file may carry a private-range
+// address literal. Documentation ranges and the unspecified address are
+// fine as synthetic fixtures; a test that needs a private address builds it
+// from its parts at run time.
+
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const ROOT = join(import.meta.dirname, "..");
+
+const IPV4 = /(?<![0-9.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![0-9])/g;
+// Link-local IPv6 (the fe80 /10 prefix) and unique-local IPv6 (the fc00 /7 prefix), written with at least two more groups.
+const IPV6 =
+  /(?<![0-9a-z:])(?:fe[89ab][0-9a-f]|f[cd][0-9a-f]{2})(?::[0-9a-f]{0,4}){2,7}(?![0-9a-z:])/gi;
+
+/** Whether a dotted quad is in 10/8, 172.16/12, 192.168/16, 100.64/10 or 169.254/16. */
+export function isPrivateIpv4(parts: number[]): boolean {
+  const [a, b] = parts as [number, number];
+  if (parts.some((n) => n > 255)) return false;
+  return (
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254)
+  );
+}
+
+/** The private-range address literals in `text`. */
+export function privateAddresses(text: string): string[] {
+  const found: string[] = [];
+  for (const match of text.matchAll(IPV4)) {
+    if (isPrivateIpv4(match.slice(1, 5).map(Number))) found.push(match[0]);
+  }
+  for (const match of text.matchAll(IPV6)) found.push(match[0]);
+  return found;
+}
+
+describe("tracked files", () => {
+  it("recognizes each private range, and leaves documentation, loopback and unspecified addresses", () => {
+    const join4 = (...parts: number[]) => parts.join(".");
+    for (const address of [
+      join4(10, 1, 2, 3),
+      join4(172, 16, 0, 1),
+      join4(172, 31, 255, 1),
+      join4(192, 168, 1, 1),
+      join4(100, 64, 0, 1),
+      join4(169, 254, 1, 1),
+      ["fe80", "", "1"].join(":"),
+      ["fd12", "3456", "", "1"].join(":"),
+    ]) {
+      expect(privateAddresses(`at ${address} here`), address).toEqual([address]);
+    }
+    for (const address of [
+      "127.0.0.1",
+      "0.0.0.0",
+      "192.0.2.1",
+      "198.51.100.7",
+      "203.0.113.9",
+      "172.32.0.1",
+      "100.128.0.1",
+      "2001:db8::1",
+      "::1",
+      "1.10.0.0.1",
+    ]) {
+      expect(privateAddresses(`at ${address} here`), address).toEqual([]);
+    }
+  });
+
+  it("carry no private-range address literal", () => {
+    const files = execFileSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" })
+      .split("\0")
+      .filter(Boolean);
+    expect(files.length).toBeGreaterThan(100);
+    const found: string[] = [];
+    for (const file of files) {
+      let bytes: Buffer;
+      try {
+        bytes = readFileSync(join(ROOT, file));
+      } catch {
+        continue; // deleted in the working tree
+      }
+      if (bytes.includes(0)) continue; // binary
+      for (const address of privateAddresses(bytes.toString("utf8"))) {
+        found.push(`${file}: ${address}`);
+      }
+    }
+    expect(found).toEqual([]);
+  });
+});
