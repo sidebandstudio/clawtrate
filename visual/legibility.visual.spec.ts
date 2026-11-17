@@ -63,6 +63,18 @@ function audit(): Finding[] {
   };
 
   const findings: Finding[] = [];
+  const measure = (text: string, style: CSSStyleDeclaration, element: Element) => {
+    const bg = background(element);
+    const fg = over(parse(style.color), bg);
+    const [hi, lo] = [luminance(fg), luminance(bg)].sort((x, y) => y - x) as [number, number];
+    findings.push({
+      text: text.slice(0, 60),
+      size: Number.parseFloat(style.fontSize),
+      ratio: Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100,
+      color: style.color,
+      background: `rgb(${bg.slice(0, 3).map(Math.round).join(", ")})`,
+    });
+  };
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const text = node.textContent?.trim();
@@ -75,16 +87,23 @@ function audit(): Finding[] {
     if (rect.width === 0 || rect.height === 0) continue;
     const style = getComputedStyle(element);
     if (style.visibility === "hidden") continue;
-    const bg = background(element);
-    const fg = over(parse(style.color), bg);
-    const [hi, lo] = [luminance(fg), luminance(bg)].sort((x, y) => y - x) as [number, number];
-    findings.push({
-      text: text.slice(0, 60),
-      size: Number.parseFloat(style.fontSize),
-      ratio: Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100,
-      color: style.color,
-      background: `rgb(${bg.slice(0, 3).map(Math.round).join(", ")})`,
-    });
+    measure(text, style, element);
+  }
+  // A field's value and its placeholder are drawn text too, but not text nodes.
+  for (const field of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+    "input, textarea",
+  )) {
+    if (field.closest("[inert], [hidden]") || field.type === "hidden") continue;
+    const rect = field.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) continue;
+    if (field.value) measure(`[value] ${field.value}`, getComputedStyle(field), field);
+    else if (field.placeholder) {
+      measure(
+        `[placeholder] ${field.placeholder}`,
+        getComputedStyle(field, "::placeholder"),
+        field,
+      );
+    }
   }
   return findings;
 }
@@ -170,6 +189,25 @@ for (const size of [WIDE, PHONE]) {
     });
   }
 }
+
+test("the audit reads field values and placeholders, and catches a small, faint one", async ({
+  page,
+}) => {
+  await openFixture(page, "scene=connect", "light");
+  const fields = (await page.evaluate(audit)).filter((f) => f.text.startsWith("["));
+  expect(fields.map((f) => f.text)).toEqual([
+    "[value] ws://127.0.0.1:19001",
+    "[placeholder] Token, for the first pairing only",
+  ]);
+  expect(fields.every((f) => f.size >= 12 && f.ratio >= 4.5)).toBe(true);
+
+  await page.addStyleTag({
+    content: ".input::placeholder { color: #e4e4e4 !important; font-size: 10px !important; }",
+  });
+  const placeholder = (await page.evaluate(audit)).find((f) => f.text.startsWith("[placeholder]"))!;
+  expect(placeholder.size).toBe(10);
+  expect(placeholder.ratio).toBeLessThan(4.5);
+});
 
 test("the fixture mode makes no request beyond its own files", async ({ page }) => {
   const foreign: string[] = [];
