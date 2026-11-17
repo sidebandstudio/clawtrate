@@ -11,9 +11,9 @@ import type {
   Run,
   StepRaw,
 } from "@clawtrate/core";
-import { useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import { useContext, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { Avatar } from "../Avatar.tsx";
-import { controlName, useCardEnv, useStepHandover } from "./context.tsx";
+import { CardThoughtContext, controlName, useCardEnv, useStepHandover } from "./context.tsx";
 import {
   botMessageKey,
   botMessageNote,
@@ -207,6 +207,7 @@ export function BotMessageCardView({
    */
   partial: boolean;
 }) {
+  const thought = useContext(CardThoughtContext);
   const env = useCardEnv();
   const raw = useRawDisclosure(read.load);
   const [full, setFull] = useState(false);
@@ -295,6 +296,7 @@ export function BotMessageCardView({
         <ChevronIcon className="chevron" />
       </summary>
       <div className="messaged-body">
+        {thought && <div className="action-thought">{thought}</div>}
         {full && partial && (
           <p className="exchange-note" data-testid="exchange-partial">
             Only part of this task's history is loaded here, so earlier messages between{" "}
@@ -405,6 +407,7 @@ export function BotMessageCardView({
 // "Messaged T3 Code" ---------------------------------------------------------------
 
 export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRawState }) {
+  const thought = useContext(CardThoughtContext);
   const env = useCardEnv();
   // The ordinary step this call was drawn as until its result named it, as the reader left it.
   const handover = useStepHandover();
@@ -525,6 +528,7 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
         <ChevronIcon className="chevron" />
       </summary>
       <div className="messaged-body">
+        {thought && <div className="action-thought">{thought}</div>}
         <ol className="exchange">
           <SentItem
             sender={sender}

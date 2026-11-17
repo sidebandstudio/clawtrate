@@ -35,6 +35,7 @@ import {
 } from "react";
 import {
   CardFor,
+  CardThoughtContext,
   PlacedCardsContext,
   codingCalls,
   refKey,
@@ -580,17 +581,17 @@ function GroupView({
     case "break":
     case "bubble": {
       const ref = group.ref;
-      const before =
+      // The reasoning that led to a Messaged card's call is drawn inside that card (7.5).
+      const thought =
         group.type === "card" && group.thought ? (
-          <ThoughtLine thought={group.thought} place="end" revision={revision} />
+          <ThoughtLine thought={group.thought} place="card" revision={revision} />
         ) : null;
       switch (ref.t) {
         case "card":
           return (
-            <>
-              {before}
+            <CardThoughtContext.Provider value={thought}>
               <CardFor cardRef={ref.ref} />
-            </>
+            </CardThoughtContext.Provider>
           );
         case "text":
           return (

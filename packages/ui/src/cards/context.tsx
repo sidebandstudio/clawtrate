@@ -10,7 +10,7 @@ import type {
   Run,
   Transcript,
 } from "@clawtrate/core";
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
 /**
  * How the reader left a call's ordinary step or its T3 Code card (`from`):
@@ -49,6 +49,13 @@ export type StepHandover = {
   /** The state the step had, if it was drawn. */
   stateOf: (callId: string) => StepState | undefined;
 };
+
+/**
+ * The "Thought" line of the reasoning that led to the call a Messaged card is
+ * drawn for: the card draws it first in its body, so it is not left in the
+ * conversation when the card is closed (conversation.md 7.5).
+ */
+export const CardThoughtContext = createContext<ReactNode>(null);
 
 export const StepHandoverContext = createContext<StepHandover | null>(null);
 

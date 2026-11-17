@@ -513,6 +513,41 @@ test.describe("action cards", () => {
     }
   });
 
+  test("F-423: the Thought line of reasoning that led to a Messaged card's call is inside that card, not left in the conversation", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=messaged-started", "light");
+    const card = page.getByTestId("messaged-card");
+    await expect(card).toHaveCount(1);
+    // Reasoning before the send, as the engine records it: a reasoning step before the call.
+    await setState(
+      page,
+      `const key = Object.keys(state.transcripts).find((k) =>
+         state.transcripts[k].runs.some((r) => r.steps.some((s) => s.toolName === "sessions_send")));
+       const t = state.transcripts[key];
+       const runs = t.runs.map((r) => {
+         const i = r.steps.findIndex((s) => s.toolName === "sessions_send");
+         if (i === -1) return r;
+         const at = r.steps[i].startedAt;
+         const thought = { ...r.steps[i], id: "reasoning:" + r.id + ":start:0", kind: "reasoning",
+           title: "Reasoning", toolName: null, toolCallId: null, status: "done",
+           startedAt: at - 3000, endedAt: at - 1000, argsText: null,
+           output: { text: "Marlow keeps the shared notes, so ask Marlow.", totalChars: 45 },
+           result: null, error: null, raw: null, rawSize: null };
+         return { ...r, steps: [...r.steps.slice(0, i), thought, ...r.steps.slice(i)] };
+       });
+       return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, runs } } };`,
+    );
+    const thought = page.locator(".transcript .thought");
+    await expect(thought).toHaveCount(1);
+    // Inside the card, so closed with it.
+    await expect(card.locator(".thought")).toHaveCount(1);
+    await expect(thought).toBeHidden();
+    await card.locator(":scope > summary").click();
+    await expect(card.locator(".thought")).toBeVisible();
+    await expect(card.locator(".thought")).toContainText("Thought for 2s");
+  });
+
   test("text written beside a tool call is one bubble before its card, never repeated as the streaming reply", async ({
     page,
   }) => {
