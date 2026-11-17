@@ -424,11 +424,21 @@ export function browserConfigProblems(config, parsed, env = {}) {
     if (entry.cdpUrl !== undefined) {
       problems.push(`browser.profiles.${bot.profile} must not set cdpUrl`);
     }
-    if (entry.driver !== undefined && entry.driver !== "openclaw") {
-      problems.push(`browser.profiles.${bot.profile} must use the managed openclaw driver`);
+    const resolved = view.profiles.get(bot.profile);
+    if (resolved.engine !== "chromium" || resolved.driver !== "openclaw") {
+      problems.push(`browser.profiles.${bot.profile} must be a managed Chromium profile`);
+      continue;
     }
-    if (entry.engine !== undefined && entry.engine !== "chromium") {
-      problems.push(`browser.profiles.${bot.profile} must use the chromium engine`);
+    if (resolved.attachOnly) {
+      problems.push(
+        `browser.profiles.${bot.profile} is attach-only: the gateway would attach to whatever answers on its port instead of starting the bot's browser`,
+      );
+    }
+    const mine = { scheme: "http", host: bot.host, port: bot.port };
+    if (describe(resolved) !== describe(mine)) {
+      problems.push(
+        `the gateway resolves browser.profiles.${bot.profile} to ${describe(resolved)}, not the plugin's ${describe(mine)}`,
+      );
     }
   }
   for (const profile of view.profiles.values()) {

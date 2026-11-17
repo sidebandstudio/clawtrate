@@ -487,3 +487,88 @@ describe("ownership is decided on the endpoint the gateway resolves, never on th
     await h.stop();
   });
 });
+
+describe("each bot's profile resolves, as the gateway resolves it, to the endpoint the plugin uses", () => {
+  const profiles = BROWSER_CONFIG.browser.profiles;
+  const parsed = parseConfig(BASE_CONFIG);
+  const problems = (browser: Record<string, unknown>, config = BASE_CONFIG) =>
+    browserConfigProblems(
+      { browser: { defaultProfile: "openclaw", profiles, ...browser } },
+      parseConfig(config),
+      {},
+    );
+
+  it("refuses a bot profile that inherits another host or scheme from browser.cdpUrl", () => {
+    for (const cdpUrl of [
+      "http://192.0.2.1:9222",
+      "http://localhost:9222",
+      "http://[::1]:9222",
+      "https://127.0.0.1:9222",
+      "http://a-name.example:9222",
+    ]) {
+      const found = problems({ cdpUrl }).join("; ");
+      expect(found, cdpUrl).toMatch(
+        /the gateway resolves browser\.profiles\.bot-atlas to \S+, not the plugin's http:\/\/127\.0\.0\.1:19113/,
+      );
+      expect(found, cdpUrl).toMatch(/bot-pixel/);
+      expect(
+        () => load({ hostConfig: { browser: { defaultProfile: "openclaw", profiles, cdpUrl } } }),
+        cdpUrl,
+      ).toThrow(/browser config/);
+    }
+    // The same host, on a port of no bot's, changes nothing for them.
+    expect(problems({ cdpUrl: "http://127.0.0.1:9222" })).toEqual([]);
+  });
+
+  it("refuses a bot endpoint on another loopback address than the gateway's", () => {
+    const config = {
+      bots: { atlas: { profile: "bot-atlas", cdpUrl: "http://[::1]:19113" } },
+    };
+    expect(problems({}, config).join("; ")).toMatch(
+      /resolves browser\.profiles\.bot-atlas to http:\/\/127\.0\.0\.1:19113, not the plugin's http:\/\/\[::1\]:19113/,
+    );
+    expect(problems({ cdpUrl: "http://[::1]:9222" }, config)).toEqual([]);
+  });
+
+  it("refuses a bot profile the gateway would only attach to, or would not run as managed Chromium", () => {
+    for (const [what, browser] of [
+      ["browser.attachOnly", { attachOnly: true }],
+      [
+        "profile attachOnly",
+        { profiles: { ...profiles, "bot-atlas": { cdpPort: 19113, attachOnly: true } } },
+      ],
+      [
+        "extension driver",
+        { profiles: { ...profiles, "bot-atlas": { cdpPort: 19113, driver: "extension" } } },
+      ],
+      [
+        "lightpanda",
+        { profiles: { ...profiles, "bot-atlas": { cdpPort: 19113, engine: "lightpanda" } } },
+      ],
+      [
+        "unknown engine",
+        { profiles: { ...profiles, "bot-atlas": { cdpPort: 19113, engine: "other" } } },
+      ],
+    ] as const) {
+      expect(problems(browser).length, what).toBeGreaterThan(0);
+    }
+  });
+
+  it("retires a bot whose profile comes to resolve elsewhere, and refuses its calls", async () => {
+    const h = load();
+    const view = await h.call("view.open", { targetId: ATLAS_TAB });
+    expect(view.ok).toBe(true);
+    h.setCurrent({
+      browser: { defaultProfile: "openclaw", profiles, cdpUrl: "http://192.0.2.1:9222" },
+    });
+    const answer = await h.call("tabs", {});
+    expect([answer.error?.details?.reason, answer.error?.message]).toEqual([
+      "browser_config_mismatch",
+      "the browser config changed: the gateway resolves browser.profiles.bot-atlas to http://192.0.2.1:19113, not the plugin's http://127.0.0.1:19113",
+    ]);
+    expect(h.state.streams.size).toBe(0);
+    expect((await h.before("atlas", "r", "c1", { action: "tabs" }))?.block).toBe(true);
+    await h.stop();
+    expect(parsed.bots.size).toBe(2);
+  });
+});
