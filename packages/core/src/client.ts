@@ -761,7 +761,11 @@ export class ClawtrateClient {
     refreshBots: () => this.refreshBots(),
     createMainTask: async (botId) => {
       const generation = this.generation;
-      await this.request("sessions.create", { key: `agent:${botId}:main`, agentId: botId, label: "Main" });
+      await this.request("sessions.create", {
+        key: `agent:${botId}:main`,
+        agentId: botId,
+        label: "Main",
+      });
       if (generation === this.generation) await this.refreshSessions(generation);
     },
     now: () => this.now(),

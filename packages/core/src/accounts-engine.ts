@@ -940,7 +940,9 @@ export class AccountsEngine {
     await ctx.refreshBots().catch(() => undefined);
     await ctx
       .createMainTask(botId)
-      .catch((error: unknown) => ctx.log(`could not give ${botId} its first task: ${errorText(error)}`));
+      .catch((error: unknown) =>
+        ctx.log(`could not give ${botId} its first task: ${errorText(error)}`),
+      );
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
     ctx.update((a) => ({

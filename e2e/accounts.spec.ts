@@ -560,7 +560,6 @@ async function signInKey(name: string): Promise<string> {
       status?: string;
       step?: { id: string; type: string; sensitive?: boolean };
     }>("wizard.next", { sessionId, ...(answer ? { answer } : {}) });
-    answer = undefined;
     if (next.done) {
       expect(next.status).toBe("done");
       return `acme:${name}`;
