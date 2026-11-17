@@ -9,6 +9,7 @@ import type {
   ApprovalCard,
   ApprovalResolution,
   ApprovalResolver,
+  DecisionAttempt,
   ExecApprovalDetail,
   PluginApprovalDetail,
   SystemAgentApprovalDetail,
@@ -310,6 +311,7 @@ const systemAgentDetail = object<SystemAgentApprovalDetail>()({
   proposalHash: NAME,
 });
 const resolver = object<ApprovalResolver>()({ kind: ENUM, id: ID });
+const decisionAttempt = object<DecisionAttempt>()({ attempt: NUMBER, decision: ENUM });
 export const APPROVAL: Bound = flagged<ApprovalCard>()({
   id: ID,
   kind: ENUM,
@@ -342,6 +344,11 @@ export const APPROVAL: Bound = flagged<ApprovalCard>()({
   decisionCut: FLAG,
   submitting: FLAG,
   submittingDecision: ENUM,
+  attempt: NUMBER,
+  inFlight: list(2, decisionAttempt),
+  unknownAt: NUMBER,
+  unknownDeny: FLAG,
+  readingAt: NUMBER,
   error: text(MAX_ERROR_JSON_CHARS),
   decisionError: ENUM,
   stillOpen: FLAG,

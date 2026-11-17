@@ -12,7 +12,12 @@ import {
   applyQuestionRequested,
   applyQuestionResolved,
   emptyActivity,
-  markApproval,
+  beginDecision,
+  beginReadback,
+  endDecision,
+  endReadback,
+  patchError,
+  readbackPending,
   normalizeApprovals,
   parseExecApproval,
   parsePluginApproval,
@@ -230,6 +235,13 @@ function waitingApproval(
   const parsed = record === execRecord ? parseExecApproval(raw) : parsePluginApproval(raw);
   if (parsed) b.update((activity) => applyApprovalRequested(activity, admitApproval(parsed)));
   return b;
+}
+
+/** A read-back of the approval found it still pending, as the engine applies it. */
+function stillPending(activity: TaskActivity): TaskActivity {
+  const begun = beginReadback(activity, "apr_5d2a");
+  const read = readbackPending(begun.activity, "apr_5d2a", begun.attempt);
+  return endReadback(read.activity, "apr_5d2a", begun.attempt);
 }
 
 function resolution(
@@ -502,29 +514,32 @@ function build(
       };
     case "approval-sending":
       return {
-        b: waitingApproval(now).update((a) =>
-          markApproval(a, "apr_5d2a", { submitting: true, error: null }),
-        ),
+        b: waitingApproval(now).update((a) => beginDecision(a, "apr_5d2a", "allow-once").activity),
       };
     case "approval-refused":
       return {
         b: waitingApproval(now).update((a) =>
-          markApproval(a, "apr_5d2a", {
-            submitting: false,
-            error: "allow-always is unavailable for this command",
-            decisionError: "refused",
-            stillOpen: true,
-          }),
+          stillPending(
+            endDecision(
+              beginDecision(a, "apr_5d2a", "allow-always").activity,
+              "apr_5d2a",
+              1,
+              "refused",
+              "allow-always is unavailable for this command",
+            ),
+          ),
         ),
       };
     case "approval-unknown":
       return {
         b: waitingApproval(now).update((a) =>
-          markApproval(a, "apr_5d2a", {
-            submitting: false,
-            error: "The gateway did not answer within 60 seconds.",
-            decisionError: "unknown",
-          }),
+          endDecision(
+            beginDecision(a, "apr_5d2a", "allow-once").activity,
+            "apr_5d2a",
+            1,
+            "unknown",
+            "The gateway did not answer within 60 seconds.",
+          ),
         ),
       };
     case "approval-cut":
@@ -635,10 +650,7 @@ function build(
         b: waitingApproval(now)
           .update(settle(resolution("denied", "deny", ago(1), { resolvedBy: "Pip's laptop" })))
           .update((a) =>
-            markApproval(a, "apr_5d2a", {
-              submitting: false,
-              error: "It had already been settled; this is how it ended.",
-            }),
+            patchError(a, "apr_5d2a", "It had already been settled; this is how it ended."),
           ),
       };
 

@@ -159,8 +159,26 @@ export type ApprovalCard = {
   cut?: string[];
   /** A resolution from this client is on its way, or the last one failed. */
   submitting: boolean;
-  /** The decision on its way while `submitting`; a Deny may still follow an allow. */
+  /** The latest decision on its way while `submitting`; a Deny may still follow an allow. */
   submittingDecision: ApprovalDecision | null;
+  /**
+   * The number of the latest attempt for this approval. Every decision sent
+   * and every read-back sent takes the next number; a response settles only
+   * the attempt it belongs to.
+   */
+  attempt: number;
+  /** Decisions on their way, by attempt: at most an allow and a Deny that followed it. */
+  inFlight: DecisionAttempt[];
+  /**
+   * The attempt number current when the latest unknown outcome was
+   * established. Only a read-back numbered above it, answered before any newer
+   * attempt began, can clear it. Null when no outcome is unknown.
+   */
+  unknownAt: number | null;
+  /** A Deny is among the decisions whose outcome is unknown: no Deny is sent again until read back. */
+  unknownDeny: boolean;
+  /** The attempt number of the latest read-back still on its way, or null. */
+  readingAt: number | null;
   error: string | null;
   /**
    * What the last failed resolution from this client establishes. `refused`:
@@ -183,6 +201,9 @@ export type ApprovalCard = {
  * others failed (`approvalSources` says which); an incomplete list is not "no
  * approvals".
  */
+/** One decision this client sent for an approval, and the attempt number it carries. */
+export type DecisionAttempt = { attempt: number; decision: ApprovalDecision };
+
 export type ApprovalAccess = "unavailable" | "loading" | "ready" | "partial" | "error";
 export type ApprovalSourceAccess = "unavailable" | "loading" | "ready" | "error";
 export const APPROVAL_KINDS: readonly ApprovalKind[] = ["exec", "plugin", "system-agent"];
@@ -271,6 +292,11 @@ function blank(id: string, kind: ApprovalKind, raw: unknown): ApprovalCard {
     decisionCut: false,
     submitting: false,
     submittingDecision: null,
+    attempt: 0,
+    inFlight: [],
+    unknownAt: null,
+    unknownDeny: false,
+    readingAt: null,
     error: null,
     decisionError: null,
     stillOpen: false,
@@ -607,6 +633,11 @@ export function applyApprovalRequested(activity: TaskActivity, card: ApprovalCar
             : (existing.exec ?? card.exec),
         submitting: existing.submitting,
         submittingDecision: existing.submittingDecision,
+        attempt: existing.attempt,
+        inFlight: existing.inFlight,
+        unknownAt: existing.unknownAt,
+        unknownDeny: existing.unknownDeny,
+        readingAt: existing.readingAt,
         error: existing.error,
         decisionError: existing.decisionError,
         stillOpen: existing.stillOpen,
@@ -697,6 +728,10 @@ export function applyApprovalResolved(
       outcomeUnknown: resolution.lossy,
       submitting: false,
       submittingDecision: null,
+      inFlight: [],
+      unknownAt: null,
+      unknownDeny: false,
+      readingAt: null,
       error: null,
       decisionError: null,
       stillOpen: false,
@@ -720,17 +755,162 @@ export function applyApprovalResolved(
   return normalizeApprovals({ ...activity, approvals });
 }
 
-export function markApproval(
+// Decision attempts ----------------------------------------------------------------
+
+/**
+ * Why a decision may not be sent now, or null when it may. At most one
+ * decision is on its way, except that a Deny may follow an allow still on its
+ * way. No allow leaves while any outcome is unknown, and no Deny leaves again
+ * while an earlier Deny's outcome is unknown.
+ */
+export function decisionRefusal(card: ApprovalCard, decision: ApprovalDecision): string | null {
+  if (card.status !== "pending") return "That approval is no longer open.";
+  if (card.inFlight.length > 0) {
+    const denyAfterAllow =
+      decision === "deny" && card.inFlight.every((each) => each.decision !== "deny");
+    if (!denyAfterAllow) return "An answer to that approval is already on its way.";
+  }
+  if (decision !== "deny" && card.decisionError === "unknown") {
+    return "Whether the last decision was applied is not known yet; check the request again first.";
+  }
+  if (decision === "deny" && card.unknownDeny) {
+    return "Whether the last Deny was applied is not known yet; check the request again first.";
+  }
+  return null;
+}
+
+function patchApproval(
   activity: TaskActivity,
   id: string,
-  patch: Pick<ApprovalCard, "submitting" | "error"> &
-    Partial<Pick<ApprovalCard, "decisionError" | "stillOpen" | "submittingDecision">>,
+  change: (card: ApprovalCard) => ApprovalCard,
 ): TaskActivity {
-  // Nothing on its way when nothing is submitting.
-  const full = patch.submitting ? patch : { submittingDecision: null, ...patch };
   return {
     ...activity,
-    approvals: activity.approvals.map((each) => (each.id === id ? { ...each, ...full } : each)),
+    approvals: activity.approvals.map((each) => (each.id === id ? change(each) : each)),
+  };
+}
+
+/** What is on its way, as the card shows it. */
+function withInFlight(card: ApprovalCard, inFlight: DecisionAttempt[]): ApprovalCard {
+  return {
+    ...card,
+    inFlight,
+    submitting: inFlight.length > 0,
+    submittingDecision: inFlight.at(-1)?.decision ?? null,
+  };
+}
+
+/** Set the error a card shows, and nothing else. */
+export function patchError(activity: TaskActivity, id: string, error: string | null): TaskActivity {
+  return patchApproval(activity, id, (card) => ({ ...card, error }));
+}
+
+/** A decision is sent: it takes the next attempt number. An unknown outcome stays unknown. */
+export function beginDecision(
+  activity: TaskActivity,
+  id: string,
+  decision: ApprovalDecision,
+): { activity: TaskActivity; attempt: number } {
+  const card = activity.approvals.find((each) => each.id === id);
+  const attempt = (card?.attempt ?? 0) + 1;
+  return {
+    attempt,
+    activity: patchApproval(activity, id, (each) => ({
+      ...withInFlight({ ...each, attempt }, [...each.inFlight, { attempt, decision }]),
+      error: null,
+      decisionError: each.decisionError === "unknown" ? "unknown" : null,
+      stillOpen: false,
+    })),
+  };
+}
+
+/**
+ * A decision's own response. It settles only its attempt: an answer that the
+ * decision was refused, that its outcome is unknown, or that it never left.
+ * A settled card only forgets the attempt.
+ */
+export function endDecision(
+  activity: TaskActivity,
+  id: string,
+  attempt: number,
+  outcome: "refused" | "unknown" | "not-sent" | "answered",
+  error: string | null,
+): TaskActivity {
+  return patchApproval(activity, id, (card) => {
+    const own = card.inFlight.find((each) => each.attempt === attempt);
+    const next = withInFlight(
+      card,
+      card.inFlight.filter((each) => each.attempt !== attempt),
+    );
+    if (card.status !== "pending" || outcome === "answered") return next;
+    if (outcome === "unknown") {
+      return {
+        ...next,
+        decisionError: "unknown",
+        unknownAt: card.attempt,
+        unknownDeny: card.unknownDeny || own?.decision === "deny",
+        stillOpen: false,
+        error,
+      };
+    }
+    if (outcome === "refused" && card.decisionError !== "unknown") {
+      return { ...next, decisionError: "refused", stillOpen: false, error };
+    }
+    // Refused while another outcome is unknown: the unknown one decides what may be sent.
+    return { ...next, error };
+  });
+}
+
+/** A read-back is sent: it takes the next attempt number. */
+export function beginReadback(
+  activity: TaskActivity,
+  id: string,
+): { activity: TaskActivity; attempt: number } {
+  const card = activity.approvals.find((each) => each.id === id);
+  const attempt = (card?.attempt ?? 0) + 1;
+  return {
+    attempt,
+    activity: patchApproval(activity, id, (each) => ({ ...each, attempt, readingAt: attempt })),
+  };
+}
+
+/** A read-back's answer arrived, or it failed: it is no longer on its way. */
+export function endReadback(activity: TaskActivity, id: string, attempt: number): TaskActivity {
+  return patchApproval(activity, id, (each) =>
+    each.readingAt === attempt ? { ...each, readingAt: null } : each,
+  );
+}
+
+/**
+ * A read-back answered that the request is still pending. It applies only if
+ * no newer attempt began since it was sent; then it clears an unknown outcome
+ * established before it was sent, and marks a refusal still open. `stale`
+ * says it was dropped.
+ */
+export function readbackPending(
+  activity: TaskActivity,
+  id: string,
+  attempt: number,
+): { activity: TaskActivity; stale: boolean } {
+  const card = activity.approvals.find((each) => each.id === id);
+  if (!card || card.status !== "pending" || card.attempt !== attempt) {
+    return { activity, stale: true };
+  }
+  return {
+    stale: false,
+    activity: patchApproval(activity, id, (each) => {
+      if (each.unknownAt !== null && attempt > each.unknownAt) {
+        return {
+          ...each,
+          decisionError: null,
+          unknownAt: null,
+          unknownDeny: false,
+          stillOpen: false,
+          error: null,
+        };
+      }
+      return each.decisionError === "refused" ? { ...each, stillOpen: true } : each;
+    }),
   };
 }
 

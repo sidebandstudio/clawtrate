@@ -3,7 +3,11 @@
 // again while a decision's outcome is unknown, and never while the text
 // decided on was cut and has not been read whole.
 
-import type { ApprovalCard as Approval, ApprovalDecision } from "@clawtrate/core";
+import {
+  decisionRefusal,
+  type ApprovalCard as Approval,
+  type ApprovalDecision,
+} from "@clawtrate/core";
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useCardEnv, useMinuteClock } from "./context.tsx";
 import {
@@ -284,9 +288,8 @@ function PendingApproval({
 
   const decide = (decision: ApprovalDecision) => {
     if (!mayDecide) return;
-    // A second decision while one is on its way is only ever Deny, which the gateway may still take.
-    if (!sendable.has(decision) || (card.submitting && decision !== "deny")) return;
-    if (card.submitting && card.submittingDecision === "deny") return;
+    // The engine's rule: a second decision while one is on its way is only ever a first Deny.
+    if (!sendable.has(decision) || decisionRefusal(card, decision) !== null) return;
     setChosen(decision);
     void env
       .invoke({
@@ -348,16 +351,17 @@ function PendingApproval({
   };
 
   const sending = phase === "sending";
+  const denySending = card.inFlight.some((each) => each.decision === "deny");
   const denyButton = (
     <button
       type="button"
       className="button"
       data-variant="quiet"
       data-decision="deny"
-      aria-disabled={(sending && chosen === "deny") || undefined}
+      aria-disabled={decisionRefusal(card, "deny") !== null || undefined}
       onClick={() => decide("deny")}
     >
-      {sending && chosen === "deny" ? "Sending…" : "Deny"}
+      {denySending ? "Sending…" : "Deny"}
     </button>
   );
 

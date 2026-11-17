@@ -5,9 +5,14 @@
 import {
   applyApprovalResolved,
   applyQuestionResolved,
+  beginDecision,
+  beginReadback,
+  decisionRefusal,
   decisionText,
+  endDecision,
+  endReadback,
   initialState,
-  markApproval,
+  readbackPending,
   markQuestion,
   PAIRING_ENDED,
   type ApprovalCard,
@@ -397,6 +402,15 @@ function inTask(
   };
 }
 
+/** A read-back that found the request still pending, as the engine applies it. */
+function readBack(activity: TaskActivity, approvalId: string): TaskActivity {
+  const card = activity.approvals.find((each) => each.id === approvalId);
+  if (!card || card.status !== "pending" || card.decisionError === null) return activity;
+  const begun = beginReadback(activity, approvalId);
+  const read = readbackPending(begun.activity, approvalId, begun.attempt);
+  return endReadback(read.activity, approvalId, begun.attempt);
+}
+
 /** The strings the gateway would report for an answer: each chosen option's value or label. */
 function answerStrings(
   transcript: Transcript | undefined,
@@ -505,13 +519,9 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
         const { key, approvalId, decision } = command;
         const card = approval(key, approvalId);
         if (!card || card.status !== "pending") throw new Error("That approval is no longer open.");
-        // As the engine: Deny goes out while another decision is on its way; a second allow does not.
-        if (card.submitting && (decision !== "deny" || card.submittingDecision === "deny")) {
-          throw new Error("An answer to that approval is already on its way.");
-        }
-        if (decision !== "deny" && card.decisionError === "unknown") {
-          throw new Error("Whether the last decision was applied is not known yet.");
-        }
+        // As the engine: the same rule for what may leave, and the same numbered attempts.
+        const refusal = decisionRefusal(card, decision);
+        if (refusal) throw new Error(refusal);
         if (
           decision !== "deny" &&
           card.decisionCut &&
@@ -519,65 +529,64 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
         ) {
           throw new Error("This approval's text was cut; read it whole before allowing it.");
         }
+        let attempt = 0;
         set(
-          inTask(state, key, (a) =>
-            markApproval(a, approvalId, {
-              submitting: true,
-              submittingDecision: decision,
-              error: null,
-              decisionError: null,
-              stillOpen: false,
-            }),
-          ),
+          inTask(state, key, (a) => {
+            const begun = beginDecision(a, approvalId, decision);
+            attempt = begun.attempt;
+            return begun.activity;
+          }),
         );
         const mode = decision === "deny" ? "apply" : decisions;
         if (mode === "apply") {
           later(400, (s) =>
             inTask(s, key, (a) =>
-              applyApprovalResolved(a, {
-                id: approvalId,
-                status: decision === "deny" ? "denied" : "allowed",
-                decision,
-                reason: "user",
-                resolvedAt: Date.now(),
-                resolvedBy: null,
-                resolver: null,
-                applicationStatus: null,
-                authoritative: true,
-                lossy: false,
-                sessionKey: key,
-                runId: card.runId,
-              }),
+              endDecision(
+                applyApprovalResolved(a, {
+                  id: approvalId,
+                  status: decision === "deny" ? "denied" : "allowed",
+                  decision,
+                  reason: "user",
+                  resolvedAt: Date.now(),
+                  resolvedBy: null,
+                  resolver: null,
+                  applicationStatus: null,
+                  authoritative: true,
+                  lossy: false,
+                  sessionKey: key,
+                  runId: card.runId,
+                }),
+                approvalId,
+                attempt,
+                "answered",
+                null,
+              ),
             ),
           );
         } else if (mode === "refuse") {
           later(400, (s) =>
             inTask(s, key, (a) =>
-              markApproval(a, approvalId, {
-                submitting: false,
-                error: "allow-always is unavailable for this command",
-                decisionError: "refused",
-                stillOpen: false,
-              }),
+              endDecision(
+                a,
+                approvalId,
+                attempt,
+                "refused",
+                "allow-always is unavailable for this command",
+              ),
             ),
           );
-          later(800, (s) =>
-            inTask(s, key, (a) =>
-              markApproval(a, approvalId, {
-                submitting: false,
-                error: "allow-always is unavailable for this command",
-                stillOpen: true,
-              }),
-            ),
-          );
+          // The read-back the engine sends after a refusal: still pending.
+          later(800, (s) => inTask(s, key, (a) => readBack(a, approvalId)));
         } else {
           later(400, (s) =>
             inTask(s, key, (a) =>
-              markApproval(a, approvalId, {
-                submitting: false,
-                error: "The gateway did not answer within 60 seconds.",
-                decisionError: "unknown",
-              }),
+              endDecision(
+                a,
+                approvalId,
+                attempt,
+                "unknown",
+                "The gateway did not answer within 60 seconds.",
+              ),
             ),
           );
         }
@@ -587,24 +596,7 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
         // Read back: still pending on the gateway, so the unanswered decision was not applied.
         const { key, approvalId } = command;
         await new Promise((resolve) => setTimeout(resolve, 300));
-        set(
-          inTask(state, key, (a) => {
-            const card = a.approvals.find((each) => each.id === approvalId);
-            if (!card || card.decisionError === null) return a;
-            return card.decisionError === "unknown"
-              ? markApproval(a, approvalId, {
-                  submitting: false,
-                  error: null,
-                  decisionError: null,
-                  stillOpen: false,
-                })
-              : markApproval(a, approvalId, {
-                  submitting: false,
-                  error: card.error,
-                  stillOpen: true,
-                });
-          }),
-        );
+        set(inTask(state, key, (a) => readBack(a, approvalId)));
         return;
       }
       case "answerQuestion": {

@@ -22,7 +22,13 @@ import {
   APPROVAL_KINDS,
   decisionText,
   expireApprovals,
-  markApproval,
+  beginDecision,
+  beginReadback,
+  decisionRefusal,
+  endDecision,
+  endReadback,
+  patchError,
+  readbackPending,
   mergeResolution,
   normalizeApprovals,
   parseApprovalResolved,
@@ -1928,16 +1934,10 @@ export class ClawtrateClient {
     const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
     if (!approval || approval.status !== "pending")
       throw new Error("That approval is no longer open.");
-    // Deny stays possible while an earlier decision is on its way: the gateway applies
-    // whichever arrives first and answers the other as already resolved. A second allow does not.
-    if (approval.submitting && (decision !== "deny" || approval.submittingDecision === "deny"))
-      throw new Error("An answer to that approval is already on its way.");
-    // A decision with no answer may have been applied: nothing but deny is sent until its state is read back.
-    if (decision !== "deny" && approval.decisionError === "unknown") {
-      throw new Error(
-        "Whether the last decision was applied is not known yet; check the request again first.",
-      );
-    }
+    // One decision on its way at a time, but a Deny may follow an allow; no allow while
+    // an outcome is unknown, and no Deny again while an earlier Deny's is (`decisionRefusal`).
+    const refusal = decisionRefusal(approval, decision);
+    if (refusal) throw new Error(refusal);
     // Text cut to its bound is allowed only by a viewer this host gave the whole text to, naming
     // the digest of what it was given. A digest the state already carries proves nothing.
     const owner = options.owner ?? DIRECT_CALLER;
@@ -1962,15 +1962,13 @@ export class ClawtrateClient {
       }
     }
     const { method, params } = resolveRequest(approval, decision, days);
-    this.updateActivity(key, (activity) =>
-      markApproval(activity, approvalId, {
-        submitting: true,
-        submittingDecision: decision,
-        error: null,
-        decisionError: null,
-        stillOpen: false,
-      }),
-    );
+    // This decision's attempt: its response settles only it.
+    let attempt = 0;
+    this.updateActivity(key, (activity) => {
+      const begun = beginDecision(activity, approvalId, decision);
+      attempt = begun.attempt;
+      return begun.activity;
+    });
     // Whether the decision left this client: before that, a failure means nothing was sent.
     let sent = false;
     try {
@@ -2013,38 +2011,37 @@ export class ClawtrateClient {
         };
       }
       this.noteApprovalOutcome(resolution);
+      this.updateActivity(key, (activity) =>
+        endDecision(
+          activity,
+          approvalId,
+          attempt,
+          "answered",
+          applied ? null : "It had already been settled; this is how it ended.",
+        ),
+      );
       if (!applied) {
         this.updateActivity(key, (activity) =>
-          markApproval(activity, approvalId, {
-            submitting: false,
-            error: "It had already been settled; this is how it ended.",
-          }),
+          patchError(activity, approvalId, "It had already been settled; this is how it ended."),
         );
       }
     } catch (error) {
       // A gateway error is a refusal of this decision; anything else after sending leaves it unknown.
       // Refused only when the answer establishes the decision was not applied
       // (`approval-refusals.ts`); every other answer after sending is unknown.
-      const decisionError =
+      const outcome =
         !sent || error instanceof NotSentError
-          ? null
+          ? "not-sent"
           : isRefusedDecision(method, error)
             ? "refused"
             : "unknown";
+      // Only this attempt is settled; a decision that lost to one already settled changes nothing.
       this.updateActivity(key, (activity) =>
-        // A decision that lost to another one already settled changes nothing on the settled card.
-        activity.approvals.find((each) => each.id === approvalId)?.status !== "pending"
-          ? activity
-          : markApproval(activity, approvalId, {
-              submitting: false,
-              error: errorMessage(error),
-              decisionError,
-              stillOpen: false,
-            }),
+        endDecision(activity, approvalId, attempt, outcome, errorMessage(error)),
       );
       this.noteMissingScope(error);
       // Neither answer says whether the request is still open: read it back.
-      if (decisionError) void this.checkApproval(key, approvalId).catch(() => undefined);
+      if (outcome !== "not-sent") void this.checkApproval(key, approvalId).catch(() => undefined);
       throw error;
     }
   }
@@ -2061,19 +2058,29 @@ export class ClawtrateClient {
     if (!approval || approval.status !== "pending" || approval.decisionError === null) return;
     if (!this.holds(APPROVALS_SCOPE)) throw new NotSentError();
     const generation = this.generation;
-    const result = asRecord(await this.request("approval.get", { id: approvalId }));
+    // The read-back's attempt: its pending answer counts only if nothing newer began.
+    let attempt = 0;
+    this.updateActivity(key, (activity) => {
+      const begun = beginReadback(activity, approvalId);
+      attempt = begun.attempt;
+      return begun.activity;
+    });
+    let result: Record<string, unknown> | null;
+    try {
+      result = asRecord(await this.request("approval.get", { id: approvalId }));
+    } finally {
+      this.updateActivity(key, (activity) => endReadback(activity, approvalId, attempt));
+    }
     if (generation !== this.generation) return;
     const snapshot = asRecord(result?.approval);
     const resolution = resolutionFromSnapshot(snapshot);
     const before = approval.decisionError;
     if (resolution && resolution.id === approvalId) {
+      // A settled request is evidence of the winner whenever it was read.
       this.noteApprovalOutcome(resolution);
       if (before === "refused") {
         this.updateActivity(key, (activity) =>
-          markApproval(activity, approvalId, {
-            submitting: false,
-            error: "It had already been settled; this is how it ended.",
-          }),
+          patchError(activity, approvalId, "It had already been settled; this is how it ended."),
         );
       }
       return;
@@ -2081,22 +2088,23 @@ export class ClawtrateClient {
     if (snapshot?.id !== approvalId || snapshot.status !== "pending") {
       throw new Error("The gateway did not say whether the request is still open.");
     }
+    let stale = false;
     this.updateActivity(key, (activity) => {
-      const now = activity.approvals.find((each) => each.id === approvalId);
-      if (!now || now.status !== "pending" || now.decisionError !== before) return activity;
-      return before === "unknown"
-        ? markApproval(activity, approvalId, {
-            submitting: false,
-            error: null,
-            decisionError: null,
-            stillOpen: false,
-          })
-        : markApproval(activity, approvalId, {
-            submitting: false,
-            error: now.error,
-            stillOpen: true,
-          });
+      const read = readbackPending(activity, approvalId, attempt);
+      stale = read.stale;
+      return read.activity;
     });
+    // A newer attempt began while this was read: its answer proves nothing now. Read again,
+    // unless a newer read-back is already on its way to decide it.
+    const now = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
+    if (
+      stale &&
+      now?.status === "pending" &&
+      now.decisionError === "unknown" &&
+      now.readingAt === null
+    ) {
+      void this.checkApproval(key, approvalId).catch(() => undefined);
+    }
   }
 
   /**
