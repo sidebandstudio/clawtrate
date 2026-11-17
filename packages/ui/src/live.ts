@@ -6,6 +6,7 @@
 import {
   activeRun,
   isActive,
+  questionPending,
   type OutgoingMessage,
   type Run,
   type Step,
@@ -21,13 +22,8 @@ export function currentRun(transcript: Transcript | undefined): Run | undefined 
   return transcript ? activeRun(transcript) : undefined;
 }
 
-/** Whether a question from this run is pending: it holds every outgoing message. */
-export function questionPending(transcript: Transcript, run: Run): boolean {
-  return (
-    transcript.questions.some((card) => card.status === "pending" && card.runId === run.id) ||
-    [...run.pendingCards, ...run.suspendedCards].some((card) => card.kind === "question")
-  );
-}
+/** Whether a question from this run is pending: it holds every outgoing message (the engine's rule). */
+export { questionPending };
 
 /** The step that is running now, the latest first. */
 export function runningStep(run: Run): Step | undefined {

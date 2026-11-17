@@ -117,6 +117,7 @@ import {
   settleVanishedRuns,
   retainActivity,
   startLocalRun,
+  questionPending,
   startQueuedRun,
   updateMessage,
   type CaughtUp,
@@ -512,19 +513,6 @@ export class GatewayNotAllowedError extends Error {
     super(`This host is not allowed to connect to ${url}.`);
     this.name = "GatewayNotAllowedError";
   }
-}
-
-/**
- * Whether the run has a question pending, by the question records as well as
- * the run's cards, so a plain message is never sent while the gateway would
- * take it as the answer.
- */
-function questionPending(activity: TaskActivity, run: Run): boolean {
-  return (
-    activity.questions.some(
-      (question) => question.status === "pending" && question.runId === run.id,
-    ) || [...run.pendingCards, ...run.suspendedCards].some((card) => card.kind === "question")
-  );
 }
 
 /**

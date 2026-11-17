@@ -747,6 +747,20 @@ export function findRun(activity: TaskActivity, runId: string): Run | undefined 
   return activity.runs.find((run) => run.id === runId);
 }
 
+/**
+ * Whether the run has a question pending, by the question records as well as
+ * the run's cards, so a plain message is never sent while the gateway would
+ * take it as the answer. A pending question holds every outgoing message, and
+ * this is the one definition of it: the engine and the interface both use it.
+ */
+export function questionPending(activity: TaskActivity, run: Run): boolean {
+  return (
+    activity.questions.some(
+      (question) => question.status === "pending" && question.runId === run.id,
+    ) || [...run.pendingCards, ...run.suspendedCards].some((card) => card.kind === "question")
+  );
+}
+
 /** The task's run that is running, waiting or stopping, if any. */
 export function activeRun(activity: TaskActivity): Run | undefined {
   return activity.runs.find((run) => isActive(run.state));
