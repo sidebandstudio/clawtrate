@@ -22,6 +22,7 @@ import {
   FOREIGN_RUNS_PER_SESSION,
   FOREIGN_SESSIONS,
   MAX_ACCESS_WAITERS,
+  MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
   MAX_OUTCOME_LOOKUPS,
@@ -32,6 +33,7 @@ import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
 import { emptyActivity } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
+  APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
   MAX_CREATIONS,
   MAX_FILE_NAME_CHARS,
@@ -140,6 +142,13 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   recipients: { max: T, each: ID + 2 * MAX_STEPS_PER_TASK * ID, row: "recipientLinks" },
   "recipients.*.runs": { max: MAX_STEPS_PER_TASK, each: ID, row: null },
   "recipients.*.sessions": { max: MAX_STEPS_PER_TASK, each: ID, row: null },
+  // Each unsettled approval's attempts, apart from any task, while anything is outstanding.
+  approvalAttempts: {
+    max: MAX_APPROVAL_ATTEMPTS,
+    each: ID + worstCase(APPROVAL_ATTEMPTS),
+    row: "approvalAttempts",
+    opaque: "`APPROVAL_ATTEMPTS`",
+  },
   approvalOutcomes: {
     max: MAX_APPROVAL_OUTCOMES,
     each: ID + worstCase(APPROVAL_OUTCOME),
