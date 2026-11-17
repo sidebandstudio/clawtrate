@@ -37,7 +37,7 @@ The desktop renderer gets one over IPC (`apps/desktop/src/renderer/bridge-deskto
 | Request more access                  | `requestAccess`                                                        | none; progress in `connection.upgrade`                  |
 | Connect, disconnect, retry           | `connect` (`url`, `token`), `connectDevGateway`, `disconnect`, `retry` | none                                                    |
 
-There is no separate steer command. `mode: "auto"` starts a new run when the task has no active run, steers into the active run when it is running or waiting, and queues when it is stopping. `mode: "queue"` always queues. A steer while a question from the run is pending is held, not sent, until the question is answered or dismissed.
+There is no separate steer command. `mode: "auto"` starts a new run when the task has no active run, steers into the active run when it is running or waiting, and queues when it is stopping. `mode: "queue"` always queues. While a question from the run is pending, every message is held, not sent, whichever mode it was sent with, until the last pending question is answered, dismissed or expires. Held messages are then released in order as a message sent at that moment would go: a steer into the running run unless it was queued, queued while the run stops, and queued, one run each, once the run has ended by itself.
 
 A question answer maps each question id to its answers. Each answer is either text as typed or `{ option: index }`, where `index` is the option's `QuestionOption.index`. At most 3 questions and 8 answers each are accepted.
 

@@ -1138,12 +1138,15 @@ export class ClawtrateClient {
       : active.state === "stopping" || options.mode === "queue"
         ? "queue"
         : "steer";
-    const held = resolved === "steer" && questionPending(transcript, active!);
+    // A pending question holds every outgoing message in the task, however it
+    // was sent; it is released when the last pending question settles.
+    const held =
+      active !== undefined && active.state !== "stopping" && questionPending(transcript, active);
     const message: OutgoingMessage = {
       id: this.randomId(),
       text: body,
       mode: resolved,
-      status: resolved === "queue" ? "queued" : held ? "held" : "sending",
+      status: held ? "held" : resolved === "queue" ? "queued" : "sending",
       runId: resolved === "steer" ? active!.id : null,
       messageSeq: null,
       createdAt: this.now(),
@@ -1161,7 +1164,7 @@ export class ClawtrateClient {
     this.updateActivity(key, (activity) => {
       const withMessage = { ...activity, outbox: [...activity.outbox, message] };
       if (resolved === "new") return startLocalRun(withMessage, message, this.now());
-      if (resolved === "queue") return queueLocalRun(withMessage, message, this.now());
+      if (resolved === "queue" && !held) return queueLocalRun(withMessage, message, this.now());
       return withMessage;
     });
     if (message.status === "sending") this.enqueueDelivery(key, message.id);
@@ -1255,7 +1258,8 @@ export class ClawtrateClient {
     const transcript = this.state.transcripts[key]!;
     const active = activeRun(transcript);
     const mode = !active ? "new" : active.state === "stopping" ? "queue" : "steer";
-    const held = mode === "steer" && questionPending(transcript, active!);
+    const held =
+      active !== undefined && active.state !== "stopping" && questionPending(transcript, active);
     this.updateActivity(key, (activity) => {
       // A run the gateway refused never started; the retry is a new attempt.
       const cleared = {
@@ -2829,11 +2833,28 @@ export class ClawtrateClient {
       .filter((message) => message.status === "held")
       .map((message) => message.id);
     if (held.length > 0 && !(active && questionPending(transcript, active))) {
-      // The question is settled: claim every held message at once, then deliver them in order.
-      this.updateActivity(key, (activity) =>
-        held.reduce((next, id) => updateMessage(next, id, { status: "sending" }), activity),
-      );
-      for (const id of held) this.enqueueDelivery(key, id);
+      // The question is settled: release every held message at once, in the
+      // order sent, each as a message sent now would go. Into a running run
+      // as a steer, unless it was queued; queued while the run stops; and
+      // once the run has ended, queued, so each starts a run of its own.
+      const steered: string[] = [];
+      this.updateActivity(key, (activity) => {
+        let next = activity;
+        const now = activeRun(activity);
+        for (const id of held) {
+          const message = next.outbox.find((each) => each.id === id);
+          if (!message || message.status !== "held") continue;
+          if (now && now.state !== "stopping" && message.mode !== "queue") {
+            next = updateMessage(next, id, { status: "sending", mode: "steer", runId: now.id });
+            steered.push(id);
+          } else {
+            next = updateMessage(next, id, { status: "queued", mode: "queue", runId: null });
+            next = queueLocalRun(next, next.outbox.find((each) => each.id === id)!, this.now());
+          }
+        }
+        return next;
+      });
+      for (const id of steered) this.enqueueDelivery(key, id);
     }
     const current = this.state.transcripts[key];
     if (!current) return;

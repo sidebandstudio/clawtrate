@@ -39,6 +39,63 @@ describe("held messages (F-096, F-106)", () => {
   });
 });
 
+describe("a pending question holds every outgoing message (F-468)", () => {
+  it("holds a message queued with the modifier or the menu, and releases it into the queue", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    gateway.handlers["chat.send"] = (params) => ({
+      runId: `run-${(params as { message: string }).message}`,
+      status: "started",
+    });
+    start(gateway);
+    gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
+    await until(() => transcript().runs[0]?.state === "waiting");
+    const id = client.sendMessage(KEY, "after this turn", { mode: "queue" });
+    expect(transcript().outbox[0]).toMatchObject({ id, status: "held", mode: "queue" });
+    expect(transcript().runs.filter((run) => run.state === "queued")).toEqual([]);
+
+    await client.dismissQuestion(KEY, "ask_1");
+    // Released as a message queued now: it waits for the run, not steered into it.
+    await until(() => transcript().outbox[0]?.status === "queued");
+    await sleep(30);
+    expect(sentTexts(gateway)).toEqual([]);
+    gateway.emit("agent", agentEvent("run-x", 3, "lifecycle", { phase: "end" }));
+    await until(() => sentTexts(gateway).length === 1);
+    expect(gateway.calls("chat.send")[0]).toMatchObject({
+      message: "after this turn",
+      queueMode: "followup",
+    });
+    client.stop();
+  });
+
+  it("turns messages still held when the run ends by itself into queued ones, one run each, in order", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["chat.send"] = (params) => ({
+      runId: `run-${(params as { message: string }).message}`,
+      status: "started",
+    });
+    start(gateway);
+    gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
+    await until(() => transcript().runs[0]?.state === "waiting");
+    client.sendMessage(KEY, "one");
+    client.sendMessage(KEY, "two");
+    expect(transcript().outbox.map((m) => m.status)).toEqual(["held", "held"]);
+    gateway.emit("agent", agentEvent("run-x", 3, "lifecycle", { phase: "end" }));
+    await until(() => sentTexts(gateway).length === 1);
+    await sleep(30);
+    // The first starts its own run; the second waits for it, queued.
+    expect(sentTexts(gateway)).toEqual(["one"]);
+    expect(gateway.calls("chat.send")[0]).toMatchObject({ queueMode: "followup" });
+    expect(transcript().outbox.find((m) => m.text === "two")?.status).toBe("queued");
+    gateway.emit("agent", agentEvent("run-one", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("agent", agentEvent("run-one", 2, "lifecycle", { phase: "end" }));
+    await until(() => sentTexts(gateway).length === 2);
+    expect(sentTexts(gateway)).toEqual(["one", "two"]);
+    expect(gateway.calls("chat.send")[1]).toMatchObject({ queueMode: "followup" });
+    client.stop();
+  });
+});
+
 describe("queued messages (F-421, F-420)", () => {
   it("drains several queued messages in order after the run completes or fails", async () => {
     for (const ending of [
