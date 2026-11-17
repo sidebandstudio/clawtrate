@@ -1144,6 +1144,27 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       recipient.validate();
       same(result.details.reply, recipient.finalText(), "the reply is the recipient's final text");
       same(view.finalText(), `Marlow replied:\n\n> ${recipient.finalText()}`, "the sender's reply");
+      // The recipient's history records the message as an assistant row with
+      // inter-session provenance naming the sender's task.
+      const recipientHistory = await h
+        .op("plain")
+        .request<{ messages: JsonRecord[] }>("chat.history", {
+          sessionKey: RECIPIENT_SESSION,
+          limit: 200,
+        });
+      const incoming = recipientHistory.messages.filter(
+        (m) => rec(m.provenance).sourceSessionKey === view.sessionKey,
+      );
+      same(
+        incoming.map((m) => [
+          m.role,
+          rec(m.provenance).kind,
+          rec(m.provenance).sourceTool,
+          m.content,
+        ]),
+        [["assistant", "inter_session", "sessions_send", "#reply Could you look over the plan?"]],
+        "the message in the recipient's history",
+      );
       await recordFamily(h, "messaging between bots", "#message", view, "sessions_send", {
         args: scriptedArgs("#message", "sessions_send", "pip"),
         title: "Session Send agent marlow, timeout 30",
