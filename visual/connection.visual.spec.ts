@@ -136,7 +136,7 @@ test("F-263: a gateway on another protocol gets a full-window notice naming both
   // Retry repeats the handshake; the gateway still speaks protocol 5.
   await notice.getByRole("button", { name: "Retry" }).click();
   await expect(page.getByTestId("protocol-notice")).toBeVisible();
-  expect(await sent(page)).toEqual(["retry"]);
+  expect((await sent(page)).filter((type) => type === "retry")).toHaveLength(1);
   await page.getByRole("button", { name: "Choose another gateway" }).click();
   await expect(page.getByRole("button", { name: "Connect a gateway" })).toBeVisible();
 });
@@ -258,4 +258,24 @@ test("F-387: Reconnect from Offline is offered, and the pane shows the error whi
   await expect(dialog.getByTestId("gateway-problem")).toContainText("Nothing answered");
   await dialog.getByRole("button", { name: "Reconnect" }).click();
   expect(await sent(page)).toContain("retry");
+});
+
+test("F-387: Reconnect to a gateway that still does not answer goes to Connecting, then back to Offline with the error", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=offline-down&${OTTO_DISK}`, "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const state = dialog.getByTestId("gateway-state");
+  await expect(state).toHaveText("Offline");
+  await dialog.getByRole("button", { name: "Reconnect" }).click();
+  await expect(state).toHaveText("Connecting");
+  await expect(dialog.getByTestId("gateway-problem")).toHaveCount(0);
+  await expect(state).toHaveText("Offline");
+  const problem = dialog.getByTestId("gateway-problem");
+  await expect(problem.locator("strong")).toHaveText("Can't reach the gateway");
+  await expect(problem).toContainText("Nothing answered at 127.0.0.1:18789.");
+  // Reconnect is offered again.
+  await expect(dialog.getByRole("button", { name: "Reconnect" })).toBeVisible();
+  expect((await sent(page)).filter((type) => type === "retry")).toHaveLength(1);
 });

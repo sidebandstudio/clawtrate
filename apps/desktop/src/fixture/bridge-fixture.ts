@@ -61,6 +61,7 @@ export const SCENES = [
   "connect-unreachable",
   "disconnected",
   "offline-unreachable",
+  "offline-down",
 ] as const;
 
 export type SceneName = (typeof SCENES)[number];
@@ -343,6 +344,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
     case "disconnected":
       return { initial: withConnection(base, { status: "disconnected" }), steps: [] };
     case "offline-unreachable":
+    case "offline-down":
       return {
         initial: withConnection(reconnecting(base), { error: UNREACHABLE }),
         steps: [],
@@ -415,8 +417,14 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
           setTimeout(() => set(mismatch), 400);
           return;
         }
-        // An attempt is under way, then the gateway answers.
+        // An attempt is under way, then the gateway answers; in "offline-down"
+        // it still does not, and the next retry is scheduled.
         set(withConnection(state, { status: "reconnecting", retryAt: null, error: null }));
+        if (name === "offline-down") {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          set(withConnection(state, { retryAt: Date.now() + 4000, error: UNREACHABLE }));
+          return;
+        }
         await new Promise((resolve) => setTimeout(resolve, 300));
         set(catchingUp(state));
         setTimeout(() => set(caughtUp(state)), 700);

@@ -121,6 +121,41 @@ describe("connecting", () => {
     client.stop();
   });
 
+  it("F-387: Reconnect to a gateway that no longer answers goes from Connecting back to Offline, with the error", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const client = new ClawtrateClient(testHost(gateway), FAST);
+    await client.connect({ url: URL, token: "t" });
+    await until(() => client.state.discovery.status === "ready");
+    await client.suspend();
+    gateway.refuseConnections = true;
+    const seen: Array<{ status: string; retryAt: number | null; error: string | null }> = [];
+    const stop = client.store.subscribe((state) =>
+      seen.push({
+        status: state.connection.status,
+        retryAt: state.connection.retryAt,
+        error: state.connection.error?.code ?? null,
+      }),
+    );
+    await client.retryNow();
+    await until(() => client.state.connection.error?.code === "UNREACHABLE");
+    // An attempt under way (no retry scheduled), then waiting for the next with the error.
+    expect(
+      seen.some((s) => s.retryAt === null && s.error === null && s.status !== "disconnected"),
+    ).toBe(true);
+    await until(() => client.state.connection.retryAt !== null);
+    expect(client.state.connection).toMatchObject({
+      error: { code: "UNREACHABLE", message: "Nothing answered at 127.0.0.1:19001." },
+    });
+    expect(["connecting", "reconnecting"]).toContain(client.state.connection.status);
+    expect(client.state.bots, "what was on screen stays").toHaveLength(1);
+    stop();
+    client.stop();
+  });
+
   it("F-263: a gateway outside the client's protocol range gets no further requests, and the error names both versions", async () => {
     const gateway = new FakeGateway();
     gateway.connectReply = () => ({
