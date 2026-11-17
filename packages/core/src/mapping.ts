@@ -187,6 +187,9 @@ export function mapSessionRow(row: RawRecord): Task | null {
     updatedAt: num(row.updatedAt) ?? num(row.lastActivityAt) ?? num(row.createdAt),
     status: taskStatus(row),
     unread: row.unread === true,
+    ...((typeof row.isMain === "boolean" ? row.isMain : /^agent:[^:]+:main$/.test(key))
+      ? { isMain: true }
+      : {}),
     ...(row.pinned === true ? { pinned: true } : {}),
     ...(row.markedUnreadAt !== undefined ? { unreadMarker: num(row.markedUnreadAt) } : {}),
     ...contextOf(row),

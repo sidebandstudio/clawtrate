@@ -29,6 +29,20 @@ describe("which tasks wait for the person", () => {
     expect(index.waitingFor(KEY)).toBeNull();
   });
 
+  it("F-057: a run the lifecycle ends as aborted marks its task stopped until its next run starts", () => {
+    const index = new WaitingIndex();
+    index.onAgent(lifecycle("end", { aborted: true }), 100);
+    expect(index.stoppedAt(KEY)).toBe(100);
+    index.onAgent(lifecycle("start", {}, "r2"), 200);
+    expect(index.stoppedAt(KEY)).toBeNull();
+    index.onAgent(lifecycle("end", {}, "r2"), 300);
+    expect(index.stoppedAt(KEY)).toBeNull();
+    index.onAgent(lifecycle("end", { status: "cancelled" }, "r3"), 400);
+    expect(index.stoppedAt(KEY)).toBe(400);
+    index.clear();
+    expect(index.stoppedAt(KEY)).toBeNull();
+  });
+
   it("F-021: a question waits until question.resolved, found by its id alone", () => {
     const index = new WaitingIndex();
     index.onQuestionRequested({ id: "q1", sessionKey: KEY, createdAtMs: 42 }, 100);
@@ -102,5 +116,12 @@ describe("which tasks wait for the person", () => {
       { key: "agent:otto:dashboard:abc", label: "Named" },
     ]);
     expect(grouped.otto!.map((task) => task.title).sort()).toEqual(["Main", "Named", "New task"]);
+    // The main session is marked, from the row's own word when it gives one.
+    expect(grouped.otto!.filter((task) => task.isMain).map((task) => task.key)).toEqual([
+      "agent:otto:main",
+    ]);
+    expect(
+      groupTasks([{ key: "agent:otto:main", isMain: false }]).otto![0]!.isMain,
+    ).toBeUndefined();
   });
 });

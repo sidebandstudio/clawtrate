@@ -9,6 +9,7 @@
 // nothing, whatever was kept (`waitingFor`).
 
 import { asRecord, type RawRecord } from "./mapping.ts";
+import { classifyLifecycleTerminal } from "./runs.ts";
 
 export const MAX_WAITING_SESSIONS = 64;
 export const MAX_WAITING_MARKERS = 8;
@@ -31,6 +32,13 @@ const str = (value: unknown): string | null =>
 export class WaitingIndex {
   /** Session key to its markers by id, in the order tasks began waiting. */
   private readonly sessions = new Map<string, Map<string, Marker>>();
+  /**
+   * Tasks whose latest run was stopped, and when (F-057): the gateway's row has
+   * no status for a run stopped with `chat.abort`, so the lifecycle's end, read
+   * as the gateway reads it (`classifyLifecycleTerminal`), says so. Until the
+   * task's next run starts; at most `MAX_WAITING_SESSIONS`, the oldest giving way.
+   */
+  private readonly stopped = new Map<string, number>();
 
   /** For tests and the retention registry: how many tasks are kept. */
   get size(): number {
@@ -80,10 +88,20 @@ export class WaitingIndex {
           id ? markerId === `approval:${id}` : marker.kind === "approval" && marker.runId === runId,
         );
       }
+      case "start":
+        return this.stopped.delete(key);
       case "end":
-      case "error":
+      case "error": {
         // The run is over: nothing of it waits any more.
-        return this.remove(key, (_, marker) => marker.runId === runId);
+        const changed = this.remove(key, (_, marker) => marker.runId === runId);
+        const reason = classifyLifecycleTerminal(data.phase, data);
+        if (reason !== "aborted" && reason !== "cancelled") return changed;
+        this.stopped.delete(key);
+        this.stopped.set(key, at);
+        while (this.stopped.size > MAX_WAITING_SESSIONS)
+          this.stopped.delete(this.stopped.keys().next().value as string);
+        return true;
+      }
       default:
         return false;
     }
@@ -130,6 +148,12 @@ export class WaitingIndex {
   /** A new gateway, or a connection that dropped: what was kept may no longer be true. */
   clear(): void {
     this.sessions.clear();
+    this.stopped.clear();
+  }
+
+  /** When the task's latest run was stopped, or null when it was not (or a run started since). */
+  stoppedAt(key: string): number | null {
+    return this.stopped.get(key) ?? null;
   }
 
   /** What a task waits on: the earliest of its markers, a question over an approval when equal. */

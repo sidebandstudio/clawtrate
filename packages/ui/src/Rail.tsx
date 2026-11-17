@@ -1176,7 +1176,7 @@ export function Rail({
                 setAnnouncement(`${bot.name} is hidden. Hidden bots keep working.`);
               }),
             },
-      ...(interactive && only
+      ...(interactive && only && !only.isMain
         ? [
             { kind: "rule" as const },
             {
@@ -1329,7 +1329,8 @@ export function Rail({
           );
         },
       },
-      ...(interactive
+      // The gateway never archives or deletes a bot's main session: neither is offered for it.
+      ...(interactive && !task.isMain
         ? [
             { kind: "rule" as const },
             {

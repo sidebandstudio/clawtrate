@@ -81,7 +81,26 @@ function changeTask(
   };
 }
 
+/** A bot's main session, marked as the engine marks it from the gateway's row. */
+function withMains(state: ClawtrateState): ClawtrateState {
+  return {
+    ...state,
+    tasksByBot: Object.fromEntries(
+      Object.entries(state.tasksByBot).map(([botId, tasks]) => [
+        botId,
+        tasks.map((task) =>
+          task.key === `agent:${botId}:main` ? { ...task, isMain: true } : task,
+        ),
+      ]),
+    ),
+  };
+}
+
 export function railScene(name: RailScene, base: ClawtrateState, now: number): ClawtrateState {
+  return withMains(railSceneOf(name, base, now));
+}
+
+function railSceneOf(name: RailScene, base: ClawtrateState, now: number): ClawtrateState {
   switch (name) {
     case "rail-write":
       return { ...interactive(base), sidebar: { status: "ok", prefs: null } };

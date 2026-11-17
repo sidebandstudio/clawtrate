@@ -4087,6 +4087,12 @@ export class ClawtrateClient {
       for (const [index, task] of tasks.entries()) {
         if (task.status !== "running") {
           this.waiting.settle(task.key);
+          // A run stopped with `chat.abort` leaves the row no status: the lifecycle said so.
+          if (
+            (task.status === "idle" || task.status === "done") &&
+            this.waiting.stoppedAt(task.key)
+          )
+            tasks[index] = { ...task, status: "stopped" };
           continue;
         }
         const waiting = this.waiting.waitingFor(task.key);

@@ -142,6 +142,11 @@ export type Task = {
    * window. Absent when the gateway does not report both.
    */
   context?: TaskContext;
+  /**
+   * The bot's main session (`isMain`, or its `agent:<bot>:main` key): the gateway
+   * refuses to archive or delete it ("Cannot archive an agent's main session.").
+   */
+  isMain?: boolean;
   /** Pinned on the gateway (`sessions.patch` `pinned`); pinned tasks come first under their bot. */
   pinned?: boolean;
   /** What the task waits on while `status` is `waiting` (`waiting.ts`), and since when. */

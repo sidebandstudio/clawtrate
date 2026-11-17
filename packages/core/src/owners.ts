@@ -136,6 +136,12 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: MAX_WAITING_ID_CHARS + MAX_WAITING_MARKERS * (2 * MAX_WAITING_ID_CHARS + 64),
     row: "bookkeeping",
   },
+  // Tasks whose latest run was stopped: a key and a time each.
+  "waiting.stopped": {
+    max: MAX_WAITING_SESSIONS,
+    each: MAX_WAITING_ID_CHARS + N,
+    row: "bookkeeping",
+  },
   "waiting.sessions.*": {
     max: MAX_WAITING_MARKERS,
     each: 2 * MAX_WAITING_ID_CHARS + 64,

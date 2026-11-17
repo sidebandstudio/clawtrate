@@ -1,7 +1,7 @@
 // The rail's task actions in the fixture: keyboard paths, where focus goes
 // after each action, what the host is asked, and that a read-only connection
 // offers none of them.
-import type { BridgeCommand } from "@clawtrate/core";
+import type { BridgeCommand } from "../packages/core/src/bridge.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, settle, SIZES } from "./fixture.ts";
 
@@ -206,23 +206,39 @@ test("F-278: Delete asks first, with Cancel focused; Delete removes the task and
   await expect(page.getByRole("dialog")).toContainText("Its run is stopped first.");
 });
 
-test("F-424: archiving or deleting a bot's last task creates and selects a new Main", async ({
+test("F-424: archiving or deleting a bot's last task creates and selects a new Main; a bot's main session offers neither", async ({
   page,
 }) => {
-  await openFixture(page, "scene=rail-write&bot=marlow", "light");
-  await bot(page, "Marlow").focus();
+  // Juniper has no main session in the fixture: three tasks of its own.
+  await openFixture(page, "scene=rail-write&bot=main", "light");
+  for (const title of ["Heat pump", "Library e-book"]) {
+    await taskMenu(page, title);
+    await page.getByRole("menuitem", { name: "Archive" }).click();
+    await expect(taskRow(page, title)).toHaveCount(0);
+  }
+  // One left: the bot's own menu archives it, and a new Main takes its place, selected.
+  await expect(bot(page, "Juniper")).toHaveAccessibleName(/^Juniper, 1 task/);
+  await bot(page, "Juniper").focus();
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Archive task" }).click();
   await expect.poll(async () => (await sent(page, "newMainTask")).length).toBe(1);
   await expect(page.locator(".title-pill-task")).toHaveText("Main");
-  await expect(bot(page, "Marlow")).toHaveAccessibleName(/^Marlow, 1 task/);
-  await expect(bot(page, "Marlow")).toBeFocused();
-  // And deleting that one makes another.
+  await expect(bot(page, "Juniper")).toHaveAccessibleName(/^Juniper, 1 task/);
+  await expect(bot(page, "Juniper")).toBeFocused();
+  // Deleting that one makes another.
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Delete task…" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
   await expect.poll(async () => (await sent(page, "newMainTask")).length).toBe(2);
-  await expect(bot(page, "Marlow")).toHaveAccessibleName(/^Marlow, 1 task/);
+  await expect(bot(page, "Juniper")).toHaveAccessibleName(/^Juniper, 1 task/);
+
+  // Marlow's one task is its main session, which the gateway never archives or deletes.
+  await bot(page, "Marlow").focus();
+  await page.keyboard.press("Shift+F10");
+  const items = await page.getByRole("menu").getByRole("menuitem").allTextContents();
+  expect(items).toContain("Rename task…");
+  expect(items).not.toContain("Archive task");
+  expect(items).not.toContain("Delete task…");
 });
 
 test("F-022: Mark as unread and Mark as read in a task's menu, sent to the host; opening a task reads it", async ({
