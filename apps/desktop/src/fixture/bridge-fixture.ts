@@ -45,6 +45,7 @@ import {
   withTaskStates,
 } from "./data.ts";
 import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
+import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -89,6 +90,7 @@ export const SCENES = [
   "offline-unreachable",
   "offline-down",
   ...LIVE_SCENES,
+  ...ACTION_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -384,6 +386,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
     case "task-states":
       return { initial: { ...base, tasksByBot: withTaskStates(base.tasksByBot) }, steps: [] };
     default:
+      if (isActionScene(name)) return actionScene(name, base, now);
       return liveScene(name as LiveScene, base, now);
   }
 }

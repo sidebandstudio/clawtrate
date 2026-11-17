@@ -1,0 +1,747 @@
+// The action cards (docs/design/conversation.md, sections 7 to 9): a single
+// card, a fold and its rows, the "Thought" line and the run line. What each
+// says is the engine's reading (`@clawtrate/core`, `actions.ts`); these
+// components only draw it and keep what the reader opened (`view-state.ts`).
+
+import {
+  actionWords,
+  foldLineOf,
+  isOpenOutcome,
+  lineOf,
+  readableOf,
+  tookOf,
+  type ActionCall,
+  type ActionLine,
+  type FoldLine,
+  type FeedMember,
+  type ReadingContext,
+  type RunLine,
+  type Step,
+  type StepRaw,
+  type Thought,
+} from "@clawtrate/core";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import {
+  CardFoot,
+  CodeBlock,
+  CopyButton,
+  Fields,
+  Glyph,
+  RawView,
+  formatJson,
+  timeOf,
+  tookOf as tookText,
+  useRawDisclosure,
+} from "../cards/parts.tsx";
+import type { RawContent } from "../cards/raw.ts";
+import type { StepRawState } from "../cards/useCards.ts";
+import { ChevronIcon, FileIcon } from "../icons.tsx";
+import { useNow } from "../StatusLine.tsx";
+import { KindIcon } from "./icons.tsx";
+import { readView, useView, viewKeys } from "./view-state.ts";
+import "./actions.css";
+
+const { tookWords, elapsedWords, thoughtFor, durationWords } = actionWords;
+
+/** What every action card in one task shares. */
+export type ActionEnv = {
+  taskKey: string;
+  sessionKey: string;
+  ctx: ReadingContext;
+  /** The engine's step for a call, and its run's id, when it has one. */
+  stepOf: (callId: string) => { step: Step; runId: string } | undefined;
+  /** A step's raw payload, read whole when needed. */
+  rawState: (stepId: string) => StepRawState;
+  /** The connection is down: what was running is last seen. */
+  lost: boolean;
+  /** Approvals are not sent on this connection. */
+  readOnly: boolean;
+};
+
+export const ActionEnvContext = createContext<ActionEnv | null>(null);
+
+export function useActionEnv(): ActionEnv {
+  const env = useContext(ActionEnvContext);
+  if (!env) throw new Error("action cards need an ActionEnvContext");
+  return env;
+}
+
+/** The DOM id of a call's card or row, so the status line and "Show in chat" can find it. */
+export const actionDomId = (callId: string) => `action-${callId.replace(/[^\w-]/g, "_")}`;
+
+/** The call as this connection sees it: last seen while the connection is lost, the read tier's waiting words. */
+function seen(call: ActionCall, env: ActionEnv): ActionCall {
+  return { ...call, lastSeen: env.lost, readOnly: env.readOnly };
+}
+
+// The line --------------------------------------------------------------------------
+
+/** "0:42" once something has run for more than 2 seconds. */
+function Elapsed({ since }: { since: number | null }) {
+  const now = useNow(since !== null);
+  if (since === null || now - since < 2000) return null;
+  return <span className="action-elapsed">{elapsedWords(now - since)}</span>;
+}
+
+function StateOf({ line, call }: { line: ActionLine; call: ActionCall }) {
+  const s = line.state;
+  if (s.type === "time") {
+    const took = tookOf(call);
+    return took !== null ? <time className="action-time">{tookWords(took)}</time> : null;
+  }
+  if (s.type === "elapsed") return <Elapsed since={call.startedAt} />;
+  return (
+    <>
+      <Glyph state={s.glyph} />
+      {s.word}
+    </>
+  );
+}
+
+function Detail({
+  text,
+  mono,
+  exit,
+  tone,
+}: {
+  text: string;
+  mono: boolean;
+  exit?: string;
+  tone?: string | null;
+}) {
+  return (
+    <span className="action-detail" data-tone={tone ?? undefined}>
+      {text ? <span className={mono ? "mono" : undefined}>{text}</span> : null}
+      {exit ? <span className="action-exit">{exit}</span> : null}
+    </span>
+  );
+}
+
+/**
+ * A card's line, single or folded: the verb, the icon and what it acted on as
+ * one sentence; the detail; the state (7.2). One component for both, so the
+ * line keeps its element when a card becomes a fold.
+ */
+function LineSummary({
+  verb,
+  object,
+  icon,
+  working,
+  detail,
+  mono,
+  exit,
+  detailTone,
+  stateTone,
+  state,
+  spoken,
+  title,
+}: {
+  verb: string;
+  object: string;
+  icon: ActionLine["icon"];
+  working: boolean;
+  detail: string;
+  mono: boolean;
+  exit?: string;
+  detailTone?: string | null;
+  stateTone?: string | undefined;
+  state: ReactNode;
+  spoken: string;
+  title: string;
+}) {
+  return (
+    <summary aria-label={spoken} title={title}>
+      <span className="action-sentence">
+        <span className="action-verb">{verb}</span>{" "}
+        <span className="action-what">
+          {working ? <Glyph state="working" /> : <KindIcon icon={icon} />}
+          {object ? <span className="action-object">{object}</span> : null}
+        </span>
+      </span>
+      <Detail text={detail} mono={mono} {...(exit ? { exit } : {})} tone={detailTone ?? null} />
+      <span className="action-state" data-tone={stateTone}>
+        {state}
+      </span>
+      <ChevronIcon className="chevron" />
+    </summary>
+  );
+}
+
+// Opened: Readable and Raw ------------------------------------------------------------
+
+const rec = (value: unknown) =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
+/** What the gateway sent for one call, as section 9 lays it out. */
+function rawContentOf(call: ActionCall, env: ActionEnv): { content: RawContent; load: () => void } {
+  const found = env.stepOf(call.id);
+  const open = call.status === "running" || call.status === "waiting" || call.status === "review";
+  const timing = [
+    { label: "Started", value: timeOf(call.startedAt) },
+    { label: "Ended", value: open ? "not reported" : timeOf(call.endedAt) },
+    { label: "Took", value: open ? "not reported" : tookText(call.startedAt, call.endedAt) },
+  ];
+  const ids = [
+    { label: "Tool call", value: call.id },
+    ...(found ? [{ label: "Run", value: found.runId }] : []),
+    { label: "Session", value: env.sessionKey },
+  ];
+  if (!found) {
+    // Only the history item's row is here: its arguments and result as the page kept them.
+    return {
+      load: () => {},
+      content: {
+        state: "loaded",
+        tool: call.name,
+        args: call.args,
+        ...(call.isError ? { error: call.text ?? "" } : { result: { content: call.text ?? "" } }),
+        running: open,
+        timing,
+        ids,
+        notes: ["From the history the gateway returned; this app keeps no more of this call."],
+      },
+    };
+  }
+  const state = env.rawState(found.step.id);
+  if (state.state === "pending") return { content: state.content, load: state.load };
+  const raw: StepRaw | null = state.raw;
+  const callRec = rec(raw?.call);
+  const resultRec = rec(raw?.result);
+  const args = raw
+    ? raw.source === "live"
+      ? callRec?.args
+      : (callRec?.arguments ?? callRec?.input)
+    : call.args;
+  const result = raw
+    ? raw.source === "live"
+      ? (resultRec?.result ?? raw.result)
+      : raw.result
+    : null;
+  const notes: string[] = [];
+  if (state.cut) notes.push(state.cut);
+  if (!raw) notes.push("Only what this app keeps of the call is here.");
+  return {
+    load: state.load,
+    content: {
+      state: "loaded",
+      tool: call.name,
+      args: args ?? call.args,
+      ...(call.isError && result !== null && result !== undefined
+        ? { error: formatJson(result) }
+        : { result: result ?? (open ? null : { content: call.text ?? "" }) }),
+      running: open,
+      truncated: found.step.truncated || Boolean(state.cut),
+      timing,
+      ids,
+      ...(notes.length ? { notes } : {}),
+    },
+  };
+}
+
+function Readable({ call, env }: { call: ActionCall; env: ActionEnv }) {
+  const view = readableOf(call, env.ctx);
+  const truncated = env.stepOf(call.id)?.step.truncated ? "text" : undefined;
+  return (
+    <>
+      <Fields
+        rows={view.rows.map((row) => ({
+          label: row.label,
+          value: row.value,
+          ...(row.mono ? { mono: true } : {}),
+        }))}
+      />
+      {view.sentence && <p className="action-note">{view.sentence}</p>}
+      {view.note && (
+        <p className="action-note" data-tone="warn">
+          {view.note}
+        </p>
+      )}
+      {view.links.length > 0 && (
+        <ul className="action-links">
+          {view.links.map((link) => (
+            <li key={link.url}>
+              <a href={link.url} target="_blank" rel="noreferrer noopener">
+                {link.title}
+              </a>
+              <span>{link.host}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {view.plan.length > 0 && (
+        <ul className="action-plan">
+          {view.plan.map((step, i) => (
+            <li key={i} data-status={step.status}>
+              {step.status === "completed" ? (
+                <Glyph state="check" />
+              ) : step.status === "in_progress" ? (
+                <Glyph state="working" />
+              ) : (
+                <span className="plan-dot" aria-hidden="true" />
+              )}
+              {step.step}
+              <span className="visually-hidden">, {step.status.replace("_", " ")}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {view.files.length > 0 && (
+        <div className="chips">
+          {view.files.map((file) => (
+            <span className="chip" key={file}>
+              <FileIcon />
+              <span>{file.split("/").at(-1)}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {view.block && (
+        <CodeBlock
+          label={view.block.label}
+          text={view.block.text}
+          copy={view.block.live ? "output" : view.block.label.toLowerCase()}
+          {...(view.block.error ? { tone: "danger" as const } : {})}
+          {...(truncated && !view.block.live ? { truncated } : {})}
+        />
+      )}
+      {view.empty && <p className="action-note">{view.empty}</p>}
+      {view.exitCode !== null && (
+        <Fields rows={[{ label: "Exit code", value: String(view.exitCode) }]} />
+      )}
+    </>
+  );
+}
+
+/** The Readable and Raw tabs of one call (8.6). One tab stop; the arrows move between them. */
+function ActionDetail({ call }: { call: ActionCall }) {
+  const env = useActionEnv();
+  const [view, setView] = useView<string>(env.taskKey, viewKeys.view(call.id), "readable");
+  const id = actionDomId(call.id);
+  const raw = rawContentOf(call, env);
+  const loaded = useRef(false);
+  useEffect(() => {
+    if (view === "raw" && !loaded.current) {
+      loaded.current = true;
+      raw.load();
+    }
+  }, [view, raw]);
+  const choose = (next: string, focus: boolean) => {
+    setView(next);
+    if (focus) requestAnimationFrame(() => document.getElementById(`${id}-tab-${next}`)?.focus());
+  };
+  const onKey = (event: KeyboardEvent) => {
+    const order = ["readable", "raw"];
+    const at = order.indexOf(view);
+    const next =
+      event.key === "ArrowRight"
+        ? order[(at + 1) % 2]
+        : event.key === "ArrowLeft"
+          ? order[(at + 1) % 2]
+          : event.key === "Home"
+            ? "readable"
+            : event.key === "End"
+              ? "raw"
+              : null;
+    if (!next) return;
+    event.preventDefault();
+    choose(next, true);
+  };
+  const tab = (key: string, label: string) => (
+    <button
+      type="button"
+      role="tab"
+      id={`${id}-tab-${key}`}
+      aria-controls={`${id}-${key}`}
+      aria-selected={view === key}
+      tabIndex={view === key ? 0 : -1}
+      data-view-button={key}
+      onClick={() => choose(key, false)}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="step-body">
+      <div className="step-tools">
+        <div className="seg" role="tablist" aria-label="Detail view" onKeyDown={onKey}>
+          {tab("readable", "Readable")}
+          {tab("raw", "Raw")}
+        </div>
+      </div>
+      <div
+        role="tabpanel"
+        id={`${id}-readable`}
+        aria-labelledby={`${id}-tab-readable`}
+        data-view="readable"
+        hidden={view !== "readable"}
+      >
+        <Readable call={call} env={env} />
+      </div>
+      <div
+        role="tabpanel"
+        id={`${id}-raw`}
+        aria-labelledby={`${id}-tab-raw`}
+        data-view="raw"
+        hidden={view !== "raw"}
+      >
+        {view === "raw" && (
+          <div className="raw-panel" role="region" aria-label="What the gateway sent">
+            <RawView raw={raw.content} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ActionBody({
+  call,
+  thought,
+  revision,
+}: {
+  call: ActionCall;
+  thought: Thought | null;
+  revision: number;
+}) {
+  return (
+    <div className="action-body">
+      {thought && (
+        <div className="action-thought">
+          <ThoughtLine thought={thought} place="card" revision={revision} />
+        </div>
+      )}
+      <ActionDetail call={call} />
+    </div>
+  );
+}
+
+// A fold -----------------------------------------------------------------------------
+
+const ROW_STATUS: Record<string, string> = {
+  running: "running",
+  review: "running",
+  waiting: "waiting",
+  failed: "failed",
+  blocked: "failed",
+  unavailable: "failed",
+  notfound: "skipped",
+  refused: "skipped",
+  denied: "skipped",
+  suppressed: "skipped",
+  stopped: "skipped",
+  unknown: "skipped",
+};
+
+/** A row inside an opened fold: the action in the singular (7.4). */
+function FoldRow({ member, revision }: { member: FeedMember; revision: number }) {
+  const env = useActionEnv();
+  const call = seen(member.call, env);
+  const line = lineOf(call, env.ctx);
+  const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.call(call.id), false);
+  const working = (line.outcome === "running" || line.outcome === "review") && !line.leaves;
+  return (
+    <details
+      className="step"
+      data-testid="tool-call"
+      data-call={call.id}
+      id={actionDomId(call.id)}
+      data-status={ROW_STATUS[line.outcome] ?? "done"}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary aria-label={line.spoken} title={line.title}>
+        <span className="step-node">
+          {working ? <Glyph state="working" /> : <KindIcon icon={line.icon} />}
+        </span>
+        <span className="step-title">{[line.verb, line.object].filter(Boolean).join(" ")}</span>
+        <span className="step-detail">
+          {line.detail ? (
+            <span className={line.mono ? "mono" : undefined}>{line.detail}</span>
+          ) : null}
+        </span>
+        <span className="step-status">
+          <StateOf line={line} call={call} />
+        </span>
+        <ChevronIcon className="chevron" />
+      </summary>
+      {member.thought && (
+        <div className="action-thought">
+          <ThoughtLine thought={member.thought} place="card" revision={revision} />
+        </div>
+      )}
+      <ActionDetail call={call} />
+    </details>
+  );
+}
+
+function FoldState({ fold }: { fold: FoldLine }) {
+  const s = fold.state;
+  switch (s.type) {
+    case "waiting":
+      return (
+        <>
+          <Glyph state="waiting" />
+          {s.readOnly ? "Waiting for approval" : "Waiting for you"}
+        </>
+      );
+    case "running":
+      return s.lastSeen ? (
+        <>
+          <Glyph state="working" />
+          Last seen running
+        </>
+      ) : (
+        <Elapsed since={s.since} />
+      );
+    case "counts":
+      return (
+        <>
+          <Glyph state={s.glyph} />
+          {s.words}
+        </>
+      );
+    case "time":
+      return s.ms !== null ? <time className="action-time">{tookWords(s.ms)}</time> : null;
+  }
+}
+
+/**
+ * One card for one call (7.2), or one card for several calls with one key in a
+ * row (7.4). One component draws both, so that when a card becomes a fold its
+ * line, the same element, keeps its place and its focus.
+ */
+export function ActionGroup({ members, revision }: { members: FeedMember[]; revision: number }) {
+  const env = useActionEnv();
+  const calls = members.map((m) => seen(m.call, env));
+  const first = calls[0]!.id;
+  const single = calls.length === 1;
+  const line = single ? lineOf(calls[0]!, env.ctx) : null;
+  const fold = single ? null : foldLineOf(calls, env.ctx);
+  // A card that was open becomes a fold that is open, with that card as its open first row.
+  const [cardOpen, setCardOpen] = useView<boolean>(env.taskKey, viewKeys.call(first), false);
+  const [foldOpen, setFoldOpen] = useView<boolean>(
+    env.taskKey,
+    viewKeys.fold(first),
+    readView(env.taskKey, viewKeys.call(first)) === true,
+  );
+  const open = single ? cardOpen : foldOpen;
+  const setOpen = single ? setCardOpen : setFoldOpen;
+  const common = {
+    className: "card action",
+    open,
+    onToggle: (event: { currentTarget: HTMLDetailsElement }) => {
+      if (event.currentTarget.open !== open) setOpen(event.currentTarget.open);
+    },
+  };
+  if (line) {
+    const member = members[0]!;
+    return (
+      <details
+        {...common}
+        data-kind={line.kind}
+        data-status={line.outcome}
+        data-problem={line.problem ?? undefined}
+        data-call={first}
+        id={actionDomId(first)}
+        data-testid="tool-call"
+      >
+        <LineSummary
+          verb={line.verb}
+          object={line.object}
+          icon={line.icon}
+          working={isOpenOutcome(line.outcome) && line.outcome !== "waiting" && !line.leaves}
+          detail={line.detail}
+          mono={line.mono}
+          exit={line.exit}
+          stateTone={line.state.type === "word" ? line.state.tone : undefined}
+          state={<StateOf line={line} call={calls[0]!} />}
+          spoken={line.spoken}
+          title={line.title}
+        />
+        <ActionBody call={calls[0]!} thought={member.thought} revision={revision} />
+      </details>
+    );
+  }
+  const f = fold!;
+  const label = `${f.verb} ${f.object}`.trim();
+  const working =
+    f.state.type === "running" && f.running !== null && !f.running.leaves && f.tone === null;
+  return (
+    <details
+      {...common}
+      data-fold={calls.length}
+      data-kind={f.kind}
+      data-status={f.status}
+      data-first={first}
+      id={`fold-${actionDomId(first)}`}
+    >
+      <LineSummary
+        verb={f.verb}
+        object={f.object}
+        icon={f.icon}
+        working={working}
+        detail={f.detail}
+        mono={false}
+        detailTone={f.tone}
+        stateTone={
+          f.state.type === "waiting"
+            ? "warn"
+            : f.state.type === "counts" && f.state.danger
+              ? "danger"
+              : undefined
+        }
+        state={<FoldState fold={f} />}
+        spoken={f.spoken}
+        title={f.title}
+      />
+      <div className="action-body">
+        <ol className="fold-rows" aria-label={label}>
+          {members.map((member) => (
+            <li key={member.call.id}>
+              <FoldRow member={member} revision={revision} />
+            </li>
+          ))}
+        </ol>
+      </div>
+    </details>
+  );
+}
+
+// Reasoning ----------------------------------------------------------------------------
+
+/** What the gateway sent for reasoning: each segment's event as received. */
+function thoughtRaw(thought: Thought, env: ActionEnv): { content: RawContent; load: () => void } {
+  const states = thought.segments.map((segment) => env.rawState(segment.id));
+  const pending = states.find((s) => s.state === "pending");
+  const load = () => states.forEach((s) => s.load());
+  if (pending && pending.state === "pending") return { content: pending.content, load };
+  const events: Array<[string, unknown]> = [];
+  states.forEach((s, i) => {
+    if (s.state !== "available" || !s.raw) return;
+    const label =
+      s.raw.source === "live"
+        ? `Reasoning event as received${states.length > 1 ? ` (${i + 1})` : ""}`
+        : `Reasoning as the gateway's history returned it${states.length > 1 ? ` (${i + 1})` : ""}`;
+    events.push([label, s.raw.call]);
+  });
+  return {
+    load,
+    content: {
+      state: "loaded",
+      events,
+      ids: [
+        { label: "Reasoning", value: thought.id },
+        { label: "Session", value: env.sessionKey },
+      ],
+      ...(events.length ? {} : { notes: ["The gateway did not keep this event."] }),
+    },
+  };
+}
+
+/**
+ * "Thought for 4s": inside the card it led to, over the reply, or at the end
+ * of a run. Folded always until opened; its open state lasts only while its
+ * run's reasoning revision is unchanged (7.5).
+ */
+export function ThoughtLine({
+  thought,
+  place,
+  revision,
+}: {
+  thought: Thought;
+  place: "card" | "reply" | "end";
+  revision: number;
+}) {
+  const env = useActionEnv();
+  const [open, setOpen] = useView<boolean>(
+    env.taskKey,
+    viewKeys.thought(thought.id, revision),
+    false,
+  );
+  const raw = thoughtRaw(thought, env);
+  const disclosure = useRawDisclosure(raw.load);
+  return (
+    <details
+      className="thought"
+      data-place={place}
+      data-thought={thought.id}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="event-line">
+        {thoughtFor(thought.ms !== null ? durationWords(thought.ms) : null)}
+        <ChevronIcon className="chevron" />
+      </summary>
+      <div className="thought-body">
+        {thought.segments.map((segment) => (
+          <p className="step-thought" key={segment.id}>
+            {segment.text}
+          </p>
+        ))}
+        <CardFoot disclosure={disclosure} raw={raw.content} />
+      </div>
+    </details>
+  );
+}
+
+// The run line -------------------------------------------------------------------------
+
+/** "Worked for 1m 12s · 14 actions", after everything the run put in the transcript (7.7). */
+export function RunLineView({
+  runId,
+  line,
+  model,
+}: {
+  runId: string;
+  line: RunLine;
+  model: string | null;
+}) {
+  const env = useActionEnv();
+  const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.run(runId), false);
+  const record = `${model ?? "model not reported"} · effort not reported`;
+  return (
+    <details
+      className="run-line"
+      data-testid="run-line"
+      data-run={runId}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="event-line" title={record} aria-label={line.text}>
+        <span className="run-label">{line.label}</span>
+        <span aria-hidden="true">·</span>
+        <span className="run-count">
+          {line.actions} {line.actions === 1 ? "action" : "actions"}
+        </span>
+        {line.failed > 0 && (
+          <>
+            <span aria-hidden="true">·</span>
+            <span className="run-failed">{line.failed} failed</span>
+          </>
+        )}
+        {line.problems.map((problem) => (
+          <span key={problem}>
+            <span aria-hidden="true">· </span>
+            <span className="run-problem">{problem}</span>
+          </span>
+        ))}
+        <ChevronIcon className="chevron" />
+      </summary>
+      <p className="run-record">
+        <span>{record}</span>
+        <span aria-hidden="true">·</span>
+        <span className="mono">{runId}</span>
+        <CopyButton what="run id" text={runId} />
+      </p>
+    </details>
+  );
+}

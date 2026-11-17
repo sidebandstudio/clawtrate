@@ -232,7 +232,21 @@ function useScope(): Scope {
   return scope;
 }
 
-function CardFor({ cardRef }: { cardRef: CardRef }) {
+/** The task's cards and its calls' raw reads, for the action cards that sit beside them. */
+export function useScopeCards(): Scope {
+  return useScope();
+}
+
+/**
+ * Cards the transcript has placed itself, inside a run's column of action
+ * cards, at their call (`kind:id`): CardSlot, RunCardList and TrailingCards
+ * leave them out.
+ */
+export const PlacedCardsContext = createContext<ReadonlySet<string>>(new Set());
+
+export const refKey = (ref: CardRef) => `${ref.kind}:${ref.id}`;
+
+export function CardFor({ cardRef }: { cardRef: CardRef }) {
   const { cards } = useScope();
   const env = useCardEnv();
   const domId = cardDomId(cardRef);
@@ -334,9 +348,10 @@ function recipientBot(env: CardEnv, id: string | null) {
  */
 export function CardSlot({ item, children }: { item: TranscriptItem; children: ReactNode }) {
   const { placement } = useScope();
+  const placed = useContext(PlacedCardsContext);
   const env = useCardEnv();
   const incoming = placement.incoming.get(item.id);
-  const refs = placement.afterItem.get(item.id) ?? [];
+  const refs = (placement.afterItem.get(item.id) ?? []).filter((ref) => !placed.has(refKey(ref)));
   let own: ReactNode = children;
   if (incoming) {
     const run = env.transcript.runs.find((each) => each.anchorItemId === item.id);
@@ -362,11 +377,14 @@ export function CardSlot({ item, children }: { item: TranscriptItem; children: R
  */
 export function RunCardList({ runId }: { runId: string }) {
   const { placement } = useScope();
+  const placed = useContext(PlacedCardsContext);
   return (
     <>
-      {(placement.byRun.get(runId) ?? []).map((ref) => (
-        <CardFor key={`${ref.kind}:${ref.id}`} cardRef={ref} />
-      ))}
+      {(placement.byRun.get(runId) ?? [])
+        .filter((ref) => !placed.has(refKey(ref)))
+        .map((ref) => (
+          <CardFor key={`${ref.kind}:${ref.id}`} cardRef={ref} />
+        ))}
     </>
   );
 }
@@ -377,6 +395,7 @@ export function RunCardList({ runId }: { runId: string }) {
  */
 export function TrailingCards({ except }: { except?: ReadonlySet<string> }) {
   const { placement } = useScope();
+  const placed = useContext(PlacedCardsContext);
   const drawn = new Set(
     [...(except ?? [])].flatMap((runId) =>
       (placement.byRun.get(runId) ?? []).map((ref) => `${ref.kind}:${ref.id}`),
@@ -385,7 +404,7 @@ export function TrailingCards({ except }: { except?: ReadonlySet<string> }) {
   return (
     <>
       {placement.trailing
-        .filter((ref) => !drawn.has(`${ref.kind}:${ref.id}`))
+        .filter((ref) => !drawn.has(`${ref.kind}:${ref.id}`) && !placed.has(refKey(ref)))
         .map((ref) => (
           <CardFor key={`${ref.kind}:${ref.id}`} cardRef={ref} />
         ))}

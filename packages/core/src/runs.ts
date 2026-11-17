@@ -21,6 +21,7 @@ import {
   MAX_ID_CHARS,
   MAX_INLINE_RAW_CHARS,
   MAX_PENDING_QUESTIONS_PER_TASK,
+  MAX_PREAMBLES_PER_RUN,
   MAX_QUESTION_OPTIONS,
   MAX_RUN_LIST,
   MAX_SETTLED_APPROVAL_COUNT,
@@ -282,8 +283,29 @@ export type Run = {
    * valid only while this is unchanged; when it changes, clear it.
    */
   reasoningRevision: number;
+  /**
+   * Text the model wrote beside a tool call (`item` of kind `preamble`), in
+   * order, newest last, at most `MAX_PREAMBLES_PER_RUN`. Absent until one arrives.
+   */
+  preambles?: Preamble[];
   /** Paths of fields cut to their bound; a cut `text` is not extended by later deltas. */
   cut?: string[];
+};
+
+/**
+ * Text the model wrote in the same message as a tool call (conversation.md
+ * 7.6). It is shown as the bot's bubble directly before the call it came
+ * with: the first tool step to start after it, `beforeTools` tool steps into
+ * the run.
+ */
+export type Preamble = {
+  /** The gateway's item id. */
+  id: string;
+  text: string;
+  /** The item's `end` arrived: no caret. */
+  ended: boolean;
+  /** How many tool steps the run had when it arrived. */
+  beforeTools: number;
 };
 
 export type OutgoingStatus =
@@ -1881,6 +1903,7 @@ function toolResultFacts(data: RawRecord): { text: string; details: RawRecord | 
 
 /** `item` frames add the gateway's timing to the tool step they describe. */
 function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): Run {
+  if (data.kind === "preamble") return applyPreamble(run, data);
   if (data.kind !== "tool") return run;
   const toolCallId = str(data.toolCallId);
   if (!toolCallId) return run;
@@ -1895,6 +1918,28 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
     startedAt: num(data.startedAt) ?? step.startedAt,
     endedAt: isOpenStep(step) ? step.endedAt : (num(data.endedAt) ?? step.endedAt),
   });
+}
+
+/** Text beside a tool call: its updates replace its text in place; `end` ends it. */
+function applyPreamble(run: Run, data: RawRecord): Run {
+  const id = str(data.itemId);
+  const text = typeof data.progressText === "string" ? data.progressText : null;
+  if (!id || (text === null && data.phase !== "end")) return run;
+  const list = run.preambles ?? [];
+  const existing = list.find((each) => each.id === id);
+  const ended = data.phase === "end";
+  const next: Preamble = existing
+    ? { ...existing, text: text ?? existing.text, ended: existing.ended || ended }
+    : {
+        id,
+        text: text ?? "",
+        ended,
+        beforeTools: run.steps.filter((step) => step.kind === "tool").length,
+      };
+  const preambles = existing
+    ? list.map((each) => (each.id === id ? next : each))
+    : [...list, next].slice(-MAX_PREAMBLES_PER_RUN);
+  return { ...run, preambles };
 }
 
 /** Exec output, streamed into the step of the call that produced it. */

@@ -1110,3 +1110,58 @@ describe("structured endings and best-effort reasoning segments", () => {
     expect(merged[0]!.steps.map((step) => step.output?.text)).toEqual(["Looking"]);
   });
 });
+
+describe("text beside a tool call (conversation.md 7.6)", () => {
+  it("keeps a preamble item before the call it came with, its updates in place, and the call's projections", () => {
+    let activity = emptyActivity;
+    const apply = (seq: number, stream: string, data: Record<string, unknown>) => {
+      activity = applyAgentEvent(activity, agent("run-1", seq, stream, data), ctx()).activity;
+    };
+    apply(1, "lifecycle", { phase: "start" });
+    apply(2, "item", { kind: "preamble", itemId: "p1", phase: "update", progressText: "Reading" });
+    apply(3, "item", {
+      kind: "preamble",
+      itemId: "p1",
+      phase: "update",
+      progressText: "Reading the log first.",
+    });
+    apply(4, "item", {
+      kind: "preamble",
+      itemId: "p1",
+      phase: "end",
+      progressText: "Reading the log first.",
+    });
+    apply(5, "item", {
+      kind: "tool",
+      toolCallId: "c1",
+      name: "exec",
+      phase: "start",
+      commandBearing: true,
+    });
+    apply(6, "tool", {
+      toolCallId: "c1",
+      name: "exec",
+      phase: "start",
+      args: { command: "du -sh /srv", content: "x".repeat(9000) },
+    });
+    apply(7, "tool", {
+      toolCallId: "c1",
+      name: "exec",
+      phase: "result",
+      result: {
+        content: [{ type: "text", text: "1G" }],
+        details: { status: "completed", exitCode: 0, aggregated: "y".repeat(9000) },
+      },
+    });
+    const run = only(activity);
+    expect(run.preambles).toEqual([
+      { id: "p1", text: "Reading the log first.", ended: true, beforeTools: 0 },
+    ]);
+    expect(run.steps[0]).toMatchObject({
+      commandBearing: true,
+      args: { command: "du -sh /srv" },
+      details: { status: "completed", exitCode: 0 },
+    });
+    expect(run.steps[0]!.details).not.toHaveProperty("aggregated");
+  });
+});

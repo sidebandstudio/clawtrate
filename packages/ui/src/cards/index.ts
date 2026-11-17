@@ -10,10 +10,21 @@ export {
   type OpenTask,
 } from "./context.tsx";
 export {
+  CardFor,
   CardScope,
   CardSlot,
+  PlacedCardsContext,
+  refKey,
+  useScopeCards,
   focusPending,
   RunCardList,
   TrailingCards,
 } from "./TranscriptCards.tsx";
-export { oldestPending, placeCards, type CardPlacement, type CardRef } from "./placement.ts";
+export {
+  cardDomId,
+  codingCalls,
+  oldestPending,
+  placeCards,
+  type CardPlacement,
+  type CardRef,
+} from "./placement.ts";

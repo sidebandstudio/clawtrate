@@ -1,4 +1,5 @@
 import type {
+  ReadingContext,
   Bot,
   ConnectionState,
   DiscoveryState,
@@ -6,7 +7,6 @@ import type {
   Run,
   Task,
   Transcript,
-  TranscriptBlock,
   TranscriptItem,
 } from "@clawtrate/core";
 import {
@@ -28,145 +28,38 @@ import {
   oldestPending,
   RunCardList,
   TrailingCards,
-  useStepHandover,
 } from "./cards/index.ts";
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
 import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
-import {
-  IncompleteCaption,
-  OutgoingBubble,
-  RunActivity,
-  RunEnding,
-  RunReply,
-} from "./LiveTurn.tsx";
+import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTurn.tsx";
+import { ActionScope, ItemFeed, RunFeed, RunLine, showAction } from "./actions/index.ts";
 import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { FindBar } from "./Find.tsx";
-import { contextWords, daysAgo, fullDate, stampTime, summarizeArguments } from "./format.ts";
-import { ArrowDownIcon, BackIcon, ChevronIcon, PanelIcon } from "./icons.tsx";
+import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
+import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 
-type ToolCall = Extract<TranscriptBlock, { kind: "tool-call" }>;
-
-function ReasoningStep({ text }: { text: string }) {
-  const firstLine = text.split("\n")[0] ?? "";
-  return (
-    <details className="step">
-      <summary>
-        <ChevronIcon className="step-chevron" />
-        <span className="step-kind">Thought</span>
-        <span className="step-reasoning-preview">{firstLine}</span>
-      </summary>
-      <div className="step-body">
-        <p className="reasoning">{text}</p>
-      </div>
-    </details>
-  );
-}
-
-function ToolStep({ call }: { call: ToolCall }) {
-  const state = call.result ? (call.result.isError ? "failed" : "done") : "no result";
-  // Kept for the card this call may become once its result names it.
-  const handover = useStepHandover();
-  const note = (element: HTMLDetailsElement, focused: boolean) =>
-    call.callId && handover?.note(call.callId, { open: element.open, focused });
-  return (
-    <details
-      className="step"
-      data-testid="tool-call"
-      onToggle={(event) =>
-        note(event.currentTarget, event.currentTarget.contains(document.activeElement))
-      }
-      onFocus={(event) => note(event.currentTarget, true)}
-      onBlur={(event) =>
-        note(event.currentTarget, event.currentTarget.contains(event.relatedTarget as Node | null))
-      }
-    >
-      <summary>
-        <ChevronIcon className="step-chevron" />
-        <span className="step-tool-name">{call.name}</span>
-        <span className="step-summary">{summarizeArguments(call.argumentsText)}</span>
-        <span className="step-state" data-error={call.result?.isError === true}>
-          {state}
-        </span>
-      </summary>
-      <div className="step-body">
-        <p className="code-label">Arguments</p>
-        <pre className="code-block">{call.argumentsText}</pre>
-        {call.result && (
-          <>
-            <p className="code-label">{call.result.isError ? "Error" : "Result"}</p>
-            <pre className="code-block">{call.result.text || "(empty)"}</pre>
-          </>
-        )}
-      </div>
-    </details>
-  );
-}
-
-/** "Thought, used 2 tools", "Used 1 tool", "Thought". */
-export function stepsLabel(blocks: TranscriptBlock[]): string {
-  const thought = blocks.some((block) => block.kind === "reasoning");
-  const tools = blocks.filter((block) => block.kind === "tool-call").length;
-  const used = tools
-    ? `${thought ? "used" : "Used"} ${tools} ${tools === 1 ? "tool" : "tools"}`
-    : "";
-  return [thought ? "Thought" : "", used].filter(Boolean).join(", ");
-}
-
-/** A run of thoughts and tool calls, folded into one line until asked for. */
-function Steps({ blocks: all }: { blocks: TranscriptBlock[] }) {
-  // A call drawn as a card is not drawn here as well.
-  const handover = useStepHandover();
-  const blocks = all.filter(
-    (block) => block.kind !== "tool-call" || !block.callId || !handover?.isCard(block.callId),
-  );
-  if (blocks.length === 0) return null;
-  return (
-    <details className="steps">
-      <summary className="event-line">
-        {stepsLabel(blocks)}
-        <ChevronIcon />
-      </summary>
-      <div className="steps-list">
-        {blocks.map((block, i) =>
-          block.kind === "reasoning" ? (
-            <ReasoningStep key={i} text={block.text} />
-          ) : block.kind === "tool-call" ? (
-            <ToolStep key={i} call={block} />
-          ) : null,
-        )}
-      </div>
-    </details>
-  );
-}
-
-/** One transcript item: its bubbles and its folded work, in their order. */
+/**
+ * One transcript item. Your message is a bubble; the bot's item is its
+ * bubbles, action cards and "Thought" lines in their order (section 7).
+ */
 function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?: boolean }) {
   const role = item.role === "user" ? "user" : "assistant";
-  const groups: Array<{ kind: "steps" | "text"; blocks: TranscriptBlock[] }> = [];
-  for (const block of item.blocks) {
-    const kind = block.kind === "text" ? "text" : "steps";
-    const last = groups.at(-1);
-    if (last && kind === "steps" && last.kind === "steps") last.blocks.push(block);
-    else groups.push({ kind, blocks: [block] });
-  }
   const time = item.timestamp === null ? undefined : fullDate(item.timestamp);
   return (
     <div className="turn" data-role={role} data-testid="transcript-turn">
-      {groups.map((group, index) =>
-        group.kind === "steps" ? (
-          <Steps key={index} blocks={group.blocks} />
-        ) : (
-          group.blocks.map((block, i) =>
-            block.kind === "text" && block.text.trim() ? (
-              <div className="msg" data-role={role} key={`${index}-${i}`}>
-                <div className="bubble" title={time}>
-                  <Markdown text={block.text} />
-                </div>
+      {role === "assistant" ? (
+        <ItemFeed itemId={item.id} />
+      ) : (
+        item.blocks.map((block, i) =>
+          block.kind === "text" && block.text.trim() ? (
+            <div className="msg" data-role={role} key={i}>
+              <div className="bubble" title={time}>
+                <Markdown text={block.text} />
               </div>
-            ) : null,
-          )
-        ),
+            </div>
+          ) : null,
+        )
       )}
       {incomplete && <IncompleteCaption />}
     </div>
@@ -184,12 +77,15 @@ function TaskContext({ task }: { task: Task }) {
 
 const STAMP_GAP_MS = 10 * 60_000;
 
+/** What the reading of an action needs beyond each call; the same for every task. */
+const READING: ReadingContext = {};
+
 /** How close to the end counts as "reading the latest", in pixels. */
 const NEAR_BOTTOM_PX = 96;
 
 /** Blocks of readable text in a transcript; the place is held in the finest one. */
 const TEXT_BLOCKS =
-  ".task-line, .stamp, .event-line, .steps > summary, .step > summary, .status-phrase, " +
+  ".task-line, .stamp, .event-line, .action > summary, .step > summary, .status-phrase, " +
   ".request-title, .card > summary, " +
   ".bubble :is(p, li, h1, h2, h3, h4, h5, h6, pre, td, th, blockquote)";
 
@@ -410,14 +306,23 @@ function TranscriptView({
       >
         <div className="transcript-inner">
           <CardScope taskKey={task.key} transcript={transcript}>
-            <h1 className="task-line" tabIndex={-1}>
-              {task.title}
-            </h1>
-            <TaskContext task={task} />
-            {note}
-            {rows}
-            <TrailingCards except={live.drawsCards} />
-            {live.foot}
+            <ActionScope
+              taskKey={task.key}
+              transcript={transcript}
+              engineRuns={live.engineRuns}
+              lost={!liveOptions.connected}
+              readOnly={!liveOptions.interactive}
+              ctx={READING}
+            >
+              <h1 className="task-line" tabIndex={-1}>
+                {task.title}
+              </h1>
+              <TaskContext task={task} />
+              {note}
+              {rows}
+              <TrailingCards except={live.drawsCards} />
+              {live.foot}
+            </ActionScope>
           </CardScope>
         </div>
       </div>
@@ -504,6 +409,8 @@ type LiveParts = {
   incomplete: Set<string>;
   /** Runs whose cards the foot draws under their message, so the trailing cards leave them out. */
   drawsCards: Set<string>;
+  /** Runs drawn from the engine's state rather than from history. */
+  engineRuns: Run[];
   /** Changes whenever the foot's content does, for following the end. */
   signature: string;
   status: StatusLineView | null;
@@ -523,7 +430,8 @@ type LiveOptions = {
   interactive: boolean;
   /** Ask for the interactive tier; null where the host never asks (pinned read-only). */
   onRequestAccess: (() => void) | null;
-  onOpenSteps: () => void;
+  /** Bring the running action's card into view; false when there is none. */
+  onShowAction: (callId: string) => boolean;
   onReview: () => void;
   leaving: { key: string; run: Run } | null;
 };
@@ -561,6 +469,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
         transcript={transcript}
         taskKey={task.key}
       />,
+      <RunLine key={`line-${run.id}`} run={run} />,
     );
     endingsBefore.set(at, list);
     if (run.state === "stopped" || run.state === "failed") {
@@ -596,17 +505,26 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
     );
   };
 
+  const engineRuns: Run[] = [];
   for (const run of footRuns) {
     if (run.messageId) bubble(run.messageId);
     const held = run === active || heldByEngine(run, transcript);
-    if (held) foot.push(<RunActivity key={`activity-${run.id}`} run={run} />);
-    // A run whose message history does not show yet has its cards here, under that message.
-    if (!run.anchorItemId || !shown.has(run.anchorItemId)) {
+    if (held) {
+      // The run's record, from the engine: its action cards, the cards at their calls,
+      // its text beside calls, its reply.
+      engineRuns.push(run);
+      drawsCards.add(run.id);
+      foot.push(
+        <RunFeed key={`feed-${run.id}`} runId={run.id} reply={(each) => <RunReply run={each} />} />,
+      );
+    } else if (!run.anchorItemId || !shown.has(run.anchorItemId)) {
+      // A run whose message history does not show yet has its cards here, under that message.
       drawsCards.add(run.id);
       foot.push(<RunCardList key={`cards-${run.id}`} runId={run.id} />);
     }
-    if (held) foot.push(<RunReply key={`reply-${run.id}`} run={run} />);
-    signature.push(`${run.id}:${run.state}:${run.text.length}:${run.steps.length}`);
+    signature.push(
+      `${run.id}:${run.state}:${run.text.length}:${run.steps.map((step) => step.status[0]).join("")}:${run.preambles?.length ?? 0}`,
+    );
     for (const message of transcript.outbox) {
       if (message.mode === "steer" && message.runId === run.id) bubble(message.id);
     }
@@ -619,6 +537,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
           transcript={transcript}
           taskKey={task.key}
         />,
+        <RunLine key={`line-${run.id}`} run={run} />,
       );
     }
   }
@@ -627,6 +546,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
   let status: StatusLineView | null = null;
   if (active) {
     status = statusLineFor(active, transcript, options);
+    const running = status.callId;
     // The gateway reports a wait this tier is not sent: say so, and how to see it.
     if (active.state === "waiting" && !options.interactive) {
       foot.push(
@@ -650,8 +570,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
         key={`status-${active.id}`}
         bot={bot}
         view={status}
-        hasSteps={active.steps.length > 0}
-        onOpenSteps={options.onOpenSteps}
+        onShow={running ? () => options.onShowAction(running) : null}
       />,
     );
   } else if (options.leaving) {
@@ -672,6 +591,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
     endingsBefore,
     incomplete,
     drawsCards,
+    engineRuns,
     signature: signature.join("|"),
     status,
     needsYou,
@@ -804,12 +724,11 @@ export function Conversation({
     const oldest = transcript ? oldestPending(transcript) : null;
     if (oldest) focusPending(oldest);
   }, [transcript]);
-  const openSteps = useCallback(() => {
-    const activity = sectionRef.current?.querySelectorAll<HTMLElement>(
-      '[data-placeholder="activity"]',
-    );
-    activity?.[activity.length - 1]?.scrollIntoView({ block: "nearest" });
-  }, []);
+  // The status line brings the running action's card into view and focuses its line (7.8).
+  const onShowAction = useCallback(
+    (callId: string) => showAction(callId, sectionRef.current ?? document),
+    [],
+  );
 
   // The status line leaves with a short fade when its run ends.
   const ended = !active
@@ -1007,7 +926,7 @@ export function Conversation({
           onRequestAccess: info.readOnly
             ? null
             : () => void send({ type: "requestAccess" }).catch(() => {}),
-          onOpenSteps: openSteps,
+          onShowAction,
           onReview: review,
           leaving,
         }}

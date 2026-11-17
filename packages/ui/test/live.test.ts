@@ -24,7 +24,6 @@ import {
   elapsed,
   endingOf,
   outgoingBubbles,
-  runningTitle,
   sendName,
   shelfMessages,
   statusLineFor,
@@ -135,10 +134,32 @@ describe("the status line", () => {
       steps: [step("read", { path: "a.log" }, { status: "done", endedAt: NOW })],
     });
     expect(statusLineFor(finished, transcript([finished]), live).phrase).toBe("Thinking");
-    expect(runningTitle(step("exec", { command: "mv /a /b" }))).toBe("Running mv");
-    expect(runningTitle(step("grep", { pattern: "cache" }))).toBe('Searching for "cache"');
-    // A tool the app does not know keeps the gateway's own title.
-    expect(runningTitle(step("coder__send", {}, { title: "Coder Send" }))).toBe("Coder Send");
+    const phrase = (name: string, args: Record<string, unknown>, more = {}) => {
+      const each = run({ steps: [step(name, args, more)] });
+      return statusLineFor(each, transcript([each]), live).phrase;
+    };
+    expect(phrase("exec", { command: "mv /a /b" })).toBe("Running mv");
+    // A tool the app has no kind for gets the general card's words, never the gateway's title.
+    expect(phrase("coder__send", {}, { title: "Coder Send" })).toBe("Using coder send");
+    expect(phrase("web_search", { query: "heat pump" })).toBe('Searching the web for "heat pump"');
+  });
+
+  it("F-082: overlapping calls: the latest to start, then the earliest still running", () => {
+    const a = step("read", { path: "a.log" }, { id: "tool:a", toolCallId: "a" });
+    const b = step("read", { path: "b.log" }, { id: "tool:b", toolCallId: "b" });
+    const c = step("read", { path: "c.log" }, { id: "tool:c", toolCallId: "c" });
+    const all = run({ steps: [a, b, c] });
+    expect(statusLineFor(all, transcript([all]), live)).toMatchObject({
+      phrase: "Reading c.log",
+      callId: "c",
+    });
+    const ended = run({
+      steps: [a, b, { ...c, status: "done", endedAt: NOW, result: { text: "x", totalChars: 1 } }],
+    });
+    expect(statusLineFor(ended, transcript([ended]), live)).toMatchObject({
+      phrase: "Reading a.log",
+      callId: "a",
+    });
   });
 
   it("F-082: the gateway's status phases give the phrase more to say while no step runs", () => {
@@ -192,6 +213,7 @@ describe("the status line", () => {
       phrase: "Reconnecting. Last seen reading backup.log",
       tone: "muted",
       startedAt: null,
+      callId: "read",
     });
   });
 

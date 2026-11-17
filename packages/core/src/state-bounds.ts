@@ -43,6 +43,7 @@ import type {
   QuestionCard,
   QuestionItem,
   QuestionOption,
+  Preamble,
   Run,
   RunEnding,
   RunError,
@@ -128,6 +129,8 @@ export const MAX_STEPS_PER_TASK = 128;
 /** Cards a run holds pending, suspended by Stop, or closed. */
 export const MAX_PENDING_CARDS = 4;
 export const MAX_CLOSED_CARDS_PER_RUN = 8;
+/** Texts beside a tool call kept per run (`Run.preambles`). */
+export const MAX_PREAMBLES_PER_RUN = 8;
 /** Retried-attempt errors kept per run. */
 export const MAX_ATTEMPT_ERROR_COUNT = 5;
 /** Items of a task's history page (`chat.history` limit) and blocks across them. */
@@ -214,6 +217,12 @@ const runEnding = object<RunEnding>()({
   providerStarted: FLAG,
   status: NAME,
 });
+const preamble = object<Preamble>()({
+  id: ID,
+  text: text(MAX_BLOCK_CHARS),
+  ended: FLAG,
+  beforeTools: NUMBER,
+});
 export const RUN: Bound = flagged<Run>()({
   id: ID,
   bound: FLAG,
@@ -243,6 +252,7 @@ export const RUN: Bound = flagged<Run>()({
   outcomeKnown: FLAG,
   attemptErrors: list(MAX_ATTEMPT_ERROR_COUNT, text(MAX_ATTEMPT_ERROR_CHARS)),
   omittedSteps: NUMBER,
+  preambles: list(MAX_PREAMBLES_PER_RUN, preamble),
   reasoningAnchor: ID,
   nextReasoning: NUMBER,
   reasoningRevision: NUMBER,

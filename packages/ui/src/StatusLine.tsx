@@ -17,19 +17,19 @@ export function useNow(active: boolean): number {
 /**
  * The last thing in a running turn (conversation.md, section 5): the bot's
  * avatar at 28 px and one short phrase, with the elapsed time. One button:
- * it opens the run's steps, and says so in its name. A new phrase rises in;
- * under reduced motion it is replaced at once.
+ * it brings the running action's card into view and moves focus to its line,
+ * without opening it (7.8), and says so in its name; with no action running
+ * it does nothing and says that. A new phrase rises in; under reduced motion
+ * it is replaced at once.
  */
 export function StatusLine({
   bot,
   view,
-  hasSteps,
-  onOpenSteps,
+  onShow,
 }: {
   bot: Bot;
   view: StatusLineView;
-  hasSteps: boolean;
-  onOpenSteps: () => void;
+  onShow: (() => void) | null;
 }) {
   const now = useNow(view.startedAt !== null);
   const shown = view.startedAt !== null ? elapsed(now - view.startedAt) : null;
@@ -42,8 +42,12 @@ export function StatusLine({
       data-tone={view.tone}
       data-testid="status-line"
       title={view.phrase}
-      aria-label={`${bot.name}, ${words}: ${view.phrase}.${hasSteps ? " Show steps." : " No steps yet."}`}
-      onClick={hasSteps ? onOpenSteps : undefined}
+      aria-label={
+        onShow
+          ? `${bot.name}, ${words}: ${view.phrase}. Show the action.`
+          : `${bot.name}, ${words}${view.phrase.toLowerCase() === words ? "" : `: ${view.phrase}`}. Nothing running to show.`
+      }
+      onClick={onShow ?? undefined}
     >
       <Presence bot={bot} state={view.state} badge={view.badge} hidden />
       <span className="status-phrase" key={view.phrase} data-testid="status-phrase">

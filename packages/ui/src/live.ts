@@ -4,12 +4,16 @@
 // (docs/design/conversation.md, sections 4, 5, 15, 16 and 17).
 
 import {
+  actionWords,
+  callFromStep,
+  lineOf,
+  phraseCall,
+  type ActionCall,
   activeRun,
   isActive,
   questionPending,
   type OutgoingMessage,
   type Run,
-  type Step,
   type Transcript,
 } from "@clawtrate/core";
 
@@ -25,75 +29,22 @@ export function currentRun(transcript: Transcript | undefined): Run | undefined 
 /** Whether a question from this run is pending: it holds every outgoing message (the engine's rule). */
 export { questionPending };
 
-/** The step that is running now, the latest first. */
-export function runningStep(run: Run): Step | undefined {
-  return [...run.steps].reverse().find((step) => step.status === "running");
-}
-
-/** The first line of a step's arguments, parsed when they are JSON. */
-function argumentsOf(step: Step): Record<string, unknown> {
-  const text = step.argsText?.text;
-  if (!text) return {};
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
-function firstString(args: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    const value = args[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return null;
-}
-
-/** The last part of a path, so a phrase stays short. */
-function baseName(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) ?? path;
-}
-
 /**
- * A running step's title in plain words (section 8's "Running" column), for
- * the kinds the app writes itself. Any other tool keeps the gateway's title,
- * unchanged.
+ * The call whose running words the status line says: the latest to start
+ * while it runs, then the earliest still running (7.8), by the engine's
+ * reading of each call.
  */
-export function runningTitle(step: Step): string {
-  if (step.kind === "reasoning") return "Thinking";
-  const name = (step.toolName ?? "").toLowerCase();
-  const args = argumentsOf(step);
-  const path = firstString(args, ["path", "file_path", "file", "filename"]);
-  if (name === "read" || name === "read_file")
-    return path ? `Reading ${baseName(path)}` : "Reading";
-  if (["write", "edit", "write_file", "edit_file", "apply_patch"].includes(name))
-    return path ? `Writing ${baseName(path)}` : "Writing";
-  if (name === "ls" || name === "list" || name === "list_dir")
-    return path ? `Looking through ${baseName(path)}` : "Looking through a folder";
-  if (["grep", "search", "find", "glob"].includes(name)) {
-    const query = firstString(args, ["pattern", "query", "q"]);
-    return query ? `Searching for "${query}"` : "Searching";
-  }
-  if (["web_fetch", "fetch", "browse", "open_url"].includes(name)) {
-    const url = firstString(args, ["url", "href"]);
-    const host = url && URL.canParse(url) ? new URL(url).hostname : null;
-    return host ? `Opening ${host}` : "Opening a page";
-  }
-  if (name === "exec" || name === "bash" || name === "shell") {
-    const command = firstString(args, ["command", "cmd"]);
-    const program = command?.split(/\s+/)[0];
-    return program ? `Running ${baseName(program)}` : "Running a command";
-  }
-  if (name === "sessions_send") {
-    const target = firstString(args, ["agentId", "label", "sessionKey"]);
-    return target ? `Messaging ${target}` : "Messaging a bot";
-  }
-  if (name === "memory_save" || name === "remember") return "Saving to memory";
-  return step.title;
+export function phraseCallOf(run: Run): ActionCall | null {
+  const calls = run.steps
+    .filter((step) => step.kind === "tool" && step.toolCallId)
+    .map((step) => callFromStep(step, run));
+  return phraseCall(calls);
+}
+
+/** The status line's words for a running call: its card's running words (section 5). */
+export function actionPhrase(call: ActionCall): string {
+  const line = lineOf(call);
+  return line.outcome === "review" ? actionWords.PHRASES.reviewing : line.running;
 }
 
 /** Status phases the gateway reports while no step runs (section 5). */
@@ -116,6 +67,8 @@ export type StatusLineView = {
   tone: "live" | "warn" | "muted";
   /** The run's reported start, for the elapsed time; null when it is hidden. */
   startedAt: number | null;
+  /** The running call the phrase names, which the line brings into view; null when none. */
+  callId: string | null;
 };
 
 /**
@@ -129,9 +82,16 @@ export function statusLineFor(
   options: { connected: boolean; interactive: boolean },
 ): StatusLineView {
   let view: StatusLineView;
-  const step = runningStep(run);
+  const call = phraseCallOf(run);
   if (run.state === "stopping") {
-    view = { state: "idle", badge: null, phrase: "Stopping…", tone: "muted", startedAt: null };
+    view = {
+      state: "idle",
+      badge: null,
+      phrase: "Stopping…",
+      tone: "muted",
+      startedAt: null,
+      callId: null,
+    };
   } else if (run.state === "waiting" && !options.interactive) {
     // The gateway reports the wait, but this tier is not sent the card.
     view = {
@@ -140,6 +100,7 @@ export function statusLineFor(
       phrase: "Waiting for an answer",
       tone: "muted",
       startedAt: null,
+      callId: null,
     };
   } else if (
     run.pendingCards.length > 0 ||
@@ -151,22 +112,25 @@ export function statusLineFor(
       phrase: "Waiting for you",
       tone: "warn",
       startedAt: null,
+      callId: null,
     };
-  } else if (step && step.kind === "tool") {
+  } else if (call) {
     view = {
       state: "working",
       badge: null,
-      phrase: runningTitle(step),
+      phrase: actionPhrase(call),
       tone: "live",
       startedAt: null,
+      callId: call.id,
     };
   } else {
     view = {
       state: "thinking",
       badge: null,
-      phrase: phasePhrase(run.phase) ?? "Thinking",
+      phrase: phasePhrase(run.phase) ?? actionWords.PHRASES.thinking,
       tone: "live",
       startedAt: null,
+      callId: null,
     };
   }
   // A clock only for a start the gateway reported, never this client's own send time.
@@ -179,6 +143,7 @@ export function statusLineFor(
       phrase: `Reconnecting. Last seen ${last.charAt(0).toLowerCase()}${last.slice(1)}`,
       tone: "muted",
       startedAt: null,
+      callId: view.callId,
     };
   }
   return view;
