@@ -305,7 +305,7 @@ test.describe("approval cards", () => {
     const card = approvalCard(page);
     // Opened already refused: the reason, and the choices beside it.
     await expect(card.getByRole("alert")).toHaveText(
-      "The gateway refused this decision. This host is set to always ask, so nothing can be saved for it. The request is still open.",
+      "The gateway refused this decision. allow-always is unavailable for this command The request is still open.",
     );
     await card.getByRole("button", { name: "Always allow…" }).click();
     await card.getByRole("button", { name: "Allow and save" }).click();
@@ -326,7 +326,7 @@ test.describe("approval cards", () => {
     await recordCommands(page);
     const card = approvalCard(page);
     await expect(card.getByRole("status")).toHaveText(
-      "No answer from the gateway. Your decision may or may not have been applied.",
+      "No answer from the gateway says what happened. Your decision may or may not have been applied.",
     );
     await expect(card.locator('.request-actions[data-row="main"] button')).toHaveText([
       "Check again",

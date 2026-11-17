@@ -495,7 +495,7 @@ function build(
         b: waitingApproval(now).update((a) =>
           markApproval(a, "apr_5d2a", {
             submitting: false,
-            error: "This host is set to always ask, so nothing can be saved for it.",
+            error: "allow-always is unavailable for this command",
             decisionError: "refused",
             stillOpen: true,
           }),

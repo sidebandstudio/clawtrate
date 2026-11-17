@@ -307,7 +307,8 @@ function PendingApproval({
       <div className="standing-note" role="status">
         <WarningIcon />
         <span>
-          <b>No answer from the gateway.</b> Your decision may or may not have been applied.
+          <b>No answer from the gateway says what happened.</b> Your decision may or may not have
+          been applied.
         </span>
       </div>
     ) : (
