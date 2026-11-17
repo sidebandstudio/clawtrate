@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import { devGateway, FORBIDDEN_PORTS, listInstances, runningOthers } from "./global-setup.ts";
 
 /** This run's own development gateway instance, created by global setup. */
@@ -330,6 +331,36 @@ test("the drawer is modal, and focus follows it across the docking width", async
   await page.getByRole("button", { name: "Hide work panel" }).click();
 });
 
+/** A run the engine would hold, for injected state: running, started elsewhere. */
+const INJECTED_RUN = {
+  id: "injected",
+  bound: true,
+  state: "running",
+  origin: "gateway",
+  messageId: null,
+  anchorItemId: null,
+  phase: null,
+  model: null,
+  textSource: "chat",
+  textItemId: null,
+  textComplete: false,
+  steps: [],
+  pendingCards: [],
+  suspendedCards: [],
+  closedCards: [],
+  endedAt: null,
+  error: null,
+  stopRequestedAt: null,
+  finishedBeforeStop: false,
+  stopError: null,
+  lastSeq: null,
+  ending: null,
+  outcomeKnown: true,
+  attemptErrors: [],
+  omittedSteps: 0,
+  nextReasoning: 0,
+};
+
 /** Proxy the bridge socket so a test can inject host state into the page. */
 async function proxyBridge(page: Page) {
   let lastState: Record<string, unknown> | null = null;
@@ -370,8 +401,12 @@ test("a streamed reply does not pull a reader away from older messages", async (
   const key = "agent:otto:disk-space";
   bridge.freeze();
   bridge.inject((state) => {
-    const transcripts = state.transcripts as Record<string, Record<string, unknown>>;
-    transcripts[key]!.live = { runId: "injected", text: "Checking the disk again." };
+    const transcripts = state.transcripts as Record<string, { runs: unknown[] }>;
+    transcripts[key]!.runs.push({
+      ...INJECTED_RUN,
+      text: "Checking the disk again.",
+      startedAt: Date.now(),
+    });
     return state;
   });
   await expect(page.getByTestId("live-turn")).toHaveCount(1);
@@ -490,6 +525,251 @@ test("tool calls open to their arguments, result and error", async ({ page }) =>
   await failed.locator("summary").click();
   await expect(failed).toContainText("Error");
   await expect(failed).toContainText("Permission denied");
+});
+
+// The live conversation against this run's real development gateway. The
+// scripted model answers a message sent from the app with a short reply and
+// a reasoning segment; it cannot yet stream slowly, ask or need approval.
+
+/** The gateway's own command line, on this run's instance profile only. */
+function openclaw(...args: string[]): string {
+  return execFileSync(
+    process.env.OPENCLAW_BIN ?? "openclaw",
+    ["--profile", `clawtrate-dev-${INSTANCE}`, ...args],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+  );
+}
+
+/** Pending device requests on this run's gateway, newest last. */
+function pendingRequests(): string[] {
+  const listed = JSON.parse(openclaw("devices", "list", "--json")) as {
+    pending?: Array<{ requestId: string }>;
+  };
+  return (listed.pending ?? []).map((request) => request.requestId);
+}
+
+/** Record, on every change, what the live turn and the status line show. */
+async function watchRun(page: Page) {
+  await page.evaluate(() => {
+    const seen: Array<Record<string, unknown>> = [];
+    (window as unknown as { __seen: unknown }).__seen = seen;
+    new MutationObserver(() => {
+      const live = document.querySelector("[data-testid=live-turn] .bubble");
+      seen.push({
+        at: performance.now(),
+        live: live?.textContent ?? null,
+        caret: !!live?.querySelector(".stream-caret"),
+        busy: live?.getAttribute("aria-busy") ?? null,
+        status: !!document.querySelector("[data-testid=status-line]"),
+        phrase: document.querySelector("[data-testid=status-phrase]")?.textContent ?? null,
+        steer: [...document.querySelectorAll("[data-testid=outgoing] .msg-caption")].some(
+          (caption) => caption.textContent === "Steer",
+        ),
+      });
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+  return () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __seen: Array<Record<string, unknown>> }).__seen as Array<{
+          at: number;
+          live: string | null;
+          caret: boolean;
+          busy: string | null;
+          status: boolean;
+          phrase: string | null;
+          steer: boolean;
+        }>,
+    );
+}
+
+const composer = (page: Page) => page.getByTestId("composer-input");
+
+test("F-456: a refused request leaves the read tier as it was; an approved one gives the composer", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Disk almost full on the media box");
+  const bar = page.getByRole("region", { name: "Access" });
+  await expect(bar).toContainText("Read-only.");
+  await expect(composer(page)).toHaveCount(0);
+
+  // Asked only when the person chooses to; the owner refuses it on the gateway's machine.
+  expect(pendingRequests()).toEqual([]);
+  await bar.getByRole("button", { name: "Request access" }).click();
+  await expect(bar).toContainText("Waiting for the gateway's owner.");
+  await expect(bar.locator(".command code")).toHaveText(
+    `pnpm dev-gateway approve --instance ${INSTANCE}`,
+  );
+  const [refused] = pendingRequests();
+  expect(refused).toBeTruthy();
+  await expect(bar).toContainText(`Request ${refused!.slice(0, 8)}`);
+  openclaw("devices", "reject", refused!);
+  await expect(bar).toContainText(
+    "The request was denied. Nothing changed. This device can still read.",
+  );
+  // The old authorization stays: the conversation still reads.
+  await expect(page.getByTestId("transcript-turn").first()).toBeVisible();
+
+  // Asked again and approved: the composer takes the bar's place.
+  await bar.getByRole("button", { name: "Request again" }).click();
+  await expect(bar).toContainText("Waiting for the gateway's owner.");
+  devGateway(INSTANCE, "approve");
+  await expect(composer(page)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("region", { name: "Access" })).toHaveCount(0);
+  await expect(page.getByTestId("status-strip")).toContainText("Access granted");
+  const gateway = page.getByRole("button", { name: /, connected\. Open the gateway menu\.$/ });
+  await expect(gateway).toBeVisible();
+});
+
+test("F-081 F-082 F-085 F-089 F-095 F-433: a sent message shows the status line within a second, its reply streams in, and the line leaves when the run completes", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  const seen = await watchRun(page);
+  await composer(page).fill("How full is the backup disk this week?");
+  const sent = Date.now();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible({ timeout: 1000 });
+  expect(Date.now() - sent).toBeLessThan(1000);
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+
+  const samples = await seen();
+  // The phrase was never empty, never named the bot, and started at Thinking.
+  const phrases = samples.flatMap((sample) => (sample.phrase === null ? [] : [sample.phrase]));
+  expect(phrases[0]).toBe("Thinking");
+  expect(phrases.every((phrase) => phrase.trim().length > 0 && !/Otto/.test(phrase))).toBe(true);
+  // The reply was on screen, streaming with its caret, while the run was still going.
+  expect(
+    samples.some(
+      (sample) => sample.live && sample.caret && sample.busy === "true" && sample.status,
+    ),
+  ).toBe(true);
+  // Once complete, history holds the message and its reply once each.
+  await expect(
+    page.getByText("How full is the backup disk this week?", { exact: true }),
+  ).toHaveCount(2);
+  await expect(page.getByTestId("outgoing")).toHaveCount(0);
+  await expect(page.getByTestId("live-turn")).toHaveCount(0);
+});
+
+test("F-097: Stop during a real run shows Stopping…, and the gateway's confirmation ends it as stopped", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  const seen = await watchRun(page);
+  await composer(page).fill("Check the backup disk once more, slowly.");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Steer this turn" })).toBeVisible();
+  await page.getByRole("button", { name: "Stop Otto" }).click();
+  await expect(page.getByTestId("stop-note").last()).toContainText(
+    "Completed steps are not undone.",
+    { timeout: 30_000 },
+  );
+  await expect(page.getByTestId("stop-note").last()).toContainText(/^Stopped/);
+  await expect(page.getByTestId("status-line")).toHaveCount(0);
+  const samples = await seen();
+  expect(samples.some((sample) => sample.phrase === "Stopping…")).toBe(true);
+});
+
+test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Certificate renewal warning");
+  await composer(page).fill("Which certificate is it?");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await composer(page).fill("And when does it renew?");
+  await page.keyboard.press("Alt+Enter");
+  const row = page.getByTestId("shelf-row");
+  await expect(row).toContainText("Queued");
+  await expect(row).toContainText("And when does it renew?");
+  await expect(row).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  const turns = page.getByTestId("transcript-turn");
+  await expect(turns.filter({ hasText: "And when does it renew?" })).toHaveCount(2);
+  // In the order sent: the queued message came after the first one's reply.
+  const order = await turns.evaluateAll((all) => all.map((turn) => turn.textContent ?? ""));
+  const first = order.findIndex((text) => text.includes("Which certificate is it?"));
+  const queued = order.findIndex((text) => text === "And when does it renew?");
+  expect(first).toBeGreaterThan(-1);
+  expect(queued).toBeGreaterThan(first + 1);
+});
+
+test("F-096: a message sent while the run works is steered into it and captioned Steer once accepted", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  const seen = await watchRun(page);
+  await composer(page).fill("Start on the backup report.");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await composer(page).fill("Only the photos set, please.");
+  await expect(page.getByRole("button", { name: "How to send: Steer" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  expect((await seen()).some((sample) => sample.steer)).toBe(true);
+  await expect(
+    page.getByTestId("transcript-turn").filter({ hasText: "Only the photos set, please." }),
+  ).not.toHaveCount(0);
+});
+
+test("F-058: two tasks of one bot run at the same time", async ({ page }) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Disk almost full on the media box");
+  await composer(page).fill("First of two at once.");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await openTask(page, "Otto", "Certificate renewal warning");
+  await composer(page).fill("Second of two at once.");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  await openTask(page, "Otto", "Disk almost full on the media box");
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  // The gateway's own record: the second task's run began before the first's ended.
+  const rows = (key: string) =>
+    (
+      JSON.parse(
+        openclaw(
+          "gateway",
+          "call",
+          "chat.history",
+          "--params",
+          JSON.stringify({ sessionKey: key, limit: 20 }),
+          "--json",
+        ),
+      ) as { messages: Array<{ role: string; __openclaw?: { recordTimestampMs?: number } }> }
+    ).messages;
+  const at = (row: { __openclaw?: { recordTimestampMs?: number } } | undefined) =>
+    row?.__openclaw?.recordTimestampMs ?? Number.NaN;
+  const first = rows("agent:otto:disk-space");
+  const second = rows("agent:otto:cert-renewal");
+  const firstReplied = at(first.findLast((row) => row.role === "assistant"));
+  const secondAsked = at(second.findLast((row) => row.role === "user"));
+  expect(secondAsked).toBeLessThan(firstReplied);
+  await expect(
+    page.getByTestId("transcript-turn").filter({ hasText: "First of two at once." }),
+  ).toHaveCount(2);
+});
+
+test("F-282: Start as new task runs the message in a new task under the same bot", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  const tasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
+  const before = await tasks.count();
+  await composer(page).fill("Plan the next restore test.");
+  await page.keyboard.press("ControlOrMeta+Shift+Enter");
+  await expect(page.getByTestId("announcer")).toHaveText("Started as a new task");
+  await expect(composer(page)).toHaveValue("");
+  await expect(page.getByRole("heading", { level: 1, name: "Weekly backup check" })).toBeVisible();
+  await expect(tasks).toHaveCount(before + 1, { timeout: 20_000 });
 });
 
 test("leaves every other instance's gateway as it found it", () => {
