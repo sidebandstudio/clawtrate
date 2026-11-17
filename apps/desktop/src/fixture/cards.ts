@@ -1098,7 +1098,15 @@ export function cardScene(name: CardSceneName, now: number): CardScene {
       plugin: "ready",
       "system-agent": "ready",
     },
-    runs: b.activity.runs.map((run) => ({ ...run, anchorItemId: anchor })),
+    // In the return scene the task has moved on since: the sender's run finished, so its
+    // card stays at its run's place in history, above the later messages.
+    runs: b.activity.runs.map((run) => ({
+      ...run,
+      anchorItemId: anchor,
+      ...(name === "messaged-return"
+        ? { state: "completed" as const, endedAt: now - 2 * MINUTE }
+        : {}),
+    })),
   };
   const items = receiving
     ? receiverItems(now)

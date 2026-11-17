@@ -1254,7 +1254,6 @@ test.describe("Messaged T3 Code cards", () => {
       });
     }, key);
     const step = page.getByTestId("tool-call");
-    await page.locator(".steps > summary").click();
     await step.locator("summary").click();
     await expect(step).toHaveAttribute("open", "");
     // The card below, open; the reader at a marked line: the approval's title at the reading line.

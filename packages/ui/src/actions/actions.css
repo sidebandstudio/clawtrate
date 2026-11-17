@@ -606,3 +606,10 @@
   animation: none;
   transition: none;
 }
+
+/* The run id keeps the record's size: text is never under 12 px. */
+.run-record .mono,
+.action-detail .mono,
+.step-detail .mono {
+  font-size: var(--text-xs);
+}

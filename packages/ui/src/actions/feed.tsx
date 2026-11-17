@@ -102,8 +102,12 @@ function runOfItem(
 type CardsFor = {
   card: (callId: string) => CardRef | null;
   approvals: (callId: string) => CardRef[];
-  /** The question cards of a run, oldest first, matched in order to its `ask_user` calls. */
+  /** The question cards of a run not placed yet, oldest first, matched in order to its `ask_user` calls. */
   questions: (runId: string) => CardRef[];
+  /** Cards already placed in some run's column: each card is placed once. */
+  taken: Set<string>;
+  /** When a card arrived, as the gateway reported it. */
+  arrivedAt: (ref: CardRef) => number | null;
 };
 
 /** A tool call as an entry: its card when it has one, else its action; then any approval it waits on. */
@@ -116,13 +120,19 @@ function callEntries(
 ): FeedEntry<FeedRef>[] {
   const card = cards.card(callId);
   const out: FeedEntry<FeedRef>[] = [];
+  if (card && cards.taken.has(refKey(card))) return out;
+  if (card) cards.taken.add(refKey(card));
   if (card) out.push({ type: "card", id: callId, ref: { t: "card", ref: card } });
   else if (name === "ask_user" && questions.length > 0) {
     const question = questions.shift()!;
+    cards.taken.add(refKey(question));
     out.push({ type: "break", id: refKey(question), ref: { t: "card", ref: question } });
   } else out.push(action());
-  for (const approval of cards.approvals(callId))
+  for (const approval of cards.approvals(callId)) {
+    if (cards.taken.has(refKey(approval))) continue;
+    cards.taken.add(refKey(approval));
     out.push({ type: "break", id: refKey(approval), ref: { t: "card", ref: approval } });
+  }
   return out;
 }
 
@@ -141,12 +151,17 @@ function itemEntries(
   const questions = run ? [...cards.questions(run.id)] : [];
   const entries: FeedEntry<FeedRef>[] = [];
   let r = 0;
+  // A bubble is keyed by its text, not its place, so a block history adds before it keeps it.
+  const seen = new Map<string, number>();
   item.blocks.forEach((block, i) => {
     if (block.kind === "text") {
+      const head = block.text.slice(0, 64);
+      const n = (seen.get(head) ?? 0) + 1;
+      seen.set(head, n);
       if (block.text.trim())
         entries.push({
           type: "bubble",
-          id: `${item.id}:t${i}`,
+          id: `${item.id}:t:${n}:${head}`,
           ref: {
             t: "text",
             text: block.text,
@@ -205,12 +220,21 @@ function runEntries(run: Run, cards: CardsFor, rest: CardRef[]): FeedEntry<FeedR
     );
   }
   preambles.forEach(preamble);
-  const placed = new Set(
-    entries.flatMap((e) => (e.type === "card" || e.type === "break" ? [e.id] : [])),
-  );
-  for (const ref of [...rest, ...questions])
-    if (!placed.has(refKey(ref)))
-      entries.push({ type: "break", id: refKey(ref), ref: { t: "card", ref } });
+  // A card that names no call of the run takes its place by when it arrived, among the calls.
+  for (const ref of [...rest, ...questions]) {
+    if (cards.taken.has(refKey(ref))) continue;
+    cards.taken.add(refKey(ref));
+    const at = cards.arrivedAt(ref);
+    const entry: FeedEntry<FeedRef> = { type: "break", id: refKey(ref), ref: { t: "card", ref } };
+    const before =
+      at === null
+        ? -1
+        : entries.findIndex(
+            (e) => e.type === "action" && e.call.startedAt !== null && e.call.startedAt > at,
+          );
+    if (before === -1) entries.push(entry);
+    else entries.splice(before, 0, entry);
+  }
   if (run.text) entries.push({ type: "bubble", id: `reply:${run.id}`, ref: { t: "reply", run } });
   return entries;
 }
@@ -246,7 +270,15 @@ export function ActionScope({
   const feeds = useMemo(() => {
     const index = stepIndex(transcript.runs);
     const t3 = codingCalls(selected);
+    const taken = new Set<string>();
     const cards: CardsFor = {
+      taken,
+      arrivedAt: (ref) =>
+        ref.kind === "approval"
+          ? (transcript.approvals.find((card) => card.id === ref.id)?.createdAt ?? null)
+          : ref.kind === "question"
+            ? (transcript.questions.find((card) => card.id === ref.id)?.createdAt ?? null)
+            : null,
       card: (callId) => {
         const message = selected.botMessages.find((card) => card.toolCallId === callId);
         if (message) return { kind: "bot-message", id: message.id };
@@ -261,7 +293,7 @@ export function ActionScope({
           .map((card) => ({ kind: "approval" as const, id: card.id })),
       questions: (runId) =>
         transcript.questions
-          .filter((card) => card.runId === runId)
+          .filter((card) => card.runId === runId && !taken.has(`question:${card.id}`))
           .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
           .map((card) => ({ kind: "question" as const, id: card.id })),
     };

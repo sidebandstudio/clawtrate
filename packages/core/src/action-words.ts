@@ -165,6 +165,7 @@ export const FORMS = {
   didntUse: "Didn't use",
   notRun: "Not run:",
   stopped: "Stopped",
+  noResult: "No result:",
   blockedByPolicy: "Blocked by policy",
   blockedByReview: "Blocked by review",
   timedOut: "Timed out:",

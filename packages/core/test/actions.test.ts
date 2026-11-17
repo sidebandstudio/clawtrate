@@ -1452,3 +1452,17 @@ describe("a routine's schedule in words", () => {
     expect(scheduleWords({ kind: "every", everyMs: 7_200_000 })).toBe("every 2 hours");
   });
 });
+
+describe("a call with no result in a run that ended without a stop", () => {
+  it("reads Unknown and never claims a stop", () => {
+    const c = call("read", { path: "notes.md" }, { status: "unreturned", text: null });
+    expect(lineOf(c)).toMatchObject({
+      outcome: "unknown",
+      verb: "No result:",
+      object: "reading notes.md",
+    });
+    expect(lineOf(call("du", { path: "/srv" }, { status: "unreturned", text: null })).verb).toBe(
+      "Call to",
+    );
+  });
+});

@@ -25,6 +25,7 @@ import {
   useContext,
   useEffect,
   useRef,
+  useState,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -42,10 +43,11 @@ import {
 } from "../cards/parts.tsx";
 import type { RawContent } from "../cards/raw.ts";
 import type { StepRawState } from "../cards/useCards.ts";
+import { useStepHandover } from "../cards/context.tsx";
 import { ChevronIcon, FileIcon } from "../icons.tsx";
 import { useNow } from "../StatusLine.tsx";
 import { KindIcon } from "./icons.tsx";
-import { readView, useView, viewKeys } from "./view-state.ts";
+import { readView, useView, viewKeys, writeView } from "./view-state.ts";
 import "./actions.css";
 
 const { tookWords, elapsedWords, thoughtFor, durationWords } = actionWords;
@@ -528,19 +530,48 @@ export function ActionGroup({ members, revision }: { members: FeedMember[]; revi
   const fold = single ? null : foldLineOf(calls, env.ctx);
   // A card that was open becomes a fold that is open, with that card as its open first row.
   const [cardOpen, setCardOpen] = useView<boolean>(env.taskKey, viewKeys.call(first), false);
+  // A fold split by a reconciliation: the part after it opens if the fold it came from was open.
+  // Taken once, when this group first becomes a fold: later its members name it as their own fold.
+  const opensAsFold = () => {
+    const from = readView(env.taskKey, viewKeys.member(first));
+    return (
+      readView(env.taskKey, viewKeys.call(first)) === true ||
+      (typeof from === "string" && readView(env.taskKey, viewKeys.fold(from)) === true)
+    );
+  };
+  const [startsOpen, setStartsOpen] = useState<boolean | null>(() =>
+    single ? null : opensAsFold(),
+  );
+  if (!single && startsOpen === null) setStartsOpen(opensAsFold());
   const [foldOpen, setFoldOpen] = useView<boolean>(
     env.taskKey,
     viewKeys.fold(first),
-    readView(env.taskKey, viewKeys.call(first)) === true,
+    startsOpen ?? (!single && opensAsFold()),
   );
+  // Remember which fold each member is in, once drawn.
+  const memberKey = calls.map((c) => c.id).join("|");
+  useEffect(() => {
+    if (single) return;
+    for (const id of memberKey.split("|")) writeView(env.taskKey, viewKeys.member(id), first);
+  }, [env.taskKey, first, memberKey, single]);
   const open = single ? cardOpen : foldOpen;
   const setOpen = single ? setCardOpen : setFoldOpen;
+  // A call that becomes the T3 Code card once its result names it hands that
+  // card how the reader left it: open or closed, and whether focus was in it.
+  const handover = useStepHandover();
+  const note = (element: HTMLDetailsElement, focused: boolean) => {
+    if (single) handover?.note(first, { open: element.open, focused });
+  };
   const common = {
     className: "card action",
     open,
     onToggle: (event: { currentTarget: HTMLDetailsElement }) => {
       if (event.currentTarget.open !== open) setOpen(event.currentTarget.open);
+      note(event.currentTarget, event.currentTarget.contains(document.activeElement));
     },
+    onFocus: (event: { currentTarget: HTMLDetailsElement }) => note(event.currentTarget, true),
+    onBlur: (event: { currentTarget: HTMLDetailsElement; relatedTarget: EventTarget | null }) =>
+      note(event.currentTarget, event.currentTarget.contains(event.relatedTarget as Node | null)),
   };
   if (line) {
     const member = members[0]!;

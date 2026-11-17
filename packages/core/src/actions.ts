@@ -45,9 +45,11 @@ type Rec = Record<string, unknown>;
  * read: `running` from its start, `waiting` while an approval names it,
  * `review` while the automatic review decides, `returned` once a result came
  * (the reading then decides), `stopped` when its run stopped before a result
- * came, and `cut-off` when its run hit its time limit while it ran.
+ * came, `cut-off` when its run hit its time limit while it ran, and
+ * `unreturned` when its run ended otherwise and no result is known.
  */
-export type CallStatus = "running" | "waiting" | "review" | "returned" | "stopped" | "cut-off";
+export type CallStatus =
+  "running" | "waiting" | "review" | "returned" | "stopped" | "cut-off" | "unreturned";
 
 export type ActionCall = {
   /** The gateway's tool call id. */
@@ -749,6 +751,9 @@ export function outcomeOf(call: ActionCall, ctx: ReadingContext = {}): OutcomeOf
       return { outcome: kind.leaves ? "unknown" : "stopped" };
     case "cut-off":
       return { outcome: "failed", word: STATE_WORDS.aborted };
+    case "unreturned":
+      // Nothing establishes what happened to it.
+      return { outcome: "unknown" };
     case "returned":
       break;
   }
@@ -1421,7 +1426,10 @@ export function lineOf(call: ActionCall, ctx: ReadingContext = {}): ActionLine {
       pair = [FORMS.stopped, runPhrase(w.run)];
       break;
     case "unknown":
-      pair = w.noun ?? [FORMS.stopped, runPhrase(w.run)];
+      pair =
+        call.status === "unreturned"
+          ? (w.noun ?? [FORMS.noResult, runPhrase(w.run)])
+          : (w.noun ?? [FORMS.stopped, runPhrase(w.run)]);
       break;
   }
   let [verb, object] = pair;

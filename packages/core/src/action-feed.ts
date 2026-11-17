@@ -193,7 +193,9 @@ export function callFromStep(
     : isTerminal(run.state)
       ? cutOff(run)
         ? "cut-off"
-        : "stopped"
+        : run.state === "stopped" || run.state === "cancelled"
+          ? "stopped"
+          : "unreturned"
       : step.status === "waiting"
         ? "waiting"
         : "running";
@@ -219,13 +221,25 @@ export function callFromBlock(
   step: Step | undefined,
   run: Pick<Run, "state" | "error" | "ending" | "origin"> | undefined,
 ): ActionCall {
-  if (step && run) return callFromStep(step, run);
+  if (step && run) {
+    const call = callFromStep(step, run);
+    // History holds a result the engine's step does not have yet: history is newer.
+    if (block.result && (call.status !== "returned" || !call.text))
+      return {
+        ...call,
+        status: "returned",
+        isError: block.result.isError,
+        text: block.result.text,
+        partial: null,
+      };
+    return call;
+  }
   return {
     id: block.callId,
     name: block.name,
     args: parseArgs(block.argumentsText),
-    // History holds no result for it: the call never returned in the turn it belongs to.
-    status: block.result ? "returned" : "stopped",
+    // History holds no result for it, and nothing here says why.
+    status: block.result ? "returned" : "unreturned",
     isError: block.result?.isError === true,
     text: block.result?.text ?? null,
     details: null,

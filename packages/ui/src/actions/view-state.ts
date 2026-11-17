@@ -64,6 +64,8 @@ export const viewKeys = {
   call: (id: string) => `call:${id}`,
   /** A fold, by its first member's tool call id. */
   fold: (id: string) => `fold:${id}`,
+  /** The fold a call was last drawn in, by its first member's id: a split's later part opens as it was. */
+  member: (id: string) => `in:${id}`,
   /** The Readable or Raw view of a call. */
   view: (id: string) => `view:${id}`,
   /** A "Thought" line, valid only for its run's reasoning revision. */

@@ -227,6 +227,42 @@ function TranscriptView({
     followTop.current = element.scrollTop;
   }, []);
 
+  // What the reader has just opened stays in view (section 18): following the
+  // end never pushes the line of a card, a fold or a row they opened above the
+  // top of the view. That line is held at the top instead, and the reader is
+  // no longer following.
+  const opened = useRef<HTMLDetailsElement | null>(null);
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+    const onToggle = (event: Event) => {
+      const details = event.target as HTMLDetailsElement;
+      if (details.open && details.contains(document.activeElement)) opened.current = details;
+    };
+    element.addEventListener("toggle", onToggle, true);
+    return () => element.removeEventListener("toggle", onToggle, true);
+  }, []);
+  const follow = useCallback(() => {
+    const element = scroller.current;
+    if (!element) return;
+    const held = opened.current;
+    const line =
+      held?.isConnected && held.open ? (held.querySelector(":scope > summary") ?? held) : null;
+    const inner = element.firstElementChild;
+    const band = inner ? Number.parseFloat(getComputedStyle(inner).paddingTop) || 0 : 0;
+    const lineTop = () => element.getBoundingClientRect().top + band;
+    // Only a line in view is held: one the reader has scrolled away from is not theirs to keep.
+    const inView = line !== null && line.getBoundingClientRect().top >= lineTop() - 1;
+    toEnd();
+    if (!line || !inView) return;
+    const over = lineTop() - line.getBoundingClientRect().top;
+    if (over <= 0) return;
+    element.scrollTop -= over;
+    followTop.current = null;
+    following.current = false;
+    setAtEnd(false);
+  }, [toEnd]);
+
   const onScroll = useCallback(() => {
     const element = scroller.current;
     if (!element) return;
@@ -250,10 +286,10 @@ function TranscriptView({
 
   // Follow new output while the reader is at the end.
   useLayoutEffect(() => {
-    if (atEnd) toEnd();
-  }, [contentSize, atEnd, toEnd]);
+    if (atEnd) follow();
+  }, [contentSize, atEnd, follow]);
 
-  useHoldPlace(scroller, following, toEnd);
+  useHoldPlace(scroller, following, follow);
 
   // A centred stamp before the first message, and wherever more than ten
   // minutes pass or the day changes.
