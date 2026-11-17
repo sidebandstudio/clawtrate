@@ -421,20 +421,20 @@
 
   CT.turnNote = ({ lead, html }) => `<div class="turn-note">${lead}<div>${html}</div></div>`;
 
-  // The connection strip (.banner in the shell).
-  const banners = {
-    reconnecting: ["warn", "reconnecting", "Reconnecting <span>· showing saved messages</span>", "Retry now"],
-    offline: ["danger", "error", "Can't reach Home gateway <span>· showing saved messages</span>", "Retry now"],
-    syncing: ["warn", "connecting", "Connected <span>· catching up</span>", ""],
-    synced: ["ok", "connected", "Synced <span>· 3 new in this task</span>", ""],
-    failed: ["danger", "error", "Couldn't sync this task", "Try again"],
+  // The status strip (.status-strip in the shell).
+  const strips = {
+    reconnecting: ["warn", "reconnecting", "Reconnecting", "showing saved messages", "Retry now"],
+    offline: ["danger", "error", "Can't reach Home gateway", "showing saved messages", "Retry now"],
+    syncing: ["warn", "connecting", "Connected", "catching up", ""],
+    synced: ["ok", "connected", "Synced", "3 new in this task", ""],
+    failed: ["danger", "error", "Couldn't sync this task", "", "Try again"],
   };
 
   CT.banner = (name, attrs = "") => {
-    const [tone, status, html, action] = banners[name];
+    const [tone, status, text, more, action] = strips[name];
     return (
-      `<div class="banner" role="status" data-tone="${tone}" ${attrs}><span class="status-dot" data-status="${status}"></span>` +
-      `<span>${html}</span>${action ? `<button type="button">${action}</button>` : ""}</div>`
+      `<div class="status-strip" role="status" data-tone="${tone}" ${attrs}><span class="status-dot" data-status="${status}"></span>` +
+      `<span class="status-strip-text">${text}${more ? `<span>· ${more}</span>` : ""}</span>${action ? `<button type="button">${action}</button>` : ""}</div>`
     );
   };
 

@@ -43,6 +43,7 @@
               </div>
             </nav>
 
+            <div class="main-pane">
             <section class="conversation" aria-label="Conversation">
               <header class="conversation-header">
                 <div class="header-side">
@@ -57,11 +58,14 @@
                   <button type="button" class="icon-button" aria-label="Show work pane" title="Work pane (⌘\)"><i data-icon="panel"></i></button>
                 </div>
               </header>
-              <div class="transcript" id="transcript" tabindex="0">
-                <div class="transcript-inner" id="transcript-inner"></div>
+              <div class="transcript-wrap">
+                <div class="transcript" id="transcript" tabindex="0">
+                  <div class="transcript-inner" id="transcript-inner"></div>
+                </div>
               </div>
               <div id="composer-slot"></div>
             </section>
+            </div>
           </div>
         </div>
       </div>

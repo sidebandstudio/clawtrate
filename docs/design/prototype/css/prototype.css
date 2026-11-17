@@ -309,7 +309,7 @@
 }
 
 .spec-static .jump,
-.spec-static .banner {
+.spec-static .status-strip {
   position: static;
   margin: 0;
   transform: none;
