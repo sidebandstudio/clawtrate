@@ -4,7 +4,7 @@
 // sends anything but a close.
 
 import { describe, expect, it } from "vitest";
-import { ATLAS_TAB, Access, load, sleep, until } from "./harness.ts";
+import { ATLAS, ATLAS_TAB, Access, load, sleep, until } from "./harness.ts";
 
 const tab = { targetId: ATLAS_TAB };
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]).toString("base64");
@@ -191,9 +191,27 @@ describe("how a stream ends", () => {
   it("the tab closing closes it with 4004", async () => {
     const h = load();
     const { socket, cdp } = await watching(h);
+    h.browser.lists.set(ATLAS, []);
     cdp.close();
     await until(() => socket.closeCode() !== null);
     expect(socket.closeCode()).toEqual({ code: 4004, reason: "target_closed" });
+    const detached = await watching(load());
+    detached.cdp.event("Inspector.detached", { reason: "target_closed" });
+    expect(detached.socket.closeCode()).toEqual({ code: 4004, reason: "target_closed" });
+  });
+
+  it("a connection that closes while the tab is still listed, or with the browser gone, closes it with 1011, not as the tab closing", async () => {
+    for (const how of ["still listed", "browser gone", "detached otherwise"]) {
+      const h = load();
+      const { socket, cdp } = await watching(h);
+      if (how === "browser gone") h.browser.lists.delete(ATLAS);
+      if (how === "detached otherwise") {
+        cdp.event("Inspector.detached", { reason: "Render process gone." });
+      } else cdp.close();
+      await until(() => socket.closeCode() !== null);
+      expect(socket.closeCode(), how).toEqual({ code: 1011, reason: "browser_unavailable" });
+      await h.stop();
+    }
   });
 
   it("a viewer that sends data is closed; a ping is answered; a close is honoured", async () => {

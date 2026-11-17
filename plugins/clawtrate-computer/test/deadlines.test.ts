@@ -7,7 +7,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { cdpTargets } from "../lib/cdp.js";
 import { parseCdpUrl } from "../lib/config.js";
-import { ATLAS_TAB, BROWSER_CONFIG, load, page, sleep, until } from "./harness.ts";
+import { ATLAS, ATLAS_TAB, BROWSER_CONFIG, load, page, sleep, until } from "./harness.ts";
 
 const tab = { targetId: ATLAS_TAB };
 const TIMEOUTS = { discoveryMs: 200, connectMs: 200, commandMs: 200 };
@@ -238,12 +238,27 @@ describe("replacing a browser or a profile", () => {
     expect(h.state.streams.has(String(view.payload!.streamId))).toBe(false);
   });
 
-  it("the lease's own connection closing (the tab or browser went away) ends the lease", async () => {
+  it("the lease's own connection closing because the tab closed ends the lease as tab-closed", async () => {
     const h = load();
     const generation = (await h.call("control.take", tab)).payload!.generation;
+    h.browser.lists.set(ATLAS, []);
     h.browser.sockets[0]!.close();
     await until(() => h.statesOf(generation).includes("tab-closed"));
     expect(h.events.at(-1)!.reason).toBe("target-closed");
+  });
+
+  it("the lease's own connection closing while the tab is still listed, or the browser is gone, is not reported as the tab closing", async () => {
+    for (const browserGone of [false, true]) {
+      const h = load();
+      const generation = (await h.call("control.take", tab)).payload!.generation;
+      if (browserGone) h.browser.lists.delete(ATLAS);
+      h.browser.sockets[0]!.close();
+      await until(() => h.statesOf(generation).includes("revoked"));
+      expect(h.events.at(-1)!.reason, String(browserGone)).toBe("browser-unavailable");
+      expect(h.statesOf(generation)).not.toContain("tab-closed");
+      expect(h.state.leases.size).toBe(0);
+      await h.stop();
+    }
   });
 
   it("a bot's profile given another port in the gateway's config retires its leases and views, and refuses calls", async () => {

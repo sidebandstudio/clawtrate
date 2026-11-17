@@ -392,6 +392,21 @@ export function createComputer(api, options = {}) {
     }
   }
 
+  /**
+   * Why a connection to a tab closed. A closed socket is not proof that the
+   * tab was closed: the browser can have stopped or been replaced, or the
+   * connection alone dropped. "tab" only when the bot's browser answers and
+   * no longer lists the tab.
+   */
+  async function whyClosed(bot, targetId) {
+    try {
+      const tabs = await cdpTargets(bot, net);
+      return tabs.some((tab) => tab.id === targetId) ? "connection" : "tab";
+    } catch {
+      return "browser";
+    }
+  }
+
   /** End every lease and view of a bot whose browser config no longer matches. */
   function retireBot(bot, reason) {
     for (const lease of state.leases.values()) {
@@ -765,7 +780,14 @@ export function createComputer(api, options = {}) {
       }
       refuse("UNAVAILABLE", "control_request_ended", "could not connect to the tab");
     }
-    lease.cdp.onClose(() => void endLease(lease, "tab-closed", "target-closed"));
+    lease.cdp.onClose(() => {
+      if (lease.ending) return;
+      void whyClosed(bot, targetId).then((why) =>
+        why === "tab"
+          ? endLease(lease, "tab-closed", "target-closed")
+          : endLease(lease, "revoked", "browser-unavailable"),
+      );
+    });
     if (lease.ending)
       refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
     const quiet = await quiesce(lease);
@@ -917,7 +939,15 @@ export function createComputer(api, options = {}) {
       }
       stream.cdp = cdp;
       let url = cdp.target.url;
-      cdp.onClose(() => endStream(stream, 4004, "target_closed"));
+      const lost = () => {
+        if (stream.ended) return;
+        void whyClosed(stream.bot, stream.targetId).then((why) =>
+          why === "tab"
+            ? endStream(stream, 4004, "target_closed")
+            : endStream(stream, 1011, "browser_unavailable"),
+        );
+      };
+      cdp.onClose(lost);
       // Nothing about the page goes out once the access behind the ticket
       // has ended: not the first address and title, not a later address.
       const current = () => {
@@ -961,7 +991,9 @@ export function createComputer(api, options = {}) {
           url = String(message.params?.frame?.url ?? "").slice(0, 2048);
           socket.write(textFrame({ type: "meta", url }));
         } else if (message.method === "Inspector.detached") {
-          endStream(stream, 4004, "target_closed");
+          // The browser says why: only "target_closed" is the tab closing.
+          if (message.params?.reason === "target_closed") endStream(stream, 4004, "target_closed");
+          else lost();
         }
       });
       try {
