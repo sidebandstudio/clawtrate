@@ -776,6 +776,8 @@ export const COMPUTER_CHECKS: ComputerCheck[] = [
       const tab = await watchTab(bot.cdpPort, targetId);
       let generation: string | null = null;
       try {
+        // An earlier check can have left the tab on the slow page itself.
+        const before = (await tabsOf(holder, key)).find((t) => t.targetId === targetId)?.url;
         const from = holder.lastSeq;
         const sent = await holder.send(key, "#browse-slow");
         const runId = String(sent.runId);
@@ -825,10 +827,7 @@ export const COMPUTER_CHECKS: ComputerCheck[] = [
         );
         same(committed, [], "navigations committed after the grant");
         const listed = (await tabsOf(holder, key)).find((t) => t.targetId === targetId);
-        expect(
-          !String(listed?.url ?? "").includes("/scripted/pages/slow"),
-          `the tab is on ${String(listed?.url)} after the grant`,
-        );
+        same(listed?.url, before, "the tab's page after the grant, as before the stopped task");
         same(rec(await holder.terminal(runId, 30_000)).state, "aborted", "the stopped task's run");
         same(
           answered(
