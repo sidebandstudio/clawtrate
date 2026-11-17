@@ -203,10 +203,11 @@ export type TaskCreation = {
   label: string | null;
   /**
    * `creating` while the request is out; `checking` when the answer did not
-   * come and the gateway is being asked again with the same key; `failed`
-   * when the gateway refused it (retry or dismiss); `unknown` when the
-   * gateway's record of the key may have expired, so nothing establishes
-   * whether it happened (dismiss only); `created` once the task exists.
+   * come and the same gateway start is being asked again with the same key;
+   * `failed` when the gateway refused it (retry or dismiss); `unknown` when
+   * nothing establishes whether it happened (dismiss, or the user's own retry,
+   * which may create a second task: `error` says so); `created` once the task
+   * exists.
    */
   status: "creating" | "checking" | "failed" | "unknown" | "created";
   /** When it was last asked of the gateway; its key is asked again only within `CREATION_KEY_WINDOW_MS` of it. */
@@ -215,11 +216,11 @@ export type TaskCreation = {
   /** The new task, once created. */
   key: string | null;
   /**
-   * When the gateway process the request went to started, from its hello
-   * (`snapshot.uptimeMs`); null if it did not say. The key is asked again only
-   * of that same process: a restarted gateway has forgotten it.
+   * The `hello-ok.server.bootId` of the gateway start the request went to;
+   * null if the hello carried none. The key is asked again automatically only
+   * of that same start, which holds its idempotency record.
    */
-  gatewayStartedAt: number | null;
+  gatewayBootId: string | null;
 };
 
 export const initialScopeUpgrade: ScopeUpgradeState = {

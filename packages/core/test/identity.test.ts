@@ -460,9 +460,9 @@ describe("live, fresh rebuild and two resyncs agree on what is promised (A6, rul
     // The raw facts themselves, reasoning text included.
     expect(facts(twice, liveTable)).toEqual(facts(freshTwice, freshTable));
     const thinkingOf = (activity: TaskActivity, table: RawTable) =>
-      activity.runs[0]!.steps
-        .filter((step) => step.kind === "reasoning")
-        .map((step) => rawFacts(table.get(KEY, step.id))?.thinking);
+      activity.runs[0]!.steps.filter((step) => step.kind === "reasoning").map(
+        (step) => rawFacts(table.get(KEY, step.id))?.thinking,
+      );
     expect(thinkingOf(twice, liveTable)).toEqual([
       "first",
       `${prefix}second`,
@@ -479,11 +479,7 @@ describe("live, fresh rebuild and two resyncs agree on what is promised (A6, rul
     const liveTable = new RawTable();
     const live = feed(
       emptyActivity,
-      [
-        thinking(1, "abc"),
-        agentEvent("r", 2, "lifecycle", { phase: "model" }),
-        thinking(3, "abc"),
-      ],
+      [thinking(1, "abc"), agentEvent("r", 2, "lifecycle", { phase: "model" }), thinking(3, "abc")],
       liveTable,
       allocator,
     );
@@ -515,10 +511,7 @@ describe("live, fresh rebuild and two resyncs agree on what is promised (A6, rul
     expect(ids(freshTwice)).toEqual(ids(fresh));
     // Each id keeps its own segment's text, read raw.
     const thinkingById = (activity: TaskActivity, table: RawTable) =>
-      activity.runs[0]!.steps.map((step) => [
-        step.id,
-        rawFacts(table.get(KEY, step.id))?.thinking,
-      ]);
+      activity.runs[0]!.steps.map((step) => [step.id, rawFacts(table.get(KEY, step.id))?.thinking]);
     expect(thinkingById(twice, liveTable)).toEqual([
       ["reasoning:r:0", "abcd"],
       ["reasoning:r:1", "abc"],

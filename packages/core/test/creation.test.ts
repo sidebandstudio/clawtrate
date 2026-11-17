@@ -5,7 +5,12 @@
 
 import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
-import { ClawtrateClient, CREATION_KEY_WINDOW_MS, MAX_TRACKED_TASKS } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  CREATION_KEY_WINDOW_MS,
+  CREATION_UNKNOWN_WARNING,
+  MAX_TRACKED_TASKS,
+} from "../src/client.ts";
 import { MAX_CREATIONS } from "../src/state-bounds.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, openTask, URL_A } from "./client-harness.ts";
@@ -117,45 +122,84 @@ describe("a creation without an answer", () => {
       await expect(client.createTask("otto", "do this once")).rejects.toThrow();
       clock += CREATION_KEY_WINDOW_MS + 1;
       await sleep(300);
-      // Asked again by the user, it is not sent: it may exist, and a new key could make a second.
-      await expect(client.createTask("otto", "do this once")).rejects.toThrow("unknown");
+      // Asked again, it is not sent: it may exist, and asking again could make a second.
+      await expect(client.createTask("otto", "do this once")).rejects.toThrow(
+        "retrying may create a second task",
+      );
       expect(gateway.calls("sessions.create")).toHaveLength(1);
-      expect(client.state.creations[0]?.status).toBe("unknown");
-      const id = client.state.creations[0]!.id;
-      await expect(client.retryCreation(id)).rejects.toThrow("cannot be retried");
-      expect(gateway.calls("sessions.create")).toHaveLength(1);
+      expect(client.state.creations[0]).toMatchObject({
+        status: "unknown",
+        error: CREATION_UNKNOWN_WARNING,
+      });
       // Dismissed, it can be asked as a new request.
-      client.dismissCreation(id);
+      client.dismissCreation(client.state.creations[0]!.id);
       expect(client.state.creations).toEqual([]);
     } finally {
       client.stop();
     }
   });
 
-  it("is not asked again of a gateway that restarted, which has forgotten the key", async () => {
+  it("is not asked again after a fast restart, however close the start times (D2)", async () => {
     const gateway = grantingGateway();
-    idempotentCreate(gateway);
-    let uptimeMs = 3_600_000;
+    // A restart within a second: the old process's uptime and the new one's say almost nothing.
+    let boot = { bootId: "boot-a", uptimeMs: 1_000 };
+    let created = 0;
     gateway.connectReply = (params) => {
       const { scopes } = params as { scopes: string[] };
+      const hello = helloOk(scopes, "device-token");
       return {
         ok: true,
-        payload: { ...helloOk(scopes, "device-token"), snapshot: { uptimeMs } },
+        payload: {
+          ...hello,
+          server: { ...hello.server, bootId: boot.bootId },
+          snapshot: { uptimeMs: boot.uptimeMs },
+        },
       };
     };
-    const { client } = await openTask({ gateway, client: { ...FASTER, creationCheckMs: 400 } });
+    gateway.handlers["sessions.create"] = () => {
+      created += 1;
+      // The first is accepted and its answer withheld; the restarted gateway forgot its key.
+      return created === 1 ? new Promise(() => {}) : { key: "agent:otto:duplicate" };
+    };
+    const { client } = await openTask({
+      gateway,
+      client: { requestTimeoutMs: 80, creationCheckMs: 500 },
+    });
+    try {
+      await expect(client.createTask("otto", "exactly once")).rejects.toThrow("being checked");
+      boot = { bootId: "boot-b", uptimeMs: 10 };
+      gateway.dropAll();
+      await until(() => client.state.creations[0]?.status === "unknown", 2_000);
+      await sleep(300);
+      expect(created).toBe(1);
+      expect(client.state.creations[0]?.error).toBe(CREATION_UNKNOWN_WARNING);
+      // Only the user's own retry, warned, asks again, with the same key.
+      const first = keysAsked(gateway)[0];
+      expect(await client.retryCreation(client.state.creations[0]!.id)).toBe(
+        "agent:otto:duplicate",
+      );
+      expect(keysAsked(gateway)).toEqual([first, first]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is never asked again of a gateway whose hello names no start", async () => {
+    const gateway = grantingGateway();
+    const create = idempotentCreate(gateway);
+    gateway.connectReply = (params) => {
+      const { scopes } = params as { scopes: string[] };
+      const hello = helloOk(scopes, "device-token");
+      return { ok: true, payload: { ...hello, server: { version: "test", connId: "c" } } };
+    };
+    const { client } = await openTask({ gateway, client: { ...FASTER, creationCheckMs: 50 } });
     try {
       await expect(client.createTask("otto", "do this once")).rejects.toThrow();
-      // The gateway restarts before the check.
-      uptimeMs = 50;
+      create.accept();
       gateway.dropAll();
-      await until(() => client.state.connection.status === "connected");
-      await sleep(500);
+      await until(() => client.state.creations[0]?.status === "unknown", 2_000);
+      await sleep(200);
       expect(gateway.calls("sessions.create")).toHaveLength(1);
-      // Asked again by the user, it is not sent either.
-      await expect(client.createTask("otto", "do this once")).rejects.toThrow("unknown");
-      expect(gateway.calls("sessions.create")).toHaveLength(1);
-      expect(client.state.creations[0]?.status).toBe("unknown");
     } finally {
       client.stop();
     }
@@ -214,7 +258,9 @@ describe("a creation being checked", () => {
     const { client } = await openTask({ gateway });
     try {
       await expect(client.createTask("otto", "do this once")).rejects.toThrow("task list");
-      await expect(client.createTask("otto", "do this once")).rejects.toThrow("unknown");
+      await expect(client.createTask("otto", "do this once")).rejects.toThrow(
+        "retrying may create a second task",
+      );
       expect(gateway.calls("sessions.create")).toHaveLength(1);
       expect(client.state.creations[0]?.status).toBe("unknown");
     } finally {

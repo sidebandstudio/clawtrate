@@ -70,7 +70,7 @@ export type BridgeCommand =
    * hold it yet.
    */
   | { type: "readStepRaw"; key: string; stepId: string }
-  /** Ask again, with its own key, for a task creation the gateway refused. */
+  /** Ask again, with its own key, for a task creation the gateway refused, or whose outcome is unknown (it may create a second task). */
   | { type: "retryCreation"; creationId: string }
   /** Forget a task creation that failed, settled or cannot be established. */
   | { type: "dismissCreation"; creationId: string };

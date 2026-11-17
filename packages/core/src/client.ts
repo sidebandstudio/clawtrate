@@ -380,14 +380,9 @@ function creationParams(creation: TaskCreation) {
   };
 }
 
-/**
- * Whether two hellos came from one gateway process: both said when it started,
- * within `GATEWAY_START_TOLERANCE_MS` of each other (network delay moves the estimate).
- */
-function sameGatewayProcess(left: number | null, right: number | null): boolean {
-  return left !== null && right !== null && Math.abs(left - right) <= GATEWAY_START_TOLERANCE_MS;
-}
-const GATEWAY_START_TOLERANCE_MS = 5_000;
+/** What a creation whose outcome could not be established says: retrying is the user's call, and may duplicate. */
+export const CREATION_UNKNOWN_WARNING =
+  "Whether the task was created could not be established. Check the task list: retrying may create a second task.";
 
 /** How long a creation's key is asked again: within the 300 s the gateway remembers it, with a margin. */
 export const CREATION_KEY_WINDOW_MS = 240_000;
@@ -547,8 +542,12 @@ export class ClawtrateClient {
   private generation = 0;
   /** True once the current connection has reached hello at least once. */
   private everConnected = false;
-  /** When the gateway process of the current connection started, from its hello; null if it did not say. */
-  private gatewayStartedAt: number | null = null;
+  /**
+   * The gateway's `hello-ok.server.bootId`: a random id per gateway start, the
+   * lifetime of its in-memory `sessions.create` idempotency cache. Null when
+   * the hello does not carry one.
+   */
+  private gatewayBootId: string | null = null;
   private rows = new Map<string, RawRecord>();
   /** Open transcripts, counted, so several viewers can share one. */
   private readonly openSessions = new Map<string, number>();
@@ -1306,7 +1305,7 @@ export class ClawtrateClient {
   async createTask(
     botId: string,
     text: string,
-    options: { label?: string; owner?: object } = {},
+    options: { label?: string; owner?: object; retryUnknown?: boolean } = {},
   ): Promise<string> {
     const body = text.trim();
     if (!body) throw new Error("The message is empty.");
@@ -1327,11 +1326,9 @@ export class ClawtrateClient {
       this.openSession(earlier.key);
       return earlier.key;
     }
-    if (earlier?.status === "unknown") {
-      // It may exist; a new key could make a second one.
-      throw new Error(
-        "Whether this task was already created is unknown; check the task list, or dismiss it to ask again.",
-      );
+    if (earlier?.status === "unknown" && !options.retryUnknown) {
+      // It may exist: only the user's own retry (`retryCreation`), warned, asks again.
+      throw new Error(CREATION_UNKNOWN_WARNING);
     }
     if (!earlier && this.creations.size >= MAX_CREATIONS) {
       throw new Error("Too many task creations are still unsettled; dismiss some first.");
@@ -1351,8 +1348,8 @@ export class ClawtrateClient {
     };
     // Kept from before it is sent: the request and its key survive a timeout.
     const creation: TaskCreation =
-      earlier && earlier.status === "failed"
-        ? // A refusal freed the key at the gateway; its window starts again with this ask.
+      earlier && (earlier.status === "failed" || earlier.status === "unknown")
+        ? // The same key: a refusal freed it, and a gateway that still has it answers the original.
           { ...earlier, status: "creating", error: null, createdAt: this.now() }
         : {
             id: this.randomId(),
@@ -1363,7 +1360,7 @@ export class ClawtrateClient {
             createdAt: this.now(),
             error: null,
             key: null,
-            gatewayStartedAt: null,
+            gatewayBootId: null,
           };
     this.putCreation(creation);
     let sent = false;
@@ -1375,7 +1372,7 @@ export class ClawtrateClient {
       // Switching gateways while access settled dropped it: it is never asked of another gateway.
       if (this.creations.get(creation.id)?.status !== "creating")
         throw new Error("Switched to another gateway.");
-      creation.gatewayStartedAt = this.gatewayStartedAt;
+      creation.gatewayBootId = this.gatewayBootId;
       this.putCreation(creation);
       sent = true;
       const result = asRecord(await this.request("sessions.create", creationParams(creation)));
@@ -1423,10 +1420,9 @@ export class ClawtrateClient {
   ): string {
     const key = typeof result?.key === "string" ? result.key : null;
     if (!key) {
-      // The gateway answered, so something may exist; without its key it cannot be found or retried safely.
-      const error = "The gateway answered without the new task; check the task list.";
-      this.putCreation({ ...creation, status: "unknown", error });
-      throw new OutcomeUnknownError(error);
+      // The gateway answered, so something may exist; without its key it cannot be found.
+      this.putCreation({ ...creation, status: "unknown", error: CREATION_UNKNOWN_WARNING });
+      throw new OutcomeUnknownError(CREATION_UNKNOWN_WARNING);
     }
     const id = creation.id;
     const runId = typeof result?.runId === "string" ? result.runId : null;
@@ -1553,36 +1549,27 @@ export class ClawtrateClient {
   }
 
   /**
-   * Find out how a creation whose answer did not come ended, by asking the
-   * gateway again with the same key and parameters: it answers with the
-   * original outcome while it still remembers the key (300 s in OpenClaw
-   * 2026.10.6), or waits for one still being worked on. Past that window
-   * nothing establishes whether it happened, so it is `unknown` and is not
-   * asked again.
+   * Find out how a creation whose answer did not come ended. It is asked
+   * again, with the same key and parameters, only of the gateway start that
+   * holds that key: the hello's `server.bootId` names it, and the gateway
+   * keeps a key for 300 s (OpenClaw 2026.10.6), so within
+   * `CREATION_KEY_WINDOW_MS` it answers with the original outcome or waits
+   * for work still in flight. Without that identity nothing establishes what
+   * happened: the creation is `unknown`, and only the user's own retry, with
+   * its warning, asks again.
    */
   private async checkCreation(id: string, attempt: number): Promise<void> {
     const creation = this.creations.get(id);
     if (!creation || creation.status !== "checking") return;
-    if (this.now() - creation.createdAt > CREATION_KEY_WINDOW_MS) {
-      this.putCreation({
-        ...creation,
-        status: "unknown",
-        error: "Whether the task was created could not be established; check the task list.",
-      });
-      return;
-    }
     if (this.state.connection.status !== "connected" || !this.holds(WRITE_SCOPE)) {
-      // Checked again after the next hello.
-      return;
+      if (this.now() - creation.createdAt <= CREATION_KEY_WINDOW_MS) return; // After the next hello.
     }
-    if (!sameGatewayProcess(creation.gatewayStartedAt, this.gatewayStartedAt)) {
-      // A gateway that restarted, or that does not say when it started, may have forgotten the
-      // key and would create the task again: nothing is asked.
-      this.putCreation({
-        ...creation,
-        status: "unknown",
-        error: "The gateway restarted before answering; check the task list for the new task.",
-      });
+    if (
+      this.now() - creation.createdAt > CREATION_KEY_WINDOW_MS ||
+      creation.gatewayBootId === null ||
+      creation.gatewayBootId !== this.gatewayBootId
+    ) {
+      this.putCreation({ ...creation, status: "unknown", error: CREATION_UNKNOWN_WARNING });
       return;
     }
     try {
@@ -1610,14 +1597,19 @@ export class ClawtrateClient {
     }
   }
 
-  /** Ask again for a creation the gateway refused, with its own key. */
+  /**
+   * The user's retry of a creation the gateway refused, or whose outcome could
+   * not be established (`CREATION_UNKNOWN_WARNING`: it may create a second
+   * task), with its own key.
+   */
   async retryCreation(id: string, options: { owner?: object } = {}): Promise<string> {
     const creation = this.creations.get(id);
-    if (!creation || creation.status !== "failed")
+    if (!creation || (creation.status !== "failed" && creation.status !== "unknown"))
       throw new Error("That creation cannot be retried.");
     return this.createTask(creation.botId, creation.text, {
       ...(creation.label ? { label: creation.label } : {}),
       ...(options.owner ? { owner: options.owner } : {}),
+      retryUnknown: true,
     });
   }
 
@@ -3129,9 +3121,8 @@ export class ClawtrateClient {
   private handleHello(hello: HelloOk, generation: number): void {
     const wasConnected = this.everConnected;
     this.everConnected = true;
-    const uptime = asRecord(hello.snapshot)?.uptimeMs;
-    this.gatewayStartedAt =
-      typeof uptime === "number" && Number.isFinite(uptime) ? Date.now() - uptime : null;
+    const bootId = asRecord(hello.server)?.bootId;
+    this.gatewayBootId = typeof bootId === "string" && bootId ? bootId : null;
     const scopes = [...(hello.auth.scopes ?? [])];
     const canWrite = scopeSatisfied(scopes, WRITE_SCOPE);
     this.policy = asRecord(hello.policy);

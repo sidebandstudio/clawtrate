@@ -471,7 +471,7 @@ const creation = object<TaskCreation>()({
   createdAt: NUMBER,
   error: text(MAX_ERROR_JSON_CHARS),
   key: ID,
-  gatewayStartedAt: NUMBER,
+  gatewayBootId: NAME,
 });
 const retentionAlarm = object<ClawtrateState["retention"]>()({
   estimated: NUMBER,

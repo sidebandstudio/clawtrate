@@ -19,12 +19,14 @@ export class GatewayError extends Error {
 
 /** When this fake gateway "process" started; its hellos report their uptime from it. */
 const fakeStartedAt = Date.now();
+/** This fake gateway start's `server.bootId`, as a real gateway reports a random one per start. */
+export const FAKE_BOOT_ID = "fake-boot-1";
 
 export function helloOk(scopes: string[] = ["operator.read"], deviceToken?: string) {
   return {
     type: "hello-ok",
     protocol: 4,
-    server: { version: "test", connId: "conn-1" },
+    server: { version: "test", connId: "conn-1", bootId: FAKE_BOOT_ID },
     features: { methods: [], events: [] },
     snapshot: { uptimeMs: Date.now() - fakeStartedAt },
     auth: { role: "operator", scopes, ...(deviceToken ? { deviceToken } : {}) },
