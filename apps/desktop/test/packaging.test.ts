@@ -86,8 +86,13 @@ describe("packaging configuration", () => {
       expect(config[FuseV1Options.EnableNodeOptionsEnvironmentVariable]).toBe(false);
       expect(config[FuseV1Options.EnableNodeCliInspectArguments]).toBe(false);
     }
-    const mac = fuses("darwin") as Record<number, unknown>;
-    expect(mac[FuseV1Options.OnlyLoadAppFromAsar]).toBe(true);
-    expect(mac[FuseV1Options.EnableEmbeddedAsarIntegrityValidation]).toBe(true);
+  });
+
+  it("loads the app only from its archive, checked against its hash, on macOS and Windows", () => {
+    for (const platform of ["darwin", "win32"]) {
+      const config = fuses(platform) as Record<number, unknown>;
+      expect(config[FuseV1Options.OnlyLoadAppFromAsar]).toBe(true);
+      expect(config[FuseV1Options.EnableEmbeddedAsarIntegrityValidation]).toBe(true);
+    }
   });
 });
