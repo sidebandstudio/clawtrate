@@ -16,7 +16,14 @@ export type ChatMessage = {
 export type ReplyStep =
   | { kind: "reasoning"; text: string; delayMs?: number }
   | { kind: "text"; text: string; delayMs?: number }
-  | { kind: "tool"; id: string; name: string; arguments: Record<string, unknown> }
+  | {
+      kind: "tool";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+      /** Characters per streamed piece of the arguments: 32 unless a large call sets more. */
+      argumentPiece?: number;
+    }
   /** The request fails with this HTTP status instead of streaming a reply. */
   | { kind: "fail"; status: number; message: string };
 

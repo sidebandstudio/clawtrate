@@ -23,6 +23,7 @@
 // State is never reused: OpenClaw keeps credentials in SQLite stores that a
 // clean profile also has, so only a folder created empty by this start is safe.
 
+import { FILES_BOT, seedWorkspaceFiles } from "./seed-files.ts";
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -1285,6 +1286,11 @@ export async function seed(inst: DevInstance): Promise<void> {
   const agents = new Map(rows.map((row) => [row.id, row]));
   console.log("Seeding sample bots and conversations");
   for (const bot of SEED_BOTS) await configureBot(inst, bot, agents);
+  // Pip's workspace also holds a picture and a git checkout, for the Work pane's Files tab.
+  const filesWorkspace =
+    agents.get(FILES_BOT)?.workspace ?? join(inst.stateDir, "workspaces", FILES_BOT);
+  assertInside(filesWorkspace, inst.stateDir);
+  seedWorkspaceFiles(filesWorkspace);
   // Configuring the bots rewrote the config; it must still keep every guarantee.
   assertSandboxed(inst, instancePorts(inst));
   await assertExecDenied(inst);
