@@ -194,11 +194,18 @@ export function BotMessageCardView({
   card,
   read,
   related,
+  partial,
 }: {
   card: BotMessageCard;
   read: StepRawState;
-  /** Every message between the two bots in this task, oldest first, for "Show full exchange". */
+  /** Every message between the two bots that this task holds, oldest first, for "Show full exchange". */
   related: Array<{ id: string; who: Bot; verb: string; text: string; at: number | null }>;
+  /**
+   * What the task holds is only part of its history, so `related` may not be
+   * every message: the list says so and is not called every message. The
+   * engine cannot load the rest, so nothing offers to.
+   */
+  partial: boolean;
 }) {
   const env = useCardEnv();
   const raw = useRawDisclosure(read.load);
@@ -287,10 +294,20 @@ export function BotMessageCardView({
         <ChevronIcon className="chevron" />
       </summary>
       <div className="messaged-body">
+        {full && partial && (
+          <p className="exchange-note" data-testid="exchange-partial">
+            Only part of this task's history is loaded here, so earlier messages between{" "}
+            {sender.name} and {recipient.name} may be missing.
+          </p>
+        )}
         {full ? (
           <ol
             className="exchange"
-            aria-label={`Every message between ${sender.name} and ${recipient.name} in this task`}
+            aria-label={
+              partial
+                ? `Messages between ${sender.name} and ${recipient.name} in the part of this task loaded here`
+                : `Every message between ${sender.name} and ${recipient.name} in this task`
+            }
           >
             {related.map((each) => (
               <li className="exchange-item" key={each.id}>
@@ -365,11 +382,17 @@ export function BotMessageCardView({
               aria-label={
                 full
                   ? "Show only this message"
-                  : `Show every message between ${sender.name} and ${recipient.name} in this task`
+                  : partial
+                    ? `Show every message between ${sender.name} and ${recipient.name} in this task that is loaded here`
+                    : `Show every message between ${sender.name} and ${recipient.name} in this task`
               }
               onClick={() => setFull((open) => !open)}
             >
-              {full ? "Show only this message" : "Show full exchange"}
+              {full
+                ? "Show only this message"
+                : partial
+                  ? "Show the loaded exchange"
+                  : "Show full exchange"}
             </button>
           )}
         </CardFoot>
@@ -384,9 +407,14 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
   const env = useCardEnv();
   // The ordinary step this call was drawn as until its result named it, as the reader left it.
   const handover = useStepHandover();
-  const [handed] = useState(() =>
-    card.toolCallId ? handover?.stateOf(card.toolCallId) : undefined,
-  );
+  const [handed] = useState(() => {
+    const state = card.toolCallId ? handover?.stateOf(card.toolCallId) : undefined;
+    return state?.from === "step" ? state : undefined;
+  });
+  // Kept for the ordinary step this call becomes again if its result names another tool.
+  const note = (element: HTMLDetailsElement, focused: boolean) =>
+    card.toolCallId &&
+    handover?.note(card.toolCallId, { open: element.open, focused, from: "card" });
   const raw = useRawDisclosure(read.load, handed?.open === true);
   const run = env.runOf(card.runId);
   const step = run?.steps.find((each) => each.id === card.stepId);
@@ -400,10 +428,11 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
   const link = resultLink(card);
   const domId = cardDomId({ kind: "t3-code", id: card.id });
   useLayoutEffect(() => {
-    if (!handed?.open) return;
+    if (!handed || !(handed.open || handed.focused)) return;
     const element = document.getElementById(domId);
     if (!(element instanceof HTMLDetailsElement)) return;
-    element.open = true;
+    // Open only if the step was; focus moves over either way.
+    if (handed.open) element.open = true;
     if (handed.focused) element.querySelector("summary")?.focus({ preventScroll: true });
   }, [handed, domId]);
 
@@ -460,6 +489,13 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
       data-connection={lost ? "lost" : undefined}
       id={domId}
       data-testid="t3-card"
+      onToggle={(event) =>
+        note(event.currentTarget, event.currentTarget.contains(document.activeElement))
+      }
+      onFocus={(event) => note(event.currentTarget, true)}
+      onBlur={(event) =>
+        note(event.currentTarget, event.currentTarget.contains(event.relatedTarget as Node | null))
+      }
     >
       <summary aria-label={`Messaged T3 Code: ${first} ${word}.`} title={first}>
         <span className="messaged-verb">Messaged</span>

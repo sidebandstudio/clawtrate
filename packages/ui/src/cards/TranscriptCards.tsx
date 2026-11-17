@@ -4,7 +4,7 @@
 // this folder: what goes where (placement.ts), what each says (model.ts) and
 // how each looks (cards.css).
 
-import type { Run, Transcript, TranscriptItem } from "@clawtrate/core";
+import { MAX_INTER_SESSION, type Run, type Transcript, type TranscriptItem } from "@clawtrate/core";
 import {
   createContext,
   useCallback,
@@ -22,7 +22,6 @@ import {
   OpenTaskContext,
   StepHandoverContext,
   useCardEnv,
-  useCardSettings,
   type CardEnv,
   type StepHandover,
   type StepState,
@@ -65,14 +64,13 @@ export function CardScope({
 }) {
   const state = useClawtrateState();
   const bridge = useBridge();
-  const settings = useCardSettings();
   const openTask = useContext(OpenTaskContext);
   const task = Object.values(state.tasksByBot)
     .flat()
     .find((each) => each.key === taskKey);
   const bot = state.bots.find((each) => each.id === task?.botId);
   const invoke = bridge.invoke;
-  const cards = useCards(taskKey, transcript, settings.codingServers, invoke);
+  const cards = useCards(taskKey, transcript, invoke);
   const placement = useMemo(
     () =>
       placeCards(
@@ -150,12 +148,19 @@ export function CardScope({
   // and only while the conversation is on screen.
 
   // Arriving from "Open in <bot>": the receiving card of that run, open, in view and focused.
+  // The task can show its runs before its history has loaded, so the card may come later:
+  // the arrival waits for it until the history has loaded without it.
+  const arriving = useRef<{ taskKey: string; runId: string } | null>(null);
   useLayoutEffect(() => {
     const runId = takeArrival(taskKey);
-    if (runId === null) return;
+    arriving.current = runId === null ? null : { taskKey, runId };
+  }, [taskKey]);
+  useLayoutEffect(() => {
+    const pending = arriving.current;
+    if (!pending || pending.taskKey !== taskKey) return;
     const open = () => {
       const element = document.querySelector<HTMLDetailsElement>(
-        `details[data-target="from"][data-run-id="${CSS.escape(runId)}"]`,
+        `details[data-target="from"][data-run-id="${CSS.escape(pending.runId)}"]`,
       );
       if (!element) return false;
       element.open = true;
@@ -163,8 +168,13 @@ export function CardScope({
       element.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
       return true;
     };
-    if (!open()) requestAnimationFrame(() => void open());
-  }, [taskKey]);
+    if (open()) arriving.current = null;
+    else if (transcript.status !== "loading") {
+      // Loaded without it as this frame is drawn: one more frame, then the arrival is over.
+      arriving.current = null;
+      requestAnimationFrame(() => void open());
+    }
+  });
 
   // Coming back from "Open in <bot>": the transcript where the reader left it, the card
   // open, focus on that control. It runs after the transcript has settled at its end, and
@@ -253,6 +263,7 @@ function CardFor({ cardRef }: { cardRef: CardRef }) {
           card={card}
           read={cards.rawState(card.stepId)}
           related={related(env, cards.selected, card.recipient.sessionKey, card.recipient.agentId)}
+          partial={partialHistory(env.transcript)}
         />
       );
     }
@@ -264,7 +275,22 @@ function CardFor({ cardRef }: { cardRef: CardRef }) {
   }
 }
 
-/** Every message between this task's bot and one recipient in this task, oldest first. */
+/**
+ * Whether what this viewer holds of the task may leave out some of its
+ * messages: history has earlier pages, which the engine does not load
+ * (`hasMore`); runs or a run's steps were let go under the engine's bounds
+ * (`runsOmitted`, `omittedSteps`); or the incoming messages fill their bound.
+ */
+function partialHistory(transcript: Transcript): boolean {
+  return (
+    transcript.hasMore ||
+    transcript.runsOmitted > 0 ||
+    transcript.runs.some((run) => run.omittedSteps > 0) ||
+    transcript.interSession.length >= MAX_INTER_SESSION
+  );
+}
+
+/** Every message between this task's bot and one recipient that this task holds, oldest first. */
 function related(
   env: CardEnv,
   selected: ReturnType<typeof useCards>["selected"],

@@ -25,6 +25,7 @@ const failed: Transcript = {
   ...emptyActivity,
   linkedRuns: {},
   interSession: [],
+  mcpTools: {},
   sessionKey: "agent:otto:a",
   status: "error",
   items: [{ id: "1", role: "user", timestamp: 1, blocks: [], model: null }],
