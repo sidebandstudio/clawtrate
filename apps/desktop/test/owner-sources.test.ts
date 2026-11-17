@@ -43,6 +43,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/runs.ts:sizes": "weak, keyed by retained objects",
   "packages/core/src/bounds.ts:drawsOn>out":
     "static, one set of pool names per bound, kept in `draws`",
+  // One call: made and dropped within one pure function.
+  "packages/core/src/action-feed.ts:groupFeed>owner":
+    "one call; the owner of each reasoning entry of the record being grouped",
+  "packages/core/src/actions.ts:readableOf>rows": "one call; the rows of one opened card",
   // Capped.
   "packages/core/src/bounds.ts:unknownKeys":
     "capped at `MAX_UNKNOWN_KEYS` (64) keys of 96 characters",

@@ -13,6 +13,7 @@ import {
   type SentRequest,
   type SettlingRecord,
 } from "./approvals.ts";
+import { projectArgs, projectDetails } from "./actions.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
 import {
@@ -174,6 +175,20 @@ export type Step = {
   raw: StepRaw | null;
   /** Length of the raw JSON, known once the step has finished. */
   rawSize: number | null;
+  /**
+   * What the reading of an action (`actions.ts`) needs of the call's
+   * arguments: `projectArgs`, at most `MAX_ACTION_FACTS_CHARS`. Absent for
+   * reasoning, or when the arguments were not an object.
+   */
+  args?: Record<string, unknown> | null;
+  /**
+   * What the reading needs of the result's `details` (`projectDetails`), at
+   * most `MAX_ACTION_FACTS_CHARS`. Absent until a result carries details;
+   * history keeps them for some tools only.
+   */
+  details?: Record<string, unknown> | null;
+  /** The gateway marked the call as a shell command (`commandBearing` on its item or result). */
+  commandBearing?: boolean;
 };
 
 /**
@@ -1805,6 +1820,8 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
             toolName: name ?? step.toolName,
             title: toolTitle(name ?? step.toolName),
             argsText: capText(prettyArgs(data.args)),
+            args: projectArgs(data.args),
+            ...(data.commandBearing === true ? { commandBearing: true } : {}),
           },
           ctx,
         ),
@@ -1836,6 +1853,8 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
         failureKind: isError ? str(details?.failureKind) : null,
         truncated: details?.truncated === true,
         replaceable: data.replaceable === true,
+        details: projectDetails(details),
+        ...(data.commandBearing === true ? { commandBearing: true } : {}),
         correction: replacing ? step.correction + 1 : step.correction,
       };
       return upsertStep(current, settleRaw(finished, ctx));
@@ -1872,6 +1891,7 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
   const step = existing ?? blankToolStep(toolCallId, str(data.name), num(data.startedAt));
   return upsertStep(run, {
     ...step,
+    ...(data.commandBearing === true ? { commandBearing: true } : {}),
     startedAt: num(data.startedAt) ?? step.startedAt,
     endedAt: isOpenStep(step) ? step.endedAt : (num(data.endedAt) ?? step.endedAt),
   });
@@ -2020,6 +2040,7 @@ export function runsFromHistory(
           run = upsertStep(run, {
             ...blankToolStep(toolCallId, name, at),
             argsText: capText(prettyArgs(block.arguments ?? block.input)),
+            args: projectArgs(block.arguments ?? block.input),
             truncated: meta(message).truncated === true,
           });
         }
@@ -2045,6 +2066,7 @@ export function runsFromHistory(
               error: isError ? capError(text || "The tool reported an error.") : null,
               failureKind: isError ? str(asRecord(message.details)?.failureKind) : null,
               truncated: step.truncated || meta(message).truncated === true,
+              details: projectDetails(message.details),
             },
             ctx,
           ),
@@ -2129,6 +2151,9 @@ function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "h
       step: {
         ...history,
         startedAt: live.startedAt ?? history.startedAt,
+        // What the live stream established about the call stays: history keeps no `commandBearing`.
+        args: history.args ?? live.args ?? null,
+        ...(live.commandBearing || history.commandBearing ? { commandBearing: true } : {}),
         // The canonical copy replaced a finished, replaceable result: an explicit correction.
         correction: isOpenStep(live) ? live.correction : live.correction + 1,
       },

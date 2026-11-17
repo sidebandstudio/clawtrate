@@ -50,6 +50,7 @@ import type {
   StepText,
 } from "./runs.ts";
 import type { Digest } from "./bounds.ts";
+import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
 import type {
   Bot,
   ClawtrateState,
@@ -199,6 +200,10 @@ export const STEP: Bound = flagged<Step>()({
   // Inline only when its whole JSON fits; otherwise null and read with `readStepRaw`.
   raw: json(MAX_INLINE_RAW_CHARS),
   rawSize: NUMBER,
+  // What the reading of an action needs, projected to fit (`projectArgs`, `projectDetails`).
+  args: json(MAX_ACTION_FACTS_CHARS),
+  details: json(MAX_ACTION_FACTS_CHARS),
+  commandBearing: FLAG,
 });
 const pendingCard = object<PendingCard>()({ id: ID, kind: ENUM, since: NUMBER });
 const closedCard = object<ClosedCard>()({ id: ID, kind: ENUM, since: NUMBER, reason: ENUM });
