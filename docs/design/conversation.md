@@ -2,33 +2,37 @@
 
 How a running turn looks, moves and reads. This is the second part of the design; `visual-language.md` is the first and defines the tokens, type, surfaces, the rail and the plain transcript this builds on.
 
-The behaviour these components must have is set out in the teardown's design proposals (`docs/research/grok-bot-flows.md`, sections 4.1, 5.6, 6.1, 6.2 and 8.8) and checked by `docs/parity.md`. This document decides appearance, wording, motion and input. Parity ids are given beside each requirement.
+The behaviour these components must have is set out in the teardown's design proposals (`docs/research/grok-bot-flows.md`, sections 4.1, 5.6, 6.1, 6.2 and 8.8) and checked by `docs/parity.md`. This document decides appearance, wording, motion and input, and for every control it shows it says what the control does, how it is reached from the keyboard and what it is called. Parity ids are given beside each requirement. Section 22 lists the parity rows whose wording has to change and why.
+
+One rule sits above the rest: **no label claims more than the gateway has reported.** A card says "Sent" when an event says the message was accepted, not when the call started. An approval's outcome says the command can run, not that it ran. While the connection is down, nothing on screen looks live.
 
 The prototype shows all of it: `prototype/gallery.html` has every component in every state, and `prototype/conversation.html` plays one scripted turn inside the shell. The styles are in `prototype/css/conversation.css` and the markup in `prototype/js/components.js`, one function per component.
 
 ## Contents
 
 1. How the pieces fit
-2. Shared rules: tokens, motion, input
-3. The state avatar
-4. The status line
-5. Streaming text and message captions
-6. The activity block
-7. Steps
-8. The Messaged card
-9. The Messaged T3 Code card
-10. Approval cards
-11. Question cards
-12. While a bot waits on you
-13. The composer during a run
-14. Stop
-15. Turn errors and notes
-16. Jump to latest
-17. After a reconnect
-18. Rows in the rail
-19. What the gateway's events drive
-20. Where this goes beyond the proposals
-21. Not covered here
+2. Shared rules: tokens, motion, input, announcements
+3. What the connection may do
+4. The state avatar
+5. The status line
+6. Streaming text and message captions
+7. The activity block
+8. Steps
+9. Raw: what the gateway sent
+10. The Messaged card
+11. The Messaged T3 Code card
+12. Approval cards
+13. Question cards
+14. While a bot waits on you
+15. The composer during a run
+16. Stop
+17. Turn errors and notes
+18. Following and Jump to latest
+19. After a reconnect
+20. Rows in the rail
+21. What the gateway's events drive
+22. Where this goes beyond the proposals, and the parity rows to reword
+23. Not covered here
 
 ## 1. How the pieces fit
 
@@ -44,9 +48,9 @@ your bubble
   status line                the avatar and a phrase; always last, leaves when the run ends
 ```
 
-Calm by default: a finished turn is bubbles and a few one-line cards. Complete on demand: every line opens in place, and every step and card can show what the gateway actually sent.
+Calm by default: a finished turn is bubbles and a few one-line cards. Complete on demand: every line opens in place, and every step and every card, of every kind, can show what the gateway actually sent (section 9).
 
-Everything that opens does so in place and grows downward. Nothing above an opened element moves. All of it uses the browser's own disclosure (`details` and `summary`), so each has a keyboard path and find-in-page reaches folded text.
+Everything that opens does so in place and grows downward. Nothing above an opened element moves. Folded content uses the browser's own disclosure (`details` and `summary`), so each has a keyboard path and find-in-page reaches folded text.
 
 ## 2. Shared rules
 
@@ -66,21 +70,23 @@ This part adds no colour tokens. It uses the set in `visual-language.md`. The to
 | `--loop-think`   | 2600ms                                                   | Thinking: one sway                                                               |
 | `--loop-work`    | 1200ms                                                   | Working: one orbit of the ring; the bob takes half                               |
 | `--loop-shimmer` | 2000ms                                                   | The light across the status phrase                                               |
-| `--loop-nudge`   | 2600ms                                                   | Waiting on you: one lean, one ping                                               |
+| `--loop-nudge`   | 2600ms                                                   | Waiting for you: one lean, one ping                                              |
 | `--loop-blink`   | 5600ms                                                   | Idle: one blink                                                                  |
 | `--loop-caret`   | 1200ms                                                   | The streaming caret's breath                                                     |
-| `--tap-min`      | 44px                                                     | Smallest touch target                                                            |
+| `--tap-min`      | 44px                                                     | Smallest touch hit area                                                          |
 
 ### Surfaces
 
-| Thing                                                              | Surface                                                                                                                                |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Activity line, event lines, notes, the status line                 | None. Text on the stage.                                                                                                               |
-| Open activity block, Messaged cards, request cards, shelf rows     | `--bg-bubble`, radius 18, at most 640 px wide. Beside a docked Work pane the conversation is 600 px and they take the column's 560 px. |
-| Code, what was sent, option lists, the full request, inside a card | `--bg-pane`, radius 10 or 14                                                                                                           |
-| Buttons on a card                                                  | `--bg-selected`; the primary stays `--bg-inverse`                                                                                      |
-| A pending approval                                                 | The card, plus a 1.5 px `--warn-line` outline                                                                                          |
-| A failed turn, a failed step under a folded block                  | `--danger-soft`                                                                                                                        |
+| Thing                                                                           | Surface                                                                                                                                |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Activity line, event lines, notes, the status line                              | None. Text on the stage.                                                                                                               |
+| Open activity block, Messaged cards, request cards, shelf rows, the access bar  | `--bg-bubble`, radius 18, at most 640 px wide. Beside a docked Work pane the conversation is 600 px and they take the column's 560 px. |
+| Code, what was sent, option lists, the full request, a raw panel, inside a card | `--bg-pane`, radius 10 or 14                                                                                                           |
+| Buttons on a card                                                               | `--bg-selected`; the primary stays `--bg-inverse`                                                                                      |
+| A pending approval                                                              | The card, plus a 1.5 px `--warn-line` outline                                                                                          |
+| A failed turn, a failed step under a folded block                               | `--danger-soft`                                                                                                                        |
+
+Text is never faded with opacity. A message that has not been sent uses the neutral raised fill with `--text` (section 6), not a dimmed version of your bubble.
 
 ### Motion
 
@@ -88,11 +94,25 @@ Motion says what state something is in. It never makes anyone wait: no enter ani
 
 **Reduced motion** is `[data-motion="reduce"]` on the root, set by the host from the system setting. Every loop stops and every transition is instant. Each state keeps a still form that says the same thing, listed with each component below. (F-291)
 
+**A lost connection** stops every motion that stands for the gateway's work, whatever the motion setting (section 19).
+
 ### Input
 
 - **Pointer.** Hover shows full text for anything truncated, as a tooltip.
-- **Touch.** Every hover has a tap or a touch-and-hold equivalent, listed with each component. Targets are at least 44 px.
-- **Keyboard.** Everything that opens is a `summary`: Tab reaches it, Enter or Space opens and closes it. Focus order follows reading order. New content never takes focus.
+- **Touch.** Every hover has a tap or a touch-and-hold equivalent, listed with each component.
+- **Keyboard.** Everything that opens is a `summary` or a button with `aria-expanded`: Tab reaches it, Enter or Space opens and closes it. Focus order follows reading order. New content never takes focus. When something that holds focus is replaced (a card resolving, a step finishing), focus moves to the same control in what replaced it, or to the replacement's first control.
+- **Shortcuts** are written for the Mac. On Windows and Linux, Ctrl stands for ⌘ and Alt for ⌥. A shortcut that belongs to a card applies while focus is inside that card and wins there over a window-wide shortcut with the same keys; outside the card the window-wide one applies. (F-072)
+
+**Hit areas.** Sizes in this document are what is drawn. On touch, every control's hit area is at least 44 × 44 px, extended invisibly where the drawing is smaller. Desktop row heights are not touch targets and stay compact.
+
+| Control                                          | Drawn, desktop | Drawn, touch      | Hit area, touch |
+| ------------------------------------------------ | -------------- | ----------------- | --------------- |
+| Copy button                                      | 24 px          | 32 px             | 44 px           |
+| Text buttons on a card ("Raw", "Show all")       | 24 px tall     | 28 px tall        | 44 px tall      |
+| The Readable and Raw tabs                        | 26 px tall     | 36 px tall        | 44 px tall      |
+| Buttons on a request card                        | 36 px          | 48 px, full width | 48 px           |
+| Jump to latest                                   | 36 px          | 44 px             | 44 px           |
+| Rows that open (steps, cards, the activity line) | 30 to 40 px    | 44 px             | 44 px           |
 
 ### State marks
 
@@ -108,11 +128,55 @@ A 12 px mark, used in task rows, beside state words and as the avatar's badge. S
 | done             | A disc with a check                  | `--accent-line`                           |
 | check            | A check alone                        | The text colour                           |
 | unread           | A dot                                | `--accent-line`                           |
-| queued           | A hollow ring                        | `--text-faint`                            |
+| queued, unknown  | A hollow ring                        | `--text-faint`                            |
 
-Reduced motion: the arc holds still at one position; the ping becomes a fixed halo.
+The hollow ring means two things, so it never stands alone: the word beside it says which. Reduced motion: the arc holds still at one position; the ping becomes a fixed halo.
 
-## 3. The state avatar
+### Announcements
+
+The conversation has one polite live region. It speaks changes a sighted reader would notice at a glance and nothing else:
+
+- a run's lifecycle: "Otto is working", "Otto is waiting for you", "Stopping", "Stopped", "Otto finished", "Otto couldn't finish";
+- the connection and access: "Reconnecting", "Connected", "Access requested", "You can now send, stop and answer";
+- the result of an action the user took: "Copied arguments", "Couldn't copy. The text is selected.", "Queued", "Held until you answer".
+
+It does not speak each phrase, each step or the elapsed time.
+
+## 3. What the connection may do
+
+A gateway grants a connection one of three tiers. The conversation is useful on every one of them, and each feature asks only for the tier it needs.
+
+| Tier        | The conversation shows                                                                                                                                                                                                     | The conversation offers                                                                                                                               |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read        | The transcript, live work as it happens (the status line, steps, Messaged cards), and Raw for what the gateway sends. The gateway does not send pending approvals or questions on this tier, so they are not shown at all. | Reading, opening, copying. No composer, no Stop, no answers.                                                                                          |
+| Interactive | Everything above, and pending approvals and questions                                                                                                                                                                      | Sending, stopping, answering                                                                                                                          |
+| Admin       | The same conversation                                                                                                                                                                                                      | Management screens elsewhere: saved permission rules, a bot's own model. Requested the first time such a screen is opened, never by the conversation. |
+
+**The access bar** takes the composer's place on the read tier. It is a shelf row on `--bg-bubble` at the foot of the column, the composer's width.
+
+| State               | The bar says                                                                                                                                                                                                                                            | Actions                       |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| Read-only           | An eye, "**Read-only.** You can follow Otto's work here. Approvals and questions aren't shown on this connection."                                                                                                                                      | "Request access" (primary)    |
+| Sending the request | "Asking the gateway…"                                                                                                                                                                                                                                   | none                          |
+| Requested           | "**Waiting for the gateway's owner.** Approve this request on the gateway's machine:", then the command the host supplies in a `--bg-pane` line with a copy button, then "Request 7c41d09e" in mono with its own copy button and "checking again in 4s" | "Check now", "Cancel request" |
+| Denied              | "**The request was denied.** Nothing changed. This device can still read."                                                                                                                                                                              | "Request again"               |
+| Expired             | "**The request expired** before it was approved."                                                                                                                                                                                                       | "Request again"               |
+| Couldn't ask        | "**Couldn't send the request.**" and the reason                                                                                                                                                                                                         | "Try again"                   |
+
+- One request covers sending, stopping and answering. The app makes it when the user chooses "Request access"; it is never made silently, and it never asks for admin.
+- The command and the request id come from the host. The design never writes a command of its own.
+- While requested, the bar keeps its place and the conversation stays live above it. Leaving the task and coming back shows the same state.
+- **When access arrives**, the bar is replaced by the composer without moving the transcript, the status strip says "**Access granted** · you can send, stop and answer" for 4 seconds, and the same words are announced. If focus was in the bar it moves to the composer's field; otherwise it stays where it was. Approvals and questions that were pending arrive as cards under the ordinary rules: they do not take focus, the status line and the rail change to "Waiting for you", and Jump to latest reads "Needs you" when a card is out of view (section 14).
+
+**A wait this device cannot see.** If the gateway reports that a run is waiting while the connection is on the read tier, the status line reads "Waiting for an answer" in `--text-muted` with the blocked badge, and a note sits above it: "Otto is waiting for an approval or an answer. This device can't see it on a read-only connection." with "Request access". Nothing is shown when the gateway does not report the wait.
+
+**A request this device can see but not answer** (a tier or capability short of the one the request needs) is a card with the title and summary, the tag "Needs approval", no buttons, and one line: "You can read this request but not answer it from this device." with "Request access". Its full request and Raw still open.
+
+**Keyboard and names.** The bar is a `region` named "Access". Its buttons are ordinary buttons in reading order; the copy buttons are named "Copy approve command" and "Copy request id". Nothing in it has a shortcut.
+
+Where a gateway offers no way to step up at all, the bar says "**Read-only.** This gateway does not let this device send." and has no button.
+
+## 4. The state avatar
 
 The avatar is the first signal. Three layers say the state, so that no single one has to be seen:
 
@@ -120,26 +184,26 @@ The avatar is the first signal. Three layers say the state, so that no single on
 - **The ring**: an arc that travels round the avatar while a tool is running. 1.5 px, 4 px outside the avatar, `--accent-line` on a faint track.
 - **The badge**: a state mark at the top right, with a 2 px halo in the surface colour, for the states that need you or went wrong.
 
-| State          | Entered when                                                                        | Eyes                             | Motion                                      | Ring          | Badge                                | Still form                                |
-| -------------- | ----------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------- | ------------- | ------------------------------------ | ----------------------------------------- |
-| idle           | No active run in any of the bot's tasks                                             | Round, looking the bot's own way | A blink every 5.6 s, staggered between bots | none          | none                                 | Eyes open                                 |
-| thinking       | A run is active and no tool step is running                                         | Turned up                        | Sways 4° each way, 2.6 s                    | none          | none                                 | Eyes turned up                            |
-| working        | A tool step is running                                                              | Straight ahead                   | Bobs, 0.6 s each way                        | Orbits, 1.2 s | none                                 | The arc held in place beside the avatar   |
-| waiting on you | A card from the bot's runs is pending                                               | Wide, on the viewer              | Leans in: grows to 110% and back, 2.6 s     | none          | waiting, pinging                     | Wide eyes and the badge with a fixed halo |
-| blocked        | The gateway or the bot's machine is unreachable, or the run needs a settings change | Half closed                      | None. Slumped 5°                            | none          | blocked                              | The same                                  |
-| done           | A run completed and its task has not been opened since                              | Smiling                          | One nod, 420 ms, then still                 | none          | none; the row carries the unread dot | Smiling eyes                              |
-| failed         | The latest run failed and its task has not been opened since                        | Half closed                      | None. Slumped 5°                            | none          | failed                               | The same                                  |
-| stopped        | The latest run was stopped; until the next run or until the task is opened          | As idle                          | None                                        | none          | stopped                              | The same                                  |
+| State           | Entered when                                                                        | Eyes                             | Motion                                      | Ring          | Badge                                | Still form                                |
+| --------------- | ----------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------- | ------------- | ------------------------------------ | ----------------------------------------- |
+| idle            | No active run in any of the bot's tasks                                             | Round, looking the bot's own way | A blink every 5.6 s, staggered between bots | none          | none                                 | Eyes open                                 |
+| thinking        | A run is active and no tool step is running                                         | Turned up                        | Sways 4° each way, 2.6 s                    | none          | none                                 | Eyes turned up                            |
+| working         | A tool step is running                                                              | Straight ahead                   | Bobs, 0.6 s each way                        | Orbits, 1.2 s | none                                 | The arc held in place beside the avatar   |
+| waiting for you | A card from the bot's runs is pending                                               | Wide, on the viewer              | Leans in: grows to 110% and back, 2.6 s     | none          | waiting, pinging                     | Wide eyes and the badge with a fixed halo |
+| blocked         | The gateway or the bot's machine is unreachable, or the run needs a settings change | Half closed                      | None. Slumped 5°                            | none          | blocked                              | The same                                  |
+| done            | A run completed and its task has not been opened since                              | Smiling                          | One nod, 420 ms, then still                 | none          | none; the row carries the unread dot | Smiling eyes                              |
+| failed          | The latest run failed and its task has not been opened since                        | Half closed                      | None. Slumped 5°                            | none          | failed                               | The same                                  |
+| stopped         | The latest run was stopped; until the next run or until the task is opened          | As idle                          | None                                        | none          | stopped                              | The same                                  |
 
-When several states apply, the order is: waiting, blocked or failed, working, thinking, done, idle. When waiting wins while the machine is unreachable, the avatar shows waiting with the blocked badge. (F-086, F-422)
+**One order, everywhere.** When several states apply, to one run or across a bot's tasks, the most urgent wins, in this order: waiting for you; failed or blocked; done with failures; working; thinking; done; stopped; idle. Done with failures is the done face with the failed badge. A queued task counts as idle for the avatar. Section 20 uses the same order for the rail and gives its fixtures. When waiting wins while the machine is unreachable, the avatar shows waiting with the blocked badge. (F-086, F-422, F-426)
 
-A bot with its own picture has no face to move. For it the ring also says thinking, as a full ring that breathes between 35% and 100% over 2.6 s (held at 50% under reduced motion), and the badge and ring carry everything else.
+A bot with its own picture has no face to move. For it the ring also says thinking, as a full ring that breathes between 35% and 100% over 2.6 s (held at 50% under reduced motion), and the badge and ring carry everything else: done is the picture with no ring and no badge, told from idle by the row's unread dot.
 
 Accessible name: the avatar is `role="img"` with the name "<Bot>, <state>", for example "Otto, working". Where it sits inside a control that already speaks the state, it is hidden from assistive technology. (F-020, F-086)
 
 Sizes: 64 px in the Work pane, 56 px pinned, 40 px in the rail, 28 px in the status line, 22 px in the title pill and in a card's live status, 20 px in the Jump control. Below 28 px the ring sits 3 px out.
 
-## 4. The status line
+## 5. The status line
 
 The last thing in a running turn: the bot's avatar at 28 px and one short phrase. No bubble. It is flush left with the bubbles, 10 px below whatever came last.
 
@@ -149,63 +213,63 @@ The last thing in a running turn: the bot's avatar at 28 px and one short phrase
 
 | Moment                                       | What shows                                                                                                   |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| You send                                     | The avatar appears at once, thinking. (F-081)                                                                |
-| A step starts                                | Its phrase appears at once, and the avatar is working. (F-082)                                               |
-| No step has started within 1 second          | The phrase "Thinking" appears. (F-082, F-083, F-085)                                                         |
+| You send                                     | The avatar and the phrase "Thinking" appear at once. The phrase is never empty. (F-081, F-082, F-085)        |
+| A step starts                                | Its phrase replaces "Thinking" at once, and the avatar is working. (F-082)                                   |
 | Bubbles, cards and steps arrive              | They render above the line. The line stays put. (F-081, F-089)                                               |
 | A card is pending                            | "Waiting for you", in `--warn`; the avatar is waiting. (F-292)                                               |
 | Stop is pressed                              | "Stopping…"; the avatar is idle; no shimmer. (F-097)                                                         |
 | The run reaches completed, stopped or failed | The line is removed: it fades and lifts 4 px over 200 ms. No message says only that the bot is done. (F-089) |
 
-The line always has an accessible name, including in the first second: "Otto, thinking. Show steps." (F-085)
+**The phrase.** While a step runs it is that step's running title (section 8). Otherwise it is "Thinking". The gateway's own status phases give it more to say when no step is running:
 
-**The phrase.** While a step runs it is that step's running title (section 7). Otherwise it is "Thinking". The gateway's own status phases give it more to say when no step is running:
+| Source                                                          | Phrase                                                                |
+| --------------------------------------------------------------- | --------------------------------------------------------------------- |
+| No step running                                                 | Thinking                                                              |
+| A step running                                                  | The step's running title, for example "Reading backup-2026-11-15.log" |
+| The gateway is reviewing a command before it runs               | Reviewing a command                                                   |
+| A message to another bot, once the gateway says it was accepted | Waiting for Marlow                                                    |
+| Status phase preparing a workspace or environment               | Setting up the workspace                                              |
+| Status phase preparing context or flushing memory               | Gathering context                                                     |
+| Status with a retry                                             | Rate limited. Retrying, attempt 2 of 5                                |
+| A pending card                                                  | Waiting for you                                                       |
+| A wait reported on a read-only connection                       | Waiting for an answer                                                 |
+| Stop pressed                                                    | Stopping…                                                             |
+| The machine is unreachable                                      | Can't reach <machine>                                                 |
+| The connection is lost                                          | Reconnecting. Last seen <last phrase, lower case>                     |
 
-| Source                                                    | Phrase                                                                |
-| --------------------------------------------------------- | --------------------------------------------------------------------- |
-| No step running                                           | Thinking                                                              |
-| A step running                                            | The step's running title, for example "Reading backup-2026-11-15.log" |
-| A message to another bot, once that bot's run has started | Waiting for Marlow                                                    |
-| Status phase preparing a workspace or environment         | Setting up the workspace                                              |
-| Status phase preparing context or flushing memory         | Gathering context                                                     |
-| Status with a retry                                       | Rate limited. Retrying, attempt 2 of 5                                |
-| A pending card                                            | Waiting for you                                                       |
-| Stop pressed                                              | Stopping…                                                             |
-| The machine is unreachable                                | Can't reach <machine>                                                 |
-| The connection is lost                                    | Reconnecting. Last seen <last phrase, lower case>                     |
-
-Phrases are in the user's language, have no bot name in front and no trailing ellipsis except "Stopping…". (F-082, F-083)
+Phrases are in the user's language, have no bot name in front and no trailing ellipsis except "Stopping…". A phrase the gateway supplies for a tool the app does not know is shown as sent, in English. (F-082, F-083)
 
 **Motion.** A light crosses the phrase while the avatar is thinking or working: a band of `--text` moving over `--text-faint`, left to right, every 2 s. It stops when the state is anything else. A new phrase rises 5 px and fades in over 200 ms; the old one is replaced at once. Reduced motion: plain `--text-muted` text, replaced at once. (F-084, F-291)
+
+**Elapsed time** is the wall-clock time since the run's start as the gateway reported it, so it is right after a reload and on a second device. It is not shown when the gateway gave no start time, and it is hidden, not frozen at a number, while the connection is lost.
 
 **Input.**
 
 - Hover: the full phrase as a tooltip, for when it is truncated. (F-087)
-- Click or Enter: opens the activity block and brings the running step into view.
-- Tap: the same. (F-087)
-- Screen readers hear a state change (thinking, working, waiting, stopping) through a polite live region, not every phrase.
+- Click, tap or Enter: opens the activity block and brings the running step into view. With no step yet, it does nothing and says so in its name.
+- Accessible name: "Otto, working: Reading backup-2026-11-15.log. Show steps."
+- Screen readers hear lifecycle changes through the announcer (section 2), not every phrase.
 
-**Elapsed time** counts from the send and shows once there is a phrase. It gives the difference between working and stuck a number.
-
-## 5. Streaming text and message captions
+## 6. Streaming text and message captions
 
 - Reply text streams into its bubble as the gateway emits it. A caret follows the last character: 2 px wide, the height of the text, `--accent-line`, breathing between 100% and 35% over 1.2 s (steady under reduced motion). The bubble has `aria-busy="true"` until the message is complete. Text is never revealed more slowly than it arrives. (F-095, F-433)
 - Progress messages the bot writes mid-run are ordinary bubbles. (F-088)
 
 A caption is a 12 px line under a bubble, on the bubble's side:
 
-| Caption                          | Under               | When                                                                     |
-| -------------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| Incomplete                       | A reply             | The run failed or was stopped while it streamed. The text stays. (F-433) |
-| Steer                            | Your bubble         | It was delivered into a running turn. (F-096)                            |
-| Failed to send · Resend · Delete | Your bubble         | The send failed. The first part is `--danger`. (F-075)                   |
-| Sends when reconnected           | Your bubble, at 60% | Written while offline. (F-287)                                           |
+| Caption                          | Under                                                 | When                                                                                                                        |
+| -------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Incomplete                       | A reply                                               | The run failed or was stopped while it streamed. The text stays. (F-433)                                                    |
+| Steer                            | Your bubble                                           | The gateway accepted it into a running turn. (F-096)                                                                        |
+| Steer · restarted the turn       | Your bubble                                           | The gateway reports that the steer interrupted the turn and restarted it. Never shown on a guess.                           |
+| Failed to send · Resend · Delete | Your bubble                                           | The send failed. The first part is `--danger`. "Resend" sends the same text again; "Delete" removes the bubble. (F-075)     |
+| Sends when reconnected           | Your bubble, in the neutral raised fill with `--text` | Written while offline and held by the host. It is sent once when the connection returns and takes your colour then. (F-287) |
 
-If the gateway reports that a steer interrupted the turn and restarted it, the caption reads "Steer · restarted the turn". The capability map notes that steering may do this.
+A message that has not been sent is never drawn in your colour and never dimmed: white on a dimmed accent falls to 2.7:1.
 
-## 6. The activity block
+## 7. The activity block
 
-Every run with at least one step has one block, placed where the run's first step began. (F-090)
+Every run with at least one step has one block, placed where the run's first step began. A run whose only steps are reasoning still has one. (F-090)
 
 **Folded** it is the quiet line from `visual-language.md`: 13 px, `--text-faint`, 30 px tall, with a chevron.
 
@@ -217,344 +281,628 @@ Every run with at least one step has one block, placed where the run's first ste
 | Stopped                             | Stopped after 40s · 4 steps |
 | Failed                              | Failed after 12s · 2 steps  |
 | Any of these with failed steps      | … · 1 failed, in `--danger` |
+| The connection is lost mid-run      | Last seen working · 3 steps |
 
-A run with no step has no block. Durations read `48s`, `1m 12s`, `1h 04m`. (F-090, F-092, F-423)
+A run with no step has no block. Durations read `48s`, `1m 12s`, `1h 04m`; a duration the gateway did not report is left out, never shown as zero. (F-090, F-092, F-423)
 
-**Failed steps stay in view.** Under a folded line, each failed step shows as its own row on a `--danger-soft` block, and opens like any step. A failure cannot hide behind a summary. (F-092, F-294)
+**Failed steps stay in view.** Under a folded line, each failed step shows as its own row on a `--danger-soft` block, and opens like any step. A failure cannot hide behind a summary. A command that exits with a non-zero code is not a failed step (section 8). (F-092, F-294)
 
-**Open**, the line becomes the head of a card: `--bg-bubble`, radius 18, 640 px at most, listing the steps in order. New steps append while it is open, each rising 4 px over 200 ms. A footer gives the model, the effort and the run id with a copy button; the same model and effort are the folded line's tooltip. (F-091, F-044)
+**Open**, the line becomes the head of a card: `--bg-bubble`, radius 18, 640 px at most, listing the steps in order. New steps append while it is open, each rising 4 px over 200 ms. A footer gives the run's model and effort, as the gateway reported them for this turn, and the run id with a copy button named "Copy run id". A value the gateway did not report reads "effort not reported"; nothing is filled in. The same model and effort are the folded line's tooltip. (F-091, F-044)
 
 **What keeps it open or folded.**
 
 - It starts folded.
 - Whether it is open is kept while steps arrive, while the reader scrolls away and back, and across switching tasks. (F-429)
-- When the run ends, an open block folds, unless a step inside it is open or keyboard focus is inside it. Opening the list is watching, and watching ends with the run; opening a step is reading, and reading is not interrupted. The reader's place is held as it folds (section 16).
+- When the run ends, an open block folds once, unless a step inside it is open or keyboard focus is inside it. Opening the list is watching, and watching ends with the run; opening a step is reading, and reading is not interrupted. The reader's place is held as it folds (section 18).
+- That fold happens only at the moment the run ends. It is not repeated when history is replayed after a reconnect, and a block the reader opens again afterwards stays open like any other.
 
 **Input.** Click, tap or Enter on the line opens and closes it. It is a `summary` whose name is its text.
 
-## 7. Steps
+## 8. Steps
 
-A step is a tool call, a stretch of reasoning the gateway exposes, a message to another bot, a handoff to T3 Code, or an approval that belongs to no tool call. An approval for a tool call is that step's waiting status, not a second step, so a command that needed approval counts once.
+A step is a tool call, a segment of reasoning the gateway exposes, a message to another bot, a handoff to T3 Code, or an approval that belongs to no tool call. Reasoning arrives as segments ordered among the tool calls, and each segment is its own step, in that order. An approval for a tool call is that step's waiting status, not a second step, so a command that needed approval counts once; the approval's own events stay in that step's Raw. (F-090, F-091)
 
-**Folded**, a step is one row, 34 px (44 on touch): an icon for its kind, a title, a detail in mono, a status at the right, and a chevron. (F-430)
+**Folded**, a step is one row, 34 px (44 on touch): an icon for its kind, a title, a detail in mono, a status at the right, and a chevron. In a column narrower than 560 px the detail moves to a second line under the title; it is never dropped. (F-430)
 
-| Status  | Row                                                                       |
-| ------- | ------------------------------------------------------------------------- |
-| running | The icon is the working mark; the title is `--text`                       |
-| done    | Icon `--text-faint`; title `--text-muted`; the status is how long it took |
-| failed  | Icon, title and status in `--danger`; the status reads "Failed"           |
-| waiting | Icon and status in `--warn`; the status reads "Waiting for you"           |
-| not run | Title `--text-faint`; the status reads "Denied", "Stopped" or "Not run"   |
+| Status    | Row                                                                                                                  |
+| --------- | -------------------------------------------------------------------------------------------------------------------- |
+| running   | The icon is the working mark; the title is `--text`                                                                  |
+| done      | Icon `--text-faint`; title `--text-muted`; the status is how long it took                                            |
+| failed    | Icon, title and status in `--danger`; the status reads "Failed", "Timed out" or "Aborted"                            |
+| waiting   | Icon and status in `--warn`; the status reads "Waiting for you"                                                      |
+| not run   | Title `--text-faint`; the status reads "Denied", "Stopped" or "Not run"                                              |
+| last seen | While the connection is lost, a running step keeps its title, stops moving, and its status reads "Last seen running" |
 
-**Titles** are plain words, and change tense with the status:
+**Titles** are plain words, and change tense with the status. For the kinds below the app writes the title from the tool's name and arguments, in the user's language. For any other tool it shows the title the gateway sends, which is fixed English, unchanged.
 
-| Kind                             | Icon             | Running                     | Done                 | Failed                    | Detail                                                  |
-| -------------------------------- | ---------------- | --------------------------- | -------------------- | ------------------------- | ------------------------------------------------------- |
-| Read a file                      | page with lines  | Reading notes.md            | Read notes.md        | Couldn't read notes.md    | 214 lines                                               |
-| Write or edit a file             | pencil           | Writing notes.md            | Wrote notes.md       | Couldn't write notes.md   | +4 lines                                                |
-| List a folder                    | folder           | Looking through logs        | Looked through logs  | Couldn't open logs        | 9 files                                                 |
-| Search                           | magnifier        | Searching for "cache"       | Searched for "cache" | Search failed             | 12 results                                              |
-| Open a web page                  | globe            | Opening example.org         | Opened example.org   | Couldn't open example.org | the page title                                          |
-| Run a command                    | terminal         | Running mv                  | Ran mv               | mv failed                 | exit 0, or the path                                     |
-| Run a command, awaiting approval | terminal         | Wants to run mv             |                      |                           | the path                                                |
-| Run a command, denied            | terminal         |                             | Didn't run mv        |                           | the path                                                |
-| Reasoning                        | dot between arcs | Thinking                    | Thought              |                           | its first line, in the interface face                   |
-| Message a bot                    | speech           | Messaging Marlow            | Messaged Marlow      | Couldn't message Marlow   | the card's state, lower case                            |
-| Hand off to T3 Code              | code brackets    | Messaging T3 Code           | Messaged T3 Code     | Couldn't reach T3 Code    | what the result says, for example "accepted, thread 18" |
-| Save to memory                   | bookmark         | Saving to memory            | Saved to memory      | Couldn't save to memory   | the first words saved                                   |
-| Any other tool                   | diamond          | Using <the gateway's title> | Used <title>         | <title> failed            | the first argument                                      |
-| A call a rule denied             | the tool's icon  |                             | Blocked by policy    |                           | the call. Status "Not run", shown as failed. (F-334)    |
+| Kind                               | Icon             | Running               | Done                                    | Failed                    | Detail                                               |
+| ---------------------------------- | ---------------- | --------------------- | --------------------------------------- | ------------------------- | ---------------------------------------------------- |
+| Read a file                        | page with lines  | Reading notes.md      | Read notes.md                           | Couldn't read notes.md    | 96 lines                                             |
+| Write or edit a file               | pencil           | Writing notes.md      | Wrote notes.md                          | Couldn't write notes.md   | +4 lines                                             |
+| List a folder                      | folder           | Looking through logs  | Looked through logs                     | Couldn't open logs        | 9 files                                              |
+| Search                             | magnifier        | Searching for "cache" | Searched for "cache"                    | Search failed             | 12 results                                           |
+| Open a web page                    | globe            | Opening example.org   | Opened example.org                      | Couldn't open example.org | the page title                                       |
+| Run a command                      | terminal         | Running mv            | Ran mv                                  | Couldn't run mv           | the exit code, "exit 0" or "exit 1"                  |
+| Run a command, under review        | terminal         | Reviewing mv          |                                         |                           | the path                                             |
+| Run a command, awaiting approval   | terminal         | Wants to run mv       |                                         |                           | the path                                             |
+| Run a command, denied              | terminal         |                       | Didn't run mv                           |                           | the path                                             |
+| Reasoning                          | dot between arcs | Thinking              | Thought                                 |                           | its first line, in the interface face                |
+| Message a bot                      | speech           | Messaging Marlow      | Messaged Marlow                         | Couldn't message Marlow   | the card's state, lower case                         |
+| Hand off to T3 Code                | code brackets    | Calling T3 Code       | Called T3 Code                          | Couldn't reach T3 Code    | the card's state, lower case                         |
+| Save to memory                     | bookmark         | Saving to memory      | Saved to memory                         | Couldn't save to memory   | the first words saved                                |
+| Any other tool                     | diamond          | The gateway's title   | The gateway's title                     | The gateway's title       | the first argument                                   |
+| A call a rule or the review denied | the tool's icon  |                       | Blocked by policy, or Blocked by review |                           | the call. Status "Not run", shown as failed. (F-334) |
 
-A truncated title shows in full on hover. (F-430)
+**How a command ended** is said exactly, because the gateway distinguishes these:
 
-**Open**, only that step opens. Others keep updating, new ones keep arriving, and nothing above it moves. (F-293) It has two views, switched by a two-part control at the top (a tab list: Readable, Raw):
+| The gateway reports                              | Row                                                                                                                                             | Counted as failed                        |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| Exit code 0                                      | "Ran mv", detail "exit 0", status the duration                                                                                                  | no                                       |
+| A non-zero exit code                             | "Ran grep", detail "exit 1" in `--text`, status the duration. The code is shown plainly; it is the command's answer, not a failure of the step. | no                                       |
+| The command hit its own time limit               | "mv timed out", status "Timed out", detail "its 120s limit"                                                                                     | yes                                      |
+| The run hit its time limit while the command ran | "mv was cut off", status "Aborted", detail "the run's 50m limit"                                                                                | yes; the run ends as failed (section 17) |
+| The tool reported an error                       | "Couldn't run mv", status "Failed"                                                                                                              | yes                                      |
 
-- **Readable.** The inputs as label and value rows, then the result. A running step shows its output as the gateway streams it, with the streaming caret, under "Output so far". (F-432)
-- **Raw.** What the gateway sent. For a tool call: the exact tool name, the arguments, the result or the error, the timing (started, ended, took) and the identifiers (tool call, item, run, session). For reasoning, a message or an approval: the event as received and its identifiers, with no invented tool fields. Every value has a copy button. (F-093, F-094)
+**The automatic review.** When the gateway reviews a command before anyone is asked, the step carries the review's record: its verdict, a risk level and a one-line reason. It applies to commands only.
 
-A reasoning step's readable view is its text, 14 px, `--text-muted`, at most 62 characters wide.
+| Review      | The step                                                                                                | Opened, the readable view adds                                                                               |
+| ----------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| In progress | "Reviewing mv", the working mark                                                                        | "Review: in progress"                                                                                        |
+| Approved    | The command runs; the row shows nothing extra. Quiet.                                                   | One line in `--text-muted`: "Reviewed automatically: approved. Low risk. Moves one folder inside /srv."      |
+| Asks        | The step waits ("Wants to run mv") and the approval card follows (section 12)                           | "Reviewed automatically: asks you. Medium risk." and the reason; the card's full request shows the same line |
+| Denied      | "Blocked by review", status "Not run", shown as a failed step, so it stays in view under a folded block | "Reviewed automatically: denied. High risk." and the reason, in `--text`; "The command was not run."         |
 
-**Long output** shows eight lines and fades out, with "Show all 214 lines" under it. Shown in full, the block scrolls inside itself up to 280 px. Copy always copies all of it. Output is never loaded until the step is opened.
+**Open**, only that step opens. Others keep updating, new ones keep arriving, and nothing above it moves. (F-293) Every step, of every kind, has two views, switched by a tab list at the top (Readable, Raw):
 
-**Copy.** A copy button turns into a check for 1.4 s. On touch, touch and hold on a step offers "Copy result", which copies exactly the result text the readable view shows, and "Copy raw". (F-093, F-431)
+- **Readable.** The inputs as label and value rows, then the result. A running step shows its output as the gateway streams it, with the streaming caret, under "Output so far". (F-432) A step with nothing to add says so in one line ("The gateway sent no result for this step.") and is never an empty box.
+- **Raw.** What the gateway sent, as section 9 defines it. (F-093, F-094)
 
-**When detail is missing.** A step rebuilt from history after a reconnect may lack timing; the status then shows nothing where the duration would be, never zero. When the gateway exposes no reasoning there are no Thought steps and nothing else changes.
+What each kind's readable view holds:
 
-**Keyboard.** Tab moves through the steps in order, Enter opens one, and inside it Tab goes to the view control, the copy buttons, and "Show all". The view control follows the tab pattern: Left and Right change the view.
+| Kind                | Readable view                                                                                               |
+| ------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Read                | The file's path; the content                                                                                |
+| Write or edit       | The path; what was added and removed                                                                        |
+| List                | The folder; the entries                                                                                     |
+| Search              | The query and where; the matches                                                                            |
+| Web page            | The address and the page title; the extracted text                                                          |
+| Command             | The command, the machine, the folder; the review's line; the output; the exit code                          |
+| Reasoning           | Its text, 14 px, `--text-muted`, at most 62 characters wide                                                 |
+| Message a bot       | Who it was sent to and the card's state; the sent text; "Show the card", which scrolls to its Messaged card |
+| Hand off to T3 Code | The target fields and the card's state; the sent text; "Show the card"                                      |
+| Memory              | What was saved                                                                                              |
+| Other               | The arguments as rows; the result                                                                           |
 
-## 8. The Messaged card
+**Long output** shows eight lines in full and stops there, with "Show all 96 lines" under it. Nothing is drawn half-faded: the eighth line is as readable as the first. Shown in full, the block scrolls inside itself up to 280 px (60% of the height on a phone) and the button reads "Show fewer". The count is the number of lines there really are. Copy always copies all of it.
+
+**Output the gateway cut.** The gateway sends at most about 8,000 characters of a result and flags the cut. The block then ends with a line on `--warn-soft`: "Truncated by the gateway. This is the first 8,000 characters; the rest was not sent." "Show all" counts only the lines received, and Copy copies what was received and says so ("Copied the first 8,000 characters").
+
+**Loading.** A step's detail is fetched when it is first opened. While it loads, the body is one line, "Loading this step…", with `aria-busy`. If that fails: "Couldn't load this step." with "Try again". A step rebuilt from history may lack timing; the status then shows nothing where the duration would be, never zero. When the gateway exposes no reasoning there are no Thought steps and nothing else changes.
+
+**Copy** follows section 9. On touch, touch and hold on a step offers "Copy result", which copies exactly the result text the readable view shows, and "Copy raw". (F-093, F-431)
+
+**Keyboard.** Tab moves through the steps in order; Enter or Space opens one. Inside it, Tab goes to the tab list, then the copy buttons, then "Show all". The tab list is one tab stop: Left and Right move between Readable and Raw and select, Home and End go to the ends. Each tab names its panel (`aria-controls`), and each panel is labelled by its tab. A step's name is its title, detail and status: "Read backup-2026-11-15.log, 96 lines, 0.6 seconds".
+
+## 9. Raw: what the gateway sent
+
+Every step and every card has Raw, on the desktop and on the phone. It is one component, so that two builders do not invent two.
+
+**Where it is.**
+
+| On                                                                                                                  | How Raw opens                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| A step                                                                                                              | The Raw tab of the step                                                                                                                 |
+| A Messaged card, a T3 Code card, an approval (pending or resolved), a question (pending or resolved), a failed turn | A text button "Raw" at the end of the card's actions. It is a disclosure: `aria-expanded`, and the panel is the next thing in the card. |
+| An event line ("Message from Pip")                                                                                  | The line is a `summary`; opened, it shows the message and its "Raw" button                                                              |
+
+**What it holds**, top to bottom, on `--bg-pane`:
+
+| Part              | Content                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Tool              | The exact tool name, in mono, with a copy button. Only for tool calls.                                                                                             |
+| Arguments         | The arguments as received, as formatted JSON                                                                                                                       |
+| Result, or Error  | The result as received. An error is on `--danger-soft`. A call still running says "No result yet. This call is still running."                                     |
+| Event as received | For reasoning, an approval, a question, an incoming message or a turn error: the event itself, and the resolving event when there is one, each under its own label |
+| Timing            | Started, ended, took. Each value has a copy button. A value not reported is "not reported".                                                                        |
+| Identifiers       | Whatever the events carry: tool call, item, run, session, and for a card the approval, question or recipient ids. Each has a copy button.                          |
+
+Nothing is invented to fill a part. A step that is not a tool call has no Tool or Arguments part.
+
+**States.**
+
+| State                    | The panel shows                                                                                                                                                         |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Loading                  | "Loading what the gateway sent…", `aria-busy`                                                                                                                           |
+| Loaded                   | The parts above                                                                                                                                                         |
+| Truncated by the gateway | The parts, and under the cut block the truncation line from section 8                                                                                                   |
+| Not available            | One sentence saying why: "The gateway did not keep this event.", "This event is older than the history the gateway returned.", or "Not sent on a read-only connection." |
+| Couldn't load            | "Couldn't load what the gateway sent." with "Try again"                                                                                                                 |
+
+**Copy.** Every code block and every value in Timing and Identifiers has a copy button, and each is named for exactly what it copies: "Copy arguments", "Copy result", "Copy tool call id". It copies that text in full, including lines the view has folded, and never anything else.
+
+- When the clipboard took it, the icon becomes a check for 1.4 s and the announcer says "Copied arguments".
+- When it did not, the icon becomes a warning for 1.4 s, the text it would have copied is selected, and the announcer says "Couldn't copy. The text is selected." Nothing claims success.
+
+**Keyboard and focus.** "Raw" is a button: Enter or Space opens and closes the panel, and focus stays on the button. The panel follows it in the tab order. Escape with focus inside the panel closes it and returns focus to "Raw". On a phone the panel is the same panel, inside the card, scrolling with the transcript; long blocks scroll inside themselves as in section 8.
+
+## 10. The Messaged card
 
 One card for each message a bot sends to another bot. It sits in the transcript where the message was sent, stays when the activity block is folded, and the same message is also a step in the block. (F-119, F-439)
 
-**Folded**, one line, 40 px (44 on touch): the word "Messaged", the recipient's avatar at 20 px and name, the first line of the message in `--text-muted`, and the state at the right with its mark. (F-122)
+**Folded**, one line, 40 px (44 on touch): the word "Messaged", the recipient's avatar at 20 px and name, the first line of the message in `--text-muted`, and the state at the right with its mark. In a column narrower than 560 px it is two lines: "Messaged", the recipient and the state on the first; the message's first line on the second. The words "Messaged" and "Message from" are never dropped, and the state word is never shortened. (F-122)
 
-| State                | Mark and colour     | Moves there when                                                                    |
-| -------------------- | ------------------- | ----------------------------------------------------------------------------------- |
-| Sending              | sending             | The send call started                                                               |
-| Waiting for approval | waiting, `--warn`   | The sender's outgoing policy is "ask me" and an approval card is pending (F-312)    |
-| Sent                 | check               | The call returned successfully                                                      |
-| Working              | working, `--accent` | The recipient's run for this message is queued, running or stopping                 |
-| Recipient waiting    | waiting, `--warn`   | That run is waiting on its user                                                     |
-| No reply yet         | queued              | That run completed without a reply. A later reply still moves it on.                |
-| Unknown              | hollow ring         | The sender was stopped and the gateway could not say whether the call completed     |
-| Replied              | check, `--accent`   | A correlated reply arrived                                                          |
-| Failed               | failed, `--danger`  | The call returned an error, or the recipient's run failed                           |
-| Blocked by policy    | failed, `--danger`  | A messaging policy forbade it (F-311)                                               |
-| Not sent             | stopped             | The approval was denied, or the sender was stopped before the call returned (F-436) |
-| Recipient stopped    | stopped             | The recipient's run ended as stopped or cancelled without a reply (F-434)           |
+**States.** Each state is something an event established. There is no state for something the gateway does not report.
 
-A card moves only forward through this list. A late event for an earlier state never moves it back, and the last five states are final. Two events belong to one card only when the gateway's identifiers say so; a replayed event updates the card it names. (F-309, F-435, F-469)
+| State                | Mark and colour     | Established by                                                                                              |
+| -------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Sending              | sending             | The bot issued the call; it has not started                                                                 |
+| Waiting for approval | waiting, `--warn`   | The sender's outgoing policy is "ask me" and an approval card for this send is pending (F-312)              |
+| Call started         | sending             | The call started. That does not show the message was delivered.                                             |
+| Sent                 | check               | The call returned and its result says the recipient accepted the message                                    |
+| Working              | working, `--accent` | The result named the recipient's run, and that run's own events show it active                              |
+| Recipient waiting    | waiting, `--warn`   | That run asked its own user a question and is waiting for the answer                                        |
+| No reply yet         | hollow ring         | That run finished, or the call returned, without a reply                                                    |
+| Replied              | check, `--accent`   | A reply arrived that an identifier ties to this message                                                     |
+| Recipient stopped    | stopped             | That run ended as stopped or cancelled without a reply (F-434)                                              |
+| Failed               | failed, `--danger`  | The call returned an error                                                                                  |
+| Blocked by policy    | failed, `--danger`  | A messaging policy forbade the call (F-311)                                                                 |
+| Not sent             | stopped             | The approval was denied, or the sender was stopped and the gateway confirms the call was never made (F-436) |
+| Unknown              | hollow ring         | The sender was stopped before the call returned and the gateway cannot say whether it was delivered         |
+
+A bot that another bot messaged cannot raise an approval, so there is no "recipient waiting on an approval": a command that would need one fails in the recipient's run. The recipient can ask its user a question, and that is what Recipient waiting means.
+
+**Transitions.** The card follows this graph, not a list order:
+
+```
+Sending ─► Waiting for approval ─► Call started          (allowed)
+   │                └────────────► Not sent              (denied)
+   ├─► Blocked by policy
+   └─► Call started ─► Sent ─► Working ⇄ Recipient waiting
+            │           │         │
+            │           └─────────┴─► Replied | No reply yet | Recipient stopped
+            ├─► Failed
+            └─► Unknown | Not sent                        (the sender was stopped)
+
+No reply yet ─► Replied          only on a reply an identifier ties to this message
+Unknown      ─► whatever a later event that names this message establishes
+```
+
+- Replied, Recipient stopped, Failed, Blocked by policy and Not sent are final. Nothing changes a final card.
+- Working and Recipient waiting may alternate as the recipient asks and is answered.
+- Where the result does not name the recipient's run, the card goes from Sent straight to Replied or No reply yet.
+- **A late reply** is attached to its card only when an identifier ties it there. Otherwise the card stays as it was and the reply arrives as an incoming message, "Message from Marlow" (below).
+- Two events belong to one card only when the gateway's identifiers say so. A replayed event updates the card it names and never makes a second one; an event older than the card's state is ignored. (F-309, F-435, F-469)
 
 **Open**, in place (F-121):
 
-- What was sent: the sender's avatar and name, "sent" and the time, then the exact text on a `--bg-pane` inset. Attachments are chips under it. (F-123, F-128)
-- What came back: the recipient's avatar and name, "replied" and the time, then the reply on an inset. While the recipient works, this slot holds the recipient's live status line, its avatar at 22 px with its state and its phrase, updating as its steps change. (F-438) On failure it holds one sentence saying what happened.
-- Actions: "Open in Marlow", "Open full exchange", and at the right "Raw". (F-124, F-308)
+- **What was sent**: the sender's avatar and name, "sent" and the time the call was issued, then the exact text on a `--bg-pane` inset. Attachments are chips under it. (F-123, F-128)
+- **What came back**: one row for the recipient, led by its avatar, then what the state allows:
 
-"Open in <Bot>" goes to the recipient's task for this message; going back returns here at the same place with the card still open. "Open full exchange" shows every message between the two bots in this task, read-only, and its Close returns to the card, still open. "Raw" shows the tool call as received.
+| State                | The recipient's row and what follows                                                                                                                                                                           |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sending              | "Otto is preparing this message."                                                                                                                                                                              |
+| Waiting for approval | "This message waits for your approval. Nothing has been sent."                                                                                                                                                 |
+| Call started         | "Otto started the call. The gateway has not said whether Marlow received it."                                                                                                                                  |
+| Sent                 | "Marlow received it. No reply yet."                                                                                                                                                                            |
+| Working              | The recipient's state avatar at 22 px, its name and its current phrase on one row, updating as its steps change: "Marlow · Reading the house log". Nothing else: the folded line already says Working. (F-438) |
+| Recipient waiting    | "Marlow asked a question in its own task and is waiting for the answer."                                                                                                                                       |
+| No reply yet         | "Marlow's run finished without a reply. A reply that names this message appears here; any other arrives as a message from Marlow."                                                                             |
+| Replied              | "Marlow replied" and the time, then the reply on an inset                                                                                                                                                      |
+| Recipient stopped    | "Marlow's run for this message was stopped before it replied."                                                                                                                                                 |
+| Failed               | "The call failed.", then the error text                                                                                                                                                                        |
+| Blocked by policy    | "A messaging rule stopped this: <the rule>. Nothing was sent."                                                                                                                                                 |
+| Not sent             | "You denied the approval. Nothing was sent.", or "Otto was stopped before the call was made. Nothing was sent."                                                                                                |
+| Unknown              | "Otto was stopped before the call returned. The gateway cannot say whether Marlow received it."                                                                                                                |
 
-**The receiving side.** The recipient's task starts the run with a "Message from <Bot>" card. It is the same component with the sender in the name slot, and its state is the recipient's own run: Working, Waiting for you, Replied, Completed, Failed, Stopped. Its "Open in <Bot>" goes to the sender's task at the matching card. (F-120, F-437, F-469)
+- **Actions**, in this order, each present only when it can do something:
 
-**Lines that are not cards.** A message a bot did not ask for arrives as an event line, "Message from" with the avatar and name. A count line, "2 messages with Otto", stands for an exchange that has no card of its own. (F-120, F-125)
+| Action               | Present when                                                    | Does                                                                                                                                                                        | Name                                                    |
+| -------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| "Show the approval"  | Waiting for approval                                            | Scrolls to the approval card and focuses it                                                                                                                                 | Show the approval for this message                      |
+| "Open in Marlow"     | The result named the recipient's task                           | Selects the recipient's task, scrolled to its "Message from Otto" card, which is open and focused                                                                           | Open this message in Marlow's task                      |
+| "Show full exchange" | The two bots have exchanged more than this message in this task | Replaces the two rows above with every message between them in this task, oldest first, read-only. It reads "Show only this message" while open. Focus stays on the button. | Show every message between Otto and Marlow in this task |
+| "Raw"                | Always                                                          | Section 9: the send call's name, arguments, result, timing and identifiers                                                                                                  | Raw                                                     |
 
-**Input.** Click, tap or Enter opens and closes the card. Touch and hold offers "Copy message" and "Copy raw". (F-440)
+**Coming back.** "Open in Marlow" records where the reader was. On the receiving card, "Open in Otto" returns there: the sender's task, the transcript at the scroll position it had, the card still open, focus on "Open in Marlow". ⌘[ does the same.
+
+**The receiving side.** The recipient's task starts the run with a "Message from <Bot>" card. It is the same component with the sender in the name slot, and its state is the recipient's own run. (F-120, F-437, F-469)
+
+| State           | Established by                               | Opened                                                                                                   |
+| --------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Working         | The run is active                            | The sent text and attachments; the recipient's own status line is at the foot of the transcript as usual |
+| Waiting for you | The run asked a question                     | The sent text; "Marlow asked you a question below." with "Show the question"                             |
+| Replied         | The run produced the reply that was returned | The sent text, then "Marlow replied" and the reply                                                       |
+| Completed       | The run finished without a reply             | The sent text; "This run finished without a reply to Otto."                                              |
+| Failed          | The run failed                               | The sent text and the reason in one sentence                                                             |
+| Stopped         | The run was stopped or cancelled             | The sent text; "This run was stopped before it replied."                                                 |
+
+Working and Waiting for you may alternate. Completed becomes Replied when a later reply is tied to the message by an identifier. A run that failed or was cancelled maps to Failed or Stopped and stays there. Its actions are "Open in Otto" (present when the sender's task is known) and "Raw".
+
+**Lines that are not cards.**
+
+- A message that no card on screen accounts for (one a bot did not ask for, or a late reply no identifier ties to a card) is an event line, "Message from" with the avatar and name. It opens to the message's text and "Raw".
+- A count line, "2 messages with Otto", stands for an exchange that has no card of its own, and opens to that exchange, read-only. The same exchange is never shown as both a card and a count line. (F-120, F-125)
+
+**Input.** Click, tap or Enter on the folded line opens and closes the card; its name is the line in full, "Messaged Marlow: Write a two-line entry for the house log. Replied." Touch and hold offers "Copy message" and "Copy raw". (F-440)
 
 **Elsewhere.** While the recipient works, its avatar in the rail is working and its row says so. (F-126)
 
-## 9. The Messaged T3 Code card
+## 11. The Messaged T3 Code card
 
 The same component, for work a bot sends to T3 Code. It is drawn only from the bot's own tool events on the gateway. The app never connects to T3 Code and has no setting for it. (F-132, F-138)
 
 **Identity.** The text "T3 Code" and a mark drawn for Clawtrate: code brackets in a 20 px rounded tile on `--bg-inverse`. No third-party logo.
 
-| State            | Mark               | Moves there when                                                                             |
-| ---------------- | ------------------ | -------------------------------------------------------------------------------------------- |
-| Sending          | sending            | The tool call started                                                                        |
-| Sent             | check              | The call returned and its result says the work was accepted                                  |
-| Delivery unknown | hollow ring        | The bot was stopped before the call returned and the gateway cannot say whether it completed |
-| Done             | check, `--accent`  | A correlated tool result carries a final result                                              |
-| Failed           | failed, `--danger` | The call or a correlated result returned an error (F-314)                                    |
-| Not sent         | stopped            | The bot was stopped before the call returned and the gateway confirms it was not made        |
+| State            | Mark               | Established by                                                                                   |
+| ---------------- | ------------------ | ------------------------------------------------------------------------------------------------ |
+| Sending          | sending            | The bot issued the call; it has not started                                                      |
+| Call started     | sending            | The call started. While it runs the gateway reports nothing more: no progress arrives.           |
+| Call made        | check              | The call returned without an error. That means the call was made, not that the work is finished. |
+| Delivery unknown | hollow ring        | The bot was stopped before the call returned and the gateway cannot say whether it was made      |
+| Failed           | failed, `--danger` | The call returned an error (F-314)                                                               |
+| Not sent         | stopped            | The bot was stopped and the gateway confirms the call was never made, or the call was denied     |
 
-Forward only; Done, Failed and Not sent are final. After Sent the card changes only when a later tool event carries identifiers that name it. With no such identifier each call is its own card, and nothing is matched by project or thread name. (F-134, F-313, F-441, F-442, F-443, F-470)
+**Transitions.** Sending, then Call started, then Call made or Failed. A stop before the call returns leads to Not sent or Delivery unknown. Delivery unknown moves to Call made or Failed only when a later tool event carries an identifier that names this call. Call made, Failed and Not sent are final.
+
+After Call made, a later tool event that names this call (the bot checking on the work) adds its result to the card under its own time; the state stays Call made, because the app cannot tell from a result whether the work is finished. With no such identifier each call is its own card, and nothing is matched by project or thread name. (F-134, F-313, F-441, F-442, F-443, F-470)
 
 **Open:**
 
-- What was sent: the exact text from the tool call's arguments, and under it a chip for each target field the arguments contain (project, thread, branch). A field that is absent has no chip. (F-133)
-- What came back: the result text and its time. At Sent with nothing more: "Thread 18. No result yet. This card changes only if Otto checks on the work." At Failed: the error text.
-- Files, as chips, only when the tool result or a gateway attachment carries them. (F-135)
-- "Open thread", only when the tool result carries a link. It opens in the system browser when chosen, and nothing is fetched before that. (F-135)
-- "Raw": the tool call and result as received.
+- **What was sent**: the exact text from the call's arguments, and under it a chip for each target field the arguments contain (project, thread, branch). A field that is absent has no chip; nothing is filled in.
+- **What came back**:
 
-**When the bot is stopped** after the work was sent, the card keeps its state and adds a line in medium weight: "Work already sent to T3 Code continues there." The stop note says the same. (F-137)
+| State            | Text                                                                                                                                                      |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sending          | "Otto is preparing this call."                                                                                                                            |
+| Call started     | "Otto started the call. Nothing more is reported until it returns."                                                                                       |
+| Call made        | "The call returned" and the time, then the result text as received. Under it: "This shows the call was made. It does not show that the work is finished." |
+| Delivery unknown | "Otto was stopped before the call returned. The gateway cannot say whether T3 Code received it."                                                          |
+| Failed           | "The call failed.", then the error text                                                                                                                   |
+| Not sent         | "Otto was stopped before the call was made. Nothing was sent."                                                                                            |
+
+- **Files**, as chips, only when a result or a gateway attachment carries them. (F-135)
+- **"Open thread"**, only when a result carries a link. It is a link named "Open the T3 Code thread in your browser", it opens the system browser when chosen, and nothing is fetched before that. With no link in the result there is no such control. (F-135)
+- **"Raw"**: section 9.
+
+**When the bot is stopped** after the call was made, the card keeps its state and adds a line in medium weight: "The call was made. Work handed to T3 Code may continue there." The stop note says the same. (F-137)
 
 Touch and hold offers "Copy sent text" and "Copy raw". (F-444) The Work pane's Coding section lists these cards across the bot's tasks; its rows use this card's folded form. (F-136)
 
-## 10. Approval cards
+## 12. Approval cards
+
+Approvals appear only on the interactive tier (section 3). They come from the bot's own run in its own task; a bot that another bot messaged, and a helper a bot spawned, cannot raise one.
 
 **Pending.** A card with a 1.5 px `--warn-line` outline, the one loud thing in a quiet transcript.
 
-- **Title** (17 px, semibold): "<Bot> wants to run a command", "<Bot> wants to message Marlow". The title names the bot and the kind of action. (F-163)
+- **Title** (17 px, semibold): "Otto wants to run a command", "Otto wants to message Marlow". The title names the bot and the kind of action. (F-163)
 - **Tag**, top right: "Needs approval" on `--warn-soft`.
-- **Summary** (15 px): one sentence saying what will happen, with the machine in bold.
+- **Summary** (15 px): one sentence saying what will happen, with the machine in bold. It says only what the command does.
 - **Warnings**, when the gateway gives them, each on its own line in `--warn` with a triangle: "This can't be undone", "This changes sign-in or security settings", "This shares your data outside this chat". (F-171)
-- **"Show full request"**: opens an inset with the reason, the exact command in mono with a copy button, label and value rows (runs on, folder, asked by), and "Raw". It reads "Hide full request" when open. (F-164)
-- **Buttons**, 36 px (48 and stacked on touch): "Allow once" (primary), "Always allow…" (default), and at the far right "Deny" (quiet). Deny is always there. (F-163, F-170, F-329)
-- **A footer line** when the card will expire or came from somewhere other than this conversation: "Asked by the routine Weekly cleanup. Expires in 28 minutes; the command is not run if it does." (F-168)
+- **"Show full request"**: opens an inset with the reason, the exact command in mono with a copy button, label and value rows (runs on, folder, asked by, and the automatic review's line when there was one), and at its foot the actions that go with the cause: "Edit rule" when one of the user's own rules made the gateway ask. It reads "Hide full request" when open. (F-164, F-170)
+- **Buttons**, 36 px: "Allow once" (primary), "Always allow…" (default), and at the far right "Deny" (quiet). (F-163, F-329)
+- **"Raw"**, a text button at the end of the card: the request as the gateway sent it (section 9).
+- **A footer line** when the card will expire or came from somewhere other than this conversation: "Expires in 28 minutes; the command is not run if it does." (F-168)
 
 When the gateway offers no rule to save, the buttons are "Allow" and "Deny". (F-329)
 
-**"Always allow…"** replaces the buttons with a form on an inset, so a standing permission is never granted without seeing what it covers:
+**Deny is always visible.** It is on the card in every pending state: beside the first buttons, beside the form's buttons while the form is open, while a rule is being saved, and after a save failed. On a phone the buttons stack at full width, 48 px each, and Deny is the last of them in every one of those states.
 
-| Row        | Control                                                                                                                                                    |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Rule       | The exact rule the gateway would save, in mono. For a command this is the program and what it matches, for example "/bin/mv, any arguments, on media-box". |
-| Applies to | "<Bot> only" or "All bots"                                                                                                                                 |
-| Lasts      | "1 hour", "1 day" or "Until I revoke"                                                                                                                      |
+**"Always allow…"** opens a form on an inset under the summary. It shows exactly what the gateway will save, and nothing in it can be changed, because a rule saved from a card cannot be widened:
 
-Below it one sentence states the result in words and changes as the choices change: "Otto can do this without asking until this time tomorrow. You can revoke it in Permissions." Then "Allow and save rule" (primary) and "Back". (F-166, F-167)
+| Row     | Shows                                                                   |
+| ------- | ----------------------------------------------------------------------- |
+| Bot     | Otto. The rule is for this bot only.                                    |
+| Command | The exact command, in mono. The rule matches this command and no other. |
+| Folder  | The directory the command runs in                                       |
+| Lasts   | Until removed                                                           |
 
-**Resolved**, the card folds to one line, 40 px: a tag, the summary, the time, and a chevron.
+Under the rows, one sentence: "Otto can run exactly this command in this folder without asking, until the rule is removed. Saved rules are listed in Settings, under Permissions; opening that needs admin access." Then the buttons: "Allow and save rule" (primary), "Back", and at the far right "Deny".
 
-| Tag                         | When                        | Sentence when opened                                                                                                       |
-| --------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Allowed once (`--accent`)   | Allow once                  | Otto ran this once. It will ask again next time. (F-325)                                                                   |
-| Always allowed (`--accent`) | Allow and save rule         | Otto ran this, and can run it again without asking until tomorrow, 5:25 PM. Then the rule, its scope and "Revoke". (F-166) |
-| Denied                      | Deny                        | Otto won't do this, and won't ask again until you send another message. (F-165)                                            |
-| Expired                     | It was not answered in time | The command was not run. (F-168)                                                                                           |
-| Closed by your message      | You sent a steer            | Your message closed this request. The command was not run. (F-169)                                                         |
-| Closed: the run ended       | The run finished first      | The command was not run. (F-418)                                                                                           |
-| Closed: the run failed      | The run failed first        | The command was not run.                                                                                                   |
-| Cancelled                   | You pressed Stop            | You stopped the run before answering. The command was not run.                                                             |
+A rule saved from the conversation has no duration and one bot. If a gateway offers a choice for some approval (today only those raised by scheduled routines, which this design does not cover), the form lists exactly the choices the gateway offers, in the gateway's own units, and offers none it does not.
 
-Opened, a resolved card also shows the full request. When saving the rule pushed out an older one, the sentence adds "Replaced the oldest rule: '…'". (F-416)
+| The form      | Shows                                                                                                   | Buttons                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Open          | The rows and the sentence                                                                               | Allow and save rule, Back, Deny                                                   |
+| Saving        | "Saving the rule…" in place of the sentence                                                             | Allow and save rule is disabled and reads "Saving…"; Back is disabled; Deny stays |
+| Couldn't save | On `--danger-soft`: "Couldn't save the rule." and the gateway's reason, then "The command has not run." | "Try again", "Allow once instead", Back, Deny                                     |
 
-**A call a rule denied** never becomes a card. It appears as a failed step, "Blocked by policy", naming the rule. (F-334)
+The card is not marked resolved until the gateway confirms the decision.
 
-**Keyboard.** The card does not take focus when it arrives. "Review" on the composer's shelf, or ⌘J, moves focus to it. Tab order inside: Show full request, Allow once, Always allow…, Deny. With focus anywhere in the card, ⌘↵ is Allow once and Escape closes the form. Deny has no shortcut. Scope and duration are radio groups: arrow keys move, Space chooses.
+**When the run has already ended.** A pending approval does not always keep its run open. The card then carries a line under the summary, in medium weight, that says what the choice now does, from what the gateway reports for the request:
 
-**Phone.** Tapping the card opens the full request. The buttons are full width, stacked, in the same order. (F-172, F-251)
+| The gateway reports                   | The line                                                                                                                         | Buttons                                          |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| The request can still be answered     | "Otto's run has ended. If you allow this, the command runs now, on its own; Otto sees the result only when you next message it." | The usual three                                  |
+| The request can no longer be answered | "Otto's run has ended and this request can no longer be answered. The command was not run."                                      | None. The card folds to "Closed: the run ended". |
 
-## 11. Question cards
+**Resolved**, the card folds to one line, 40 px: a tag, the summary, the time, and a chevron. The sentence under it says what the gateway has reported and no more. Allowing a command is not proof that it ran: whether it ran, and how it ended, is on its step.
+
+| Tag                         | When                                                       | Sentence when opened                                                                                                                                                                                                                                                            |
+| --------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Allowed once (`--accent`)   | The gateway confirmed "allow once"                         | Allowed once. The command can run now. Otto will ask again next time. (F-325)                                                                                                                                                                                                   |
+| Always allowed (`--accent`) | The gateway confirmed the rule was saved                   | Allowed, and saved as a rule. The command can run now. Then the saved rule as the gateway returned it: the bot, the command, the folder, "Until removed", and when it was saved. Then: "To see or remove it, open Settings, then Permissions. That needs admin access." (F-166) |
+| Denied                      | The gateway confirmed the denial                           | Denied. The command was not run. Otto won't do this, and won't ask again until you send another message. (F-165)                                                                                                                                                                |
+| Expired                     | It was not answered in time                                | Expired at 5:53 PM without an answer. The command was not run. (F-168)                                                                                                                                                                                                          |
+| Closed: the run ended       | The run finished and the request can no longer be answered | The run ended before this was answered. The command was not run. (F-418)                                                                                                                                                                                                        |
+| Closed: the run failed      | The run failed first                                       | The run failed before this was answered. The command was not run.                                                                                                                                                                                                               |
+| Cancelled                   | You pressed Stop                                           | You stopped the run before answering. The command was not run.                                                                                                                                                                                                                  |
+
+Opened, a resolved card also shows the full request and "Raw", which then holds the request and the resolving event. When the gateway reports that saving the rule replaced an older one, the sentence adds "It replaced the oldest rule: '…'". (F-416)
+
+**After it expired.** When the expired request offered a rule and the gateway still accepts one for it, the opened card has "Always allow next time". It opens the same form, with "Save rule for next time" as its primary button and no Deny, since there is nothing left to refuse. Saving changes future requests only and never runs the expired command; the sentence then reads "Rule saved for next time. Nothing was run." (F-328)
+
+**The permission order.** The gateway decides; the app never works out a verdict of its own. What the user sees for each case, strongest first, and the first case that applies is the one shown:
+
+| #   | Case                                                               | What the user sees                                                                                                                                   | What it names                                                                                                             |
+| --- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 1   | A denial configured on the gateway                                 | A failed step, "Blocked by policy", status "Not run". No card; nothing to approve.                                                                   | "Decided by: a rule on the gateway", and the gateway's reason when it gives one                                           |
+| 2   | A deny rule for this bot                                           | The same failed step                                                                                                                                 | "Decided by: Otto's rule", and the rule                                                                                   |
+| 3   | An "ask" rule that matches, even though a saved allow also matches | An approval card. Allowing runs this one action.                                                                                                     | In the full request: "Asked because of Otto's rule 'ask before deleting'. It outranks the saved allow.", with "Edit rule" |
+| 4   | A saved allow that is in scope and has not expired or been removed | An ordinary step that runs. No card.                                                                                                                 | Opened, one line in the readable view: "Allowed by a saved rule: Otto, this command, in /srv/media."                      |
+| 5   | The default review, when none of the above applies                 | By its verdict: approved, an ordinary step with the quiet review line; asks, an approval card; denied, a failed step "Blocked by review" (section 8) | The review's risk level and reason                                                                                        |
+
+- With the review switched off and nothing stronger matching, the gateway asks, and the card appears as in case 5.
+- Something the user said earlier in the conversation is not a permission. With a deny or an ask above it, the action is still blocked or still asks.
+- A saved allow that is out of scope, expired or removed is no case at all: the gateway works through the order again, and another saved allow may still apply.
+- A capability the connection lacks is not a denial. That is section 3's card that can be read but not answered.
+
+**Keyboard.**
+
+- The card does not take focus when it arrives. "Review" on the composer's shelf, or ⌘J, moves focus to it; the card is a `region` named "Otto wants to run a command. Needs approval."
+- Tab order: Show full request, Allow once, Always allow…, Deny, Raw. With the form open: Show full request, the form's rows (read as text), Allow and save rule, Back, Deny, Raw.
+- "Always allow…" has `aria-expanded` and opens the form with focus on "Allow and save rule". Escape, or Back, closes the form and returns focus to "Always allow…".
+- ⌘↵ with focus anywhere in the card is Allow once, and with the form open it is Allow and save rule. Inside the card it wins over the window's own ⌘↵; in the composer ⌘↵ still sends. Deny has no shortcut.
+- When the card resolves while focus is inside it, focus moves to the resolved card's line.
+
+**Phone.** The buttons are full width and stacked in the same order, with Deny last. Tapping "Show full request" opens it in place. (F-172, F-251)
+
+## 13. Question cards
+
+Questions appear only on the interactive tier. A bot asks one to three questions at a time. Each has two to four options, may allow several answers, and can always be answered in the user's own words. A bot that wants the user to do something asks it here.
 
 **Pending.** A card with no outline: questions are part of the conversation.
 
-- **Title** (17 px, semibold), and a quiet round Dismiss button at the top right. (F-112)
-- **Options** as rows on one inset with rules between them: a letter in a 24 px tile, the option, and an optional second line in `--text-muted`. Rows are 44 px (52 on touch). (F-112)
-- **"Type your own answer"**: a pill field with a round send button, grey until there is text. (F-303)
-- **Several answers**: "Choose all that apply." under the title; chosen rows fill their letter tile and show a check; "Send answer" (primary) is disabled until one is chosen, with "2 chosen" beside it. (F-114)
+- **A quiet round Dismiss button** at the top right, named "Dismiss Otto's questions". (F-112)
+- **Each question** is a block: its title (17 px, semibold; 15 px when there are several), "Choose all that apply." under it when several answers are allowed, its options, and its own "Type your own answer" field. Blocks are separated by 16 px. With several questions a small count leads each title: "1 of 3".
+- **Options** are rows on one inset with rules between them: a letter in a 24 px tile, the option, and an optional second line in `--text-muted`. Rows are 44 px (52 on touch). (F-112)
+- **"Type your own answer"**: a pill field. Typing in it clears that question's chosen options, and choosing an option clears the field. (F-303)
 
-**Answered**, the card keeps its title, now in 14 px `--text-muted`, and shrinks to the chosen rows: the letter, the answer and a check. The bot does not repeat the question. (F-113)
+**Answering.**
 
-| State                      | Row under the title                                                    |
-| -------------------------- | ---------------------------------------------------------------------- |
-| Answered                   | The letter and the answer, with a check; one row per answer            |
-| Answered in your own words | The text, with a check                                                 |
-| Dismissed                  | "Dismissed". The bot is told and carries on; it may ask again. (F-302) |
-| Closed                     | "Closed: the run ended", "Closed: the run failed" or "Cancelled"       |
+| The card has                  | How it is answered                                                                                                                                                               |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| One question, one answer      | Choosing an option answers at once. A typed answer is sent with Enter or the field's round send button.                                                                          |
+| One question, several answers | Chosen rows fill their letter tile and show a check. "Send answer" (primary) is enabled once something is chosen or typed, with "2 chosen" beside it. (F-114)                    |
+| Two or three questions        | Each is answered in its block. "Send answers" (primary) is at the foot, enabled when every question has an answer, with "2 of 3 answered" beside it. Nothing is sent until then. |
 
-**Keyboard.** One answer: the options are a radio group; Up and Down move, and Enter or the option's letter answers. Several answers: the letter or Space toggles, and ⌘↵ sends. Escape dismisses, when focus is in the card.
+**After.** The card keeps each title, now in 14 px `--text-muted`, and shrinks to what was answered. The bot does not repeat the question. (F-113)
 
-## 12. While a bot waits on you
+| State     | Under each title                                                                                    | What the bot is told                                 |
+| --------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Answered  | The letter and the answer with a check, one row per answer; a typed answer is the text with a check | The answers                                          |
+| Dismissed | "Dismissed"                                                                                         | That there is no answer. The run carries on. (F-302) |
+| Expired   | "Expired without an answer"                                                                         | That there is no answer. The run carries on.         |
+| Cancelled | "Cancelled: you stopped the run"                                                                    | Nothing; the run is over                             |
+| Closed    | "Closed: the run ended" or "Closed: the run failed"                                                 | Nothing                                              |
+
+Pending or resolved, the card ends with "Raw": the question event, and the answer event once there is one.
+
+**A message typed in the composer while a question is pending is not the answer.** It is held and sent into the run once the question is answered or dismissed (section 15).
+
+**Keyboard.**
+
+- The card does not take focus when it arrives; "Review" or ⌘J moves focus to its first option. The card is a `region` named "Otto asks: <the first title>".
+- One answer: the options are a radio group with one tab stop. Up and Down move the focus, Space or Enter chooses the focused option, and pressing an option's letter chooses it directly.
+- Several answers: the options are checkboxes in a group; Up and Down move, Space or the letter toggles, and ⌘↵ sends when "Send answer" is enabled.
+- Tab goes from the options to the own-answer field, to the next question, then to "Send answers", then "Raw". Letters choose options only while focus is in that question's options, never while typing.
+- Escape with focus in the card dismisses it, after "Send answers" or a typed draft would be lost only once: the first Escape clears a typed answer, the next dismisses.
+- When the card resolves, focus moves to the resolved card.
+
+**Phone.** The same card. Options are 52 px rows, the own-answer field is 48 px, and "Send answers" is full width. Long questions wrap; the card scrolls with the transcript.
+
+## 14. While a bot waits on you
 
 Quiet until something needs you; then it says so in five places at once, in the same colour and the same words.
 
-| Place           | What shows                                                                                                                         |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| The card        | The warn outline and the "Needs approval" tag                                                                                      |
-| The status line | "Waiting for you" in `--warn`; the avatar leaning in, with its badge (F-292)                                                       |
-| The composer    | A shelf row on `--warn-soft`: "Otto needs your approval to run a command", with "Review", which scrolls to the card and focuses it |
-| The task row    | The waiting mark                                                                                                                   |
-| The bot row     | The waiting avatar, and "Waiting for you: approve a command" in `--warn` (F-021)                                                   |
+| Place           | What shows                                                                                                                                                             |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The card        | An approval: the warn outline and the "Needs approval" tag. A question: the card itself.                                                                               |
+| The status line | "Waiting for you" in `--warn`; the avatar leaning in, with its badge (F-292)                                                                                           |
+| The composer    | A shelf row on `--warn-soft`: "Otto needs your approval to run a command" or "Otto asked you a question", with "Review", which scrolls to the card and focuses it (⌘J) |
+| The task row    | The waiting mark                                                                                                                                                       |
+| The bot row     | The waiting avatar, and "Waiting for you: approve a command" or "Waiting for you: a question" in `--warn` (F-021)                                                      |
 
-The Jump control reads "Needs you" when the card is out of view (section 16). When you start typing, the shelf row changes to "Sending will close Otto's approval request", because a steer closes open approval cards. (F-169) A question stays open through a steer.
+The Jump control reads "Needs you" when the card is out of view (section 18).
 
-It all clears the moment the last pending card is answered, expires or is dismissed.
+**What typing does.** A message sent while an approval is pending joins the run and leaves the approval pending; the shelf row does not change. A message sent while a question is pending is held, and as soon as there is text the shelf row reads "Otto asked a question. A message sent now is held until you answer."
 
-## 13. The composer during a run
+**Several at once.** Pending cards are kept as a list. The run is waiting while the list is not empty, so answering one of two leaves everything above in place for the other. "Review" and "Needs you" go to the oldest pending card. It all clears the moment the last pending card is answered, expires or is dismissed. (F-302)
 
-The pill from `visual-language.md`, with what a run adds. Send stays; Stop appears beside it. (F-097)
+## 15. The composer during a run
 
-| Run            | Placeholder                    | Controls after the text                                   |
-| -------------- | ------------------------------ | --------------------------------------------------------- |
-| None           | Message Otto                   | Send                                                      |
-| Running        | Steer Otto                     | Stop, Send. With text: a mode word, "Steer", before them. |
-| Waiting on you | Answer above, or message Otto  | The same                                                  |
-| Stopping       | Queue a message for Otto       | "Stopping…", Send                                         |
-| Offline        | Offline. You can keep writing. | Send, disabled. The draft is kept. (F-073)                |
+The pill from `visual-language.md`, with what a run adds. Send stays; Stop appears beside it. On the read tier the access bar stands in its place (section 3). (F-097)
 
-- **Send** is the round `--bg-inverse` button, grey with nothing typed.
-- **Stop** is a round `--bg-bubble` button holding a 10 px square. It turns `--danger-soft` on hover. Its name is "Stop <Bot>". It is there while the run is running or waiting, and gone while it is stopping.
-- **The mode word** says what Enter will do during a run: "Steer" or "Queue". It is a menu button that opens upward: "Steer this turn ↵", "Queue after this turn ⌥↵", "Start as new task ⇧⌘↵". With no run, the same menu (Send, Start as new task) opens from a right-click or a long press on Send. (F-061, F-096, F-282)
+| Run                    | Placeholder                                | Controls after the text                                     |
+| ---------------------- | ------------------------------------------ | ----------------------------------------------------------- |
+| None                   | Message Otto                               | Send                                                        |
+| Running                | Steer Otto                                 | Stop, Send. With text: the mode word, "Steer", before them. |
+| Waiting on an approval | Answer above, or message Otto              | The same                                                    |
+| Waiting on a question  | Answer above, or message Otto              | Stop, Send. With text: the mode word reads "Hold".          |
+| Stopping               | Queue a message for Otto                   | "Stopping…", Send                                           |
+| Offline                | Offline. Messages send when you reconnect. | Send (`visual-language.md`, section 8, with its fallback)   |
 
-**Keys.** Enter sends, or steers during a run. Shift+Enter adds a line. ⌥Enter queues. ⇧⌘Enter starts a new task with the message. ⌘. stops. ⌘I focuses the composer. (F-072)
+- **Send** is the round `--bg-inverse` button, grey when it cannot send. Its name says what it will do: "Send", "Steer this turn", "Queue after this turn", "Hold until you answer".
+- **Stop** is a round `--bg-bubble` button holding a 10 px square. It turns `--danger-soft` on hover. Its name is "Stop Otto". It is there while the run is running or waiting, and gone while it is stopping.
+- **The mode word** says what plain Enter will do during a run: "Steer", "Queue" or "Hold". It is a menu button named "How to send: Steer" that opens upward.
+
+**One send operation.** Enter, the Send button, the menu, "Send now" on a queued row and anything added later all go through it. Its guard is the one in `visual-language.md`, section 8: a task is open, the connection may write, and there is text or an attachment within the limits. Then:
+
+| When                                             | Plain Enter or Send                                                                                   | Where the message is shown                                     |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| No run                                           | Starts a run                                                                                          | Your bubble                                                    |
+| A run is running, or waiting on an approval only | Steer: the message joins the run. Pending approvals stay pending.                                     | Your bubble, captioned "Steer" once the gateway accepts it     |
+| A question is pending                            | Hold: the message is kept and sent into the run as a steer when the question is answered or dismissed | A shelf row, "Held until you answer", with "Edit" and "Cancel" |
+| The mode is Queue                                | Queue: the message starts the next run when this one ends                                             | A shelf row, "Queued", with "Send now" and "Cancel"            |
+| The run is stopping                              | Queue, whatever the mode                                                                              | The same shelf row, without "Send now"                         |
+| Offline                                          | The host holds it and sends it once on reconnect                                                      | Your bubble in the neutral fill, "Sends when reconnected"      |
+
+| Other ways to send     | Keys | Does                                                                                                                                                                                                                          |
+| ---------------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Queue after this turn  | ⌥↵   | Queues this one message. It does not change the mode, so the mode word still shows what plain Enter does.                                                                                                                     |
+| Start as new task      | ⇧⌘↵  | Creates a task under the same bot and runs the message there. This task's draft clears, the new task appears in the rail with the working mark, and the announcer says "Started as a new task". This task stays open. (F-282) |
+| Choosing from the menu |      | "Steer this turn" or "Queue after this turn" sets the mode for the rest of this run; it returns to Steer when the run ends. "Start as new task" sends at once.                                                                |
+
+**The menu.** During a run it opens from the mode word. With no run it opens from Send: by right-click, by touch and hold, and from the keyboard with Shift+F10 or the Menu key while Send has focus. Items: "Steer this turn ↵" (or "Hold until you answer ↵"), "Queue after this turn ⌥↵", "Start as new task ⇧⌘↵"; with no run, "Send ↵" and "Start as new task ⇧⌘↵". It is a `menu`; the current mode is a checked `menuitemradio`. It opens with focus on the checked item, Up and Down move, Enter chooses, and Escape closes it and returns focus to what opened it. (F-061, F-096)
+
+**Keys.** Enter sends as the mode word says. Shift+Enter adds a line. ⌥Enter queues. ⇧⌘Enter starts a new task. ⌘. stops. ⌘J goes to what needs you. ⌘I focuses the composer. ⌘Enter sends from anywhere in the window except inside a pending card, where it answers the card (section 12). (F-072)
 
 **The shelf** is a stack of rows above the pill, each 40 px on `--bg-bubble`, newest at the bottom. A row rises 4 px over 200 ms.
 
-| Row                                  | Content                                                                                                       | Actions                                                                    |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Queued message                       | The queued mark, "Queued" and the text                                                                        | "Send now" (steers; absent while stopping), "Cancel" (F-280, F-281, F-421) |
-| A queued message the gateway refused | On `--danger-soft`: "Couldn't start", the reason, the text                                                    | "Delete"                                                                   |
-| Needs you                            | Section 12                                                                                                    | "Review"                                                                   |
-| Notice                               | On `--danger-soft`: a title and a reason, such as "Otto failed to respond. The model provider is overloaded." | "Try again", Dismiss; "Clear all" when there are several (F-103, F-300)    |
+| Row                                           | Content                                                                                                       | Actions                                                                                                                       |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Queued message                                | The hollow ring, "Queued" and the text                                                                        | "Send now" (steers it into the current run through the same operation; absent while stopping), "Cancel" (F-280, F-281, F-421) |
+| Held message                                  | The hollow ring, "Held until you answer" and the text                                                         | "Edit" (puts the text back in the field and removes the row), "Cancel"                                                        |
+| A queued message the gateway refused to start | On `--danger-soft`: "Couldn't start", the reason, the text                                                    | "Try again", "Delete". The message is never removed silently.                                                                 |
+| Needs you                                     | Section 14                                                                                                    | "Review"                                                                                                                      |
+| Notice                                        | On `--danger-soft`: a title and a reason, such as "Otto failed to respond. The model provider is overloaded." | "Try again", Dismiss; "Clear all" when there are several (F-103, F-300)                                                       |
 
-Queued messages wait on the shelf, not in the transcript, because they have not been sent. Each becomes a bubble when it starts.
+Queued messages start in the order they were queued, one run each, after a run that completed, stopped or failed. Held messages are sent in order. Neither is in the transcript until it is sent, because it has not been.
 
-**Phone.** One row: attach, the text, Stop, Send, each 40 px. There is no mode word; touch and hold on Send opens a sheet with the three ways to send.
+**Attachments** are chips inside the pill, above the text: a file icon, the name, the size, and a remove button named "Remove <name>". The gateway's limits are checked as files are added, so a refusal is seen before anything is sent:
 
-## 14. Stop
+| Limit                     | A chip over it                                                        | Under the chips                                                          |
+| ------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| 6 MiB for an image        | On `--danger-soft`: the name, and "8.2 MB. Images can be up to 6 MB." |                                                                          |
+| 20 MiB for any other file | The same, "Files can be up to 20 MB."                                 |                                                                          |
+| 25 MiB for the message    | Chips stay as they are                                                | "27.4 MB attached. A message can carry up to 25 MB.", on `--danger-soft` |
 
-1. Pressing Stop, or ⌘., moves the run to stopping. The phrase reads "Stopping…", Stop leaves the composer, pending cards close as "Cancelled", and a message sent now is queued. (F-097, F-421)
-2. When the gateway confirms, the status line leaves and a note takes its place.
+While any refusal shows, Send is disabled and its tooltip and description give the reason. Removing a file clears it.
+
+**Phone.** One row: attach, the text, the mode word when there is text, Stop, Send, each with a 44 px hit area. The mode word keeps its place and its menu opens as a sheet from the foot of the screen; touch and hold on Send opens the same sheet. The sheet is a `menu` with the same items, 52 px rows; tapping outside it or Escape closes it and returns focus to Send.
+
+## 16. Stop
+
+1. Pressing Stop, or ⌘., asks the gateway to stop the run and moves it to stopping. The phrase reads "Stopping…", Stop leaves the composer, and a message sent now is queued. (F-097, F-421)
+2. When the gateway confirms, pending approvals and questions close as "Cancelled", the status line leaves and a note takes its place.
 
 The note is 13 px `--text-muted`, led by the stopped mark:
 
 > **Stopped after 40s.** Completed steps are not undone.
 >
-> - Stopped with it: Marlow's run for this message, and one command on media-box.
-> - Work already sent to T3 Code continues there.
+> - Stopped with it: Marlow's run for this message.
+> - The call to T3 Code was made. Work handed to T3 Code may continue there.
 
-It lists every helper run, bot run and process that was stopped, and names what continues. Completed steps, cards and text stay where they are. (F-098, F-137, F-296, F-297, F-298, F-299)
+It lists every helper run, bot run and process the gateway reports as stopped, and names what may continue. It claims nothing the gateway did not report: a call that had started and not returned is listed as "The message to Marlow may or may not have been delivered." Completed steps, cards and text stay where they are. (F-098, F-137, F-296, F-297, F-298, F-299)
 
-If the run finished before the stop took effect, the note reads "**Finished before Stop took effect.** The turn completed normally." (F-419)
+| What happens                                 | What shows                                                                                                                                                                                                       |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The gateway confirms the stop                | The note above                                                                                                                                                                                                   |
+| The stop request fails                       | The run returns to running: Stop comes back, the status line shows the run's real state again, pending cards stay pending, and a notice on the shelf reads "Couldn't stop Otto." with the reason and "Try again" |
+| The run finished before the stop took effect | "**Finished before Stop took effect.** The turn completed normally." (F-419)                                                                                                                                     |
+| The run was stopped from somewhere else      | It goes straight to stopped, without "Stopping…": "**Stopped after 40s**, from another device or session." and the same list                                                                                     |
 
-## 15. Turn errors and notes
+## 17. Turn errors and notes
 
 **A failed turn** ends with a card on `--danger-soft`: a triangle, a semibold title ("Otto couldn't finish this turn"), the reason in one or two sentences, and actions: "Try again", "Copy request ID", "Raw", and a round Dismiss. It is `role="alert"`. (F-102, F-301)
 
 - "Try again" sends the same message as a new run.
+- "Copy request ID" copies the id and reports it as any copy does (section 9). "Raw" is the error event as received. Dismiss, named "Dismiss this error", folds the card to an event line, "Otto couldn't finish this turn", which opens it again.
 - The reason says what is known and what was not undone: "The model provider is overloaded. Nothing ran after step 4, and steps already completed are not undone."
 - A rate limit retries by itself first, and the status line says so. The card appears only when the retries are used up.
 - Reply text that had begun stays, captioned "Incomplete".
+- Pending cards close as "Closed: the run failed". Queued messages stay queued and start in order.
 
-**Notes** use the Stop note's form.
+**Time limits.** The gateway says which limit was hit, and the words follow it.
 
-| Note       | Text                                                                                                               |
-| ---------- | ------------------------------------------------------------------------------------------------------------------ |
-| Turn limit | **Stopped at the 50 minute turn limit** so it would not hang. Send a message to pick up where it left off. (F-100) |
-| Timeouts   | **Stopped after 3 tool calls in a row timed out.** media-box may not be responding. (F-101)                        |
+| Limit                                  | What shows                                                                                                                                                                                                                                                                 |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A command's own limit                  | A failed step, "mv timed out", "its 120s limit" (section 8). The run goes on.                                                                                                                                                                                              |
+| The run's limit                        | The run ends as failed. The step that was running reads "mv was cut off", "Aborted". The card's title is "Otto's turn reached its 50 minute limit", and its reason "The gateway ended the turn so it would not hang. Send a message to pick up where it left off." (F-100) |
+| Several tool calls in a row timing out | A note in the Stop note's form: "**Stopped after 3 tool calls in a row timed out.** media-box may not be responding." (F-101)                                                                                                                                              |
 
-## 16. Jump to latest
+## 18. Following and Jump to latest
 
-This is the shell's `.jump-latest` control (see `visual-language.md`), with the states a run needs. New output is followed only when the reader is within 96 px of the end. Otherwise the reader's place holds, and the control appears, centred 10 px above the foot of the transcript: a pill on `--bg-raised` with `--shadow-pop`, 36 px (40 on touch), at most 380 px wide. It rises 6 px and fades in over 200 ms.
+**Following.** The reader is following when the end of the transcript is within 96 px of the foot of the view. That is decided before each change, and then:
 
-| State              | Content                                                                                  |
-| ------------------ | ---------------------------------------------------------------------------------------- |
-| New output, no run | "Jump to latest", or "3 new", and a down arrow                                           |
-| A run is active    | The bot's avatar at 20 px with its state, the current phrase, and a down arrow           |
-| A card is pending  | The waiting mark, "Needs you" in `--warn`, and an arrow pointing to the card, up or down |
+- a reader who was following stays at the end, whatever changed: new output, a card arriving or resolving, the shelf or the composer growing or shrinking, the standing-allow form opening, the Work pane docking;
+- a reader who was not following keeps their place: the first message in view stays where it is while things change above or below it.
 
-Choosing it scrolls to the end, or to the pending card and focuses it, and the control leaves. It also leaves when the reader scrolls back to the end.
+So when an approval arrives and the shelf row appears, the status line is still the last thing in view, at any width. A reader who has opened a step and is reading it is not following, and is not moved to keep the status line in view.
 
-The same rule holds when things change above the reader: a block folding at the end of a run, a card resolving, older messages loading, the Work pane docking. The message at the top of the view stays where it is.
+**Jump to latest** is the shell's `.jump-latest` control (see `visual-language.md`), with the states a run needs. It shows only while the reader is not following and its destination is out of view: centred 10 px above the foot of the transcript, a pill on `--bg-raised` with `--shadow-pop`, 36 px (44 on touch), at most 380 px wide. It rises 6 px and fades in over 200 ms.
 
-## 17. After a reconnect
+| State              | Content                                                                           | Destination                                                                                              |
+| ------------------ | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| A card is pending  | The waiting mark, "Needs you" in `--warn`, and an arrow                           | The oldest pending card. The arrow points up when that card is above the view and down when it is below. |
+| A run is active    | The bot's avatar at 20 px in its real state, the current phrase, and a down arrow | The end                                                                                                  |
+| New output, no run | "Jump to latest", or "3 new", and a down arrow                                    | The end                                                                                                  |
 
-The status strip reports the connection from the protected band under the title pill (`visual-language.md`, sections 8 and 11), so it never sits over message text and nothing reflows when it comes and goes. One state drives the strip, the rail's footer, the status line and the composer. For a conversation that was mid-run:
+A pending card comes first, then a live run, then new output. Choosing the control scrolls to its destination; for a card it also moves focus to the card. The control leaves when its destination comes into view.
 
-| Moment                | Strip                                                                                  | Status line                                                                                                                                   | Composer                                        |
-| --------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| The connection drops  | **Reconnecting** · showing saved messages, with "Retry now"                            | Stays, and stops moving: the avatar is blocked, the phrase reads "Reconnecting. Last seen reading the backup log", the elapsed time is hidden | "Offline. You can keep writing."; send disabled |
-| Reconnected, fetching | **Connected** · catching up                                                            | Unchanged                                                                                                                                     | Unchanged                                       |
-| Caught up             | **Synced** · 3 new in this task, for 4 seconds; "Synced" alone when nothing was missed | Shows the run's real state again                                                                                                              | Back to the run's state                         |
-| The fetch failed      | **Couldn't sync this task**, with "Try again"                                          | Unchanged                                                                                                                                     | Unchanged                                       |
+## 19. After a reconnect
 
-- The app does not animate what it cannot see: while disconnected no ring orbits and no phrase shimmers.
+The status strip reports the connection from inside the conversation, in the band under the title pill (`visual-language.md`, sections 8 and 11). One state drives the strip, the rail's footer, the status line and the composer. For a conversation that was mid-run:
+
+| Moment                | Strip                                                                          | Status line                                                                                                                                   | Composer                |
+| --------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| The connection drops  | **Reconnecting in 4s** · showing saved messages, with "Retry now"              | Stays, and stops moving: the avatar is blocked, the phrase reads "Reconnecting. Last seen reading the backup log", the elapsed time is hidden | The offline form        |
+| Reconnected, fetching | **Connected** · catching up                                                    | Unchanged                                                                                                                                     | Unchanged               |
+| Caught up             | **Synced**, for 4 seconds, with "· 3 new in this task" when the count is known | Shows the run's real state again                                                                                                              | Back to the run's state |
+| The fetch failed      | **Couldn't sync this task**, with "Try again"                                  | Unchanged                                                                                                                                     | Unchanged               |
+
+**A lost connection never looks like live work.** One flag for the whole window, not one per component, turns off everything that stands for work on the gateway, and marks what is left as last seen:
+
+| Where                                                                                                 | While the connection is lost                                                                                        |
+| ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Every state avatar: the status line, the rail, pinned tiles, a card's recipient row, the Jump control | No ring orbits and no body bobs, sways or leans. The avatar keeps its last face. The open task's bot shows blocked. |
+| Every working or waiting mark: task rows, steps, cards' state words                                   | Still. The arc holds one position; the waiting dot has no ping.                                                     |
+| The status phrase                                                                                     | No shimmer. "Reconnecting. Last seen …"                                                                             |
+| A running step                                                                                        | Status "Last seen running"                                                                                          |
+| A Messaged or T3 Code card that was Sending, Call started or Working                                  | The state word keeps its last value with "last seen" before it: "Last seen working"                                 |
+| The activity line                                                                                     | "Last seen working · 3 steps"                                                                                       |
+| A bot's row in the rail                                                                               | Its last preview, led by "Last seen:"                                                                               |
+| The streaming caret                                                                                   | Still                                                                                                               |
+
+The strip's own dot, and the footer's, may pulse: that motion is the connection attempt, which the app does know about.
+
 - What was missed is fetched again and merged in place, without enter animations. No message, step or card appears twice: each is matched by its identifiers and updates the one already on screen. (F-107, F-442)
-- Nothing unmounts and nothing the reader had opened folds: an open block, an open step with its chosen view, and an open card all survive. (F-104)
+- Nothing unmounts and nothing the reader had opened folds: an open block, an open step with its chosen view, an open card with its Raw panel all survive. (F-104)
 - The reader's place holds. New items below the fold bring up Jump to latest.
 - If the fetch fails, what was on screen stays. (F-105)
 
 In the prototype, "Drop the connection" in the bar shows all of this during the scripted run.
 
-## 18. Rows in the rail
+## 20. Rows in the rail
 
 The rail's arrangement, the folded-bot rule and the task rows are defined in `visual-language.md`, section 7. This section adds the states a run brings.
 
-**A bot row** speaks for all of the bot's tasks through three independent signals, so work in one task never hides news in another:
+**A bot row** speaks for all of the bot's tasks. One table decides every part of it, so the parts cannot disagree:
 
-| Signal                | Shows                                     | Comes from                                                                                                                       |
-| --------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| The avatar's state    | The face, ring and badge of section 3     | The most urgent state among the bot's tasks: waiting for you, failed or blocked, done with failures, working, done, idle (F-426) |
-| Line two and the time | What the bot last said or is doing now    | The latest activity in any task                                                                                                  |
-| The unread dot        | An 8 px accent dot at the end of line two | Any unread task other than the one on screen (F-022)                                                                             |
+| Part                | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The avatar's state  | The most urgent state among the bot's tasks, in the order of section 4: waiting for you; failed or blocked; done with failures; working; thinking; done; stopped; idle. (F-426)                                                                                                                                                                                                                                                                                                                            |
+| The failure badge   | Shown with failed, and with done with failures (on the done face)                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Line two            | If any task is waiting for you: "Waiting for you: approve a command", or "…: a question", in `--warn`, whatever happened since in other tasks. Otherwise, by the avatar's state: failed, "Couldn't finish: provider overloaded" in `--danger`; blocked, "Can't reach media-box" in `--warn`; done with failures, "Finished with 1 failed step" in `--danger`; working, the working task's current phrase; thinking, "Thinking". For done, stopped and idle: the latest message in any task. (F-021, F-295) |
+| The time            | "now" while a run is active; since it began waiting, for waiting; otherwise the time of the latest activity                                                                                                                                                                                                                                                                                                                                                                                                |
+| The unread dot      | An 8 px accent dot at the end of line two when any task other than the one on screen is unread. Independent of everything above. (F-022)                                                                                                                                                                                                                                                                                                                                                                   |
+| The accessible name | "<Bot>, <N> tasks, <state>", with ", unread" when the dot shows                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 With the state avatar, the run-state mark that the plain shell puts at the start of line two moves onto the avatar: the ring for working, the badge for waiting, blocked and failed.
 
-| Bot's state        | Avatar                      | Line two                                                                     | Time                   |
-| ------------------ | --------------------------- | ---------------------------------------------------------------------------- | ---------------------- |
-| working            | working, with the ring      | The current phrase, `--text-muted`                                           | now                    |
-| thinking           | thinking                    | Thinking                                                                     | now                    |
-| waiting for you    | waiting, with its badge     | "Waiting for you: approve a command" or "…: a question", in `--warn` (F-021) | since it began waiting |
-| blocked            | blocked, with its badge     | "Can't reach media-box", in `--warn`                                         |                        |
-| failed             | failed, with its badge      | "Couldn't finish: provider overloaded", in `--danger`                        |                        |
-| done with failures | done, with the failed badge | "Finished with 1 failed step", in `--danger`, and the unread dot (F-295)     |                        |
-| done, unread       | done                        | The latest message, and the unread dot                                       |                        |
-| idle               | idle                        | The latest message                                                           |                        |
+Fixtures for the order:
 
-A bot working in one task while another task is unread shows the working avatar, the working task's phrase and the unread dot together. The row's accessible name is "<Bot>, <state>", with ", unread" when it applies. (F-020) A pinned tile shows the same avatar state, with the unread dot beside the name.
+| The bot's tasks                                                       | The row shows                                                                           |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| One waiting, one working                                              | Waiting, and "Waiting for you: …"                                                       |
+| One done with failures, one working                                   | Done with failures, its failed badge, "Finished with 1 failed step", and the unread dot |
+| The same, after the done-with-failures task is opened                 | Working, the working task's phrase                                                      |
+| One waiting since ten minutes ago, another that finished a minute ago | Waiting, "Waiting for you: …", and the unread dot for the finished task                 |
+| One working, one unread                                               | Working, the working task's phrase, and the unread dot                                  |
+| One stopped, one idle                                                 | Stopped, with its badge, and the latest message                                         |
 
-**A task row** is its title and at most one mark at the right. (F-057)
+A pinned tile shows the same avatar state, with the unread dot beside the name.
+
+**A task row** is its title, the time of its last activity, and at most one mark at the right. (F-057, F-425)
 
 | Task               | Mark       | Title          | Accessible name ends   |
 | ------------------ | ---------- | -------------- | ---------------------- |
@@ -564,63 +912,92 @@ A bot working in one task while another task is unread shows the working avatar,
 | failed             | failed     |                | ", last run failed"    |
 | done with failures | failed     |                | ", done with failures" |
 | done, unread       | unread dot | `--text`       | ", unread"             |
+| stopped            | stopped    |                | ", stopped"            |
 | queued             | queued     |                | ", queued"             |
 | idle               | none       | `--text-muted` |                        |
 
-A task's state is always a mark and never a word, because warn-coloured text is not allowed on the selected task's fill (`visual-language.md`, section 13). Opening a task clears done, done with failures and their marks. (F-022, F-295)
+The time is 12 px, `--text-faint`, tabular, in the rail's short form ("now", "5:36 PM", "Mon"), between the title and the mark. It is part of the row's accessible name. A task's state is always a mark and never a word, because warn-coloured text is not allowed on the selected task's fill (`visual-language.md`, section 13). Opening a task clears done, done with failures, stopped and their marks. (F-022, F-295)
 
 **The phone** uses the same rows at touch sizes: 44 px avatars, 44 px task rows.
 
-## 19. What the gateway's events drive
+## 21. What the gateway's events drive
 
-Names are from `docs/research/gateway-capabilities.md`. The connection must advertise `tool-events`, `approvals` and `exec-approvals`.
+Names are from `docs/research/gateway-capabilities.md`. Each capability gates its own feature and never the whole conversation: a connection without one still shows everything else.
 
-| Shown                        | Driven by                                                                                                                                                               |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A run starts                 | `chat.send` returning a run id; `agent` stream `lifecycle`, phase `start`                                                                                               |
-| Status phases, retries       | `chat` state `status`, with `phase` and `retry`                                                                                                                         |
-| Reasoning steps              | `agent` stream `thinking`. Absent when the model reports none or visibility is off.                                                                                     |
-| A step starts, updates, ends | `agent` streams `item` and `tool`, phases start, update, result                                                                                                         |
-| Output as it arrives         | `agent` stream `tool` phase `update`; stream `command_output`                                                                                                           |
-| A failed step                | A tool result with `isError`                                                                                                                                            |
-| Reply text                   | `chat` state `delta`, then `final`                                                                                                                                      |
-| A card is pending            | `exec.approval.requested`, `plugin.approval.requested`; lifecycle phase `waiting-approval`                                                                              |
-| A card is answered           | `exec.approval.resolved`; lifecycle phase `approval-resolved`                                                                                                           |
-| Messaged card                | A tool event named `sessions_send`: the target from its arguments, the reply and the recipient's run id from its result; the recipient's run from that run's own events |
-| Messaged T3 Code card        | A tool event whose name starts with the configured server's prefix, or whose result names that server                                                                   |
-| The run ends                 | `chat` state `final`, `aborted` or `error`; lifecycle phase `end` or `error`                                                                                            |
-| A gap                        | A jump in the event sequence, or a reconnect: reload the history                                                                                                        |
+| Shown                        | Driven by                                                                                                                                                               | Needs                                   |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| A run starts                 | `chat.send` returning a run id; `agent` stream `lifecycle`, phase `start`                                                                                               | Read to see it; interactive to send     |
+| Status phases, retries       | `chat` state `status`, with `phase` and `retry`                                                                                                                         | Read                                    |
+| Reasoning steps              | `agent` stream `thinking`, as segments in order among the tool calls. Absent when the model reports none or visibility is off.                                          | Read                                    |
+| A step starts, updates, ends | `agent` streams `item` and `tool`, phases start, update, result                                                                                                         | Read, with `tool-events`                |
+| Output as it arrives         | `agent` stream `tool` phase `update`; stream `command_output`                                                                                                           | Read                                    |
+| A failed step                | A tool result with `isError`; a time limit from the result's structured timeout                                                                                         | Read                                    |
+| The automatic review         | The review record on the command's step                                                                                                                                 | Read                                    |
+| Reply text                   | `chat` state `delta`, then `final`                                                                                                                                      | Read                                    |
+| A card is pending            | `exec.approval.requested`, `plugin.approval.requested`; the question request                                                                                            | Interactive. Not sent on the read tier. |
+| A card is answered           | `exec.approval.resolved`; lifecycle phase `approval-resolved`; the question's answer                                                                                    | Interactive                             |
+| Messaged card                | A tool event named `sessions_send`: the target from its arguments, the reply and the recipient's run id from its result; the recipient's run from that run's own events | Read                                    |
+| Messaged T3 Code card        | A tool event whose name starts with the configured server's prefix, or whose result names that server                                                                   | Read                                    |
+| The run ends                 | `chat` state `final`, `aborted` or `error`; lifecycle phase `end` or `error`                                                                                            | Read                                    |
+| A gap                        | A jump in the event sequence, or a reconnect: reload the history                                                                                                        | Read                                    |
 
 Three things depend on the gateway more than the rest:
 
-- **Questions.** The capability map lists the question methods and their scope but not their events. Where a gateway gives the client no question event, the bot's question arrives as an ordinary message and is answered in the composer.
-- **Expiry of a standing allow.** The map shows grants expiring in whole days. "1 hour" needs a finer expiry from the gateway or a plugin; until then the Lasts row offers only what the gateway can keep.
-- **The recipient's state on a Messaged card.** Working and Recipient waiting need the recipient's run to be identifiable before the send returns. Where it is not, the card goes from Sending to Replied.
+- **What "started" proves.** A tool's start event shows the call started and nothing about delivery. That is why both Messaged cards have Call started between Sending and their first confirmed state.
+- **The recipient's state on a Messaged card.** Working and Recipient waiting need the send's result to name the recipient's run. Where it does not, the card goes from Sent to Replied or No reply yet.
+- **Rules.** A rule saved from an approval is for one bot, one exact command and one folder, with no duration. Listing or removing rules needs the admin tier.
 
-## 20. Where this goes beyond the proposals
+## 22. Where this goes beyond the proposals, and the parity rows to reword
 
 The proposals say what must be true. These are the places where this design adds a state, a rule or a control they do not have, or reads one differently.
 
-| What                                          | In the proposals                                                                       | Here                                                                                                                                                                                                                            |
-| --------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Avatar states                                 | Six: idle, thinking, working, waiting, blocked, done                                   | Eight: failed and stopped are added. Failed shares blocked's place in the priority order and its slumped face, with its own badge. Stopped is the idle face with a square badge until the next run or until the task is opened. |
-| Avatars with a picture                        | Not addressed                                                                          | The ring and the badge carry the state, since there is no face to move.                                                                                                                                                         |
-| An approval as a step                         | Every approval is a step                                                               | An approval for a tool call is that step's waiting status; only an approval with no tool call is a step of its own. A command that needed approval is counted once.                                                             |
-| The activity block when a run ends            | Its open or folded state is kept while steps arrive, across scrolling and across tasks | The same, and in addition an open block folds when the run ends unless a step in it is open or focus is inside it.                                                                                                              |
-| Status phrases                                | "Thinking", the running step's summary, "Waiting for you", "Stopping…"                 | The same, plus phrases for the gateway's own status phases, retries, an unreachable machine and a lost connection (section 4).                                                                                                  |
-| Elapsed time                                  | Not addressed                                                                          | Shown on the status line, counting from the send.                                                                                                                                                                               |
-| Where the Send menu lives                     | On the Send button                                                                     | During a run, on a mode word beside Send ("Steer" or "Queue"); with no run, on a right-click or long press of Send.                                                                                                             |
-| Queued messages                               | A "Queued" chip on the message                                                         | A row on a shelf above the composer, with "Send now" and "Cancel"; the message enters the transcript when it starts.                                                                                                            |
-| A steer that the gateway turns into a restart | Not addressed                                                                          | The caption reads "Steer · restarted the turn".                                                                                                                                                                                 |
-| Jump to latest                                | Not addressed                                                                          | Three states: new output, a live run, a pending card (section 16).                                                                                                                                                              |
-| A reconnect during a run                      | The strip and the refetch                                                              | Also: the status line stops moving and says what it last saw (section 17).                                                                                                                                                      |
-| A standing allow's duration                   | 1 hour, 1 day, until revoked                                                           | The same three, with the note that the gateway's grants are in whole days today (section 19).                                                                                                                                   |
+| What                                          | In the proposals                                                                       | Here                                                                                                                                                  |
+| --------------------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Avatar states                                 | Six: idle, thinking, working, waiting, blocked, done                                   | Eight: failed and stopped are added, each with its place in the one priority order (section 4).                                                       |
+| Avatars with a picture                        | Not addressed                                                                          | The ring and the badge carry the state, since there is no face to move.                                                                               |
+| An approval as a step                         | Every approval is a step                                                               | An approval for a tool call is that step's waiting status, and its events stay in the step's Raw; an approval with no tool call is a step of its own. |
+| The activity block when a run ends            | Its open or folded state is kept while steps arrive, across scrolling and across tasks | The same, and an open block folds once when the run ends unless a step in it is open or focus is inside it. A block reopened afterwards persists.     |
+| Status phrases                                | "Thinking", the running step's summary, "Waiting for you", "Stopping…"                 | The same, plus phrases for the gateway's status phases, the review, retries, an unreachable machine and a lost connection (section 5).                |
+| Elapsed time                                  | Not addressed                                                                          | Shown on the status line, from the run's reported start.                                                                                              |
+| Where the Send menu lives                     | On the Send button                                                                     | During a run, on a mode word beside Send, on the desktop and on the phone; with no run, on Send.                                                      |
+| Queued messages                               | A "Queued" chip on the message                                                         | A row on a shelf above the composer, with "Send now" and "Cancel".                                                                                    |
+| A steer that the gateway turns into a restart | Not addressed                                                                          | The caption reads "Steer · restarted the turn", only when the gateway reports it.                                                                     |
+| Jump to latest                                | Not addressed                                                                          | Three states with one priority (section 18).                                                                                                          |
+| A reconnect during a run                      | The strip and the refetch                                                              | Also: everything that stood for live work stops and is marked last seen (section 19).                                                                 |
+| Tiers                                         | Not addressed                                                                          | The read tier has an access bar in the composer's place and no approvals or questions (section 3).                                                    |
+| Call started                                  | Sending, then Sent                                                                     | A state between them on both Messaged cards, because a start event does not prove delivery.                                                           |
 
-Every run state in section 5.6, every Messaged and T3 Code card state in sections 6.1 and 6.2, the receiving side's six states and the permission order in section 8.8 are shown as written. None is dropped.
+**Parity rows to reword.** Only the Clawtrate column changes; the description of Grok Bot stays. Rows not listed here are met as written, including F-054, F-425 (task rows show the last-activity time) and F-427 (the iPhone app keeps its own route; `visual-language.md`, section 12).
 
-## 21. Not covered here
+| Row   | New wording for the Clawtrate column                                                                                                                                                                                                                                                                                                          | Why                                                                            |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| F-021 | better: while a bot waits for an answer, its avatar shows the waiting state and badge, and its preview starts "Waiting for you" in Clawtrate's own warning colour; the state clears as soon as nothing is pending.                                                                                                                            | Appearance only; the function is kept.                                         |
+| F-057 | better: each task shows its own status (working, waiting for you, blocked, failed, done, done with failures, stopped, queued, idle) as a shape mark with the status in its accessible name, in the sidebar (desktop, iPad) or the task list (iPhone) (FC-06, §4.1).                                                                           | A mark and a name in place of a word.                                          |
+| F-061 | better: the Send menu's "Queue after this turn" adds the message as a "Queued" row on the shelf above the composer, and it runs when the current run ends (§5.6).                                                                                                                                                                             | The chip becomes a shelf row.                                                  |
+| F-064 | better: the user's messages are right-aligned rounded bubbles filled with Clawtrate's own accent, derived from its logo; Appearance can switch this to neutral.                                                                                                                                                                               | The binding identity decision.                                                 |
+| F-072 | same; note: inside a pending approval or question card, Cmd/Ctrl+Enter answers that card and does not send.                                                                                                                                                                                                                                   | Shortcut precedence.                                                           |
+| F-086 | better: as written, with two more states, failed and stopped, each with a badge; the priority order is waiting for you, failed or blocked, done with failures, working, thinking, done, stopped, idle.                                                                                                                                        | Two added states.                                                              |
+| F-090 | better: as written, where a step is a tool call, an exposed reasoning segment, a Bot-to-Bot message, a handoff, or an approval that belongs to no tool call.                                                                                                                                                                                  | One step per action.                                                           |
+| F-091 | better: clicking or tapping the activity block expands it into step cards, one per tool call, exposed reasoning segment, Bot-to-Bot message, handoff and standalone approval; an approval for a tool call is that step's waiting status and its events stay in the step's raw view; new cards append live while it is expanded (FC-05).       | One step per action.                                                           |
+| F-134 | better: the Messaged T3 Code card's state is Sending, Call started or Delivery unknown (non-terminal), or Call made, Failed or Not sent (terminal), derived only from the Bot's tool events; Call made means the call returned, not that the work finished (§6.2).                                                                            | A start event does not prove delivery, and a result does not prove completion. |
+| F-137 | better: stopping the Bot stops only its gateway run; the card keeps its state and adds "The call was made. Work handed to T3 Code may continue there." (§6.2)                                                                                                                                                                                 | The app cannot know that it continues.                                         |
+| F-163 | better: an approval card has a title naming the Bot ("&lt;Bot&gt; wants to run a command"), a "Needs approval" tag in Clawtrate's warning colour, a one-sentence summary, "Show full request", and "Allow once" (primary), "Always allow…", which opens a form showing what is saved, and "Deny", which stays visible in every pending state. | Own wording; Deny always visible.                                              |
+| F-167 | better: "Always allow" on a conversation approval shows exactly what the gateway saves (the Bot, the exact command, its directory, until removed) and offers nothing wider; where a gateway offers a scope or a duration, the form lists exactly those (FC-09).                                                                               | The gateway saves one bot, one command, one directory, no duration.            |
+| F-169 | better: sending a new message joins the run and leaves pending approval cards open; pressing Stop closes them as "Cancelled".                                                                                                                                                                                                                 | The gateway keeps approvals pending through a steer.                           |
+| F-313 | better: a later tool event updates the card only when identifiers carried in the gateway's tool events name it; without one, the card stays at Call made (§6.2).                                                                                                                                                                              | Follows F-134.                                                                 |
+| F-429 | better: an expanded activity block stays expanded after scrolling away and back, and after switching to another task and returning; when the run ends it folds once, unless a step in it is open or focus is inside it, and a block reopened after that stays open (§5.6).                                                                    | The terminal fold.                                                             |
+| F-430 | better: a collapsed step card shows a kind icon, a summary, a detail and a status; in a narrow column the detail moves to a second line; on desktop, hovering a truncated summary shows it in full (§5.6).                                                                                                                                    | The narrow row keeps its detail.                                               |
+| F-470 | better: stop-before-result fixture, parameterized: when the gateway confirms the call was not made, the card ends as "Not sent"; when the gateway cannot say, the card reads "Delivery unknown" and stays so with no further event; a later correlated result then moves it to Call made or Failed (§6.2).                                    | Follows F-134.                                                                 |
 
-- Group chats, and approval cards inside them (F-080, F-179, F-289, F-290).
-- Secure Form, Computer, draft, file and link cards. They use the card frame here: `--bg-bubble`, radius 18, a 17 px title, a tag at the top right, buttons along the foot.
-- The Permissions page, where a standing allow is revoked (F-178, F-324).
-- The Work pane's Coding section, beyond the card form its rows use (F-136).
+Not every case in the teardown's sections 5.6 and 8.8 has a specimen here. Section 23 lists what is left to other components.
+
+## 23. Not covered here
+
+- Secure Form and Computer cards, and with them the order between the vault, a password manager and a Secure Form. They use the card frame here (`--bg-bubble`, radius 18, a 17 px title, a tag at the top right, buttons along the foot), and a run counts them among its pending cards, so a steer or an answer to another card never clears them.
+- Requests for permissions on the phone itself: pending, timed out, granted and re-evaluated, resumed once, blocked by policy.
+- Draft, file and link cards.
+- The Permissions page, where saved rules are listed and removed, and its audit log and limits. It needs the admin tier. (F-178, F-324)
+- Approvals raised by scheduled routines, which are the only ones with a duration.
+- Changing the model or the effort. Both belong to the task and the turn; a bot's own default needs the admin tier.
+- The Work pane's Coding section, beyond the card form its rows use. (F-136)
+- A conversation shared by several bots. The gateway has none.
