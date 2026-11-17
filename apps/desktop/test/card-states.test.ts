@@ -18,6 +18,7 @@ import {
   type Run,
   type Step,
   type Transcript,
+  T3_CODE_TOOLS,
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 import {
@@ -42,7 +43,7 @@ import {
   targetChips,
 } from "../../../packages/ui/src/cards/model.ts";
 import { placeCards } from "../../../packages/ui/src/cards/placement.ts";
-import { isCardCall, selectCards, T3_CODE_TOOLS } from "../../../packages/ui/src/cards/useCards.ts";
+import { isCardCall, selectCards } from "../../../packages/ui/src/cards/useCards.ts";
 import {
   CARD_SCENES,
   CARD_TASK,
@@ -93,7 +94,7 @@ const rawOf = (step: Step) => step.raw;
 const cards = (name: CardSceneName) => {
   const { transcript } = scene(name);
   // No server is named as T3 Code: its calls are known by T3 Code's own tools, as their results name them.
-  return { transcript, selected: selectCards(transcript, [], rawOf) };
+  return { transcript, selected: selectCards(transcript, rawOf) };
 };
 /**
  * A scene's cards as the engine draws them when it has the gateway's own map
@@ -103,7 +104,6 @@ const cards = (name: CardSceneName) => {
 const mapped = (name: CardSceneName) => {
   const { transcript } = scene(name);
   const selected = selectMessageCards(transcript, {
-    codingServers: [T3_SERVER],
     mcpTools: {
       [`${T3_SERVER}__t3_thread_launch`]: { server: T3_SERVER, tool: "t3_thread_launch" },
     },
@@ -403,13 +403,11 @@ describe("Messaged cards from the engine's state", () => {
     ]);
     const received = scene("received-working").transcript;
     expect(received.sessionKey).toBe(RECEIVING_TASK);
-    const placed = placeCards(received, selectCards(received, [], rawOf));
+    const placed = placeCards(received, selectCards(received, rawOf));
     expect([...placed.incoming.keys()]).toEqual(["m-in:0"]);
     expect(received.runs[0]!.anchorItemId).toBe("m-in:0");
     const late = scene("incoming-line").transcript;
-    expect([...placeCards(late, selectCards(late, [], rawOf)).incoming.keys()]).toEqual([
-      "m-late:1",
-    ]);
+    expect([...placeCards(late, selectCards(late, rawOf)).incoming.keys()]).toEqual(["m-late:1"]);
     expect(late.runs.some((run) => run.anchorItemId === "m-late:1")).toBe(false);
   });
 });
@@ -431,22 +429,58 @@ describe("Messaged T3 Code cards from the engine's state", () => {
     expect(cards("t3-failed").selected.mcpCalls[0]!.error).toMatch(/ECONNREFUSED/);
   });
 
-  it("F-132 F-134: before its result names it, a call is an ordinary tool step, not a T3 Code card", () => {
-    for (const name of [
-      "t3-started",
-      "t3-approval",
-      "t3-delivery-unknown",
-      "t3-not-sent",
-    ] as const) {
+  it("F-132 F-134: with the gateway's map, a call is the T3 Code card from its start, in each state before a result; without it, an ordinary step", () => {
+    const expected: Array<[CardSceneName, string]> = [
+      ["t3-started", "call-started"],
+      ["t3-approval", "approval"],
+      ["t3-delivery-unknown", "delivery-unknown"],
+      ["t3-not-sent", "not-sent"],
+    ];
+    for (const [name, key] of expected) {
       const { transcript, selected } = cards(name);
-      expect(selected.mcpCalls, name).toEqual([]);
+      expect(transcript.mcpTools, name).toEqual({
+        [`${T3_SERVER}__t3_thread_launch`]: { server: T3_SERVER, tool: "t3_thread_launch" },
+      });
+      const calls = selected.mcpCalls.filter((card) => card.codingAgent);
+      expect(calls, name).toHaveLength(1);
+      const step = transcript.runs[0]!.steps.find((each) => each.id === calls[0]!.stepId);
+      expect(mcpKey(calls[0]!, transcript.approvals, step?.status === "waiting"), name).toBe(key);
+      // No map: nothing identifies the call before its result.
+      const bare = selectCards({ ...transcript, mcpTools: {} }, rawOf);
       expect(
-        transcript.runs[0]!.steps.some(
-          (step) => step.toolName === `${T3_SERVER}__t3_thread_launch`,
-        ),
+        bare.mcpCalls.filter((card) => card.codingAgent),
         name,
-      ).toBe(true);
+      ).toEqual([]);
     }
+  });
+
+  it("F-132 F-134: the result overrules the map: another tool named is an ordinary step; a result naming none never makes Call made", () => {
+    const { transcript } = cards("t3-call-made");
+    const steps = transcript.runs[0]!.steps;
+    const withResult = (result: Record<string, unknown> | null, status: Step["status"]) => ({
+      ...transcript,
+      runs: transcript.runs.map((run) => ({
+        ...run,
+        steps: steps.map((step) => ({
+          ...step,
+          status,
+          raw: step.raw ? { ...step.raw, result } : null,
+        })),
+      })),
+    });
+    const t3 = (t: Parameters<typeof selectCards>[0]) =>
+      selectCards(t, rawOf).mcpCalls.filter((card) => card.codingAgent);
+    // Its own result names T3 Code's tool: Call made.
+    expect(t3(transcript)).toMatchObject([{ state: "returned" }]);
+    // The map named T3 Code, the result names another tool: an ordinary step.
+    const other = { mcpServer: T3_SERVER, mcpTool: "t3_project_list_v2" };
+    expect(t3(withResult({ result: { content: [], details: other } }, "done"))).toEqual([]);
+    // A result naming no tool, as history keeps it: never Call made on the map's word.
+    expect(t3(withResult({ content: [{ type: "text", text: "ok" }] }, "done"))).toEqual([]);
+    // A failure naming no tool keeps the map's word.
+    expect(
+      t3(withResult({ content: [{ type: "text", text: "Denied." }], isError: true }, "failed")),
+    ).toMatchObject([{ state: "failed" }]);
   });
 
   it("F-134 F-470: with the gateway's map of effective names, each state before a result says only what the events establish", () => {
@@ -509,7 +543,7 @@ describe("Messaged T3 Code cards from the engine's state", () => {
       raw: run.steps[0]!.raw ? { ...run.steps[0]!.raw } : null,
     };
     const doubled = { ...transcript, runs: [{ ...run, steps: [...run.steps, second] }] };
-    const calls = selectCards(doubled, [], rawOf).mcpCalls;
+    const calls = selectCards(doubled, rawOf).mcpCalls;
     expect(calls.map((card) => card.id)).toEqual(["tool:call_t3", "tool:call_t3b"]);
   });
 
@@ -543,9 +577,9 @@ describe("Messaged T3 Code cards from the engine's state", () => {
     };
     const t3 = (
       calls: Array<{ name: string; details?: Record<string, unknown> }>,
-      servers: string[] = [],
+      mcpTools: Transcript["mcpTools"] = {},
     ) =>
-      selectCards(run(calls), servers, rawOf)
+      selectCards({ ...run(calls), mcpTools }, rawOf)
         .mcpCalls.filter((card) => card.codingAgent)
         .map((card) => card.tool);
     for (const tool of T3_CODE_TOOLS) {
@@ -584,19 +618,23 @@ describe("Messaged T3 Code cards from the engine's state", () => {
         },
       ]),
     ).toEqual([]);
-    // A server a host configured as T3 Code counts for any tool its results name.
+    // No server is T3 Code as a whole: where the map names one of its tools on a server,
+    // a result naming an ordinary tool on that server overrules it.
+    const launch = { server: "my_coder", tool: "t3_thread_launch" };
+    expect(t3([{ name: "opaque_7" }], { opaque_7: launch })).toEqual(["t3_thread_launch"]);
     expect(
-      t3(
-        [
-          {
-            name: "my_coder__send_message",
-            details: { mcpServer: "my_coder", mcpTool: "send_message" },
-          },
-        ],
-        ["my_coder"],
-      ),
-    ).toEqual(["send_message"]);
-    expect(t3([{ name: "my_coder__send_message" }], ["my_coder"])).toEqual([]);
+      t3([{ name: "opaque_7", details: { mcpServer: "my_coder", mcpTool: "read_file" } }], {
+        opaque_7: launch,
+      }),
+    ).toEqual([]);
+    expect(
+      t3([
+        {
+          name: "my_coder__send_message",
+          details: { mcpServer: "my_coder", mcpTool: "send_message" },
+        },
+      ]),
+    ).toEqual([]);
   });
 
   // The gateway names a tool-server call `<safe server>__<safe tool>`, cut to 64
@@ -631,7 +669,7 @@ describe("Messaged T3 Code cards from the engine's state", () => {
       }
     });
     const transcript = { runs: a.runs, approvals: [], linkedRuns: {}, interSession: [] };
-    return { transcript, selected: selectCards(transcript, [], rawOf) };
+    return { transcript, selected: selectCards(transcript, rawOf) };
   };
 
   it("F-132: a different tool on the same server does not become T3 Code", () => {
@@ -738,7 +776,6 @@ describe("cards follow the gateway's identifiers, forward only", () => {
   ) =>
     selectCards(
       { runs: activity.runs, approvals: [], linkedRuns, interSession: [] },
-      [],
       rawOf,
       previous,
     );
@@ -1010,7 +1047,6 @@ describe("cards in the order the gateway's events establish", () => {
       { runs: a.runs, approvals: a.approvals, questions: a.questions, items: [], interSession: [] },
       selectCards(
         { runs: a.runs, approvals: a.approvals, linkedRuns: {}, interSession: [] },
-        [],
         rawOf,
       ),
     );
@@ -1031,10 +1067,12 @@ describe("a T3 Code card's state moves only as its own call's events establish",
       ...transcript,
       runs: transcript.runs.map((run) => ({ ...run, steps: made.runs[0]!.steps })),
     });
-    // In the app: no card while nothing names the call, then Call made.
+    // In the app, with the gateway's map: Delivery unknown, then Call made when the result names it.
     const stopped = cards("t3-delivery-unknown");
-    expect(stopped.selected.mcpCalls).toEqual([]);
-    const shown = selectCards(withResult(stopped.transcript), [], rawOf, stopped.selected);
+    expect(stopped.selected.mcpCalls.filter((card) => card.codingAgent)).toMatchObject([
+      { state: "unknown" },
+    ]);
+    const shown = selectCards(withResult(stopped.transcript), rawOf, stopped.selected);
     expect(shown.mcpCalls.filter((card) => card.codingAgent)).toMatchObject([
       { state: "returned" },
     ]);
@@ -1043,7 +1081,6 @@ describe("a T3 Code card's state moves only as its own call's events establish",
     const before = known.selected;
     expect(before.mcpCalls[0]!.state).toBe("unknown");
     const later = selectMessageCards(withResult(known.transcript), {
-      codingServers: [T3_SERVER],
       rawOf,
       previous: before,
     });
@@ -1072,7 +1109,6 @@ describe("a T3 Code card's state moves only as its own call's events establish",
     });
     const madeCards = selectCards(
       { runs: a.runs, approvals: [], linkedRuns: {}, interSession: [] },
-      [],
       rawOf,
     );
     a = tool(a, {
@@ -1084,7 +1120,6 @@ describe("a T3 Code card's state moves only as its own call's events establish",
     });
     const after = selectCards(
       { runs: a.runs, approvals: [], linkedRuns: {}, interSession: [] },
-      [],
       rawOf,
       madeCards,
     );

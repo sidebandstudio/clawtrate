@@ -1171,8 +1171,11 @@ export function applyQuestionRequested(
   const runId = str(record.runId);
   const existing = activity.questions.find((question) => question.id === id);
   // A settled question stays settled, and an ended run takes no new question:
-  // a late or repeated event must never make either actionable again.
+  // a late or repeated event must never make either actionable again. A run
+  // remembers the questions it settled among its closed cards, also where the
+  // question itself is not kept (a recipient's run in a task nobody has open).
   if (existing && existing.status !== "pending") return activity;
+  if (!existing && questionSettled(activity, id)) return activity;
   const known = runId ? findRun(activity, runId) : undefined;
   if (known && isTerminal(known.state)) return activity;
   if (
@@ -1219,6 +1222,73 @@ export function applyQuestionRequested(
       ],
     };
   });
+}
+
+/**
+ * A question in a session nobody here has open, whose run this client follows
+ * as a recipient's: the run waits on it, holding only the card's id; the
+ * question itself is not kept.
+ */
+export function foreignQuestionRequested(
+  activity: TaskActivity,
+  record: RawRecord,
+  ctx: EngineContext,
+): TaskActivity {
+  const next = applyQuestionRequested(activity, record, ctx);
+  return next.questions.length > 0 ? { ...next, questions: [] } : next;
+}
+
+/** The runs that hold a question known only by its id (`questionMarkers`). */
+export function runsWithQuestionMarkers(activity: TaskActivity): Run[] {
+  const ids = new Set(questionMarkers(activity));
+  return activity.runs.filter((run) =>
+    [...run.pendingCards, ...run.suspendedCards].some(
+      (card) => card.kind === "question" && ids.has(card.id),
+    ),
+  );
+}
+
+/**
+ * Questions a task's runs wait on that the task holds no record of: a run that
+ * waited on a question while nobody here had its task open keeps only the
+ * card's id, and keeps it when the task is opened. Each settles through the
+ * same rules as a question with its record: `question.resolved`, or a
+ * `question.list` read that no longer lists it.
+ */
+export function questionMarkers(activity: TaskActivity): string[] {
+  return activity.runs.flatMap((run) =>
+    [...run.pendingCards, ...run.suspendedCards]
+      .filter(
+        (card) =>
+          card.kind === "question" &&
+          !activity.questions.some((question) => question.id === card.id),
+      )
+      .map((card) => card.id),
+  );
+}
+
+/** That question settled: its run goes on. */
+export function foreignQuestionResolved(activity: TaskActivity, payload: RawRecord): TaskActivity {
+  const id = str(payload.id);
+  if (!id || !activity.runs.some((run) => run.pendingCards.some((card) => card.id === id))) {
+    return activity;
+  }
+  const reason: CardCloseReason =
+    payload.status === "answered"
+      ? "answered"
+      : payload.status === "expired"
+        ? "expired"
+        : payload.status === "cancelled"
+          ? "dismissed"
+          : "closed";
+  return { ...activity, runs: activity.runs.map((run) => closeCard(run, id, reason)) };
+}
+
+/** Whether a run of the task settled this question: it is among the run's closed cards. */
+export function questionSettled(activity: TaskActivity, id: string): boolean {
+  return activity.runs.some((run) =>
+    run.closedCards.some((card) => card.kind === "question" && card.id === id),
+  );
 }
 
 function closeCard(run: Run, cardId: string, reason: CardCloseReason): Run {
@@ -1338,6 +1408,11 @@ export function settleMissingQuestions(
       (pendingBefore === undefined || pendingBefore.has(question.id))
     ) {
       next = applyQuestionResolved(next, { id: question.id, status: "closed" });
+    }
+  }
+  for (const id of questionMarkers(activity)) {
+    if (!pendingIds.has(id) && (pendingBefore === undefined || pendingBefore.has(id))) {
+      next = foreignQuestionResolved(next, { id, status: "closed" });
     }
   }
   return next;
@@ -1929,6 +2004,13 @@ export function runsFromHistory(
   /** Runs whose last persisted content is a thinking block: that segment may still be streaming. */
   const trailingThinking = new Map<string, boolean>();
   let anchor: string | null = null;
+  /**
+   * Runs that a message from another session started, by run id: `chat.history`
+   * shows such a message as an assistant row with `provenance.kind:
+   * "inter_session"` and, like a user row, the key `${runId}:user` of the run
+   * it started (OpenClaw 2026.10.6), not as a user row.
+   */
+  const startedBy = new Map<string, string>();
   const rows = Array.isArray(messages) ? messages : [];
   const first = asRecord(rows[0]);
   const cutRunId =
@@ -1943,6 +2025,13 @@ export function runsFromHistory(
       anchor = historyItemId(message, index);
       return;
     }
+    const provenance = asRecord(message.provenance) ?? asRecord(meta(message).provenance);
+    if (provenance?.kind === "inter_session" && !str(meta(message).runId)) {
+      const key = rowIdempotencyKey(message);
+      if (key?.endsWith(":user"))
+        startedBy.set(key.slice(0, -":user".length), historyItemId(message, index));
+      return;
+    }
     // The gateway's injected aborted-partial row names its run in `openclawAbort`.
     const runId = str(meta(message).runId) ?? str(asRecord(message.openclawAbort)?.runId);
     if (!runId) return;
@@ -1955,7 +2044,7 @@ export function runsFromHistory(
           state: "running",
           origin: "history",
           bound: true,
-          anchorItemId: anchor,
+          anchorItemId: startedBy.get(runId) ?? anchor,
           reasoningAnchor: runId === cutRunId ? "c" : null,
         },
         at,
@@ -2468,11 +2557,21 @@ function rowIdempotencyKey(message: RawRecord): string | null {
 }
 
 /**
- * Whether a user row's key is this message's. The gateway records the user
- * row of a `chat.send` under the send's key with `:user` appended.
+ * Whether a user row's key names this outgoing message. The gateway records
+ * a user row under the run it started for the message, with `:user` after it
+ * (`${clientRunId}:user` in OpenClaw 2026.10.6's chat-send-handler). For
+ * `chat.send` that run id is the send's idempotency key (`clientRunId =
+ * p.idempotencyKey`); for `sessions.create` it is the run the answer named,
+ * kept as the message's `runId`. A steer's `runId` is the run it joined, which
+ * names another message's row, so a steer is matched by its own key only.
+ * The bare key is accepted too.
  */
-function keyIsMessage(key: string | null, messageId: string): boolean {
-  return key === messageId || key === `${messageId}:user`;
+function namesOutgoing(rowKey: string | null, outgoing: OutgoingMessage): boolean {
+  if (rowKey === null) return false;
+  if (rowKey === outgoing.id || rowKey === `${outgoing.id}:user`) return true;
+  return (
+    outgoing.mode !== "steer" && outgoing.runId !== null && rowKey === `${outgoing.runId}:user`
+  );
 }
 
 /**
@@ -2501,7 +2600,7 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
       return true;
     }
     const byKey = rows.find(
-      (row) => !used.has(row.index) && keyIsMessage(rowIdempotencyKey(row.message), outgoing.id),
+      (row) => !used.has(row.index) && namesOutgoing(rowIdempotencyKey(row.message), outgoing),
     );
     const bySeq =
       byKey ??
@@ -2511,7 +2610,7 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
             if (used.has(row.index) || num(meta(row.message).seq) !== outgoing.messageSeq)
               return false;
             const key = rowIdempotencyKey(row.message);
-            return key === null || keyIsMessage(key, outgoing.id);
+            return key === null || namesOutgoing(key, outgoing);
           })
         : undefined);
     if (!bySeq) return true;
