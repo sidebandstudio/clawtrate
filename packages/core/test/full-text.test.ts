@@ -1,0 +1,207 @@
+// Values cut to their bound keep nothing more, and are read whole on demand.
+// A cut approval offers only deny until its whole text was read and shown; a
+// cut question option is answered with its whole label.
+
+import { describe, expect, it } from "vitest";
+import { createBridgeSession } from "../src/bridge.ts";
+import {
+  MAX_COMMAND_CHARS,
+  MAX_OPTION_CHARS,
+  MAX_STEP_BODY_CHARS,
+  MAX_BLOCK_CHARS,
+} from "../src/state-bounds.ts";
+import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
+import { until } from "./fake-gateway.ts";
+
+const longCommand = `echo ${"x".repeat(MAX_COMMAND_CHARS * 3)}`;
+
+function execItem(id: string, command: string) {
+  return {
+    id,
+    request: {
+      command,
+      host: "gateway",
+      agentId: "otto",
+      sessionKey: KEY,
+      runId: "run-1",
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
+    },
+    createdAtMs: 2_000,
+    expiresAtMs: 9_000_000_000_000,
+  };
+}
+
+describe("an approval whose command was cut", () => {
+  it("offers only deny until its whole text has been read", async () => {
+    const gateway = grantingGateway();
+    let listed = [execItem("ap-long", longCommand)];
+    gateway.handlers["exec.approval.list"] = () => listed;
+    gateway.handlers["exec.approval.resolve"] = () => ({ ok: true });
+    const { client, transcript } = await openTask({ gateway });
+    const viewer = createBridgeSession(client);
+    try {
+      await viewer.apply({ type: "openSession", key: KEY });
+      await until(() => transcript().approvals.length === 1);
+      const card = transcript().approvals[0]!;
+      // Kept cut, and marked so.
+      expect(JSON.stringify(card.exec!.command).length).toBeLessThanOrEqual(MAX_COMMAND_CHARS);
+      expect(card.cut).toContain("exec.command");
+      // Allowing it unseen is refused, through the client and the bridge alike.
+      await expect(client.resolveApproval(KEY, "ap-long", "allow-once")).rejects.toThrow(
+        "read it whole",
+      );
+      await expect(
+        viewer.apply({
+          type: "resolveApproval",
+          key: KEY,
+          approvalId: "ap-long",
+          decision: "allow-once",
+          expiresInDays: null,
+          shownDigest: "not-the-digest",
+        }),
+      ).rejects.toThrow("read it whole");
+      expect(gateway.calls("exec.approval.resolve")).toEqual([]);
+      // Read whole: the full command, and the digest an allow must name. Nothing more is kept.
+      const read = await viewer.apply({
+        type: "readApprovalText",
+        key: KEY,
+        approvalId: "ap-long",
+      });
+      expect(read.text.command).toBe(longCommand);
+      expect(read.digest).toBe(card.decisionDigest);
+      expect(transcript().approvals[0]!.exec!.command).toBe(card.exec!.command);
+      await viewer.apply({
+        type: "resolveApproval",
+        key: KEY,
+        approvalId: "ap-long",
+        decision: "allow-once",
+        expiresInDays: null,
+        shownDigest: read.digest,
+      });
+      expect(gateway.calls("exec.approval.resolve")).toEqual([
+        { id: "ap-long", decision: "allow-once" },
+      ]);
+      // A changed approval under the same id is not read as the one shown.
+      listed = [execItem("ap-long", `${longCommand} && rm -rf build`)];
+      gateway.emit("exec.approval.requested", execItem("ap-other", longCommand));
+      await until(() => transcript().approvals.length === 2);
+      listed = [execItem("ap-other", `${longCommand}; true`)];
+      await expect(client.readApprovalText(KEY, "ap-other")).rejects.toThrow("changed");
+    } finally {
+      viewer.dispose();
+      client.stop();
+    }
+  });
+
+  it("can still be denied unseen", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["exec.approval.list"] = () => [execItem("ap-long", longCommand)];
+    gateway.handlers["exec.approval.resolve"] = () => ({ ok: true });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      await until(() => transcript().approvals.length === 1);
+      await client.resolveApproval(KEY, "ap-long", "deny");
+      expect(gateway.calls("exec.approval.resolve")).toEqual([{ id: "ap-long", decision: "deny" }]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is allowed as before when nothing was cut", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["exec.approval.list"] = () => [execItem("ap-short", "uname -s")];
+    gateway.handlers["exec.approval.resolve"] = () => ({ ok: true });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      await until(() => transcript().approvals.length === 1);
+      expect(transcript().approvals[0]!.cut).toBeUndefined();
+      await client.resolveApproval(KEY, "ap-short", "allow-once");
+      expect(gateway.calls("exec.approval.resolve")).toHaveLength(1);
+    } finally {
+      client.stop();
+    }
+  });
+});
+
+describe("a question option cut to its bound", () => {
+  it("is answered with its whole label", async () => {
+    const gateway = grantingGateway();
+    const long = `Blue ${"b".repeat(MAX_OPTION_CHARS * 2)}`;
+    const record = questionRecord("ask-long", "run-q");
+    record.questions[0]!.options = [{ label: long }, { label: "Red" }];
+    gateway.handlers["question.list"] = () => ({ questions: [record] });
+    gateway.handlers["question.resolve"] = () => ({ status: "answered" });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      gateway.emit("agent", agentEvent("run-q", 1, "lifecycle", { phase: "start" }));
+      gateway.emit("question.requested", record);
+      await until(() => transcript().questions.length === 1);
+      const shown = transcript().questions[0]!.questions[0]!.options[0]!.label;
+      expect(shown.length).toBeLessThan(long.length);
+      expect(long.startsWith(shown)).toBe(true);
+      await client.answerQuestion(KEY, "ask-long", { color: [shown] });
+      const [params] = gateway.calls("question.resolve") as Array<{
+        answers: { answers: Record<string, string[]> };
+      }>;
+      expect(params!.answers.answers.color).toEqual([long]);
+    } finally {
+      client.stop();
+    }
+  });
+});
+
+describe("history text cut to its bound", () => {
+  it("is read whole on demand, and the kept item stays cut", async () => {
+    const gateway = grantingGateway();
+    const long = "h".repeat(MAX_BLOCK_CHARS * 4);
+    gateway.handlers["chat.history"] = () => ({
+      messages: [{ role: "user", content: long, __openclaw: { id: "u1", seq: 1 } }],
+      hasMore: false,
+    });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      const item = transcript().items[0]!;
+      expect(JSON.stringify(item).length).toBeLessThan(long.length);
+      expect(item.cut?.length).toBeGreaterThan(0);
+      const whole = await client.readHistoryItem(KEY, item.id);
+      expect(JSON.stringify(whole)).toContain(long);
+      expect(transcript().items[0]).toEqual(item);
+    } finally {
+      client.stop();
+    }
+  });
+});
+
+describe("a step's text", () => {
+  it("is cut to its bound with the cut marked, and its raw payload read whole", async () => {
+    const { client, gateway, transcript } = await openTask();
+    try {
+      const output = "o".repeat(MAX_STEP_BODY_CHARS * 8);
+      gateway.emit(
+        "agent",
+        agentEvent("run-s", 1, "tool", {
+          phase: "start",
+          toolCallId: "c1",
+          name: "exec",
+          args: {},
+        }),
+      );
+      gateway.emit(
+        "agent",
+        agentEvent("run-s", 2, "tool", {
+          phase: "result",
+          toolCallId: "c1",
+          name: "exec",
+          result: { content: [{ type: "text", text: output }] },
+        }),
+      );
+      await until(() => transcript().runs[0]?.steps[0]?.status === "done");
+      const step = transcript().runs[0]!.steps[0]!;
+      expect(JSON.stringify(step.result!.text).length).toBeLessThanOrEqual(MAX_STEP_BODY_CHARS);
+      expect(step.result!.totalChars).toBe(output.length);
+      expect(JSON.stringify(client.stepRaw(KEY, step.id))).toContain(output);
+    } finally {
+      client.stop();
+    }
+  });
+});
