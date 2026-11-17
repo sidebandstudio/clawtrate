@@ -1,12 +1,12 @@
 // Turns whose identity or end the gateway reports otherwise than the client
 // asked: a Stop before the gateway has taken the send, a send answered as
 // already aborted, a turn the gateway ran from its queue under an id of its
-// own, and a turn the gateway wrote itself.
+// own, a turn the gateway wrote itself, and a deleted session's followed runs.
 // Each event order below was recorded from OpenClaw 2026.10.6 on a named
 // development instance.
 
 import { describe, expect, it } from "vitest";
-import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
 
 const runIds = (runs: { id: string; state: string }[]) => runs.map((run) => [run.id, run.state]);
@@ -182,6 +182,45 @@ describe("a turn the gateway wrote itself", () => {
     gateway.emit("session.message", { sessionKey: KEY });
     await until(() => transcript().items.length === 1);
     expect(transcript().outbox).toHaveLength(1);
+    client.stop();
+  });
+});
+
+describe("a deleted session nobody had open", () => {
+  const PEER = "agent:marlow:review-peer";
+
+  it("session deletion retires a foreign pending question and its run", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.emit(
+      "agent",
+      agentEvent("sender-r", 1, "tool", {
+        phase: "start",
+        name: "sessions_send",
+        toolCallId: "send-c",
+        args: { sessionKey: PEER, message: "A message" },
+      }),
+    );
+    gateway.emit(
+      "agent",
+      agentEvent("sender-r", 2, "tool", {
+        phase: "result",
+        name: "sessions_send",
+        toolCallId: "send-c",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "{}" }],
+          details: { status: "accepted", sessionKey: PEER, runId: "peer-r" },
+        },
+      }),
+    );
+    gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    gateway.emit("question.requested", questionRecord("foreign-q", "peer-r", PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "waiting");
+    gateway.emit("sessions.changed", { sessionKey: PEER, reason: "delete" });
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "cancelled");
+    const foreign = (client as unknown as { foreign: Map<string, unknown> }).foreign;
+    expect(foreign.has(PEER)).toBe(false);
     client.stop();
   });
 });

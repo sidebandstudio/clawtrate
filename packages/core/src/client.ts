@@ -102,6 +102,7 @@ import {
   failRun,
   failRunStart,
   findRun,
+  finishRun,
   isActive,
   cachedSize,
   isTerminal,
@@ -2721,6 +2722,30 @@ export class ClawtrateClient {
     }
   }
 
+  /**
+   * A session the gateway deleted while nobody had it open: its runs this client
+   * followed are over, however they stood, and a question they waited on is no
+   * longer asked. They settle as ended with no known outcome, so a card that
+   * follows them stops showing them working or waiting, and the entry goes.
+   */
+  private retireForeign(rawKey: string): void {
+    const sessionKey = capId(rawKey, MAX_ID_CHARS);
+    if (!this.foreign.has(sessionKey)) return;
+    this.updateForeign(sessionKey, (activity, ctx) =>
+      activity.runs.some((run) => !isTerminal(run.state))
+        ? {
+            ...activity,
+            runs: activity.runs.map((run) =>
+              isTerminal(run.state)
+                ? run
+                : { ...finishRun(run, "cancelled", ctx), outcomeKnown: false },
+            ),
+          }
+        : activity,
+    );
+    this.foreign.delete(sessionKey);
+  }
+
   /** A run this task does not hold: a followed foreign session's, or another task's. */
   private otherRun(runId: string): Run | undefined {
     for (const activity of this.foreign.values()) {
@@ -4026,6 +4051,7 @@ export class ClawtrateClient {
     }
     if (isSessionRemoval(payload)) {
       this.cancelAllQueued(key);
+      this.retireForeign(key);
       if (this.rows.delete(key)) this.publishTasks();
       return;
     }
