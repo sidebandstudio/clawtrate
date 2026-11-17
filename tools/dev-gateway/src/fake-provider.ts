@@ -9,6 +9,21 @@ import { messageText, planReply, type ChatMessage, type ReplyStep } from "./scri
 
 export const FAKE_MODEL_ID = MODEL_ID;
 
+/** Where the gateway's Ollama search provider asks a local host first. */
+export const WEB_SEARCH_PATH = "/api/experimental/web_search";
+
+/** Three fixed results on the reserved `.example` domain; nothing is fetched. */
+export function scriptedSearchResults(query: string) {
+  const topic = query.trim() || "your search";
+  return {
+    results: [1, 2, 3].map((n) => ({
+      title: `Result ${n} for ${topic}`,
+      url: `https://search.example/results/${n}`,
+      content: `A scripted search result (${n} of 3) about ${topic}.`,
+    })),
+  };
+}
+
 type ToolSpec = { type?: string; function?: { name?: string } };
 
 type CompletionRequest = {
@@ -190,6 +205,18 @@ export function startFakeProvider(options: FakeProviderOptions) {
           object: "list",
           data: [{ id: FAKE_MODEL_ID, object: "model", owned_by: "clawtrate-dev" }],
         });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === WEB_SEARCH_PATH) {
+        // The gateway's Ollama web search provider, pointed here by the config.
+        let query = "";
+        try {
+          query = String((JSON.parse(await readBody(req)) as { query?: unknown }).query ?? "");
+        } catch {
+          // an unreadable body is answered with no query
+        }
+        log(`web search ${JSON.stringify(query.slice(0, 80))}`);
+        sendJson(res, 200, scriptedSearchResults(query));
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/chat/completions") {

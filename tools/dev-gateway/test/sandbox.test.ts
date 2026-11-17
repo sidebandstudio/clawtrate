@@ -89,6 +89,54 @@ describe("development gateway config", () => {
     expect(sandboxProblems(outward)).toContain("agents.entries.main may message only no other bot");
   });
 
+  it("keeps file tools in the workspace, search on loopback and network tools denied", () => {
+    expect(config.tools.fs).toEqual({ workspaceOnly: true });
+    expect(config.tools.web).toEqual({
+      search: { enabled: true, provider: "ollama" },
+      fetch: { enabled: false },
+    });
+    expect(config.plugins.entries.ollama).toEqual({
+      config: { webSearch: { baseUrl: "http://127.0.0.1:19091" } },
+    });
+    for (const tool of ["web_fetch", "browser", "message", "nodes", "tts"]) {
+      expect(config.tools.deny).toContain(tool);
+    }
+    /** The problems of a copy of the config with one value set at a path. */
+    const broken = (path: string, value: unknown) => {
+      const copy = clone(config) as unknown as Record<string, unknown>;
+      const keys = path.split(".");
+      let node = copy;
+      for (const key of keys.slice(0, -1)) {
+        node[key] ??= {};
+        node = node[key] as Record<string, unknown>;
+      }
+      node[keys.at(-1)!] = value;
+      return sandboxProblems(copy);
+    };
+    expect(broken("tools.fs.workspaceOnly", false)).toContain(
+      "tools.fs.workspaceOnly must be true",
+    );
+    expect(broken("tools.web.fetch.enabled", true)).toContain(
+      "tools.web.fetch.enabled must be false",
+    );
+    expect(broken("tools.web.search.provider", "brave")).toContain(
+      'tools.web.search must be exactly { enabled, provider: "ollama" }',
+    );
+    for (const url of ["https://ollama.com", "http://ollama-host:11434"]) {
+      expect(broken("plugins.entries.ollama.config.webSearch.baseUrl", url)).toContain(
+        "web search must go only to the scripted server on loopback",
+      );
+    }
+    expect(broken("plugins.entries.ollama.config.webSearch.apiKey", "x")).toContain(
+      "web search must go only to the scripted server on loopback",
+    );
+    expect(broken("tools.deny", ["web_fetch"])).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^tools.deny must include .*browser/)]),
+    );
+    expect(broken("tools.alsoAllow", ["browser"])).toContain("tools.alsoAllow must not be set");
+    expect(broken("plugins.load", { paths: ["/x"] })).toContain("plugins.load must not be set");
+  });
+
   it("runs only the stand-in coding agent as a local MCP server", () => {
     const server = config.mcp.servers.coder;
     expect(server.transport).toBe("stdio");

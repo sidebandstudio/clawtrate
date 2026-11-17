@@ -297,6 +297,18 @@ export function devConfig(
       exec: { mode: "deny" },
       // Bot-to-bot messages only between the pair; both ends must match.
       agentToAgent: { enabled: true, allow: [...MESSAGING_PAIR] },
+      // File tools stay inside each bot's own workspace.
+      fs: { workspaceOnly: true },
+      web: {
+        // Web search goes to the scripted model server, through the bundled
+        // Ollama search provider's base URL; see the plugin entry below.
+        search: { enabled: true, provider: "ollama" },
+        // web_fetch cannot be limited to loopback, so it is off.
+        fetch: { enabled: false },
+      },
+      // Tools that reach the network, drive a browser or another device, or
+      // send through a channel are not offered to any bot.
+      deny: [...DENIED_TOOLS],
     },
     // The stand-in coding agent: a local command server, no network, run in
     // the instance's own folder.
@@ -314,10 +326,52 @@ export function devConfig(
     // provider. Off, with no provider, so nothing can reach a paid API.
     memory: { search: { enabled: false, provider: "none" } },
     plugins: {
-      entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
+      entries: {
+        "memory-core": { config: { dreaming: { enabled: false } } },
+        // Only the search half of the bundled Ollama plugin is used, on loopback.
+        ollama: { config: { webSearch: { baseUrl: searchBaseUrl(ports) } } },
+      },
     },
   };
 }
+
+/** The scripted model server also answers web searches. */
+export function searchBaseUrl(ports: InstancePorts): string {
+  return `http://127.0.0.1:${ports.providerPort}`;
+}
+
+/**
+ * Denied for every bot: tools that reach the network (web_fetch, x_search,
+ * code_execution, tts and the media generators), drive a browser, screen or
+ * paired device (browser, canvas, screen, computer, nodes, mobile_ui and the
+ * file-transfer plugin's node tools), run a model on a node (node_inference),
+ * send through a chat channel (message, conversations_send, conversations_turn),
+ * or publish (github_publish).
+ */
+export const DENIED_TOOLS = [
+  "web_fetch",
+  "x_search",
+  "code_execution",
+  "tts",
+  "image_generate",
+  "music_generate",
+  "video_generate",
+  "browser",
+  "canvas",
+  "screen",
+  "computer",
+  "nodes",
+  "mobile_ui",
+  "dir_fetch",
+  "dir_list",
+  "file_fetch",
+  "file_write",
+  "node_inference",
+  "message",
+  "conversations_send",
+  "conversations_turn",
+  "github_publish",
+] as const;
 
 type JsonRecord = Record<string, unknown>;
 const at = (value: unknown, ...path: string[]): unknown =>
@@ -354,6 +408,50 @@ function mcpProblems(mcp: unknown, stateDir?: string): string[] {
   }
   return problems;
 }
+
+/**
+ * What the tools may reach: files only in the bot's workspace, web search only
+ * at the scripted server on loopback, no web fetch, and every tool in
+ * DENIED_TOOLS denied with nothing that could add it back.
+ */
+function toolReachProblems(config: unknown, ports?: InstancePorts): string[] {
+  const problems: string[] = [];
+  if (at(config, "tools", "fs", "workspaceOnly") !== true)
+    problems.push("tools.fs.workspaceOnly must be true");
+  if (at(config, "tools", "web", "fetch", "enabled") !== false)
+    problems.push("tools.web.fetch.enabled must be false");
+  const search = (at(config, "tools", "web", "search") as JsonRecord | undefined) ?? {};
+  if (
+    JSON.stringify(Object.keys(search).sort()) !== JSON.stringify(["enabled", "provider"]) ||
+    search.provider !== "ollama"
+  ) {
+    problems.push('tools.web.search must be exactly { enabled, provider: "ollama" }');
+  }
+  const searchUrl = at(config, "plugins", "entries", "ollama", "config", "webSearch", "baseUrl");
+  const ollama = at(config, "plugins", "entries", "ollama") as JsonRecord | undefined;
+  if (
+    typeof searchUrl !== "string" ||
+    !/^http:\/\/127\.0\.0\.1:\d+$/.test(searchUrl) ||
+    (ports !== undefined && searchUrl !== searchBaseUrl(ports)) ||
+    JSON.stringify(Object.keys(ollama ?? {})) !== JSON.stringify(["config"]) ||
+    JSON.stringify(Object.keys(rec(ollama?.config))) !== JSON.stringify(["webSearch"]) ||
+    JSON.stringify(Object.keys(rec(rec(ollama?.config).webSearch))) !== JSON.stringify(["baseUrl"])
+  ) {
+    problems.push("web search must go only to the scripted server on loopback");
+  }
+  const denied = at(config, "tools", "deny");
+  const missing = DENIED_TOOLS.filter((tool) => !Array.isArray(denied) || !denied.includes(tool));
+  if (missing.length > 0) problems.push(`tools.deny must include ${missing.join(", ")}`);
+  for (const key of ["allow", "alsoAllow", "profile", "byProvider", "toolsBySender"]) {
+    if (at(config, "tools", key) !== undefined) problems.push(`tools.${key} must not be set`);
+  }
+  const loads = at(config, "plugins", "load");
+  if (loads !== undefined) problems.push("plugins.load must not be set");
+  return problems;
+}
+
+const rec = (value: unknown): JsonRecord =>
+  value !== null && typeof value === "object" ? (value as JsonRecord) : {};
 
 /**
  * The guarantees the development gateway must keep: only the scripted model,
@@ -442,6 +540,7 @@ export function sandboxProblems(
     problems.push(`tools.agentToAgent.allow must be exactly ${MESSAGING_PAIR.join(" and ")}`);
   }
   problems.push(...mcpProblems(at(config, "mcp"), stateDir));
+  problems.push(...toolReachProblems(config, ports));
   if (at(config, "gateway", "bind") !== "loopback")
     problems.push('gateway.bind must be "loopback"');
   return problems;

@@ -298,6 +298,7 @@ describe("per-instance folders, markers and the spawn boundary", () => {
     expect(sandboxProblems(devConfig("t"), ports)).toEqual([
       "gateway.port must be this instance's 19240",
       "the scripted provider must be this instance's port 19250",
+      "web search must go only to the scripted server on loopback",
     ]);
   });
 
