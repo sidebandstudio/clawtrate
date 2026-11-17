@@ -24,8 +24,12 @@ OPENCLAW_DEV_STATE="$HOME/.openclaw-<profile>" node questions.mjs
 - the gateway reports 2026.10.6;
 - every model of every agent is the scripted fake.
 
-Scenarios that answer approvals resolve only the request raised in their own
-session for the command they sent.
+Scenarios that answer approvals resolve only requests raised in sessions they
+created. Scenarios that change config restore the exact original value in a
+`finally` block and fail if it differs (`withAgentExecPolicy` in
+`probe-lib.mjs`). Waits that time out throw; they are never reported as an
+absence. Node scenarios act only on the fixture node named by
+`PROBE_NODE_NAME`.
 
 | Script | Row 19 topic |
 | --- | --- |
@@ -47,11 +51,11 @@ Row 20 scripts:
 | Script | Row 20 topic |
 | --- | --- |
 | `members-mcpcancel-settings.mjs` | `node … members`: agents as session members; `mcpcancel`: MCP `notifications/cancelled`; `settings [permissionMode,configFull,sessionsPatchExecAsk]`: settings changes during a pending approval |
-| `helper-and-recipient-approvals.mjs` | `helper`: a sub-agent's exec approval and parent abort; `recipient`: a `sessions_send` recipient's exec approval |
+| `helper-and-recipient-approvals.mjs` | `helper` / `recipient`: whether a sub-agent or a `sessions_send` recipient raises an exec card; reports `CARD`, `FAILED` (quoting the child transcript) or `UNKNOWN`, never a bare "none" |
 | `files-computer-presence.mjs` | workspace, session files, diff, artifacts, `computer.status`, nodes, presence |
-| `node-pairing-hoststats.mjs` | approves a pending node and waits for `node.hostStats`. Needs a node host (see row 20) |
-| `node-routed-exec.mjs` | routes a task's exec to the first node |
-| `exec-auto-review.mjs` | `exec.mode: "auto"` verdicts with the scripted reviewer; changes and restores Atlas's exec mode |
+| `node-pairing-hoststats.mjs` | approves the fixture node named by `PROBE_NODE_NAME` and waits for its `node.hostStats`; refuses an ambiguous name and touches no other node |
+| `node-routed-exec.mjs` | routes one task's exec to the fixture node (`PROBE_NODE_NAME`) and runs `pwd`; resolves only its own task's approval |
+| `exec-auto-review.mjs` | `exec.mode: "auto"` allow and deny verdicts with the scripted reviewer (not ask, failure or escalation); restores Atlas's exact exec block |
 | `memory-save-search.mjs` | a bot writing memory, `memory.status`, `memory.search` |
 | `usage-fields.mjs`, `effort-and-models.mjs` | usage result fields; effort per turn and `models.list` details |
 | `paired-devices.mjs` | fields of paired client devices |

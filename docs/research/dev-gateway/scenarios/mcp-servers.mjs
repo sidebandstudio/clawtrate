@@ -14,6 +14,8 @@ const cfg = await A.call("config.get", {});
 const coder = cfg.config?.mcp?.servers?.coder;
 console.log("config mcp.servers.coder (redacted view):", JSON.stringify(coder).slice(0, 200));
 const t0 = Date.now();
+if (cfg.config?.mcp?.servers?.coder2) throw new Error("coder2 already configured; refusing to overwrite it");
+try {
 console.log("patch add coder2:", await r(A.call("config.patch", { raw: JSON.stringify({ mcp: { servers: { coder2: { command: coder.command, args: coder.args } } } }), baseHash: cfg.hash }), 80));
 await sleep(3000);
 const reload = A.events.filter((e) => e.t >= t0 && ["config.changed", "plugins.changed", "skills.changed"].includes(e.event)).map((e) => `${e.event} ${JSON.stringify(e.payload).slice(0, 120)}`);
@@ -25,7 +27,10 @@ await (await A.send(s.key, "#tool coder2__list_threads {}")).done;
 const tr = A.events.find((e) => e.t >= t1 && e.event === "agent" && e.payload?.stream === "tool" && e.payload.data?.phase === "result");
 console.log("call to new server without restart:", JSON.stringify({ name: tr?.payload.data.name, isError: tr?.payload.data.isError, text: tr?.payload.data.result?.content?.[0]?.text?.slice(0, 120) }));
 console.log("mcp.authLogin (no browser origin):", await r(A.call("mcp.authLogin", { sessionId: crypto.randomUUID(), serverName: "coder" })));
-const cfg2 = await A.call("config.get", {});
-// Removing a server whose args array would shrink needs replacePaths.
-await A.call("config.patch", { raw: JSON.stringify({ mcp: { servers: { coder2: null } } }), baseHash: cfg2.hash, replacePaths: ["mcp.servers.coder2.args"] });
+} finally {
+  // Removing a server whose args array would shrink needs replacePaths.
+  const cfg2 = await A.call("config.get", {});
+  await A.call("config.patch", { raw: JSON.stringify({ mcp: { servers: { coder2: null } } }), baseHash: cfg2.hash, replacePaths: ["mcp.servers.coder2.args"] });
+  if ((await A.call("config.get", {})).config?.mcp?.servers?.coder2) throw new Error("coder2 was not removed");
+}
 await A.close();

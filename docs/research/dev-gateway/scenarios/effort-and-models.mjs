@@ -4,7 +4,7 @@ const s = await A.call("sessions.create", { agentId: "pixel", label: `eff ${Date
 await A.call("sessions.messages.subscribe", { key: s.key });
 const t0 = Date.now();
 const run = await A.send(s.key, "effort check", { thinking: "high" }); const f = await run.done;
-const lc = [];
+const lc = A.events.filter((e) => e.t >= t0 && e.event === "agent" && e.payload?.runId === run.runId && e.payload.stream === "lifecycle").map((e) => JSON.stringify(e.payload.data).slice(0, 200));
 console.log("lifecycle:", lc.join("\n  "));
 console.log("final keys:", Object.keys(f).join(","), "message keys:", Object.keys(f.message ?? {}).join(","), "usage:", String(JSON.stringify(f.usage ?? f.message?.usage)).slice(0, 300));
 const h = await A.call("chat.history", { sessionKey: s.key, limit: 4 });

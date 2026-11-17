@@ -1,4 +1,4 @@
-import { connect, sleep, brief } from "./probe-lib.mjs";
+import { connect, sleep, brief, withAgentExecPolicy } from "./probe-lib.mjs";
 import crypto from "node:crypto";
 const caps = ["tool-events", "approvals", "exec-approvals", "plugin-approvals"];
 const A = await connect({ name: "A", scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"], caps });
@@ -36,16 +36,18 @@ if (which === "settings") {
     let res;
     if (change === "permissionMode") res = await r(A.call("sessions.patch", { key, permissionMode: "guarded" }));
     if (change === "sessionsPatchExecAsk") res = await r(ADM.call("sessions.patch", { key, execAsk: "off", execSecurity: "full" }));
-    if (change === "configFull") { const c = await ADM.call("config.get", {}); res = await r(ADM.call("config.patch", { raw: JSON.stringify({ agents: { entries: { atlas: { tools: { exec: { mode: "full" } } } } } }), baseHash: c.hash })); }
-    await sleep(4000);
+    // configFull switches Atlas to full exec only for this observation window;
+    // withAgentExecPolicy restores the exact original block afterwards.
+    const observe = () => sleep(4000);
+    if (change === "configFull") { res = "ok (config.patch exec.mode full)"; await withAgentExecPolicy(ADM, "atlas", { mode: "full" }, observe); }
+    else await observe();
     const list = await A.call("exec.approval.list", {});
     const still = JSON.stringify(list).includes(id);
     const resolved = A.events.find((e) => e.event === "exec.approval.resolved" && e.payload?.id === id);
-    console.log(`## ${change}: change=${res}\n still listed: ${still}; resolved event: ${resolved ? JSON.stringify(resolved.payload).slice(0, 300) : "none"}`);
+    console.log(`## ${change}: change=${res}\n still listed: ${still}; resolved event within 4 s: ${resolved ? JSON.stringify(resolved.payload).slice(0, 300) : "not seen"}`);
     if (still) await r(A.call("exec.approval.resolve", { id, decision: "deny" }));
     const f = await run.done.catch((e) => ({ state: "?" + e.message }));
     console.log(" run:", f.state, f.errorMessage ?? "");
-    if (change === "configFull") { const c = await ADM.call("config.get", {}); await ADM.call("config.patch", { raw: JSON.stringify({ agents: { entries: { atlas: { tools: { exec: null } } } } }), baseHash: c.hash }); await sleep(2000); }
   }
 }
 await A.close(); await ADM.close();

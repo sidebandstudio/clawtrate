@@ -1,11 +1,11 @@
 import { connect, sleep, brief } from "./probe-lib.mjs";
 // Routines: create, run now, approval from the run and its standing grant,
 // pause, refused run, remove. Prints cron events and the run's session.
-// Clear approvals left by earlier probes so they cannot be mistaken for this run's.
+// Acts only on approvals raised in this job's own run sessions and on grants
+// minted for this job.
 const caps = ["tool-events", "approvals", "exec-approvals", "plugin-approvals"];
 const A = await connect({ name: "R", scopes: ["operator.read", "operator.write", "operator.admin", "operator.approvals"], caps });
 const r = (p, n = 500) => p.then((x) => "ok " + JSON.stringify(x).slice(0, n), (e) => `ERR ${e.gatewayCode ?? ""} ${e.message.slice(0, 200)}`);
-for (const a of await A.call("exec.approval.list", {})) await A.call("exec.approval.resolve", { id: a.id, decision: "deny" }).catch(() => {});
 const t0 = Date.now();
 const add = await A.call("cron.add", { name: "probe routine", agentId: "atlas", schedule: { kind: "cron", expr: "0 9 * * *", tz: "Europe/Paris" }, sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: '#tool exec {"command":"uname -s"}' } });
 const id = add.id ?? add.job?.id;
@@ -16,7 +16,7 @@ console.log("cron.status:", await r(A.call("cron.status", {}), 300));
 // Run now; answer the approval with allow-always to mint a standing grant.
 const runP = A.call("cron.run", { id, mode: "force", waitTimeoutMs: 60000 }, 90000).then((x) => x, (e) => ({ err: e.message }));
 let req = null;
-for (let i = 0; i < 60 && !req; i++) { req = A.events.find((e) => e.event === "exec.approval.requested" && e.t >= t0) ?? null; if (!req) await sleep(500); }
+for (let i = 0; i < 60 && !req; i++) { req = A.events.find((e) => e.event === "exec.approval.requested" && e.t >= t0 && String(e.payload?.request?.sessionKey ?? "").includes(`:cron:${id}:run:`)) ?? null; if (!req) await sleep(500); }
 if (req) {
   console.log("approval from routine:", JSON.stringify({ sessionKey: req.payload.request.sessionKey, agentId: req.payload.request.agentId, scope: req.payload.request.scope, decisions: req.payload.request.allowedDecisions ?? req.payload.allowedDecisions }).slice(0, 400));
   console.log("resolve allow-always:", await r(A.call("exec.approval.resolve", { id: req.payload.id, decision: "allow-always", grantExpiresInDays: 1 })));
@@ -28,7 +28,7 @@ console.log("grants.list:", await r(A.call("exec.approval.grants.list", {}), 700
 const t1 = Date.now();
 const run2 = await A.call("cron.run", { id, mode: "force", waitTimeoutMs: 60000 }, 90000).catch((e) => ({ err: e.message }));
 for (let i = 0; i < 60 && A.events.filter((e) => e.t >= t1 && e.event === "cron" && e.payload.action === "finished").length === 0; i++) await sleep(500);
-console.log("second run (grant should apply):", JSON.stringify(run2).slice(0, 250), "| new approval asked:", A.events.some((e) => e.event === "exec.approval.requested" && e.t >= t1));
+console.log("second run (grant should apply):", JSON.stringify(run2).slice(0, 250), "| new approval for this job after its finished event:", A.events.some((e) => e.event === "exec.approval.requested" && e.t >= t1 && String(e.payload?.request?.sessionKey ?? "").includes(`:cron:${id}:run:`)));
 const runs = await A.call("cron.runs", { id, limit: 5 });
 console.log("cron.runs entry keys:", Object.keys((runs.entries ?? runs.runs ?? [])[0] ?? {}).join(","));
 const e0 = (runs.entries ?? runs.runs ?? [])[0] ?? {};
@@ -50,5 +50,5 @@ console.log("run due while paused:", await r(A.call("cron.run", { id, mode: "due
 console.log("remove:", await r(A.call("cron.remove", { id }), 200));
 console.log("\ncron events:");
 for (const e of A.events.filter((e) => e.t >= t0 && e.event === "cron")) console.log(" ", JSON.stringify({ ...e.payload, job: e.payload.job ? "<job>" : undefined }).slice(0, 330));
-for (const g of ((await A.call("exec.approval.grants.list", {})).grants ?? [])) await A.call("exec.approval.grants.revoke", { grantId: g.grantId });
+for (const g of ((await A.call("exec.approval.grants.list", {})).grants ?? []).filter((g) => g.cronJobId === id)) await A.call("exec.approval.grants.revoke", { grantId: g.grantId });
 await A.close();

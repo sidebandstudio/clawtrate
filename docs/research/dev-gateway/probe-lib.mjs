@@ -81,8 +81,10 @@ export function connect({ name = "probe", scopes = ["operator.read", "operator.w
       minProtocol: 4,
       maxProtocol: 4,
       onEvent: (e) => {
-        events.push({ t: Date.now(), event: e.event, payload: e.payload });
-        for (const w of waiters) w(e);
+        const rec = { t: Date.now(), event: e.event, payload: e.payload };
+        events.push(rec);
+        // Waiters get the same timestamped record as the buffered search.
+        for (const w of waiters) w(rec);
       },
       onConnectError: reject,
     };
@@ -120,12 +122,12 @@ export function connect({ name = "probe", scopes = ["operator.read", "operator.w
           new Promise((res, rej) => {
             const hit = events.find((e) => pred(e));
             if (hit) return res(hit);
-            const t = setTimeout(() => (waiters.delete(w), rej(new Error("waitFor timeout"))), timeoutMs);
-            const w = (e) => {
-              if (pred({ event: e.event, payload: e.payload })) {
+            const t = setTimeout(() => (waiters.delete(w), rej(new Error(`waitFor timeout after ${timeoutMs} ms`))), timeoutMs);
+            const w = (rec) => {
+              if (pred(rec)) {
                 clearTimeout(t);
                 waiters.delete(w);
-                res({ event: e.event, payload: e.payload });
+                res(rec);
               }
             };
             waiters.add(w);
@@ -153,3 +155,34 @@ export function brief(e, max = 400) {
   return `${e.event} ${JSON.stringify(p).slice(0, max)}`;
 }
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Runs fn with agents.entries.<agentId>.tools.exec replaced by `execBlock`,
+ * then restores the exact original block in finally and checks it. The
+ * restore clears the block first (null), then writes the original back, so no
+ * key from `execBlock` survives a merge patch. Throws if the restored block
+ * differs from the original. `adm` must hold operator.admin.
+ */
+export async function withAgentExecPolicy(adm, agentId, execBlock, fn) {
+  const read = async () => {
+    const c = await adm.call("config.get", {});
+    return { hash: c.hash, exec: c.config?.agents?.entries?.[agentId]?.tools?.exec };
+  };
+  const patch = async (value) => {
+    const { hash } = await read();
+    await adm.call("config.patch", { raw: JSON.stringify({ agents: { entries: { [agentId]: { tools: { exec: value } } } } }), baseHash: hash });
+  };
+  const original = (await read()).exec;
+  await patch(null);
+  await patch(execBlock);
+  try {
+    return await fn();
+  } finally {
+    await patch(null);
+    if (original !== undefined) await patch(original);
+    const restored = (await read()).exec;
+    if (JSON.stringify(restored) !== JSON.stringify(original)) {
+      throw new Error(`exec policy of ${agentId} not restored: ${JSON.stringify(restored)} != ${JSON.stringify(original)}`);
+    }
+  }
+}

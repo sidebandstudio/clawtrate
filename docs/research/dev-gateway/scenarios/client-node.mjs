@@ -42,9 +42,11 @@ const hello = await ready.catch((e) => ({ err: e.message }));
 console.log("node hello:", hello.err ?? JSON.stringify({ role: hello.auth?.role, scopes: hello.auth?.scopes }));
 const pl = await OP.call("node.pair.list", {});
 console.log("pending node pairings:", pl.pending.length, "| paired:", pl.paired.map((p) => ({ name: p.displayName, commands: p.commands })).filter((p) => p.name === "probe client node").map((p) => JSON.stringify(p)).join(","));
-for (const p of pl.pending) console.log("approve:", await r(OP.call("node.pair.approve", { requestId: p.requestId }), 200));
+// Approve only this script's own node (its node id is its device id).
+for (const p of pl.pending.filter((p) => p.nodeId === ident.deviceId)) console.log("approve:", await r(OP.call("node.pair.approve", { requestId: p.requestId }), 200));
 await sleep(1500);
-const me = (await OP.call("node.list", {})).nodes.find((n) => n.displayName === "probe client node");
+const me = (await OP.call("node.list", {})).nodes.find((n) => n.nodeId === ident.deviceId);
+if (!me) throw new Error("the script's own node is not listed");
 console.log("node.list entry:", JSON.stringify({ connected: me?.connected, commands: me?.commands, caps: me?.caps, platform: me?.platform }));
 console.log("invoke system.notify:", await r(OP.call("node.invoke", { nodeId: me.nodeId, command: "system.notify", params: { title: "Hi", body: "from probe" }, idempotencyKey: crypto.randomUUID(), timeoutMs: 5000 })));
 console.log("invoke custom clawtrate.app.open:", await r(OP.call("node.invoke", { nodeId: me.nodeId, command: "clawtrate.app.open", params: { app: "Notes" }, idempotencyKey: crypto.randomUUID(), timeoutMs: 5000 })));
