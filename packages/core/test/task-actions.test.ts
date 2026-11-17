@@ -89,6 +89,8 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
   const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   let clock = 0;
   let written = false;
+  let mainMade = false;
+  let mark = "idle";
   const ctx: TaskActionContext = {
     request: async (method, raw) => {
       const params = raw as Record<string, unknown>;
@@ -132,8 +134,9 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
     sleep: async (ms) => {
       clock += ms;
     },
+    runMark: () => mark,
   };
-  return { ctx, calls, wrote: () => written };
+  return { ctx, calls, wrote: () => written, setMark: (next: string) => (mark = next) };
 }
 
 describe("the rail's task actions", () => {
@@ -209,6 +212,21 @@ describe("the rail's task actions", () => {
       method: "sessions.patch",
       params: { key: KEY, archived: true, expectedSessionId: "s-1" },
     });
+  });
+
+  it("F-277: a run that starts while Archive checks is not stopped: nothing is archived and the person is asked", async () => {
+    const gateway = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: false } });
+    const request = gateway.ctx.request;
+    gateway.ctx.request = async (method, params) => {
+      const answer = await request(method, params);
+      // Another device starts a run just after the gateway described the task as idle.
+      if (method === "sessions.describe") gateway.setMark("run-2");
+      return answer;
+    };
+    await expect(archiveTask(gateway.ctx, KEY, { stop: false })).rejects.toBeInstanceOf(
+      ActiveRunError,
+    );
+    expect(gateway.calls.map((call) => call.method)).toEqual(["sessions.describe"]);
   });
 
   it("F-277: a task whose run is active is not archived without Stop, and nothing is asked of it", async () => {
@@ -309,6 +327,7 @@ describe("the rail's task actions", () => {
       ensureWrite: async () => {},
       now: () => 0,
       sleep: async () => {},
+      runMark: () => "",
     };
     const listed = await listArchived(ctx, "pip");
     expect(listed.tasks).toHaveLength(MAX_ARCHIVED_LISTED);

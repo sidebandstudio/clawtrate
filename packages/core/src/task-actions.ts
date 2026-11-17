@@ -30,6 +30,12 @@ export type TaskActionContext = {
   ensureWrite: () => Promise<void>;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
+  /**
+   * What the engine knows, from the gateway's events and rows, of a task's runs:
+   * a token that changes when a run starts or the row turns active. Archive reads
+   * it before and after its own check, and sends nothing if it moved.
+   */
+  runMark: (key: string) => string;
 };
 
 /** An archived task, as the Archived group shows it. */
@@ -292,10 +298,15 @@ export async function archiveTask(
   options: { stop: boolean },
 ): Promise<void> {
   await ctx.ensureWrite();
+  const mark = ctx.runMark(key);
   let row = await describe(ctx, key);
   if (row && isActive(row)) {
     if (!options.stop) throw new ActiveRunError();
     row = await stopAndSettle(ctx, key);
+  } else if (!options.stop && ctx.runMark(key) !== mark) {
+    // A run started, or the row turned active, while the check was under way: archiving now
+    // would stop it, so nothing is sent and the person is asked.
+    throw new ActiveRunError();
   }
   if (row?.archived === true) return;
   await call(ctx, "sessions.patch", archiveParams(key, sessionIdOf(row, key), true));

@@ -4568,6 +4568,11 @@ export class ClawtrateClient {
       },
       now: () => this.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      runMark: (key) => {
+        const row = this.rows.get(capId(key, MAX_ID_CHARS));
+        const active = row?.hasActiveRun === true || row?.status === "running";
+        return `${this.waiting.latestRunId(key) ?? ""}\u0000${active ? "active" : "idle"}`;
+      },
     };
   }
 
