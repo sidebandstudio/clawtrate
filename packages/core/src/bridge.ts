@@ -157,7 +157,7 @@ const QUESTION_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const MAX_LABEL_CHARS = 512;
 /** Why a held or queued message cannot be taken back to edit: its files would not fit. */
 export const TAKE_BACK_NO_ROOM =
-  "Its files don't fit with the files already waiting to be sent. The message stays as it is; send or remove some waiting files, then edit it.";
+  "Too many files are waiting to be sent for this message's files to come back with it. The message stays as it is; send or remove some waiting files, then edit it.";
 const MAX_ANSWER_CHARS = 4000;
 
 function sessionKey(value: unknown): string {

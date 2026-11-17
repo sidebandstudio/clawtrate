@@ -125,7 +125,7 @@ describe("taking a message back is all or nothing (F-468)", () => {
     expect(client.retainedAttachmentBytes).toBe(bytes);
     expect(bytes).toBeGreaterThan(0);
     // Told why, in plain words.
-    expect(String(refused)).toMatch(/files already waiting to be sent/);
+    expect(String(refused)).toMatch(/Too many files are waiting.*The message stays as it is/);
     viewer.dispose();
     client.stop();
   });
