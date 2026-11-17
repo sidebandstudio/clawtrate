@@ -25,3 +25,37 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The gateway version the project tests against (docs/decisions.md), from the public registry.
+      - run: npm install --global openclaw@2026.10.6
+      - run: openclaw --version
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm e2e
+
+  macos:
+    # The visual baselines were taken on macOS 15; font rasterising differs between releases.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium
+      - run: pnpm visual
+      # Unsigned: no signing variables are set, so the app is signed ad hoc and not notarized.
+      - run: pnpm package:mac
