@@ -66,9 +66,18 @@ function expect(condition: unknown, message: string): asserts condition {
   if (!condition) throw new CheckFailure(message);
 }
 
+/** JSON with object keys in sorted order, so equal values compare equal whatever their key order. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v !== null && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as JsonRecord).sort(([a], [b]) => (a < b ? -1 : 1)))
+      : v,
+  );
+}
+
 function same(actual: unknown, expected: unknown, what: string): void {
   expect(
-    JSON.stringify(actual) === JSON.stringify(expected),
+    canonical(actual) === canonical(expected),
     `${what}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
   );
 }
@@ -85,6 +94,74 @@ export class RunView {
     this.runId = runId;
     this.sessionKey = sessionKey;
     this.from = from;
+    track(this);
+  }
+
+  /**
+   * Assert every tool call of the run, in order: its name and exact
+   * arguments, its result's error flag, content and details, and its item's
+   * kind, title and end status. A run whose calls this was never called for
+   * fails the check (see `unaccountedRuns`); a run with no calls asserts [].
+   */
+  expectCalls(expected: CallExpectation[]): void {
+    const starts = this.tool("start");
+    const items = this.agent("item").filter((e) => this.data(e).kind === "tool");
+    same(
+      starts.map((e) => this.data(e).name),
+      expected.map((c) => c.name),
+      `the tool calls of run ${this.runId}`,
+    );
+    same(
+      items.filter((e) => this.data(e).phase === "start").length,
+      expected.length,
+      `tool items of run ${this.runId}`,
+    );
+    for (const [i, call] of expected.entries()) {
+      const where = `call ${i + 1} (${call.name})`;
+      const start = starts[i]!;
+      const id = this.data(start).toolCallId;
+      same(this.data(start).args, call.args, `${where} arguments`);
+      const end = this.tool("result").find((e) => this.data(e).toolCallId === id);
+      expect(end, `${where} has no result`);
+      same(this.data(end).isError, call.isError, `${where} isError`);
+      const result = rec(this.data(end).result);
+      const blocks = Array.isArray(result.content) ? (result.content as JsonRecord[]) : [];
+      same(
+        blocks.map((b) => b.type),
+        blocks.map(() => "text"),
+        `${where} content block types`,
+      );
+      const details = Object.hasOwn(result, "details") ? result.details : undefined;
+      if (typeof call.details === "function") {
+        (call.details as (d: JsonRecord | undefined, w: string) => void)(
+          details as JsonRecord | undefined,
+          where,
+        );
+      } else same(details, call.details, `${where} details`);
+      const texts = blocks.map((b) => String(b.text ?? ""));
+      if (typeof call.content === "function") call.content(texts, where);
+      else same(texts, call.content, `${where} content`);
+      const itemStart = items.find(
+        (e) => this.data(e).toolCallId === id && this.data(e).phase === "start",
+      );
+      const itemEnd = items.find(
+        (e) => this.data(e).toolCallId === id && this.data(e).phase === "end",
+      );
+      expect(itemStart && itemEnd, `${where} item start and end`);
+      same(
+        [this.data(itemStart).name, this.data(itemStart).title, this.data(itemEnd).status],
+        [call.name, call.title, call.status ?? (call.isError ? "failed" : "completed")],
+        `${where} item name, title and end status`,
+      );
+    }
+    TRACKED.get(this.runId)!.calls = true;
+  }
+
+  /** Assert how the run ended: its terminal chat state and, unless null, its final text. */
+  expectEnd(state: string, text: string | null): void {
+    same(this.terminal.state, state, `the end of run ${this.runId}`);
+    if (text !== null) same(this.finalText(), text, `the final text of run ${this.runId}`);
+    TRACKED.get(this.runId)!.end = true;
   }
 
   get events(): GatewayEvent[] {
@@ -186,6 +263,63 @@ export class RunView {
 }
 
 type Schema = TSchema;
+
+/** One expected tool call; see RunView.expectCalls. */
+export type CallExpectation = {
+  name: string;
+  args: unknown;
+  isError: boolean;
+  /** The result's text blocks exactly, or a check of them. */
+  content: string[] | ((texts: string[], where: string) => void);
+  /** The result's details exactly (undefined: none), or a check of them. */
+  details: unknown;
+  /** The item's title. */
+  title: string;
+  /** The item's end status; completed, or failed for an error. */
+  status?: string;
+};
+
+/** Every run a check started or watched, and whether its calls and its end were asserted. */
+const TRACKED = new Map<string, { calls: boolean; end: boolean; sessionKey: string }>();
+
+function track(view: RunView): void {
+  if (view.runId && !TRACKED.has(view.runId)) {
+    TRACKED.set(view.runId, { calls: false, end: false, sessionKey: view.sessionKey });
+  }
+}
+
+/** Runs of the check just finished whose calls or end were never asserted. */
+export function unaccountedRuns(): string[] {
+  return [...TRACKED.entries()].flatMap(([runId, t]) => [
+    ...(t.calls ? [] : [`the tool calls of run ${runId} (${t.sessionKey}) were not asserted`]),
+    ...(t.end ? [] : [`the end of run ${runId} (${t.sessionKey}) was not asserted`]),
+  ]);
+}
+
+/**
+ * Run one check: it fails if it fails, or if any run that appeared on any
+ * client while it ran was left with its calls or its end unasserted, whether
+ * or not the check made a view of it.
+ */
+export async function runCheck(h: Harness, check: ScenarioCheck): Promise<void> {
+  TRACKED.clear();
+  const clients = (["plain", "approvals", "questions"] as const).map((name) => h.op(name));
+  const before = clients.map((op) => op.lastSeq);
+  await check.run(h);
+  await sleep(300);
+  for (const [i, op] of clients.entries()) {
+    for (const e of op.events) {
+      const p = rec(e.payload);
+      if (e.seq <= before[i]! || typeof p.runId !== "string") continue;
+      if (e.event !== "agent" && e.event !== "chat" && e.event !== "session.tool") continue;
+      if (!TRACKED.has(p.runId)) {
+        TRACKED.set(p.runId, { calls: false, end: false, sessionKey: String(p.sessionKey) });
+      }
+    }
+  }
+  const left = unaccountedRuns();
+  if (left.length > 0) throw new CheckFailure(left.join("; "));
+}
 
 /**
  * Top-level fields the gateway sent that the published schema does not
@@ -407,6 +541,293 @@ export function scriptedArgs(directive: string, tool: string, agentId = "main"):
   return call.arguments;
 }
 
+// ---------------------------------------------------------------------------
+// Expected calls. Each builder gives one call's exact expectation; a field
+// that varies from run to run (a duration, a run id, the home folder) is a
+// check of its own instead of a value.
+
+type Check = (value: unknown, where: string) => void;
+const isNumberAtLeast =
+  (min: number): Check =>
+  (value, where) =>
+    expect(
+      typeof value === "number" && value >= min,
+      `${where} must be a number of at least ${min}, found ${JSON.stringify(value)}`,
+    );
+const matchesPattern =
+  (pattern: RegExp): Check =>
+  (value, where) =>
+    expect(
+      typeof value === "string" && pattern.test(value),
+      `${where} must match ${String(pattern)}, found ${JSON.stringify(value)}`,
+    );
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Details with exactly these keys; a function value checks that key's value. */
+function detailsLike(expected: Record<string, unknown>) {
+  return (details: JsonRecord | undefined, where: string) => {
+    expect(details !== undefined, `${where} has no details`);
+    same(Object.keys(details!).sort(), Object.keys(expected).sort(), `${where} details keys`);
+    for (const [key, value] of Object.entries(expected)) {
+      if (typeof value === "function") (value as Check)(details![key], `${where} details.${key}`);
+      else same(details![key], value, `${where} details.${key}`);
+    }
+  };
+}
+
+/** Text blocks exactly as given; a function checks that block. */
+function textsLike(expected: (string | Check)[]) {
+  return (texts: string[], where: string) => {
+    same(texts.length, expected.length, `${where} content blocks`);
+    for (const [i, value] of expected.entries()) {
+      if (typeof value === "function") value(texts[i], `${where} content[${i}]`);
+      else same(texts[i], value, `${where} content[${i}]`);
+    }
+  };
+}
+
+/** A tool result whose text is its details as indented JSON. */
+const jsonText =
+  (where: string, details: () => unknown): Check =>
+  (value) =>
+    same(value, JSON.stringify(details(), null, 2), `${where} text is its details as JSON`);
+
+async function fileCall(
+  h: Harness,
+  agentId: string,
+  path: string,
+  offset?: number,
+): Promise<CallExpectation> {
+  const file = await workspaceFile(h, agentId, path);
+  const text = offset
+    ? file
+        .split("\n")
+        .slice(offset - 1)
+        .join("\n")
+    : file;
+  return {
+    name: "read",
+    args: offset ? { path, offset } : { path },
+    isError: false,
+    content: [text],
+    details: { kind: "text", content: text },
+    title: offset ? `Read from line ${offset} in ${path}` : `Read from ${path}`,
+  };
+}
+
+/** `ls` as the bot sees its workspace: every entry quoted, folders with a slash, in name order. */
+async function lsCall(h: Harness, agentId: string): Promise<CallExpectation> {
+  const out = await h
+    .op("plain")
+    .request<{ entries: { name: string; kind: string }[] }>("agents.workspace.list", { agentId });
+  const text = out.entries
+    .map((e) => (e.kind === "directory" ? `${e.name}/` : e.name))
+    .sort()
+    .map((name) => JSON.stringify(name))
+    .join("\n");
+  return {
+    name: "ls",
+    args: { path: "." },
+    isError: false,
+    content: [text],
+    details: { content: text },
+    title: "Ls .",
+  };
+}
+
+/** A write or edit of a workspace file: the absolute path is the only varying part. */
+function fileChangeCall(
+  name: "write" | "edit",
+  args: { path: string; content?: string; edits?: unknown },
+  text: string,
+  change: { created?: boolean; diff: string; hunk: string },
+  title: string,
+): CallExpectation {
+  const tail = `/workspace/${args.path}`;
+  return {
+    name,
+    args,
+    isError: false,
+    content: textsLike([
+      matchesPattern(new RegExp(`^${escapeRe(text).replace("<path>", `\\S+${escapeRe(tail)}`)}$`)),
+    ]),
+    details: detailsLike({
+      changed: true,
+      ...(change.created === undefined ? {} : { created: change.created }),
+      diff: change.diff,
+      firstChangedLine: 1,
+      patch: matchesPattern(
+        new RegExp(`^--- (\\S+${escapeRe(tail)})\\n\\+\\+\\+ \\1\\n${escapeRe(change.hunk)}$`),
+      ),
+    }),
+    title,
+  };
+}
+
+/** An exec of one of the shell bot's commands, with the parts of its details that vary checked. */
+function execCall(
+  args: Record<string, unknown>,
+  result: {
+    isError: boolean;
+    content: (string | Check)[];
+    details: Record<string, unknown>;
+    title: string;
+    status?: string;
+  },
+): CallExpectation {
+  return {
+    name: "exec",
+    args,
+    isError: result.isError,
+    content: textsLike(result.content),
+    details: detailsLike({ ...result.details, cwd: matchesPattern(/\/workspaces\/otto$/) }),
+    title: result.title,
+    ...(result.status ? { status: result.status } : {}),
+  };
+}
+
+function askCall(
+  directive: string,
+  agentId: string,
+  answers: Record<string, string[]>,
+): CallExpectation {
+  const args = scriptedArgs(directive, "ask_user", agentId) as {
+    questions: { id: string; header: string; question: string }[];
+  };
+  const details = { status: "answered", answers: { answers } };
+  const lines = args.questions.map((q) => `${q.header}: ${(answers[q.id] ?? []).join(", ")}`);
+  return {
+    name: "ask_user",
+    args,
+    isError: false,
+    content: [`${lines.join("\n")}\n\n${JSON.stringify(details, null, 2)}`],
+    details,
+    title: `Ask User ${args.questions[0]!.question}`,
+  };
+}
+
+/** A sessions_send result: indented JSON of its details, whose run id varies. */
+function sendCall(
+  directive: string,
+  sender: string,
+  details: Record<string, unknown>,
+  isError: boolean,
+  title: string,
+): CallExpectation {
+  let seen: JsonRecord | undefined;
+  return {
+    name: "sessions_send",
+    args: scriptedArgs(directive, "sessions_send", sender),
+    isError,
+    details: (d: JsonRecord | undefined, where: string) => {
+      seen = d;
+      detailsLike({ runId: matchesPattern(UUID), ...details })(d, where);
+    },
+    content: (texts: string[], where: string) =>
+      textsLike([jsonText(where, () => seen)])(texts, where),
+    title,
+  };
+}
+
+/** A call to the stand-in coding agent's send_message: its rendering, then its own text. */
+function sendMessageCall(directive: string, message: string): CallExpectation {
+  const name = `${CODING_AGENT_SERVER}__send_message`;
+  let structured: JsonRecord = {};
+  return {
+    name,
+    args: scriptedArgs(directive, name),
+    isError: false,
+    details: (d: JsonRecord | undefined, where: string) => {
+      structured = rec(rec(d).structuredContent);
+      const thread = String(structured.threadId);
+      expect(/^thread-\d+$/.test(thread), `${where} thread id ${thread}`);
+      same(
+        d,
+        {
+          mcpServer: CODING_AGENT_SERVER,
+          mcpTool: "send_message",
+          structuredContent: {
+            threadId: thread,
+            reply: `Opened a branch and drafted the change for: ${message}`,
+            url: `${THREAD_URL_BASE}${thread}`,
+          },
+        },
+        `${where} details`,
+      );
+    },
+    content: (texts: string[], where: string) =>
+      same(
+        texts,
+        [
+          `structuredContent:\n${JSON.stringify(sortedKeys(structured), null, 2)}`,
+          SEND_MESSAGE_TEXT,
+        ],
+        `${where} content`,
+      ),
+    title: "Coder Send Message",
+  };
+}
+
+const slowTaskCall = (seconds: number): CallExpectation => ({
+  name: `${CODING_AGENT_SERVER}__slow_task`,
+  args: { seconds },
+  isError: false,
+  content: [`structuredContent:\n${JSON.stringify({ seconds, status: "done" }, null, 2)}`],
+  details: {
+    mcpServer: CODING_AGENT_SERVER,
+    mcpTool: "slow_task",
+    structuredContent: { status: "done", seconds },
+  },
+  title: "Coder Slow Task",
+});
+
+/** The routine the #schedule scenario creates, as the gateway returns it. */
+function routineDetails(sessionKey: string): Record<string, unknown> {
+  return {
+    id: matchesPattern(UUID),
+    owner: { agentId: "main", sessionKey, accountId: "default" },
+    agentId: "main",
+    sessionKey,
+    name: "Scripted reminder",
+    enabled: true,
+    deleteAfterRun: true,
+    createdAtMs: isNumberAtLeast(1),
+    schedule: { kind: "at", at: "2035-01-01T09:00:00.000Z" },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "Reminder: check the trail conditions." },
+    state: { nextRunAtMs: Date.parse("2035-01-01T09:00:00.000Z") },
+    updatedAtMs: isNumberAtLeast(1),
+    configRevision: matchesPattern(/^sha256:\S+$/),
+    nextRunAtMs: Date.parse("2035-01-01T09:00:00.000Z"),
+    deliveryPreview: { label: "not requested", detail: "not requested" },
+  };
+}
+
+/** A tool the gateway refused to a non-owner. */
+const refusedCall = (name: string, args: unknown): CallExpectation => ({
+  name,
+  args,
+  isError: true,
+  content: [`Tool ${name} not found`],
+  details: {},
+  title: "Automations",
+  status: "blocked",
+});
+
+/** The text a directive's scenario ends with when its tools return nothing it reads. */
+export function scriptedFinalText(directive: string, agentId = "main"): string {
+  const ctx: PlanContext = { agentId, sessionKey: null, results: [] };
+  const rounds = scenarioRounds(selectScenarios(directive));
+  return resolveRound(rounds.at(-1) ?? [], ctx, "check")
+    .flatMap((step) => (step.kind === "text" ? [step.text] : []))
+    .join("");
+}
+
+/** What the recipient answers a #message with. */
+const RECIPIENT_REPLY = scriptedFinalText("#reply");
+
 /** The tools a bot's model is offered in a paired client's run: the allowlist, expanded. */
 export const EXPECTED_OFFERED_TOOLS = [
   "apply_patch",
@@ -560,6 +981,13 @@ async function questionCheck(
   shape(questions);
   await answer(h, asked, answers);
   await h.wait(view);
+  view.expectCalls([askCall(directive, "pip", answers)]);
+  view.expectEnd(
+    "final",
+    `Thanks. You answered:\n\n${Object.entries(answers)
+      .map(([id, value]) => `- ${id}: ${value.join(", ")}`)
+      .join("\n")}`,
+  );
   same(view.terminal.state, "final", "the run's end");
   const result = view.result("ask_user");
   same(result.isError, false, "ask_user isError");
@@ -624,6 +1052,8 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         rebuilt = typeof d.text === "string" ? d.text : rebuilt + String(d.delta ?? "");
       same(rebuilt, text, "the text rebuilt from snapshots and deltas");
       same(pieces[0]!.text, pieces[0]!.delta, "the first assistant event is a snapshot");
+      view.expectCalls([]);
+      view.expectEnd("final", text);
     },
   },
   {
@@ -657,6 +1087,11 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["final", "I thought it over first. This is the answer that follows the reasoning."],
         "the visible answer",
       );
+      view.expectCalls([]);
+      view.expectEnd(
+        "final",
+        "I thought it over first. This is the answer that follows the reasoning.",
+      );
     },
   },
   {
@@ -673,6 +1108,13 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       const error = view.lifecycle("error")[0];
       expect(error, "lifecycle error");
       same(rec(view.data(error).terminalReply).disposition, "empty", "terminalReply disposition");
+      view.expectCalls([]);
+      view.expectEnd("error", null);
+      same(
+        view.terminal.errorMessage,
+        "⚠️ Agent couldn't generate a response. Please try again.",
+        "the error message",
+      );
     },
   },
   {
@@ -703,6 +1145,8 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       const item = view.agent("item")[0]!;
       same(view.data(item).itemId, `tool:${String(view.data(start).toolCallId)}`, "item id");
       same(view.result("read").isError, false, "read isError");
+      view.expectCalls([await lsCall(h, "main"), await fileCall(h, "main", "AGENTS.md")]);
+      view.expectEnd("final", scriptedFinalText("#steps"));
     },
   },
   {
@@ -733,6 +1177,8 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         view.finalText().startsWith("Here is a long answer"),
         "the aborted event carries the partial text",
       );
+      view.expectCalls([]);
+      view.expectEnd("aborted", null);
     },
   },
   {
@@ -755,6 +1201,10 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       const firstEnd = first.events.find(isChat("final"))!;
       const secondStart = second.lifecycle("start")[0]!;
       expect(secondStart.seq > firstEnd.seq, "the queued run starts after the first one ends");
+      first.expectCalls([]);
+      first.expectEnd("final", scriptedFinalText("#slow 3"));
+      second.expectCalls([]);
+      second.expectEnd("final", scriptedFinalText("#text"));
     },
   },
   {
@@ -797,6 +1247,10 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "I thought it over first. This is the answer that follows the reasoning.",
         "the active run answered the steer",
       );
+      first.expectCalls([slowTaskCall(3)]);
+      first.expectEnd("final", scriptedFinalText("#think"));
+      steer.expectCalls([]);
+      steer.expectEnd("final", "");
     },
   },
   {
@@ -810,6 +1264,26 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       same(result.details.status, "error", "result details status");
       const end = view.agent("item").find((e) => view.data(e).phase === "end")!;
       same(view.data(end).status, "failed", "item end status");
+      let failed: JsonRecord | undefined;
+      view.expectCalls([
+        {
+          name: "read",
+          args: scriptedArgs("#tool-fail", "read"),
+          isError: true,
+          details: (d: JsonRecord | undefined, where: string) => {
+            failed = d;
+            detailsLike({
+              status: "error",
+              tool: "read",
+              error: matchesPattern(/^File not found: \S+\/workspace\/missing\/old-notes\.md\.$/),
+            })(d, where);
+          },
+          content: (texts: string[], where: string) =>
+            textsLike([jsonText(where, () => failed)])(texts, where),
+          title: "Read from missing/old-notes.md",
+        },
+      ]);
+      view.expectEnd("final", scriptedFinalText("#tool-fail"));
     },
   },
   {
@@ -839,6 +1313,29 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       const longer = more.messages.find((m) => m.role === "toolResult")!;
       const text = (longer.content as JsonRecord[]).map((p) => String(p.text ?? "")).join("");
       expect(text.length > 8_000, "chat.history maxChars returns more of the output");
+      const full = Array.from({ length: 20_000 }, (_, i) => `line ${i + 1} of 20000`).join("\n");
+      const marker = "\n…(truncated)…";
+      view.expectCalls([
+        {
+          name: `${CODING_AGENT_SERVER}__long_output`,
+          args: { lines: 20_000 },
+          isError: false,
+          content: textsLike([
+            (value, where) =>
+              expect(
+                typeof value === "string" &&
+                  value.endsWith(marker) &&
+                  value.length > 8_000 &&
+                  value.length < 8_100 &&
+                  full.startsWith(value.slice(0, -marker.length)),
+                `${where} must be the start of the output, cut, then the marker`,
+              ),
+          ]),
+          details: { mcpServer: CODING_AGENT_SERVER, mcpTool: "long_output" },
+          title: "Coder Long Output",
+        },
+      ]);
+      view.expectEnd("final", scriptedFinalText("#long-output"));
     },
   },
   {
@@ -942,6 +1439,28 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           ),
         "the reusable rule was not applied in a new task",
       );
+      const lsOutput = await listing(h, SHELL_BOT);
+      const approvedLs = execCall(
+        { command: "ls", workdir: "." },
+        {
+          isError: false,
+          content: [lsOutput],
+          details: {
+            status: "completed",
+            exitCode: 0,
+            exitSignal: null,
+            exitReason: "exit",
+            durationMs: isNumberAtLeast(0),
+            aggregated: lsOutput,
+            noOutputTimedOut: false,
+          },
+          title: "Exec list files (in .)",
+        },
+      );
+      for (const run of [view, again, elsewhere]) {
+        run.expectCalls([approvedLs]);
+        run.expectEnd("final", scriptedFinalText("#approve"));
+      }
     },
   },
   {
@@ -981,6 +1500,22 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "The gateway did not let the command run.",
         "the reply after a denial",
       );
+      const deniedText = `Exec denied (gateway id=${id}, user-denied): echo 'Hello from Otto.'`;
+      view.expectCalls([
+        execCall(scriptedArgs("#approve-once", "exec", SHELL_BOT) as JsonRecord, {
+          isError: true,
+          content: [deniedText],
+          details: {
+            status: "failed",
+            exitCode: null,
+            durationMs: 0,
+            aggregated: deniedText,
+            timedOut: false,
+          },
+          title: "Exec print text (in .)",
+        }),
+      ]);
+      view.expectEnd("final", "The gateway did not let the command run.");
     },
   },
   {
@@ -1012,6 +1547,27 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       const end = view.agent("command_output").find((e) => view.data(e).phase === "end");
       expect(end, "command_output end");
       same(view.data(end).exitCode, 1, "command_output exitCode");
+      const exited =
+        "ls: missing-folder: No such file or directory\n\n(Command exited with code 1)";
+      view.expectCalls([
+        execCall(scriptedArgs("#exit-code", "exec", SHELL_BOT) as JsonRecord, {
+          isError: false,
+          content: [exited],
+          details: {
+            status: "completed",
+            exitCode: 1,
+            exitSignal: null,
+            exitReason: "exit",
+            durationMs: isNumberAtLeast(0),
+            aggregated: exited,
+            noOutputTimedOut: false,
+          },
+          title: "Exec list files in missing-folder (in .)",
+          // Observed: the item ends "failed" although the result is not an error.
+          status: "failed",
+        }),
+      ]);
+      view.expectEnd("final", scriptedFinalText("#exit-code"));
     },
   },
   {
@@ -1033,6 +1589,27 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "exec timeout details",
       );
       same(view.terminal.state, "final", "the run's end");
+      view.expectCalls([
+        execCall(scriptedArgs("#exec-timeout", "exec", SHELL_BOT) as JsonRecord, {
+          isError: true,
+          content: [
+            "Command timed out after 1 seconds.\n\nThe command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
+          ],
+          details: {
+            status: "failed",
+            exitCode: null,
+            exitSignal: "SIGTERM",
+            failureKind: "overall-timeout",
+            exitReason: "overall-timeout",
+            durationMs: isNumberAtLeast(900),
+            aggregated: "",
+            timedOut: true,
+            noOutputTimedOut: false,
+          },
+          title: "Exec sleep 5 (in .)",
+        }),
+      ]);
+      view.expectEnd("final", scriptedFinalText("#exec-timeout"));
     },
   },
   {
@@ -1056,6 +1633,22 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           ),
         "a denied bot raised an approval",
       );
+      const refusal = {
+        status: "error",
+        tool: "exec",
+        error: "exec denied: host=gateway security=deny",
+      };
+      view.expectCalls([
+        {
+          name: "exec",
+          args: scriptedArgs("#approve", "exec", "pip"),
+          isError: true,
+          content: [JSON.stringify(refusal, null, 2)],
+          details: refusal,
+          title: "Exec list files (in .)",
+        },
+      ]);
+      view.expectEnd("final", "The gateway did not let the command run.");
     },
   },
   {
@@ -1178,6 +1771,23 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         recipient.events.find(isChat("final"))!.seq < view.tool("result", "sessions_send")[0]!.seq,
         "order of recipient end and tool result",
       );
+      view.expectCalls([
+        sendCall(
+          "#message",
+          "pip",
+          {
+            sessionKey: RECIPIENT_SESSION,
+            status: "ok",
+            delivery: { status: "skipped" },
+            reply: RECIPIENT_REPLY,
+          },
+          false,
+          "Session Send agent marlow, timeout 30",
+        ),
+      ]);
+      view.expectEnd("final", `Marlow replied:\n\n> ${RECIPIENT_REPLY}`);
+      recipient.expectCalls([]);
+      recipient.expectEnd("final", RECIPIENT_REPLY);
     },
   },
   {
@@ -1193,6 +1803,21 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "The message to Marlow did not get through (forbidden).",
         "the sender's reply",
       );
+      view.expectCalls([
+        sendCall(
+          "#message",
+          "main",
+          {
+            status: "forbidden",
+            error:
+              "Agent-to-agent messaging denied by the requester agent tools.agentToAgent.send allowlist. Ask the operator to add this destination if intended.",
+            sessionKey: RECIPIENT_SESSION,
+          },
+          true,
+          "Session Send agent marlow, timeout 30",
+        ),
+      ]);
+      view.expectEnd("final", "The message to Marlow did not get through (forbidden).");
     },
   },
   {
@@ -1219,11 +1844,12 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         RECIPIENT_SESSION,
         view.from,
       );
+      await h.wait(recipient, 60_000);
+      // The sender's run ended before the recipient's did.
       expect(
-        recipient.terminal.state === undefined,
+        view.events.find(isChat("final"))!.seq < recipient.events.find(isChat("final"))!.seq,
         "the recipient was still running when the sender finished",
       );
-      await h.wait(recipient, 60_000);
       same(recipient.terminal.state, "final", "the recipient's run");
       // The late reply starts a new run in the sender's task.
       const late = await h
@@ -1251,6 +1877,28 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       h.observe(
         `late reply row: role ${String(forwarded.role)}, sourceTool ${String(rec(forwarded.provenance).sourceTool)}, sourceSessionKey ${String(rec(forwarded.provenance).sourceSessionKey)}`,
       );
+      view.expectCalls([
+        sendCall(
+          "#message-slow",
+          "pip",
+          {
+            status: "accepted",
+            sessionKey: RECIPIENT_SESSION,
+            targetDisposition: "queued",
+            delivery: { status: "pending" },
+          },
+          false,
+          "Session Send agent marlow, timeout 3",
+        ),
+      ]);
+      view.expectEnd(
+        "final",
+        "Marlow is still working on it. Their reply will arrive in this task.",
+      );
+      recipient.expectCalls([]);
+      recipient.expectEnd("final", scriptedFinalText("#slow 15"));
+      lateRun.expectCalls([]);
+      lateRun.expectEnd("final", "Marlow's reply arrived. It is shown above.");
     },
   },
   {
@@ -1273,6 +1921,24 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       );
       same(recipient.terminal.state, "error", "the recipient's run");
       same(view.finalText(), "Marlow got the message, but their run failed.", "the sender's reply");
+      view.expectCalls([
+        sendCall(
+          "#message-fail",
+          "pip",
+          {
+            status: "error",
+            error:
+              "LLM request rejected: The scripted model was asked to fail\\. | scripted_failure",
+            sentBeforeError: true,
+            sessionKey: RECIPIENT_SESSION,
+          },
+          true,
+          "Session Send agent marlow, timeout 30",
+        ),
+      ]);
+      view.expectEnd("final", "Marlow got the message, but their run failed.");
+      recipient.expectCalls([]);
+      recipient.expectEnd("error", null);
     },
   },
   {
@@ -1300,7 +1966,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "Thanks. You answered:\n\n- route: Town walk",
         "the recipient's reply",
       );
-      await h
+      const late = await h
         .op("plain")
         .waitFor(
           "the late reply's run in the sender's task",
@@ -1311,6 +1977,29 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           30_000,
           recipient.events.find(isChat("final"))!.seq,
         );
+      view.expectCalls([
+        sendCall(
+          "#message-ask",
+          "pip",
+          {
+            status: "accepted",
+            sessionKey: RECIPIENT_SESSION,
+            targetDisposition: "queued",
+            delivery: { status: "pending" },
+          },
+          false,
+          "Session Send agent marlow, timeout 5",
+        ),
+      ]);
+      view.expectEnd(
+        "final",
+        "Marlow is still working on it. Their reply will arrive in this task.",
+      );
+      recipient.expectCalls([askCall("#ask", RECIPIENT, { route: ["Town walk"] })]);
+      recipient.expectEnd("final", "Thanks. You answered:\n\n- route: Town walk");
+      const lateRun = new RunView(h.op("plain"), String(rec(late.payload).runId), key, view.from);
+      lateRun.expectCalls([]);
+      lateRun.expectEnd("final", "Marlow's reply arrived. It is shown above.");
     },
   },
   {
@@ -1365,6 +2054,8 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ],
         "the structured reply",
       );
+      view.expectCalls([sendMessageCall("#mcp", "Add a dark mode toggle to the settings page.")]);
+      view.expectEnd("final", `The coding agent picked it up: ${String(structured.url)}`);
     },
   },
   {
@@ -1392,6 +2083,10 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "the slow call's result",
       );
       same(view.finalText(), `The coding agent finished: ${String(structured.url)}`, "the reply");
+      view.expectCalls([
+        sendMessageCall("#mcp-slow 3", "Refactor the settings page into sections."),
+      ]);
+      view.expectEnd("final", `The coding agent finished: ${String(structured.url)}`);
     },
   },
   {
@@ -1402,6 +2097,17 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       const result = view.result(`${CODING_AGENT_SERVER}__run_checks`);
       same([result.isError, result.details.status], [true, "error"], "MCP error result");
       same(view.terminal.state, "final", "the run's end");
+      view.expectCalls([
+        {
+          name: `${CODING_AGENT_SERVER}__run_checks`,
+          args: {},
+          isError: true,
+          content: ["Checks failed: 2 of 14 tests failed in the stand-in suite."],
+          details: { mcpServer: CODING_AGENT_SERVER, mcpTool: "run_checks", status: "error" },
+          title: "Coder Run Checks",
+        },
+      ]);
+      view.expectEnd("final", scriptedFinalText("#mcp-error"));
     },
   },
   {
@@ -1442,6 +2148,17 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         result.seq > view.events.find(isChat("aborted"))!.seq,
         "order of the aborted event and the tool result",
       );
+      view.expectCalls([
+        {
+          name: `${CODING_AGENT_SERVER}__slow_task`,
+          args: { seconds: 3600 },
+          isError: true,
+          content: ["Aborted"],
+          details: {},
+          title: "Coder Slow Task",
+        },
+      ]);
+      view.expectEnd("aborted", "");
     },
   },
   {
@@ -1457,6 +2174,8 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       same(rec(view.terminal.errorDetail).failoverReason, "format", "errorDetail.failoverReason");
       expect(view.lifecycle("error").length === 1, "lifecycle error");
       same(view.agent("assistant").length, 0, "assistant events");
+      view.expectCalls([]);
+      view.expectEnd("error", null);
     },
   },
   {
@@ -1483,6 +2202,8 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["final", "I read my instructions file."],
         "the run's end",
       );
+      view.expectCalls([await fileCall(h, "main", "AGENTS.md")]);
+      view.expectEnd("final", scriptedFinalText("#read"));
     },
   },
   {
@@ -1525,6 +2246,13 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["final", "I read six files in my workspace."],
         "the run's end",
       );
+      const reads: CallExpectation[] = [];
+      for (const call of scriptedCalls("#read-six")) {
+        const args = call.arguments as { path: string; offset?: number };
+        reads.push(await fileCall(h, "main", args.path, args.offset));
+      }
+      view.expectCalls(reads);
+      view.expectEnd("final", scriptedFinalText("#read-six"));
     },
   },
   {
@@ -1560,6 +2288,8 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["final", "Those are the files in my workspace."],
         "the run's end",
       );
+      view.expectCalls([await lsCall(h, "main")]);
+      view.expectEnd("final", scriptedFinalText("#list"));
     },
   },
   {
@@ -1592,6 +2322,20 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["final", "I wrote notes/scratch.md."],
         "the run's end",
       );
+      view.expectCalls([
+        fileChangeCall(
+          "write",
+          scriptedArgs("#write", "write") as { path: string; content: string },
+          "Successfully wrote 34 bytes to <path>",
+          {
+            created: true,
+            diff: "+1 # Scratch\n+2 \n+3 - Check the trail map.",
+            hunk: "@@ -0,0 +1,3 @@\n+# Scratch\n+\n+- Check the trail map.\n",
+          },
+          "Write to notes/scratch.md (34 chars)",
+        ),
+      ]);
+      view.expectEnd("final", scriptedFinalText("#write"));
     },
   },
   {
@@ -1627,6 +2371,26 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["final", "I changed the departure time in notes/edit-me.md."],
         "the run's end",
       );
+      view.expectCalls([
+        fileChangeCall(
+          "write",
+          scriptedArgs("#edit", "write") as { path: string; content: string },
+          "Successfully wrote 15 bytes to <path>",
+          { created: true, diff: "+1 Leave at 9:00.", hunk: "@@ -0,0 +1,1 @@\n+Leave at 9:00.\n" },
+          "Write to notes/edit-me.md (15 chars)",
+        ),
+        fileChangeCall(
+          "edit",
+          scriptedArgs("#edit", "edit") as { path: string; edits: unknown },
+          "Successfully replaced 1 block(s) in <path>.",
+          {
+            diff: "-1 Leave at 9:00.\n+1 Leave at 8:30.",
+            hunk: "@@ -1,1 +1,1 @@\n-Leave at 9:00.\n+Leave at 8:30.\n",
+          },
+          "Edit in notes/edit-me.md",
+        ),
+      ]);
+      view.expectEnd("final", scriptedFinalText("#edit"));
     },
   },
   {
@@ -1659,6 +2423,20 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["final", "Saved to memory: you prefer the lake loop on relaxed weekends."],
         "the run's end",
       );
+      view.expectCalls([
+        fileChangeCall(
+          "write",
+          args,
+          "Successfully wrote 45 bytes to <path>",
+          {
+            created: true,
+            diff: "+1 - Prefers the lake loop on relaxed weekends.",
+            hunk: "@@ -0,0 +1,1 @@\n+- Prefers the lake loop on relaxed weekends.\n",
+          },
+          "Write to memory/2026-11-17.md (45 chars)",
+        ),
+      ]);
+      view.expectEnd("final", scriptedFinalText("#remember"));
     },
   },
   {
@@ -1694,6 +2472,54 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["final", "I found three results; they are shown above."],
         "the run's end",
       );
+      const wrapped = (inner: string): Check =>
+        matchesPattern(
+          new RegExp(
+            `^\\n<<<EXTERNAL_UNTRUSTED_CONTENT id="([0-9a-f]+)">>>\\nSource: Web Search\\n---\\n${escapeRe(inner)}\\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="\\1">>>$`,
+          ),
+        );
+      let found: JsonRecord | undefined;
+      view.expectCalls([
+        {
+          name: "web_search",
+          args,
+          isError: false,
+          details: (d: JsonRecord | undefined, where: string) => {
+            found = d;
+            detailsLike({
+              kind: "results",
+              provider: "ollama",
+              query: args.query,
+              count: 3,
+              tookMs: isNumberAtLeast(0),
+              results: (value: unknown, at: string) => {
+                const rows = value as JsonRecord[];
+                same(rows.length, 3, `${at} length`);
+                for (const [i, row] of rows.entries()) {
+                  detailsLike({
+                    title: wrapped(`Result ${i + 1} for ${args.query}`),
+                    url: `https://search.example/results/${i + 1}`,
+                    snippet: wrapped(
+                      `A scripted search result (${i + 1} of 3) about ${args.query}.`,
+                    ),
+                    siteName: wrapped("search.example"),
+                  })(row, `${at}[${i}]`);
+                }
+              },
+              externalContent: {
+                untrusted: true,
+                source: "web_search",
+                provider: "ollama",
+                wrapped: true,
+              },
+            })(d, where);
+          },
+          content: (texts: string[], where: string) =>
+            textsLike([jsonText(where, () => found)])(texts, where),
+          title: `Web Search for "${args.query}" (top 3)`,
+        },
+      ]);
+      view.expectEnd("final", scriptedFinalText("#search"));
     },
   },
   {
@@ -1737,13 +2563,61 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["final", "Those are my recent tasks."],
         "the run's end",
       );
+      let page: JsonRecord | undefined;
+      view.expectCalls([
+        {
+          name: "sessions_list",
+          args: scriptedArgs("#sessions", "sessions_list"),
+          isError: false,
+          details: (d: JsonRecord | undefined, where: string) => {
+            page = d;
+            detailsLike({
+              count: 5,
+              sessions: (value: unknown, at: string) => {
+                const rows = value as JsonRecord[];
+                same(rows.length, 5, `${at} length`);
+                for (const [i, row] of rows.entries()) {
+                  same(
+                    [row.agentId, row.kind, row.archived],
+                    ["main", "other", false],
+                    `${at}[${i}]`,
+                  );
+                  matchesPattern(/^agent:…\S+$/)(row.key, `${at}[${i}].key`);
+                  matchesPattern(UUID)(row.sessionId, `${at}[${i}].sessionId`);
+                }
+              },
+              hasMore: true,
+              nextOffset: 5,
+              limitApplied: 5,
+            })(d, where);
+          },
+          // The text keeps each key whole and lists the same sessions.
+          content: (texts: string[], where: string) => {
+            same(texts.length, 1, `${where} content blocks`);
+            const listed = rec(JSON.parse(texts[0]!) as unknown);
+            same(listed.count, 5, `${where} text count`);
+            const rows = (listed.sessions ?? []) as JsonRecord[];
+            same(
+              rows.map((row) => row.sessionId),
+              ((page?.sessions ?? []) as JsonRecord[]).map((row) => row.sessionId),
+              `${where} text sessions`,
+            );
+            expect(
+              rows.every((row) => String(row.key).startsWith("agent:main:")),
+              `${where} text keys`,
+            );
+          },
+          title: "Sessions 5",
+        },
+      ]);
+      view.expectEnd("final", scriptedFinalText("#sessions"));
     },
   },
   {
     name: "a routine created and removed by the owner",
     covers: ["#schedule"],
     run: async (h) => {
-      const key = `agent:main:check-schedule-${Date.now().toString(36)}`;
+      const key = await h.session("main", "schedule");
       const view = await h.ownerRun("main", key, "#schedule");
       // A run the CLI started reaches this client through session.tool (sessions.subscribe).
       same(view.agent("tool").length, 0, "agent tool events for a run another client started");
@@ -1792,6 +2666,39 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       for (const r of refused) {
         same((r.content as JsonRecord[])[0]?.text, "Tool automations not found", "the refusal");
       }
+      let routine: JsonRecord | undefined;
+      const addArgs = scriptedArgs("#schedule", "automations");
+      view.expectCalls([
+        {
+          name: "automations",
+          args: addArgs,
+          isError: false,
+          details: (d: JsonRecord | undefined, where: string) => {
+            routine = d;
+            detailsLike(routineDetails(key))(d, where);
+          },
+          content: (texts: string[], where: string) =>
+            textsLike([jsonText(where, () => routine)])(texts, where),
+          title: "Automations",
+        },
+        {
+          name: "automations",
+          args: { action: "remove", jobId: added.id },
+          isError: false,
+          content: [JSON.stringify({ ok: true, removed: true }, null, 2)],
+          details: { ok: true, removed: true },
+          title: "Automations",
+        },
+      ]);
+      view.expectEnd("final", "I created the routine and removed it again.");
+      asUser.expectCalls([
+        refusedCall("automations", addArgs),
+        refusedCall("automations", { action: "remove", jobId: "unknown" }),
+      ]);
+      asUser.expectEnd(
+        "final",
+        "The routine could not be set up here; the gateway offers routines only to its owner.",
+      );
     },
   },
   {
@@ -1821,6 +2728,20 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["final", "The plan is on the card above."],
         "the run's end",
       );
+      view.expectCalls([
+        {
+          name: "progress_card",
+          args: scriptedArgs("#plan", "progress_card"),
+          isError: false,
+          content: [
+            "Progress card updated (rev 1, 3/3 done)",
+            JSON.stringify({ revision: 1, steps: { completed: 3, total: 3 } }, null, 2),
+          ],
+          details: { revision: 1, steps: { completed: 3, total: 3 } },
+          title: "Progress Card",
+        },
+      ]);
+      view.expectEnd("final", scriptedFinalText("#plan"));
     },
   },
   {
@@ -1829,14 +2750,18 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     run: async (h) => {
       // What the model was really offered, as the scripted server received it.
       const paired = await h.session("main", "offered");
-      await h.run("plain", paired, "#text");
+      const pairedRun = await h.run("plain", paired, "#text");
+      pairedRun.expectCalls([]);
+      pairedRun.expectEnd("final", scriptedFinalText("#text"));
       same(
         await h.offeredTools(paired),
         EXPECTED_OFFERED_TOOLS,
         "tools offered in a paired client's run",
       );
-      const ownerKey = `agent:main:check-offered-owner-${Date.now().toString(36)}`;
-      await h.ownerRun("main", ownerKey, "#text");
+      const ownerKey = await h.session("main", "offered-owner");
+      const ownerRun = await h.ownerRun("main", ownerKey, "#text");
+      ownerRun.expectCalls([]);
+      ownerRun.expectEnd("final", scriptedFinalText("#text"));
       same(
         await h.offeredTools(ownerKey),
         [...EXPECTED_OFFERED_TOOLS, "automations"].sort(),
@@ -1903,6 +2828,8 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         view.agent("item").length,
         "item events reach every subscriber",
       );
+      view.expectCalls([await fileCall(h, "main", "AGENTS.md")]);
+      view.expectEnd("final", scriptedFinalText("#read"));
     },
   },
   {
@@ -1944,6 +2871,23 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["final", "The slow command finished."],
         "the run's end",
       );
+      view.expectCalls([
+        execCall(scriptedArgs("#sleep 1", "exec", SHELL_BOT) as JsonRecord, {
+          isError: false,
+          content: ["(no output)"],
+          details: {
+            status: "completed",
+            exitCode: 0,
+            exitSignal: null,
+            exitReason: "exit",
+            durationMs: isNumberAtLeast(900),
+            aggregated: "",
+            noOutputTimedOut: false,
+          },
+          title: "Exec sleep 1 (in .)",
+        }),
+      ]);
+      view.expectEnd("final", scriptedFinalText("#sleep 1"));
     },
   },
   {
@@ -1960,6 +2904,8 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           `#help does not give the phrase for #${scenario.name}`,
         );
       }
+      view.expectCalls([]);
+      view.expectEnd("final", scriptedFinalText("#help"));
     },
   },
   {
@@ -1998,6 +2944,11 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "two reasoning steps in one message join with a newline",
       );
       same(view.finalText(), "Thanks. You answered:\n\n- route: Lake loop", "the reply");
+      view.expectCalls([
+        sendMessageCall("#think #mcp #ask", "Add a dark mode toggle to the settings page."),
+        askCall("#ask", "pip", { route: ["Lake loop"] }),
+      ]);
+      view.expectEnd("final", "Thanks. You answered:\n\n- route: Lake loop");
     },
   },
   {
@@ -2033,7 +2984,7 @@ export async function runScenarioChecks(
   let failed = 0;
   for (const check of SCENARIO_CHECKS.filter(options.only ?? (() => true))) {
     try {
-      await check.run(harness);
+      await runCheck(harness, check);
       passed += 1;
       log(`ok    ${check.name}`);
     } catch (error) {
@@ -2052,7 +3003,9 @@ export async function prepareRecipient(h: Harness): Promise<void> {
   // The plain client also follows every session, so it receives session.tool
   // for runs it did not start; the questions client deliberately does not.
   await h.op("plain").request("sessions.subscribe", {});
-  await h.run("plain", RECIPIENT_SESSION, "#reply");
+  const opened = await h.run("plain", RECIPIENT_SESSION, "#reply");
+  opened.expectCalls([]);
+  opened.expectEnd("final", RECIPIENT_REPLY);
 }
 
 export function createHarness(

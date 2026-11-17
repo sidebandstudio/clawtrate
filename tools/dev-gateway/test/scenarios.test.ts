@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createCodingAgent, SEND_MESSAGE_TEXT, THREAD_URL_BASE } from "../src/coding-agent-mcp.ts";
-import { SCENARIO_CHECKS, uncoveredDirectives } from "../src/scenario-check.ts";
+import {
+  createHarness,
+  RunView,
+  runCheck,
+  SCENARIO_CHECKS,
+  uncoveredDirectives,
+} from "../src/scenario-check.ts";
+import type { OperatorSession } from "../src/operator.ts";
 import {
   resolveRound,
   scenarioRounds,
@@ -241,5 +248,40 @@ describe("the scenario check's coverage", () => {
     expect(SCENARIO_CHECKS.some((check) => check.name === "every directive has a check")).toBe(
       true,
     );
+  });
+});
+
+describe("a check cannot skip a run", () => {
+  /** Clients that hold given events and answer nothing. */
+  const fakeHarness = (events: { event: string; payload: unknown }[]) => {
+    const op = {
+      events: events.map((e, i) => ({ ...e, seq: i + 1, at: 0 })),
+      lastSeq: 0,
+    } as unknown as OperatorSession;
+    return createHarness({ plain: op, approvals: op, questions: op });
+  };
+  const ended = {
+    event: "chat",
+    payload: { runId: "r1", sessionKey: "agent:main:x", seq: 1, state: "final" },
+  };
+
+  it("fails a check that never asserts a run it saw", async () => {
+    const h = fakeHarness([ended]);
+    await expect(runCheck(h, { name: "lazy", covers: [], run: async () => {} })).rejects.toThrow(
+      /tool calls of run r1 .* were not asserted; the end of run r1/,
+    );
+  });
+
+  it("passes a check that asserts the run's calls and end", async () => {
+    const h = fakeHarness([ended]);
+    await runCheck(h, {
+      name: "thorough",
+      covers: [],
+      run: async () => {
+        const view = new RunView(h.op("plain"), "r1", "agent:main:x", 0);
+        view.expectCalls([]);
+        view.expectEnd("final", "");
+      },
+    });
   });
 });

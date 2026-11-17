@@ -10,6 +10,7 @@ import {
   ownerAgent,
   openCheckClients,
   prepareRecipient,
+  runCheck,
   SCENARIO_CHECKS,
   UNDECLARED_FIELDS,
   type ClientName,
@@ -49,7 +50,7 @@ test.describe.serial("scenario check", () => {
   for (const check of SCENARIO_CHECKS) {
     test(`${check.name} (${check.covers.join(" ")})`, async () => {
       test.setTimeout(180_000);
-      await check.run(harness);
+      await runCheck(harness, check);
     });
   }
 });
