@@ -1,0 +1,922 @@
+// The fixture's provider accounts (docs/design/bots.md): the accounts, the
+// sign-ins a gateway can start, each bot's binding and lock evidence, and
+// answers to the account commands that follow the engine's states closely
+// enough for interface checks. Every account, label, link and code is made up.
+//
+// Address parameters:
+//   access=read|write|admin   what the connection may do (default: the scene's)
+//   accounts=none|loading|error   no account yet, still loading, or a failed read
+//   lock=locked|bound|stale|gone|failed|multi|old|gateway|retained|none|watching|differs|lost|unwritten
+//                             the open bot's binding and evidence
+//   signin=<stage>            where a sign-in that starts goes: waiting (default),
+//                             failed, expired, cancelled, ended, busy, unconfirmed, saving
+//   saved=1                   a sign-in that ended uncleanly left an account behind
+//   kept=1                    the gateway has no main bot with a shared store
+//   create=failed|slow|checking   how New bot's Create goes
+//   admin=grant               a request for admin access is approved after a moment
+
+import {
+  ADMIN_SCOPES,
+  INTERACTIVE_SCOPES,
+  initialAccountsState,
+  type AccountsState,
+  type BotBinding,
+  type BridgeCommand,
+  type ClawtrateState,
+  type GatewayAccount,
+  type LockEvidence,
+  type SignInState,
+} from "@clawtrate/core";
+
+export type AccountParams = {
+  access: "read" | "write" | "admin" | null;
+  accounts: "ready" | "none" | "loading" | "error";
+  lock: string | null;
+  signin: string | null;
+  saved: boolean;
+  kept: boolean;
+  create: string | null;
+  admin: string | null;
+  bot: string | null;
+};
+
+export function accountParams(params: URLSearchParams): AccountParams {
+  const access = params.get("access");
+  const accounts = params.get("accounts");
+  return {
+    access: access === "read" || access === "write" || access === "admin" ? access : null,
+    accounts:
+      accounts === "none" || accounts === "loading" || accounts === "error" ? accounts : "ready",
+    lock: params.get("lock"),
+    signin: params.get("signin"),
+    saved: params.get("saved") === "1",
+    kept: params.get("kept") === "1",
+    create: params.get("create"),
+    admin: params.get("admin"),
+    bot: params.get("bot"),
+  };
+}
+
+export const NO_ACCOUNT_PARAMS: AccountParams = {
+  access: null,
+  accounts: "ready",
+  lock: null,
+  signin: null,
+  saved: false,
+  kept: false,
+  create: null,
+  admin: null,
+  bot: null,
+};
+
+const MINUTE = 60_000;
+const DAY = 86_400_000;
+
+const account = (
+  id: string,
+  label: string | null,
+  type: string,
+  kind: GatewayAccount["kind"],
+  extra: Partial<GatewayAccount> = {},
+): GatewayAccount => ({
+  id,
+  provider: id.split(":")[0]!,
+  label,
+  type,
+  status: type === "api_key" ? "static" : "ok",
+  expiresAt: null,
+  kind,
+  keptBy: null,
+  logoutSupported: true,
+  ...extra,
+});
+
+const evidence = (patch: Partial<LockEvidence>): LockEvidence => ({
+  status: "none",
+  checkedAt: null,
+  lastMatchAt: null,
+  lostAt: null,
+  error: null,
+  ...patch,
+});
+
+const binding = (botId: string, patch: Partial<BotBinding>): BotBinding => ({
+  botId,
+  primary: null,
+  provider: null,
+  model: null,
+  account: null,
+  mode: "default-model",
+  fallbacks: null,
+  suffixLost: false,
+  accountMissing: false,
+  effort: null,
+  order: null,
+  evidence: evidence({}),
+  fallbacksUnwritten: false,
+  ...patch,
+});
+
+const bound = (
+  botId: string,
+  ref: string,
+  effort: string,
+  now: number,
+  patch: Partial<BotBinding> = {},
+) => {
+  const [provider, rest] = ref.split("/") as [string, string];
+  const [model, acct] = rest.split("@") as [string, string | undefined];
+  return binding(botId, {
+    primary: ref,
+    provider,
+    model,
+    account: acct ?? null,
+    mode: acct ? "account" : "gateway",
+    fallbacks: [],
+    effort,
+    evidence: evidence({ status: "none", checkedAt: now - MINUTE }),
+    ...patch,
+  });
+};
+
+/** The accounts and bindings every fixture scene has, read at `now`. */
+export function fixtureAccounts(now: number, params: AccountParams): AccountsState {
+  if (params.accounts === "loading") return { ...initialAccountsState, status: "loading" };
+  if (params.accounts === "error")
+    return {
+      ...initialAccountsState,
+      status: "error",
+      error: "models.authStatus timed out after 60 seconds.",
+    };
+  const none = params.accounts === "none";
+  const accounts: GatewayAccount[] = none
+    ? []
+    : [
+        account("openai:work", "Work", "oauth", "subscription"),
+        account("openai:home", "Home", "oauth", "subscription"),
+        account("xai:personal", "Personal", "oauth", "subscription"),
+        account("github-copilot:github", null, "token", "subscription", {
+          status: "expiring",
+          expiresAt: now + 3 * DAY,
+        }),
+        account("anthropic:manual", "Lab key", "api_key", "key"),
+        account("anthropic:pip", "Pip's key", "api_key", "key", { keptBy: "pip" }),
+      ];
+  const locked = evidence({
+    status: "matched",
+    checkedAt: now - MINUTE,
+    lastMatchAt: now - MINUTE,
+  });
+  const bindings: BotBinding[] = none
+    ? [
+        bound("main", "openai/gpt-5.5", "medium", now),
+        bound("marlow", "openai/gpt-5.5", "low", now),
+        bound("otto", "openai/gpt-5.5", "medium", now),
+        bound("pip", "openai/gpt-5.5-mini", "low", now),
+        binding("quartermaster", {}),
+      ]
+    : [
+        bound("main", "openai/gpt-5.5", "medium", now),
+        bound("marlow", "openai/gpt-5.5@openai:work", "low", now),
+        bound("otto", "openai/gpt-5.5@openai:work", "medium", now, {
+          order: { ids: ["openai:work"], stored: true, configured: null },
+          evidence: locked,
+        }),
+        bound("pip", "openai/gpt-5.5-mini@openai:home", "low", now),
+        binding("quartermaster", {}),
+      ];
+  const state: AccountsState = {
+    ...initialAccountsState,
+    status: "ready",
+    readAt: now - MINUTE,
+    labels: params.access === "admin",
+    defaultModel: "openai/gpt-5.5",
+    mainShared: !params.kept,
+    accounts,
+    methods: [
+      {
+        id: "xai/xai-oauth",
+        provider: "xai",
+        label: "xAI",
+        hint: "SuperGrok or X Premium",
+        kind: "device-code",
+        flow: "code",
+        group: "subscription",
+      },
+      {
+        id: "openai/openai-device-code",
+        provider: "openai",
+        label: "ChatGPT",
+        hint: "Plus, Pro or Business",
+        kind: "device-code",
+        flow: "code",
+        group: "subscription",
+      },
+      {
+        id: "openai/openai",
+        provider: "openai",
+        label: "ChatGPT in the browser",
+        hint: "Plus, Pro or Business",
+        kind: "oauth",
+        flow: "paste",
+        group: "subscription",
+      },
+      {
+        id: "openai/openai-token-sharing",
+        provider: "openai",
+        label: "Sign in with ChatGPT",
+        hint: "on the gateway's machine",
+        kind: "oauth",
+        flow: "host",
+        group: "subscription",
+      },
+      {
+        id: "github-copilot/github-copilot",
+        provider: "github-copilot",
+        label: "GitHub Copilot",
+        hint: "Copilot subscription",
+        kind: "device-code",
+        flow: "code",
+        group: "subscription",
+      },
+      {
+        id: "github-copilot/github-copilot-enterprise",
+        provider: "github-copilot",
+        label: "GitHub Copilot Enterprise",
+        hint: "Your company's GitHub",
+        kind: "device-code",
+        flow: "domain",
+        group: "subscription",
+      },
+      {
+        id: "minimax/minimax-global-oauth",
+        provider: "minimax-portal",
+        label: "MiniMax",
+        hint: "Coding plan",
+        kind: "device-code",
+        flow: "code",
+        group: "subscription",
+      },
+      {
+        id: "openrouter/openrouter-oauth",
+        provider: "openrouter",
+        label: "OpenRouter",
+        hint: "Credits",
+        kind: "oauth",
+        flow: "paste",
+        group: "token",
+      },
+    ],
+    keyProviders: [
+      { provider: "openai", hasKey: false, method: null },
+      { provider: "anthropic", hasKey: !none, method: null },
+      { provider: "xai", hasKey: false, method: null },
+      { provider: "openrouter", hasKey: false, method: null },
+    ],
+    models: [
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: null,
+        available: true,
+        levels: ["off", "low", "medium", "high"],
+        defaultLevel: "medium",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.5-mini",
+        name: null,
+        available: true,
+        levels: ["low", "medium"],
+        defaultLevel: "low",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.5-codex",
+        name: null,
+        available: false,
+        levels: ["low", "medium", "high"],
+        defaultLevel: "medium",
+      },
+      {
+        provider: "xai",
+        id: "grok-4.7",
+        name: null,
+        available: true,
+        levels: ["low", "high"],
+        defaultLevel: "low",
+      },
+      {
+        provider: "xai",
+        id: "grok-build-0.1",
+        name: null,
+        available: true,
+        levels: [],
+        defaultLevel: null,
+      },
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-5.5",
+        name: null,
+        available: true,
+        levels: ["off", "low", "medium", "high"],
+        defaultLevel: "medium",
+      },
+      {
+        provider: "github-copilot",
+        id: "gpt-5.5",
+        name: null,
+        available: true,
+        levels: ["low", "medium", "high"],
+        defaultLevel: "medium",
+      },
+    ],
+    bindings,
+  };
+  return withLock(state, params, now);
+}
+
+/** The open bot's binding in the state the address names. */
+function withLock(state: AccountsState, params: AccountParams, now: number): AccountsState {
+  const id = params.bot ?? "otto";
+  const lock = params.lock;
+  if (!lock) return state;
+  const patch = (change: Partial<BotBinding>) => ({
+    ...state,
+    bindings: state.bindings.map((b) => (b.botId === id ? { ...b, ...change } : b)),
+  });
+  const work = "openai/gpt-5.5@openai:work";
+  const at = now - MINUTE;
+  switch (lock) {
+    case "locked":
+      return patch({
+        primary: work,
+        account: "openai:work",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        order: { ids: ["openai:work"], stored: true, configured: null },
+        evidence: evidence({ status: "matched", checkedAt: at, lastMatchAt: at }),
+      });
+    case "bound":
+    case "watching":
+      return patch({
+        primary: work,
+        account: "openai:work",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        order: null,
+        evidence: evidence({ status: "none", checkedAt: at }),
+      });
+    case "stale":
+      return patch({
+        primary: "openai/gpt-5.5@openai:home",
+        account: "openai:home",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        order: { ids: ["openai:work"], stored: true, configured: null },
+        evidence: evidence({ status: "other", checkedAt: at, lastMatchAt: at - 2 * MINUTE }),
+      });
+    case "gone":
+      return patch({
+        primary: work,
+        account: "openai:work",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        order: null,
+        evidence: evidence({
+          status: "none",
+          checkedAt: at,
+          lastMatchAt: at - 11 * MINUTE,
+          lostAt: at,
+        }),
+      });
+    case "failed":
+      return patch({
+        primary: work,
+        account: "openai:work",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        order: { ids: ["openai:work"], stored: true, configured: null },
+        evidence: evidence({
+          status: "failed",
+          checkedAt: at - 11 * MINUTE,
+          lastMatchAt: at - 11 * MINUTE,
+          error: "models.authStatus timed out",
+        }),
+      });
+    case "multi":
+      return patch({
+        primary: work,
+        account: "openai:work",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        order: { ids: ["openai:work", "openai:home"], stored: true, configured: null },
+        evidence: evidence({ status: "multi", checkedAt: at }),
+      });
+    case "old":
+      return patch({
+        primary: work,
+        account: "openai:work",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        order: { ids: ["openai:work"], stored: true, configured: null },
+        evidence: evidence({
+          status: "matched",
+          checkedAt: now - 9 * MINUTE,
+          lastMatchAt: now - 9 * MINUTE,
+        }),
+      });
+    case "gateway":
+      return patch({
+        primary: "openai/gpt-5.5",
+        account: null,
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "gateway",
+        order: null,
+        fallbacks: [],
+        evidence: evidence({ status: "none", checkedAt: at }),
+      });
+    case "retained":
+      return patch({
+        primary: "openai/gpt-5.5",
+        account: null,
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "gateway",
+        order: { ids: ["openai:work"], stored: true, configured: null },
+        fallbacks: [],
+        evidence: evidence({ status: "none", checkedAt: at }),
+      });
+    case "lost":
+      return patch({
+        primary: "openai/gpt-5.5",
+        account: null,
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "gateway",
+        suffixLost: true,
+        order: null,
+        evidence: evidence({ status: "none", checkedAt: at }),
+      });
+    case "none":
+      return patch({
+        primary: "openai/gpt-5.5@openai:gone",
+        account: "openai:gone",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        accountMissing: true,
+        order: null,
+        evidence: evidence({ status: "none", checkedAt: at }),
+      });
+    case "differs":
+      return patch({
+        primary: work,
+        account: "openai:work",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        fallbacks: ["anthropic/claude-sonnet-5.5"],
+        order: null,
+        evidence: evidence({ status: "none", checkedAt: at }),
+      });
+    case "unwritten":
+      return patch({
+        primary: work,
+        account: "openai:work",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        fallbacksUnwritten: true,
+        order: null,
+        evidence: evidence({ status: "none", checkedAt: at }),
+      });
+    default:
+      return state;
+  }
+}
+
+/** The connection with the access the address names. */
+export function withAccess(state: ClawtrateState, params: AccountParams): ClawtrateState {
+  if (!params.access) return state;
+  const scopes =
+    params.access === "admin"
+      ? [...ADMIN_SCOPES]
+      : params.access === "write"
+        ? [...INTERACTIVE_SCOPES]
+        : ["operator.read"];
+  return {
+    ...state,
+    connection: {
+      ...state.connection,
+      scopes,
+      requestedScopes: scopes,
+      canWrite: params.access !== "read",
+      canAnswer: params.access !== "read",
+      canApprove: params.access !== "read",
+      canAdmin: params.access === "admin",
+    },
+  };
+}
+
+const REQUEST = "3f9a2c71-5b0e-4d6a-9c18-7e2f0a4b6d93";
+
+/**
+ * The account commands, answered on the fixture's state. Returns undefined
+ * for a command that is not one of them.
+ */
+export function accountCommand(
+  command: BridgeCommand,
+  get: () => ClawtrateState,
+  set: (state: ClawtrateState) => void,
+  params: AccountParams,
+): Promise<unknown> | undefined {
+  const accounts = () => get().accounts;
+  const put = (change: (a: AccountsState) => AccountsState) =>
+    set({ ...get(), accounts: change(accounts()) });
+  const later = (ms: number, run: () => void) => setTimeout(run, ms);
+  const signIn = (patch: Partial<SignInState>) =>
+    put((a) => (a.signIn ? { ...a, signIn: { ...a.signIn, ...patch } } : a));
+  const result = (added: string[]) => ({
+    added,
+    landed: params.kept ? ("kept" as const) : ("shared" as const),
+    keptBy: params.kept ? "otto" : null,
+    readFailed: false,
+    locks: [],
+  });
+  switch (command.type) {
+    case "requestAccess": {
+      if (command.tier !== "admin") return undefined;
+      const upgrade = (patch: Partial<ClawtrateState["connection"]["upgrade"]>) =>
+        set({
+          ...get(),
+          connection: { ...get().connection, upgrade: { ...get().connection.upgrade, ...patch } },
+        });
+      upgrade({
+        status: "requesting",
+        scopes: [...ADMIN_SCOPES],
+        requestId: null,
+        approveCommand: null,
+        error: null,
+      });
+      later(400, () =>
+        upgrade({
+          status: "pending",
+          requestId: REQUEST,
+          approveCommand: `openclaw devices approve ${REQUEST}`,
+        }),
+      );
+      if (params.admin === "grant")
+        later(1000, () => {
+          upgrade({ status: "approved" });
+          set(
+            withAccess(
+              { ...get(), accounts: { ...accounts(), labels: true } },
+              { ...params, access: "admin" },
+            ),
+          );
+        });
+      return Promise.resolve();
+    }
+    case "refreshAccounts":
+      return Promise.resolve();
+    case "checkLock":
+      put((a) => ({
+        ...a,
+        bindings: a.bindings.map((b) =>
+          b.botId === command.botId && b.evidence.status !== "failed"
+            ? {
+                ...b,
+                evidence: {
+                  ...b.evidence,
+                  checkedAt: Date.now(),
+                  ...(b.evidence.status === "matched" ? { lastMatchAt: Date.now() } : {}),
+                },
+              }
+            : b,
+        ),
+      }));
+      return Promise.resolve();
+    case "startSignIn": {
+      const method = accounts().methods.find((m) => m.id === command.methodId)!;
+      const base: SignInState = {
+        id: "fixture-signin",
+        method: method.id,
+        provider: method.provider,
+        label: method.label,
+        flow: method.flow,
+        forBot: params.kept ? "otto" : "main",
+        keptOnly: params.kept,
+        stage: "starting",
+        step: null,
+        error: null,
+        cancelling: false,
+        saving: false,
+        startedAt: Date.now(),
+        result: null,
+        byKey: false,
+      };
+      put((a) => ({ ...a, signIn: base }));
+      const stage = params.signin ?? "waiting";
+      later(300, () => {
+        if (stage === "busy")
+          return signIn({
+            stage: "busy",
+            error: "OpenClaw setup is already in progress; try again when it finishes.",
+          });
+        if (stage === "starting") return;
+        if (stage === "connected") {
+          // The person approves on the provider's page a moment later.
+          signIn({
+            stage: "waiting",
+            step: {
+              id: "code",
+              type: "progress",
+              title: null,
+              message: null,
+              url: "https://sign-in.example/device",
+              code: "QK4F-7PZD",
+              expiresInMinutes: 15,
+              placeholder: null,
+              sensitive: false,
+            },
+          });
+          later(500, () => connected());
+          return;
+        }
+        if (["failed", "expired", "cancelled", "ended", "unconfirmed"].includes(stage)) {
+          return signIn({
+            stage: stage as SignInState["stage"],
+            error:
+              stage === "failed"
+                ? `${method.label} refused the sign-in: the code was not accepted.`
+                : stage === "unconfirmed"
+                  ? "Your sign-in was saved, but the connection update could not be confirmed. Send /login refresh in chat to try again."
+                  : null,
+            result: result(
+              params.saved || stage === "unconfirmed" ? [`${method.provider}:second`] : [],
+            ),
+          });
+        }
+        if (method.flow === "paste")
+          return signIn({
+            stage: "entering",
+            step: {
+              id: "paste",
+              type: "text",
+              title: null,
+              message: null,
+              url: "https://sign-in.example/authorize?state=fixture",
+              code: null,
+              expiresInMinutes: null,
+              placeholder: "Paste here",
+              sensitive: true,
+            },
+          });
+        if (method.flow === "domain")
+          return signIn({
+            stage: "entering",
+            step: {
+              id: "domain",
+              type: "text",
+              title: "GitHub Enterprise address",
+              message:
+                "Enter your company's GitHub address. The gateway then shows a code to enter there.",
+              url: null,
+              code: null,
+              expiresInMinutes: null,
+              placeholder: "github.example.com",
+              sensitive: false,
+            },
+          });
+        if (method.flow === "host")
+          return signIn({
+            stage: "waiting",
+            step: {
+              id: "host",
+              type: "progress",
+              title: null,
+              message:
+                "On a computer that isn't the gateway, forward its port first: ssh -N -L 8080:127.0.0.1:8080 gateway-host. Then open the sign-in page in that computer's browser.",
+              url: "https://sign-in.example/authorize?state=host",
+              code: null,
+              expiresInMinutes: null,
+              placeholder: null,
+              sensitive: false,
+            },
+          });
+        signIn({
+          stage: "waiting",
+          saving: stage === "saving",
+          step: {
+            id: "code",
+            type: "progress",
+            title: null,
+            message: null,
+            url: "https://sign-in.example/device",
+            code: "QK4F-7PZD",
+            expiresInMinutes: 15,
+            placeholder: null,
+            sensitive: false,
+          },
+        });
+      });
+      return Promise.resolve();
+    }
+    case "answerSignIn": {
+      const current = accounts().signIn;
+      if (current?.step && !current.step.sensitive && current.flow === "domain") {
+        signIn({
+          stage: "waiting",
+          step: {
+            ...current.step,
+            type: "progress",
+            code: "QK4F-7PZD",
+            expiresInMinutes: 15,
+            url: "https://github.example.com/login/device",
+            sensitive: false,
+          },
+        });
+        return Promise.resolve();
+      }
+      signIn({ stage: "checking" });
+      later(400, () => connected());
+      return Promise.resolve();
+    }
+    case "cancelSignIn":
+      signIn({
+        stage: "cancelled",
+        step: null,
+        result: result(params.saved ? ["openai:second"] : []),
+      });
+      return Promise.resolve();
+    case "dismissSignIn":
+      put((a) => ({ ...a, signIn: null }));
+      return Promise.resolve();
+    case "saveApiKey": {
+      const id = `${command.provider}:manual`;
+      put((a) => ({
+        ...a,
+        accounts: a.accounts.some((x) => x.id === id)
+          ? a.accounts
+          : [...a.accounts, account(id, null, "api_key", "key")],
+      }));
+      return Promise.resolve({ profileId: id });
+    }
+    case "setAccountLabel":
+      put((a) => ({
+        ...a,
+        accounts: a.accounts.map((x) =>
+          x.id === command.profileId ? { ...x, label: command.label.trim() } : x,
+        ),
+      }));
+      return Promise.resolve();
+    case "disconnectAccount":
+      put((a) => ({
+        ...a,
+        accounts: a.accounts.filter((x) => x.id !== command.profileId),
+        bindings: a.bindings.map((b) =>
+          b.account === command.profileId ? { ...b, accountMissing: true } : b,
+        ),
+      }));
+      return Promise.resolve();
+    case "createBot": {
+      const name = command.name.trim() || "New bot";
+      put((a) => ({
+        ...a,
+        creation: {
+          name,
+          status: params.create === "checking" ? "checking" : "creating",
+          slow: false,
+          botId: null,
+          error: null,
+        },
+      }));
+      if (params.create === "slow") {
+        later(300, () =>
+          put((a) => (a.creation ? { ...a, creation: { ...a.creation, slow: true } } : a)),
+        );
+        return new Promise(() => {});
+      }
+      return new Promise((resolve, reject) =>
+        later(500, () => {
+          if (params.create === "failed") {
+            put((a) =>
+              a.creation
+                ? { ...a, creation: { ...a.creation, status: "failed", error: "refused" } }
+                : a,
+            );
+            reject(new Error("Could not create the bot."));
+            return;
+          }
+          const id =
+            name
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-|-$/g, "") || "new-bot";
+          const ref = `${command.provider}/${command.model}${command.account ? `@${command.account}` : ""}`;
+          const state = get();
+          set({
+            ...state,
+            bots: [
+              ...state.bots,
+              {
+                id,
+                name,
+                emoji: null,
+                avatarUrl: command.avatar,
+                theme: null,
+                model: ref,
+                isDefault: false,
+              },
+            ],
+            tasksByBot: { ...state.tasksByBot, [id]: [] },
+            accounts: {
+              ...state.accounts,
+              creation: { name, status: "created", slow: false, botId: id, error: null },
+              bindings: [
+                ...state.accounts.bindings,
+                bound(id, ref, command.effort ?? "medium", Date.now()),
+              ],
+            },
+          });
+          resolve({ botId: id });
+        }),
+      );
+    }
+    case "dismissBotCreation":
+      put((a) => ({ ...a, creation: null }));
+      return Promise.resolve();
+    case "changeBotAccount":
+    case "setBotModel": {
+      put((a) => ({
+        ...a,
+        bindings: a.bindings.map((b) => {
+          if (b.botId !== command.botId) return b;
+          const accountId = command.type === "changeBotAccount" ? command.account : b.account;
+          const provider = command.type === "changeBotAccount" ? command.provider : b.provider!;
+          const ref = `${provider}/${command.model}${accountId ? `@${accountId}` : ""}`;
+          const next = bound(b.botId, ref, command.effort ?? b.effort ?? "medium", Date.now(), {
+            order: b.order,
+          });
+          // The order the gateway keeps is not changed by a change of account.
+          const ids = b.order?.ids ?? [];
+          const status: LockEvidence["status"] =
+            !accountId || ids.length === 0
+              ? "none"
+              : ids.length === 1 && ids[0] === accountId
+                ? "matched"
+                : ids.includes(accountId)
+                  ? "multi"
+                  : ids.length === 1
+                    ? "other"
+                    : "none";
+          return { ...next, evidence: { ...b.evidence, status, checkedAt: Date.now() } };
+        }),
+      }));
+      return Promise.resolve();
+    }
+    case "removeBotFallbacks":
+      put((a) => ({
+        ...a,
+        bindings: a.bindings.map((b) =>
+          b.botId === command.botId ? { ...b, fallbacks: [], fallbacksUnwritten: false } : b,
+        ),
+      }));
+      return Promise.resolve();
+    default:
+      return undefined;
+  }
+
+  function connected() {
+    const current = accounts().signIn;
+    if (!current) return;
+    const id = `${current.provider}:second`;
+    put((a) => ({
+      ...a,
+      accounts: a.accounts.some((x) => x.id === id)
+        ? a.accounts
+        : [
+            ...a.accounts,
+            account(
+              id,
+              null,
+              current.flow === "key" ? "api_key" : "oauth",
+              "subscription",
+              params.kept ? { keptBy: "otto" } : {},
+            ),
+          ],
+      signIn: a.signIn
+        ? { ...a.signIn, stage: "connected", step: null, result: result([id]) }
+        : null,
+    }));
+  }
+}

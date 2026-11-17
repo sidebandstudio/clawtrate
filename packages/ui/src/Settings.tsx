@@ -1,14 +1,21 @@
-// Settings, opened with Cmd/Ctrl+, from any screen. Its Gateway pane shows the
+// Settings, opened with Cmd/Ctrl+, from any screen (bots.md section 7). Two
+// panes: the list of sections, and the chosen one. Its Gateway pane shows the
 // connection as it is (address, state, this device, the scopes the gateway
-// granted) and offers Reconnect and Disconnect. A modal dialog: focus stays
-// inside it, Escape closes it, and focus returns to where it was.
+// granted) and offers Reconnect and Disconnect; Accounts lists the gateway's
+// accounts. A modal dialog: focus stays inside it, Escape closes it, and
+// focus returns to where it was.
 
-import type { ConnectionState, HostInfo } from "@clawtrate/core";
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import type { AccountsState, Bot, ConnectionState, HostInfo } from "@clawtrate/core";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useCommand } from "./bridge.tsx";
+import { useAccountsSection } from "./bots/AccountsSection.tsx";
+import { Dialog } from "./bots/Dialog.tsx";
+import { recall, remember } from "./bots/memory.ts";
+import { useAnnouncer } from "./bots/parts.tsx";
+import "./bots/bots.css";
 import { failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
-import { CloseIcon } from "./icons.tsx";
+import { BackIcon, ChevronIcon, CloseIcon } from "./icons.tsx";
 
 /** The connection's state, as the Gateway pane names it. */
 export function gatewayState(connection: ConnectionState): string {
@@ -47,17 +54,43 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
+type Section = "gateway" | "accounts";
+const SECTIONS: Array<[Section, string]> = [
+  ["gateway", "Gateway"],
+  ["accounts", "Accounts"],
+];
+/** ⌘, opens on the section last shown, Gateway the first time. */
+const SHOWN_LAST = "settings-section";
+
 export function Settings({
   connection,
   info,
+  accounts,
+  bots,
   onClose,
 }: {
   connection: ConnectionState;
   info: HostInfo;
+  accounts: AccountsState;
+  bots: readonly Bot[];
   onClose: () => void;
 }) {
   const send = useCommand();
-  const dialogRef = useRef<HTMLElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [section, setSectionState] = useState<Section>(
+    () => recall<Section>(SHOWN_LAST) ?? "gateway",
+  );
+  // On a phone the list comes first; a section replaces it.
+  const [pane, setPane] = useState<"nav" | "section">("nav");
+  const [announcer, announce] = useAnnouncer();
+  const setSection = (next: Section) => {
+    remember(SHOWN_LAST, next);
+    setSectionState(next);
+    setPane("section");
+    requestAnimationFrame(() =>
+      dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus(),
+    );
+  };
   const state = gatewayState(connection);
   const problem = gatewayProblem(connection);
   const canReconnect = state === "Offline" || state === "Disconnected";
@@ -69,7 +102,11 @@ export function Settings({
     info.deviceName ?? (info.kind === "desktop" ? "Clawtrate Desktop" : "Clawtrate Web");
 
   useEffect(() => {
-    dialogRef.current?.querySelector<HTMLElement>(".settings-close")?.focus();
+    const dialog = dialogRef.current;
+    const close = [...(dialog?.querySelectorAll<HTMLElement>(".settings-close") ?? [])].find(
+      (each) => each.getClientRects().length > 0,
+    );
+    close?.focus();
   }, []);
 
   // An action replaces its own button (Disconnect gives way to Reconnect, and
@@ -84,27 +121,6 @@ export function Settings({
     )?.focus();
   });
 
-  // The dialog keeps focus inside itself; Escape closes it.
-  const onKey = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-      return;
-    }
-    if (event.key !== "Tab" || !dialogRef.current) return;
-    const items = [...dialogRef.current.querySelectorAll<HTMLElement>("button, [tabindex='0']")];
-    const first = items[0];
-    const last = items.at(-1);
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last?.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first?.focus();
-    }
-  };
-
   const dot =
     state === "Connected"
       ? "connected"
@@ -114,125 +130,174 @@ export function Settings({
           ? "error"
           : "disconnected";
 
-  return (
-    <div className="settings-layer">
-      <button
-        type="button"
-        className="settings-scrim"
-        aria-label="Close settings"
-        tabIndex={-1}
-        onClick={onClose}
-      />
-      <section
-        ref={dialogRef}
-        className="settings"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-title"
-        data-testid="settings"
-        onKeyDown={onKey}
-      >
-        <header className="settings-head">
-          <h2 id="settings-title">Settings</h2>
+  const toNav = (
+    <button
+      type="button"
+      className="icon-button b-back"
+      data-variant="quiet"
+      data-b="to-nav"
+      aria-label="Back to settings"
+      onClick={() => {
+        setPane("nav");
+        requestAnimationFrame(() =>
+          dialogRef.current
+            ?.querySelector<HTMLElement>('.b-nav-item[aria-current="page"]')
+            ?.focus(),
+        );
+      }}
+    >
+      <BackIcon />
+    </button>
+  );
+  const closeButton = (
+    <button
+      type="button"
+      className="icon-button b-close settings-close"
+      aria-label="Close settings"
+      title="Close (Esc)"
+      onClick={onClose}
+    >
+      <CloseIcon />
+    </button>
+  );
+
+  const accountsSection = useAccountsSection({ accounts, bots, connection, info, announce, toNav });
+
+  const gatewayPane = (
+    <>
+      <dl className="facts" data-testid="gateway-facts">
+        <div>
+          <dt>Address</dt>
+          <dd title={connection.gatewayUrl ?? undefined}>{connection.gatewayUrl ?? "None yet"}</dd>
+        </div>
+        <div>
+          <dt>State</dt>
+          <dd className="settings-state" data-testid="gateway-state">
+            <span className="status-dot" data-status={dot} aria-hidden="true" />
+            {state}
+          </dd>
+        </div>
+        <div>
+          <dt>This device</dt>
+          <dd>
+            {deviceName}
+            {connection.deviceId ? ` · ${connection.deviceId.slice(0, 8)}` : ""}
+          </dd>
+        </div>
+        <div>
+          <dt>Granted scopes</dt>
+          <dd data-testid="granted-scopes" className="b-wrap-value">
+            {connection.status === "connected" && connection.scopes.length > 0
+              ? connection.scopes.join(", ")
+              : "None while not connected"}
+          </dd>
+        </div>
+        {connection.serverVersion && (
+          <div>
+            <dt>Gateway</dt>
+            <dd>
+              OpenClaw {connection.serverVersion}
+              {connection.protocol !== null ? ` · protocol ${connection.protocol}` : ""}
+            </dd>
+          </div>
+        )}
+      </dl>
+      {problem && (
+        <div className="form-error" role="alert" data-testid="gateway-problem">
+          <strong>{problem.title}</strong>
+          {problem.message}
+        </div>
+      )}
+      <div className="settings-actions">
+        {canReconnect && (
           <button
             type="button"
-            className="icon-button settings-close"
-            aria-label="Close settings"
-            title="Close (Esc)"
-            onClick={onClose}
+            className="button"
+            data-variant="primary"
+            onClick={() => void send({ type: "retry" })}
           >
-            <CloseIcon />
+            Reconnect
           </button>
+        )}
+        {canDisconnect && (
+          <button type="button" className="button" onClick={() => void send({ type: "suspend" })}>
+            Disconnect
+          </button>
+        )}
+        {connection.gatewayUrl && (
+          <button
+            type="button"
+            className="button"
+            data-variant="quiet"
+            onClick={() => {
+              onClose();
+              void send({ type: "disconnect" });
+            }}
+          >
+            Use another gateway
+          </button>
+        )}
+      </div>
+      {connection.gatewayUrl && (
+        <p className="settings-note">
+          {gatewayLabel(connection.gatewayUrl)} keeps this device's pairing while it is
+          disconnected.{" "}
+          {connection.canAdmin
+            ? "This device holds admin access, which it asked for to change bots and accounts."
+            : "This device asks for more access only when you start something that needs it."}
+        </p>
+      )}
+    </>
+  );
+
+  let content: ReactNode;
+  if (section === "accounts" && accountsSection.connect) content = accountsSection.connect;
+  else {
+    const view =
+      section === "accounts" && accountsSection.view
+        ? accountsSection.view
+        : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+    content = (
+      <>
+        <header className="b-section-head">
+          {view.back}
+          <h3 id="b-section-title" tabIndex={-1}>
+            {view.title}
+          </h3>
         </header>
-        <section className="settings-pane" aria-labelledby="settings-gateway">
-          <h3 id="settings-gateway">Gateway</h3>
-          <dl className="facts" data-testid="gateway-facts">
-            <div>
-              <dt>Address</dt>
-              <dd title={connection.gatewayUrl ?? undefined}>
-                {connection.gatewayUrl ?? "None yet"}
-              </dd>
-            </div>
-            <div>
-              <dt>State</dt>
-              <dd className="settings-state" data-testid="gateway-state">
-                <span className="status-dot" data-status={dot} aria-hidden="true" />
-                {state}
-              </dd>
-            </div>
-            <div>
-              <dt>This device</dt>
-              <dd>
-                {deviceName}
-                {connection.deviceId ? ` · ${connection.deviceId.slice(0, 8)}` : ""}
-              </dd>
-            </div>
-            <div>
-              <dt>Granted scopes</dt>
-              <dd data-testid="granted-scopes">
-                {connection.status === "connected" && connection.scopes.length > 0
-                  ? connection.scopes.join(", ")
-                  : "None while not connected"}
-              </dd>
-            </div>
-            {connection.serverVersion && (
-              <div>
-                <dt>Gateway</dt>
-                <dd>
-                  OpenClaw {connection.serverVersion}
-                  {connection.protocol !== null ? ` · protocol ${connection.protocol}` : ""}
-                </dd>
-              </div>
-            )}
-          </dl>
-          {problem && (
-            <div className="form-error" role="alert" data-testid="gateway-problem">
-              <strong>{problem.title}</strong>
-              {problem.message}
-            </div>
-          )}
-          <div className="settings-actions">
-            {canReconnect && (
-              <button
-                type="button"
-                className="button"
-                data-variant="primary"
-                onClick={() => void send({ type: "retry" })}
-              >
-                Reconnect
-              </button>
-            )}
-            {canDisconnect && (
-              <button
-                type="button"
-                className="button"
-                onClick={() => void send({ type: "suspend" })}
-              >
-                Disconnect
-              </button>
-            )}
-            {connection.gatewayUrl && (
-              <button
-                type="button"
-                className="button"
-                data-variant="quiet"
-                onClick={() => {
-                  onClose();
-                  void send({ type: "disconnect" });
-                }}
-              >
-                Use another gateway
-              </button>
-            )}
+        <div className="b-section-body">{view.body}</div>
+        {view.foot && <footer className="b-section-foot">{view.foot}</footer>}
+      </>
+    );
+  }
+
+  return (
+    <Dialog kind="settings" labelledBy="settings-title" onClose={onClose} testId="settings">
+      <div className="b-settings" data-pane={pane} ref={dialogRef}>
+        <nav className="b-nav" aria-label="Settings">
+          <div className="b-nav-head">
+            <h2 id="settings-title">Settings</h2>
+            {closeButton}
           </div>
-          {connection.gatewayUrl && (
-            <p className="settings-note">
-              {gatewayLabel(connection.gatewayUrl)} keeps this device's pairing while it is
-              disconnected. This device asks for read access only.
-            </p>
-          )}
+          {SECTIONS.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className="b-nav-item"
+              aria-current={id === section ? "page" : undefined}
+              onClick={() => setSection(id)}
+            >
+              {label}
+              <ChevronIcon />
+            </button>
+          ))}
+        </nav>
+        <section className="b-section" aria-labelledby="b-section-title">
+          {closeButton}
+          {content}
         </section>
-      </section>
-    </div>
+        {announcer}
+      </div>
+    </Dialog>
   );
 }

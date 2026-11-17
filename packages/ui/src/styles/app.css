@@ -2790,57 +2790,8 @@ textarea {
   background: var(--text-faint);
 }
 
-/* Settings: a dialog over either screen. */
-.settings-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 40;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-}
-
-.settings-scrim {
-  position: absolute;
-  inset: 0;
-  padding: 0;
-  border: 0;
-  background: var(--bg-scrim);
-  cursor: default;
-}
-
-.settings {
-  position: relative;
-  width: min(520px, 100%);
-  max-height: calc(100% - 32px);
-  overflow: auto;
-  padding: 18px 20px 22px;
-  border-radius: var(--radius-lg);
-  background: var(--bg-raised);
-  box-shadow: var(--shadow-pop);
-}
-
-.settings-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 14px;
-}
-
-.settings-head h2 {
-  margin: 0;
-  font-size: var(--text-lg);
-  font-weight: var(--weight-medium);
-}
-
-.settings-pane h3 {
-  margin: 0 0 8px;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-regular);
-  color: var(--text-faint);
-}
-
-.settings .facts dd {
+/* Settings: the Gateway pane's own parts; its frame is the two-pane dialog of bots.css. */
+.b-settings .facts dd {
   text-align: right;
 }
 

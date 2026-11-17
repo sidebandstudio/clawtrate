@@ -17,6 +17,8 @@ import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
+import { NewBot } from "./bots/NewBot.tsx";
+import "./bots/bots.css";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
 
 /** A control that can take focus now: in the page, shown, and not behind the drawer. */
@@ -135,6 +137,25 @@ export function Shell({
   const backLinkRef = useRef<(() => void) | null>(null);
 
   const [shortcuts, setShortcuts] = useState(false);
+  // New bot, from the "+" menu and ⌘N, where the connection may write (bots.md section 3).
+  const [newBot, setNewBot] = useState(false);
+  const openNewBot = useCallback(() => setNewBot(true), []);
+  useEffect(() => {
+    if (!interactive || inert) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === "n"
+      ) {
+        event.preventDefault();
+        setNewBot(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [interactive, inert]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "/") {
@@ -366,6 +387,7 @@ export function Shell({
         bubbles={bubbles}
         onBubbles={onBubbles}
         onOpenSettings={onOpenSettings}
+        onNewBot={interactive ? openNewBot : null}
         inert={drawerOpen || inert}
       />
       <div className="main-pane" ref={mainRef}>
@@ -427,10 +449,33 @@ export function Shell({
             onClose={() => setPanel(false)}
             closeRef={closeRef}
             panelRef={panelRef}
+            accounts={state.accounts}
+            bots={state.bots}
+            tasks={bot ? (state.tasksByBot[bot.id] ?? []) : []}
+            transcripts={state.transcripts}
+            connection={state.connection}
+            info={info}
           />
         )}
       </div>
       {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
+      {newBot && (
+        <NewBot
+          accounts={state.accounts}
+          bots={state.bots}
+          connection={state.connection}
+          info={info}
+          onClose={() => setNewBot(false)}
+          onCreated={(id) => {
+            setNewBot(false);
+            selection.selectBot(id);
+            openDetail();
+            requestAnimationFrame(() =>
+              document.querySelector<HTMLElement>(".composer-input")?.focus(),
+            );
+          }}
+        />
+      )}
       <p
         className="visually-hidden"
         role="status"

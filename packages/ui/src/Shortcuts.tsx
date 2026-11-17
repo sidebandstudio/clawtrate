@@ -17,6 +17,7 @@ export const SHORTCUTS: Array<[keys: string, does: string]> = [
   ["⌥↑ ⌥↓", "The bot above or below"],
   ["⌃Tab", "The next bot; ⇧⌃Tab, the one before"],
   ["⌘\\", "Show or hide the work panel"],
+  ["⌘N", "New bot"],
   ["⌘,", "Settings"],
   ["⌘/", "Show these shortcuts"],
 ];

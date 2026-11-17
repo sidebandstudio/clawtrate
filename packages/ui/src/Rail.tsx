@@ -22,6 +22,7 @@ import {
   EyeIcon,
   HideIcon,
   PinIcon,
+  PlusIcon,
   SearchIcon,
   SettingsIcon,
   SortIcon,
@@ -215,6 +216,7 @@ function TaskRows({
 
 type MenuState =
   | { kind: "gateway"; trigger: HTMLElement }
+  | { kind: "plus"; trigger: HTMLElement }
   | { kind: "sort"; trigger: HTMLElement }
   | { kind: "bot"; botId: string; trigger: HTMLElement; x: number; y: number };
 
@@ -242,6 +244,7 @@ export function Rail({
   bubbles,
   onBubbles,
   onOpenSettings,
+  onNewBot,
   inert,
 }: {
   bots: Bot[];
@@ -262,6 +265,11 @@ export function Rail({
   bubbles: BubbleChoice;
   onBubbles: (choice: BubbleChoice) => void;
   onOpenSettings: () => void;
+  /**
+   * "New bot" in the "+" menu (visual-language.md section 7, bots.md section
+   * 3); absent, with the "+" itself, when the connection may not write.
+   */
+  onNewBot: (() => void) | null;
   inert: boolean;
 }) {
   const send = useCommand();
@@ -927,6 +935,25 @@ export function Rail({
         </button>
         {query === null ? (
           <>
+            {onNewBot && (
+              <button
+                type="button"
+                className="icon-button"
+                aria-haspopup="menu"
+                aria-expanded={menu?.kind === "plus"}
+                aria-label="New"
+                title="New"
+                data-testid="plus"
+                onClick={(event) => {
+                  const trigger = event.currentTarget;
+                  setMenu((current) =>
+                    current?.kind === "plus" ? null : { kind: "plus", trigger },
+                  );
+                }}
+              >
+                <PlusIcon />
+              </button>
+            )}
             <button
               type="button"
               className="icon-button"
@@ -1081,6 +1108,30 @@ export function Rail({
           label="Gateway"
           className="gateway-menu"
           entries={gatewayEntries}
+          onClose={closeMenu}
+          trigger={menu.trigger}
+        />
+      )}
+      {menu?.kind === "plus" && onNewBot && (
+        <Menu
+          label="New"
+          className="rail-menu plus-menu"
+          style={{
+            left: Math.max(8, menu.trigger.getBoundingClientRect().left),
+            top: menu.trigger.getBoundingClientRect().bottom + 6,
+          }}
+          entries={[
+            {
+              kind: "item",
+              label: "New bot",
+              hint: "⌘N",
+              onSelect: () => {
+                // Focus goes back to the "+" first, so the dialog returns it there.
+                closeMenu(true);
+                onNewBot();
+              },
+            },
+          ]}
           onClose={closeMenu}
           trigger={menu.trigger}
         />
