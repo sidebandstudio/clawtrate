@@ -11,6 +11,13 @@
 // The development gateway is an instance of this run's own, named `e2e-<run>`,
 // and is recorded, like the app, in the same run records `pnpm e2e` keeps, so
 // a run killed outright is cleaned up by the next `pnpm e2e` or launch check.
+//
+// What this run must leave alone is asserted: the processes listening on the
+// default instance's and the web preview's ports (19001, 19091, 5310, 5311),
+// and a sentinel instance, `e2e-<run>-other`, that it starts unseeded and never
+// touches. Other builders' instances come and go on a shared machine; a change
+// to them is printed as a note, not counted as a failure, since a snapshot
+// cannot show this run caused it.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -63,6 +70,37 @@ function fingerprint(paths: string[]): string {
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The processes listening on the protected ports, each by PID, start time and
+ * address. `lsof` exits 1 when nothing listens, which is an answer too.
+ */
+export function protectedListeners(): string[] {
+  let out: string;
+  try {
+    out = execFileSync(
+      "lsof",
+      ["-nP", ...FORBIDDEN_PORTS.map((port) => `-iTCP:${port}`), "-sTCP:LISTEN", "-Fpn"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+  } catch (error) {
+    const failed = error as { status?: number; stdout?: string };
+    if (failed.status !== 1 || failed.stdout) throw error;
+    out = "";
+  }
+  const rows: string[] = [];
+  let pid = 0;
+  for (const line of out.split("\n")) {
+    if (line.startsWith("p")) pid = Number(line.slice(1));
+    if (line.startsWith("n")) {
+      const found = processIdentity(pid);
+      rows.push(
+        `pid ${pid} (${found.state === "alive" ? found.identity : found.state}) ${line.slice(1)}`,
+      );
+    }
+  }
+  return [...new Set(rows)].sort();
+}
 
 /** The processes whose command line names `dir`: the app and its helpers, which all carry its data folder. */
 export function processesUsing(dir: string): number[] {
@@ -135,8 +173,17 @@ export default async function globalSetup() {
   process.on("SIGTERM", onSignal);
   process.on("exit", () => void cleanUpOnce());
 
+  const sentinel = `${name}-other`;
+  const sentinelState = () => {
+    const row = listInstances().find((entry) => entry.name === sentinel);
+    return row
+      ? `running ${row.gatewayRunning}, gateway pid ${row.gatewayPid}, ports ${row.gatewayPort}/${row.providerPort}`
+      : "absent";
+  };
+  let sentinelBefore: string | null = null;
   const realBefore = fingerprint(REAL_DATA);
-  const othersBefore = runningOthers([name]);
+  const listenersBefore = protectedListeners();
+  const othersBefore = runningOthers([name, sentinel]);
   let appProcess: ChildProcess | null = null;
   const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
   record.dirs.push(dir);
@@ -156,29 +203,52 @@ export default async function globalSetup() {
     for (let i = 0; i < 50 && processesUsing(userData).length > 0; i += 1) await sleep(200);
     const left = processesUsing(userData);
     if (left.length > 0) problems.push(`app processes still running: ${left.join(", ")}`);
+    if (sentinelBefore !== null && sentinelState() !== sentinelBefore) {
+      problems.push(`the sentinel instance changed: ${sentinelBefore} -> ${sentinelState()}`);
+    }
     problems.push(...cleanUpOnce());
     if (fingerprint(REAL_DATA) !== realBefore) {
       problems.push("the data folder of this machine's own Clawtrate changed");
     }
-    const othersAfter = runningOthers([name]);
-    const gone = othersBefore.filter((row) => !othersAfter.includes(row));
-    if (gone.length > 0) problems.push(`instances that were running changed: ${gone.join(", ")}`);
-    if (listInstances().some((row) => row.name === name)) {
-      problems.push(`instance ${name} was not removed`);
+    const listenersAfter = protectedListeners();
+    if (listenersAfter.join("\n") !== listenersBefore.join("\n")) {
+      problems.push(
+        `the listeners on ports ${FORBIDDEN_PORTS.join(", ")} changed:\n` +
+          `before: ${listenersBefore.join("; ") || "none"}\nafter: ${listenersAfter.join("; ") || "none"}`,
+      );
+    }
+    const othersAfter = runningOthers([name, sentinel]);
+    const changed = othersBefore.filter((row) => !othersAfter.includes(row));
+    if (changed.length > 0) {
+      console.log(`Note: other instances changed during the run, not by it: ${changed.join(", ")}`);
+    }
+    if (listInstances().some((row) => row.name === name || row.name === sentinel)) {
+      problems.push(`instance ${name} or ${sentinel} was not removed`);
     }
     if (problems.length > 0) throw new Error(problems.join("\n"));
-    console.log(`Quit the packaged app and removed instance ${name} and ${dir}`);
+    console.log(`Quit the packaged app, removed instances ${name} and ${sentinel} and ${dir}`);
+  };
+
+  /** Start an instance, recording its name and run id first. */
+  const startInstance = (instance: string, ...flags: string[]) => {
+    const runId = newRunId();
+    record.instances.push({ name: instance, runId });
+    saveRecord(RECORDS, record);
+    execFileSync(
+      process.execPath,
+      [CLI, "start", "--run-id", runId, "--instance", instance, ...flags],
+      { cwd: ROOT, env: cliEnv(), stdio: ["ignore", "inherit", "inherit"] },
+    );
   };
 
   try {
-    const runId = newRunId();
-    record.instances.push({ name, runId });
-    saveRecord(RECORDS, record);
-    execFileSync(process.execPath, [CLI, "start", "--run-id", runId, "--instance", name], {
-      cwd: ROOT,
-      env: cliEnv(),
-      stdio: ["ignore", "inherit", "inherit"],
-    });
+    // Another gateway this run owns and never touches, listening the whole time.
+    startInstance(sentinel, "--no-seed");
+    sentinelBefore = sentinelState();
+    if (!sentinelBefore.startsWith("running true")) {
+      throw new Error(`sentinel ${sentinel} is not running`);
+    }
+    startInstance(name);
     const mine = listInstances().find((row) => row.name === name);
     if (!mine?.gatewayRunning) throw new Error(`instance ${name} is not running`);
     for (const port of [mine.gatewayPort, mine.providerPort]) {
