@@ -72,7 +72,7 @@ await p.close();
 p = await open(files);
 check("F-152 files tab lists the task's changed and read files", await q(p, () => {
   const heads = [...document.querySelectorAll("#panel-files .files h3")].map((h) => h.textContent);
-  return heads.join() === "Changed,Read,Sent in chat" && document.querySelectorAll('#panel-files [data-open]').length === 5;
+  return heads.join() === "Changed,Read,Sent in chat" && document.querySelectorAll('#panel-files [data-open]').length === 7;
 }));
 check("F-321 a file changed by a file tool carries the run marker", await q(p, () =>
   document.querySelector('[data-open="notes/disk-2026-11-16.md"]').textContent.includes("Changed last run") &&
@@ -125,8 +125,9 @@ check("a source line links to the step", await q(p, () => document.querySelector
 await p.close();
 
 for (const [path, words, name] of [
-  ["logs/transcode.log", "The gateway sends files up to 256 KB", "too large"],
-  ["notes/receipts.pdf", "isn't text or an image", "not text"],
+  ["logs/transcode.log", "The gateway sends text up to 256 KB", "text too large"],
+  ["notes/cache-walkthrough.mp4", "recordings and videos from a task's folder up to 1 MB", "video over 1 MB"],
+  ["notes/receipts.pdf", "isn't text or media. None of the gateway's file methods sends files like this", "not text or media"],
 ]) {
   p = await open(`${files}&file=${path}`);
   check(`F-449 a file the gateway won't send (${name}) shows its facts and says why`, await q(p, (w) =>
@@ -134,6 +135,12 @@ for (const [path, words, name] of [
     [...document.querySelectorAll(".reader-facts dt")].map((d) => d.textContent).join() === "Name,Size,Modified,Type,Folder", words));
   await p.close();
 }
+p = await open(`${files}&file=notes/voice-memo.m4a`);
+check("M1 a recording up to 1 MB in the task's folder plays in the pane and can be downloaded", await q(p, () => {
+  document.querySelector("[data-play-file]").click();
+  return document.querySelector("[data-play-file]").getAttribute("aria-pressed") === "true" && !!document.querySelector('[data-files="download"]') && !document.querySelector('[data-files="copy"]');
+}));
+await p.close();
 p = await open(`${files}&file=charts/usage.png`);
 check("an image has Download and no Copy; its source is unknown", await q(p, () =>
   !!document.querySelector('[data-files="download"]') && !document.querySelector('[data-files="copy"]') && document.querySelector(".reader-source").textContent.startsWith("No source in this task")));
@@ -206,11 +213,11 @@ p = await open(`${files}&files=error`);
 check("F-320 a failed listing shows the error and Try again", await q(p, () => document.querySelector("#panel-files [role=alert]").textContent.includes("Couldn't load this task's files")));
 await p.click('[data-files="retry"]');
 await p.waitForTimeout(800);
-check("F-320 a successful retry replaces the error with the listing", await q(p, () => !document.querySelector("#panel-files [role=alert]") && document.querySelectorAll("#panel-files [data-open]").length === 5));
+check("F-320 a successful retry replaces the error with the listing", await q(p, () => !document.querySelector("#panel-files [role=alert]") && document.querySelectorAll("#panel-files [data-open]").length === 7));
 await p.close();
 
 p = await open(`${files}&files=stale`);
-check("F-320 a failed refresh keeps the list under one line", await q(p, () => document.querySelector(".files-alert").textContent.startsWith("Couldn't refresh. Showing the list from") && document.querySelectorAll("#panel-files [data-open]").length === 5));
+check("F-320 a failed refresh keeps the list under one line", await q(p, () => document.querySelector(".files-alert").textContent.startsWith("Couldn't refresh. Showing the list from") && document.querySelectorAll("#panel-files [data-open]").length === 7));
 await p.close();
 
 p = await open(`${files}&files=loading&motion=reduce`);
@@ -225,7 +232,7 @@ await p.close();
 
 p = await open(`${files}&files=many`);
 await p.fill("#files-filter", "media-2026-10-0");
-check("many files: the filter narrows the list and says how many", await q(p, () => /^\d+ of 40 files$/.test(document.querySelector(".files-filter [role=status]").textContent) && document.activeElement.id === "files-filter"));
+check("many files: the filter narrows the list and says how many", await q(p, () => /^\d+ of 42 files$/.test(document.querySelector(".files-filter [role=status]").textContent) && document.activeElement.id === "files-filter"));
 await p.keyboard.press("Escape");
 check("Escape clears the filter", await q(p, () => document.querySelector("#files-filter").value === "" && !document.querySelector(".files-filter [role=status]")));
 await p.close();

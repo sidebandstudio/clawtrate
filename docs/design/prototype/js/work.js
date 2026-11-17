@@ -156,6 +156,31 @@
       content: inventory,
       source: { step: "st-read-inv", words: "Read by Otto at 5:31 PM" },
     },
+    // A recording in the task's folder: sent by sessions.files.assets, up to 1 MB.
+    "notes/voice-memo.m4a": {
+      folder: "notes",
+      size: 655360,
+      time: "5:34 PM",
+      full: "Today 5:34 PM",
+      type: "audio/mp4",
+      kind: "audio",
+      duration: "0:48",
+      group: "read",
+      via: "sessions.files.assets",
+      source: null,
+    },
+    // A video in the task's folder that is over the 1 MB the media method sends.
+    "notes/cache-walkthrough.mp4": {
+      folder: "notes",
+      size: 14680064,
+      time: "5:20 PM",
+      full: "Today 5:20 PM",
+      type: "video/mp4",
+      kind: "video",
+      group: "read",
+      tooLarge: true,
+      source: null,
+    },
     "AGENTS.md": {
       folder: "",
       size: 214,
@@ -394,6 +419,8 @@
   function kindIcon(f) {
     if (!f) return "list";
     if (f.kind === "image") return "image";
+    if (f.kind === "audio") return "audio";
+    if (f.kind === "video") return "video";
     if (f.kind === "binary") return "page";
     return "file";
   }
@@ -661,7 +688,8 @@
     const path = level.path;
     const f = files[path];
     const name = path.split("/").pop();
-    const sendable = (f.kind === "text" || f.kind === "image") && !f.tooLarge;
+    // Which read method sends it (work-pane.md, section 8); nothing sends the rest.
+    const sendable = ["text", "image", "audio", "video"].includes(f.kind) && !f.tooLarge;
     const actions =
       (sendable
         ? `<button type="button" class="icon-button" data-variant="quiet" data-files="download" aria-label="Download ${esc(name)}" title="Download">${icon("download")}</button>`
@@ -700,8 +728,14 @@
           : "";
 
     let body;
-    if (f.tooLarge) body = facts(f, name, `${esc(name)} is ${size(f.size)}. The gateway sends files up to 256 KB, so it can't be shown or downloaded here.`);
-    else if (f.kind === "binary") body = facts(f, name, `${esc(name)} isn't text or an image. The gateway doesn't send files like this, so it can't be shown or downloaded here.`);
+    if (f.tooLarge && f.kind === "text") body = facts(f, name, `${esc(name)} is ${size(f.size)}. The gateway sends text up to 256 KB, so it can't be shown or downloaded here.`);
+    else if (f.tooLarge) body = facts(f, name, `${esc(name)} is ${size(f.size)}. The gateway sends recordings and videos from a task's folder up to 1 MB, so it can't be played or downloaded here.`);
+    else if (f.kind === "binary") body = facts(f, name, `${esc(name)} isn't text or media. None of the gateway's file methods sends files like this, so it can't be shown or downloaded here.`);
+    else if (f.kind === "audio")
+      body =
+        `<div class="audio-player"><div class="artifact" data-kind="audio"><button type="button" class="artifact-play" data-play-file="${esc(path)}" aria-pressed="false" aria-label="Play ${esc(name)}, ${f.duration}">` +
+        `<span class="artifact-tile" data-round="true">${icon("play")}</span></button><span class="artifact-text"><span class="artifact-name">${esc(name)}</span>` +
+        `<span class="artifact-sub" id="file-audio-sub">Audio · ${size(f.size)} · ${f.duration}</span></span></div></div>`;
     else if (f.kind === "image") body = `<button type="button" class="reader-image" data-files="viewer" aria-label="Open ${esc(name)} full size">${chart()}</button>`;
     else if (view === "preview") body = markdown(f.content);
     else if (view === "changes") body = changesView(f);
@@ -811,7 +845,7 @@
   function download(path) {
     const f = files[path];
     const name = path.split("/").pop();
-    const data = f.kind === "image" ? new Blob([chart().replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ')], { type: "image/svg+xml" }) : new Blob([new TextEncoder().encode(f.content)], { type: f.type || "text/plain" });
+    const data = f.kind === "audio" || f.kind === "video" ? new Blob([new TextEncoder().encode(`${name}: sample bytes\n`)], { type: f.type }) : f.kind === "image" ? new Blob([chart().replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ')], { type: "image/svg+xml" }) : new Blob([new TextEncoder().encode(f.content)], { type: f.type || "text/plain" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(data);
     a.download = name;
@@ -1021,6 +1055,17 @@
   document.addEventListener("click", (event) => {
     const target = event.target;
 
+    // A recording from the task's folder plays in the pane.
+    const playFile = target.closest("[data-play-file]");
+    if (playFile) {
+      const on = playFile.getAttribute("aria-pressed") !== "true";
+      const f = files[playFile.dataset.playFile];
+      playFile.setAttribute("aria-pressed", String(on));
+      playFile.setAttribute("aria-label", `${on ? "Pause" : "Play"} ${playFile.dataset.playFile.split("/").pop()}, ${f.duration}`);
+      $(".artifact-tile", playFile).innerHTML = icon(on ? "pause" : "play");
+      $("#file-audio-sub").innerHTML = on ? `<span class="audio-track"><span style="width:12%"></span></span>0:06 / ${f.duration}` : `Audio · ${size(f.size)} · ${f.duration}`;
+      return;
+    }
     const openFromStep = target.closest("[data-open-file]");
     if (openFromStep) {
       const step = openFromStep.closest("details.step");
