@@ -881,6 +881,21 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
+    name: "a bot outside the pair cannot message",
+    covers: ["#message"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "message-outside"), "#message");
+      const result = view.result("sessions_send");
+      same([result.isError, result.details.status], [true, "forbidden"], "sessions_send result");
+      h.observe(`a send from outside the pair: ${String(result.details.error)}`);
+      same(
+        view.finalText(),
+        "The message to Marlow did not get through (forbidden).",
+        "the sender's reply",
+      );
+    },
+  },
+  {
     name: "a message to a slow bot",
     covers: ["#message-slow"],
     run: async (h) => {

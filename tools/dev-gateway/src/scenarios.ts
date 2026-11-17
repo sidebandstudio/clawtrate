@@ -232,7 +232,8 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "think-only",
     phrase: "think without answering",
-    summary: "Reasoning only: no text and no tool.",
+    summary:
+      "Reasoning only: no text and no tool. The gateway asks twice more for a visible answer, then ends the run in an error.",
     steps: () => [think("I am only thinking here and will not write a visible answer.")],
   },
   {
@@ -252,7 +253,8 @@ export const SCENARIOS: Scenario[] = [
     phrase: "take your time",
     defaultArg: 20,
     maxArg: 300,
-    summary: "Reasoning, then text streamed slowly for N seconds (default 20).",
+    summary:
+      "Reasoning, then text streamed slowly for N seconds (default 20): stop it, or queue a message behind it.",
     steps: (seconds) => [
       think("This will take a while, so I will stream it slowly.", 250),
       slowText(seconds),
@@ -263,7 +265,8 @@ export const SCENARIOS: Scenario[] = [
     phrase: "run a slow tool",
     defaultArg: 20,
     maxArg: 600,
-    summary: "A tool call that takes N seconds (default 20): the coding agent's slow_task.",
+    summary:
+      "A tool call that takes N seconds (default 20): steer into it, stop it or queue behind it.",
     steps: (seconds) => [
       think(
         "This tool takes a while. You can stop the run, steer it or queue a message behind it.",
@@ -294,7 +297,7 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     name: "approve",
-    phrase: "run a command i can approve",
+    phrase: "run a command I can approve",
     bots: "Otto",
     summary: `Asks to run \`${SHELL_COMMANDS.list}\` in Otto's workspace. The approval offers a reusable rule (allow-always).`,
     steps: () => [
@@ -305,7 +308,7 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     name: "approve-once",
-    phrase: "run a command i approve every time",
+    phrase: "run a command I approve every time",
     bots: "Otto",
     summary: `Asks to run \`${SHELL_COMMANDS.print}\` with per-call ask "always": the approval offers no reusable rule.`,
     steps: () => [
@@ -342,7 +345,7 @@ export const SCENARIOS: Scenario[] = [
     bots: "Otto",
     defaultArg: 20,
     maxArg: 120,
-    summary: "Asks to run `sleep N` (default 20): a slow shell command.",
+    summary: "Asks to run `sleep N` (default 20, at most 120): a slow shell command.",
     steps: (seconds) => [
       think("I will run a slow shell command."),
       exec(SHELL_COMMANDS.sleep(seconds)),
@@ -414,35 +417,35 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "reply",
     phrase: "reply with a note",
-    summary: "A short note; what a bot answers when the other bot messages it with `#message`.",
+    summary: "A short note; what a bot answers when the other bot messages it.",
     steps: () => [say("Happy to help. The plan looks sound; I would leave half an hour earlier.")],
   },
   {
     name: "message",
     phrase: "message your partner",
-    bots: "Marlow and Pip",
+    bots: "Marlow or Pip",
     summary: "A message to the other bot of the pair, answered in the same call.",
     steps: () => message("#reply", "Could you look over the plan?", 30),
   },
   {
     name: "message-slow",
     phrase: "message your slow partner",
-    bots: "Marlow and Pip",
+    bots: "Marlow or Pip",
     summary:
-      "A message to the other bot, which takes 15 seconds; the call returns before it answers.",
+      "A message to the other bot, which takes 15 seconds; the call returns before it answers, and the reply arrives later in the same task.",
     steps: () => message("#slow 15", "Could you write a long note on the plan?", 3),
   },
   {
     name: "message-fail",
     phrase: "message your failing partner",
-    bots: "Marlow and Pip",
+    bots: "Marlow or Pip",
     summary: "A message to the other bot, whose run ends in a model error.",
     steps: () => message("#model-error", "Could you check the plan?", 30),
   },
   {
     name: "message-ask",
     phrase: "message your partner who asks",
-    bots: "Marlow and Pip",
+    bots: "Marlow or Pip",
     summary: "A message to the other bot, which asks its own user a question before replying.",
     steps: () => message("#ask", "Which route should we plan for?", 5),
   },
@@ -489,7 +492,7 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     name: "mcp-stop",
-    phrase: "start a coding task i can stop",
+    phrase: "start a coding task I can stop",
     summary: "A call to the coding agent that does not finish for an hour: stop the run mid-call.",
     steps: () => [
       think("This coding task runs for a long time. Stop the run to cancel it."),
@@ -531,7 +534,9 @@ export function selectScenarios(prompt: string): Selection[] {
     .toLowerCase()
     .replace(/[^a-z0-9 ]+/g, " ")
     .replace(/\s+/g, " ");
-  const phrase = BY_PHRASE.find((scenario) => ` ${text} `.includes(` ${scenario.phrase} `));
+  const phrase = BY_PHRASE.find((scenario) =>
+    ` ${text} `.includes(` ${scenario.phrase.toLowerCase()} `),
+  );
   return phrase ? [{ scenario: phrase, arg: phrase.defaultArg ?? 0 }] : [];
 }
 
