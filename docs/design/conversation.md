@@ -647,6 +647,7 @@ Every action card, every row in a fold, every request card and every "Thought" l
 | An action card, or a row in an opened fold                                                                          | The Raw tab of its opened view                                                                                                          |
 | Reasoning                                                                                                           | The opened "Thought" line ends with a "Raw" button: the reasoning event as received                                                     |
 | A Messaged card, a T3 Code card, an approval (pending or resolved), a question (pending or resolved), a failed turn | A text button "Raw" at the end of the card's actions. It is a disclosure: `aria-expanded`, and the panel is the next thing in the card. |
+| A call inside a T3 Code thread's card                                                                               | "Raw for this call" at the end of that call's item; each joined call has its own (11.3)                                                 |
 | An event line ("Message from Pip")                                                                                  | The line is a `summary`; opened, it shows the message and its "Raw" button                                                              |
 
 **What it holds**, top to bottom, on `--bg-pane`:
@@ -843,6 +844,42 @@ T3 Code offers an outside client seven tools (`docs/research/provider-accounts-a
 So a failed check, or a refused follow-up, shows on its own item and does not change the thread's word. The reported status is a snapshot, not a live state: it changes only when another call on the thread returns, and the opened card says when: "T3 Code reported Running at 5:41 PM." Keeping the card's word to what a call's result reported, rather than polling T3 Code, is a presentation decision: the results do carry T3 Code's status, and the card shows it with its time.
 
 **The folded line** reads "Messaged T3 Code", the T3 Code mark, the first line of the latest message sent on the thread (the launch's `message`, else its `title`, or a follow-up's `message`), and the thread's state. When the thread holds more than one call, the detail ends with their number, "· 3 calls".
+
+### 11.3 Opened: every call, each with its own Raw
+
+Opened, the thread's card lists its calls in order, one item each, and every item can show what the gateway sent for its own call:
+
+- **The item's head**: who and what, "Otto started the thread", "Otto followed up", "Otto read the thread", "Otto waited for a result", "Otto asked T3 Code to stop", with the call's time and its own state word.
+- **What was sent**: the exact `message`, for a launch or a follow-up; under a launch, a chip for each target field its arguments contain (project, title, model, branch from `workspaceStrategy`). An absent field has no chip; nothing is filled in.
+- **What came back**, as the result established it: for a launch, the thread and its first run's status; for a follow-up, its `delivery` in words ("Started a new run", "Queued", "Steered the running turn", "Restarted the turn") and the run's status; for a read, the thread's status and, when the page holds the latest run's assistant items to the end, that reply, with "Read to the end" or, when `hasMore` is true, "First page only: the reply may continue"; for a wait, the run's status, "The wait ended before the run finished" when `timedOut`, and the result run when `resultRun` names one; for an interrupt, its status in words. The state sentences of the per-call table apply: "This shows the call was made. It does not show that the work is finished." under any call whose result reports no final status.
+- **"Raw"**, a text button at the end of every item, named "Raw for this call", opens that call's own panel (section 9): its tool name, arguments, result, timing and identifiers. Every call that joined the card keeps its Raw here, whether or not it also has a line of its own (11.4).
+- **"Show where it happened"**, on an item whose call also has a line of its own, scrolls to that line (11.4).
+
+Under the items: **Files**, as chips, only when a result or a gateway attachment carries them (F-135), and **"Open thread"**, only when a result carries a `link`, the latest one received. It is a link named "Open the T3 Code thread in your browser"; it opens the system browser when chosen, and nothing is fetched before that. (F-135)
+
+A card that is one call on its own (no known thread) is opened as before: what was sent, what came back, Files, "Open thread" and "Raw".
+
+### 11.4 Becoming the T3 Code card, joining a thread, and a line at each later moment
+
+**The change in place.** A call that is T3 Code's but not yet known to be shows, while it runs, as the general card: "Using t3code thread launch", words from its effective name, the diamond, Call started. When its result names one of the seven tools, that same element becomes T3 Code's line, keyed by the same tool call id:
+
+- **Place.** The line keeps its place in the transcript. At every width the two lines have the same structure (one line on a wide column; the sentence and the state on the first line and the detail on the second on a narrow one), so the height is the same; where a different height cannot be avoided (a longer sentence wraps), the reading line holds as section 18 says, and nothing above the reader moves.
+- **What changes.** The icon becomes the T3 Code mark, the words become "Messaged T3 Code" or the operation's words below, the detail becomes the first line sent, and the right side the state. The change is a 200 ms cross-fade of the line's parts; under reduced motion it is instant.
+- **What carries over.** If the line was open on its Readable tab, the T3 Code card opens with this call's item; if it was open on Raw, the item opens with its Raw panel open. Focus stays on the same control: on the line's heading if it was there; on the item's "Raw for this call" if it was on the Raw tab; on the same copy button inside the same Raw panel if it was there, since both are section 9's one component.
+- **When the result overrules the name mapping.** A call the mapping had shown as T3 Code's, whose result names another tool, becomes that tool's card in place by the same rules. Because a call joins a thread only after its result (below), an overruled call never has to leave a thread's card.
+
+**Joining a thread's card.** A call on a thread that already has a card joins it only after its result names the tool and the thread, and then in one of two ways:
+
+- **Directly**, when all of these hold: the thread's card is the item just above the call's line in the same column, with nothing arriving between them since the call started; the reader is following the end of the transcript (section 18); and the call's line is not open and holds no focus. Then the line closes up over 200 ms (instantly under reduced motion) and the call is an item of the thread's card, which updates its state. This happens only at the foot of the transcript, where the reader is, so nothing above the reader moves.
+- **With a line of its own**, in every other case: the call keeps its line where it happened, in T3 Code's family, and is also an item of the thread's card. Its words: "Followed up with T3 Code", "Read the thread in T3 Code", "Waited for T3 Code", "Asked T3 Code to stop", each with the call's own state and, as its detail, the first line it sent or the status it got back. The line opens to that call alone (what was sent, what came back, its Raw) and has "Show the thread".
+
+Either way, every call has its Raw on the thread's card, and a call with a line has it there too.
+
+**Getting from a line to its thread, and back.** Destinations are found by identity, never by nearness.
+
+- **"Show the thread"** (named "Show this thread's card") finds the card for the line's thread identity. In this task: it scrolls the card into view by the smallest scroll, opens it, opens this call's item, and moves focus to the item's head. In another task of the same bot (the Coding section's index of thread cards across a bot's tasks, F-136, knows where): it opens that task at the card in the same way, and records where the reader was, so that "Back" on the phone, ⌘[ on the desktop, or the card's "Back to where you were" returns to the line with focus on "Show the thread", as "Open in Marlow" does (section 10). Where no card for the thread is in reach, the control is absent.
+- **"Show where it happened"** on an item (named "Show this call where it happened") finds the line by the call's tool call id, scrolls to it and moves focus to its heading.
+- Nothing else moves focus. A line or an item never leads to a different thread, even one beside it.
 
 ### 11.5 What remains open about T3 Code
 
