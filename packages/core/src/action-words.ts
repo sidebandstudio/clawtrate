@@ -70,6 +70,7 @@ export const VERBS = {
   mark: v("Marking", "Marked", "Couldn't mark"),
   makePlan: v("Making", "Made", "Couldn't save"),
   savePlan: v("Saving", "Saved", "Couldn't save"),
+  clearPlan: v("Clearing", "Cleared", "Couldn't clear"),
   make: v("Making", "Made", "Couldn't make"),
   send: v("Sending", "Message on", "Couldn't send on"),
 } as const;

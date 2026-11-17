@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  callFromBlock,
   callFromStep,
   foldLineOf,
   groupFeed,
@@ -131,8 +132,9 @@ describe("F-488 every kind of 8.1 has its words, its kind and its outcome", () =
     // An absolute path is memory only inside the bot's workspace.
     expect(kindOf(call("write", { path: "/workspace/bot/memory/a.md" }), {}).kind).toBe("edit");
     expect(
-      kindOf(call("write", { path: "/workspace/bot/memory/a.md" }), { workspaceRoot: "/workspace/bot" })
-        .kind,
+      kindOf(call("write", { path: "/workspace/bot/memory/a.md" }), {
+        workspaceRoot: "/workspace/bot",
+      }).kind,
     ).toBe("memory");
     expect(kindOf(call("write", { path: "notes/memory/a.md" })).kind).toBe("edit");
   });
@@ -611,17 +613,18 @@ describe("F-488 every kind of 8.1 has its words, its kind and its outcome", () =
     ).toBe("server");
   });
   it("26 any other tool: words from its name, the gateway's detail keys, folds only when listed", () => {
-    const c = call("skills_search", { query: "invoice" }, { text: "2 skills match." });
+    const ok = { details: { ok: true } };
+    const c = call("skills_search", { query: "invoice" }, { text: "2 skills match.", ...ok });
     expect(words(c)).toBe("Used skills search");
     expect(line(c).detail).toBe("invoice");
-    expect(words(call("getWeatherNow", { location: "Leeds" }))).toBe("Used get weather now");
-    expect(words(call("github_publish", { title: "x", path: "notes/backup-exclude.md" }))).toBe(
+    expect(words(call("getWeatherNow", { location: "Leeds" }, ok))).toBe("Used get weather now");
+    expect(words(call("github_publish", { title: "x", path: "notes/backup-exclude.md" }, ok))).toBe(
       "Used github publish",
     );
     expect(line(call("github_publish", { path: "notes/backup-exclude.md" })).detail).toBe(
       "backup-exclude.md",
     );
-    expect(words(call("read_PDF_text", {}))).toBe("Used read PDF text");
+    expect(words(call("read_PDF_text", {}, ok))).toBe("Used read PDF text");
     expect(kindOf(c).key).toBeNull();
     expect(kindOf({ ...c, builtin: true }).key).toBe("tool:skills_search");
     expect(line(call("skills_search", {}, { isError: true, text: "nope" })).verb).toBe(
@@ -1173,7 +1176,8 @@ describe("F-091 F-092 folding (7.4)", () => {
       read("backup-2026-11-08.log", { isError: true, text: "ENOENT" }),
       read("c.md"),
     ]);
-    expect(`${f.verb} ${f.object}`).toBe("Read 3 files");
+    // The done plural counts the two reads that were done, never the failed one.
+    expect(`${f.verb} ${f.object}`).toBe("Read 2 files");
     expect(f.detail).toBe("couldn't read backup-2026-11-08.log");
     expect(f.tone).toBe("danger");
     expect(f.state).toMatchObject({ type: "counts", words: "1 failed", danger: true });
@@ -1468,15 +1472,14 @@ describe("a call with no result in a run that ended without a stop", () => {
 });
 
 describe("a plan saved again", () => {
-  it("is Made the first time in a task and Saved after that, by order or by the gateway's revision", () => {
+  it("is Made at the gateway's first revision and Saved after it, never by the task's order", () => {
     const plan = call(
       "progress_card",
       { plan: [{ step: "a", status: "pending" }] },
-      { details: { revision: 1, steps: {} } },
+      { details: { revision: 1, steps: { completed: 0, total: 1 } } },
     );
     expect(words(plan)).toBe("Made a plan");
-    expect(words({ ...plan, repeat: true })).toBe("Saved the plan");
-    expect(words({ ...plan, details: { revision: 3, steps: {} } })).toBe("Saved the plan");
+    expect(words({ ...plan, details: { revision: 3, steps: null } })).toBe("Saved the plan");
   });
 });
 
@@ -1557,3 +1560,188 @@ describe("a call its run's stop cut short", () => {
     expect(groups[0]).toMatchObject({ type: "thought", thought: { ms: null } });
   });
 });
+
+describe("nothing reaches Done by default (7.3)", () => {
+  const outcome = (c: ActionCall, ctx = {}) => lineOf(c, ctx).outcome;
+  const servers = { toolServers: { remote_thing: { server: "sample", tool: "thing" } } };
+  const empty = { text: "", details: null };
+
+  it("a tool-server call that returned nothing is a call made", () => {
+    expect(outcome(call("remote_thing", {}, empty), servers)).toBe("made");
+    expect(outcome(call("remote_thing", {}, { text: "Issue 12 created" }), servers)).toBe("done");
+  });
+  it("a general card's payload with no field the design reads is a call made", () => {
+    const c = call("custom_tool", {}, { details: { requestId: "r-1" } });
+    expect(outcome(c)).toBe("made");
+    expect(outcome(call("custom_tool", {}, { text: "Plain words" }))).toBe("made");
+    expect(outcome(call("custom_tool", {}, { details: { ok: true } }))).toBe("done");
+    expect(outcome(call("custom_tool", {}, { details: { status: "completed" } }))).toBe("done");
+  });
+  it("made media needs a path or a medium that is there, not an empty list", () => {
+    const make = (details: Record<string, unknown>) =>
+      call("image_generate", { action: "generate" }, { details });
+    expect(outcome(make({ paths: [] }))).toBe("made");
+    expect(outcome(make({ media: [] }))).toBe("made");
+    expect(outcome(make({ paths: ["out/a.png"] }))).toBe("done");
+  });
+  it("a patch that returned no text and no details is a call made", () => {
+    const patch = call("apply_patch", { input: "*** Update File: note.md" }, empty);
+    expect(outcome(patch)).toBe("made");
+    expect(outcome({ ...patch, text: "Success. Updated note.md" })).toBe("done");
+  });
+  it("the general reading outranks a kind's fallback: refused, queued", () => {
+    const get = call("memory_get", { path: "notes.md" }, { details: { status: "forbidden" } });
+    expect(outcome(get)).toBe("refused");
+    const exec = call("exec", { command: "echo hi" }, { details: { status: "queued" } });
+    expect(outcome(exec)).toBe("queued");
+  });
+  it("a signal at either level outranks a value shown only as received", () => {
+    const c = call("custom_tool", {}, { details: { status: "redirect", result: { ok: false } } });
+    expect(outcome(c)).toBe("failed");
+  });
+  it("a plugin's block reads the same with or without the name map", () => {
+    const blocked = call("remote_thing", {}, { details: { status: "blocked" }, text: "blocked" });
+    expect(lineOf(blocked).outcome).toBe("blocked");
+    expect(lineOf(blocked, servers).outcome).toBe("blocked");
+    const run = { state: "completed" as const, startedAt: 1_000, endedAt: 2_000 };
+    expect(runLineOf(run as Run, [blocked])?.failed).toBe(1);
+    expect(runLineOf(run as Run, [blocked], servers)?.failed).toBe(1);
+  });
+});
+
+describe("a plan as the gateway answered it", () => {
+  it("a cleared card says it was cleared, by its payload or its text", () => {
+    const cleared = call(
+      "progress_card",
+      {},
+      {
+        details: { revision: null, steps: null },
+        text: "Progress card cleared",
+      },
+    );
+    expect(words(cleared)).toBe("Cleared the plan");
+    expect(lineOf(cleared).outcome).toBe("done");
+    expect(words({ ...cleared, details: null })).toBe("Cleared the plan");
+    expect(words({ ...cleared, status: "running", text: null, details: null })).toBe(
+      "Clearing the plan",
+    );
+  });
+  it("the projection keeps the revision and the step counts", () => {
+    const kept = projectDetails({ revision: 4, steps: { completed: 1, total: 2 } });
+    expect(kept).toMatchObject({ revision: 4, steps: { completed: 1, total: 2 } });
+    const saved = call(
+      "progress_card",
+      { plan: [] },
+      { details: kept, text: "Progress card updated" },
+    );
+    expect(words(saved)).toBe("Saved the plan");
+    expect(line(saved).detail).toBe("1 of 2 done");
+  });
+  it("a plan with no revision establishes only the call", () => {
+    const c = call("progress_card", { plan: [{ step: "a", status: "pending" }] }, empty());
+    expect(lineOf(c).outcome).toBe("made");
+  });
+});
+
+describe("a fold's plural is never more complete than its members (7.4)", () => {
+  const read = (path: string, more: Partial<ActionCall> = {}) =>
+    call("read", { path }, { text: "contents", ...more });
+  it("a failed member is not counted as read, in the line or its accessible name", () => {
+    const f = foldLineOf([read("one.md"), read("missing.md", { isError: true, text: "no file" })]);
+    expect(`${f.verb} ${f.object}`).toBe("Read 1 file");
+    expect(f.spoken).toMatch(/^Read 1 file, couldn't read missing.md, 1 failed$/);
+  });
+  it("a running member is not counted as read", () => {
+    const f = foldLineOf([
+      read("one.md"),
+      read("two.md", { status: "running", text: null, endedAt: null }),
+    ]);
+    expect(`${f.verb} ${f.object}`).toBe("Read 1 file");
+    expect(f.spoken).toMatch(/^Read 1 file, reading two.md, running$/);
+  });
+  it("a fold with no Done member uses the neutral plural", () => {
+    const f = foldLineOf([
+      read("a.md", { isError: true, text: "no" }),
+      read("b.md", { isError: true, text: "no" }),
+    ]);
+    expect(f.verb).not.toMatch(/^Read/);
+  });
+});
+
+describe("fold keys keep apart what the plural cannot say together", () => {
+  it("two different changes of the Control UI do not fold", () => {
+    const show = call("screen", { action: "desktop_show" });
+    const hide = call("screen", { action: "desktop_hide" });
+    expect(kindOf(show).key).not.toBe(kindOf(hide).key);
+    expect(kindOf(show).key).toBe(kindOf(call("screen", { action: "desktop_show" })).key);
+  });
+  it("a result that names another operation of a mapped server keeps it apart", () => {
+    const ctx = { toolServers: { remote_thing: { server: "sample", tool: "thing" } } };
+    const mapped = call("remote_thing", {}, { details: { mcpServer: "sample", mcpTool: "thing" } });
+    const other = call("remote_thing", {}, { details: { mcpServer: "sample", mcpTool: "other" } });
+    expect(kindOf(mapped, ctx).key).toBe("server:sample:thing");
+    expect(kindOf(other, ctx).key).toBe("server:sample:other");
+  });
+  it("a general card folds by name when the gateway's inventory lists it, and only then", () => {
+    const c = call("skills_search", {});
+    expect(kindOf(c).key).toBeNull();
+    expect(kindOf(c, { builtinTools: ["skills_search"] }).key).toBe("tool:skills_search");
+    expect(kindOf(c, { builtinTools: ["other_tool"] }).key).toBeNull();
+  });
+});
+
+describe("memory, by the workspace root the gateway names", () => {
+  it("an absolute path is memory only inside the root the gateway gave", () => {
+    const w = call("write", { path: "/workspace/bot/memory/a.md" }, { details: { changed: true } });
+    expect(kindOf(w).kind).toBe("edit");
+    expect(kindOf(w, { workspaceRoot: null }).kind).toBe("edit");
+    expect(kindOf(w, { workspaceRoot: "/workspace/bot" }).kind).toBe("memory");
+    expect(kindOf(w, { workspaceRoot: "/workspace/other" }).kind).toBe("edit");
+  });
+});
+
+describe("a result history kept only as text", () => {
+  const block = (name: string, text: string, args = "{}") => ({
+    kind: "tool-call" as const,
+    callId: "h-1",
+    name,
+    argumentsText: args,
+    result: { text, isError: false },
+  });
+  it("is read as its payload when the text is the tool's JSON", () => {
+    const refused = callFromBlock(
+      block("sessions_history", '{"status":"forbidden","error":"Visibility restricted"}'),
+      undefined,
+      undefined,
+    );
+    expect(lineOf(refused).outcome).toBe("refused");
+  });
+  it("text that is not a payload establishes only the call", () => {
+    expect(lineOf(callFromBlock(block("custom_tool", "Done!"), undefined, undefined)).outcome).toBe(
+      "made",
+    );
+  });
+  it("a read's content is never taken for a payload", () => {
+    const c = callFromBlock(
+      block("read", '{"status":"error","error":"in the file"}', '{"path":"a.json"}'),
+      undefined,
+      undefined,
+    );
+    expect(lineOf(c).outcome).toBe("done");
+  });
+});
+
+describe("the arguments' projection", () => {
+  it("keeps the keys the reading reads before others take its budget", () => {
+    const noise = Object.fromEntries(
+      Array.from({ length: 200 }, (_, i) => [`property${i}`, "x".repeat(200)]),
+    );
+    const kept = projectArgs({ path: "notes.md", irrelevant: noise });
+    expect(kept?.path).toBe("notes.md");
+    expect(JSON.stringify(kept).length).toBeLessThanOrEqual(MAX_ACTION_FACTS_CHARS);
+  });
+});
+
+function empty(): Partial<ActionCall> {
+  return { text: "", details: null };
+}

@@ -12,12 +12,14 @@ import {
   lineOf,
   outcomeOf,
   problemOf,
+  projectDetails,
   type ActionCall,
+  type ActionKind,
   type ActionLine,
   type ReadingContext,
 } from "./actions.ts";
 import { isTerminal, type Run, type Step } from "./runs.ts";
-import type { TranscriptBlock } from "./types.ts";
+import type { Transcript, TranscriptBlock } from "./types.ts";
 
 /** One reasoning segment, as the engine keeps it. */
 export type ThoughtSegment = {
@@ -161,6 +163,23 @@ export function callsOf<R>(groups: FeedGroup<R>[]): ActionCall[] {
 
 // From the engine's state ------------------------------------------------------------
 
+/**
+ * What a task's transcript tells the reading: the gateway's map of
+ * tool-server names, the built-in and plugin tools of its inventory, and the
+ * bot's workspace root, each only as the gateway gave it.
+ */
+export function readingContextOf(transcript: {
+  mcpTools: Transcript["mcpTools"];
+  builtinTools?: string[] | undefined;
+  workspaceRoot?: string | null | undefined;
+}): ReadingContext {
+  return {
+    toolServers: transcript.mcpTools,
+    builtinTools: transcript.builtinTools ?? [],
+    workspaceRoot: transcript.workspaceRoot ?? null,
+  };
+}
+
 function parseArgs(text: string | null | undefined): Record<string, unknown> {
   if (!text) return {};
   try {
@@ -171,6 +190,36 @@ function parseArgs(text: string | null | undefined): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/** Kinds whose result text is what the tool read or ran, never its own payload. */
+const CONTENT_KINDS: Partial<Record<ActionKind, true>> = {
+  read: true,
+  list: true,
+  command: true,
+  terminal: true,
+  page: true,
+  xsearch: true,
+  look: true,
+};
+
+/**
+ * A call's payload, where the gateway kept no `details` but the result's
+ * text is the tool's own JSON (as history keeps most results): read as that
+ * payload. Text that is not one establishes nothing beyond the call (7.3).
+ */
+function withPayload(call: ActionCall): ActionCall {
+  if (call.details || !call.text || CONTENT_KINDS[kindOf(call).kind]) return call;
+  const text = call.text.trim();
+  if (!text.startsWith("{")) return call;
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return call;
+  }
+  const details = projectDetails(value);
+  return details ? { ...call, details } : call;
 }
 
 /** Whether a run that ended left a call open because it hit its time limit. */
@@ -200,7 +249,7 @@ export function callFromStep(
       : step.status === "waiting"
         ? "waiting"
         : "running";
-  return {
+  return withPayload({
     id: step.toolCallId ?? step.id,
     name: step.toolName ?? "",
     args: step.args ?? parseArgs(step.argsText?.text),
@@ -214,7 +263,7 @@ export function callFromStep(
     fromHistory: run.origin === "history" && !step.details,
     partial: open ? (step.output?.text ?? null) : null,
     runStopped: run.state === "stopped" || run.state === "cancelled",
-  };
+  });
 }
 
 /** A tool-call block of a history item, as the reading takes it; its step, when the engine has one, says more. */
@@ -235,16 +284,16 @@ export function callFromBlock(
       return { ...call, status: "unreturned", isError: false, text: null };
     // History holds a result the engine's step does not have yet: history is newer.
     if (block.result && (call.status !== "returned" || !call.text))
-      return {
+      return withPayload({
         ...call,
         status: "returned",
         isError: block.result.isError,
         text: block.result.text,
         partial: null,
-      };
+      });
     return call;
   }
-  return {
+  return withPayload({
     id: block.callId,
     name: block.name,
     args: parseArgs(block.argumentsText),
@@ -257,7 +306,7 @@ export function callFromBlock(
     startedAt: null,
     endedAt: null,
     fromHistory: true,
-  };
+  });
 }
 
 /** A reasoning step as a segment. */

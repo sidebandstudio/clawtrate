@@ -83,8 +83,6 @@ export type ActionCall = {
   readOnly?: boolean;
   /** The connection was lost while the call was open. */
   lastSeen?: boolean;
-  /** An earlier call of the same tool came before it in the task: a plan saved again, not made. */
-  repeat?: boolean;
   /** Its run was stopped: an error result that says nothing more is the stop's, not a failure. */
   runStopped?: boolean;
 };
@@ -101,6 +99,11 @@ export type ReadingContext = {
    * The result's `details.mcpServer` and `mcpTool` overrule it.
    */
   toolServers?: Readonly<Record<string, { server: string; tool: string }>>;
+  /**
+   * Built-in and plugin tools by effective name, from the same inventory
+   * (`tools.effective`): a general card of one of these folds by its name (8.3).
+   */
+  builtinTools?: readonly string[];
 };
 
 // Small helpers ----------------------------------------------------------------------
@@ -434,16 +437,21 @@ export function kindOf(call: ActionCall, ctx: ReadingContext = {}): KindInfo {
   const server = toolServerOf(call, ctx);
   if (server) {
     if (T3_CODE_TOOLS.includes(server.tool)) return info("t3", null);
-    // Folds by server and tool only when the gateway's map named it at its start (7.4).
+    // Folds only when the gateway's map named it at its start (7.4), by the server and tool it
+    // turned out to be: a result that names another operation keeps it apart.
     const atStart = ctx.toolServers?.[call.name];
-    return info("server", atStart ? `server:${atStart.server}:${atStart.tool}` : null);
+    return info("server", atStart ? `server:${server.server}:${server.tool}` : null);
   }
   const a = call.args;
   if ((call.name === "write" || call.name === "edit") && isMemoryPath(a.path, ctx))
     return info("memory", "memory");
   if (call.commandBearing && call.name !== "terminal") return info("command", "command");
   const kind = TABLE[call.name];
-  if (!kind) return info("tool", call.builtin ? `tool:${call.name}` : null);
+  if (!kind) {
+    // A general card folds by its name only when the gateway's tool inventory lists it (8.3).
+    const listed = call.builtin === true || ctx.builtinTools?.includes(call.name) === true;
+    return info("tool", listed ? `tool:${call.name}` : null);
+  }
   switch (kind) {
     case "message":
     case "helper":
@@ -455,6 +463,9 @@ export function kindOf(call: ActionCall, ctx: ReadingContext = {}): KindInfo {
       return info(kind, ROUTINE_LOOKUPS[str(a.action)] ? `${call.name}:${str(a.action)}` : null);
     case "terminal":
       return info(kind, `${call.name}:${str(a.action) || "?"}`);
+    case "screen":
+      // Its plural says the display changed, so only the same change folds.
+      return info(kind, `screen:${str(a.action) || "?"}`);
     case "media":
       return info(kind, `${call.name}:${str(a.action) || "generate"}`);
     case "recall":
@@ -515,40 +526,90 @@ const SUCCESS: Record<string, true> = {
 
 const wordOf = (value: unknown) => upper(nameWords(str(value)));
 
+/** A general reading's outcome, with whether it names a problem or only a word as received. */
+type General = OutcomeOf & { signal: "problem" | "word" };
+
 /**
  * The general reading of a payload (7.3). Every kind goes through it; a
  * kind's adapter only adds to it. It looks at `details` and at a nested
- * `details.result`, and returns the outcome a "not done" signal gives, or
- * null when it finds none.
+ * `details.result` where a tool projects its outcome there, and returns the
+ * outcome a "not done" signal gives, or null when it finds none. A signal at
+ * either level outranks a value shown only as received at the other: a
+ * nested `ok: false` under an unknown top-level `status` is Failed.
  */
 export function payloadOutcome(details: Rec | null): OutcomeOf | null {
+  const general = generalReading(details);
+  return general && { outcome: general.outcome, ...(general.word ? { word: general.word } : {}) };
+}
+
+function generalReading(details: Rec | null): General | null {
   if (!details) return null;
-  for (const d of [details, rec(details.result) ?? {}]) {
+  const levels = [details, rec(details.result) ?? {}];
+  for (const d of levels) {
     const status = typeof d.status === "string" ? d.status : "";
     const code = typeof d.code === "string" ? d.code : "";
-    if (status === "forbidden") return { outcome: "refused", word: STATE_WORDS.notRun };
-    if (code === "confirmation_required")
-      return { outcome: "refused", word: STATE_WORDS.needsConfirmation };
-    if (status === "approval-pending") return { outcome: "waiting" };
-    if (status === "not_found" || d.removed === false) return { outcome: "notfound" };
+    const problem = (outcome: Outcome, word?: string): General => ({
+      outcome,
+      ...(word ? { word } : {}),
+      signal: "problem",
+    });
+    if (status === "forbidden") return problem("refused", STATE_WORDS.notRun);
+    if (status === "blocked") return problem("blocked", "policy");
+    if (code === "confirmation_required") return problem("refused", STATE_WORDS.needsConfirmation);
+    if (status === "approval-pending") return problem("waiting");
+    if (status === "not_found" || d.removed === false) return problem("notfound");
     if (
       d.ok === false ||
       (d.error !== undefined && d.error !== null && d.error !== "" && d.error !== false) ||
       status === "error" ||
       status === "failed"
     )
-      return { outcome: "failed" };
-    if (status === "queued") return { outcome: "queued" };
-    if (d.effect === "unverifiable" || d.effect === "suspected_noop")
-      return { outcome: "unconfirmed" };
+      return problem("failed");
+    if (status === "queued") return problem("queued");
+    if (d.effect === "unverifiable" || d.effect === "suspected_noop") return problem("unconfirmed");
+  }
+  for (const d of levels) {
+    const status = typeof d.status === "string" ? d.status : "";
+    const code = typeof d.code === "string" ? d.code : "";
     if (d.outcome !== undefined && d.outcome !== null) {
       const oc = typeof d.outcome === "string" ? d.outcome : str(rec(d.outcome)?.code);
-      return { outcome: "made", word: oc ? wordOf(oc) : STATE_WORDS.callMade };
+      return { outcome: "made", word: oc ? wordOf(oc) : STATE_WORDS.callMade, signal: "word" };
     }
-    if (status && !SUCCESS[status]) return { outcome: "made", word: wordOf(status) };
-    if (code && !SUCCESS[code]) return { outcome: "made", word: wordOf(code) };
+    if (status && !SUCCESS[status])
+      return { outcome: "made", word: wordOf(status), signal: "word" };
+    if (code && !SUCCESS[code]) return { outcome: "made", word: wordOf(code), signal: "word" };
   }
   return null;
+}
+
+/**
+ * A value that says the work was done (7.3): `ok: true`, a success `status`
+ * or `code`, `removed: true`, `effect: "confirmed"`, at either level. What a
+ * general card needs for Done, since its result has no field of its own.
+ */
+function saysDone(details: Rec | null): boolean {
+  if (!details) return false;
+  return [details, rec(details.result) ?? {}].some(
+    (d) =>
+      d.ok === true ||
+      SUCCESS[str(d.status)] === true ||
+      SUCCESS[str(d.code)] === true ||
+      d.removed === true ||
+      d.effect === "confirmed",
+  );
+}
+
+/** The identity keys a tool-server result carries whatever it did. */
+const IDENTITY_KEYS: Record<string, true> = { mcpServer: true, mcpTool: true };
+
+/**
+ * A result that carries something: text with more than white space, or
+ * details beyond the tool server's own identity. "A result without error"
+ * (8.1) needs one; an empty return establishes nothing.
+ */
+function carries(call: ActionCall): boolean {
+  if (str(call.text).trim()) return true;
+  return Object.keys(call.details ?? {}).some((key) => !IDENTITY_KEYS[key]);
 }
 
 /** How an error result reads, where the gateway says more than "an error" (7.3, 8.4). */
@@ -606,7 +667,8 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
   edit: (c) => {
     const d = c.details;
     if (d?.changed === false) return "unchanged";
-    if (c.name === "apply_patch") return "done";
+    // A patch's result says nothing of its own: one that carries text or details is Done.
+    if (c.name === "apply_patch") return carries(c) ? "done" : "made";
     return d?.changed === true || typeof d?.diff === "string" || rec(d?.diffStat) ? "done" : "made";
   },
   memory: (c) => {
@@ -636,7 +698,7 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
     // A non-zero exit is the command's answer, not a failure (8.4).
     return num(d?.exitCode) !== null ? "done" : "made";
   },
-  terminal: (c) => (c.text || c.details ? "done" : "made"),
+  terminal: (c) => (carries(c) ? "done" : "made"),
   web: (c) => {
     const d = c.details;
     if (Array.isArray(d?.results)) return "done";
@@ -652,9 +714,9 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
     if (!(d?.text || c.text)) return "unavailable";
     return d?.truncated === true ? "partial" : "done";
   },
-  browser: (c) => (c.text || c.details ? "done" : "made"),
+  browser: (c) => (carries(c) ? "done" : "made"),
   computer: (c) => {
-    if (OBSERVE[str(c.args.action)]) return c.text || c.details ? "done" : "made";
+    if (OBSERVE[str(c.args.action)]) return carries(c) ? "done" : "made";
     const r = rec(c.details?.result) ?? {};
     if (r.ok === false) return "failed";
     if (r.effect === "confirmed") return "done";
@@ -670,7 +732,7 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
     // The device's code for an act that ran is not fixed by the gateway (8.7, point 7).
     return { outcome: "made", word: code ? wordOf(code) : STATE_WORDS.callMade };
   },
-  screen: (c) => (c.text || c.details ? "done" : "made"),
+  screen: (c) => (carries(c) ? "done" : "made"),
   routine: (c) => {
     const d = c.details ?? {};
     switch (c.args.action) {
@@ -684,10 +746,10 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
       case "update":
         return d.id ? "done" : "made";
       default:
-        return c.text || c.details ? "done" : "made";
+        return carries(c) ? "done" : "made";
     }
   },
-  tasks: (c) => (c.text || c.details ? "done" : "made"),
+  tasks: (c) => (carries(c) ? "done" : "made"),
   helper: (c) => {
     if (c.name === "sessions_spawn") {
       const s = c.details?.status;
@@ -700,23 +762,24 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
             : "made";
     }
     // The results of a wait, a kill and a steer were not read for this design (8.7, point 3).
-    return c.name === "subagents" && c.args.action === "list" && (c.text || c.details)
-      ? "done"
-      : "made";
+    return c.name === "subagents" && c.args.action === "list" && carries(c) ? "done" : "made";
   },
   question: (c) => {
     const s = c.details?.status;
     if (s === "answered") return { outcome: "done", word: STATE_WORDS.answered };
     return s ? { outcome: "made", word: wordOf(s) } : "made";
   },
-  plan: (c) => (c.text || c.details ? "done" : "made"),
+  plan: (c) => {
+    if (c.name !== "progress_card") return carries(c) ? "done" : "made";
+    // The card's revision, or the gateway's answer that it cleared the card.
+    return num(c.details?.revision) !== null || clearedPlan(c) ? "done" : "made";
+  },
   media: (c) => {
     const d = c.details;
-    if (c.args.action === "list" || c.args.action === "status")
-      return c.text || d ? "done" : "made";
+    if (c.args.action === "list" || c.args.action === "status") return carries(c) ? "done" : "made";
     if (d?.async === true && d.status === "started") return "started";
     if (c.name === "tts") return d?.audioPath ? "done" : "made";
-    return d?.media || d?.paths ? "done" : "made";
+    return list(d?.media).length || list(d?.paths).length ? "done" : "made";
   },
   look: (c) => {
     const e = c.details?.error;
@@ -739,11 +802,11 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
   },
   server: (c) => {
     const s = c.details?.status;
-    if (s === "blocked") return { outcome: "blocked", word: "policy" };
     if (s === "aborted" || s === "cancelled") return "unknown";
-    return "done";
+    return carries(c) ? "done" : "made";
   },
-  tool: (c) => (c.text || c.details ? "done" : "made"),
+  // A general card has no field of its own: only a value that says the work was done (7.3).
+  tool: (c) => (saysDone(c.details) ? "done" : "made"),
 };
 
 /**
@@ -774,9 +837,28 @@ export function outcomeOf(call: ActionCall, ctx: ReadingContext = {}): OutcomeOf
   if (call.isError) return errorOutcome(call, kind);
   const adapter = ADAPTERS[kind.kind];
   const norm = (o: OutcomeOf | Outcome): OutcomeOf => (typeof o === "string" ? { outcome: o } : o);
-  const own = adapter ? norm(adapter(call)) : null;
-  if (own && own.outcome !== "done") return own;
-  return payloadOutcome(call.details) ?? own ?? { outcome: "made" };
+  const own = adapter ? norm(adapter(call)) : { outcome: "made" as const };
+  // An outcome the kind names more exactly than the reading (Started, Partial, No change…).
+  if (own.outcome !== "done" && own.outcome !== "made") return own;
+  const general = generalReading(call.details);
+  const word = (o: OutcomeOf): OutcomeOf => ({
+    outcome: o.outcome,
+    ...(o.word ? { word: o.word } : {}),
+  });
+  // A signal of the general reading outranks the kind's Done and its fallback.
+  if (general?.signal === "problem") return word(general);
+  if (own.outcome === "made" && own.word) return own;
+  // Done only where neither the reading finds a value it shows as received nor the kind lacks its evidence.
+  if (general) return word(general);
+  return own;
+}
+
+/** A progress card the gateway cleared: no card, so no revision and no steps. */
+function clearedPlan(call: ActionCall): boolean {
+  const d = call.details;
+  if (d && "revision" in d)
+    return d.revision === null && (d.steps === null || d.steps === undefined);
+  return /^Progress card cleared/.test(str(call.text));
 }
 
 /** What a fold and the run line count an outcome as (7.3, last column). */
@@ -1159,13 +1241,19 @@ function wordsOf(call: ActionCall, kind: ActionKind, ctx: ReadingContext): Words
       if (call.name === "update_goal") return three(VERBS.mark, theGoalStatus(str(a.status)));
       if (call.name === "get_goal") return three(VERBS.check, OBJECTS.theGoal);
       const steps = list(a.plan).map(rec);
-      const done = steps.filter((s) => s?.status === "completed").length;
-      // The first plan in a task is made; later ones save it again (the gateway's revision says so too).
-      const again = call.repeat === true || (num(d.revision) ?? 1) > 1;
+      // A call with neither part clears the card; so does the gateway's answer that it did.
+      const clearing = !steps.length && !str(a.markdown).trim();
+      if (clearedPlan(call) || (clearing && call.status !== "returned"))
+        return three(VERBS.clearPlan, OBJECTS.thePlan);
+      const card = rec(d.steps);
+      const total = num(card?.total) ?? steps.length;
+      const done = num(card?.completed) ?? steps.filter((s) => s?.status === "completed").length;
+      // The gateway's revision says whether this made the card or saved it again; without it, saved.
+      const made = num(d.revision) === 1;
       return three(
-        again ? VERBS.savePlan : VERBS.makePlan,
-        again ? OBJECTS.thePlan : OBJECTS.aPlan,
-        done ? FORMS.ofDone(done, steps.length) : PLURALS.steps(steps.length),
+        made ? VERBS.makePlan : VERBS.savePlan,
+        made ? OBJECTS.aPlan : OBJECTS.thePlan,
+        done ? FORMS.ofDone(done, total) : total ? PLURALS.steps(total) : "",
       );
     }
     case "media": {
@@ -1745,9 +1833,14 @@ export function foldLineOf(calls: ActionCall[], ctx: ReadingContext = {}): FoldL
     !asks && outcomes.every((o) => o === "done" || o === "partial" || problemOf(o) !== null);
   const neutral: Pair = [neutralOf(kind, calls, ctx), `· ${PLURALS.calls(calls.length)}`];
   const started = allStarted ? startedPluralOf(kind, calls) : null;
+  // The done plural counts the Done and Partial members only: "Read 1 file · 1 failed" (7.4).
+  const doneCalls = calls.filter((_, i) => {
+    const o = lines[i]!.outcome;
+    return o === "done" || o === "partial";
+  });
   const [verb, object] =
-    allDone || (problems.length > 0 && doneOrProblem)
-      ? pluralOf(kind, calls, ctx)
+    doneCalls.length > 0 && (allDone || (problems.length > 0 && doneOrProblem))
+      ? pluralOf(kind, doneCalls, ctx)
       : (started ?? neutral);
 
   const live =
@@ -1901,6 +1994,8 @@ const DETAIL_KEYS: Record<string, true> = {
   sessionKey: true,
   runId: true,
   diff: true,
+  revision: true,
+  steps: true,
 };
 
 /**
@@ -1943,13 +2038,30 @@ export function projectArgs(args: unknown): Rec | null {
   // A patch's input is read for its file lines only.
   const input = typeof r.input === "string" ? patchHeads(r.input) : undefined;
   const base = input !== undefined ? { ...r, input } : r;
-  return fit(base, [
+  const attempts: Array<[number, number, number]> = [
     [512, 32, 4],
     [160, 16, 3],
     [64, 8, 3],
     [32, 4, 2],
-  ]);
+  ];
+  // Keys the reading reads come first: when all of them do not fit, the others go.
+  const read: Rec = {};
+  for (const [key, value] of Object.entries(base)) if (ARG_KEYS[key]) read[key] = value;
+  return fit(base, attempts.slice(0, 2)) ?? fit(read, attempts);
 }
+
+/** Argument keys the reading reads, in any kind's words, detail or readable view. */
+const ARG_KEYS: Record<string, true> = Object.fromEntries(
+  (
+    "path paths pdf pdfs input command workdir host url targetUrl targetId ref element node nodeId " +
+    "id requestId to channelId guildId userId name query pattern messageId action request " +
+    "mobileAction confirmed job jobId plan markdown objective status label task agentId ids " +
+    "target sessionKey sessionId message channel conversationRef questions prompt text count " +
+    "maxResults from lines limit timeoutSeconds pages extractMode maxChars coordinate edits content"
+  )
+    .split(" ")
+    .map((key) => [key, true]),
+);
 
 /** The file lines of a patch, which are all the reading takes from it. */
 function patchHeads(input: string): string {

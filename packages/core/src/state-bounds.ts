@@ -163,6 +163,8 @@ export const MAX_COMMAND_ARGS = 16;
 export const MAX_LINKED_RUNS = 32;
 /** Tool-server tools a task keeps from `tools.effective`, by effective name. */
 export const MAX_MCP_TOOLS = 128;
+/** Built-in and plugin tools a task keeps from `tools.effective`, by effective name. */
+export const MAX_BUILTIN_TOOLS = 256;
 /** A tool's effective name: the gateway cuts it to 64 characters (`buildSafeToolName`). */
 export const MAX_TOOL_NAME_CHARS = 128;
 /** Steer aliases per task (also `MAX_STEER_ALIASES`). */
@@ -466,6 +468,9 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
     MAX_TOOL_NAME_CHARS,
     object<McpToolIdentity>()({ server: NAME, tool: NAME }),
   ),
+  // Names and a root are ids: a cut one would name another tool or folder.
+  builtinTools: list(MAX_BUILTIN_TOOLS, id(MAX_TOOL_NAME_CHARS)),
+  workspaceRoot: id(MAX_STEP_PATH_CHARS),
   loadedAt: NUMBER,
 });
 

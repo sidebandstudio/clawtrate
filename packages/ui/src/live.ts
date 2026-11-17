@@ -8,6 +8,7 @@ import {
   callFromStep,
   lineOf,
   phraseCall,
+  readingContextOf,
   type ActionCall,
   type ReadingContext,
   activeRun,
@@ -83,8 +84,8 @@ export function statusLineFor(
   options: { connected: boolean; interactive: boolean },
 ): StatusLineView {
   let view: StatusLineView;
-  // Read as the cards read it: with the gateway's map of tool-server names.
-  const ctx: ReadingContext = { toolServers: transcript.mcpTools };
+  // Read as the cards read it: with what the gateway said of the task's tools and workspace.
+  const ctx: ReadingContext = readingContextOf(transcript);
   const call = phraseCallOf(run, ctx);
   if (run.state === "stopping") {
     view = {

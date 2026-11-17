@@ -203,6 +203,18 @@ export type Transcript = TaskActivity & {
    * a result's own `details` overrule it.
    */
   mcpTools: Record<string, McpToolIdentity>;
+  /**
+   * The built-in and plugin tools `tools.effective` lists for this task, by
+   * effective name: a general card of one of these folds by its name (8.3).
+   * Absent until the inventory is read.
+   */
+  builtinTools?: string[];
+  /**
+   * The bot's workspace root, as the gateway names it (`agents.files.list`
+   * `workspace`): an absolute path is a memory note only inside it (8.2).
+   * Absent or null when the gateway has not said; nothing is inferred then.
+   */
+  workspaceRoot?: string | null;
   /** Paths of fields cut to their bound that no item beneath records itself. */
   cut?: string[];
   /** Epoch ms of the latest successful history load. */

@@ -10,6 +10,7 @@ import {
   callFromStep,
   groupFeed,
   isTerminal,
+  readingContextOf,
   runLineOf,
   segmentFromStep,
   type FeedEntry,
@@ -280,10 +281,11 @@ export function ActionScope({
   ctx: ReadingContext;
   children: ReactNode;
 }) {
-  // The gateway's name map for tool servers: a tool-server call is known from its start.
+  // The gateway's name map, tool inventory and workspace root: what the reading may know at a start.
+  const { mcpTools, builtinTools, workspaceRoot } = transcript;
   const ctx = useMemo(
-    () => ({ ...given, toolServers: transcript.mcpTools }),
-    [given, transcript.mcpTools],
+    () => ({ ...given, ...readingContextOf({ mcpTools, builtinTools, workspaceRoot }) }),
+    [given, mcpTools, builtinTools, workspaceRoot],
   );
   const scope = useScopeCards();
   const handover = useStepHandover();
@@ -323,15 +325,6 @@ export function ActionScope({
     const skip = new Set(
       engineRuns.flatMap((run) => run.steps.flatMap((s) => (s.toolCallId ? [s.toolCallId] : []))),
     );
-    // Tools already called earlier in the task, in its order: a plan after the first is saved again.
-    const called = new Set<string>();
-    const markRepeats = (entries: FeedEntry<FeedRef>[]) =>
-      entries.map((entry) => {
-        if (entry.type !== "action") return entry;
-        const repeat = called.has(entry.call.name);
-        called.add(entry.call.name);
-        return repeat ? { ...entry, call: { ...entry.call, repeat: true } } : entry;
-      });
     const engineRunIds = new Set(engineRuns.map((run) => run.id));
     const items = new Map<string, { groups: Groups; revision: number }>();
     let previousUser: string | null = null;
@@ -342,7 +335,7 @@ export function ActionScope({
       // A run drawn from the engine draws its calls and reasoning there: the rows history already
       // holds of it keep only their text, so nothing is drawn twice and nothing only history has is lost.
       const fromEngine = run !== undefined && engineRunIds.has(run.id);
-      const entries = markRepeats(itemEntries(item, run, index, skip, cards, fromEngine));
+      const entries = itemEntries(item, run, index, skip, cards, fromEngine);
       items.set(item.id, {
         groups: groupFeed(entries, ctx),
         revision: run?.reasoningRevision ?? 0,
@@ -352,7 +345,7 @@ export function ActionScope({
     for (const run of engineRuns) {
       const rest = placement.byRun.get(run.id) ?? [];
       runs.set(run.id, {
-        groups: groupFeed(markRepeats(runEntries(run, cards, rest)), ctx),
+        groups: groupFeed(runEntries(run, cards, rest), ctx),
         revision: run.reasoningRevision,
       });
     }
