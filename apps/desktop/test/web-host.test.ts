@@ -36,6 +36,7 @@ beforeAll(async () => {
       get state() {
         return store.get();
       },
+      withdraw: () => {},
     } as unknown as ClawtrateClient,
     info: { kind: "web", version: "test", devGateway: null },
     policy: {},
