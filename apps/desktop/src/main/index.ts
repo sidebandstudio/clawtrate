@@ -112,6 +112,16 @@ async function main(): Promise<void> {
     // Only the command's plain-data answer crosses back to the renderer.
     return session.apply(parseBridgeCommand(raw));
   });
+  // Files arrive as bytes, never as paths: a renderer cannot make this process read a file of its choosing.
+  ipcMain.handle("clawtrate:attach", (_event, raw: unknown) => {
+    const file = raw as { name?: unknown; type?: unknown; data?: unknown } | null;
+    const data = file?.data;
+    if (!(data instanceof ArrayBuffer)) throw new Error("invalid file");
+    const store = policy.attachments!;
+    const meta = { fileName: file?.name, mimeType: file?.type };
+    store.check(meta, data.byteLength);
+    return store.add(meta, data.byteLength, () => Buffer.from(data).toString("base64"));
+  });
   batchSnapshots(client.store.subscribe, (state) => {
     window?.webContents.send("clawtrate:state", state);
   });

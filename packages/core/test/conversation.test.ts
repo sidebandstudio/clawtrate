@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
-import { CLIENT_CAPS, ClawtrateClient, SendTooLargeError } from "../src/client.ts";
+import { APPROVAL_CAPS, CLIENT_CAPS, ClawtrateClient, SendTooLargeError } from "../src/client.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import {
   deferred,
@@ -142,6 +142,8 @@ describe("scope step-up (B1, F-002)", () => {
     expect(client.state.connection.canAnswer).toBe(true);
     const upgraded = connectAt(gateway, 1);
     expect(upgraded.scopes).toEqual([...INTERACTIVE_SCOPES]);
+    // Holding operator.approvals, the connect now claims the approval caps too.
+    expect(upgraded.caps).toEqual([...CLIENT_CAPS, ...APPROVAL_CAPS]);
     expect(upgraded.auth?.deviceToken ?? upgraded.auth?.token).toBe("rotated-token");
     expect(JSON.parse(storage.data.get(tokenKey(URL_A))!)).toEqual({
       token: "rotated-token",
@@ -559,10 +561,16 @@ describe("bridge commands for the live conversation", () => {
     const { client } = await openTask({ gateway });
     const viewer = createBridgeSession(client);
     await expect(
-      viewer.apply({ type: "sendMessage", key: KEY, text: "hi", mode: "auto" }),
+      viewer.apply({ type: "sendMessage", key: KEY, text: "hi", mode: "auto", attachmentIds: [] }),
     ).rejects.toThrow(/not open in this view/);
     await viewer.apply({ type: "openSession", key: KEY });
-    const sent = await viewer.apply({ type: "sendMessage", key: KEY, text: "hi", mode: "auto" });
+    const sent = await viewer.apply({
+      type: "sendMessage",
+      key: KEY,
+      text: "hi",
+      mode: "auto",
+      attachmentIds: [],
+    });
     expect(sent.messageId).toBe(client.state.transcripts[KEY]!.outbox[0]!.id);
 
     const created = await viewer.apply({

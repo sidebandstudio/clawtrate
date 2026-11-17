@@ -2,6 +2,7 @@
 // one core client, the device's data directory, and development gateway detection.
 
 import {
+  AttachmentStore,
   ClawtrateClient,
   defaultApprovalInstructions,
   validateGatewayUrl,
@@ -10,6 +11,7 @@ import {
   type HostInfo,
 } from "@clawtrate/core";
 import { createNodeHost } from "@clawtrate/core/node";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -119,6 +121,10 @@ export async function startHostRuntime(options: {
       version: APP_VERSION,
       devGateway: options.devGateway ? { url: options.devGateway.url } : null,
     },
-    policy: { devGateway: options.devGateway },
+    // Files viewers add before sending, held in this process until a message takes them.
+    policy: {
+      devGateway: options.devGateway,
+      attachments: new AttachmentStore({ newId: randomUUID }),
+    },
   };
 }

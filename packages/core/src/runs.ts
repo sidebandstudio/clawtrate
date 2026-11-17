@@ -4,6 +4,7 @@
 // docs/research/grok-bot-flows.md §5.6. Every function here is pure apart from
 // the raw table, which keeps the exact gateway payloads off the state snapshots.
 
+import type { ApprovalAccess, ApprovalCard } from "./approvals.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 
 export type RunState =
@@ -30,6 +31,10 @@ export function isActive(state: RunState): boolean {
  * `waiting-approval`) or a question from `ask_user` (`question.requested`).
  * Secure Form and Computer cards are not in the capability map.
  */
+/**
+ * Ids starting `lifecycle:` stand for an approval known only from the run's
+ * `waiting-approval` phase; they give way to the approval record once it is seen.
+ */
 export type PendingCard = { id: string; kind: "approval" | "question"; since: number | null };
 
 export type CardCloseReason =
@@ -53,7 +58,13 @@ export type CardCloseReason =
 export type ClosedCard = PendingCard & { reason: CardCloseReason };
 
 export type StepKind = "tool" | "reasoning";
-export type StepStatus = "running" | "done" | "failed";
+/** `waiting` is a tool step held by its own pending approval; the approval is not a second step. */
+export type StepStatus = "running" | "waiting" | "done" | "failed";
+
+/** A step that has not finished. */
+export function isOpenStep(step: Step): boolean {
+  return step.status === "running" || step.status === "waiting";
+}
 
 /** Display text, capped so long output never bloats every state snapshot. */
 export type StepText = { text: string; totalChars: number };
@@ -90,21 +101,39 @@ export type Step = {
   /** The final result text. */
   result: StepText | null;
   error: string | null;
+  /** The pending or last approval this tool call waited on. */
+  approvalId: string | null;
   /** The tool's own failure kind, for example `overall-timeout` for an exec that ran out of time. */
   failureKind: string | null;
   /** The gateway cut the result (`__openclaw.truncated` on the history row). */
   truncated: boolean;
   /**
-   * The raw call and result, inline once the step has finished and its JSON
-   * form is at most `RAW_INLINE_LIMIT` characters. Otherwise null; read it with
-   * the client's `stepRaw` (bridge command `readStepRaw`).
+   * The raw call and result as known so far, inline when its JSON form is at
+   * most `RAW_INLINE_LIMIT` characters (set at the tool's start and again when
+   * it finishes). Otherwise null; read it with the client's `stepRaw` (bridge
+   * command `readStepRaw`).
    */
   raw: StepRaw | null;
   /** Length of the raw JSON, known once the step has finished. */
   rawSize: number | null;
 };
 
+/**
+ * How a run failed. `kind` is the gateway's own classification where it sends
+ * one (`chat` `errorKind`, for example `timeout`), never parsed from the text.
+ */
 export type RunError = { message: string; kind: string | null };
+
+/**
+ * What the run's terminal lifecycle event said, as sent: `stopReason`, and for
+ * a timeout `timeoutPhase` and whether the provider had started.
+ */
+export type RunEnding = {
+  stopReason: string | null;
+  timeoutPhase: string | null;
+  providerStarted: boolean | null;
+  status: string | null;
+};
 
 export type Run = {
   /** The gateway's run id, or this client's idempotency key until the gateway answers. */
@@ -142,6 +171,8 @@ export type Run = {
   stopError: string | null;
   /** Highest per-run `agent` event seq seen, for gap detection. */
   lastSeq: number | null;
+  /** The terminal lifecycle or chat event's structured fields, when it carried any. */
+  ending: RunEnding | null;
 };
 
 export type OutgoingStatus =
@@ -230,6 +261,10 @@ export type TaskActivity = {
   runs: Run[];
   outbox: OutgoingMessage[];
   questions: QuestionCard[];
+  /** Exec, plugin and generic approvals for this task. */
+  approvals: ApprovalCard[];
+  /** Whether this connection can see approvals. On a read-only connection it cannot, which is not "none". */
+  approvalAccess: ApprovalAccess;
   /**
    * Run ids a steer send returned, mapped to the run the steer joined. The
    * gateway settles them at once with an empty final; while the joined run is
@@ -244,6 +279,8 @@ export const emptyActivity: TaskActivity = {
   runs: [],
   outbox: [],
   questions: [],
+  approvals: [],
+  approvalAccess: "unavailable",
   steerAliases: {},
   caughtUp: null,
 };
@@ -391,6 +428,7 @@ export function newRun(
     finishedBeforeStop: false,
     stopError: null,
     lastSeq: null,
+    ending: null,
     ...init,
   };
 }
@@ -431,7 +469,7 @@ export function finishRun(
   const reason: CardCloseReason =
     to === "failed" ? "run-failed" : to === "completed" ? "run-ended" : "cancelled";
   const steps = run.steps.map((step) => {
-    if (step.status !== "running") return step;
+    if (!isOpenStep(step)) return step;
     const closed: Step =
       step.kind === "reasoning"
         ? { ...step, status: "done", endedAt }
@@ -884,9 +922,9 @@ export function applyChatEvent(
         return finishRun({ ...withText, textComplete: true }, "completed", ctx);
       }
       case "aborted":
-        return finishRun(run, "stopped", ctx);
+        return finishRun({ ...run, ending: endingOf(payload, run.ending) }, "stopped", ctx);
       case "error":
-        return finishRun(run, "failed", ctx, {
+        return finishRun({ ...run, ending: endingOf(payload, run.ending) }, "failed", ctx, {
           message: str(payload.errorMessage) ?? "The run failed.",
           kind: str(payload.errorKind),
         });
@@ -953,7 +991,7 @@ function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContex
       const id =
         str(data.approvalId) ??
         str(data.id) ??
-        `approval:${run.pendingCards.length + run.closedCards.length + 1}`;
+        `lifecycle:${run.pendingCards.length + run.closedCards.length + 1}`;
       if (run.pendingCards.some((card) => card.id === id)) return { ...run, state: "waiting" };
       return {
         ...run,
@@ -962,9 +1000,12 @@ function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContex
       };
     }
     case "approval-resolved": {
+      // Without an id, only a stand-in from `waiting-approval` can be closed here;
+      // an approval record is closed by its own resolved event.
       const id = str(data.approvalId) ?? str(data.id);
-      const index = id ? run.pendingCards.findIndex((card) => card.id === id) : 0;
-      const card = run.pendingCards[index === -1 ? 0 : index];
+      const card = id
+        ? run.pendingCards.find((each) => each.id === id)
+        : run.pendingCards.find((each) => each.id.startsWith("lifecycle:"));
       if (!card) return run;
       const pendingCards = run.pendingCards.filter((each) => each !== card);
       return {
@@ -975,11 +1016,13 @@ function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContex
       };
     }
     case "end": {
+      run = { ...run, ending: endingOf(data, run.ending) };
       const endedAt = num(data.endedAt) ?? ts;
       if (data.aborted === true) return finishRun(run, "stopped", ctx, null, endedAt);
       return finishRun(run, "completed", ctx, null, endedAt);
     }
     case "error": {
+      run = { ...run, ending: endingOf(data, run.ending) };
       if (data.aborted === true) return finishRun(run, "stopped", ctx, null, ts);
       const message = str(data.error) ?? str(asRecord(data.error)?.message) ?? "The run failed.";
       return finishRun(run, "failed", ctx, { message, kind: null }, ts);
@@ -987,6 +1030,18 @@ function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContex
     default:
       return run;
   }
+}
+
+function endingOf(data: RawRecord, previous: RunEnding | null): RunEnding {
+  return {
+    stopReason: str(data.stopReason) ?? previous?.stopReason ?? null,
+    timeoutPhase: str(data.timeoutPhase) ?? previous?.timeoutPhase ?? null,
+    providerStarted:
+      typeof data.providerStarted === "boolean"
+        ? data.providerStarted
+        : (previous?.providerStarted ?? null),
+    status: str(data.status) ?? previous?.status ?? null,
+  };
 }
 
 function applyThinking(
@@ -1027,6 +1082,7 @@ function applyThinking(
     output: capText(cumulative ?? delta),
     result: null,
     error: null,
+    approvalId: null,
     failureKind: null,
     truncated: false,
     raw: null,
@@ -1063,6 +1119,7 @@ function blankToolStep(toolCallId: string, name: string | null, ts: number | nul
     output: null,
     result: null,
     error: null,
+    approvalId: null,
     failureKind: null,
     truncated: false,
     raw: null,
@@ -1077,17 +1134,24 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
   const name = str(data.name);
   const current = closeReasoning(run, ctx, ts);
   const existing = current.steps.find((step) => step.id === id);
-  if (existing && existing.status !== "running") return current;
+  if (existing && !isOpenStep(existing)) return current;
   const step = existing ?? blankToolStep(toolCallId, name, ts);
   switch (data.phase) {
     case "start": {
       ctx.raw.set(ctx.sessionKey, id, { source: "live", runId: run.id, call: data, result: null });
-      return upsertStep(current, {
-        ...step,
-        toolName: name ?? step.toolName,
-        title: toolTitle(name ?? step.toolName),
-        argsText: capText(prettyArgs(data.args)),
-      });
+      // The call is known now; carry it inline while the tool runs when it is small.
+      return upsertStep(
+        current,
+        settleRaw(
+          {
+            ...step,
+            toolName: name ?? step.toolName,
+            title: toolTitle(name ?? step.toolName),
+            argsText: capText(prettyArgs(data.args)),
+          },
+          ctx,
+        ),
+      );
     }
     case "update": {
       const partial = asRecord(data.partialResult);
@@ -1137,7 +1201,7 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
   return upsertStep(run, {
     ...step,
     startedAt: num(data.startedAt) ?? step.startedAt,
-    endedAt: step.status === "running" ? step.endedAt : (num(data.endedAt) ?? step.endedAt),
+    endedAt: isOpenStep(step) ? step.endedAt : (num(data.endedAt) ?? step.endedAt),
   });
 }
 
@@ -1146,7 +1210,7 @@ function applyCommandOutput(run: Run, data: RawRecord): Run {
   const itemId = str(data.itemId);
   if (!itemId?.startsWith("command:") || data.phase !== "delta") return run;
   const step = run.steps.find((each) => each.id === toolStepId(itemId.slice("command:".length)));
-  if (!step || step.status !== "running" || typeof data.output !== "string") return run;
+  if (!step || !isOpenStep(step) || typeof data.output !== "string") return run;
   return upsertStep(run, { ...step, output: appendText(step.output, data.output) });
 }
 
@@ -1225,6 +1289,7 @@ export function runsFromHistory(
                 output: capText(block.thinking),
                 result: null,
                 error: null,
+                approvalId: null,
                 failureKind: null,
                 truncated: false,
                 raw: null,
@@ -1291,10 +1356,43 @@ export function runsFromHistory(
 function mergeStep(live: Step, history: Step): Step {
   // A finished step beats a running one; between two finished steps, the live
   // one keeps the raw frames the user watched.
-  if (live.status === "running" && history.status !== "running") {
+  if (isOpenStep(live) && !isOpenStep(history)) {
     return { ...history, startedAt: live.startedAt ?? history.startedAt };
   }
   return history.truncated && !live.truncated ? { ...live, truncated: true } : live;
+}
+
+/**
+ * Merge one run's steps. Tool steps match by id. Live reasoning segments are
+ * split by a heuristic (a model call, a tool, reply text, or text that does
+ * not extend the last), so their ids need not match the transcript's
+ * `thinking` blocks. Once history holds the finished run and every live tool
+ * step, its reasoning replaces the live segments and its order wins. Until
+ * then history reasoning is not added. Either way no reasoning text is shown
+ * twice, and none is dropped before the transcript has it.
+ */
+function mergeSteps(live: Step[], history: Run): Step[] {
+  const historyIds = new Set(history.steps.map((step) => step.id));
+  const liveById = new Map(live.map((step) => [step.id, step]));
+  const complete =
+    isTerminal(history.state) &&
+    live.every((step) => step.kind !== "tool" || historyIds.has(step.id)) &&
+    (history.steps.some((step) => step.kind === "reasoning") ||
+      !live.some((step) => step.kind === "reasoning"));
+  if (complete) {
+    return history.steps.map((step) => {
+      const current = liveById.get(step.id);
+      return step.kind === "tool" && current ? mergeStep(current, step) : step;
+    });
+  }
+  const steps = [...live];
+  for (const step of history.steps) {
+    if (step.kind === "reasoning") continue;
+    const index = steps.findIndex((each) => each.id === step.id);
+    if (index === -1) steps.push(step);
+    else steps[index] = mergeStep(steps[index]!, step);
+  }
+  return steps;
 }
 
 /**
@@ -1309,12 +1407,7 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
   const merged = history.map((fromHistory) => {
     const current = liveById.get(fromHistory.id);
     if (!current) return fromHistory;
-    const steps = [...current.steps];
-    for (const step of fromHistory.steps) {
-      const index = steps.findIndex((each) => each.id === step.id);
-      if (index === -1) steps.push(step);
-      else steps[index] = mergeStep(steps[index]!, step);
-    }
+    const steps = mergeSteps(current.steps, fromHistory);
     let run: Run = {
       ...current,
       steps,

@@ -15,6 +15,24 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
+import {
+  applyApprovalRequested,
+  applyApprovalResolved,
+  expireApprovals,
+  markApproval,
+  normalizeApprovals,
+  parseApprovalResolved,
+  parseApprovalSnapshot,
+  parseExecApproval,
+  parsePluginApproval,
+  resolveRequest,
+  settleUnlistedApprovals,
+  type ApprovalCard,
+  type ApprovalDecision,
+  type ApprovalKind,
+} from "./approvals.ts";
+import { interSessionMessages, linkedRunOf, recipientRunIds, type LinkedRun } from "./cards.ts";
+import { MAX_FILE_BYTES, MAX_IMAGE_BYTES } from "./attachments.ts";
 import type { ApprovalInstructions, ClawtrateHost } from "./host.ts";
 import {
   asRecord,
@@ -69,6 +87,7 @@ import {
   type TaskActivity,
 } from "./runs.ts";
 import {
+  APPROVALS_SCOPE,
   heldFromGrant,
   INTERACTIVE_SCOPES,
   normalizeHeldScopes,
@@ -98,6 +117,21 @@ export const REQUESTED_SCOPES = ["operator.read"] as const;
  * resolve approvals.
  */
 export const CLIENT_CAPS: readonly string[] = ["tool-events"];
+/**
+ * Added when the connect asks for `operator.approvals`: without `approvals` and
+ * `exec-approvals` the gateway auto-denies exec approvals as `no-route`, and
+ * `plugin-approvals` routes plugin approvals. A read-only connect does not claim
+ * them, so the gateway never waits on a connection that cannot see approvals.
+ */
+export const APPROVAL_CAPS: readonly string[] = ["approvals", "exec-approvals", "plugin-approvals"];
+
+/** The caps a connect requesting these scopes advertises. */
+export function capsFor(scopes: readonly string[]): string[] {
+  return scopes.includes(APPROVALS_SCOPE) ? [...CLIENT_CAPS, ...APPROVAL_CAPS] : [...CLIENT_CAPS];
+}
+
+/** Longest standing allow the gateway accepts (`grantExpiresInDays`). */
+export const MAX_GRANT_DAYS = 3650;
 /** A registered client id for third-party operator UIs; we do not claim an OpenClaw product id. */
 export const CLIENT_ID = "gateway-client";
 export const CLIENT_MODE = "ui";
@@ -112,10 +146,6 @@ export const DEFAULT_TURN_LIMIT_MS = 50 * 60_000;
 export const MAX_MESSAGE_CHARS = 32_000;
 /** The gateway's frame ceiling after `connect` when `hello-ok.policy.maxPayload` is absent (25 MiB). */
 export const DEFAULT_MAX_PAYLOAD_BYTES = 26_214_400;
-/** Decoded image ceiling `chat.send` enforces (6 MiB). */
-export const MAX_IMAGE_BYTES = 6_291_456;
-/** Decoded per-file ceiling `chat.send` enforces by default (`agents.defaults.mediaMaxMb`, 20 MiB). */
-export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 /** Room left in a frame for the request envelope around the params. */
 const FRAME_SLACK_BYTES = 1024;
 const SESSION_LIST_PARAMS = {
@@ -126,6 +156,10 @@ const SESSION_LIST_PARAMS = {
   excludeSubagents: true,
 };
 const HISTORY_LIMIT = 200;
+/** How many sessions nobody has open, and how many runs of each, are followed for bot-to-bot cards. */
+const FOREIGN_SESSIONS = 20;
+const FOREIGN_RUNS_PER_SESSION = 10;
+const MAX_TIMER_MS = 2_147_483_647;
 const PAIRING_RETRY_MS = 3000;
 
 const SETTINGS_KEY = "connection";
@@ -301,6 +335,13 @@ export class ClawtrateClient {
   private readonly historySeq = new Map<string, number>();
   private readonly raw = new RawTable();
   private readonly turnTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * Runs of sessions no viewer has open, kept small, so a bot-to-bot card can
+   * follow the recipient's run when this connection receives its events.
+   */
+  private readonly foreign = new Map<string, TaskActivity>();
+  private readonly foreignRaw = new RawTable();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapping = false;
   private changedDuringBootstrap = false;
@@ -434,6 +475,9 @@ export class ClawtrateClient {
     this.historySeq.delete(key);
     this.raw.clearTask(key);
     this.clearTurnTimers(key);
+    const expiry = this.expiryTimers.get(key);
+    if (expiry) clearTimeout(expiry);
+    this.expiryTimers.delete(key);
     for (const message of this.state.transcripts[key]?.outbox ?? []) {
       this.attachmentContent.delete(message.id);
     }
@@ -1012,6 +1056,232 @@ export class ClawtrateClient {
     }
   }
 
+  // Approvals -------------------------------------------------------------------
+
+  /**
+   * Resolve an approval with the method for its kind: allow once, deny, or a
+   * standing allow (`allow-always`), optionally limited to `expiresInDays`
+   * days where the gateway takes a duration (exec and the generic kind). Deny
+   * is always possible. The gateway offers no field for which bots a standing
+   * allow covers.
+   */
+  async resolveApproval(
+    key: string,
+    approvalId: string,
+    decision: ApprovalDecision,
+    options: { expiresInDays?: number | null } = {},
+  ): Promise<void> {
+    const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
+    if (!approval || approval.status !== "pending")
+      throw new Error("That approval is no longer open.");
+    if (decision !== "deny" && !approval.allowedDecisions.includes(decision)) {
+      throw new Error(`The gateway does not offer ${decision} for this approval.`);
+    }
+    const days = options.expiresInDays ?? null;
+    if (days !== null) {
+      if (decision !== "allow-always") throw new Error("Only a standing allow takes a duration.");
+      if (approval.kind === "plugin") throw new Error("Plugin approvals take no duration.");
+      if (!Number.isInteger(days) || days < 1 || days > MAX_GRANT_DAYS) {
+        throw new Error(`A standing allow lasts 1 to ${MAX_GRANT_DAYS} days.`);
+      }
+    }
+    const { method, params } = resolveRequest(approval, decision, days);
+    this.updateActivity(key, (activity) =>
+      markApproval(activity, approvalId, { submitting: true, error: null }),
+    );
+    try {
+      await this.ensureScope(APPROVALS_SCOPE);
+      await this.request(method, params);
+      this.updateActivity(key, (activity) =>
+        applyApprovalResolved(activity, {
+          id: approvalId,
+          status: decision === "deny" ? "denied" : "allowed",
+          decision,
+          reason: "user",
+          resolvedAt: this.now(),
+          resolvedBy: this.host.client.displayName,
+        }),
+      );
+    } catch (error) {
+      this.updateActivity(key, (activity) =>
+        markApproval(activity, approvalId, { submitting: false, error: errorMessage(error) }),
+      );
+      throw error;
+    }
+  }
+
+  /** Put an approval in the open task it belongs to: by session key, else by its run. */
+  private routeApproval(card: ApprovalCard): void {
+    let key = card.sessionKey && this.openSessions.has(card.sessionKey) ? card.sessionKey : null;
+    if (!key) {
+      key =
+        Object.values(this.state.transcripts).find(
+          (transcript) =>
+            transcript.approvals.some((approval) => approval.id === card.id) ||
+            (card.runId !== null && findRun(transcript, card.runId) !== undefined),
+        )?.sessionKey ?? null;
+    }
+    if (key) this.updateActivity(key, (activity) => applyApprovalRequested(activity, card));
+  }
+
+  /**
+   * Pending approvals for one task, from `exec.approval.list`,
+   * `plugin.approval.list` and `openclaw.approval.list`, when it opens and
+   * after every reconnect. On a connection without `operator.approvals` the
+   * task says approvals are unavailable.
+   */
+  private async backfillApprovals(key: string, generation: number): Promise<void> {
+    if (!this.holds(APPROVALS_SCOPE)) {
+      this.setApprovalAccess(key, "unavailable");
+      return;
+    }
+    if (this.state.transcripts[key]?.approvalAccess !== "ready")
+      this.setApprovalAccess(key, "loading");
+    const sources: Array<{
+      kind: ApprovalKind;
+      method: string;
+      parse: (v: unknown) => ApprovalCard | null;
+    }> = [
+      { kind: "exec", method: "exec.approval.list", parse: parseExecApproval },
+      { kind: "plugin", method: "plugin.approval.list", parse: parsePluginApproval },
+      {
+        kind: "system-agent",
+        method: "openclaw.approval.list",
+        parse: (v) => parseApprovalSnapshot(v),
+      },
+    ];
+    const results = await Promise.allSettled(
+      sources.map((source) => this.request(source.method, {})),
+    );
+    if (generation !== this.generation || !this.openSessions.has(key)) return;
+    const run = (activity: TaskActivity) => {
+      let next = activity;
+      results.forEach((result, index) => {
+        const source = sources[index]!;
+        if (result.status !== "fulfilled") return;
+        const record = asRecord(result.value);
+        const items = Array.isArray(result.value)
+          ? result.value
+          : Array.isArray(record?.approvals)
+            ? record.approvals
+            : Array.isArray(record?.items)
+              ? record.items
+              : [];
+        const cards = items
+          .map((item) => source.parse(item))
+          .filter((card): card is ApprovalCard => card !== null && card.status === "pending")
+          .filter(
+            (card) =>
+              card.sessionKey === key ||
+              (card.sessionKey === null &&
+                card.runId !== null &&
+                findRun(next, card.runId) !== undefined),
+          );
+        for (const card of cards) next = applyApprovalRequested(next, card);
+        // Only kinds this card set can come from: a generic snapshot of an exec approval counts as exec.
+        const kinds: ApprovalKind[] = [source.kind];
+        next = settleUnlistedApprovals(next, kinds, new Set(cards.map((card) => card.id)));
+      });
+      return next;
+    };
+    this.updateActivity(key, run);
+    const failed = results.filter((result) => result.status === "rejected");
+    // The exec list is the one the map shows live; it decides whether approvals could be read.
+    this.setApprovalAccess(key, results[0]!.status === "fulfilled" ? "ready" : "error");
+    for (const failure of failed) {
+      this.log(
+        "warn",
+        `approval list failed: ${errorMessage((failure as PromiseRejectedResult).reason)}`,
+      );
+    }
+  }
+
+  private setApprovalAccess(key: string, access: TaskActivity["approvalAccess"]): void {
+    const transcript = this.state.transcripts[key];
+    if (!transcript || transcript.approvalAccess === access) return;
+    this.setTranscript(key, () => ({ ...transcript, approvalAccess: access }));
+  }
+
+  /** Expire pending approvals at their `expiresAt`, then re-read the lists to confirm. */
+  private scheduleApprovalExpiry(key: string): void {
+    const transcript = this.state.transcripts[key];
+    const existing = this.expiryTimers.get(key);
+    if (existing) clearTimeout(existing);
+    this.expiryTimers.delete(key);
+    const next = Math.min(
+      ...(transcript?.approvals ?? [])
+        .filter((approval) => approval.status === "pending" && approval.expiresAt !== null)
+        .map((approval) => approval.expiresAt!),
+    );
+    if (!Number.isFinite(next)) return;
+    this.expiryTimers.set(
+      key,
+      setTimeout(
+        () => {
+          this.expiryTimers.delete(key);
+          this.updateActivity(key, (activity) => expireApprovals(activity, this.now()));
+          void this.backfillApprovals(key, this.generation);
+        },
+        // setTimeout fires at once past 2^31-1 ms; re-check at that horizon instead.
+        Math.min(MAX_TIMER_MS, Math.max(0, next - this.now())),
+      ),
+    );
+  }
+
+  // Linked runs -------------------------------------------------------------------
+
+  /** Apply an event to a session nobody has open, keeping a few recent runs of a few sessions. */
+  private updateForeign(
+    sessionKey: string,
+    fn: (activity: TaskActivity, ctx: EngineContext) => TaskActivity,
+  ): void {
+    const before = this.foreign.get(sessionKey) ?? emptyActivity;
+    let next = fn(before, { sessionKey, now: this.now(), raw: this.foreignRaw });
+    if (next === before) return;
+    if (next.runs.length > FOREIGN_RUNS_PER_SESSION) {
+      next = { ...next, runs: next.runs.slice(-FOREIGN_RUNS_PER_SESSION) };
+    }
+    // Steps of foreign runs are not shown; keep only the run states.
+    next = {
+      ...next,
+      runs: next.runs.map((run) => (run.steps.length ? { ...run, steps: [] } : run)),
+    };
+    this.foreignRaw.clearTask(sessionKey);
+    this.foreign.delete(sessionKey);
+    this.foreign.set(sessionKey, next);
+    while (this.foreign.size > FOREIGN_SESSIONS) {
+      const oldest = this.foreign.keys().next().value as string;
+      this.foreign.delete(oldest);
+    }
+    const changed = next.runs.some((run) => findRun(before, run.id)?.state !== run.state);
+    if (changed) for (const key of this.openSessions.keys()) this.refreshLinkedRuns(key);
+  }
+
+  /** Copy the state of every recipient run a task's `sessions_send` results name, where it is known. */
+  private refreshLinkedRuns(key: string): void {
+    const transcript = this.state.transcripts[key];
+    if (!transcript) return;
+    const ids = recipientRunIds(transcript.runs, (step) => step.raw ?? this.raw.get(key, step.id));
+    const linked: Record<string, LinkedRun> = {};
+    for (const id of ids) {
+      for (const [sessionKey, activity] of [
+        ...this.foreign.entries(),
+        ...Object.entries(this.state.transcripts),
+      ] as Array<[string, TaskActivity]>) {
+        const run = findRun(activity, id);
+        if (run) linked[id] = linkedRunOf(run, sessionKey);
+      }
+    }
+    const current = transcript.linkedRuns;
+    const same =
+      Object.keys(current).length === Object.keys(linked).length &&
+      Object.entries(linked).every(
+        ([id, run]) => current[id]?.state === run.state && current[id]?.endedAt === run.endedAt,
+      );
+    if (!same)
+      this.setTranscript(key, () => ({ ...this.state.transcripts[key]!, linkedRuns: linked }));
+  }
+
   // Questions -------------------------------------------------------------------
 
   /**
@@ -1116,7 +1386,7 @@ export class ClawtrateClient {
   ): void {
     const current = this.state.transcripts[key];
     if (!current) return;
-    const next = fn(current, this.context(key));
+    const next = normalizeApprovals(fn(current, this.context(key)));
     if (next === current) return;
     this.setTranscript(key, () => withLive({ ...current, ...next }));
     this.afterActivity(key);
@@ -1126,6 +1396,8 @@ export class ClawtrateClient {
   private afterActivity(key: string): void {
     const transcript = this.state.transcripts[key];
     if (!transcript) return;
+    this.refreshLinkedRuns(key);
+    this.scheduleApprovalExpiry(key);
     for (const run of transcript.runs) {
       const timerKey = `${key}\u0000${run.id}`;
       const timer = this.turnTimers.get(timerKey);
@@ -1137,7 +1409,10 @@ export class ClawtrateClient {
         const elapsed = this.now() - (run.startedAt ?? this.now());
         this.turnTimers.set(
           timerKey,
-          setTimeout(() => this.turnLimitReached(key, run.id), Math.max(0, limit - elapsed)),
+          setTimeout(
+            () => this.turnLimitReached(key, run.id),
+            Math.min(MAX_TIMER_MS, Math.max(0, limit - elapsed)),
+          ),
         );
       }
     }
@@ -1167,6 +1442,12 @@ export class ClawtrateClient {
     this.turnTimers.delete(`${key}\u0000${runId}`);
     const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
     if (!run || !isActive(run.state)) return;
+    const limit = this.options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS;
+    if (this.now() - (run.startedAt ?? this.now()) < limit) {
+      // Woken early by the timer ceiling: arm again.
+      this.afterActivity(key);
+      return;
+    }
     const minutes = Math.round((this.options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS) / 60_000);
     this.updateActivity(key, (activity, ctx) =>
       failRun(
@@ -1317,7 +1598,7 @@ export class ClawtrateClient {
         client,
         role: plan.role,
         scopes: plan.scopes,
-        caps: [...CLIENT_CAPS],
+        caps: capsFor(plan.scopes),
         ...(plan.auth ? { auth: plan.auth } : {}),
         ...(plan.device ? { device: plan.device } : {}),
         locale: "en-US",
@@ -1401,6 +1682,8 @@ export class ClawtrateClient {
     this.historyTimers.clear();
     for (const timer of this.turnTimers.values()) clearTimeout(timer);
     this.turnTimers.clear();
+    for (const timer of this.expiryTimers.values()) clearTimeout(timer);
+    this.expiryTimers.clear();
   }
 
   private handleConnectFailure(error: GatewayProtocolRequestError, deviceId: string, url: string) {
@@ -1473,6 +1756,7 @@ export class ClawtrateClient {
       scopes,
       canWrite,
       canAnswer: scopeSatisfied(scopes, QUESTIONS_SCOPE),
+      canApprove: scopeSatisfied(scopes, APPROVALS_SCOPE),
       pairing: null,
       error: null,
       retryAt: null,
@@ -1638,6 +1922,8 @@ export class ClawtrateClient {
       error: null,
       hasMore: false,
       live: null,
+      linkedRuns: {},
+      interSession: [],
     };
   }
 
@@ -1691,6 +1977,7 @@ export class ClawtrateClient {
           sessionKey: key,
           status: "ready",
           items: mapHistory(messages),
+          interSession: interSessionMessages(messages),
           error: null,
           hasMore: history?.hasMore === true,
           caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
@@ -1698,6 +1985,7 @@ export class ClawtrateClient {
       );
       this.afterActivity(key);
       void this.backfillQuestions(key, generation);
+      void this.backfillApprovals(key, generation);
     } catch (error) {
       if (generation !== this.generation || !this.openSessions.has(key)) return;
       this.setTranscript(key, (current) => ({
@@ -1728,7 +2016,10 @@ export class ClawtrateClient {
     const runId = typeof payload?.runId === "string" ? payload.runId : null;
     if (!payload || !key || !runId) return;
     const { event: projected } = this.streams.project(event);
-    if (!this.openSessions.has(key)) return;
+    if (!this.openSessions.has(key)) {
+      this.updateForeign(key, (activity, ctx) => applyChatEvent(activity, payload, null, ctx));
+      return;
+    }
     const text =
       payload.state === "delta"
         ? liveTextFromChatMessage(asRecord(projected.payload)?.message)
@@ -1749,7 +2040,11 @@ export class ClawtrateClient {
         Object.values(this.state.transcripts).find((transcript) => findRun(transcript, runId))
           ?.sessionKey ?? null;
     }
-    if (!key || !this.openSessions.has(key)) return;
+    if (!key) return;
+    if (!this.openSessions.has(key)) {
+      this.updateForeign(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
+      return;
+    }
     let gap = false;
     this.updateActivity(key, (activity, ctx) => {
       const result = applyAgentEvent(activity, payload, ctx);
@@ -1789,6 +2084,32 @@ export class ClawtrateClient {
           this.updateActivity(key, (activity, ctx) =>
             applyQuestionRequested(activity, record, ctx),
           );
+        }
+        return;
+      }
+      case "exec.approval.requested":
+      case "plugin.approval.requested":
+      case "openclaw.approval.requested": {
+        const card =
+          event.event === "exec.approval.requested"
+            ? parseExecApproval(event.payload)
+            : event.event === "plugin.approval.requested"
+              ? parsePluginApproval(event.payload)
+              : parseApprovalSnapshot(event.payload);
+        if (card) this.routeApproval(card);
+        return;
+      }
+      case "exec.approval.resolved":
+      case "plugin.approval.resolved":
+      case "openclaw.approval.resolved": {
+        const resolution = parseApprovalResolved(event.payload);
+        if (!resolution) return;
+        for (const transcript of Object.values(this.state.transcripts)) {
+          if (transcript.approvals.some((approval) => approval.id === resolution.id)) {
+            this.updateActivity(transcript.sessionKey, (activity) =>
+              applyApprovalResolved(activity, resolution),
+            );
+          }
         }
         return;
       }

@@ -1,6 +1,7 @@
 // View models the interface renders. Gateway payloads are mapped into these in
 // mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
 
+import type { InterSessionMessage, LinkedRun } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
 
 export type ConnectionStatus =
@@ -66,6 +67,8 @@ export type ConnectionState = {
   canWrite: boolean;
   /** True while the connection holds `operator.questions`, so question cards can be answered. */
   canAnswer: boolean;
+  /** True while the connection holds `operator.approvals`, so approvals can be seen and resolved. */
+  canApprove: boolean;
   upgrade: ScopeUpgradeState;
   deviceId: string | null;
   pairing: PairingRequest | null;
@@ -135,6 +138,10 @@ export type Transcript = TaskActivity & {
    * `runs`; kept for views that only draw one streaming bubble.
    */
   live: { runId: string; text: string } | null;
+  /** Recipient runs that this task's bot-to-bot sends name, where this connection saw them. */
+  linkedRuns: Record<string, LinkedRun>;
+  /** Messages from other sessions in this task's history (inter-session provenance). */
+  interSession: InterSessionMessage[];
 };
 
 /** Loading bots and tasks after each connect, separate from the socket's own state. */
@@ -172,6 +179,7 @@ export const initialConnectionState: ConnectionState = {
   requestedScopes: [],
   canWrite: false,
   canAnswer: false,
+  canApprove: false,
   upgrade: initialScopeUpgrade,
   deviceId: null,
   pairing: null,

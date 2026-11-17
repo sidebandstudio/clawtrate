@@ -3,6 +3,7 @@
 // gateway token or the gateway socket; it only receives state and sends commands.
 
 import {
+  AttachmentTooLargeError,
   batchSnapshots,
   createBridgeSession,
   parseBridgeCommand,
@@ -17,6 +18,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { HostRuntime } from "../host/runtime.ts";
 
 export const ACCESS_COOKIE = "clawtrate_access";
+export const ATTACHMENTS_PATH = "/attachments";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -124,6 +126,10 @@ export function startWebHost(options: WebHostOptions) {
         return;
       }
       const access = authorized(req, url);
+      if (url.pathname === ATTACHMENTS_PATH) {
+        await receiveAttachment(req, res, url, access !== "denied" && sameOrigin(req));
+        return;
+      }
       if (access === "denied") {
         res.writeHead(401, { ...SECURITY_HEADERS, "content-type": "text/html; charset=utf-8" });
         res.end(
@@ -150,6 +156,79 @@ export function startWebHost(options: WebHostOptions) {
       res.end();
     });
   });
+
+  /**
+   * `POST /attachments?name=<file name>&type=<mime type>` with the raw file as
+   * the body. Needs the access cookie and a same-origin request, like the
+   * bridge. The declared length is checked against the gateway's ceiling for
+   * that type before any byte is read, and the count is enforced while reading.
+   */
+  const receiveAttachment = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+    allowed: boolean,
+  ) => {
+    const reply = (status: number, body: unknown, close = false) => {
+      res.writeHead(status, {
+        ...SECURITY_HEADERS,
+        "content-type": "application/json",
+        ...(close ? { connection: "close" } : {}),
+      });
+      res.end(JSON.stringify(body));
+    };
+    // Refused before the body is read: answer, then close rather than read a body that is not wanted.
+    const refuse = (status: number, error: string) => {
+      reply(status, { error }, true);
+      req.resume();
+    };
+    if (!allowed) return refuse(401, "This preview needs its access link.");
+    if (req.method !== "POST") return refuse(405, "Use POST.");
+    const store = runtime.policy.attachments;
+    if (!store) return refuse(503, "This host does not take files.");
+    const declared = Number(req.headers["content-length"]);
+    if (!req.headers["content-length"] || !Number.isSafeInteger(declared)) {
+      return refuse(411, "A content length is required.");
+    }
+    const meta = { fileName: url.searchParams.get("name"), mimeType: url.searchParams.get("type") };
+    try {
+      store.check(meta, declared);
+    } catch (error) {
+      const status = error instanceof AttachmentTooLargeError ? 413 : 400;
+      return refuse(status, error instanceof Error ? error.message : String(error));
+    }
+    const chunks: Buffer[] = [];
+    let received = 0;
+    let overflow = false;
+    await new Promise<void>((resolveRead, rejectRead) => {
+      req.on("data", (chunk: Buffer) => {
+        received += chunk.length;
+        if (received > declared) {
+          overflow = true;
+          req.destroy();
+          resolveRead();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      req.on("end", () => resolveRead());
+      req.on("error", (error) => (overflow ? resolveRead() : rejectRead(error)));
+    });
+    if (overflow || received !== declared) {
+      if (!res.headersSent) reply(400, { error: "The body does not match its declared length." });
+      return;
+    }
+    try {
+      const data = Buffer.concat(chunks, received);
+      reply(
+        200,
+        store.add(meta, received, () => data.toString("base64")),
+      );
+    } catch (error) {
+      const status = error instanceof AttachmentTooLargeError ? 413 : 400;
+      reply(status, { error: error instanceof Error ? error.message : String(error) });
+    }
+  };
 
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 

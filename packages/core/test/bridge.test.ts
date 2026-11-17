@@ -37,7 +37,17 @@ describe("parseBridgeCommand for the live conversation", () => {
       key,
       text: "hi",
       mode: "auto",
+      attachmentIds: [],
     });
+    expect(
+      parseBridgeCommand({
+        type: "sendMessage",
+        key,
+        text: "",
+        mode: "auto",
+        attachmentIds: ["a-1"],
+      }),
+    ).toMatchObject({ attachmentIds: ["a-1"] });
     expect(
       parseBridgeCommand({ type: "sendMessage", key, text: "hi", mode: "queue" }),
     ).toMatchObject({
@@ -86,6 +96,29 @@ describe("parseBridgeCommand for the live conversation", () => {
     ).toThrow("invalid text");
     expect(() => parseBridgeCommand({ type: "sendMessage", key: "../x", text: "hi" })).toThrow();
     expect(() => parseBridgeCommand({ type: "retryMessage", key, messageId: "a b" })).toThrow();
+    expect(() =>
+      parseBridgeCommand({ type: "sendMessage", key, text: "hi", attachmentIds: ["../x"] }),
+    ).toThrow("invalid attachments");
+    expect(() =>
+      parseBridgeCommand({
+        type: "sendMessage",
+        key,
+        text: "hi",
+        attachmentIds: Array.from({ length: 21 }, (_, i) => `a-${i}`),
+      }),
+    ).toThrow("invalid attachments");
+    expect(() =>
+      parseBridgeCommand({ type: "resolveApproval", key, approvalId: "ap-1", decision: "allow" }),
+    ).toThrow("invalid decision");
+    expect(() =>
+      parseBridgeCommand({
+        type: "resolveApproval",
+        key,
+        approvalId: "ap-1",
+        decision: "allow-always",
+        expiresInDays: 0,
+      }),
+    ).toThrow("invalid duration");
     expect(() => parseBridgeCommand({ type: "createTask", botId: "a/b", text: "go" })).toThrow();
     expect(() =>
       parseBridgeCommand({ type: "createTask", botId: "otto", text: "go", label: "x".repeat(513) }),

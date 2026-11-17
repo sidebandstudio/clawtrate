@@ -2,6 +2,11 @@
 // the renderer. The host owns the gateway connection; the renderer receives state
 // snapshots and sends commands. Transport is IPC in Electron and a WebSocket on the web.
 
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  type AttachmentInfo,
+  type AttachmentStore,
+} from "./attachments.ts";
 import { MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { StepRaw } from "./runs.ts";
 import type { ClawtrateState } from "./types.ts";
@@ -16,8 +21,17 @@ export type BridgeCommand =
   | { type: "closeSession"; key: string }
   /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
   | { type: "requestAccess" }
-  /** Send to a task this viewer has open. Files are not carried over the bridge. */
-  | { type: "sendMessage"; key: string; text: string; mode: "auto" | "queue" }
+  /**
+   * Send to a task this viewer has open. Files are not carried in the command:
+   * they are added first (web upload path or Electron IPC) and named by id.
+   */
+  | {
+      type: "sendMessage";
+      key: string;
+      text: string;
+      mode: "auto" | "queue";
+      attachmentIds: string[];
+    }
   | { type: "retryMessage"; key: string; messageId: string }
   | { type: "deleteMessage"; key: string; messageId: string }
   | { type: "cancelQueued"; key: string; messageId: string }
@@ -27,6 +41,14 @@ export type BridgeCommand =
   | { type: "stopRun"; key: string; runId: string }
   | { type: "answerQuestion"; key: string; questionId: string; answers: Record<string, string[]> }
   | { type: "dismissQuestion"; key: string; questionId: string }
+  /** Allow once, deny, or a standing allow; `expiresInDays` only with `allow-always`. */
+  | {
+      type: "resolveApproval";
+      key: string;
+      approvalId: string;
+      decision: "allow-once" | "allow-always" | "deny";
+      expiresInDays: number | null;
+    }
   /** The exact raw call and result behind a step card, however large. */
   | { type: "readStepRaw"; key: string; stepId: string };
 
@@ -54,6 +76,11 @@ export type ClawtrateBridge = {
   send(command: BridgeCommand): Promise<void>;
   /** Like `send`, and resolves with the command's answer. */
   invoke<C extends BridgeCommand>(command: C): Promise<BridgeResultFor<C>>;
+  /**
+   * Hand a file to the host for a later `sendMessage`. Checked against the
+   * gateway's per-image and per-file ceilings before it is kept.
+   */
+  attach(file: { name: string; type: string; data: ArrayBuffer }): Promise<AttachmentInfo>;
 };
 
 /** Messages a web host sends over its bridge socket. */
@@ -139,13 +166,23 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "retry":
     case "requestAccess":
       return { type: command.type };
-    case "sendMessage":
+    case "sendMessage": {
+      const ids = command.attachmentIds ?? [];
+      if (
+        !Array.isArray(ids) ||
+        ids.length > MAX_ATTACHMENTS_PER_MESSAGE ||
+        ids.some((each) => typeof each !== "string" || !ID_PATTERN.test(each))
+      ) {
+        throw new Error("invalid attachments");
+      }
       return {
         type: "sendMessage",
         key: sessionKey(command.key),
         text: messageText(command.text),
         mode: command.mode === "queue" ? "queue" : "auto",
+        attachmentIds: ids as string[],
       };
+    }
     case "retryMessage":
     case "deleteMessage":
     case "cancelQueued":
@@ -189,6 +226,34 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         key: sessionKey(command.key),
         questionId: id(command.questionId, "question id"),
       };
+    case "resolveApproval": {
+      const decision = command.decision;
+      if (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny") {
+        throw new Error("invalid decision");
+      }
+      const days = command.expiresInDays;
+      if (
+        days !== undefined &&
+        days !== null &&
+        (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > 3650)
+      ) {
+        throw new Error("invalid duration");
+      }
+      if (
+        typeof command.approvalId !== "string" ||
+        command.approvalId.length > 256 ||
+        !command.approvalId
+      ) {
+        throw new Error("invalid approval id");
+      }
+      return {
+        type: "resolveApproval",
+        key: sessionKey(command.key),
+        approvalId: command.approvalId,
+        decision,
+        expiresInDays: days ?? null,
+      };
+    }
     case "readStepRaw":
       return {
         type: "readStepRaw",
@@ -206,6 +271,8 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
 export type BridgePolicy = {
   /** Connection details for the development gateway, when the host has them. */
   devGateway?: { url: string; token: string | null } | null;
+  /** Files viewers added for their next message. */
+  attachments?: AttachmentStore;
 };
 
 /**
@@ -255,10 +322,19 @@ export function createBridgeSession(
         return;
       case "requestAccess":
         return client.requestAccess();
-      case "sendMessage":
-        return {
-          messageId: client.sendMessage(mine(command.key), command.text, { mode: command.mode }),
-        };
+      case "sendMessage": {
+        const key = mine(command.key);
+        if (command.attachmentIds.length > 0 && !policy.attachments) {
+          throw new Error("This host does not take files.");
+        }
+        const attachments = policy.attachments?.get(command.attachmentIds) ?? [];
+        const messageId = client.sendMessage(key, command.text, {
+          mode: command.mode,
+          attachments,
+        });
+        policy.attachments?.release(command.attachmentIds);
+        return { messageId };
+      }
       case "retryMessage":
         return client.retryMessage(mine(command.key), command.messageId);
       case "deleteMessage":
@@ -282,6 +358,10 @@ export function createBridgeSession(
         return client.answerQuestion(mine(command.key), command.questionId, command.answers);
       case "dismissQuestion":
         return client.dismissQuestion(mine(command.key), command.questionId);
+      case "resolveApproval":
+        return client.resolveApproval(mine(command.key), command.approvalId, command.decision, {
+          expiresInDays: command.expiresInDays,
+        });
       case "readStepRaw":
         return client.stepRaw(mine(command.key), command.stepId);
     }

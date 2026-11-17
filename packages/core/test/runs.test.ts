@@ -1008,3 +1008,71 @@ describe("question cards", () => {
     expect(only(activity)).toMatchObject({ state: "stopping", pendingCards: [] });
   });
 });
+
+describe("structured endings and best-effort reasoning segments", () => {
+  it("keeps the terminal event's own timeout fields rather than reading the error text", () => {
+    const { activity } = play([
+      A("run-1", 1, "lifecycle", { phase: "start" }),
+      A("run-1", 2, "lifecycle", {
+        phase: "error",
+        error: "Request timed out",
+        stopReason: "timeout",
+        timeoutPhase: "model",
+        providerStarted: true,
+      }),
+    ]);
+    expect(only(activity)).toMatchObject({
+      state: "failed",
+      ending: { stopReason: "timeout", timeoutPhase: "model", providerStarted: true, status: null },
+    });
+    const chatTimeout = play([
+      C("run-2", 1, "error", { errorMessage: "Timed out", errorKind: "timeout" }),
+    ]).activity;
+    expect(only(chatTimeout, "run-2").error).toEqual({ message: "Timed out", kind: "timeout" });
+  });
+
+  it("a wrong live split never duplicates reasoning once history has the run", () => {
+    // A replacement update that does not extend the text looks like a new segment live.
+    const live = play([
+      A("run-1", 1, "thinking", { text: "Check the disk", delta: "Check the disk" }),
+      A("run-1", 2, "thinking", { text: "Check the cache first", delta: "Check the cache first" }),
+      A("run-1", 3, "lifecycle", { phase: "end", aborted: false }),
+    ]).activity;
+    expect(only(live).steps.filter((step) => step.kind === "reasoning")).toHaveLength(2);
+    const history = runsFromHistory(
+      [
+        { role: "user", content: "go", __openclaw: { id: "u1", seq: 1 } },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Check the cache first" },
+            { type: "text", text: "Done" },
+          ],
+          stopReason: "stop",
+          __openclaw: { id: "a1", seq: 2, runId: "run-1" },
+        },
+      ],
+      null,
+      ctx(),
+    );
+    const merged = mergeHistoryRuns(live.runs, history, ctx());
+    expect(merged[0]!.steps.map((step) => step.output?.text)).toEqual(["Check the cache first"]);
+  });
+
+  it("does not add history reasoning to a run still in flight, so nothing shows twice", () => {
+    const live = play([A("run-1", 1, "thinking", { text: "Looking", delta: "Looking" })]).activity;
+    const history = runsFromHistory(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Looking at it" }],
+          __openclaw: { id: "a1", seq: 2, runId: "run-1" },
+        },
+      ],
+      "run-1",
+      ctx(),
+    );
+    const merged = mergeHistoryRuns(live.runs, history, ctx());
+    expect(merged[0]!.steps.map((step) => step.output?.text)).toEqual(["Looking"]);
+  });
+});

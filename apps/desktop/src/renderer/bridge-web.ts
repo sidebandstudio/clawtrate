@@ -1,4 +1,5 @@
 import type {
+  AttachmentInfo,
   BridgeCommand,
   BridgeResultFor,
   BridgeClientMessage,
@@ -98,6 +99,24 @@ export function createWebBridge(): Promise<ClawtrateBridge> {
         await call(command);
       },
       invoke: (command) => call(command) as Promise<BridgeResultFor<typeof command>>,
+      async attach(file) {
+        // Files go on their own path; the bridge socket carries only small frames.
+        const query = new URLSearchParams({
+          name: file.name,
+          type: file.type || "application/octet-stream",
+        });
+        const response = await fetch(`/attachments?${query}`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/octet-stream" },
+          body: file.data,
+        });
+        const body = (await response.json()) as AttachmentInfo | { error: string };
+        if (!response.ok || "error" in body) {
+          throw new Error("error" in body ? body.error : `Upload failed (${response.status})`);
+        }
+        return body;
+      },
     });
 
     open();
