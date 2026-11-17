@@ -1,22 +1,34 @@
 // The packaged app launches, shows its window and connect screen, and pairs
-// with a development gateway instance of this run's own.
+// with a development gateway instance of this run's own. On Windows, where no
+// development gateway runs, the tests that need one are skipped.
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { devGateway } from "../e2e/global-setup.ts";
 import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
+import { appEnv, packagedExecutable } from "./global-setup.ts";
+import {
+  integrityLevels,
+  mainWindowTitle,
+  taskbarOverlayDescription,
+  windowsProcesses,
+} from "./windows.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const APP = process.env.CLAWTRATE_PACKAGED_APP!;
 const USER_DATA = process.env.CLAWTRATE_PACKAGED_USER_DATA!;
 const APP_PID = Number(process.env.CLAWTRATE_PACKAGED_PID);
+const WINDOWS = process.platform === "win32";
+const NO_GATEWAY = "no development gateway runs on Windows";
 
 /** The app's direct children, as the system reports them: PID and full command line. */
 function helpers(): { pid: number; command: string }[] {
+  if (WINDOWS) return windowsProcesses().filter(({ ppid }) => ppid === APP_PID);
   const out = execFileSync("ps", ["-axww", "-o", "pid=,ppid=,command="], { encoding: "utf8" });
   return out.split("\n").flatMap((line) => {
     const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
@@ -66,8 +78,12 @@ test.afterAll(async () => {
 });
 
 test("opens its window from the packaged app on the connect screen", async () => {
-  // The renderer is the one inside the app bundle's archive, not the source tree.
-  const bundled = `file://${realpathSync(APP)}/Contents/Resources/app.asar/out/renderer/index.html`;
+  // The renderer is the one inside the app's archive, not the source tree.
+  const bundled = WINDOWS
+    ? decodeURI(
+        pathToFileURL(join(realpathSync(APP), "resources/app.asar/out/renderer/index.html")).href,
+      )
+    : `file://${realpathSync(APP)}/Contents/Resources/app.asar/out/renderer/index.html`;
   expect(decodeURI(page.url())).toBe(bundled);
   await expect(page).toHaveTitle("Clawtrate");
   await expect(page.getByRole("heading", { name: "Clawtrate" })).toBeVisible();
@@ -96,7 +112,72 @@ test("opens its window from the packaged app on the connect screen", async () =>
   expect(page_.csp).toContain("script-src 'self'");
 });
 
+test("names its window Clawtrate, as Windows sees it", async () => {
+  test.skip(!WINDOWS, "on macOS the page's title above is the window's title");
+  // The window is shown once its page has painted; until then Windows reports no title.
+  await expect.poll(() => mainWindowTitle(APP_PID), { timeout: 20_000 }).toBe("Clawtrate");
+});
+
+test("shows unread tasks as an overlay on its taskbar button, and clears it at zero", async () => {
+  test.skip(!WINDOWS, "the macOS dock badge is not read from outside yet");
+  // The page reports the count through the bridge, as the renderer does for
+  // unread tasks; the main process sets the overlay icon, whose description
+  // Windows gives as the taskbar button's help text.
+  const exe = packagedExecutable(APP);
+  const setBadge = (count: number) =>
+    page.evaluate((value) => {
+      (
+        window as unknown as { clawtrateHost: { setBadge(n: number): void } }
+      ).clawtrateHost.setBadge(value);
+    }, count);
+  await setBadge(3);
+  await expect.poll(() => taskbarOverlayDescription(exe), { timeout: 15_000 }).toBe("3 unread");
+  await setBadge(0);
+  await expect.poll(() => taskbarOverlayDescription(exe), { timeout: 15_000 }).toBe("");
+});
+
+test("hands a second launch to the running app instead of starting another", async () => {
+  // The same data folder, so the same single-instance lock. The second process
+  // must exit by itself, successfully, and leave the first one and its one window.
+  const second = spawn(packagedExecutable(APP), [`--user-data-dir=${USER_DATA}`], {
+    env: appEnv(),
+    stdio: "ignore",
+  });
+  const exited = new Promise<number | null>((resolve) => second.once("exit", resolve));
+  const code = await Promise.race([
+    exited,
+    new Promise<"running">((resolve) => setTimeout(() => resolve("running"), 15_000)),
+  ]);
+  if (code === "running") second.kill();
+  expect(code, "the second launch's exit code").toBe(0);
+  expect(() => process.kill(APP_PID, 0), "the first app is still running").not.toThrow();
+  await page.waitForTimeout(500);
+  expect(browser.contexts().flatMap((context) => context.pages())).toHaveLength(1);
+});
+
 test("runs its renderer in the operating system's sandbox", () => {
+  expect(Number.isInteger(APP_PID) && APP_PID > 1).toBe(true);
+  if (WINDOWS) {
+    // Room for PowerShell's first compile of the token reader (see integrityLevels).
+    test.setTimeout(150_000);
+    // Chromium starts a sandboxed renderer on Windows with a restricted token at
+    // untrusted integrity, and the main process keeps the user's own level. The
+    // integrity level is read from each process's token, from outside.
+    // This assertion has never been seen to fail: the packaged Windows app,
+    // started with the sandbox turned off (--no-sandbox or
+    // ELECTRON_DISABLE_SANDBOX=1), crashes at once with an access violation
+    // (0xC0000005) before any renderer exists, so no unsandboxed renderer could
+    // be produced to read.
+    const renderers = helpers().filter(({ command }) => /\s--type=renderer(\s|$)/.test(command));
+    expect(renderers.length, "the app's renderer processes").toBeGreaterThan(0);
+    const levels = integrityLevels([APP_PID, ...renderers.map(({ pid }) => pid)]);
+    for (const { pid, command } of renderers) {
+      expect(command, `renderer ${pid}`).not.toMatch(/\s--no-sandbox(\s|$)/);
+      expect(levels.get(pid), `integrity level of renderer ${pid}`).toBe(0);
+    }
+    expect(levels.get(APP_PID), "integrity level of the main process").toBeGreaterThan(0);
+    return;
+  }
   // The page having no Node globals says nothing about the sandbox; context
   // isolation alone gives that. So the evidence is the renderer process
   // itself, from outside it. Its launch arguments show how Chromium started
@@ -106,7 +187,6 @@ test("runs its renderer in the operating system's sandbox", () => {
   // kernel then confirms the process is actually confined. Neither can be
   // satisfied when `sandbox: false` or a missing app.enableSandbox() lets the
   // renderer run unsandboxed, which is what this test exists to catch.
-  expect(Number.isInteger(APP_PID) && APP_PID > 1).toBe(true);
   const renderers = helpers().filter(({ command }) => /\s--type=renderer(\s|$)/.test(command));
   expect(renderers.length, "the app's renderer processes").toBeGreaterThan(0);
   for (const { pid, command } of renderers) {
@@ -119,6 +199,7 @@ test("runs its renderer in the operating system's sandbox", () => {
 });
 
 test("pairs with its own development gateway instance and shows the seeded bots", async () => {
+  test.skip(WINDOWS, NO_GATEWAY);
   expect(INSTANCE).toMatch(/^e2e-[0-9a-f]{8}$/);
   const endpoint = provenEndpoint({
     instance: INSTANCE,
@@ -158,6 +239,7 @@ test("pairs with its own development gateway instance and shows the seeded bots"
 });
 
 test("keeps the device key and tokens in its own data folder, readable by the user only", () => {
+  test.skip(WINDOWS, `${NO_GATEWAY}, so the app has paired with none and written no key`);
   const dir = join(USER_DATA, "gateway");
   expect(statSync(dir).mode & 0o777).toBe(0o700);
   const files = readdirSync(dir);
@@ -182,6 +264,7 @@ test("stays on its own content", async () => {
       bots: document.querySelectorAll('[data-testid="bot"]').length,
     };
   });
-  expect(result).toEqual({ windowRefused: true, stayed: true, bots: 4 });
+  // Paired on macOS, so the seeded bots are still shown; on Windows the connect screen is.
+  expect(result).toEqual({ windowRefused: true, stayed: true, bots: WINDOWS ? 0 : 4 });
   expect(browser.contexts().flatMap((context) => context.pages())).toHaveLength(1);
 });
