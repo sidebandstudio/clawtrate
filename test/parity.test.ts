@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   checkIds,
@@ -8,6 +8,8 @@ import {
   parityProblems,
   parseTable,
   playwrightChecks,
+  skipProblems,
+  testFiles,
   vitestChecks,
   type CheckPath,
 } from "./parity.ts";
@@ -28,6 +30,15 @@ describe("the parity table", () => {
       ];
       expect(checks.length).toBeGreaterThan(400);
       expect(parityProblems(rows, new Set(checkIds(checks)))).toEqual([]);
+      // No file that names a row skips any of its checks. The guard's own tests are exempt.
+      const files = ["e2e", "visual", "test", "packages", "apps", "tools"]
+        .flatMap((dir) => testFiles(join(ROOT, dir)))
+        .map((path) => relative(ROOT, path))
+        .filter((path) => !path.startsWith("test/parity"));
+      expect(files.length).toBeGreaterThan(20);
+      expect(
+        files.flatMap((path) => skipProblems(path, readFileSync(join(ROOT, path), "utf8"))),
+      ).toEqual([]);
     },
     LISTING,
   );
@@ -83,6 +94,41 @@ describe("the parity table", () => {
       ["F-001: runs"],
       ["F-003: group", "x"],
     ]);
+  });
+
+  it("fails a check that skips itself inside its body, unconditionally or on a condition, and names the file and line", () => {
+    const source = [
+      'import { test } from "@playwright/test";',
+      'test("F-004: no proof", () => {',
+      "  test.skip(true);",
+      "});",
+      'test("F-005: not here", ({ browserName }) => {',
+      '  test.skip(browserName === "webkit", "not on WebKit");',
+      "});",
+    ].join("\n");
+    expect(skipProblems("e2e/a.spec.ts", source)).toEqual([
+      "e2e/a.spec.ts:3: test.skip in a file whose checks name parity rows",
+      "e2e/a.spec.ts:6: test.skip in a file whose checks name parity rows",
+    ]);
+  });
+
+  it("fails skip, fixme, todo and only as modifiers, and leaves files that name no row alone", () => {
+    const lines = [
+      'test.describe.only("F-001: group", () => {});',
+      'it.todo("F-002: later");',
+      'describe.skip("F-003: group", () => {});',
+      'test.fixme("F-004: broken", () => {});',
+      "test.describe.configure({ mode: 'serial' });",
+    ];
+    expect(skipProblems("visual/b.spec.ts", lines.join("\n"))).toEqual([
+      "visual/b.spec.ts:1: test.describe.only in a file whose checks name parity rows",
+      "visual/b.spec.ts:2: it.todo in a file whose checks name parity rows",
+      "visual/b.spec.ts:3: describe.skip in a file whose checks name parity rows",
+      "visual/b.spec.ts:4: test.fixme in a file whose checks name parity rows",
+    ]);
+    expect(skipProblems("x.test.ts", 'test("no row here", () => { test.skip(true); });')).toEqual(
+      [],
+    );
   });
 
   it("fails a done row without a check, a check for no row, and an unknown status", () => {

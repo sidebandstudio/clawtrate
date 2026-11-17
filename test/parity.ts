@@ -6,8 +6,14 @@
 // are: Vitest collects each test file by running it, and Playwright loads each
 // spec, so a check in a comment or behind code that never runs is never
 // registered, and a skipped, fixme or todo check is listed as such and left out.
+//
+// A check can still skip itself from inside its body, which no listing shows.
+// So a plain source rule comes on top: a test file that names a row in a title
+// may not call `skip`, `fixme`, `todo` or `only` on its test or describe
+// objects in any form. If a check cannot run somewhere, its row is not done.
 
 import { execFileSync } from "node:child_process";
+import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export const STATUSES = ["todo", "done", "desktop done", "gap"] as const;
@@ -94,6 +100,34 @@ export function listPlaywright(root: string, config: string): CheckPath[] {
   return playwrightChecks(
     list(root, root, "playwright", ["test", "--list", "--reporter=json", "-c", config]),
   );
+}
+
+/** A check title that starts with a row id. */
+const PARITY_TITLE = /\b(?:test|it|describe)(?:\.\w+)*\(\s*[`'"](?:F-\d{3}[ ,]*)+:/;
+/** `skip`, `fixme`, `todo` or `only` on a test or describe object, as a modifier or a call. */
+const SKIPPING = /\b(?:test|it|describe)(?:\.\w+)*\.(?:skip|fixme|todo|only)\b/;
+
+/** Every line of a test file that names a row and skips, or runs only some, of its checks. */
+export function skipProblems(file: string, source: string): string[] {
+  if (!PARITY_TITLE.test(source)) return [];
+  return source.split("\n").flatMap((line, index) => {
+    const found = SKIPPING.exec(line);
+    return found
+      ? [`${file}:${index + 1}: ${found[0]} in a file whose checks name parity rows`]
+      : [];
+  });
+}
+
+const SKIP_DIRS = new Set(["node_modules", "dist", "out", ".run", "test-results", "baselines"]);
+
+/** The test files under `dir`: every `*.test.ts` and `*.spec.ts`. */
+export function testFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((entry) => {
+    if (SKIP_DIRS.has(entry)) return [];
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) return testFiles(path);
+    return /\.(test|spec)\.ts$/.test(entry) ? [path] : [];
+  });
 }
 
 /** Everything wrong with the table and the checks that name it. */
