@@ -347,8 +347,8 @@ export function BotMessageCardView({
               type="button"
               className="link-button"
               aria-label={`Open this message in ${recipient.name}'s task`}
-              onClick={() => {
-                rememberReturn(env.taskKey, domId);
+              onClick={(event) => {
+                rememberReturn(env.taskKey, env.bot?.id ?? null, domId, event.currentTarget);
                 arriveAt(card.recipient.sessionKey!, card.recipientRunId);
                 env.openTask!(recipient.id!, card.recipient.sessionKey!);
               }}
@@ -653,7 +653,9 @@ export function ReceivedCardView({
                   // Not arrived from there: open the sender's task at its end.
                   returnPoint = null;
                 }
-                env.openTask!(senderId, message.sourceSessionKey!);
+                if (!goBack(env.taskKey, env.openTask!)) {
+                  env.openTask!(senderId, message.sourceSessionKey!);
+                }
               }}
             >
               Open in {senderName}
@@ -772,7 +774,13 @@ export function focusCard(domId: string): void {
 }
 
 /** Where the reader was when "Open in <bot>" took them away, for coming back. */
-let returnPoint: { taskKey: string; domId: string } | null = null;
+let returnPoint: {
+  taskKey: string;
+  botId: string | null;
+  domId: string;
+  /** The transcript's scroll position when the reader left. */
+  scrollTop: number | null;
+} | null = null;
 
 /** Where "Open in <bot>" goes: the receiving card of the run the send's result named. */
 let arrival: { taskKey: string; runId: string | null } | null = null;
@@ -789,14 +797,24 @@ export function takeArrival(taskKey: string): string | null {
   return runId;
 }
 
-function rememberReturn(taskKey: string, domId: string): void {
-  returnPoint = { taskKey, domId };
+function rememberReturn(taskKey: string, botId: string | null, domId: string, from: Element): void {
+  const scroller = from.closest<HTMLElement>('[data-testid="transcript"]');
+  returnPoint = { taskKey, botId, domId, scrollTop: scroller?.scrollTop ?? null };
+}
+
+/** ⌘[ and "Open in <sender>": back to where "Open in <bot>" was chosen, when that was elsewhere. */
+export function goBack(fromTask: string, openTask: (botId: string, key: string) => void): boolean {
+  if (!returnPoint?.botId || returnPoint.taskKey === fromTask) return false;
+  openTask(returnPoint.botId, returnPoint.taskKey);
+  return true;
 }
 
 /** The card to restore when a task opens again, once. */
-export function takeReturnPoint(taskKey: string): string | null {
+export function takeReturnPoint(
+  taskKey: string,
+): { domId: string; scrollTop: number | null } | null {
   if (returnPoint?.taskKey !== taskKey) return null;
-  const { domId } = returnPoint;
+  const { domId, scrollTop } = returnPoint;
   returnPoint = null;
-  return domId;
+  return { domId, scrollTop };
 }

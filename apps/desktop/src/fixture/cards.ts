@@ -87,6 +87,7 @@ export const CARD_SCENES = [
   "messaged-not-sent",
   "messaged-unknown",
   "messaged-last-seen",
+  "messaged-return",
   "received-working",
   "received-waiting",
   "received-completed",
@@ -701,6 +702,7 @@ function build(
       return { b: sendResult(messaged(now), now, { status: "accepted", sessionKey: MARLOW_KEY }) };
     case "messaged-working":
     case "messaged-last-seen":
+    case "messaged-return":
       return {
         b: sendResult(messaged(now), now, {
           status: "accepted",
@@ -936,6 +938,25 @@ function closeQuestions(activity: TaskActivity): TaskActivity {
 const ASK =
   "Check that last night's backups finished, and tidy the transcode cache on media-box if it is still in /srv/media.";
 
+/** Rows of ordinary conversation around a card, so the transcript scrolls. */
+function filler(at: number, count: number, prefix: string): TranscriptItem[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `f-${prefix}${i}:${i}`,
+    role: i % 2 === 0 ? ("user" as const) : ("assistant" as const),
+    timestamp: at + i * 1000,
+    blocks: [
+      {
+        kind: "text" as const,
+        text:
+          i % 2 === 0
+            ? `Note ${i + 1}: is the garage-pi backup on schedule?`
+            : `Yes. Run ${i + 1} finished on time and the archive checks out.`,
+      },
+    ],
+    model: null,
+  }));
+}
+
 function senderItems(now: number): TranscriptItem[] {
   return [
     {
@@ -999,7 +1020,15 @@ export function cardScene(name: CardSceneName, now: number): CardScene {
     },
     runs: b.activity.runs.map((run) => ({ ...run, anchorItemId: anchor })),
   };
-  const items = receiving ? receiverItems(now) : senderItems(now);
+  const items = receiving
+    ? receiverItems(now)
+    : name === "messaged-return"
+      ? [
+          ...filler(now - 40 * MINUTE, 18, "e"),
+          ...senderItems(now),
+          ...filler(now - MINUTE, 20, "l"),
+        ]
+      : senderItems(now);
   const interSession = receiving
     ? [
         {

@@ -888,6 +888,53 @@ test.describe("Messaged cards", () => {
     ).toBeFocused();
   });
 
+  test("F-124: coming back from Marlow's task, by Open in Otto or ⌘[, restores the transcript's place, the open card and focus", async ({
+    page,
+  }) => {
+    for (const back of ["button", "shortcut"] as const) {
+      await openFixture(page, "scene=messaged-return", "light");
+      const scroller = page.getByTestId("transcript");
+      const card = page.getByTestId("messaged-card");
+      await card.evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await scroller.evaluate((element) => {
+        element.scrollTop -= 120;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      await card.locator("summary").click();
+      await settle(page);
+      const before = {
+        top: await scroller.evaluate((element) => element.scrollTop),
+        card: (await card.boundingBox())!.y,
+      };
+      expect(before.top, "the reader is away from the end").toBeLessThan(
+        await scroller.evaluate((element) => element.scrollHeight - element.clientHeight - 200),
+      );
+      await card.getByRole("button", { name: "Open this message in Marlow's task" }).click();
+      await expect(page.locator(".title-pill")).toContainText("House log");
+      if (back === "button") {
+        await page
+          .getByTestId("received-card")
+          .getByRole("button", { name: "Open this message in Otto's task" })
+          .click();
+      } else {
+        await page.keyboard.press("ControlOrMeta+BracketLeft");
+      }
+      await expect(page.locator(".title-pill")).toContainText("Tidy the transcode cache");
+      const returned = page.getByTestId("messaged-card");
+      await expect(returned).toHaveAttribute("open", "");
+      await expect(
+        returned.getByRole("button", { name: "Open this message in Marlow's task" }),
+      ).toBeFocused();
+      await settle(page);
+      const after = {
+        top: await page.getByTestId("transcript").evaluate((element) => element.scrollTop),
+        card: (await returned.boundingBox())!.y,
+      };
+      expect(Math.abs(after.top - before.top), back).toBeLessThanOrEqual(2);
+      expect(Math.abs(after.card - before.card), back).toBeLessThanOrEqual(2);
+    }
+  });
+
   test("F-308: Show full exchange shows every message between the two bots in this task, read-only, and returns to the card", async ({
     page,
   }) => {

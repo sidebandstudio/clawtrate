@@ -28,6 +28,7 @@ import {
   IncomingLine,
   ReceivedCardView,
   T3CodeCardView,
+  goBack,
   takeArrival,
   takeReturnPoint,
 } from "./MessagedCard.tsx";
@@ -149,23 +150,44 @@ export function CardScope({
     if (!open()) requestAnimationFrame(() => void open());
   }, [taskKey]);
 
-  // Coming back from "Open in <bot>": the card open again, in view, focus on that control.
+  // Coming back from "Open in <bot>": the transcript where the reader left it, the card
+  // open, focus on that control. It runs after the transcript has settled at its end, and
+  // tells it the reader is not following, so the end does not take the place back.
   useLayoutEffect(() => {
-    const domId = takeReturnPoint(taskKey);
-    if (!domId) return;
-    const restore = () => {
-      const element = document.getElementById(domId);
-      if (!(element instanceof HTMLDetailsElement)) return false;
+    const back = takeReturnPoint(taskKey);
+    if (!back) return;
+    let frame = 0;
+    const restore = (tries: number) => {
+      const element = document.getElementById(back.domId);
+      if (!(element instanceof HTMLDetailsElement)) {
+        if (tries > 0) frame = requestAnimationFrame(() => restore(tries - 1));
+        return;
+      }
       element.open = true;
-      element.scrollIntoView({ block: "center" });
+      const scroller = element.closest<HTMLElement>('[data-testid="transcript"]');
+      if (scroller && back.scrollTop !== null) {
+        scroller.scrollTop = back.scrollTop;
+        scroller.dispatchEvent(new Event("scroll"));
+      } else element.scrollIntoView({ block: "center" });
       const button = [...element.querySelectorAll<HTMLButtonElement>(".card-actions button")].find(
         (each) => each.textContent?.startsWith("Open in"),
       );
       (button ?? element.querySelector<HTMLElement>("summary"))?.focus({ preventScroll: true });
-      return true;
     };
-    if (!restore()) requestAnimationFrame(() => void restore());
+    frame = requestAnimationFrame(() => (frame = requestAnimationFrame(() => restore(10))));
+    return () => cancelAnimationFrame(frame);
   }, [taskKey]);
+
+  // ⌘[ goes back to where "Open in <bot>" was chosen.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "[" && openTask) {
+        if (goBack(taskKey, openTask)) event.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [taskKey, openTask]);
 
   return (
     <ScopeContext.Provider value={{ placement, cards }}>
