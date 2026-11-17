@@ -1020,6 +1020,42 @@ export function dropUnboundRun(activity: TaskActivity, runId: string): TaskActiv
   return { ...activity, runs: activity.runs.filter((each) => each !== run) };
 }
 
+/**
+ * A send whose outcome is not known (no answer, the connection dropped, or an
+ * acceptance that named no run): its optimistic run goes, unless the person has
+ * asked to stop it. That run stays `stopping`, unnamed, so the Stop is not
+ * forgotten: a history read names it (then it is stopped) or settles it
+ * (`settleUnboundStops`).
+ */
+export function dropUnboundRunUnlessStopping(activity: TaskActivity, runId: string): TaskActivity {
+  return findRun(activity, runId)?.state === "stopping"
+    ? activity
+    : dropUnboundRun(activity, runId);
+}
+
+/**
+ * After a history read, the runs the person asked to stop before the gateway
+ * named them, whose send is no longer awaiting its answer: one the gateway has
+ * in flight under the send's id is now named (and is to be stopped); one
+ * history holds is settled by the merge; one nothing shows is settled as
+ * stopped with no known outcome, keeping `stopRequestedAt`, so a later read
+ * that finds it in flight still stops it.
+ */
+export function settleUnboundStops(
+  runs: Run[],
+  inFlightRunId: string | null,
+  historyRunIds: ReadonlySet<string>,
+  awaitingAnswer: ReadonlySet<string>,
+  ctx: EngineContext,
+): Run[] {
+  return runs.map((run) => {
+    if (run.bound || run.state !== "stopping" || run.origin !== "local") return run;
+    if (run.id === inFlightRunId) return { ...run, bound: true };
+    if (historyRunIds.has(run.id) || awaitingAnswer.has(run.id)) return run;
+    return { ...finishRun(run, "stopped", ctx), outcomeKnown: false };
+  });
+}
+
 /** "The gateway refuses to start the run": `running` or `queued` to `failed`, "Couldn't start". */
 export function failRunStart(
   activity: TaskActivity,

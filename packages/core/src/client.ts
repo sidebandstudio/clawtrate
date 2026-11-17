@@ -112,6 +112,7 @@ import {
   bindRun,
   cancelQueuedRun,
   dropUnboundRun,
+  dropUnboundRunUnlessStopping,
   emptyActivity,
   failRun,
   failRunStart,
@@ -130,6 +131,7 @@ import {
   registerRunAlias,
   registerSteerAlias,
   settleRunFromSendAnswer,
+  settleUnboundStops,
   throughRunAliases,
   removeMessage,
   requestStop,
@@ -1958,8 +1960,9 @@ export class ClawtrateClient {
       // No answer: whether it was delivered is unknown. History is read to find
       // it by its key; it becomes unconfirmed, with retry and delete, only if
       // history does not hold it. Nothing is sent again on an assumption.
+      // A run the person asked to stop stays, stopping, until history names or settles it.
       this.updateActivity(key, (activity) =>
-        dropUnboundRun(
+        dropUnboundRunUnlessStopping(
           updateMessage(activity, messageId, {
             status: "checking",
             runId: null,
@@ -1991,9 +1994,9 @@ export class ClawtrateClient {
         );
       }
       if (runId === null && message.mode !== "steer") {
-        // Accepted, but no run named: none is assumed. History confirms the
-        // message, or the next read finds it unconfirmed, to retry or delete.
-        return dropUnboundRun(
+        // Accepted, but no run named: none is assumed, unless the person asked to stop it.
+        // History confirms the message, or the next read finds it unconfirmed, to retry or delete.
+        return dropUnboundRunUnlessStopping(
           updateMessage(activity, messageId, { status: "sent", messageSeq, runId: null }),
           messageId,
         );
@@ -4409,12 +4412,27 @@ export class ClawtrateClient {
         const payload = scratch.get(key, stepId);
         if (payload) this.raw.set(key, stepId, payload);
       }
-      const runs = settleVanishedRuns(
-        merge.runs,
-        activeBefore,
-        new Set(fromHistory.map((run) => run.id)),
+      const historyIds = new Set(fromHistory.map((run) => run.id));
+      const awaitingAnswer = new Set(
+        current.outbox
+          .filter((message) => message.status === "sending" || message.status === "awaiting-access")
+          .map((message) => message.id),
+      );
+      const runs = settleUnboundStops(
+        settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx),
         inFlightId,
+        historyIds,
+        awaitingAnswer,
         ctx,
+      );
+      // A Stop asked before the gateway named its run: the run in flight under the send's id
+      // is that run, named now, and is stopped; so is one settled earlier with no known outcome.
+      const toStop = runs.filter(
+        (run) =>
+          run.id === inFlightId &&
+          run.stopRequestedAt !== null &&
+          ((run.state === "stopping" && !findRun(current, run.id)?.bound) ||
+            (run.state === "stopped" && !run.outcomeKnown)),
       );
       const reconciled = reconcileOutbox({ ...current, runs }, messages);
       // History holds these now: their files are no longer needed.
@@ -4440,6 +4458,11 @@ export class ClawtrateClient {
       this.dropRawOfRemovedSteps(key, current, rebuilt);
       this.setTranscript(key, () => withLive(rebuilt));
       this.afterActivity(key);
+      for (const run of toStop) {
+        this.request("chat.abort", { sessionKey: key, runId: run.id }).catch((error: unknown) =>
+          this.noteMissingScope(error),
+        );
+      }
       void this.backfillQuestions(key, generation);
       void this.backfillApprovals(key, generation);
       void this.readToolMap(key, generation);
