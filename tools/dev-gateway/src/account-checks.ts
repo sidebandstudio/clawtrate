@@ -507,7 +507,17 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
         "another model's run: the order, without the pin",
       );
       same(other[0]!.model, "dev-2", "the model the other run asked for");
-      await h.lock(bot, "acme", null);
+      same(
+        await h.lock(bot, "acme", null),
+        null,
+        "unlock, as the gateway's command line reads it back",
+      );
+      const unlocked = await providerView(h.reader, bot, "acme");
+      same(
+        [unlocked?.profileOrder ?? null, unlocked?.profileOrderStored ?? null],
+        [null, null],
+        "the bot's order as models.authStatus reports it after unlock",
+      );
     },
   },
   {
