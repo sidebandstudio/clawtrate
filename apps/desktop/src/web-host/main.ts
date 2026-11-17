@@ -63,6 +63,7 @@ async function main(): Promise<void> {
     // so it may only ever talk to the local development gateway: saved, typed,
     // retried or otherwise.
     devOnly: tokenDisabled,
+    recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance }),
   });
   const accessToken = tokenDisabled ? null : createAccessToken();
   const host = startWebHost({

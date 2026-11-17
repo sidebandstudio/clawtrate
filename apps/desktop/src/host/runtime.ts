@@ -4,20 +4,21 @@
 import {
   ClawtrateClient,
   defaultApprovalInstructions,
-  validateGatewayUrl,
   type ApprovalInstructions,
   type BridgePolicy,
   type HostInfo,
 } from "@clawtrate/core";
 import { createNodeHost } from "@clawtrate/core/node";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { provenEndpoint } from "../../../../tools/dev-gateway/src/endpoint.ts";
 import {
   DEFAULT_GATEWAY_URL,
-  namedGatewayUrl,
   runDirFor,
   validateInstanceName,
 } from "../../../../tools/dev-gateway/src/instance.ts";
+import type { Identify } from "../../../../tools/dev-gateway/src/state-guard.ts";
 
 export { selectInstance } from "../../../../tools/dev-gateway/src/instance.ts";
 
@@ -33,48 +34,38 @@ export type DevGatewayConnection = {
   instance: string | null;
 };
 
-/** Where `pnpm dev-gateway start` writes an instance's bootstrap token in this checkout. */
-export function devConnectionPath(repoRoot: string, instance: string | null = null): string {
-  return join(runDirFor(instance, join(repoRoot, "tools/dev-gateway/.run")), "connection.json");
-}
-
-function readJson(path: string): Record<string, unknown> | null {
-  if (!existsSync(path)) return null;
-  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-  return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+/** This checkout's run folder for an instance, where `pnpm dev-gateway start` writes its files. */
+export function devRunDir(repoRoot: string, instance: string | null = null): string {
+  return runDirFor(instance, join(repoRoot, "tools/dev-gateway/.run"));
 }
 
 /**
- * The selected development instance's connection, if this checkout's dev
- * tooling wrote one. The file supplies only the token. The default instance's
- * endpoint is fixed. A named instance's endpoint must be a loopback address on
- * a port from the tool's named-instance range, equal to the gateway port the
- * tool recorded for that instance in its run file next to it. Anything else is
- * rejected, so editing the files cannot relabel another gateway as development.
+ * The selected development instance's connection, only when this checkout
+ * started that instance and its gateway is running now: the instance's
+ * marker, run id, checkout, port and live gateway process must all agree with
+ * this checkout's run and connection files (`provenEndpoint`). Anything stale,
+ * incomplete, linked or mismatched gives null.
  */
 export function readDevConnection(
   repoRoot: string,
-  options: { instance?: string | null; path?: string } = {},
+  options: { instance?: string | null; home?: string; identify?: Identify } = {},
 ): DevGatewayConnection | null {
+  // The name is validated before any path is built from it.
   const instance = options.instance == null ? null : validateInstanceName(options.instance);
-  const path = options.path ?? devConnectionPath(repoRoot, instance);
+  let checkout: string;
   try {
-    const parsed = readJson(path);
-    if (!parsed || typeof parsed.url !== "string") return null;
-    if (typeof parsed.token !== "string" || !parsed.token) return null;
-    if ((parsed.instance ?? null) !== instance) return null;
-    let expected: string | null;
-    if (instance === null) {
-      expected = DEV_GATEWAY_URL;
-    } else {
-      const record = readJson(join(dirname(path), "state.json"));
-      expected = namedGatewayUrl(record?.gatewayPort);
-    }
-    if (expected === null || validateGatewayUrl(parsed.url) !== expected) return null;
-    return { url: expected, token: parsed.token, instance } satisfies DevGatewayConnection;
+    checkout = realpathSync(repoRoot);
   } catch {
     return null;
   }
+  const proof = provenEndpoint({
+    instance,
+    home: options.home ?? homedir(),
+    runDir: devRunDir(repoRoot, instance),
+    checkout,
+    ...(options.identify ? { identify: options.identify } : {}),
+  });
+  return "refusal" in proof ? null : proof;
 }
 
 /** The approve command to show. Only the development gateway gets the dev tooling's command. */
@@ -117,13 +108,16 @@ export async function startHostRuntime(options: {
   /** Connect to the development gateway at startup when nothing else is saved. */
   autoConnectDev?: boolean;
   /**
-   * Only ever connect to the development gateway. Enforced by the client before
-   * every connection, including a saved one, so token-free hosts cannot resume
-   * another gateway.
+   * Only ever connect to the development gateway, and only while `recheckDevGateway`
+   * still proves it. Enforced by the client before every connection, including a
+   * saved one and every retry, so token-free hosts cannot resume another gateway
+   * or follow a port that a different process has taken over.
    */
   devOnly?: boolean;
+  /** Proves the development gateway again; usually `readDevConnection` with the same options. */
+  recheckDevGateway?: () => DevGatewayConnection | null;
 }): Promise<HostRuntime> {
-  if (options.devOnly && !options.devGateway) {
+  if (options.devOnly && (!options.devGateway || !options.recheckDevGateway)) {
     throw new Error(
       "Development-only mode needs the development gateway. Run `pnpm dev-gateway up`.",
     );
@@ -146,7 +140,15 @@ export async function startHostRuntime(options: {
         if (level !== "debug") console[level === "info" ? "log" : level](`[core] ${message}`);
       },
     }),
-    devOnly ? { allowGatewayUrl: (url) => url === devOnly.url } : {},
+    devOnly
+      ? {
+          allowGatewayUrl: (url) => {
+            if (url !== devOnly.url) return false;
+            const proof = options.recheckDevGateway!();
+            return proof !== null && proof.url === devOnly.url && proof.token === devOnly.token;
+          },
+        }
+      : {},
   );
   if (devOnly) {
     const saved = await client.savedSettings();

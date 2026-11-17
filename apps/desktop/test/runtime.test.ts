@@ -1,15 +1,31 @@
 // A1 and A3: what a host connects to, and what it tells people to run.
 import { createFileStore } from "@clawtrate/core/node";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  childFor,
+  deadProcess,
+  liveProcess,
+  OTHER_CHECKOUT,
+  seedInstance,
+  stopChildren,
+  type Proc,
+} from "../../../tools/dev-gateway/test/fixtures.ts";
 import WebSocket, { WebSocketServer } from "ws";
 import {
   approvalInstructionsFor,
   DEV_GATEWAY_URL,
-  devConnectionPath,
+  devRunDir,
   readDevConnection,
   SavedGatewayRefusedError,
   startHostRuntime,
@@ -31,7 +47,10 @@ beforeAll(async () => {
   otherUrl = `ws://127.0.0.1:${(other.address() as AddressInfo).port}`;
 });
 
-afterAll(() => other.close());
+afterAll(() => {
+  other.close();
+  stopChildren();
+});
 
 async function dataDirRemembering(url: string): Promise<string> {
   const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-runtime-"));
@@ -55,6 +74,7 @@ describe("token-free development mode (A1)", () => {
         devGateway,
         autoConnectDev: true,
         devOnly: true,
+        recheckDevGateway: () => devGateway,
       }),
     ).rejects.toBeInstanceOf(SavedGatewayRefusedError);
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -114,79 +134,107 @@ describe("token-free development mode (A1)", () => {
   });
 });
 
-describe("development connection file (A1)", () => {
-  function fileWith(contents: unknown): string {
-    const dir = mkdtempSync(join(tmpdir(), "clawtrate-devconn-"));
-    const path = join(dir, "connection.json");
-    writeFileSync(path, JSON.stringify(contents));
-    return path;
-  }
-
-  it("accepts only the fixed loopback endpoint", () => {
-    const read = (contents: unknown) => readDevConnection("", { path: fileWith(contents) });
-    expect(read({ url: DEV_GATEWAY_URL, token: "t" })).toEqual({
-      url: DEV_GATEWAY_URL,
-      token: "t",
-      instance: null,
-    });
-    expect(read({ url: "wss://gateway.example.com", token: "t" })).toBeNull();
-    expect(read({ url: "ws://127.0.0.1:18789", token: "t" })).toBeNull();
-    expect(read({ url: DEV_GATEWAY_URL, token: "" })).toBeNull();
-    expect(read("not an object")).toBeNull();
-    // A file written for a named instance is not the default instance's.
-    expect(read({ url: DEV_GATEWAY_URL, token: "t", instance: "alpha" })).toBeNull();
+/**
+ * A checkout whose dev tooling started `instance` under a temporary home: the
+ * instance's marker with a live stand-in gateway, this checkout's run file and
+ * connection file. Pieces can be changed to model stale or edited state.
+ */
+function provenCheckout(
+  instance: string | null,
+  options: { gateway?: Proc; checkout?: string; connection?: Record<string, unknown> } = {},
+) {
+  const home = mkdtempSync(join(tmpdir(), "clawtrate-home-"));
+  const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-checkout-")));
+  const runDir = devRunDir(repoRoot, instance);
+  const gateway = options.gateway ?? liveProcess();
+  const { runId, stateDir } = seedInstance(home, instance, {
+    gateway,
+    checkout: options.checkout ?? repoRoot,
+    runRoot: join(repoRoot, "tools/dev-gateway/.run"),
   });
-});
+  // The run file records the checkout that started it; edit it back to this one.
+  const port = instance === null ? 19001 : 19240;
+  writeFileSync(
+    join(runDir, "state.json"),
+    JSON.stringify({
+      runId,
+      instance,
+      checkout: repoRoot,
+      gatewayPort: port,
+      providerPort: port + 10,
+      startedAt: "",
+    }),
+  );
+  const url = `ws://127.0.0.1:${port}`;
+  writeFileSync(
+    join(runDir, "connection.json"),
+    JSON.stringify({ url, token: "t", instance, runId, ...options.connection }),
+  );
+  const read = () => readDevConnection(repoRoot, { instance, home });
+  return { home, repoRoot, runDir, stateDir, runId, url, gateway, read };
+}
 
-describe("a named development instance (A1)", () => {
-  const NAMED_URL = "ws://127.0.0.1:19240";
-  const named = { url: NAMED_URL, token: "named-token", instance: "alpha" };
-
-  /** A checkout whose dev tooling wrote this connection file and run file for "alpha". */
-  function checkoutWith(connection: unknown, record: unknown): string {
-    const repoRoot = mkdtempSync(join(tmpdir(), "clawtrate-checkout-"));
-    const path = devConnectionPath(repoRoot, "alpha");
-    mkdirSync(join(path, ".."), { recursive: true });
-    writeFileSync(path, JSON.stringify(connection));
-    if (record !== undefined) writeFileSync(join(path, "..", "state.json"), JSON.stringify(record));
-    return repoRoot;
-  }
-
-  it("reads the connection from the instance's own run folder", () => {
-    const repoRoot = checkoutWith(
-      { url: NAMED_URL, token: "t", instance: "alpha" },
-      { gatewayPort: 19240 },
-    );
-    expect(devConnectionPath(repoRoot, "alpha")).toBe(
-      join(repoRoot, "tools/dev-gateway/.run/instances/alpha/connection.json"),
-    );
-    expect(readDevConnection(repoRoot, { instance: "alpha" })).toEqual({
-      url: NAMED_URL,
-      token: "t",
-      instance: "alpha",
-    });
-    // The default instance's file is elsewhere and absent here.
-    expect(readDevConnection(repoRoot)).toBeNull();
+describe("development eligibility needs proof, not two agreeing files (A1)", () => {
+  it("accepts the selected instance when marker, run, checkout, port and live gateway agree", () => {
+    for (const instance of [null, "alpha"]) {
+      const { url, read } = provenCheckout(instance);
+      expect(read()).toEqual({ url, token: "t", instance });
+    }
+    expect(devRunDir("/repo", "alpha")).toBe("/repo/tools/dev-gateway/.run/instances/alpha");
+    expect(devRunDir("/repo")).toBe("/repo/tools/dev-gateway/.run");
   });
 
-  it("accepts only the loopback port this checkout's tool recorded for it", () => {
-    const read = (connection: object, record?: object) =>
-      readDevConnection(checkoutWith(connection, record), { instance: "alpha" });
-    const ok = { url: NAMED_URL, token: "t", instance: "alpha" };
-    expect(read(ok, { gatewayPort: 19240 })).not.toBeNull();
-    // Not what the run file recorded, or no run file at all.
-    expect(read(ok, { gatewayPort: 19260 })).toBeNull();
-    expect(read(ok)).toBeNull();
-    // The default instance's port, the default profile's port and a remote host.
-    expect(read({ ...ok, url: DEV_GATEWAY_URL }, { gatewayPort: 19001 })).toBeNull();
-    expect(read({ ...ok, url: "ws://127.0.0.1:18789" }, { gatewayPort: 18789 })).toBeNull();
+  it("refuses a run file and a connection file that agree when there is no marker", () => {
+    const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-checkout-")));
+    const runDir = devRunDir(repoRoot, "alpha");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, "state.json"), JSON.stringify({ gatewayPort: 19200 }));
+    writeFileSync(
+      join(runDir, "connection.json"),
+      JSON.stringify({ instance: "alpha", url: "ws://127.0.0.1:19200", token: "probe" }),
+    );
+    const home = mkdtempSync(join(tmpdir(), "clawtrate-home-"));
+    expect(readDevConnection(repoRoot, { instance: "alpha", home })).toBeNull();
+  });
+
+  it("refuses anything stale, incomplete, linked or mismatched", () => {
+    const refused = (label: string, read: () => unknown) => expect(read(), label).toBeNull();
+    refused("gateway gone", provenCheckout("alpha", { gateway: deadProcess() }).read);
+    const reused = { pid: liveProcess().pid, identity: "Thu Jan  1 00:00:00 1970" };
+    refused("gateway pid reused", provenCheckout("alpha", { gateway: reused }).read);
+    refused(
+      "another checkout's marker",
+      provenCheckout("alpha", { checkout: OTHER_CHECKOUT }).read,
+    );
+    refused(
+      "connection file of another run",
+      provenCheckout("alpha", { connection: { runId: "f".repeat(48) } }).read,
+    );
+    refused(
+      "connection file names another port",
+      provenCheckout("alpha", { connection: { url: "ws://127.0.0.1:19260" } }).read,
+    );
+    refused(
+      "connection file names a remote host",
+      provenCheckout(null, { connection: { url: "ws://gateway.example.com:19001" } }).read,
+    );
+
+    const linkedConnection = provenCheckout("alpha");
+    const real = join(linkedConnection.runDir, "real.json");
+    renameSync(join(linkedConnection.runDir, "connection.json"), real);
+    symlinkSync(real, join(linkedConnection.runDir, "connection.json"));
+    refused("connection file is a link", linkedConnection.read);
+
+    const linkedState = provenCheckout("alpha");
+    const moved = `${linkedState.stateDir}-real`;
+    renameSync(linkedState.stateDir, moved);
+    symlinkSync(moved, linkedState.stateDir);
+    refused("state folder is a link", linkedState.read);
+
+    const otherInstance = provenCheckout("alpha");
     expect(
-      read({ ...ok, url: "ws://gateway.example.com:19240" }, { gatewayPort: 19240 }),
+      readDevConnection(otherInstance.repoRoot, { instance: "beta", home: otherInstance.home }),
     ).toBeNull();
-    expect(read({ ...ok, url: "wss://127.0.0.1:19240" }, { gatewayPort: 19240 })).toBeNull();
-    // Written for another instance.
-    expect(read({ ...ok, instance: "beta" }, { gatewayPort: 19240 })).toBeNull();
-    expect(read({ ...ok, instance: null }, { gatewayPort: 19240 })).toBeNull();
   });
 
   it("rejects an instance name that is not one before reading anything", () => {
@@ -197,38 +245,55 @@ describe("a named development instance (A1)", () => {
     }
   });
 
-  it("without a token opens nothing but the selected instance's gateway", async () => {
-    // A saved default-instance gateway is refused like any other.
+  it("without a token, proves the gateway again before every connection", async () => {
+    for (const instance of [null, "alpha"]) {
+      const proven = provenCheckout(instance);
+      const devGateway = proven.read()!;
+      expect(devGateway).not.toBeNull();
+      const runtime = await startHostRuntime({
+        kind: "web",
+        displayName: "Clawtrate Web",
+        dataDir: mkdtempSync(join(tmpdir(), "clawtrate-runtime-")),
+        devGateway,
+        devOnly: true,
+        recheckDevGateway: proven.read,
+      });
+      expect(runtime.info.devGateway).toEqual({ url: proven.url });
+      expect(runtime.policy.devGateway).toEqual({ url: proven.url, token: "t" });
+      const before = attempts;
+      // Any other gateway, including the default instance's for a named one.
+      for (const url of [otherUrl, instance === null ? "ws://127.0.0.1:19240" : DEV_GATEWAY_URL]) {
+        await expect(runtime.client.connect({ url, token: null })).rejects.toThrow(/not allowed/i);
+      }
+      // Its own gateway once that process is gone: the next (re)connection is refused
+      // before a socket is opened, so a port someone else takes over is never trusted.
+      childFor(proven.gateway.pid).kill("SIGTERM");
+      await new Promise((resolve) => childFor(proven.gateway.pid).once("exit", resolve));
+      expect(proven.read()).toBeNull();
+      await expect(runtime.client.connect({ url: proven.url, token: null })).rejects.toThrow(
+        /not allowed/i,
+      );
+      expect(attempts).toBe(before);
+      runtime.client.stop();
+    }
+  });
+
+  it("does not start token-free without a proven development gateway", async () => {
     await expect(
       startHostRuntime({
         kind: "web",
         displayName: "Clawtrate Web",
-        dataDir: await dataDirRemembering(DEV_GATEWAY_URL),
-        devGateway: named,
+        dataDir: mkdtempSync(join(tmpdir(), "clawtrate-runtime-")),
+        devGateway: null,
         devOnly: true,
+        recheckDevGateway: () => null,
       }),
-    ).rejects.toBeInstanceOf(SavedGatewayRefusedError);
-
-    const runtime = await startHostRuntime({
-      kind: "web",
-      displayName: "Clawtrate Web",
-      dataDir: mkdtempSync(join(tmpdir(), "clawtrate-runtime-")),
-      devGateway: named,
-      devOnly: true,
-    });
-    const before = attempts;
-    for (const url of [otherUrl, DEV_GATEWAY_URL]) {
-      await expect(runtime.client.connect({ url, token: null })).rejects.toThrow(/not allowed/i);
-    }
-    expect(attempts).toBe(before);
-    expect(runtime.info.devGateway).toEqual({ url: NAMED_URL });
-    // The bridge's development command gets the URL and token only.
-    expect(runtime.policy.devGateway).toEqual({ url: NAMED_URL, token: "named-token" });
-    runtime.client.stop();
+    ).rejects.toThrow(/needs the development gateway/);
   });
 
   it("shows the approve command for the same instance", () => {
-    expect(approvalInstructionsFor(named)(NAMED_URL, "req-1")).toEqual({
+    const named = { url: "ws://127.0.0.1:19240", token: "t", instance: "alpha" };
+    expect(approvalInstructionsFor(named)(named.url, "req-1")).toEqual({
       command: "pnpm dev-gateway approve --instance alpha",
       note: null,
     });
