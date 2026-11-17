@@ -8,6 +8,9 @@
 //   user text "#tool <name> <json>" -> stream reasoning, then one tool call
 //   user text "#ask <sessionKey> <message>" -> sessions_send tool call
 //   user text "#slow <seconds> <text>" -> stream text slowly (abort, steer)
+//   user text "#say <text>"         -> reply with exactly <text> (e.g. NO_REPLY)
+//   exec auto-review request        -> JSON verdict: deny if the command
+//                                      contains "rm ", else allow at low risk
 //   anything else                   -> stream reasoning, then "Echo: <text>"
 //
 // Usage: node fake-openai.mjs [--port 19102] [--log /path/requests.jsonl]
@@ -46,7 +49,7 @@ const userIntent = (text) => {
     .filter((l) => l && !ENVELOPE.test(l))
     // The first turn of sessions.create keeps the timestamp on the text line.
     .map((l) => l.replace(/^\[[^\]]*\]\s*/, ""));
-  const directive = [...lines].reverse().find((l) => l.startsWith("#tool ") || l.startsWith("#ask "));
+  const directive = [...lines].reverse().find((l) => /^#(tool|ask|say|slow) /.test(l));
   return directive ?? lines.at(-1) ?? "";
 };
 
@@ -60,6 +63,18 @@ function plan(body) {
     const name = call?.function?.name ?? "tool";
     const result = textOf(last.content).slice(0, 400);
     return { reasoning: `The ${name} call finished.`, text: `Tool ${name} returned: ${result}` };
+  }
+  // Exec auto-review (tools.exec.mode "auto"): answer with the reviewer's JSON.
+  const lastText = textOf(last.content);
+  if (lastText.includes("UNTRUSTED_EXEC_REQUEST_JSON_BEGIN")) {
+    const deny = /"command":\s*"[^"]*\brm /.test(lastText);
+    return {
+      text: JSON.stringify(
+        deny
+          ? { decision: "deny", risk: "high", rationale: "Scripted reviewer: deletes files." }
+          : { decision: "allow", risk: "low", rationale: "Scripted reviewer: read-only command." },
+      ),
+    };
   }
   // Utility calls (session activity recaps, titles) carry no tools and a JSON
   // body; answer briefly so recaps do not grow by echoing themselves.
@@ -89,6 +104,8 @@ function plan(body) {
       },
     };
   }
+  const say = intent.match(/^#say\s+(.+)$/s);
+  if (say) return { text: say[1] };
   const slow = intent.match(/^#slow\s+(\d+)\s*(.*)$/s);
   if (slow) {
     // Stream for roughly <seconds>, for abort and steer tests.
