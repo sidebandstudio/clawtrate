@@ -40,7 +40,8 @@ function settlingLabel(via: string): string {
 
 /**
  * The records the gateway sent that settled a request and what this app
- * sent, each labelled; where the engine holds none, a line says so.
+ * sent, each labelled; where the engine holds none for a settled request, a
+ * line says so.
  */
 export function settlingRaw(
   settled: boolean,
@@ -62,6 +63,6 @@ export function settlingRaw(
   if (settled && settledBy.length === 0) {
     notes.push("This app did not receive the gateway's record of how it was settled.");
   }
-  if (sent.length === 0) notes.push("This app sent nothing to settle it.");
+  if (settled && sent.length === 0) notes.push("This app sent nothing to settle it.");
   return { events, notes };
 }
