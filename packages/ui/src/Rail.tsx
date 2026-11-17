@@ -29,7 +29,7 @@ import {
 } from "./icons.tsx";
 import { Menu, type MenuEntry } from "./Menu.tsx";
 import type { BubbleChoice, ThemeChoice } from "./preferences.ts";
-import { arrange, moveInOrder, SORT_ORDERS, useRoster } from "./roster.ts";
+import { arrange, moveInOrder, rosterScope, SORT_ORDERS, useRoster } from "./roster.ts";
 import {
   botLabel,
   summarize,
@@ -266,7 +266,14 @@ export function Rail({
 }) {
   const send = useCommand();
   const now = useMinuteClock();
-  const roster = useRoster();
+  // The arrangement belongs to the gateway. Its identity arrives with its bots,
+  // so the scope is settled only once there are bots.
+  const roster = useRoster(
+    bots.length > 0 ? rosterScope(connection) : null,
+    connection.gatewayUrl
+      ? rosterScope({ gatewayId: null, gatewayUrl: connection.gatewayUrl })
+      : null,
+  );
   const [tip, setTip] = useState<Tip | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [showHidden, setShowHidden] = useState(false);

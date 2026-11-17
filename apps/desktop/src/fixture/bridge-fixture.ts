@@ -27,7 +27,9 @@ export const FIXTURE_INFO: HostInfo = {
   deviceName: "Clawtrate Web",
 };
 
-const GATEWAY_URL = "ws://127.0.0.1:18789";
+export const GATEWAY_URL = "ws://127.0.0.1:18789";
+/** The fixture gateway's identity, as `gateway.identity.get` would give it. Invented. */
+export const GATEWAY_ID = "6f3b0d2e9a41c7f58e2d4b1a0c9e7f3d5b8a2c4e6f1d0b9a8c7e5f4d3b2a1c0e";
 const DEVICE_ID = "a41c9e02f7d84b19c6e2";
 
 /** Every scene the fixture can show, by the name used in `?scene=`. */
@@ -69,6 +71,7 @@ const connected: ConnectionState = {
   ...initialState.connection,
   status: "connected",
   gatewayUrl: GATEWAY_URL,
+  gatewayId: GATEWAY_ID,
   serverVersion: "2026.10.6",
   protocol: 4,
   scopes: ["operator.read"],

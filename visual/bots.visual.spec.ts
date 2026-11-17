@@ -445,6 +445,83 @@ test("F-013 F-027 F-266: after a menu action moves a bot, keyboard focus is on t
   await expect(page.locator(".hidden-toggle")).toBeFocused();
 });
 
+test("F-013 F-027 F-266: pins, hidden bots and the manual order belong to the gateway they were made on", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&pins=otto&hidden=marlow`, "light");
+  await settle(page);
+  const pins = page.locator(".pin-grid .pin");
+  const hidden = page.locator(".hidden-list .bot, .hidden-toggle");
+  await expect(pins).toHaveCount(1);
+  await expect(page.locator(".hidden-toggle")).toBeVisible();
+  // Another gateway, whose bots have the same ids.
+  const switchTo = (gatewayId: string, gatewayUrl: string) =>
+    page.evaluate(
+      ([id, url]) =>
+        (
+          window as unknown as {
+            clawtrateFixture: {
+              setState: (change: (state: { connection: object }) => object) => void;
+            };
+          }
+        ).clawtrateFixture.setState((state) => ({
+          ...state,
+          connection: { ...state.connection, gatewayId: id, gatewayUrl: url },
+        })),
+      [gatewayId, gatewayUrl],
+    );
+  const first = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          clawtrateFixture: {
+            getState: () => { connection: { gatewayId: string; gatewayUrl: string } };
+          };
+        }
+      ).clawtrateFixture.getState().connection,
+  );
+  await switchTo(
+    "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9",
+    "ws://127.0.0.1:28789",
+  );
+  await expect(pins).toHaveCount(0);
+  await expect(hidden).toHaveCount(0);
+  await expect(bot(page, "Marlow")).toBeVisible();
+  // Pinning there keeps to that gateway.
+  await menuItem(page, "Pip", "Pin");
+  await expect(page.locator('.pin-grid .pin[data-bot="pip"]')).toBeVisible();
+  // Back on the first gateway: its own pin and hidden bot, and not the other's pin.
+  await switchTo(first.gatewayId, first.gatewayUrl);
+  await expect(pins).toHaveCount(1);
+  await expect(page.locator('.pin-grid .pin[data-bot="otto"]')).toBeVisible();
+  await expect(page.locator(".hidden-toggle")).toBeVisible();
+  // The same gateway at another address is still the same gateway.
+  await switchTo(first.gatewayId, "ws://127.0.0.1:38789");
+  await expect(page.locator('.pin-grid .pin[data-bot="otto"]')).toBeVisible();
+});
+
+test("F-013 F-027: an arrangement saved before it was kept per gateway is carried over to the open gateway", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("seeded")) return;
+    sessionStorage.setItem("seeded", "1");
+    localStorage.setItem(
+      "clawtrate.roster",
+      JSON.stringify({ pinned: ["pip"], hidden: ["marlow"], sort: "recent", manual: [] }),
+    );
+  });
+  await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+  await expect(page.locator('.pin-grid .pin[data-bot="pip"]')).toBeVisible();
+  await expect(page.locator(".hidden-toggle")).toBeVisible();
+  const keys = await page.evaluate(() =>
+    Object.keys(localStorage).filter((key) => key.startsWith("clawtrate.roster")),
+  );
+  expect(keys).toEqual([expect.stringMatching(/^clawtrate\.roster:gateway:[0-9a-f]{64}$/)]);
+  await page.reload();
+  await expect(page.locator('.pin-grid .pin[data-bot="pip"]')).toBeVisible();
+});
+
 test("F-426: a bot row shows the most urgent state of its tasks; opening a done-with-failures task clears it", async ({
   page,
 }) => {

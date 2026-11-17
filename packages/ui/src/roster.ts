@@ -2,8 +2,14 @@
 // the sort order and the manual order. The gateway can store none of it for a
 // read-only connection (`users.prefs.set` needs `operator.write`), so it is
 // kept per device, and the sort control says so for the manual order.
+//
+// Bot ids belong to a gateway (every gateway has a `main`), so the arrangement
+// is kept per gateway: under the gateway's own identity, or under its address
+// when it gives none. An arrangement saved before it was kept per gateway, or
+// under the address before the identity was known, moves to the gateway that
+// is open when it is first read.
 
-import type { Bot, Task } from "@clawtrate/core";
+import type { Bot, ConnectionState, Task } from "@clawtrate/core";
 import { useCallback, useState } from "react";
 import { readPreference, writePreference } from "./preferences.ts";
 
@@ -24,15 +30,49 @@ export type RosterPrefs = {
   manual: string[];
 };
 
-const KEY = "roster";
+/** The single arrangement kept before it was kept per gateway. */
+const LEGACY_KEY = "roster";
+
+/** The preference key of one gateway's arrangement. */
+export const rosterKey = (scope: string) => `roster:${scope}`;
+
+/** Which gateway an arrangement belongs to: its identity, else its address. Null with neither. */
+export function rosterScope(
+  connection: Pick<ConnectionState, "gatewayId" | "gatewayUrl">,
+): string | null {
+  if (connection.gatewayId) return `gateway:${connection.gatewayId}`;
+  if (connection.gatewayUrl) return `address:${connection.gatewayUrl}`;
+  return null;
+}
 
 const ids = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 
-export function readRoster(): RosterPrefs {
+/**
+ * The arrangement for `scope`. When it has none yet, the one kept under the
+ * gateway's address (`fallback`), or else the one from before arrangements
+ * were kept per gateway, moves to it.
+ */
+export function readRoster(scope: string | null, fallback: string | null = null): RosterPrefs {
+  if (scope === null) return parseRoster(null);
+  let raw = readPreference(rosterKey(scope));
+  if (raw === null) {
+    const from = [fallback && fallback !== scope ? rosterKey(fallback) : null, LEGACY_KEY].find(
+      (key): key is string => key !== null && readPreference(key) !== null,
+    );
+    if (from) {
+      raw = readPreference(from);
+      writePreference(rosterKey(scope), raw);
+      writePreference(from, null);
+    }
+  }
+  return parseRoster(raw);
+}
+
+function parseRoster(raw: string | null): RosterPrefs {
   let parsed: Record<string, unknown> = {};
   try {
-    const value: unknown = JSON.parse(readPreference(KEY) ?? "{}");
+    const value: unknown = JSON.parse(raw ?? "{}");
     if (value && typeof value === "object") parsed = value as Record<string, unknown>;
   } catch {
     // A damaged preference starts over.
@@ -98,18 +138,28 @@ export function moveInOrder(shown: string[], id: string, toIndex: number): strin
   return [...without.slice(0, at), id, ...without.slice(at)];
 }
 
-/** The rail's per-device arrangement, persisted on every change. */
-export function useRoster() {
-  const [prefs, setPrefs] = useState<RosterPrefs>(readRoster);
+/**
+ * The rail's per-device arrangement for one gateway, persisted on every
+ * change. `scope` is from `rosterScope`; `fallback` is the gateway's address
+ * scope, whose arrangement moves to `scope` the first time.
+ */
+export function useRoster(scope: string | null, fallback: string | null = null) {
+  const [held, setHeld] = useState(() => ({ scope, prefs: readRoster(scope, fallback) }));
+  let current = held;
+  // Another gateway: its own arrangement.
+  if (held.scope !== scope) {
+    current = { scope, prefs: readRoster(scope, fallback) };
+    setHeld(current);
+  }
   const update = useCallback((change: (prefs: RosterPrefs) => RosterPrefs) => {
-    setPrefs((current) => {
-      const next = change(current);
-      writePreference(KEY, JSON.stringify(next));
-      return next;
+    setHeld((now) => {
+      const next = change(now.prefs);
+      if (now.scope !== null) writePreference(rosterKey(now.scope), JSON.stringify(next));
+      return { scope: now.scope, prefs: next };
     });
   }, []);
   return {
-    prefs,
+    prefs: current.prefs,
     setSort: useCallback((sort: SortOrder) => update((p) => ({ ...p, sort })), [update]),
     togglePin: useCallback(
       (id: string) =>

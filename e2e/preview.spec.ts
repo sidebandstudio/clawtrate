@@ -281,6 +281,24 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
   await expect(botRow(page, "Pip")).toHaveAttribute("aria-expanded", "true");
 });
 
+test("F-013 F-027 F-266: this device keeps its pins and hidden bots under the gateway's own identity", async ({
+  page,
+}) => {
+  const identity = await gatewayCall<{ deviceId: string }>("gateway.identity.get", {});
+  expect(identity.deviceId).toMatch(/^[0-9a-f]{64}$/);
+  await openShell(page);
+  await botRow(page, "Otto").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Pin" }).click();
+  await expect(page.locator('.pin-grid .pin[data-bot="otto"]')).toBeVisible();
+  const keys = await page.evaluate(() =>
+    Object.keys(localStorage).filter((key) => key.startsWith("clawtrate.roster")),
+  );
+  expect(keys).toEqual([`clawtrate.roster:gateway:${identity.deviceId}`]);
+  await page.locator('.pin-grid .pin[data-bot="otto"]').click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Unpin" }).click();
+  await expect(page.locator(".pin-grid")).toHaveCount(0);
+});
+
 test("F-059 F-063: a task's header shows the gateway's context use, and stamps separate its blocks", async ({
   page,
 }) => {

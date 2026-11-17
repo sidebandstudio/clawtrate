@@ -37,6 +37,12 @@ export type ConnectionError = {
 export type ConnectionState = {
   status: ConnectionStatus;
   gatewayUrl: string | null;
+  /**
+   * The gateway's own identity (`gateway.identity.get` `deviceId`), stable
+   * across addresses and restarts. Null until it is read, or when the gateway
+   * does not give it.
+   */
+  gatewayId: string | null;
   serverVersion: string | null;
   protocol: number | null;
   scopes: string[];
@@ -154,6 +160,7 @@ export type ClawtrateState = {
 export const initialConnectionState: ConnectionState = {
   status: "idle",
   gatewayUrl: null,
+  gatewayId: null,
   serverVersion: null,
   protocol: null,
   scopes: [],

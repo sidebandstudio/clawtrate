@@ -1,6 +1,13 @@
 import type { Bot, Task } from "@clawtrate/core";
-import { describe, expect, it } from "vitest";
-import { arrange, moveInOrder, type RosterPrefs } from "../src/roster.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  arrange,
+  moveInOrder,
+  readRoster,
+  rosterKey,
+  rosterScope,
+  type RosterPrefs,
+} from "../src/roster.ts";
 
 const bot = (id: string, name: string, isDefault = false): Bot => ({
   id,
@@ -78,5 +85,63 @@ describe("F-031 F-266: the rail's order", () => {
     expect(names(arranged.pinned)).toEqual([]);
     expect(names(arranged.list)).toEqual(["Marlow", "juniper"]);
     expect(names(arranged.hidden)).toEqual(["Otto", "Pip"]);
+  });
+});
+
+describe("each gateway's arrangement", () => {
+  const data = new Map<string, string>();
+  beforeEach(() => {
+    data.clear();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => data.set(key, value),
+      removeItem: (key: string) => data.delete(key),
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const saved = (prefs: Partial<RosterPrefs>) =>
+    JSON.stringify({ pinned: [], hidden: [], sort: "recent", manual: [], ...prefs });
+
+  it("F-013 F-027 F-266: is kept under the gateway's identity, else its address, and one gateway's never applies to another", () => {
+    expect(rosterScope({ gatewayId: "a1", gatewayUrl: "ws://127.0.0.1:18789" })).toBe("gateway:a1");
+    expect(rosterScope({ gatewayId: null, gatewayUrl: "ws://127.0.0.1:18789" })).toBe(
+      "address:ws://127.0.0.1:18789",
+    );
+    expect(rosterScope({ gatewayId: null, gatewayUrl: null })).toBe(null);
+    data.set(`clawtrate.${rosterKey("gateway:a1")}`, saved({ pinned: ["main"], hidden: ["otto"] }));
+    expect(readRoster("gateway:a1")).toMatchObject({ pinned: ["main"], hidden: ["otto"] });
+    // Another gateway with the same bot ids starts with nothing pinned or hidden.
+    expect(readRoster("gateway:b2")).toMatchObject({ pinned: [], hidden: [] });
+    // The same gateway at another address is the same gateway.
+    expect(readRoster("gateway:a1", "address:ws://127.0.0.1:28789")).toMatchObject({
+      pinned: ["main"],
+    });
+    expect(readRoster(null)).toMatchObject({ pinned: [], hidden: [], sort: "recent" });
+  });
+
+  it("F-013 F-027 F-266: an arrangement saved before it was kept per gateway moves to the first gateway that reads it, once", () => {
+    const before = saved({ pinned: ["otto"], hidden: ["marlow"], sort: "manual", manual: ["pip"] });
+    data.set("clawtrate.roster", before);
+    expect(readRoster("gateway:a1")).toEqual({
+      pinned: ["otto"],
+      hidden: ["marlow"],
+      sort: "manual",
+      manual: ["pip"],
+    });
+    expect(data.get(`clawtrate.${rosterKey("gateway:a1")}`)).toBe(before);
+    expect(data.has("clawtrate.roster")).toBe(false);
+    // A second gateway does not get it too.
+    expect(readRoster("gateway:b2")).toMatchObject({ pinned: [], hidden: [] });
+  });
+
+  it("F-013 F-027 F-266: an arrangement kept under the address moves to the identity once the gateway gives one", () => {
+    const byAddress = saved({ pinned: ["pip"] });
+    data.set(`clawtrate.${rosterKey("address:ws://127.0.0.1:18789")}`, byAddress);
+    data.set("clawtrate.roster", saved({ pinned: ["otto"] }));
+    expect(readRoster("gateway:a1", "address:ws://127.0.0.1:18789")).toMatchObject({
+      pinned: ["pip"],
+    });
+    expect(data.has(`clawtrate.${rosterKey("address:ws://127.0.0.1:18789")}`)).toBe(false);
   });
 });

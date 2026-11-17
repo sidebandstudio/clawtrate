@@ -7,14 +7,14 @@
 //   &bot=otto&task=<key>   the bot and task to open (stored as the app stores them)
 //   &panel=open            the Work pane
 //   &theme=dark            the app's own theme override
-//   &pins=main,otto        pinned bots, in order (this device's rail arrangement)
+//   &pins=main,otto        pinned bots, in order (this device's rail arrangement for the gateway)
 //   &hidden=marlow         hidden bots
 //   &sort=name             the rail's sort order: recent, name or manual
 
-import { App, BridgeProvider } from "@clawtrate/ui";
+import { App, BridgeProvider, rosterKey, rosterScope } from "@clawtrate/ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { createFixtureBridge, isScene } from "./bridge-fixture.ts";
+import { createFixtureBridge, GATEWAY_ID, GATEWAY_URL, isScene } from "./bridge-fixture.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 
 const params = new URLSearchParams(location.search);
@@ -42,8 +42,9 @@ function seedPreferences() {
   if (panel === "open" || panel === "closed") write("panel", panel);
   const list = (name: string) => params.get(name)?.split(",").filter(Boolean);
   if (params.has("pins") || params.has("hidden") || params.has("sort")) {
+    // Kept per gateway, under the fixture gateway's identity.
     write(
-      "roster",
+      rosterKey(rosterScope({ gatewayId: GATEWAY_ID, gatewayUrl: GATEWAY_URL })!),
       JSON.stringify({
         pinned: list("pins") ?? [],
         hidden: list("hidden") ?? [],

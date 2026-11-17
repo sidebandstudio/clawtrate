@@ -345,6 +345,7 @@ export class ClawtrateClient {
         deviceId: identity.deviceId,
         paired,
         serverVersion: sameGateway ? state.connection.serverVersion : null,
+        gatewayId: sameGateway ? state.connection.gatewayId : null,
       },
       transcripts: sameGateway
         ? state.transcripts
@@ -645,12 +646,26 @@ export class ClawtrateClient {
     this.bootstrapping = true;
     this.changedDuringBootstrap = false;
     this.setDiscovery({ status: "loading", error: null });
+    // The gateway's identity comes with its bots, so what this device keeps
+    // per gateway (pins, hidden bots, order) is known when the bots appear.
+    const gatewayId = this.request("gateway.identity.get", {}).then(
+      (result) => {
+        const id = asRecord(result)?.deviceId;
+        return typeof id === "string" && id ? id : null;
+      },
+      () => null,
+    );
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const [agents, sessions] = await Promise.allSettled([
-      this.request("agents.list", {}).then((result) => {
+      this.request("agents.list", {}).then(async (result) => {
+        const id = await gatewayId;
         if (generation === this.generation) {
-          this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+          this.store.update((state) => ({
+            ...state,
+            connection: { ...state.connection, gatewayId: id },
+            bots: mapAgents(result),
+          }));
         }
         return result;
       }),
