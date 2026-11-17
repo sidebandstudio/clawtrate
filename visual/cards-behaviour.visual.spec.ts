@@ -650,6 +650,8 @@ test.describe("approval cards", () => {
 
   test("F-163: ⌘J moves focus to the oldest pending card", async ({ page }) => {
     await openFixture(page, "scene=approval-pending", "light");
+    // The card is drawn before the shortcut is pressed, so the key never lands before it.
+    await expect(approvalCard(page)).toBeVisible();
     await page.locator("body").click();
     await page.keyboard.press("ControlOrMeta+j");
     await expect(approvalCard(page)).toBeFocused();

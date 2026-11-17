@@ -143,6 +143,7 @@ function itemEntries(
   index: Map<string, { step: Step; run: Run }>,
   skip: ReadonlySet<string>,
   cards: CardsFor,
+  fromEngine = false,
 ): FeedEntry<FeedRef>[] {
   const reasoningSteps = run ? run.steps.filter((s) => s.kind === "reasoning") : [];
   const reasoningBlocks = item.blocks.filter((b) => b.kind === "reasoning").length;
@@ -169,6 +170,7 @@ function itemEntries(
           },
         });
     } else if (block.kind === "reasoning") {
+      if (fromEngine) return;
       const step = engineIds ? reasoningSteps[r] : undefined;
       r += 1;
       entries.push({
@@ -321,9 +323,10 @@ export function ActionScope({
       if (item.role === "user") previousUser = item.id;
       if (item.role !== "assistant") continue;
       const run = runOfItem(item, previousUser, index, transcript.runs);
-      // A run drawn from the engine is drawn there alone: its rows history already holds are not drawn twice.
-      if (run && engineRunIds.has(run.id)) continue;
-      const entries = markRepeats(itemEntries(item, run, index, skip, cards));
+      // A run drawn from the engine draws its calls and reasoning there: the rows history already
+      // holds of it keep only their text, so nothing is drawn twice and nothing only history has is lost.
+      const fromEngine = run !== undefined && engineRunIds.has(run.id);
+      const entries = markRepeats(itemEntries(item, run, index, skip, cards, fromEngine));
       items.set(item.id, {
         groups: groupFeed(entries, ctx),
         revision: run?.reasoningRevision ?? 0,
