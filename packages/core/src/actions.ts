@@ -10,6 +10,7 @@
 // exact. Nothing reaches Done by default. Every word comes from
 // `action-words.ts`.
 
+import { T3_CODE_TOOLS } from "./cards.ts";
 import {
   FORMS,
   LABELS,
@@ -92,6 +93,12 @@ export type ReadingContext = {
   workspaceRoot?: string | null;
   /** Bot names by id, for "Read Marlow's task". */
   botName?: (agentId: string) => string | null;
+  /**
+   * The gateway's own map from effective tool names to a tool server and its
+   * tool (`tools.effective`): a tool-server call is known from its start.
+   * The result's `details.mcpServer` and `mcpTool` overrule it.
+   */
+  toolServers?: Readonly<Record<string, { server: string; tool: string }>>;
 };
 
 // Small helpers ----------------------------------------------------------------------
@@ -374,25 +381,22 @@ const TABLE: Record<string, ActionKind> = {
   conversations_turn: "channel",
 };
 
-/** T3 Code's seven published tools (section 11.1). */
-export const T3_CODE_TOOL_NAMES: Readonly<Record<string, true>> = {
-  t3_project_list: true,
-  t3_thread_launch: true,
-  t3_thread_send: true,
-  t3_thread_read: true,
-  t3_thread_wait: true,
-  t3_thread_list: true,
-  t3_thread_interrupt: true,
-};
-
-/** A tool server and tool, as a result names them (`details.mcpServer`, `details.mcpTool`). */
-export function toolServerOf(call: Pick<ActionCall, "details">): {
-  server: string;
-  tool: string;
-} | null {
+/**
+ * A tool-server call's server and tool: as its result names them
+ * (`details.mcpServer`, `details.mcpTool`), else as the gateway's name map
+ * gives them for its effective name. `mapped` says which.
+ */
+export function toolServerOf(
+  call: Pick<ActionCall, "details" | "name">,
+  ctx: ReadingContext = {},
+): { server: string; tool: string; mapped: boolean } | null {
   const server = str(call.details?.mcpServer);
   const tool = str(call.details?.mcpTool);
-  return server && tool ? { server, tool } : null;
+  if (server && tool) return { server, tool, mapped: false };
+  const known = ctx.toolServers?.[call.name];
+  return known && str(known.server) && str(known.tool)
+    ? { server: known.server, tool: known.tool, mapped: true }
+    : null;
 }
 
 export type KindInfo = {
@@ -425,11 +429,12 @@ export function kindOf(call: ActionCall, ctx: ReadingContext = {}): KindInfo {
     key,
     leaves: LEAVES[kind] === true,
   });
-  const server = toolServerOf(call);
+  const server = toolServerOf(call, ctx);
   if (server) {
-    if (T3_CODE_TOOL_NAMES[server.tool]) return info("t3", null);
-    // Known only from its result: it does not fold (7.4).
-    return info("server", null);
+    if (T3_CODE_TOOLS.includes(server.tool)) return info("t3", null);
+    // Folds by server and tool only when the gateway's map named it at its start (7.4).
+    const atStart = ctx.toolServers?.[call.name];
+    return info("server", atStart ? `server:${atStart.server}:${atStart.tool}` : null);
   }
   const a = call.args;
   if ((call.name === "write" || call.name === "edit") && isMemoryPath(a.path, ctx))
@@ -1214,7 +1219,7 @@ function wordsOf(call: ActionCall, kind: ActionKind, ctx: ReadingContext): Words
       };
     }
     case "server": {
-      const id = toolServerOf(call)!;
+      const id = toolServerOf(call, ctx)!;
       return {
         ...three(VERBS.use, id.server, nameWords(id.tool)),
         noun: [NOUNS.toolServer, id.server],
@@ -1619,7 +1624,7 @@ function startedPluralOf(kind: ActionKind, calls: ActionCall[]): Pair | null {
   return [FORMS.startedMaking, `${many} · ${PLURALS.times(calls.length)}`];
 }
 
-function neutralOf(kind: ActionKind, calls: ActionCall[]): string {
+function neutralOf(kind: ActionKind, calls: ActionCall[], ctx: ReadingContext): string {
   const first = calls[0]!;
   switch (kind) {
     case "recall":
@@ -1640,7 +1645,7 @@ function neutralOf(kind: ActionKind, calls: ActionCall[]): string {
     case "message":
       return upper(nameWords(first.name));
     case "server":
-      return NEUTRAL.toolServer(toolServerOf(first)?.server ?? "");
+      return NEUTRAL.toolServer(toolServerOf(first, ctx)?.server ?? "");
     default:
       return (NEUTRAL as unknown as Record<string, string>)[kind] ?? upper(nameWords(first.name));
   }
@@ -1731,7 +1736,7 @@ export function foldLineOf(calls: ActionCall[], ctx: ReadingContext = {}): FoldL
   const problems = lines.filter((l) => l.problem !== null && !open(l));
   const doneOrProblem =
     !asks && outcomes.every((o) => o === "done" || o === "partial" || problemOf(o) !== null);
-  const neutral: Pair = [neutralOf(kind, calls), `· ${PLURALS.calls(calls.length)}`];
+  const neutral: Pair = [neutralOf(kind, calls, ctx), `· ${PLURALS.calls(calls.length)}`];
   const started = allStarted ? startedPluralOf(kind, calls) : null;
   const [verb, object] =
     allDone || (problems.length > 0 && doneOrProblem)
@@ -2188,7 +2193,7 @@ export function readableOf(call: ActionCall, ctx: ReadingContext = {}): Readable
       add(LABELS.text, a.message);
       break;
     case "server": {
-      const id = toolServerOf(call)!;
+      const id = toolServerOf(call, ctx)!;
       add(LABELS.server, id.server);
       add(LABELS.tool, nameWords(id.tool));
       for (const [k, value] of Object.entries(a)) add(k, value, typeof value !== "string");

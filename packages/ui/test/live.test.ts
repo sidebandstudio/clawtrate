@@ -36,6 +36,7 @@ function transcript(runs: Run[], change: Partial<Transcript> = {}): Transcript {
     ...emptyActivity,
     linkedRuns: {},
     interSession: [],
+    mcpTools: {},
     sessionKey: "agent:otto:a",
     status: "ready",
     items: [],

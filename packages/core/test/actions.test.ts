@@ -1496,3 +1496,36 @@ describe("a failure rebuilt from history without details", () => {
     expect(lineOf({ ...c, text: '{"status": "error", "err' }).detail).toBe("");
   });
 });
+
+describe("the gateway's name map for tool servers", () => {
+  it("knows a tool-server call from its start, folds it by server and tool, and lets the result overrule it", () => {
+    const ctx = {
+      toolServers: { linear__create_issue: { server: "linear", tool: "create_issue" } },
+    };
+    const open = call("linear__create_issue", { title: "x" }, { status: "running", text: null });
+    expect(kindOf(open, ctx)).toMatchObject({
+      kind: "server",
+      key: "server:linear:create_issue",
+      leaves: true,
+    });
+    expect(lineOf(open, ctx)).toMatchObject({ verb: "Tool server", object: "linear" });
+    // Without the map it is the general card and never folds.
+    expect(kindOf(open)).toMatchObject({ kind: "tool", key: null });
+    // The result names T3 Code's own tool: it is T3 Code's, whatever the map said.
+    const t3 = {
+      ...open,
+      status: "returned" as const,
+      details: { mcpServer: "linear", mcpTool: "t3_thread_send" },
+    };
+    expect(kindOf(t3, ctx).kind).toBe("t3");
+    // The map names T3 Code; the result names another tool: an ordinary tool-server call.
+    const mapped = { toolServers: { coder__send: { server: "coder", tool: "t3_thread_send" } } };
+    const back = call(
+      "coder__send",
+      {},
+      { details: { mcpServer: "coder", mcpTool: "send_message" } },
+    );
+    expect(kindOf({ ...back, status: "running", details: null }, mapped).kind).toBe("t3");
+    expect(kindOf(back, mapped).kind).toBe("server");
+  });
+});

@@ -583,6 +583,7 @@ export function fixtureTranscripts(now: number, bots: Bot[]): Record<string, Tra
           : [],
         linkedRuns: {},
         interSession: [],
+        mcpTools: {},
         sessionKey: key,
         status: "ready",
         items,

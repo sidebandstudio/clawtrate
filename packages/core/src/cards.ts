@@ -141,7 +141,11 @@ export type McpCallCard = {
   runId: string;
   server: string;
   tool: string;
-  /** The server is one of the configured coding-agent servers. */
+  /**
+   * The call is T3 Code's: its tool, as identified, is one of T3 Code's
+   * published tools (`T3_CODE_TOOLS`), on whatever server. Decided per call;
+   * no server is T3 Code as a whole.
+   */
   codingAgent: boolean;
   /** `args.message`, when the call has one. */
   text: string | null;
@@ -184,19 +188,60 @@ export type CardInput = {
   interSession?: InterSessionMessage[];
 };
 
+/**
+ * T3 Code's published tools. A tool-server call is T3 Code's when its own
+ * tool is one of these, on any server: by the result's `details.mcpTool`, or
+ * before its result by the gateway's map of effective names, which the result
+ * overrules. Nothing makes a server as a whole T3 Code.
+ */
+export const T3_CODE_TOOLS: readonly string[] = [
+  "t3_project_list",
+  "t3_thread_launch",
+  "t3_thread_send",
+  "t3_thread_read",
+  "t3_thread_wait",
+  "t3_thread_list",
+  "t3_thread_interrupt",
+];
+
+/** A tool-server tool, by its server and its own name. */
+export type McpToolIdentity = { server: string; tool: string };
+
+/**
+ * The tool-server tools of a `tools.effective` answer, by effective name:
+ * `{groups: [{tools: [{id, source: "mcp", mcpServer, mcpToolName}]}]}`
+ * (`ToolsEffectiveEntrySchema` in OpenClaw 2026.10.6). A tool the session is
+ * denied is left out; past `max`, the rest are not kept.
+ */
+export function mcpToolMap(value: unknown, max: number): Record<string, McpToolIdentity> {
+  const out: Record<string, McpToolIdentity> = {};
+  let count = 0;
+  const groups = asRecord(value)?.groups;
+  for (const group of Array.isArray(groups) ? groups : []) {
+    const tools = asRecord(group)?.tools;
+    for (const entry of Array.isArray(tools) ? tools : []) {
+      const tool = asRecord(entry);
+      if (tool?.source !== "mcp" || tool.deniedBySession === true) continue;
+      const name = str(tool.id);
+      const server = str(tool.mcpServer);
+      const own = str(tool.mcpToolName);
+      if (!name || !server || !own || name in out) continue;
+      if (count >= max) return out;
+      out[name] = { server, tool: own };
+      count += 1;
+    }
+  }
+  return out;
+}
+
 export type CardOptions = {
-  /**
-   * MCP server names (`details.mcpServer`) to treat as the coding agent. No
-   * product name is built in.
-   */
-  codingServers: readonly string[];
   /**
    * Exact tool names known to be MCP tools, with their server and tool, for
    * example from the gateway's tool catalog. Tool names are sanitized,
    * shortened and de-duplicated by the gateway, so they are never parsed; a
    * call is recognized before its result only through this map.
    */
-  mcpTools?: Readonly<Record<string, { server: string; tool: string }>>;
+  mcpTools?: Readonly<Record<string, McpToolIdentity>>;
   /** Cards returned last time, so states only move forward. */
   previous?: SelectedCards;
   /** Full raw payloads for steps too large to carry theirs inline (the client's `stepRaw`). */
@@ -239,6 +284,31 @@ function resultBody(raw: StepRaw | null): RawRecord | null {
   const result = asRecord(raw?.result);
   if (!result) return null;
   return asRecord(result.result) ?? result;
+}
+
+/**
+ * What a bot-to-bot send's result says about the delivery: its `details`,
+ * live. `chat.history` keeps only `details.sessionKey` for `sessions_send`;
+ * the same fields (`status`, `runId`, `reply`, `error`, `sentBeforeError`)
+ * are then in the result's own text, the JSON object the tool returned. That
+ * object is read only when the text is exactly one, and `details` wins.
+ */
+function sendDetails(body: RawRecord | null): RawRecord | null {
+  const details = asRecord(body?.details);
+  if (str(details?.status)) return details;
+  const blocks = Array.isArray(body?.content) ? body.content : [];
+  const texts = blocks
+    .map((block) => asRecord(block))
+    .filter((block) => block?.type === "text" && typeof block.text === "string");
+  if (texts.length !== 1) return details;
+  let parsed: RawRecord | null;
+  try {
+    parsed = asRecord(JSON.parse(texts[0]!.text as string));
+  } catch {
+    return details;
+  }
+  if (!parsed || Array.isArray(parsed) || !str(parsed.status)) return details;
+  return { ...parsed, ...details };
 }
 
 function agentFromKey(key: string | null): string | null {
@@ -335,7 +405,7 @@ function botMessageCard(
 ): BotMessageCard {
   const args = callArgs(raw);
   const body = resultBody(raw);
-  const details = asRecord(body?.details);
+  const details = sendDetails(body);
   const resultKey = str(details?.sessionKey);
   const argKey = str(args?.sessionKey);
   const recipient: Recipient = {
@@ -484,7 +554,6 @@ function mcpCallCard(
   raw: StepRaw | null,
   identity: { server: string; tool: string },
   input: CardInput,
-  codingServers: readonly string[],
 ): McpCallCard {
   const args = callArgs(raw);
   const body = resultBody(raw);
@@ -510,7 +579,7 @@ function mcpCallCard(
     runId: run.id,
     server: identity.server,
     tool: identity.tool,
-    codingAgent: codingServers.includes(identity.server),
+    codingAgent: T3_CODE_TOOLS.includes(identity.tool),
     text: str(args?.message),
     args: args ?? null,
     result: step.result,
@@ -558,7 +627,7 @@ export function selectMessageCards(input: CardInput, options: CardOptions): Sele
       }
       const identity = mcpIdentity(step, resultBody(raw), options);
       if (!identity) continue;
-      const card = mcpCallCard(step, run, raw, identity, input, options.codingServers);
+      const card = mcpCallCard(step, run, raw, identity, input);
       card.state = advanceMcpCallState(prior(previousMcp, card), card.state);
       mcpCalls.push(card);
     }
@@ -624,7 +693,7 @@ export function recipientLinks(
   for (const run of runs) {
     for (const step of run.steps) {
       if (step.toolName !== BOT_MESSAGE_TOOL) continue;
-      const details = asRecord(resultBody(rawOf(step))?.details);
+      const details = sendDetails(resultBody(rawOf(step)));
       const runId = str(details?.runId);
       const sessionKey = str(details?.sessionKey);
       if (runId || sessionKey) links.push({ runId, sessionKey });
@@ -639,7 +708,7 @@ export function recipientRunIds(runs: Run[], rawOf: (step: Step) => StepRaw | nu
   for (const run of runs) {
     for (const step of run.steps) {
       if (step.toolName !== BOT_MESSAGE_TOOL) continue;
-      const id = str(asRecord(resultBody(rawOf(step))?.details)?.runId);
+      const id = str(sendDetails(resultBody(rawOf(step)))?.runId);
       if (id) ids.push(id);
     }
   }

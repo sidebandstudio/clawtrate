@@ -445,6 +445,10 @@ function linked(state: LinkedRun["state"], now: number): Record<string, LinkedRu
 
 /** T3 Code's own tool, as the gateway names a simple server's tool. */
 const T3_TOOL = `${T3_SERVER}__t3_thread_launch`;
+/** The gateway's map of tool-server tools for the task, as `tools.effective` reports it. */
+const T3_MAP: Transcript["mcpTools"] = {
+  [T3_TOOL]: { server: T3_SERVER, tool: "t3_thread_launch" },
+};
 const T3_SENT =
   "In backup-scripts, make the weekly check skip machines that are asleep instead of failing, and add a test for it.";
 
@@ -963,17 +967,19 @@ function build(
       return { b: new Builder(CARD_TASK, now).start(ago(3)).end(ago(2)) };
 
     case "t3-started":
-      return { b: t3Call(now) };
+      return { extra: { mcpTools: T3_MAP }, b: t3Call(now) };
     case "t3-approval":
       return {
+        extra: { mcpTools: T3_MAP },
         b: t3Call(now)
           .event("lifecycle", { phase: "waiting-approval", approvalId: "apr_t3" }, ago(2))
           .update(requested(t3Approval(now))),
       };
     case "t3-call-made":
-      return { b: t3Result(t3Call(now), now) };
+      return { extra: { mcpTools: T3_MAP }, b: t3Result(t3Call(now), now) };
     case "t3-work-may-continue":
       return {
+        extra: { mcpTools: T3_MAP },
         b: t3Result(t3Call(now), now)
           .update((a) => ({
             ...a,
@@ -983,6 +989,7 @@ function build(
       };
     case "t3-delivery-unknown":
       return {
+        extra: { mcpTools: T3_MAP },
         b: t3Call(now)
           .update((a) => ({
             ...a,
@@ -991,9 +998,10 @@ function build(
           .end(ago(1), "end", { aborted: true, stopReason: "aborted" }),
       };
     case "t3-failed":
-      return { b: t3Result(t3Call(now), now, true) };
+      return { extra: { mcpTools: T3_MAP }, b: t3Result(t3Call(now), now, true) };
     case "t3-not-sent":
       return {
+        extra: { mcpTools: T3_MAP },
         b: t3Call(now)
           .event("lifecycle", { phase: "waiting-approval", approvalId: "apr_t3" }, ago(2))
           .update(requested(t3Approval(now)))
@@ -1154,6 +1162,7 @@ export function cardScene(name: CardSceneName, now: number): CardScene {
   const transcript: Transcript = {
     ...activity,
     linkedRuns: extra?.linkedRuns ?? {},
+    mcpTools: extra?.mcpTools ?? {},
     interSession,
     sessionKey: task,
     status: "ready",

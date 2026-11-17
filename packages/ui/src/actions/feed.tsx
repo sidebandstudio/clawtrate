@@ -269,7 +269,7 @@ export function ActionScope({
   engineRuns,
   lost,
   readOnly,
-  ctx,
+  ctx: given,
   children,
 }: {
   taskKey: string;
@@ -280,6 +280,11 @@ export function ActionScope({
   ctx: ReadingContext;
   children: ReactNode;
 }) {
+  // The gateway's name map for tool servers: a tool-server call is known from its start.
+  const ctx = useMemo(
+    () => ({ ...given, toolServers: transcript.mcpTools }),
+    [given, transcript.mcpTools],
+  );
   const scope = useScopeCards();
   const handover = useStepHandover();
   const { selected, rawState } = scope.cards;

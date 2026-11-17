@@ -24,6 +24,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -387,6 +388,8 @@ function ActionDetail({ call }: { call: ActionCall }) {
         hidden={view !== "readable"}
       >
         <Readable call={call} env={env} />
+        {/* The files this action made link here from the Work pane's Files tab, and back: their
+            links go in this slot (the card's or row's element carries the call's id, `data-call`). */}
       </div>
       <div
         role="tabpanel"
@@ -560,9 +563,26 @@ export function ActionGroup({ members, revision }: { members: FeedMember[]; revi
   // card how the reader left it: open or closed, and whether focus was in it.
   const handover = useStepHandover();
   const note = (element: HTMLDetailsElement, focused: boolean) => {
-    if (single) handover?.note(first, { open: element.open, focused });
+    if (single) handover?.note(first, { open: element.open, focused, from: "step" });
   };
+  // Drawn again after its T3 Code card, when the result named another tool: as the card was.
+  const element = useRef<HTMLDetailsElement>(null);
+  useLayoutEffect(() => {
+    if (!single) return;
+    const state = handover?.stateOf(first);
+    const details = element.current;
+    if (state?.from !== "card" || !(state.open || state.focused) || !details) return;
+    if (state.open) {
+      writeView(env.taskKey, viewKeys.call(first), true);
+      details.open = true;
+    }
+    if (state.focused)
+      details.querySelector<HTMLElement>(":scope > summary")?.focus({ preventScroll: true });
+    // Once, as it is drawn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const common = {
+    ref: element,
     className: "card action",
     open,
     onToggle: (event: { currentTarget: HTMLDetailsElement }) => {
