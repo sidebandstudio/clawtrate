@@ -172,6 +172,33 @@ test.describe("action cards", () => {
     await expect(page.locator(".raw-panel")).toHaveCount(0);
   });
 
+  test("F-090: a run that kept 128 of 400 actions says so on its run line and in line where the gap is; text keeps its call", async ({
+    page,
+  }) => {
+    await open(page, "actions-retained");
+    const runLine = page.getByTestId("run-line").locator("summary");
+    await expect(runLine).toHaveAccessibleName(/^Worked for 6m 41s · 400 actions · 128 shown$/);
+    const gap = page.getByTestId("actions-not-kept");
+    await expect(gap).toHaveCount(1);
+    await expect(gap).toHaveText(
+      "272 actions not kept here; the gateway's transcript still has them",
+    );
+    // The note is in line, before the first action kept.
+    const order = await page
+      .locator('.transcript :is([data-testid="actions-not-kept"], details.card.action)')
+      .evaluateAll((nodes) => nodes.map((n) => n.getAttribute("data-testid") ?? "card"));
+    expect(order[0]).toBe("actions-not-kept");
+    // The text written before call 390 is directly before the card that holds it.
+    const text = page.locator(".bubble", { hasText: "The last eleven logs are this week's." });
+    await expect(text).toHaveCount(1);
+    const next = text.locator(
+      "xpath=following::details[contains(concat(' ', @class, ' '), ' action ')][1]",
+    );
+    // A fold of the last eleven, whose first member is call 390.
+    await expect(next).toHaveAttribute("data-first", "call_r390");
+    await expect(next).toHaveAttribute("data-fold", "11");
+  });
+
   test("F-093: Raw never builds a result: a call history kept no result for is unavailable, and kept text names where it came from", async ({
     page,
   }) => {

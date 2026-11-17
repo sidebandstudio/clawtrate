@@ -15,6 +15,7 @@ import {
   INTERACTIVE_SCOPES,
   mapHistory,
   RawTable,
+  retainActivity,
   runsFromHistory,
   type ClawtrateState,
   type EngineContext,
@@ -35,6 +36,7 @@ export const ACTION_SCENES = [
   "actions-becoming-fold",
   "actions-history",
   "actions-question",
+  "actions-retained",
 ] as const;
 
 export type ActionScene = (typeof ACTION_SCENES)[number];
@@ -1176,6 +1178,64 @@ function liveRun(
   return { activity, message };
 }
 
+/**
+ * A finished run of 400 reads, with text written before the 390th, through
+ * the engine's retention: it keeps the newest 128 and counts the others.
+ */
+function retainedRun(now: number): TaskActivity {
+  const ctx: EngineContext = { sessionKey: OPEN_TASK, now, raw: new RawTable() };
+  const runId = "run-retained";
+  const t0 = now - 10 * 60 * SECOND;
+  let seq = 0;
+  let activity: TaskActivity = emptyActivity;
+  const apply = (at: number, stream: string, data: Rec) => {
+    seq += 1;
+    activity = applyAgentEvent(
+      activity,
+      { runId, seq, stream, ts: at, sessionKey: OPEN_TASK, data },
+      { ...ctx, now: at },
+    ).activity;
+  };
+  apply(t0, "lifecycle", { phase: "start", startedAt: t0 });
+  for (let i = 1; i <= 400; i += 1) {
+    const at = t0 + i * SECOND;
+    const id = `call_r${String(i).padStart(3, "0")}`;
+    const path = `logs/scan-${String(i).padStart(3, "0")}.log`;
+    if (i === 390)
+      apply(at, "item", {
+        kind: "preamble",
+        itemId: "pre_r",
+        phase: "end",
+        progressText: "The last eleven logs are this week's.",
+      });
+    apply(at, "item", {
+      kind: "tool",
+      toolCallId: id,
+      name: "read",
+      phase: "start",
+      startedAt: at,
+    });
+    apply(at, "tool", { toolCallId: id, name: "read", phase: "start", args: { path } });
+    apply(at + 300, "tool", {
+      toolCallId: id,
+      name: "read",
+      phase: "result",
+      result: { content: [{ type: "text", text: `scan ${i}: ok` }], details: { kind: "file" } },
+    });
+    apply(at + 300, "item", {
+      kind: "tool",
+      toolCallId: id,
+      name: "read",
+      phase: "end",
+      startedAt: at,
+      endedAt: at + 300,
+    });
+    activity = retainActivity(activity);
+  }
+  apply(t0 + 401 * SECOND, "lifecycle", { phase: "end", endedAt: t0 + 401 * SECOND });
+  return retainActivity(activity);
+}
+
 // Scenes --------------------------------------------------------------------------------
 
 const withOpenTask = (
@@ -1220,6 +1280,13 @@ export function actionScene(
         items: t.items,
         outbox: [message],
       })),
+      steps: [],
+    };
+  }
+  if (name === "actions-retained") {
+    const activity = retainedRun(now);
+    return {
+      initial: withOpenTask(base, (t) => ({ ...t, ...activity, items: [], outbox: [] })),
       steps: [],
     };
   }

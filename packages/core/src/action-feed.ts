@@ -273,8 +273,9 @@ export function callFromStep(
     text: open ? null : (step.result?.text ?? ""),
     details: step.details ?? null,
     commandBearing: step.commandBearing === true,
-    startedAt: step.startedAt,
-    endedAt: open ? null : step.endedAt,
+    // History rows' times are not the call's own: no duration is read from them.
+    startedAt: step.rowTimes ? null : step.startedAt,
+    endedAt: open || step.rowTimes ? null : step.endedAt,
     fromHistory: run.origin === "history" && !step.details,
     partial: open ? (step.output?.text ?? null) : null,
     runStopped: run.state === "stopped" || run.state === "cancelled",
@@ -329,8 +330,8 @@ export function segmentFromStep(step: Step): ThoughtSegment {
   return {
     id: step.id,
     text: step.output?.text ?? "",
-    startedAt: step.startedAt,
-    endedAt: step.status === "running" ? null : step.endedAt,
+    startedAt: step.rowTimes ? null : step.startedAt,
+    endedAt: step.status === "running" || step.rowTimes ? null : step.endedAt,
   };
 }
 
@@ -360,7 +361,10 @@ export function phraseLine(call: ActionCall, ctx: ReadingContext = {}): ActionLi
 export type RunLine = {
   /** "Worked for 1m 12s", "Stopped after 40s", "Failed after 12s". */
   label: string;
+  /** The actions the run reported: those shown and those not kept. */
   actions: number;
+  /** Of them, the actions shown; less than `actions` when some were not kept. */
+  shown: number;
   /** Failed and Not run. */
   failed: number;
   /** "1 unavailable", "1 not sent", "1 stopped", "1 unknown", in that order. */
@@ -375,16 +379,17 @@ export type RunLine = {
  * reported both ends.
  */
 export function runLineOf(
-  run: Pick<Run, "state" | "startedAt" | "endedAt" | "reportedStartAt">,
+  run: Pick<Run, "state" | "startedAt" | "endedAt" | "reportedStartAt"> &
+    Partial<Pick<Run, "omittedTools" | "endFromRows">>,
   calls: ActionCall[],
   ctx: ReadingContext = {},
 ): RunLine | null {
-  if (!isTerminal(run.state) || run.state === "cancelled" || calls.length === 0) return null;
-  const start = run.reportedStartAt ?? run.startedAt;
-  const after =
-    start !== null && run.endedAt !== null && run.endedAt > start
-      ? durationWords(run.endedAt - start)
-      : null;
+  const reported = calls.length + (run.omittedTools ?? 0);
+  if (!isTerminal(run.state) || run.state === "cancelled" || reported === 0) return null;
+  // Only times the gateway reported: its lifecycle start, and an end that is not a history row's.
+  const start = run.reportedStartAt;
+  const end = run.endFromRows ? null : run.endedAt;
+  const after = start !== null && end !== null && end > start ? durationWords(end - start) : null;
   const label =
     run.state === "stopped"
       ? RUN_LINE.stopped(after)
@@ -400,11 +405,12 @@ export function runLineOf(
     n("stopped") ? RUN_LINE.problem.stopped(n("stopped")) : "",
     n("unknown") ? RUN_LINE.problem.unknown(n("unknown")) : "",
   ].filter(Boolean);
-  const count = `${calls.length} ${calls.length === 1 ? "action" : "actions"}`;
-  const text = [label, count, failed ? RUN_LINE.failedCount(failed) : "", ...others]
+  const count = RUN_LINE.actions(reported);
+  const shown = reported > calls.length ? RUN_LINE.shown(calls.length) : "";
+  const text = [label, count, shown, failed ? RUN_LINE.failedCount(failed) : "", ...others]
     .filter(Boolean)
     .join(" · ");
-  return { label, actions: calls.length, failed, problems: others, text };
+  return { label, actions: reported, shown: calls.length, failed, problems: others, text };
 }
 
 /** Whether any call is still open, so the run's actions are live. */

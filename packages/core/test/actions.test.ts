@@ -1756,3 +1756,69 @@ describe("a question's id", () => {
     );
   });
 });
+
+describe("the run line counts what the run reported (7.7)", () => {
+  const read = (path: string) => call("read", { path }, { text: "x" });
+  it("says how many of the reported actions are shown when some were not kept", () => {
+    const run = {
+      state: "completed" as const,
+      startedAt: 1_000,
+      endedAt: 61_000,
+      reportedStartAt: 1_000,
+      omittedTools: 272,
+    };
+    const calls = Array.from({ length: 128 }, (_, i) => read(`f${i}.md`));
+    const line = runLineOf(run, calls)!;
+    expect(line.text).toBe("Worked for 1m · 400 actions · 128 shown");
+    expect(line.actions).toBe(400);
+    expect(line.shown).toBe(128);
+  });
+  it("reads no duration from history rows' times or from this app's own send time", () => {
+    const calls = [read("a.md")];
+    const base = { state: "completed" as const, startedAt: 1_000, endedAt: 5_000 };
+    expect(runLineOf({ ...base, reportedStartAt: null }, calls)!.label).toBe("Worked");
+    expect(runLineOf({ ...base, reportedStartAt: 1_000, endFromRows: true }, calls)!.label).toBe(
+      "Worked",
+    );
+    expect(runLineOf({ ...base, reportedStartAt: 1_000 }, calls)!.label).toBe("Worked for 4s");
+  });
+});
+
+describe("a refusal reads the same live and from history", () => {
+  it("a task refusal with only its JSON body is Not run either way", () => {
+    const body = '{"status":"forbidden","error":"Visibility restricted"}';
+    const step = {
+      id: "tool:c1",
+      kind: "tool",
+      toolName: "sessions_history",
+      toolCallId: "c1",
+      status: "done",
+      startedAt: 1_000,
+      endedAt: 1_200,
+      argsText: null,
+      args: { sessionKey: "agent:marlow:main" },
+      result: { text: body, totalChars: body.length },
+      details: null,
+    } as unknown as Step;
+    const run = { state: "completed", error: null, ending: null, origin: "live" } as unknown as Run;
+    const live = lineOf(callFromStep(step, run));
+    const history = lineOf(
+      callFromBlock(
+        {
+          kind: "tool-call",
+          callId: "c1",
+          name: "sessions_history",
+          argumentsText: '{"sessionKey":"agent:marlow:main"}',
+          result: { text: body, isError: false },
+        },
+        undefined,
+        undefined,
+      ),
+    );
+    expect(live.outcome).toBe("refused");
+    expect(history.outcome).toBe("refused");
+    expect(history.spoken.replace(/, [\d.]+ ?s(econds?)?/, "")).toBe(
+      live.spoken.replace(/, [\d.]+ ?s(econds?)?/, ""),
+    );
+  });
+});

@@ -364,6 +364,12 @@ export const RUN_LINE = {
   stopped: (after: string | null) => (after ? `Stopped after ${after}` : "Stopped"),
   failed: (after: string | null) => (after ? `Failed after ${after}` : "Failed"),
   failedCount: (n: number) => `${n} failed`,
+  actions: (n: number) => `${n} ${n === 1 ? "action" : "actions"}`,
+  /** Of the run's actions, those kept here when some were not. */
+  shown: (n: number) => `${n} shown`,
+  /** In line, where actions the run reported are not kept here. */
+  notKept: (n: number) =>
+    `${n} ${n === 1 ? "action" : "actions"} not kept here; the gateway's transcript still has ${n === 1 ? "it" : "them"}`,
   problem: {
     unavailable: (n: number) => `${n} unavailable`,
     suppressed: (n: number) => `${n} not sent`,

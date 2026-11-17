@@ -21,14 +21,7 @@ import {
 import { AccessBar } from "./AccessBar.tsx";
 import { useCommand } from "./bridge.tsx";
 import { Avatar, Presence } from "./Avatar.tsx";
-import {
-  CardScope,
-  CardSlot,
-  focusPending,
-  oldestPending,
-  RunCardList,
-  TrailingCards,
-} from "./cards/index.ts";
+import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from "./cards/index.ts";
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
 import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
 import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTurn.tsx";
@@ -554,9 +547,13 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
         <RunFeed key={`feed-${run.id}`} runId={run.id} reply={(each) => <RunReply run={each} />} />,
       );
     } else if (!run.anchorItemId || !shown.has(run.anchorItemId)) {
-      // A run whose message history does not show yet has its cards here, under that message.
+      // A run whose message history does not show yet is drawn from the engine's record, its
+      // actions with its cards, under that message: what the engine holds is never left out.
+      engineRuns.push(run);
       drawsCards.add(run.id);
-      foot.push(<RunCardList key={`cards-${run.id}`} runId={run.id} />);
+      foot.push(
+        <RunFeed key={`feed-${run.id}`} runId={run.id} reply={(each) => <RunReply run={each} />} />,
+      );
     }
     signature.push(
       `${run.id}:${run.state}:${run.text.length}:${run.steps.map((step) => step.status[0]).join("")}:${run.preambles?.length ?? 0}`,

@@ -137,7 +137,8 @@ export const MAX_PREAMBLES_PER_RUN = 8;
 export const MAX_ATTEMPT_ERROR_COUNT = 5;
 /** Items of a task's history page (`chat.history` limit) and blocks across them. */
 export const MAX_HISTORY_ITEMS = 200;
-export const MAX_BLOCKS_PER_ITEM = 16;
+/** As many as the page holds: a run of many actions keeps every block the page can, in one item. */
+export const MAX_BLOCKS_PER_ITEM = 300;
 export const MAX_HISTORY_BLOCKS = 300;
 /** Inter-session messages kept per task, newest. */
 export const MAX_INTER_SESSION = 64;
@@ -215,6 +216,8 @@ export const STEP: Bound = flagged<Step>()({
   args: json(MAX_ACTION_FACTS_CHARS),
   details: json(MAX_ACTION_FACTS_CHARS),
   commandBearing: FLAG,
+  rowTimes: FLAG,
+  omittedBefore: NUMBER,
   // A path is an id: never cut, since a cut path would name another file.
   files: object<StepFiles>()({
     paths: list(MAX_STEP_PATHS, id(MAX_STEP_PATH_CHARS)),
@@ -235,7 +238,7 @@ const preamble = object<Preamble>()({
   id: ID,
   text: text(MAX_BLOCK_CHARS),
   ended: FLAG,
-  beforeTools: NUMBER,
+  beforeCall: ID,
 });
 export const RUN: Bound = flagged<Run>()({
   id: ID,
@@ -266,6 +269,9 @@ export const RUN: Bound = flagged<Run>()({
   outcomeKnown: FLAG,
   attemptErrors: list(MAX_ATTEMPT_ERROR_COUNT, text(MAX_ATTEMPT_ERROR_CHARS)),
   omittedSteps: NUMBER,
+  omittedTools: NUMBER,
+  omittedToolsAtEnd: NUMBER,
+  endFromRows: FLAG,
   preambles: list(MAX_PREAMBLES_PER_RUN, preamble),
   reasoningAnchor: ID,
   nextReasoning: NUMBER,

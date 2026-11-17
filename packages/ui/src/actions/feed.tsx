@@ -6,6 +6,7 @@
 // names, and a question card takes its `ask_user` call's place.
 
 import {
+  actionWords,
   askUserQuestionId,
   callFromBlock,
   callFromStep,
@@ -57,7 +58,9 @@ export type FeedRef =
   | { t: "text"; text: string; title?: string | undefined }
   | { t: "preamble"; preamble: Preamble }
   | { t: "reply"; run: Run }
-  | { t: "card"; ref: CardRef };
+  | { t: "card"; ref: CardRef }
+  /** Actions the run reported that are not kept here, at their place. */
+  | { t: "gap"; count: number };
 
 type Groups = FeedGroup<FeedRef>[];
 
@@ -153,6 +156,17 @@ function shownByEngine(run: Run, text: string): boolean {
   );
 }
 
+const gap = (id: string, count: number): FeedEntry<FeedRef> => ({
+  type: "break",
+  id,
+  ref: { t: "gap", count },
+});
+
+/** Where actions were not kept directly before a step: one line, in its place. */
+function gapBefore(step: Step): FeedEntry<FeedRef>[] {
+  return step.omittedBefore ? [gap(`gap:${step.id}`, step.omittedBefore)] : [];
+}
+
 /** An assistant history item's record. */
 function itemEntries(
   item: TranscriptItem,
@@ -161,6 +175,7 @@ function itemEntries(
   skip: ReadonlySet<string>,
   cards: CardsFor,
   fromEngine = false,
+  record: EngineRecord | null = null,
 ): FeedEntry<FeedRef>[] {
   const reasoningSteps = run ? run.steps.filter((s) => s.kind === "reasoning") : [];
   const reasoningBlocks = item.blocks.filter((b) => b.kind === "reasoning").length;
@@ -199,6 +214,10 @@ function itemEntries(
       });
     } else if (!skip.has(block.callId)) {
       const found = index.get(block.callId);
+      // Calls the engine holds that history's rows here no longer do come first, in the run's order.
+      if (record && found) entries.push(...record.before(found.step));
+      if (found) entries.push(...gapBefore(found.step));
+      record?.drawn.add(block.callId);
       entries.push(
         ...callEntries(
           block.callId,
@@ -210,7 +229,49 @@ function itemEntries(
       );
     }
   });
+  if (record?.last) entries.push(...record.rest());
   return entries;
+}
+
+/**
+ * A run's record in the engine, for the history items that draw it: the
+ * calls their rows no longer hold (an item keeps at most
+ * `MAX_BLOCKS_PER_ITEM` blocks) are drawn from the engine's steps in the
+ * run's order, so nothing it kept is dropped silently, and where it kept
+ * nothing a line says how many actions are not kept.
+ */
+type EngineRecord = {
+  drawn: Set<string>;
+  /** The run's calls not in any row, before this step, not drawn yet. */
+  before: (step: Step) => FeedEntry<FeedRef>[];
+  /** Every call not drawn yet, and the gap at the run's end: after the run's last item. */
+  rest: () => FeedEntry<FeedRef>[];
+  /** This item is the run's last. */
+  last: boolean;
+};
+
+function engineRecord(
+  run: Run,
+  inRows: ReadonlySet<string>,
+  drawn: Set<string>,
+  last: boolean,
+): EngineRecord {
+  const tools = run.steps.filter((step) => step.kind === "tool" && step.toolCallId);
+  const draw = (steps: Step[]) =>
+    steps.flatMap((step) => {
+      drawn.add(step.toolCallId!);
+      return [...gapBefore(step), { type: "action" as const, call: callFromStep(step, run) }];
+    });
+  const missing = (step: Step) => !inRows.has(step.toolCallId!) && !drawn.has(step.toolCallId!);
+  return {
+    drawn,
+    last,
+    before: (step) => draw(tools.slice(0, tools.indexOf(step)).filter(missing)),
+    rest: () => [
+      ...draw(tools.filter(missing)),
+      ...(run.omittedToolsAtEnd ? [gap(`gap:${run.id}:end`, run.omittedToolsAtEnd)] : []),
+    ],
+  };
 }
 
 /** A run the engine holds: its steps, its text beside calls, its unplaced cards, its reply. */
@@ -219,14 +280,14 @@ function runEntries(run: Run, cards: CardsFor, rest: CardRef[]): FeedEntry<FeedR
   const preambles = [...(run.preambles ?? [])];
   const preamble = (p: Preamble) =>
     entries.push({ type: "bubble", id: `preamble:${p.id}`, ref: { t: "preamble", preamble: p } });
-  let tools = 0;
   for (const step of run.steps) {
     if (step.kind === "reasoning") {
       entries.push({ type: "reasoning", segment: segmentFromStep(step) });
       continue;
     }
-    while (preambles.length && preambles[0]!.beforeTools <= tools) preamble(preambles.shift()!);
-    tools += 1;
+    entries.push(...gapBefore(step));
+    // Text written before this call, by its call id: dropping older steps never moves it.
+    for (const p of preambles.filter((each) => each.beforeCall === step.toolCallId)) preamble(p);
     if (!step.toolCallId) continue;
     entries.push(
       ...callEntries(
@@ -238,7 +299,9 @@ function runEntries(run: Run, cards: CardsFor, rest: CardRef[]): FeedEntry<FeedR
       ),
     );
   }
-  preambles.forEach(preamble);
+  if (run.omittedToolsAtEnd) entries.push(gap(`gap:${run.id}:end`, run.omittedToolsAtEnd));
+  const calls = new Set(run.steps.map((step) => step.toolCallId));
+  preambles.filter((p) => p.beforeCall === null || !calls.has(p.beforeCall)).forEach(preamble);
   // A card that names no call of the run takes its place by when it arrived, among the calls.
   for (const ref of [...rest, ...cards.questions(run.id)]) {
     if (cards.taken.has(refKey(ref))) continue;
@@ -340,15 +403,36 @@ export function ActionScope({
     );
     const engineRunIds = new Set(engineRuns.map((run) => run.id));
     const items = new Map<string, { groups: Groups; revision: number }>();
+    // Each assistant item's run, and each run's last item, in one pass.
+    const runOf = new Map<string, Run | undefined>();
+    const lastItem = new Map<string, string>();
     let previousUser: string | null = null;
     for (const item of transcript.items) {
       if (item.role === "user") previousUser = item.id;
       if (item.role !== "assistant") continue;
       const run = runOfItem(item, previousUser, index, transcript.runs);
+      runOf.set(item.id, run);
+      if (run) lastItem.set(run.id, item.id);
+    }
+    const inRows = new Set(
+      transcript.items.flatMap((item) =>
+        item.blocks.flatMap((block) => (block.kind === "tool-call" ? [block.callId] : [])),
+      ),
+    );
+    const drawnOf = new Map<string, Set<string>>();
+    for (const item of transcript.items) {
+      if (item.role !== "assistant") continue;
+      const run = runOf.get(item.id);
       // A run drawn from the engine draws its calls and reasoning there: the rows history already
       // holds of it keep only their text, so nothing is drawn twice and nothing only history has is lost.
       const fromEngine = run !== undefined && engineRunIds.has(run.id);
-      const entries = itemEntries(item, run, index, skip, cards, fromEngine);
+      const drawn = run ? (drawnOf.get(run.id) ?? new Set<string>()) : null;
+      if (run && drawn) drawnOf.set(run.id, drawn);
+      const record =
+        run && drawn && !fromEngine
+          ? engineRecord(run, inRows, drawn, lastItem.get(run.id) === item.id)
+          : null;
+      const entries = itemEntries(item, run, index, skip, cards, fromEngine, record);
       items.set(item.id, {
         groups: groupFeed(entries, ctx),
         revision: run?.reasoningRevision ?? 0,
@@ -518,6 +602,12 @@ function GroupView({
           );
         case "reply":
           return <>{reply(ref.run)}</>;
+        case "gap":
+          return (
+            <p className="event-line action-gap" data-testid="actions-not-kept">
+              {actionWords.RUN_LINE.notKept(ref.count)}
+            </p>
+          );
       }
     }
   }
@@ -573,7 +663,9 @@ export function RunLine({ run }: { run: Run }) {
     () => run.steps.filter((s) => s.kind === "tool").map((s) => callFromStep(s, run)),
     [run],
   );
-  const line = isTerminal(run.state) ? runLineOf(run, calls) : null;
+  // Read as the cards read it, with what the gateway said of the task's tools.
+  const ctx = useContext(ActionEnvContext)?.ctx;
+  const line = isTerminal(run.state) ? runLineOf(run, calls, ctx) : null;
   if (!line) return null;
   return <RunLineView runId={run.id} line={line} model={run.model} />;
 }

@@ -814,6 +814,12 @@ export function RunLineView({
         <span className="run-count">
           {line.actions} {line.actions === 1 ? "action" : "actions"}
         </span>
+        {line.shown < line.actions && (
+          <>
+            <span aria-hidden="true">·</span>
+            <span className="run-shown">{line.shown} shown</span>
+          </>
+        )}
         {line.failed > 0 && (
           <>
             <span aria-hidden="true">·</span>
