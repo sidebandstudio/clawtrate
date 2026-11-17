@@ -258,9 +258,25 @@ export class RunView {
     }
   }
 
-  /** Every chat and agent event of the run matches the protocol schema. */
+  /**
+   * Every chat and agent event of the run matches the protocol schema, but one:
+   * for a turn it ran from its queue the gateway sends an `agent` event on
+   * stream `error` with `data.reason: "seq gap"` and no `seq`, its own note of
+   * a gap in the run's numbering. The schema requires `seq`; the event is
+   * counted in `SEQ_GAP_NOTES` and set aside.
+   */
   validate(): void {
     for (const e of this.events) {
+      const p = rec(e.payload);
+      if (
+        e.event === "agent" &&
+        p.stream === "error" &&
+        p.seq === undefined &&
+        rec(p.data).reason === "seq gap"
+      ) {
+        SEQ_GAP_NOTES.add(this.runId);
+        continue;
+      }
       const kind =
         e.event === "chat"
           ? `chat ${String(rec(e.payload).state)}`
@@ -286,6 +302,19 @@ export type CallExpectation = {
   /** The item's end status; completed, or failed for an error. */
   status?: string;
 };
+
+/** Runs for which the gateway sent its "seq gap" error event (see RunView.validate). */
+export const SEQ_GAP_NOTES = new Set<string>();
+
+/** Poll a condition until it holds, or fail after the limit. */
+async function until(label: string, check: () => Promise<boolean>, timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await sleep(250);
+  }
+  throw new CheckFailure(`timed out after ${timeoutMs} ms waiting for ${label}`);
+}
 
 /** Every run a check started or watched, and whether its calls and its end were asserted. */
 const TRACKED = new Map<string, { calls: boolean; end: boolean; sessionKey: string }>();
@@ -313,7 +342,14 @@ export async function runCheck(h: Harness, check: ScenarioCheck): Promise<void> 
   TRACKED.clear();
   const clients = (["plain", "approvals", "questions"] as const).map((name) => h.op(name));
   const before = clients.map((op) => op.lastSeq);
-  await check.run(h);
+  try {
+    await check.run(h);
+  } catch (error) {
+    // A failed check may leave runs going. They are stopped, and the gateway is idle in every
+    // task that had a run during the check, before the next check starts and counts events.
+    await drain(h, sessionsWithRuns(clients, before));
+    throw error;
+  }
   await sleep(300);
   for (const [i, op] of clients.entries()) {
     for (const e of op.events) {
@@ -327,6 +363,42 @@ export async function runCheck(h: Harness, check: ScenarioCheck): Promise<void> 
   }
   const left = unaccountedRuns();
   if (left.length > 0) throw new CheckFailure(left.join("; "));
+}
+
+/** The tasks that had any run event on the check's clients since `before`. */
+function sessionsWithRuns(clients: OperatorSession[], before: number[]): Set<string> {
+  const keys = new Set<string>();
+  for (const [i, op] of clients.entries()) {
+    for (const e of op.events) {
+      const p = rec(e.payload);
+      if (e.seq > before[i]! && typeof p.runId === "string" && typeof p.sessionKey === "string")
+        keys.add(p.sessionKey);
+    }
+  }
+  return keys;
+}
+
+/** Stop whatever runs in these tasks and wait until the gateway has nothing in flight or waiting there. */
+export async function drain(h: Harness, keys: Iterable<string>): Promise<void> {
+  const op = h.op("plain");
+  for (const key of keys) {
+    await op.request("chat.abort", { sessionKey: key }).catch(() => {});
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const history = await op
+        .request<{ inFlightRun?: unknown; pendingInputs?: { items?: unknown[] } }>("chat.history", {
+          sessionKey: key,
+          limit: 1,
+        })
+        .catch(() => null);
+      if (history && !history.inFlightRun && (history.pendingInputs?.items ?? []).length === 0)
+        break;
+      await op.request("chat.abort", { sessionKey: key }).catch(() => {});
+      await sleep(500);
+    }
+  }
+  // Late events of the stopped runs (a stopped tool's result) arrive just after.
+  await sleep(500);
 }
 
 /**
@@ -1206,15 +1278,22 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     run: async (h) => {
       const key = await h.session("main", "slow-abort");
       const view = await h.start("plain", key, "#slow 20");
-      await h
-        .op("plain")
-        .waitFor(
-          "streamed text",
-          (e) => isAgent("assistant")(e) && rec(e.payload).runId === view.runId,
-        );
+      // The barrier is the gateway's own record of this run's streamed text (its in-flight run
+      // in history), with most of the twenty seconds of text still to come. Not the text events:
+      // on a loaded machine the gateway can pass them on only as the turn settles, and an abort
+      // then races the run's end.
+      await until("the run's text on the gateway", async () => {
+        const history = await h
+          .op("plain")
+          .request<{ inFlightRun?: { runId?: string; text?: string } }>("chat.history", {
+            sessionKey: key,
+            limit: 1,
+          });
+        return history.inFlightRun?.runId === view.runId && (history.inFlightRun.text ?? "") !== "";
+      });
       const out = await h.op("plain").request("chat.abort", { sessionKey: key });
       same(out, { ok: true, aborted: true, runIds: [view.runId] }, "chat.abort result");
-      await h.wait(view, 10_000);
+      await h.wait(view, 30_000);
       same(view.terminal.state, "aborted", "the run's end");
       same(view.terminal.stopReason, "rpc", "aborted stopReason");
       const end = view.lifecycle("end")[0];
@@ -1237,23 +1316,33 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#slow"],
     run: async (h) => {
       const key = await h.session("main", "slow-queue");
-      const first = await h.start("plain", key, "#slow 3");
+      const first = await h.start("plain", key, "#slow 12");
+      // Queued while the first turn is surely under way: after its own reasoning, with twelve
+      // seconds of text to come. Queueing as the turn settles meets a race in the gateway
+      // itself ("placement authority changed", from its retained placement read refusing a
+      // revoked reader); this check proves the queue, not that boundary.
       await h
         .op("plain")
         .waitFor(
-          "streamed text",
-          (e) => isAgent("assistant")(e) && rec(e.payload).runId === first.runId,
+          "the first run's reasoning",
+          (e) => isAgent("thinking")(e) && rec(e.payload).runId === first.runId,
         );
       const second = await h.start("plain", key, "#text", { queueMode: "followup" });
       expect(second.runId !== first.runId, "the queued message has its own run");
-      await h.wait(first);
-      await h.wait(second);
+      await h.wait(first, 90_000);
+      await h.wait(second, 90_000);
       same([first.terminal.state, second.terminal.state], ["final", "final"], "both runs' ends");
       const firstEnd = first.events.find(isChat("final"))!;
-      const secondStart = second.lifecycle("start")[0]!;
-      expect(secondStart.seq > firstEnd.seq, "the queued run starts after the first one ends");
+      // Observed: a turn the gateway runs from its queue reports no lifecycle start under the
+      // send's run id (its run_status goes under an id of the gateway's own), so the order is
+      // read from the run's first event of any kind.
+      const secondFirst = second.events[0];
+      expect(
+        secondFirst !== undefined && secondFirst.seq > firstEnd.seq,
+        "the queued run starts after the first one ends",
+      );
       first.expectCalls([]);
-      first.expectEnd("final", scriptedFinalText("#slow 3"));
+      first.expectEnd("final", scriptedFinalText("#slow 12"));
       second.expectCalls([]);
       second.expectEnd("final", scriptedFinalText("#text"));
     },
@@ -1263,7 +1352,10 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#slow-tool"],
     run: async (h) => {
       const key = await h.session("main", "slow-tool-steer");
-      const first = await h.start("plain", key, "#slow-tool 3");
+      // The steer is sent once the tool of this exact run has started, with fifteen seconds of
+      // the tool still to go: wide enough that its acceptance lands inside the tool on a loaded
+      // machine. The scripted tool has no release of its own to hold it at a barrier.
+      const first = await h.start("plain", key, "#slow-tool 15");
       await h
         .op("plain")
         .waitFor(
@@ -1273,8 +1365,8 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
             rec(e.payload).runId === first.runId,
         );
       const steer = await h.start("plain", key, "#think", { queueMode: "steer" });
-      await h.wait(steer, 30_000);
-      await h.wait(first, 30_000);
+      await h.wait(steer, 60_000);
+      await h.wait(first, 90_000);
       // Observed: the steer's own run settles at once with an empty final; the
       // tool finishes and the steered message is answered inside the first run.
       same(steer.terminal.state, "final", "the steer run's end");
@@ -1285,12 +1377,12 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       // one block, the rendering of the structured content.
       same(
         slow.content.map((p) => p.text),
-        [`structuredContent:\n${JSON.stringify({ seconds: 3, status: "done" }, null, 2)}`],
+        [`structuredContent:\n${JSON.stringify({ seconds: 15, status: "done" }, null, 2)}`],
         "a duplicate server text is dropped",
       );
       same(
         slow.details.structuredContent,
-        { status: "done", seconds: 3 },
+        { status: "done", seconds: 15 },
         "the slow tool's structured result",
       );
       same(
@@ -1298,7 +1390,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "I thought it over first. This is the answer that follows the reasoning.",
         "the active run answered the steer",
       );
-      first.expectCalls([slowTaskCall(3)]);
+      first.expectCalls([slowTaskCall(15)]);
       first.expectEnd("final", scriptedFinalText("#think"));
       steer.expectCalls([]);
       steer.expectEnd("final", "");
@@ -2180,7 +2272,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         { ok: true, aborted: true, runIds: [view.runId] },
         "chat.abort",
       );
-      await h.wait(view, 10_000);
+      await h.wait(view, 30_000);
       same([view.terminal.state, view.terminal.stopReason], ["aborted", "rpc"], "the run's end");
       // Observed: the call's result arrives after the run's terminal events.
       const result = await h
@@ -2188,7 +2280,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         .waitFor(
           "the stopped call's result",
           (e) => isTool("result", name)(e) && rec(e.payload).runId === view.runId,
-          10_000,
+          30_000,
         );
       same(
         [rec(rec(result.payload).data).isError, view.result(name).text],

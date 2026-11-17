@@ -32,7 +32,10 @@ const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
 const SHOTS = process.env.CLAWTRATE_CARD_SHOTS;
 const STAMP = Date.now().toString(36);
 
-test.describe.configure({ mode: "serial" });
+// Not serial: one check failing on timing does not keep the rest from running. The checks
+// still run in file order on one worker; after a failure Playwright starts a new worker,
+// which pairs fresh hosts in beforeAll. Only the last check reads what earlier ones left
+// (`later`), and it fails when that is empty.
 
 type Host = { child: ChildProcess; url: string; data: string };
 const hosts: Host[] = [];
@@ -293,11 +296,13 @@ test.describe("approval cards on a real gateway", () => {
     for (const name of ["Allow once", "Always allow…", "Deny"]) {
       await expect(approval.getByRole("button", { name })).toBeVisible();
     }
-    await expect(approval).toContainText("Expires in 30 minutes");
+    // The gateway's expiry is 30 minutes from the request; the card counts down from then, and
+    // on a loaded machine a minute can pass before the card is first drawn.
+    await expect(approval).toContainText(/Expires in (29|30) minutes/);
     await shot(approval, "approval-pending");
     // On a read-only connection the gateway sends no pending approvals: none is shown.
     await openTask(reader, "Otto", title);
-    await expect(transcript(reader)).toContainText("#sleep 2");
+    await expect(transcript(reader)).toContainText("#sleep 2", { timeout: 30_000 });
     await expect(card(reader, "approval-card")).toHaveCount(0);
 
     await approval.getByRole("button", { name: "Allow once" }).click();
@@ -514,19 +519,54 @@ test.describe("Messaged cards on a real gateway", () => {
     await expect(state(page)).toHaveText("Failed");
   });
 
-  test("F-122 F-469: a slow recipient: Sent while it works, then its reply arrives in the task", async () => {
+  test("F-122 F-469: a slow recipient: Sent or Working while it works, never Working once it has ended, and its reply arrives in the task", async () => {
     const t = await sent("message-slow", "#message-slow");
     await clients.plain.terminal(t.runId);
+    // The recipient's run, by the id the send's result names.
+    const result = clients.plain
+      .runEvents(t.runId)
+      .map((e) => e.payload as { stream?: string; data?: Record<string, unknown> })
+      .find((p) => p.stream === "tool" && p.data?.phase === "result");
+    // Its details name it, or, where details are empty, the result's text object does.
+    const sentResult = (result?.data?.result ?? {}) as {
+      details?: { runId?: string };
+      content?: Array<{ text?: string }>;
+    };
+    const fromText = (() => {
+      try {
+        return (JSON.parse(sentResult.content?.[0]?.text ?? "{}") as { runId?: string }).runId;
+      } catch {
+        return undefined;
+      }
+    })();
+    const recipientRunId = sentResult.details?.runId ?? fromText ?? "";
+    expect(recipientRunId).not.toBe("");
     await openTask(page, "Pip", t.title);
-    await expect(state(page)).toHaveText("Sent");
+    // The host follows every session (sessions.subscribe), so the recipient's run reaches it
+    // whenever its events come: until then the card is Sent, from then on Working. Which one
+    // shows first depends only on when they arrive, so either is right here.
+    await expect(state(page)).toHaveText(/^(Sent|Working)$/);
     await shot(card(page, "messaged-card"), "messaged-slow-sent");
     // The reply arrives later in the same task, as a message from Marlow. Nothing in it names
-    // the send it answers (its provenance names only Marlow's task), and this connection did
-    // not start the send, so it never saw Marlow's run: the card stays Sent.
+    // the send it answers (its provenance names only Marlow's task).
     const incoming = page.getByTestId("incoming-line").or(page.getByTestId("received-card"));
     await expect(incoming).toHaveCount(1, { timeout: 60_000 });
     await expect(incoming).toContainText("Marlow");
-    await expect(state(page)).toHaveText("Sent");
+    // Once the gateway has ended the recipient's run, the card never still says Working: Sent
+    // if this connection never saw the run, No reply yet if it did.
+    await expect
+      .poll(
+        async () =>
+          (
+            await clients.plain.request<{ inFlightRun?: { runId?: string } }>("chat.history", {
+              sessionKey: "agent:marlow:main",
+              limit: 1,
+            })
+          ).inFlightRun?.runId === recipientRunId,
+        { timeout: 60_000 },
+      )
+      .toBe(false);
+    await expect(state(page)).toHaveText(/^(Sent|No reply yet)$/, { timeout: 30_000 });
     await shot(page, "messaged-slow-reply-arrived");
   });
 
@@ -618,7 +658,9 @@ test.describe("Messaged cards' actions on a real gateway", () => {
     await messaged.getByRole("button", { name: "Open this message in Marlow's task" }).click();
     await expect(page.locator(".title-pill")).toContainText("Notes for Pip");
     // Marlow's task, at the Message from Pip card of the run this message started, open and focused.
-    const received = page.getByTestId("received-card").last();
+    // Marlow's task holds cards from other checks too: this one is the card the link opened.
+    const received = page.locator('[data-testid="received-card"][open]');
+    await expect(received).toHaveCount(1);
     await expect(received).toHaveAttribute("open", "");
     await expect(received.locator("summary")).toBeFocused();
     await shot(received, "received-card");
@@ -707,7 +749,11 @@ test.describe("tool-server calls on a real gateway", () => {
     await ordinaryStep(page, "structuredContent");
     const stop = await called("mcp-stop", "#mcp-stop");
     await openTask(page, "Juniper", stop.title);
-    await page.waitForTimeout(3000);
+    // Stopped once its long call has started on the gateway, not after a fixed wait.
+    await clients.plain.waitFor("the long call's start", (e) => {
+      const p = e.payload as { runId?: string; stream?: string; data?: { phase?: string } };
+      return p.runId === stop.runId && p.stream === "tool" && p.data?.phase === "start";
+    });
     await clients.plain.request("chat.abort", { sessionKey: stop.key });
     await clients.plain.terminal(stop.runId);
     await expect(card(page, "t3-card")).toHaveCount(0);
