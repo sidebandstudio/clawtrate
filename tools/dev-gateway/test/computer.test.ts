@@ -54,7 +54,8 @@ const temp = () => {
 
 const plugin = () => loadDevPlugin("clawtrate-computer", CHECKOUT_DIR, PLUGIN_RULE);
 type Config = ReturnType<typeof devConfig> & Record<string, unknown>;
-const config = (state: string) => devConfig("tok", PORTS, state, [plugin()], CHROMIUM) as Config;
+const config = (state: string) =>
+  devConfig("tok", PORTS, state, [plugin()], {}, CHROMIUM) as Config;
 
 describe("the computer plugin's contract addition", () => {
   it("passes the guard and declares browsers for two seeded bots, with timings from their sets", () => {
@@ -162,7 +163,7 @@ describe("the browser setup the tool writes", () => {
       const denied = (entry.tools.deny as string[] | undefined) ?? [];
       expect(denied.includes("browser"), bot).toBe(!["marlow", "pip"].includes(bot));
     }
-    expect(sandboxProblems(c, PORTS, state, [plugin()], CHROMIUM)).toEqual([]);
+    expect(sandboxProblems(c, PORTS, state, [plugin()], {}, CHROMIUM)).toEqual([]);
   });
 
   it("without the plugin there is no browser block and the browser tool stays denied to every bot", () => {
@@ -246,9 +247,10 @@ describe("the browser setup the tool writes", () => {
     for (const [what, mutate] of mutations) {
       const c = structuredClone(config(state));
       mutate(c);
-      expect(sandboxProblems(c, PORTS, state, [plugin()], CHROMIUM).length, what).toBeGreaterThan(
-        0,
-      );
+      expect(
+        sandboxProblems(c, PORTS, state, [plugin()], {}, CHROMIUM).length,
+        what,
+      ).toBeGreaterThan(0);
     }
   });
 });

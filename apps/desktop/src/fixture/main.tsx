@@ -10,6 +10,8 @@
 //   &pins=main,otto        pinned bots, in order (this device's rail arrangement for the gateway)
 //   &hidden=marlow         hidden bots
 //   &sort=name             the rail's sort order: recent, name or manual
+//   &files=loaded          the Work pane's Files states (files.ts), with &checkout=1, &fileload=failed
+//   &tab=files             the Work pane's tab
 
 import { App, BridgeProvider, rosterKey, rosterScope } from "@clawtrate/ui";
 import { StrictMode } from "react";
@@ -17,6 +19,7 @@ import { createRoot } from "react-dom/client";
 import { createFixtureBridge, GATEWAY_ID, GATEWAY_URL, isScene } from "./bridge-fixture.ts";
 import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
+import { fileParams } from "./files.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -48,6 +51,8 @@ function seedPreferences() {
   if (bot && task) write("tasks", JSON.stringify({ [bot]: task }));
   const panel = params.get("panel");
   if (panel === "open" || panel === "closed") write("panel", panel);
+  const tab = params.get("tab");
+  if (tab) write("workTab", tab);
   const list = (name: string) => params.get(name)?.split(",").filter(Boolean);
   if (params.has("pins") || params.has("hidden") || params.has("sort")) {
     // Kept per gateway, under the fixture gateway's identity.
@@ -66,7 +71,9 @@ function seedPreferences() {
 seedPreferences();
 document.documentElement.dataset.host = "web";
 const sceneName = params.get("scene");
-const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main");
+const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
+  files: fileParams(params),
+});
 // For tests and manual checks: change the state from the console.
 Object.assign(window, { clawtrateFixture: bridge });
 

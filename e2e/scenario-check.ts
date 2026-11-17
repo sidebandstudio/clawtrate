@@ -6,6 +6,9 @@
 // scenarios` in this checkout. It never uses the default instance or its ports.
 // Afterwards it resets exactly that instance, also on Ctrl-C or SIGTERM.
 //
+// The instance has the scripted provider accounts and the development
+// sign-in plugin, so the account checks (account-checks.ts) run after the
+// scenario checks, with an admin client and a read-only one of their own.
 // Then the computer checks (computer-checks.ts) run on a second instance,
 // `e2e-<run>-computer`, started with `--with-plugin clawtrate-computer`,
 // whose bots Marlow and Pip have browsers of their own; it is recorded and
@@ -17,9 +20,11 @@ import { join } from "node:path";
 import {
   browserPorts,
   instancePorts,
+  lockOrder,
   openInstance,
   openOperator,
 } from "../tools/dev-gateway/src/cli.ts";
+import { ACCOUNT_CLIENTS, runAccountChecks } from "../tools/dev-gateway/src/account-checks.ts";
 import {
   COMPUTER_CLIENTS,
   runComputerChecks,
@@ -93,7 +98,7 @@ async function main(): Promise<number> {
     });
   try {
     console.log(`Starting instance ${name} for the scenario check`);
-    await startInstance(name, runId);
+    await startInstance(name, runId, ["--with-accounts", "--with-plugin", "clawtrate-dev-signin"]);
     const mine = listInstances().find((row) => row.name === name);
     for (const port of [mine?.gatewayPort, mine?.providerPort]) {
       if (port === null || port === undefined || FORBIDDEN_PORTS.includes(port)) {
@@ -101,14 +106,15 @@ async function main(): Promise<number> {
       }
     }
     const inst = openInstance(name);
-    let scenariosFailed = 0;
+    const providerUrl = `http://127.0.0.1:${instancePorts(inst).providerPort}`;
     const clients = await openCheckClients((label, scopes, caps) =>
       openOperator(inst, label, scopes, caps),
     );
+    let scenariosFailed = 0;
     try {
       const { passed, failed, notes } = await runScenarioChecks(clients, {
         ownerAgent: (botId, key, message) => ownerAgent(inst, botId, key, message),
-        providerUrl: `http://127.0.0.1:${instancePorts(inst).providerPort}`,
+        providerUrl,
       });
       for (const row of FAMILY_ROWS) console.log(`family ${JSON.stringify(row)}`);
       for (const note of notes) console.log(`note  ${note}`);
@@ -122,8 +128,39 @@ async function main(): Promise<number> {
     } finally {
       for (const op of Object.values(clients)) await op.close();
     }
+    const admin = await openOperator(
+      inst,
+      "Clawtrate account check (admin)",
+      [...ACCOUNT_CLIENTS.admin.scopes],
+      [...ACCOUNT_CLIENTS.admin.caps],
+    );
+    const reader = await openOperator(
+      inst,
+      "Clawtrate account check (reader)",
+      [...ACCOUNT_CLIENTS.reader.scopes],
+      [...ACCOUNT_CLIENTS.reader.caps],
+    );
+    let accountsFailed = 0;
+    try {
+      const accounts = await runAccountChecks({
+        admin,
+        reader,
+        providerUrl,
+        stateDir: inst.stateDir,
+        lock: (bot, provider, profileId) => lockOrder(inst, { bot, provider, profileId }),
+      });
+      for (const note of accounts.notes) console.log(`note  ${note}`);
+      for (const line of accounts.differences) console.log(`differs from the design  ${line}`);
+      console.log(
+        `${accounts.passed} of ${accounts.passed + accounts.failed} account checks passed`,
+      );
+      accountsFailed = accounts.failed;
+    } finally {
+      await admin.close();
+      await reader.close();
+    }
     const computer = await computerChecks(computerName, computerRunId, startInstance);
-    return scenariosFailed === 0 && computer === 0 ? 0 : 1;
+    return scenariosFailed === 0 && accountsFailed === 0 && computer === 0 ? 0 : 1;
   } finally {
     const problems = cleanUpOnce();
     if (problems.length > 0) {

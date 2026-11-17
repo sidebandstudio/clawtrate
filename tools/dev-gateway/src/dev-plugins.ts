@@ -28,7 +28,15 @@
 //
 // The setting kinds are SETTING_KINDS and nothing else: there is no kind for
 // free text, a command, an argument list, a credential or a model provider.
-// Any other key or kind is refused.
+// Any other key or kind is refused. A `scripted-model-url` is a path on the
+// instance's own scripted model, which is how a plugin reaches the scripted
+// side (the scripted sign-ins) without knowing the ports a start chooses.
+//
+// Sign-ins. A plugin's manifest may declare providers and sign-in methods
+// (`providers`, `providerAuthChoices`, `setup.providers`) only for the
+// scripted account providers (accounts.ts), never a real provider's id, and
+// the instance must then be started with `--with-accounts`. The manifest is
+// checked; what the plugin's code does is trusted, as above.
 //
 // Browsers of their own. One plugin of an instance may also declare
 // `botBrowsers`: which seeded bots get a managed browser of their own, and
@@ -69,9 +77,18 @@ const MAX_BYTES = 5 * 1024 * 1024;
  * The kinds a setting may have. `flag` is true or false; `count` a whole
  * number; `loopback-url` an http or ws URL whose host is a loopback address,
  * written exactly as it parses; `instance-path` a relative path of plain
- * names, given to the plugin resolved inside the instance's state folder.
+ * names, given to the plugin resolved inside the instance's state folder;
+ * `scripted-model-url` an absolute path of plain names, given to the plugin
+ * as that path on the instance's own scripted model (`http://127.0.0.1:<its
+ * port><path>`).
  */
-export const SETTING_KINDS = ["flag", "count", "loopback-url", "instance-path"] as const;
+export const SETTING_KINDS = [
+  "flag",
+  "count",
+  "loopback-url",
+  "instance-path",
+  "scripted-model-url",
+] as const;
 export type SettingKind = (typeof SETTING_KINDS)[number];
 export type Setting = { kind: SettingKind; value: boolean | number | string };
 
@@ -132,6 +149,8 @@ export type DevPlugin = {
   tools: string[];
   /** The bots it gives a browser of their own, or null. */
   botBrowsers: BotBrowsers | null;
+  /** The scripted account providers its manifest declares sign-ins for. */
+  providers: string[];
 };
 
 export type PluginRule = {
@@ -141,7 +160,54 @@ export type PluginRule = {
   reserved: readonly string[];
   /** The seeded bots, the only ones a `botBrowsers` declaration may name. */
   seedBots: readonly string[];
+  /** The only providers a plugin's manifest may declare: the scripted account providers. */
+  scriptedProviders: readonly string[];
 };
+
+/**
+ * The providers a manifest declares, and why it may not, one line per
+ * problem: only scripted account providers, in `providers`,
+ * `providerAuthChoices[].provider` and `setup.providers[].id`.
+ */
+export function manifestProviderProblems(
+  manifest: Record<string, unknown>,
+  scriptedProviders: readonly string[],
+): { providers: string[]; problems: string[] } {
+  const named: unknown[] = [];
+  const problems: string[] = [];
+  const list = (value: unknown, where: string): unknown[] => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) {
+      problems.push(`${where} must be a list`);
+      return [];
+    }
+    return value;
+  };
+  named.push(...list(manifest.providers, "providers"));
+  for (const choice of list(manifest.providerAuthChoices, "providerAuthChoices")) {
+    named.push(isPlainObject(choice) ? choice.provider : choice);
+  }
+  if (manifest.setup !== undefined) {
+    const setup = isPlainObject(manifest.setup) ? manifest.setup : {};
+    for (const entry of list(setup.providers, "setup.providers")) {
+      named.push(isPlainObject(entry) ? entry.id : entry);
+    }
+  }
+  for (const key of ["providerAuthAliases", "modelCatalog", "providerEndpoints"]) {
+    if (manifest[key] !== undefined) problems.push(`the manifest may not set ${key}`);
+  }
+  for (const provider of named) {
+    if (typeof provider !== "string" || !scriptedProviders.includes(provider)) {
+      problems.push(
+        `provider ${JSON.stringify(provider)} is not a scripted account provider (${scriptedProviders.join(", ")})`,
+      );
+    }
+  }
+  return {
+    providers: [...new Set(named.filter((p): p is string => typeof p === "string"))],
+    problems,
+  };
+}
 
 /** A checkout's own plugins folder. */
 export const pluginsRoot = (checkout: string) => join(checkout, "plugins");
@@ -194,6 +260,16 @@ function settingProblem(key: string, setting: unknown): string | null {
       const segments = value.split("/");
       if (segments.length > 8 || !segments.every((segment) => PATH_SEGMENT.test(segment))) {
         return `setting ${key} (instance-path) must be plain names inside the instance, not ${JSON.stringify(value)}`;
+      }
+      return null;
+    }
+    case "scripted-model-url": {
+      if (typeof value !== "string" || !value.startsWith("/")) {
+        return `setting ${key} (scripted-model-url) must be a path starting with /`;
+      }
+      const segments = value.slice(1).split("/");
+      if (segments.length > 8 || !segments.every((segment) => PATH_SEGMENT.test(segment))) {
+        return `setting ${key} (scripted-model-url) must be plain names, not ${JSON.stringify(value)}`;
       }
       return null;
     }
@@ -345,6 +421,15 @@ function checkPlugin(name: string, root: string, rule: PluginRule): DevPlugin {
       }
     }
   }
+  const declared = manifestProviderProblems(
+    manifest as Record<string, unknown>,
+    rule.scriptedProviders,
+  );
+  if (declared.problems.length > 0) {
+    refuse(
+      `its manifest declares providers this guard does not accept:\n  - ${declared.problems.join("\n  - ")}`,
+    );
+  }
   const addition = json(ADDITION_FILE);
   const problems = additionProblems(addition, { manifestId: id, ...rule });
   if (problems.length > 0) {
@@ -363,6 +448,7 @@ function checkPlugin(name: string, root: string, rule: PluginRule): DevPlugin {
     settings: checked.settings ?? {},
     tools: (checked.tools ?? []).map((tool) => tool.name),
     botBrowsers: checked.botBrowsers ?? null,
+    providers: declared.providers,
   };
 }
 
@@ -421,14 +507,25 @@ export function checkedCopy(
 /** The folder a plugin's instance-path settings lie under. */
 export const pluginData = (stateDir: string, name: string) => join(stateDir, PLUGIN_DATA_DIR, name);
 
-/** A plugin's config entry on an instance: each setting's value, a path resolved inside it. */
+/**
+ * A plugin's config entry on an instance: each setting's value, a path
+ * resolved inside it, a scripted-model path on the instance's scripted model.
+ */
 export function pluginEntry(
   plugin: DevPlugin,
   stateDir: string,
+  providerPort: number,
 ): { enabled: true; config: Record<string, unknown> } {
   const base = pluginData(stateDir, plugin.name);
   const config: Record<string, unknown> = {};
   for (const [key, { kind, value }] of Object.entries(plugin.settings)) {
+    if (kind === "scripted-model-url") {
+      if (!Number.isInteger(providerPort) || providerPort < 1 || providerPort > 65535) {
+        throw new Error(`plugin ${plugin.name}: no scripted model port for ${key}`);
+      }
+      config[key] = `http://127.0.0.1:${providerPort}${String(value)}`;
+      continue;
+    }
     if (kind !== "instance-path") {
       config[key] = value;
       continue;

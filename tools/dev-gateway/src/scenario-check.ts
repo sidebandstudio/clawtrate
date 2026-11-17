@@ -32,12 +32,16 @@ import { TERMINAL_CHAT_STATES, type GatewayEvent, type OperatorSession } from ".
 import {
   resolveRound,
   scenarioRounds,
+  LARGE_LOG_BYTES,
+  LARGE_LOG_PATH,
+  largeLogParts,
   SCENARIOS,
   selectScenarios,
   SHELL_COMMANDS,
   type PlanContext,
 } from "./scenarios.ts";
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
+import { FILES_BOT, PICTURE_PATH, trailMap } from "./seed-files.ts";
 import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
 import { OFFERED_TOOLS_PATH, QUIET_TURNS_PATH } from "./fake-provider.ts";
 import { COMPUTER_CHECKS } from "./computer-checks.ts";
@@ -1587,27 +1591,30 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         .request("exec.approval.resolve", { id: approval.id, decision: "allow-once" });
       await h.wait(view);
       const result = view.result("exec");
-      same(
-        [result.isError, result.details.status, result.details.exitCode],
-        [false, "completed", 1],
-        "exec result",
-      );
+      same([result.isError, result.details.status], [false, "completed"], "exec result");
+      // `ls` of a missing folder exits 1 on BSD and 2 on GNU, and words its message differently.
+      const code = Number(result.details.exitCode);
       expect(
-        result.text.endsWith("(Command exited with code 1)"),
-        "the result text names the exit code",
+        code === 1 || code === 2,
+        `ls of a missing folder exits 1 or 2 (got ${String(result.details.exitCode)})`,
+      );
+      const exited = result.text;
+      expect(
+        /^ls: .*missing-folder.*No such file or directory\n\n\(Command exited with code (\d+)\)$/.exec(
+          exited,
+        )?.[1] === String(code),
+        `the result text is ls's own message and names the exit code (${JSON.stringify(exited)})`,
       );
       const end = view.agent("command_output").find((e) => view.data(e).phase === "end");
       expect(end, "command_output end");
-      same(view.data(end).exitCode, 1, "command_output exitCode");
-      const exited =
-        "ls: missing-folder: No such file or directory\n\n(Command exited with code 1)";
+      same(view.data(end).exitCode, code, "command_output exitCode");
       view.expectCalls([
         execCall(scriptedArgs("#exit-code", "exec", SHELL_BOT) as JsonRecord, {
           isError: false,
           content: [exited],
           details: {
             status: "completed",
-            exitCode: 1,
+            exitCode: code,
             exitSignal: null,
             exitReason: "exit",
             durationMs: isNumberAtLeast(0),
@@ -3112,6 +3119,127 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     run: () => {
       same(uncoveredDirectives(), [], "directives no check sends");
       return Promise.resolve();
+    },
+  },
+  // The Work pane's files. Last, so their tasks are not among the ones the sessions check pages through.
+  {
+    name: "a file write over the readers' limit",
+    covers: ["#write-large"],
+    run: async (h) => {
+      const key = await h.session("main", "write-large");
+      const view = await h.run("plain", key, "#write-large");
+      const { first, lastLine, rest } = largeLogParts();
+      same(
+        [first.length + rest.length, first.endsWith(lastLine)],
+        [LARGE_LOG_BYTES, true],
+        "the two calls' parts",
+      );
+      const changed = (where: string, details: JsonRecord | undefined, created: boolean | null) =>
+        same(
+          [details?.changed, created === null ? undefined : details?.created],
+          [true, created === null ? undefined : created],
+          `${where} details changed and created`,
+        );
+      view.expectCalls([
+        {
+          name: "write",
+          args: scriptedArgs("#write-large", "write"),
+          isError: false,
+          content: textsLike([
+            matchesPattern(
+              new RegExp(`^Successfully wrote ${first.length} bytes to \\S+/logs/transcode\\.log$`),
+            ),
+          ]),
+          details: (details: JsonRecord | undefined, where: string) =>
+            changed(where, details, true),
+          title: `Write to ${LARGE_LOG_PATH} (${first.length} chars)`,
+        },
+        {
+          name: "edit",
+          args: scriptedArgs("#write-large", "edit"),
+          isError: false,
+          content: textsLike([
+            matchesPattern(/^Successfully replaced 1 block\(s\) in \S+\/logs\/transcode\.log\.$/),
+          ]),
+          details: (details: JsonRecord | undefined, where: string) =>
+            changed(where, details, null),
+          title: `Edit in ${LARGE_LOG_PATH}`,
+        },
+      ]);
+      view.expectEnd("final", scriptedFinalText("#write-large"));
+      // The task lists it as changed, with its size; neither get reader sends it, and each
+      // says so with the size and its limit (262,144 bytes).
+      const list = await h
+        .op("plain")
+        .request<{ files: JsonRecord[] }>("sessions.files.list", { sessionKey: key });
+      same(
+        list.files.map((file) => [file.path, file.kind, file.size]),
+        [[LARGE_LOG_PATH, "modified", LARGE_LOG_BYTES]],
+        "the task's file list",
+      );
+      const refusal = async (method: string, params: JsonRecord) => {
+        try {
+          await h.op("plain").request(method, params);
+        } catch (error) {
+          return rec((error as { details?: unknown }).details);
+        }
+        throw new CheckFailure(`${method} sent a file over its limit`);
+      };
+      const task = await refusal("sessions.files.get", { sessionKey: key, path: LARGE_LOG_PATH });
+      same(
+        [task.type, task.size, task.maxPreviewBytes],
+        ["session_file_too_large", LARGE_LOG_BYTES, 262_144],
+        "sessions.files.get refusal",
+      );
+      const workspace = await refusal("agents.workspace.get", {
+        agentId: "main",
+        path: LARGE_LOG_PATH,
+      });
+      same(
+        [workspace.type, workspace.size, workspace.maxBytes],
+        ["workspace_file_too_large", LARGE_LOG_BYTES, 262_144],
+        "agents.workspace.get refusal",
+      );
+    },
+  },
+  {
+    name: "a picture read from the workspace",
+    covers: ["#picture"],
+    run: async (h) => {
+      const key = await h.session(FILES_BOT, "picture");
+      const view = await h.run("plain", key, "#picture");
+      // The scripted model takes no images: the read tool says so instead of sending the picture.
+      const text =
+        "Read image file [image/png]\n[Current model does not support images. The image will be omitted from this request.]";
+      view.expectCalls([
+        {
+          name: "read",
+          args: { path: PICTURE_PATH },
+          isError: false,
+          content: [text],
+          details: { kind: "text", content: text },
+          title: `Read from ${PICTURE_PATH}`,
+        },
+      ]);
+      view.expectEnd("final", scriptedFinalText("#picture", FILES_BOT));
+      // The task's own reader sends the picture as it is on disk.
+      const got = await h.op("plain").request<{ file: JsonRecord }>("sessions.files.get", {
+        sessionKey: key,
+        path: PICTURE_PATH,
+      });
+      const picture = trailMap();
+      same(
+        [
+          got.file.kind,
+          got.file.previewKind,
+          got.file.mimeType,
+          got.file.contentEncoding,
+          got.file.size,
+        ],
+        ["read", "image", "image/png", "base64", picture.length],
+        "sessions.files.get of the picture",
+      );
+      same(got.file.content, picture.toString("base64"), "the picture's bytes");
     },
   },
 ];
