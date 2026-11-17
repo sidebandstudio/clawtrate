@@ -102,16 +102,19 @@ export type StepRaw = {
 
 export type Step = {
   /**
-   * `tool:<toolCallId>`, the gateway's own id. A reasoning segment has none:
-   * live, it is `reasoning:<runId>:<n>`, `n` from a counter for the whole
-   * client that never goes back; read from history, it is
-   * `reasoning:<runId>:h<row>.<block>`, named by its row and block.
+   * A tool step is `tool:<toolCallId>`, the gateway's own id. A reasoning
+   * step's id is derived from its place in its run, never from its text
+   * (`reasoningStepId`): the run, the nearest tool call before it in the run
+   * (or the run's start), and how many reasoning blocks came since that
+   * anchor. Live and history compute the same function.
    *
-   * Promised: unique within a task for the life of the client, and the same
-   * while the task stays open, through streaming and resyncs of the same
-   * history window. Not promised: the same reasoning id after the task is
-   * closed and reopened, or read from a different window; nor any meaning in
-   * the number.
+   * Promised: unique within a task. On a resync of the same history window a
+   * reasoning card keeps its id whenever the reasoning blocks before it since
+   * its anchor are the same in number; a card the live stream showed as one,
+   * that history holds as several blocks, keeps its id for the first of them.
+   * Not promised: when history shows a reasoning block, since the same anchor,
+   * that the live stream never showed on its own, the cards after it there
+   * shift by one; nothing across a reopening or a different history window.
    */
   id: string;
   kind: StepKind;
@@ -134,7 +137,12 @@ export type Step = {
   approvalId: string | null;
   /** The tool's own failure kind, for example `overall-timeout` for an exec that ran out of time. */
   failureKind: string | null;
-  /** The gateway cut the result (`__openclaw.truncated` on the history row). */
+  /**
+   * The gateway cut this step's text: a history row it came from says so
+   * (`__openclaw.truncated`, for tool calls, results and reasoning alike), or
+   * its live result did (`details.truncated`). Its whole text is then not
+   * known here; `readStepRaw` asks for more and says if it is still cut.
+   */
   truncated: boolean;
   /** The gateway marked the result `replaceable`: a later `replace` frame may correct it. */
   replaceable: boolean;
@@ -236,10 +244,20 @@ export type Run = {
    */
   omittedSteps: number;
   /**
-   * Reasoning segments this run has numbered, when the engine runs without the
-   * client's id allocator (`EngineContext.ids`). Only ever grows.
+   * The anchor the run's next reasoning block is numbered from: `t.<toolCallId>`
+   * of the latest tool call, `c` when a history window began inside the run
+   * so its start is not visible, or null for the run's start.
    */
+  reasoningAnchor: string | null;
+  /** Reasoning blocks since `reasoningAnchor`: the next one's number. */
   nextReasoning: number;
+  /**
+   * Increases each time a reconciliation with history removes, adds or
+   * re-anchors any reasoning step id in this run. View state keyed by a
+   * reasoning step id of this run (an open card, a selected raw view) is
+   * valid only while this is unchanged; when it changes, clear it.
+   */
+  reasoningRevision: number;
   /** Paths of fields cut to their bound; a cut `text` is not extended by later deltas. */
   cut?: string[];
 };
@@ -446,7 +464,28 @@ export { MAX_STEPS_PER_TASK };
  * `not-available-yet`, never presented as recoverable.
  */
 export type StepRead =
-  { status: "available"; raw: StepRaw } | { status: "not-available-yet"; reason: string };
+  | { status: "available"; raw: StepRaw }
+  | { status: "not-available-yet"; reason: string }
+  /**
+   * History holds the step, but the gateway cut its row to a display length
+   * even at the length asked for (`__openclaw.truncated`): `raw` is what it
+   * sent, the beginning of what it stored with the gateway's own marker after
+   * it, and `receivedChars` the length of the longest text the rebuilt step
+   * exposes (its arguments, output or result), not of the raw payload.
+   */
+  | { status: "cut-by-gateway"; raw: StepRaw; receivedChars: number; reason: string }
+  /**
+   * History returned something at this step's place, but nothing shows it is
+   * this step (a reasoning text that does not begin with the step's own, a
+   * different call id): it is not offered as the step's text.
+   */
+  | { status: "not-established"; reason: string }
+  /**
+   * The gateway replaced the message that holds this step with its
+   * oversized placeholder (a message above its 131,072-byte limit): it will
+   * not return this text in full, so asking again does not help.
+   */
+  | { status: "too-large-for-gateway"; reason: string };
 
 /** Full raw payloads, keyed by task and step id. Owned by the client, never snapshotted. */
 export class RawTable {
@@ -542,8 +581,6 @@ export type EngineContext = {
   sessionKey: string;
   now: number;
   raw: RawTable;
-  /** The client's id allocator for live reasoning segments; a counter that never goes backwards. */
-  ids?: { next(): number };
 };
 
 // Small readers ------------------------------------------------------------------
@@ -667,7 +704,9 @@ export function newRun(
     outcomeKnown: true,
     attemptErrors: [],
     omittedSteps: 0,
+    reasoningAnchor: null,
     nextReasoning: 0,
+    reasoningRevision: 0,
     ...init,
   };
 }
@@ -780,7 +819,15 @@ function flagCutTexts(step: Step): Step {
 function upsertStep(run: Run, written: Step): Run {
   const step = flagCutTexts(written);
   const index = run.steps.findIndex((each) => each.id === step.id);
-  if (index === -1) return { ...run, steps: [...run.steps, step] };
+  if (index === -1) {
+    // A new tool call is the anchor the reasoning after it is numbered from.
+    const anchor = step.kind === "tool" && step.toolCallId ? toolAnchor(step.toolCallId) : null;
+    const anchored =
+      anchor !== null && anchor !== run.reasoningAnchor
+        ? { reasoningAnchor: anchor, nextReasoning: 0 }
+        : {};
+    return { ...run, ...anchored, steps: [...run.steps, step] };
+  }
   const steps = [...run.steps];
   steps[index] = step;
   return { ...run, steps };
@@ -1575,8 +1622,8 @@ function applyThinking(
     // Nothing establishes that it continues: a new segment, the earlier one kept as it was.
     run = closeReasoning(run, ctx, ts);
   }
-  const id = reasoningId(run, ctx);
-  if (!ctx.ids) run = { ...run, nextReasoning: run.nextReasoning + 1 };
+  const id = reasoningStepId(run.id, run.reasoningAnchor, run.nextReasoning);
+  run = { ...run, nextReasoning: run.nextReasoning + 1 };
   const text = cumulative ?? delta;
   ctx.raw.set(ctx.sessionKey, id, { source: "live", runId: run.id, call: payload, result: null });
   return upsertStep(run, {
@@ -1603,14 +1650,20 @@ function applyThinking(
   });
 }
 
+/** The reasoning anchor a tool call sets. */
+function toolAnchor(toolCallId: string): string {
+  return `t.${toolCallId}`;
+}
+
 /**
- * A live reasoning segment's id. With the client's allocator, `n` comes from
- * a counter that never goes backwards for the life of the client, so no id is
- * used twice in a task, across resyncs and reopenings. Without it (the engine
- * alone), from the run's own count.
+ * A reasoning step's id: a pure function of its place in its run. `anchor`
+ * is the nearest tool call before it (`t.<toolCallId>`), `c` for a run whose
+ * start a history window does not show, or null for the run's start; `n`
+ * counts the reasoning blocks since that anchor. The live stream and history
+ * compute it alike, so nothing has to be matched.
  */
-function reasoningId(run: Run, ctx: EngineContext): string {
-  return `reasoning:${run.id}:${ctx.ids ? ctx.ids.next() : run.nextReasoning}`;
+export function reasoningStepId(runId: string, anchor: string | null, n: number): string {
+  return `reasoning:${runId}:${anchor ?? "s"}:${n}`;
 }
 
 function applyAssistant(run: Run, data: RawRecord, ts: number, ctx: EngineContext): Run {
@@ -1775,14 +1828,6 @@ function meta(message: RawRecord): RawRecord {
   return asRecord(message["__openclaw"]) ?? {};
 }
 
-/** A row's own identity, as the gateway supplies it: its id, else its sequence, else its place in the page. */
-function rowKey(message: RawRecord, index: number): string {
-  const rowId = str(meta(message).id);
-  if (rowId) return rowId;
-  const seq = num(meta(message).seq);
-  return seq !== null ? `#${seq}` : `@${index}`;
-}
-
 /** The display id `mapHistory` gives a row, so runs can anchor to transcript items. */
 export function historyItemId(message: RawRecord, index: number): string {
   return `${str(meta(message).id) ?? `row-${index}`}:${index}`;
@@ -1796,12 +1841,17 @@ function rowTime(message: RawRecord): number | null {
  * Rebuild a task's runs and steps from `chat.history`. Rows are grouped by
  * `__openclaw.runId`. The run in `inFlightRun` is `running`; every other run is
  * terminal, `stopped` or `failed` when its last assistant row says it was
- * aborted or errored, otherwise `completed`.
+ * aborted or errored, otherwise `completed`. `windowCut` says the page does
+ * not reach the transcript's start (`hasMore`): then the run of the page's
+ * first row, unless that row is a user's, may have begun before it, and its
+ * reasoning before its first visible tool call is numbered from the anchor
+ * `c`, so it never takes the ids a window that sees the run's start gives.
  */
 export function runsFromHistory(
   messages: unknown,
   inFlight: string | RawRecord | null,
   ctx: EngineContext,
+  options: { windowCut?: boolean } = {},
 ): Run[] {
   const snapshot = typeof inFlight === "string" ? { runId: inFlight } : inFlight;
   const inFlightRunId = str(snapshot?.runId);
@@ -1811,6 +1861,11 @@ export function runsFromHistory(
   const trailingThinking = new Map<string, boolean>();
   let anchor: string | null = null;
   const rows = Array.isArray(messages) ? messages : [];
+  const first = asRecord(rows[0]);
+  const cutRunId =
+    options.windowCut && first && first.role !== "user"
+      ? (str(meta(first).runId) ?? str(asRecord(first.openclawAbort)?.runId))
+      : null;
 
   rows.forEach((entry, index) => {
     const message = asRecord(entry);
@@ -1825,14 +1880,24 @@ export function runsFromHistory(
     const at = rowTime(message);
     let run =
       runs.get(runId) ??
-      newRun(runId, { state: "running", origin: "history", bound: true, anchorItemId: anchor }, at);
+      newRun(
+        runId,
+        {
+          state: "running",
+          origin: "history",
+          bound: true,
+          anchorItemId: anchor,
+          reasoningAnchor: runId === cutRunId ? "c" : null,
+        },
+        at,
+      );
     if (message.role === "assistant") {
       lastAssistant.set(runId, message);
       run = { ...run, model: str(message.model) ?? run.model, endedAt: at ?? run.endedAt };
       const content = Array.isArray(message.content) ? message.content : [];
       if (typeof message.content === "string" && message.content.trim())
         trailingThinking.set(runId, false);
-      content.forEach((part, blockIndex) => {
+      content.forEach((part) => {
         const block = asRecord(part);
         if (!block) return;
         if (block.type === "text" && typeof block.text === "string" && block.text.trim())
@@ -1843,10 +1908,9 @@ export function runsFromHistory(
           block.thinking.trim()
         ) {
           trailingThinking.set(runId, true);
-          // Ids derived from history have their own namespace, from the
-          // gateway's row and the block's place in it: the same window of
-          // history always names a segment the same, and never as a live id.
-          const id = `reasoning:${runId}:h${rowKey(message, index)}.${blockIndex}`;
+          // The same function of its place as the live stream's.
+          const id = reasoningStepId(runId, run.reasoningAnchor, run.nextReasoning);
+          run = { ...run, nextReasoning: run.nextReasoning + 1 };
           ctx.raw.set(ctx.sessionKey, id, { source: "history", runId, call: block, result: null });
           run = upsertStep(
             run,
@@ -1866,7 +1930,8 @@ export function runsFromHistory(
                 error: null,
                 approvalId: null,
                 failureKind: null,
-                truncated: false,
+                // A reasoning row carries the gateway's cut like a tool row does.
+                truncated: meta(message).truncated === true,
                 replaceable: false,
                 correction: 0,
                 continuation: digestOf(block.thinking),
@@ -1886,6 +1951,7 @@ export function runsFromHistory(
           run = upsertStep(run, {
             ...blankToolStep(toolCallId, name, at),
             argsText: capText(prettyArgs(block.arguments ?? block.input)),
+            truncated: meta(message).truncated === true,
           });
         }
       });
@@ -1909,7 +1975,7 @@ export function runsFromHistory(
               result: capText(text),
               error: isError ? capError(text || "The tool reported an error.") : null,
               failureKind: isError ? str(asRecord(message.details)?.failureKind) : null,
-              truncated: meta(message).truncated === true,
+              truncated: step.truncated || meta(message).truncated === true,
             },
             ctx,
           ),
@@ -2001,52 +2067,20 @@ function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "h
 }
 
 /**
- * Pair history reasoning segments with live ones, preserving order: each
- * history segment, in order, takes the first live segment after the last one
- * taken whose whole text has the same length and digest; failing that, when
- * both have the same number of segments, the live one at its own place, if
- * that is after the last one taken (the live one may have missed its end in
- * a gap). Ids therefore never cross, and repeated text pairs in order. A
- * history segment left unpaired keeps its own history id.
- */
-function alignReasoning(live: Step[], history: Step[]): Map<Step, Step> {
-  const pairs = new Map<Step, Step>();
-  let last = -1;
-  history.forEach((step, index) => {
-    let at = -1;
-    if (step.continuation !== null) {
-      for (let i = last + 1; i < live.length; i += 1) {
-        const evidence = live[i]!.continuation;
-        if (evidence !== null && sameDigest(evidence, step.continuation)) {
-          at = i;
-          break;
-        }
-      }
-    }
-    if (at === -1 && live.length === history.length && index > last) at = index;
-    if (at === -1) return;
-    pairs.set(step, live[at]!);
-    last = at;
-  });
-  return pairs;
-}
-
-/**
- * Merge one run's steps. Tool steps match by id. Live reasoning segments are
- * split by a heuristic (a model call, a tool, reply text, or text that does
- * not extend the last), so their ids need not match the transcript's
- * `thinking` blocks. Once history holds the finished run and every live tool
- * step, its reasoning replaces the live segments and its order wins. Until
- * then history reasoning is not added. Either way no reasoning text is shown
+ * Merge one run's steps by id. Reasoning ids are derived from their place
+ * (`reasoningStepId`), live and from history alike, so nothing is matched.
+ * Once history holds the finished run and every live tool step, its steps,
+ * reasoning included, replace the live ones and its order wins. Until then
+ * history reasoning is not added. Either way no reasoning text is shown
  * twice, and none is dropped before the transcript has it.
  */
 function mergeSteps(
   live: Run,
   history: Run,
-  fromHistory: Map<string, string>,
+  fromHistory: Set<string>,
 ): { steps: Step[]; omittedSteps: number } {
-  const pick = ({ step, source }: { step: Step; source: "live" | "history" }, from = step.id) => {
-    if (source === "history") fromHistory.set(step.id, from);
+  const pick = ({ step, source }: { step: Step; source: "live" | "history" }) => {
+    if (source === "history") fromHistory.add(step.id);
     return step;
   };
   const historyIds = new Set(history.steps.map((step) => step.id));
@@ -2058,19 +2092,11 @@ function mergeSteps(
       !live.steps.some((step) => step.kind === "reasoning"));
   if (complete) {
     // The transcript holds the whole run: its steps, all of them, replace the
-    // live ones, and retention counts again from there. History segments keep
-    // the ids of live ones in order, so ids are stable while the task stays
-    // open and never move to another segment.
-    const liveReasoning = live.steps.filter((step) => step.kind === "reasoning");
-    const historyReasoning = history.steps.filter((step) => step.kind === "reasoning");
-    const pairs = alignReasoning(liveReasoning, historyReasoning);
+    // live ones, and retention counts again from there. A reasoning block
+    // has the id its place gives it, which a live card at that place had too.
     return {
       steps: history.steps.map((step) => {
-        if (step.kind === "reasoning") {
-          const same = pairs.get(step);
-          if (same) return pick({ step: { ...step, id: same.id }, source: "history" }, step.id);
-          return pick({ step, source: "history" });
-        }
+        if (step.kind === "reasoning") return pick({ step, source: "history" });
         const current = liveById.get(step.id);
         return pick(current ? mergeStep(current, step) : { step, source: "history" });
       }),
@@ -2078,14 +2104,19 @@ function mergeSteps(
     };
   }
   // History tool steps the live run lacks go in at their place in history's
-  // order, after the history step before them, so a step retention dropped
-  // comes back where it was and gives way again in the same order.
+  // order, after the history step before them (a reasoning card at the same
+  // place included), so a step retention dropped comes back where it was and
+  // gives way again in the same order.
   const steps = [...live.steps];
   let cursor = 0;
   let restored = 0;
   for (const step of history.steps) {
-    if (step.kind === "reasoning") continue;
     const index = steps.findIndex((each) => each.id === step.id);
+    if (step.kind === "reasoning") {
+      // Not added before the run ends, but a live card at the same place keeps the order.
+      if (index !== -1) cursor = index + 1;
+      continue;
+    }
     if (index === -1) {
       steps.splice(cursor, 0, pick({ step, source: "history" }));
       cursor += 1;
@@ -2100,12 +2131,52 @@ function mergeSteps(
 
 export type HistoryMerge = {
   runs: Run[];
-  /**
-   * Steps taken from history, by the id they have now, each with the id its
-   * raw payload has in the rebuild; that payload replaces the live one.
-   */
-  fromHistory: Map<string, string>;
+  /** Steps taken from history, by id: their payload in the rebuild, under the same id, replaces the live one. */
+  fromHistory: Set<string>;
 };
+
+/**
+ * Whether a merge removed, added or re-anchored a reasoning id of the run.
+ * Steps retention had dropped and history brings back, older than every step
+ * still shown, are not a change.
+ */
+function reasoningIdsChanged(live: Run, merged: Step[]): boolean {
+  const reasoning = (steps: Step[]) => steps.filter((step) => step.kind === "reasoning");
+  const liveIds = new Set(live.steps.map((step) => step.id));
+  const mergedIds = new Set(merged.map((step) => step.id));
+  if (reasoning(live.steps).some((step) => !mergedIds.has(step.id))) return true;
+  const firstKept = merged.findIndex((step) => liveIds.has(step.id));
+  return merged.some(
+    (step, index) =>
+      step.kind === "reasoning" &&
+      !liveIds.has(step.id) &&
+      !(live.omittedSteps > 0 && firstKept !== -1 && index < firstKept),
+  );
+}
+
+/**
+ * Where a run's next reasoning block is numbered from after a merge: the
+ * side whose anchor comes later in the merged steps (the run's start, or a
+ * window's cut, before every step), and on the same anchor the larger count.
+ */
+function mergedAnchor(
+  live: Run,
+  history: Run,
+  steps: Step[],
+): { reasoningAnchor: string | null; nextReasoning: number } {
+  if (live.reasoningAnchor === history.reasoningAnchor)
+    return {
+      reasoningAnchor: live.reasoningAnchor,
+      nextReasoning: Math.max(live.nextReasoning, history.nextReasoning),
+    };
+  const place = (anchor: string | null) =>
+    anchor?.startsWith("t.")
+      ? steps.findIndex((step) => step.id === toolStepId(anchor.slice(2)))
+      : -1;
+  return place(history.reasoningAnchor) > place(live.reasoningAnchor)
+    ? { reasoningAnchor: history.reasoningAnchor, nextReasoning: history.nextReasoning }
+    : { reasoningAnchor: live.reasoningAnchor, nextReasoning: live.nextReasoning };
+}
 
 /**
  * Merge a reloaded history into the live runs without duplicating anything.
@@ -2118,11 +2189,11 @@ export type HistoryMerge = {
 export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext): HistoryMerge {
   const liveById = new Map(live.map((run) => [run.id, run]));
   const historyIds = new Set(history.map((run) => run.id));
-  const fromHistory = new Map<string, string>();
+  const fromHistory = new Set<string>();
   const merged = history.map((fromRun) => {
     const current = liveById.get(fromRun.id);
     if (!current) {
-      for (const step of fromRun.steps) fromHistory.set(step.id, step.id);
+      for (const step of fromRun.steps) fromHistory.add(step.id);
       return fromRun;
     }
     const { steps, omittedSteps } = mergeSteps(current, fromRun, fromHistory);
@@ -2132,8 +2203,8 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
       omittedSteps,
       anchorItemId: fromRun.anchorItemId ?? current.anchorItemId,
       model: current.model ?? fromRun.model,
-      // Positions only grow, whichever side counted further.
-      nextReasoning: Math.max(current.nextReasoning, fromRun.nextReasoning),
+      ...mergedAnchor(current, fromRun, steps),
+      reasoningRevision: current.reasoningRevision + (reasoningIdsChanged(current, steps) ? 1 : 0),
     };
     if (!isTerminal(current.state) && isTerminal(fromRun.state)) {
       run = {

@@ -226,7 +226,13 @@ function drawsOn(bound: Bound): ReadonlySet<string> {
 
 const drawsFrom = (bound: Bound, pools: Pools) =>
   pools.size > 0 && [...drawsOn(bound)].some((name) => pools.has(name));
-/** Keys found on retained objects that the schema does not name; a programming error, counted for tests. */
+/** Unknown keys remembered at most; past it, more are not kept. */
+export const MAX_UNKNOWN_KEYS = 64;
+/**
+ * Keys found on retained objects that the schema does not name, a
+ * programming error, kept for tests: at most `MAX_UNKNOWN_KEYS`, each cut to
+ * 96 characters.
+ */
 export const unknownKeys = new Set<string>();
 
 /**
@@ -338,7 +344,7 @@ function walk(bound: Bound, value: unknown, path: string, pools: Pools, cuts: st
         if (key === "cut" && bound.flags) continue;
         const field = bound.fields[key];
         if (!field) {
-          unknownKeys.add(key);
+          if (unknownKeys.size < MAX_UNKNOWN_KEYS) unknownKeys.add(key.slice(0, 96));
           changed = true;
           continue;
         }

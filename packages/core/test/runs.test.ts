@@ -547,7 +547,7 @@ describe("steps from tool events (F-090, F-091, F-093, F-294, F-432)", () => {
     const run = only(activity);
     expect(run.steps.map(view)).toEqual([
       {
-        id: "reasoning:run-1:0",
+        id: "reasoning:run-1:s:0",
         kind: "reasoning",
         title: "Reasoning",
         toolName: null,
@@ -573,7 +573,7 @@ describe("steps from tool events (F-090, F-091, F-093, F-294, F-432)", () => {
         failureKind: null,
       },
       {
-        id: "reasoning:run-1:1",
+        id: "reasoning:run-1:t.call_1:0",
         kind: "reasoning",
         title: "Reasoning",
         toolName: null,
@@ -636,8 +636,8 @@ describe("steps from tool events (F-090, F-091, F-093, F-294, F-432)", () => {
       A("run-1", 2, "thinking", { text: "Second", delta: "Second" }),
     ]);
     expect(only(activity).steps.map((step) => [step.id, step.status, step.output?.text])).toEqual([
-      ["reasoning:run-1:0", "done", "First thought"],
-      ["reasoning:run-1:1", "running", "Second"],
+      ["reasoning:run-1:s:0", "done", "First thought"],
+      ["reasoning:run-1:s:1", "running", "Second"],
     ]);
   });
 
@@ -839,7 +839,7 @@ describe("rebuilding from history (F-107, F-093)", () => {
     const withoutReasoningId = (step: Parameters<typeof view>[0]) =>
       step.kind === "reasoning" ? { ...view(step), id: null } : view(step);
     expect(rebuilt!.steps.map(withoutReasoningId)).toEqual(live.steps.map(withoutReasoningId));
-    expect(rebuilt!.steps[0]!.id).toBe("reasoning:run-1:ha1.0");
+    expect(rebuilt!.steps[0]!.id).toBe("reasoning:run-1:s:0");
     expect(rebuilt!.steps[1]!.raw).toEqual({
       source: "history",
       runId: "run-1",
@@ -914,11 +914,11 @@ describe("rebuilding from history (F-107, F-093)", () => {
       ctx(),
     ).runs;
     expect(merged[0]!.state).toBe("completed");
-    // The segment seen live keeps its id; the one lost in the gap is named by its history row.
+    // Ids are their places: the segment seen live keeps its id, the one lost in the gap takes its own.
     expect(merged[0]!.steps.map((step) => step.id)).toEqual([
-      "reasoning:run-1:0",
+      "reasoning:run-1:s:0",
       "tool:call_1",
-      "reasoning:run-1:ha2.0",
+      "reasoning:run-1:t.call_1:0",
     ]);
   });
 

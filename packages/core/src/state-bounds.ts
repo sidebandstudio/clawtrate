@@ -228,7 +228,9 @@ export const RUN: Bound = flagged<Run>()({
   outcomeKnown: FLAG,
   attemptErrors: list(MAX_ATTEMPT_ERROR_COUNT, text(MAX_ATTEMPT_ERROR_CHARS)),
   omittedSteps: NUMBER,
+  reasoningAnchor: ID,
   nextReasoning: NUMBER,
+  reasoningRevision: NUMBER,
 });
 const attachmentInfo = object<OutgoingAttachmentInfo>()({
   fileName: text(MAX_FILE_NAME_CHARS),
@@ -367,6 +369,7 @@ const item = flagged<TranscriptItem>()({
   timestamp: NUMBER,
   blocks: list(MAX_BLOCKS_PER_ITEM, block, { pool: "blocks" }),
   model: NAME,
+  truncated: FLAG,
 });
 const interSession = flagged<InterSessionMessage>()({
   itemId: ID,

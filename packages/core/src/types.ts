@@ -131,6 +131,12 @@ export type TranscriptItem = {
   timestamp: number | null;
   blocks: TranscriptBlock[];
   model: string | null;
+  /**
+   * The gateway cut a row of this item to its display length
+   * (`__openclaw.truncated`): present and true only then. Its text, here or
+   * read whole, is a prefix of what the gateway stored.
+   */
+  truncated?: boolean;
   /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
   cut?: string[];
 };
