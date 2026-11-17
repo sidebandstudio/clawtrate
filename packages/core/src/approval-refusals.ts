@@ -30,21 +30,25 @@ export const REFUSED_DECISION_ANSWERS: readonly RefusedDecisionAnswer[] = [
   {
     answer: "FORBIDDEN with details.code MISSING_SCOPE",
     why: "method authorization refuses the request before any handler runs",
-    source: "request-authorization-CUsX09Ar.mjs:388 (authorizeGatewayMethod)",
-    matches: (error) => codeOf(error) === "MISSING_SCOPE",
+    source:
+      "request-authorization-CUsX09Ar.mjs:388 (authorizeGatewayMethod), shaped by error-codes-CWpzrMTj.mjs:96 (missingScopeErrorShape)",
+    matches: (error) => error.gatewayCode === "FORBIDDEN" && codeOf(error) === "MISSING_SCOPE",
   },
   {
     answer: "INVALID_REQUEST with details.reason APPROVAL_ALREADY_RESOLVED",
     why: "the request was already settled with another decision; this one was not applied",
     source:
       "approval-shared-0z4gkxmd.mjs:87 and :281 (respondRepeatedApprovalResolution), reached at :341 and :392",
-    matches: (error) => reasonOf(error) === "APPROVAL_ALREADY_RESOLVED",
+    matches: (error) =>
+      error.gatewayCode === "INVALID_REQUEST" && reasonOf(error) === "APPROVAL_ALREADY_RESOLVED",
   },
   {
     answer: "INVALID_REQUEST with details.reason APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
     why: "exec's decision check refuses a decision the request does not offer, before resolving",
     source: "exec-approval-DAaiZN5X.mjs:117 and :482, checked at approval-shared-0z4gkxmd.mjs:350",
-    matches: (error) => reasonOf(error) === "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
+    matches: (error) =>
+      error.gatewayCode === "INVALID_REQUEST" &&
+      reasonOf(error) === "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
   },
   {
     answer: "INVALID_REQUEST with details.allowedDecisions, from plugin.approval.resolve",
@@ -52,6 +56,7 @@ export const REFUSED_DECISION_ANSWERS: readonly RefusedDecisionAnswer[] = [
     source: "plugin-approval-B3Gyyexn.mjs:186, checked at approval-shared-0z4gkxmd.mjs:350",
     matches: (error, method) =>
       method === "plugin.approval.resolve" &&
+      error.gatewayCode === "INVALID_REQUEST" &&
       Array.isArray(asRecord(error.details)?.allowedDecisions),
   },
   {

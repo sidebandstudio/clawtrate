@@ -298,6 +298,47 @@ describe("a decision that failed, read back", () => {
     expect(REFUSED_DECISION_ANSWERS.every((each) => each.source && each.why)).toBe(true);
   });
 
+  it("a refusal's structured detail counts only under the outer code the gateway sends it with", () => {
+    const refused = (method: string, shape: { code: string; message: string; details?: unknown }) =>
+      isRefusedDecision(method, new GatewayProtocolRequestError(shape));
+    const scope = { code: "MISSING_SCOPE", missingScope: "operator.approvals" };
+    expect(
+      refused("exec.approval.resolve", { code: "FORBIDDEN", message: "x", details: scope }),
+    ).toBe(true);
+    expect(
+      refused("exec.approval.resolve", { code: "UNAVAILABLE", message: "x", details: scope }),
+    ).toBe(false);
+    for (const reason of ["APPROVAL_ALREADY_RESOLVED", "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE"]) {
+      expect(
+        refused("exec.approval.resolve", {
+          code: "INVALID_REQUEST",
+          message: "x",
+          details: { reason },
+        }),
+        reason,
+      ).toBe(true);
+      expect(
+        refused("exec.approval.resolve", {
+          code: "UNAVAILABLE",
+          message: "x",
+          details: { reason },
+        }),
+        reason,
+      ).toBe(false);
+    }
+    const plugin = { allowedDecisions: ["deny"] };
+    expect(
+      refused("plugin.approval.resolve", {
+        code: "INVALID_REQUEST",
+        message: "x",
+        details: plugin,
+      }),
+    ).toBe(true);
+    expect(
+      refused("plugin.approval.resolve", { code: "UNAVAILABLE", message: "x", details: plugin }),
+    ).toBe(false);
+  });
+
   it("Deny goes out while an Allow is on its way; a second Allow does not; the card shows whichever the gateway applied", async () => {
     // Deny wins: the gateway applies it and answers the Allow as already resolved.
     let releaseAllow!: () => void;
