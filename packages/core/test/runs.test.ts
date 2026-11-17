@@ -63,17 +63,14 @@ type Frame =
 
 function play(frames: Frame[], start: TaskActivity = emptyActivity) {
   let activity = start;
-  let gaps = 0;
   for (const frame of frames) {
     if (frame.event === "agent") {
-      const result = applyAgentEvent(activity, frame.payload, ctx());
-      activity = result.activity;
-      if (result.gap) gaps += 1;
+      activity = applyAgentEvent(activity, frame.payload, ctx()).activity;
     } else {
       activity = applyChatEvent(activity, frame.payload, frame.text ?? null, ctx());
     }
   }
-  return { activity, gaps };
+  return { activity };
 }
 
 const A = (runId: string, seq: number, stream: string, data: Record<string, unknown>): Frame => ({
@@ -199,7 +196,6 @@ function message(id: string, extra: Partial<OutgoingMessage> = {}): OutgoingMess
     status: "sending",
     runId: null,
     messageSeq: null,
-    afterSeq: 0,
     createdAt: 1_000,
     error: null,
     attachments: [],
@@ -367,7 +363,10 @@ describe("run states: the §5.6 table (F-468)", () => {
       stopRequestedAt: 3_000,
       pendingCards: [],
     });
-    expect(only(activity).closedCards.map((card) => card.reason)).toEqual([
+    // Held until the stop takes, so a refused Stop can restore them.
+    expect(only(activity).suspendedCards.map((card) => card.id)).toEqual(["ap-1", "ask_1"]);
+    const stopped = play([C("run-1", 9, "aborted", {})], activity).activity;
+    expect(only(stopped).closedCards.map((card) => card.reason)).toEqual([
       "cancelled",
       "cancelled",
     ]);
@@ -430,7 +429,13 @@ describe("run states: the §5.6 table (F-468)", () => {
       A("run-1", 2, "lifecycle", { phase: "waiting-approval", approvalId: "ap-1" }),
     ]).activity;
     waiting = play(
-      [A("run-1", 3, "lifecycle", { phase: "error", error: "provider timeout" })],
+      [
+        A("run-1", 3, "lifecycle", {
+          phase: "error",
+          error: "provider timeout",
+          executionSettled: true,
+        }),
+      ],
       waiting,
     ).activity;
     expect(only(waiting)).toMatchObject({
@@ -794,12 +799,28 @@ describe("steps from tool events (F-090, F-091, F-093, F-294, F-432)", () => {
   });
 });
 
-describe("sequence gaps (F-107)", () => {
-  it("reports a forward gap in a run's agent seq", () => {
+describe("sequence numbers (F-107)", () => {
+  it("drops repeated and older frames, so cumulative text and output never restart or double", () => {
+    const frames = toolRun().slice(0, 4);
+    const once = play(frames).activity;
+    const replayed = play([...frames, frames[2]!, frames[3]!, frames[1]!]).activity;
+    expect(replayed).toEqual(once);
+    let output = play([
+      A("run-1", 1, "tool", { phase: "start", name: "exec", toolCallId: "c1", args: {} }),
+    ]).activity;
+    const delta = A("run-1", 2, "command_output", {
+      itemId: "command:c1",
+      phase: "delta",
+      output: "line\n",
+    });
+    output = play([delta, delta], output).activity;
+    expect(output.runs[0]!.steps[0]!.output?.text).toBe("line\n");
+  });
+
+  it("treats a forward jump as coalescing, not loss: the run goes on", () => {
     const frames = toolRun();
-    const { gaps } = play([...frames.slice(0, 4), ...frames.slice(5)]);
-    expect(gaps).toBe(1);
-    expect(play(frames).gaps).toBe(0);
+    const { activity } = play([...frames.slice(0, 3), ...frames.slice(6)]);
+    expect(only(activity).state).toBe("completed");
   });
 });
 
@@ -873,7 +894,7 @@ describe("rebuilding from history (F-107, F-093)", () => {
   it("merges a reload into live runs without duplicating runs or steps", () => {
     const live = play(toolRun()).activity;
     const history = runsFromHistory(toolRunHistory, null, ctx());
-    const merged = mergeHistoryRuns(live.runs, history, ctx());
+    const merged = mergeHistoryRuns(live.runs, history, ctx()).runs;
     expect(merged).toHaveLength(1);
     expect(merged[0]!.steps).toHaveLength(3);
     // Live raw frames win over history ones for steps the user watched.
@@ -883,7 +904,11 @@ describe("rebuilding from history (F-107, F-093)", () => {
   it("recovers a terminal state lost in a gap from history", () => {
     const live = play(toolRun().slice(0, 8)).activity;
     expect(only(live).state).toBe("running");
-    const merged = mergeHistoryRuns(live.runs, runsFromHistory(toolRunHistory, null, ctx()), ctx());
+    const merged = mergeHistoryRuns(
+      live.runs,
+      runsFromHistory(toolRunHistory, null, ctx()),
+      ctx(),
+    ).runs;
     expect(merged[0]!.state).toBe("completed");
     expect(merged[0]!.steps.map((step) => step.id)).toEqual([
       "reasoning:run-1:0",
@@ -900,7 +925,7 @@ describe("rebuilding from history (F-107, F-093)", () => {
       activity.runs,
       runsFromHistory(toolRunHistory, null, ctx()),
       ctx(),
-    );
+    ).runs;
     expect(merged.map((run) => [run.id, run.state])).toEqual([
       ["run-1", "completed"],
       ["m2", "running"],
@@ -917,21 +942,20 @@ describe("outbox reconciliation (F-075, F-107)", () => {
     { role: "user", content: "Third one", __openclaw: { id: "u3", seq: 10 } },
   ];
 
-  it("matches by idempotency key, then by messageSeq, then by text after the message was written", () => {
+  it("matches by idempotency key, then by messageSeq, and never by text", () => {
     let activity: TaskActivity = {
       ...emptyActivity,
       outbox: [
         message("m1", { status: "sent" }),
         message("m2", { status: "sent", text: "Second", messageSeq: 8 }),
-        message("m3", { status: "failed", text: "Third one", afterSeq: 8 }),
-        message("m4", { status: "sent", text: "older", afterSeq: 5 }),
+        message("m3", { status: "failed", text: "Third one" }),
         message("m5", { status: "queued", text: "Later" }),
       ],
     };
     activity = startLocalRun(activity, activity.outbox[0]!, 1_000);
     activity = reconcileOutbox(activity, rows);
-    // m4's text only appears in a row older than the message, so it stays.
-    expect(activity.outbox.map((each) => each.id)).toEqual(["m4", "m5"]);
+    // m3's text is in history, but nothing ties that row to it: it stays to be retried or deleted.
+    expect(activity.outbox.map((each) => each.id)).toEqual(["m3", "m5"]);
     expect(only(activity, "m1")).toMatchObject({ messageId: null, anchorItemId: "u1:1" });
   });
 
@@ -1055,7 +1079,7 @@ describe("structured endings and best-effort reasoning segments", () => {
       null,
       ctx(),
     );
-    const merged = mergeHistoryRuns(live.runs, history, ctx());
+    const merged = mergeHistoryRuns(live.runs, history, ctx()).runs;
     expect(merged[0]!.steps.map((step) => step.output?.text)).toEqual(["Check the cache first"]);
   });
 
@@ -1072,7 +1096,7 @@ describe("structured endings and best-effort reasoning segments", () => {
       "run-1",
       ctx(),
     );
-    const merged = mergeHistoryRuns(live.runs, history, ctx());
+    const merged = mergeHistoryRuns(live.runs, history, ctx()).runs;
     expect(merged[0]!.steps.map((step) => step.output?.text)).toEqual(["Looking"]);
   });
 });

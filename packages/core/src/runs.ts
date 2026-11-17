@@ -107,6 +107,8 @@ export type Step = {
   failureKind: string | null;
   /** The gateway cut the result (`__openclaw.truncated` on the history row). */
   truncated: boolean;
+  /** The gateway marked the result `replaceable`: a later `replace` frame may correct it. */
+  replaceable: boolean;
   /**
    * The raw call and result as known so far, inline when its JSON form is at
    * most `RAW_INLINE_LIMIT` characters (set at the tool's start and again when
@@ -159,6 +161,8 @@ export type Run = {
   textComplete: boolean;
   steps: Step[];
   pendingCards: PendingCard[];
+  /** Cards that were pending when Stop was pressed: closed if the stop takes, restored if it fails. */
+  suspendedCards: PendingCard[];
   closedCards: ClosedCard[];
   startedAt: number | null;
   endedAt: number | null;
@@ -173,6 +177,13 @@ export type Run = {
   lastSeq: number | null;
   /** The terminal lifecycle or chat event's structured fields, when it carried any. */
   ending: RunEnding | null;
+  /**
+   * False when the run is known to have ended but nothing established how: a
+   * rebuild from history whose rows do not say. The state is then a stand-in.
+   */
+  outcomeKnown: boolean;
+  /** Errors of attempts the gateway retried, newest last, at most `MAX_ATTEMPT_ERRORS`. */
+  attemptErrors: string[];
 };
 
 export type OutgoingStatus =
@@ -203,8 +214,6 @@ export type OutgoingMessage = {
   runId: string | null;
   /** `chat.send`'s `messageSeq`, when the gateway returned one. */
   messageSeq: number | null;
-  /** Highest transcript seq known when it was written; history rows after it may be this message. */
-  afterSeq: number;
   createdAt: number;
   error: string | null;
   /** Files sent with it, without their content. */
@@ -289,21 +298,57 @@ export const emptyActivity: TaskActivity = {
 export const MAX_STEP_TEXT = 16_000;
 /** Raw payloads up to this JSON length travel inline with the step. */
 export const RAW_INLINE_LIMIT = 32_000;
+/** JSON characters of raw payloads the host keeps across all tasks; the oldest give way. */
+export const MAX_RAW_BYTES = 32 * 1024 * 1024;
+/** Finished runs kept per task; active and queued runs are always kept. */
+export const MAX_RUNS_PER_TASK = 50;
+/** Closed cards kept per run. */
+export const MAX_CLOSED_CARDS = 20;
+/** Steer aliases kept per task. */
+export const MAX_STEER_ALIASES = 50;
+/** Settled question cards kept per task; pending ones are always kept. */
+export const MAX_SETTLED_QUESTIONS = 20;
+/** Settled approvals kept per task; pending ones are always kept. */
+export const MAX_SETTLED_APPROVALS = 20;
 
 /** Full raw payloads, keyed by task and step id. Owned by the client, never snapshotted. */
 export class RawTable {
-  private readonly entries = new Map<string, StepRaw>();
+  private readonly entries = new Map<string, { raw: StepRaw; size: number }>();
+  private total = 0;
+  private readonly budget: number;
+
+  /** `budget` is the most JSON characters kept; the oldest entries give way first. */
+  constructor(budget: number = MAX_RAW_BYTES) {
+    this.budget = budget;
+  }
 
   private key(sessionKey: string, stepId: string): string {
     return `${sessionKey}\u0000${stepId}`;
   }
 
   get(sessionKey: string, stepId: string): StepRaw | null {
-    return this.entries.get(this.key(sessionKey, stepId)) ?? null;
+    return this.entries.get(this.key(sessionKey, stepId))?.raw ?? null;
   }
 
   set(sessionKey: string, stepId: string, raw: StepRaw): void {
-    this.entries.set(this.key(sessionKey, stepId), raw);
+    const key = this.key(sessionKey, stepId);
+    this.drop(key);
+    const size = rawSize(raw);
+    if (size > this.budget) return;
+    this.entries.set(key, { raw, size });
+    this.total += size;
+    for (const [oldest, entry] of this.entries) {
+      if (this.total <= this.budget) break;
+      this.entries.delete(oldest);
+      this.total -= entry.size;
+    }
+  }
+
+  private drop(key: string): void {
+    const entry = this.entries.get(key);
+    if (!entry) return;
+    this.entries.delete(key);
+    this.total -= entry.size;
   }
 
   patch(sessionKey: string, stepId: string, patch: Partial<StepRaw>): StepRaw | null {
@@ -316,12 +361,12 @@ export class RawTable {
 
   clearTask(sessionKey: string): void {
     const prefix = `${sessionKey}\u0000`;
-    for (const key of [...this.entries.keys()])
-      if (key.startsWith(prefix)) this.entries.delete(key);
+    for (const key of [...this.entries.keys()]) if (key.startsWith(prefix)) this.drop(key);
   }
 
   clear(): void {
     this.entries.clear();
+    this.total = 0;
   }
 }
 
@@ -346,6 +391,21 @@ export function contentText(content: unknown): string {
       return block && block.type === "text" && typeof block.text === "string" ? block.text : "";
     })
     .join("");
+}
+
+/** Errors are shown in full up to this many characters, like step text. */
+export const MAX_ERROR_CHARS = MAX_STEP_TEXT;
+/** Attempt errors kept per run. */
+export const MAX_ATTEMPT_ERRORS = 5;
+
+export function capError(text: string): string {
+  return text.length > MAX_ERROR_CHARS ? `${text.slice(0, MAX_ERROR_CHARS - 1)}…` : text;
+}
+
+function capRunError(error: RunError | null): RunError | null {
+  return error && error.message.length > MAX_ERROR_CHARS
+    ? { ...error, message: capError(error.message) }
+    : error;
 }
 
 export function capText(text: string): StepText {
@@ -420,6 +480,7 @@ export function newRun(
     textComplete: false,
     steps: [],
     pendingCards: [],
+    suspendedCards: [],
     closedCards: [],
     startedAt: now,
     endedAt: null,
@@ -429,6 +490,8 @@ export function newRun(
     stopError: null,
     lastSeq: null,
     ending: null,
+    outcomeKnown: true,
+    attemptErrors: [],
     ...init,
   };
 }
@@ -485,10 +548,14 @@ export function finishRun(
     ...run,
     state: to,
     endedAt,
-    error: error ?? run.error,
+    error: capRunError(error ?? run.error),
     steps,
     pendingCards: [],
-    closedCards: [...run.closedCards, ...run.pendingCards.map((card) => ({ ...card, reason }))],
+    suspendedCards: [],
+    closedCards: [
+      ...run.closedCards,
+      ...[...run.suspendedCards, ...run.pendingCards].map((card) => ({ ...card, reason })),
+    ],
     finishedBeforeStop: run.state === "stopping" && to === "completed",
     textComplete: run.textComplete || to === "completed",
   };
@@ -652,22 +719,28 @@ export function requestStop(activity: TaskActivity, runId: string, now: number):
       stopRequestedAt: now,
       stopError: null,
       pendingCards: [],
-      closedCards: [
-        ...run.closedCards,
-        ...run.pendingCards.map((card) => ({ ...card, reason: "cancelled" as const })),
-      ],
+      suspendedCards: [...run.suspendedCards, ...run.pendingCards],
     };
   });
 }
 
 /**
  * The stop request itself failed (no write access, or the gateway refused it):
- * the run goes on. This is the one transition outside the §5.6 table; without it
- * a run would show "Stopping…" forever.
+ * the run goes on as it was, `waiting` again with its pending cards restored if
+ * it had any. This is the one transition outside the §5.6 table; without it a
+ * run would show "Stopping…" forever.
  */
 export function revertStop(activity: TaskActivity, runId: string, error: string): TaskActivity {
   return updateRun(activity, runId, (run) =>
-    run.state === "stopping" ? { ...run, state: "running", stopError: error } : run,
+    run.state === "stopping"
+      ? {
+          ...run,
+          state: run.suspendedCards.length > 0 ? "waiting" : "running",
+          pendingCards: [...run.suspendedCards, ...run.pendingCards],
+          suspendedCards: [],
+          stopError: error,
+        }
+      : run,
   );
 }
 
@@ -747,6 +820,11 @@ export function applyQuestionRequested(
   if (!id || (record.status !== undefined && record.status !== "pending")) return activity;
   const runId = str(record.runId);
   const existing = activity.questions.find((question) => question.id === id);
+  // A settled question stays settled, and an ended run takes no new question:
+  // a late or repeated event must never make either actionable again.
+  if (existing && existing.status !== "pending") return activity;
+  const known = runId ? findRun(activity, runId) : undefined;
+  if (known && isTerminal(known.state)) return activity;
   const card: QuestionCard = {
     id,
     runId,
@@ -783,6 +861,14 @@ export function applyQuestionRequested(
 }
 
 function closeCard(run: Run, cardId: string, reason: CardCloseReason): Run {
+  const suspended = run.suspendedCards.find((each) => each.id === cardId);
+  if (suspended) {
+    return {
+      ...run,
+      suspendedCards: run.suspendedCards.filter((each) => each !== suspended),
+      closedCards: [...run.closedCards, { ...suspended, reason }],
+    };
+  }
   const card = run.pendingCards.find((pending) => pending.id === cardId);
   if (!card) return run;
   const pendingCards = run.pendingCards.filter((pending) => pending !== card);
@@ -837,6 +923,22 @@ export function applyQuestionResolved(activity: TaskActivity, payload: RawRecord
   return next;
 }
 
+/**
+ * Questions still pending when their run has ended are no longer actionable:
+ * the run cannot take an answer. Idempotent.
+ */
+export function settleQuestionsOfEndedRuns(activity: TaskActivity): TaskActivity {
+  let changed = false;
+  const questions = activity.questions.map((question) => {
+    if (question.status !== "pending" || !question.runId) return question;
+    const run = findRun(activity, question.runId);
+    if (!run || !isTerminal(run.state)) return question;
+    changed = true;
+    return { ...question, status: "closed" as const, submitting: false };
+  });
+  return changed ? { ...activity, questions } : activity;
+}
+
 /** An answer or dismissal is being sent, or failed. */
 export function markQuestion(
   activity: TaskActivity,
@@ -855,10 +957,16 @@ export function markQuestion(
 export function settleMissingQuestions(
   activity: TaskActivity,
   pendingIds: Set<string>,
+  /** Ids pending when the list was asked for; one that arrived since is never settled by it. */
+  pendingBefore?: ReadonlySet<string>,
 ): TaskActivity {
   let next = activity;
   for (const question of activity.questions) {
-    if (question.status === "pending" && !pendingIds.has(question.id)) {
+    if (
+      question.status === "pending" &&
+      !pendingIds.has(question.id) &&
+      (pendingBefore === undefined || pendingBefore.has(question.id))
+    ) {
       next = applyQuestionResolved(next, { id: question.id, status: "closed" });
     }
   }
@@ -886,7 +994,7 @@ export function removeMessage(activity: TaskActivity, id: string): TaskActivity 
 
 // Live events ---------------------------------------------------------------------
 
-export type ApplyResult = { activity: TaskActivity; gap: boolean };
+export type ApplyResult = { activity: TaskActivity };
 
 /**
  * A `chat` event for this task. `projectedText` is the visible text of the
@@ -935,7 +1043,7 @@ export function applyChatEvent(
   return next;
 }
 
-/** An `agent` event for this task. Reports a forward gap in the run's `seq`. */
+/** An `agent` event for this task. */
 export function applyAgentEvent(
   activity: TaskActivity,
   payload: RawRecord,
@@ -944,19 +1052,21 @@ export function applyAgentEvent(
   const runId = str(payload.runId);
   const stream = str(payload.stream);
   const data = asRecord(payload.data) ?? {};
-  if (!runId || !stream || isSteerAlias(activity, runId)) return { activity, gap: false };
+  if (!runId || !stream || isSteerAlias(activity, runId)) return { activity };
   const existing = findRun(activity, runId);
-  if (existing && isTerminal(existing.state)) return { activity, gap: false };
+  const seq = num(payload.seq);
+  // A repeated or older frame is dropped. Forward jumps are normal: the gateway
+  // coalesces assistant and thinking frames after numbering them, so they are
+  // not taken as loss; loss is the connection-level frame gap.
+  if (existing && seq !== null && existing.lastSeq !== null && seq <= existing.lastSeq)
+    return { activity };
+  const replacement = stream === "tool" && data.phase === "result" && data.replace === true;
+  if (existing && isTerminal(existing.state) && !replacement) return { activity };
 
   let next = ensureRun(activity, runId, ctx);
-  const seq = num(payload.seq);
   const ts = num(payload.ts) ?? ctx.now;
-  let gap = false;
   next = updateRun(next, runId, (run) => {
-    if (seq !== null) {
-      if (run.lastSeq !== null && seq > run.lastSeq + 1) gap = true;
-      if (run.lastSeq === null || seq > run.lastSeq) run = { ...run, lastSeq: seq };
-    }
+    if (seq !== null && (run.lastSeq === null || seq > run.lastSeq)) run = { ...run, lastSeq: seq };
     switch (stream) {
       case "lifecycle":
         return applyLifecycle(run, data, ts, ctx);
@@ -976,7 +1086,7 @@ export function applyAgentEvent(
         return run;
     }
   });
-  return { activity: next, gap };
+  return { activity: next };
 }
 
 function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContext): Run {
@@ -1017,18 +1127,146 @@ function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContex
     }
     case "end": {
       run = { ...run, ending: endingOf(data, run.ending) };
-      const endedAt = num(data.endedAt) ?? ts;
-      if (data.aborted === true) return finishRun(run, "stopped", ctx, null, endedAt);
-      return finishRun(run, "completed", ctx, null, endedAt);
+      return terminalFromLifecycle(run, "end", data, num(data.endedAt) ?? ts, ctx);
     }
     case "error": {
+      if (data.aborted !== true && !isDefinitiveLifecycleError(data)) {
+        // An attempt failed and the gateway may retry or fall back: the run goes on.
+        const message = capError(
+          str(data.error) ?? str(asRecord(data.error)?.message) ?? "An attempt failed.",
+        );
+        return {
+          ...run,
+          attemptErrors: [...run.attemptErrors, message].slice(-MAX_ATTEMPT_ERRORS),
+        };
+      }
       run = { ...run, ending: endingOf(data, run.ending) };
-      if (data.aborted === true) return finishRun(run, "stopped", ctx, null, ts);
-      const message = str(data.error) ?? str(asRecord(data.error)?.message) ?? "The run failed.";
-      return finishRun(run, "failed", ctx, { message, kind: null }, ts);
+      return terminalFromLifecycle(run, "error", data, ts, ctx);
     }
     default:
       return run;
+  }
+}
+
+const TIMEOUT_PHASES = new Set(["queue", "preflight", "provider", "post_turn", "gateway_draining"]);
+const HARD_TIMEOUT_PHASES = new Set(["preflight", "provider", "post_turn"]);
+
+type TerminalReason =
+  | "completed"
+  | "hard_timeout"
+  | "timed_out"
+  | "superseded"
+  | "cancelled"
+  | "aborted"
+  | "blocked"
+  | "abandoned"
+  | "failed";
+
+/**
+ * The gateway's own reading of a terminal lifecycle event
+ * (`resolveAgentRunLifecycleTerminalFacts` and `resolveAgentRunTerminalFacts`
+ * in OpenClaw 2026.10.6), reduced to what the run table needs.
+ */
+export function classifyLifecycleTerminal(phase: "end" | "error", data: RawRecord): TerminalReason {
+  const stopReason = str(data.stopReason);
+  const timeoutPhase =
+    typeof data.timeoutPhase === "string" && TIMEOUT_PHASES.has(data.timeoutPhase.trim())
+      ? data.timeoutPhase.trim()
+      : null;
+  const status = str(data.status)?.toLowerCase() ?? null;
+  const timedOut =
+    stopReason === "timeout" ||
+    timeoutPhase !== null ||
+    status === "timeout" ||
+    status === "timed_out";
+  const aborted = data.aborted === true || status === "aborted";
+  const cancellationStatus =
+    status === "cancelled" ||
+    status === "canceled" ||
+    status === "aborted" ||
+    status === "superseded";
+  const cancelled = cancellationStatus || aborted;
+  const failed =
+    phase === "error" || status === "error" || status === "failed" || stopReason === "error";
+  const isAbortReason = (value: string | null) => value === "aborted" || value === "restart";
+  const isCancelReason = (value: string | null) => value === "rpc" || value === "stop";
+  const normalized =
+    !timedOut &&
+    cancelled &&
+    !isAbortReason(stopReason) &&
+    !isCancelReason(stopReason) &&
+    stopReason !== "superseded" &&
+    (stopReason === null || cancellationStatus)
+      ? aborted
+        ? "aborted"
+        : "stop"
+      : stopReason;
+  const factStatus = timedOut ? "timeout" : cancelled || failed ? "error" : "ok";
+  const liveness = str(data.livenessState)?.trim().toLowerCase() ?? null;
+  const restart = normalized === "restart";
+  const providerStarted = typeof data.providerStarted === "boolean" ? data.providerStarted : null;
+  const hardTimeout =
+    (timeoutPhase !== null && HARD_TIMEOUT_PHASES.has(timeoutPhase)) ||
+    (!restart && factStatus === "timeout" && providerStarted === true);
+  const cancelledFact = restart || (factStatus !== "ok" && isCancelReason(normalized));
+  if (hardTimeout) return "hard_timeout";
+  if (normalized === "superseded") return "superseded";
+  if (liveness === "blocked") return "blocked";
+  if (isAbortReason(normalized) && !restart) return "aborted";
+  if (cancelledFact) return "cancelled";
+  if (liveness === "abandoned") return "abandoned";
+  if (factStatus === "timeout") return "timed_out";
+  if (factStatus === "error") return "failed";
+  return "completed";
+}
+
+/** A lifecycle error ends the run only when the gateway says it is definitive (`isDefinitiveRunLifecycle`). */
+export function isDefinitiveLifecycleError(data: RawRecord): boolean {
+  return (
+    data.executionSettled === true ||
+    data.fallbackExhaustedFailure === true ||
+    classifyLifecycleTerminal("error", data) !== "failed"
+  );
+}
+
+function terminalFromLifecycle(
+  run: Run,
+  phase: "end" | "error",
+  data: RawRecord,
+  at: number,
+  ctx: EngineContext,
+): Run {
+  const reason = classifyLifecycleTerminal(phase, data);
+  const message =
+    str(data.error) ??
+    str(asRecord(data.error)?.message) ??
+    (phase === "error" ? "The run failed." : null);
+  switch (reason) {
+    case "completed":
+      return finishRun(run, "completed", ctx, null, at);
+    case "superseded":
+    case "cancelled":
+    case "aborted":
+      return finishRun(run, "stopped", ctx, null, at);
+    case "hard_timeout":
+    case "timed_out":
+      return finishRun(
+        run,
+        "failed",
+        ctx,
+        { message: message ?? "The run timed out.", kind: "timeout" },
+        at,
+      );
+    case "blocked":
+    case "abandoned":
+    case "failed":
+      return finishRun(
+        run,
+        "failed",
+        ctx,
+        { message: message ?? "The run failed.", kind: reason },
+        at,
+      );
   }
 }
 
@@ -1085,6 +1323,7 @@ function applyThinking(
     approvalId: null,
     failureKind: null,
     truncated: false,
+    replaceable: false,
     raw: null,
     rawSize: null,
   });
@@ -1122,6 +1361,7 @@ function blankToolStep(toolCallId: string, name: string | null, ts: number | nul
     approvalId: null,
     failureKind: null,
     truncated: false,
+    replaceable: false,
     raw: null,
     rawSize: null,
   };
@@ -1134,7 +1374,14 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
   const name = str(data.name);
   const current = closeReasoning(run, ctx, ts);
   const existing = current.steps.find((step) => step.id === id);
-  if (existing && !isOpenStep(existing)) return current;
+  // A finished step takes only an explicit replacement of a result marked replaceable.
+  const replacing =
+    existing !== undefined &&
+    !isOpenStep(existing) &&
+    data.phase === "result" &&
+    data.replace === true &&
+    existing.replaceable;
+  if (existing && !isOpenStep(existing) && !replacing) return current;
   const step = existing ?? blankToolStep(toolCallId, name, ts);
   switch (data.phase) {
     case "start": {
@@ -1159,8 +1406,7 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
       return upsertStep(current, { ...step, output: text ? capText(text) : step.output });
     }
     case "result": {
-      const result = asRecord(data.result);
-      const text = contentText(result?.content);
+      const { text, details } = toolResultFacts(data);
       const isError = data.isError === true;
       if (!ctx.raw.patch(ctx.sessionKey, id, { result: data })) {
         ctx.raw.set(ctx.sessionKey, id, {
@@ -1170,22 +1416,37 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
           result: data,
         });
       }
-      const details = asRecord(result?.details);
       const finished: Step = {
         ...step,
         toolName: name ?? step.toolName,
         status: isError ? "failed" : "done",
-        endedAt: step.endedAt ?? ts,
+        endedAt: replacing ? ts : (step.endedAt ?? ts),
         result: capText(text),
-        error: isError ? text || "The tool reported an error." : null,
+        error: isError ? capError(text || "The tool reported an error.") : null,
         failureKind: isError ? str(details?.failureKind) : null,
         truncated: details?.truncated === true,
+        replaceable: data.replaceable === true,
       };
       return upsertStep(current, settleRaw(finished, ctx));
     }
     default:
       return current;
   }
+}
+
+/**
+ * A tool result's text and details in either shipped shape: the ordinary
+ * `result: {content, details}`, or the native one with the presentation text
+ * in `output` and the details directly in `result`.
+ */
+function toolResultFacts(data: RawRecord): { text: string; details: RawRecord | null } {
+  const result = asRecord(data.result);
+  if (Array.isArray(result?.content)) {
+    return { text: contentText(result.content), details: asRecord(result.details) };
+  }
+  const output = data.output;
+  const text = typeof output === "string" ? output : contentText(output);
+  return { text, details: result };
 }
 
 /** `item` frames add the gateway's timing to the tool step they describe. */
@@ -1207,9 +1468,14 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
 
 /** Exec output, streamed into the step of the call that produced it. */
 function applyCommandOutput(run: Run, data: RawRecord): Run {
+  if (data.phase !== "delta") return run;
+  // The call's own id when the event carries it; otherwise exec's `command:<toolCallId>` item.
   const itemId = str(data.itemId);
-  if (!itemId?.startsWith("command:") || data.phase !== "delta") return run;
-  const step = run.steps.find((each) => each.id === toolStepId(itemId.slice("command:".length)));
+  const toolCallId =
+    str(data.toolCallId) ??
+    (itemId?.startsWith("command:") ? itemId.slice("command:".length) : null);
+  if (!toolCallId) return run;
+  const step = run.steps.find((each) => each.id === toolStepId(toolCallId));
   if (!step || !isOpenStep(step) || typeof data.output !== "string") return run;
   return upsertStep(run, { ...step, output: appendText(step.output, data.output) });
 }
@@ -1237,9 +1503,11 @@ function rowTime(message: RawRecord): number | null {
  */
 export function runsFromHistory(
   messages: unknown,
-  inFlightRunId: string | null,
+  inFlight: string | RawRecord | null,
   ctx: EngineContext,
 ): Run[] {
+  const snapshot = typeof inFlight === "string" ? { runId: inFlight } : inFlight;
+  const inFlightRunId = str(snapshot?.runId);
   const runs = new Map<string, Run>();
   const lastAssistant = new Map<string, RawRecord>();
   let anchor: string | null = null;
@@ -1252,7 +1520,8 @@ export function runsFromHistory(
       anchor = historyItemId(message, index);
       return;
     }
-    const runId = str(meta(message).runId);
+    // The gateway's injected aborted-partial row names its run in `openclawAbort`.
+    const runId = str(meta(message).runId) ?? str(asRecord(message.openclawAbort)?.runId);
     if (!runId) return;
     const at = rowTime(message);
     let run =
@@ -1292,6 +1561,7 @@ export function runsFromHistory(
                 approvalId: null,
                 failureKind: null,
                 truncated: false,
+                replaceable: false,
                 raw: null,
                 rawSize: null,
               },
@@ -1327,7 +1597,7 @@ export function runsFromHistory(
               status: isError ? "failed" : "done",
               endedAt: at ?? step.startedAt,
               result: capText(text),
-              error: isError ? text || "The tool reported an error." : null,
+              error: isError ? capError(text || "The tool reported an error.") : null,
               failureKind: isError ? str(asRecord(message.details)?.failureKind) : null,
               truncated: meta(message).truncated === true,
             },
@@ -1340,26 +1610,66 @@ export function runsFromHistory(
     runs.set(runId, run);
   });
 
+  // The run in flight may have no transcript row yet: build it from the
+  // snapshot, replaying the activity events it carries.
+  if (inFlightRunId) {
+    let activity: TaskActivity = {
+      ...emptyActivity,
+      runs: [
+        runs.get(inFlightRunId) ??
+          newRun(
+            inFlightRunId,
+            { state: "running", origin: "history", bound: true, anchorItemId: anchor },
+            num(snapshot?.startedAt),
+          ),
+      ],
+    };
+    if (!runs.has(inFlightRunId)) {
+      for (const entry of Array.isArray(snapshot?.events) ? snapshot.events : []) {
+        const event = asRecord(entry);
+        if (event)
+          activity = applyAgentEvent(activity, { ...event, runId: inFlightRunId }, ctx).activity;
+      }
+    }
+    const run = activity.runs[0]!;
+    const text = typeof snapshot?.text === "string" ? snapshot.text : "";
+    runs.set(inFlightRunId, text && !run.text ? { ...run, text } : run);
+  }
+
   return [...runs.values()].map((run) => {
     if (run.id === inFlightRunId) return run;
     const last = lastAssistant.get(run.id);
     const stopReason = str(last?.stopReason);
-    if (stopReason === "aborted") return finishRun(run, "stopped", ctx, null, run.endedAt);
+    if (stopReason === "aborted" || asRecord(last?.openclawAbort)?.aborted === true) {
+      return finishRun(run, "stopped", ctx, null, run.endedAt);
+    }
     if (stopReason === "error") {
       const message = str(last?.errorMessage) ?? "The run failed.";
       return finishRun(run, "failed", ctx, { message, kind: null }, run.endedAt);
     }
-    return finishRun(run, "completed", ctx, null, run.endedAt);
+    // Only a final reply establishes completion. A last row that stops for a
+    // tool, or no reply row at all, says the run ended but not how.
+    const finished = finishRun(run, "completed", ctx, null, run.endedAt);
+    return stopReason === "stop" || stopReason === "length"
+      ? finished
+      : { ...finished, outcomeKnown: false };
   });
 }
 
-function mergeStep(live: Step, history: Step): Step {
-  // A finished step beats a running one; between two finished steps, the live
-  // one keeps the raw frames the user watched.
-  if (isOpenStep(live) && !isOpenStep(history)) {
-    return { ...history, startedAt: live.startedAt ?? history.startedAt };
+function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "history" } {
+  // A finished step beats a running one. Between two finished steps the live
+  // one keeps the raw frames the user watched, unless the gateway marked its
+  // result replaceable: then the transcript holds the canonical result.
+  if ((isOpenStep(live) && !isOpenStep(history)) || (live.replaceable && !isOpenStep(history))) {
+    return {
+      step: { ...history, startedAt: live.startedAt ?? history.startedAt },
+      source: "history",
+    };
   }
-  return history.truncated && !live.truncated ? { ...live, truncated: true } : live;
+  return {
+    step: history.truncated && !live.truncated ? { ...live, truncated: true } : live,
+    source: "live",
+  };
 }
 
 /**
@@ -1371,7 +1681,11 @@ function mergeStep(live: Step, history: Step): Step {
  * then history reasoning is not added. Either way no reasoning text is shown
  * twice, and none is dropped before the transcript has it.
  */
-function mergeSteps(live: Step[], history: Run): Step[] {
+function mergeSteps(live: Step[], history: Run, fromHistory: Set<string>): Step[] {
+  const pick = ({ step, source }: { step: Step; source: "live" | "history" }) => {
+    if (source === "history") fromHistory.add(step.id);
+    return step;
+  };
   const historyIds = new Set(history.steps.map((step) => step.id));
   const liveById = new Map(live.map((step) => [step.id, step]));
   const complete =
@@ -1382,69 +1696,154 @@ function mergeSteps(live: Step[], history: Run): Step[] {
   if (complete) {
     return history.steps.map((step) => {
       const current = liveById.get(step.id);
-      return step.kind === "tool" && current ? mergeStep(current, step) : step;
+      return pick(
+        step.kind === "tool" && current ? mergeStep(current, step) : { step, source: "history" },
+      );
     });
   }
   const steps = [...live];
   for (const step of history.steps) {
     if (step.kind === "reasoning") continue;
     const index = steps.findIndex((each) => each.id === step.id);
-    if (index === -1) steps.push(step);
-    else steps[index] = mergeStep(steps[index]!, step);
+    if (index === -1) steps.push(pick({ step, source: "history" }));
+    else steps[index] = pick(mergeStep(steps[index]!, step));
   }
   return steps;
 }
+
+export type HistoryMerge = {
+  runs: Run[];
+  /** Ids of the steps taken from history; their raw payloads replace the live ones. */
+  fromHistory: Set<string>;
+};
 
 /**
  * Merge a reloaded history into the live runs without duplicating anything.
  * Runs match by id and steps by id. A live terminal state is final. A live
  * run that history shows ended takes history's terminal state, which is how a
- * terminal event lost in a gap is recovered.
+ * terminal event lost in a gap is recovered. Pure: the caller commits the raw
+ * payloads of the steps reported in `fromHistory`, so a step and its raw
+ * lookup always come from the same source.
  */
-export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext): Run[] {
+export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext): HistoryMerge {
   const liveById = new Map(live.map((run) => [run.id, run]));
   const historyIds = new Set(history.map((run) => run.id));
-  const merged = history.map((fromHistory) => {
-    const current = liveById.get(fromHistory.id);
-    if (!current) return fromHistory;
-    const steps = mergeSteps(current.steps, fromHistory);
+  const fromHistory = new Set<string>();
+  const merged = history.map((fromRun) => {
+    const current = liveById.get(fromRun.id);
+    if (!current) {
+      for (const step of fromRun.steps) fromHistory.add(step.id);
+      return fromRun;
+    }
+    const steps = mergeSteps(current.steps, fromRun, fromHistory);
     let run: Run = {
       ...current,
       steps,
-      anchorItemId: fromHistory.anchorItemId ?? current.anchorItemId,
-      model: current.model ?? fromHistory.model,
+      anchorItemId: fromRun.anchorItemId ?? current.anchorItemId,
+      model: current.model ?? fromRun.model,
     };
-    if (!isTerminal(current.state) && isTerminal(fromHistory.state)) {
-      run = finishRun(
-        run,
-        fromHistory.state as "completed" | "stopped" | "failed",
-        ctx,
-        fromHistory.error,
-        fromHistory.endedAt ?? ctx.now,
-      );
+    if (!isTerminal(current.state) && isTerminal(fromRun.state)) {
+      run = {
+        ...finishRun(
+          run,
+          fromRun.state as "completed" | "stopped" | "failed",
+          ctx,
+          fromRun.error,
+          fromRun.endedAt ?? ctx.now,
+        ),
+        outcomeKnown: fromRun.outcomeKnown,
+      };
     }
     return run;
   });
-  return [...merged, ...live.filter((run) => !historyIds.has(run.id))].sort(
+  const runs = [...merged, ...live.filter((run) => !historyIds.has(run.id))].sort(
     (a, b) => Number(a.state === "queued") - Number(b.state === "queued"),
   );
-}
-
-/** The highest transcript seq in a history page. */
-export function maxHistorySeq(messages: unknown): number {
-  let max = 0;
-  for (const entry of Array.isArray(messages) ? messages : []) {
-    const seq = num(meta(asRecord(entry) ?? {}).seq);
-    if (seq !== null && seq > max) max = seq;
-  }
-  return max;
+  return { runs, fromHistory };
 }
 
 /**
- * Match outgoing messages to the user rows history now holds. A row matches by
- * `__openclaw.idempotencyKey`, then by the `messageSeq` `chat.send` returned,
- * then by the same text in a row written after the message was. Matched
- * messages leave the outbox, and their runs anchor to the row.
+ * Runs that were active before a reload and that the gateway no longer has in
+ * flight, with no transcript row, have ended without saying how. They settle
+ * (`stopped` if a stop was pending, otherwise `completed`) with
+ * `outcomeKnown: false`, so none waits forever.
+ */
+export function settleVanishedRuns(
+  runs: Run[],
+  activeBefore: ReadonlySet<string>,
+  historyRunIds: ReadonlySet<string>,
+  inFlightRunId: string | null,
+  ctx: EngineContext,
+): Run[] {
+  return runs.map((run) => {
+    if (!activeBefore.has(run.id) || isTerminal(run.state) || run.state === "queued") return run;
+    if (historyRunIds.has(run.id) || run.id === inFlightRunId) return run;
+    const settled = finishRun(run, run.state === "stopping" ? "stopped" : "completed", ctx);
+    return { ...settled, outcomeKnown: false };
+  });
+}
+
+/**
+ * Bound what a task keeps while it stays open: the newest finished runs, the
+ * newest closed cards per run, the newest steer aliases and settled questions.
+ * Anything active, queued or pending is always kept. Idempotent.
+ */
+export function retainActivity(activity: TaskActivity): TaskActivity {
+  let changed = false;
+  const finished = activity.runs.filter((run) => isTerminal(run.state));
+  let runs = activity.runs;
+  if (finished.length > MAX_RUNS_PER_TASK) {
+    const drop = new Set(finished.slice(0, finished.length - MAX_RUNS_PER_TASK));
+    runs = runs.filter((run) => !drop.has(run));
+    changed = true;
+  }
+  if (runs.some((run) => run.closedCards.length > MAX_CLOSED_CARDS)) {
+    runs = runs.map((run) =>
+      run.closedCards.length > MAX_CLOSED_CARDS
+        ? { ...run, closedCards: run.closedCards.slice(-MAX_CLOSED_CARDS) }
+        : run,
+    );
+    changed = true;
+  }
+  let steerAliases = activity.steerAliases;
+  const aliasKeys = Object.keys(steerAliases);
+  if (aliasKeys.length > MAX_STEER_ALIASES) {
+    steerAliases = Object.fromEntries(
+      aliasKeys.slice(-MAX_STEER_ALIASES).map((key) => [key, activity.steerAliases[key]!]),
+    );
+    changed = true;
+  }
+  let questions = activity.questions;
+  const settled = questions.filter((question) => question.status !== "pending");
+  if (settled.length > MAX_SETTLED_QUESTIONS) {
+    const drop = new Set(settled.slice(0, settled.length - MAX_SETTLED_QUESTIONS));
+    questions = questions.filter((question) => !drop.has(question));
+    changed = true;
+  }
+  let approvals = activity.approvals;
+  const settledApprovals = approvals.filter((approval) => approval.status !== "pending");
+  if (settledApprovals.length > MAX_SETTLED_APPROVALS) {
+    const drop = new Set(
+      settledApprovals.slice(0, settledApprovals.length - MAX_SETTLED_APPROVALS),
+    );
+    approvals = approvals.filter((approval) => !drop.has(approval));
+    changed = true;
+  }
+  return changed ? { ...activity, runs, steerAliases, questions, approvals } : activity;
+}
+
+/** A user row's idempotency key: under `__openclaw`, or on the row itself. */
+function rowIdempotencyKey(message: RawRecord): string | null {
+  return str(meta(message).idempotencyKey) ?? str(message.idempotencyKey);
+}
+
+/**
+ * Match outgoing messages to the user rows history now holds, by identifiers
+ * only: the row's idempotency key, or the `messageSeq` `chat.send` returned
+ * when the row carries no contradicting key. Text is never evidence: a message
+ * no identifier ties to a row stays visible, to be retried or deleted, rather
+ * than being retired by a look-alike. Matched messages leave the outbox, and
+ * their runs anchor to the row.
  */
 export function reconcileOutbox(activity: TaskActivity, messages: unknown): TaskActivity {
   const rows = (Array.isArray(messages) ? messages : [])
@@ -1460,26 +1859,22 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
     ) {
       return true;
     }
-    const pick = (test: (row: { message: RawRecord; index: number }) => boolean) =>
-      rows.find((row) => !used.has(row.index) && test(row));
-    const match =
-      pick((row) => str(meta(row.message).idempotencyKey) === outgoing.id) ??
-      (outgoing.messageSeq !== null
-        ? pick((row) => num(meta(row.message).seq) === outgoing.messageSeq)
-        : undefined) ??
-      pick((row) => {
-        const seq = num(meta(row.message).seq);
-        const text = contentText(row.message.content).trim();
-        return (
-          seq !== null &&
-          seq > outgoing.afterSeq &&
-          text !== "" &&
-          text.includes(outgoing.text.trim())
-        );
-      });
-    if (!match) return true;
-    used.add(match.index);
-    anchors.set(outgoing.id, historyItemId(match.message, match.index));
+    const byKey = rows.find(
+      (row) => !used.has(row.index) && rowIdempotencyKey(row.message) === outgoing.id,
+    );
+    const bySeq =
+      byKey ??
+      (outgoing.status === "sent" && outgoing.messageSeq !== null
+        ? rows.find((row) => {
+            if (used.has(row.index) || num(meta(row.message).seq) !== outgoing.messageSeq)
+              return false;
+            const key = rowIdempotencyKey(row.message);
+            return key === null || key === outgoing.id;
+          })
+        : undefined);
+    if (!bySeq) return true;
+    used.add(bySeq.index);
+    anchors.set(outgoing.id, historyItemId(bySeq.message, bySeq.index));
     return false;
   });
   if (outbox.length === activity.outbox.length) return activity;

@@ -74,3 +74,54 @@ describe("web host upgrade handling", () => {
     expect(child.exitCode).toBeNull();
   });
 });
+
+function authedSocket(): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/bridge`, {
+      headers: { cookie: `clawtrate_access=${TOKEN}`, origin: `http://127.0.0.1:${port}` },
+    });
+    socket.once("message", () => resolve(socket));
+    socket.once("error", reject);
+  });
+}
+
+async function healthy(): Promise<boolean> {
+  const response = await fetch(`http://127.0.0.1:${port}/healthz`);
+  return response.status === 200 && child.exitCode === null;
+}
+
+describe("web host bridge frames", () => {
+  it("survives a frame one byte over the bridge limit", async () => {
+    const socket = await authedSocket();
+    const closed = new Promise<number>((resolve) => socket.once("close", (code) => resolve(code)));
+    socket.on("error", () => {});
+    socket.send("x".repeat(64 * 1024 + 1));
+    expect(await closed).toBe(1009);
+    expect(await healthy()).toBe(true);
+  });
+
+  it("answers malformed and flooding frames with bounded errors and keeps running", async () => {
+    const socket = await authedSocket();
+    const results: unknown[] = [];
+    socket.on("message", (data) => results.push(JSON.parse(String(data))));
+    socket.send("{not json");
+    socket.send(
+      JSON.stringify({ type: "command", id: "x".repeat(65), command: { type: "retry" } }),
+    );
+    for (let i = 0; i < 200; i += 1) {
+      socket.send(
+        JSON.stringify({
+          type: "command",
+          id: String(i),
+          command: { type: "openSession", key: `agent:a:t${i}` },
+        }),
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const errors = results.filter((r) => (r as { ok?: boolean }).ok === false);
+    expect(errors.length).toBeGreaterThanOrEqual(2);
+    expect(errors.some((r) => String((r as { error: string }).error).match(/at once/))).toBe(true);
+    socket.close();
+    expect(await healthy()).toBe(true);
+  });
+});

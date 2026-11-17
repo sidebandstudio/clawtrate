@@ -94,7 +94,16 @@ export type BridgeServerMessage =
 export type BridgeClientMessage = { type: "command"; id: string; command: BridgeCommand };
 
 const SESSION_KEY_PATTERN = /^[\w:.@+-]{1,512}$/;
-const ID_PATTERN = /^[\w:.@+-]{1,256}$/;
+/**
+ * Gateway ids (runs, tool calls, approvals, questions) are opaque: the
+ * OpenAI Responses adapter, for one, pairs ids with a vertical bar. They are
+ * bounded strings without control characters, never parsed.
+ */
+export const MAX_OPAQUE_ID_CHARS = 512;
+/** Tasks one viewer may hold open at once. */
+export const MAX_VIEWER_OPEN_TASKS = 32;
+/** Commands one viewer may have in flight at once. */
+export const MAX_VIEWER_PENDING_COMMANDS = 16;
 const BOT_ID_PATTERN = /^[\w.-]{1,128}$/;
 const QUESTION_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const MAX_LABEL_CHARS = 512;
@@ -108,7 +117,14 @@ function sessionKey(value: unknown): string {
 }
 
 function id(value: unknown, what: string): string {
-  if (typeof value !== "string" || !ID_PATTERN.test(value)) throw new Error(`invalid ${what}`);
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MAX_OPAQUE_ID_CHARS ||
+    [...value].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f)
+  ) {
+    throw new Error(`invalid ${what}`);
+  }
   return value;
 }
 
@@ -171,7 +187,14 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       if (
         !Array.isArray(ids) ||
         ids.length > MAX_ATTACHMENTS_PER_MESSAGE ||
-        ids.some((each) => typeof each !== "string" || !ID_PATTERN.test(each))
+        ids.some((each) => {
+          try {
+            id(each, "attachment id");
+            return false;
+          } catch {
+            return true;
+          }
+        })
       ) {
         throw new Error("invalid attachments");
       }
@@ -239,17 +262,10 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       ) {
         throw new Error("invalid duration");
       }
-      if (
-        typeof command.approvalId !== "string" ||
-        command.approvalId.length > 256 ||
-        !command.approvalId
-      ) {
-        throw new Error("invalid approval id");
-      }
       return {
         type: "resolveApproval",
         key: sessionKey(command.key),
-        approvalId: command.approvalId,
+        approvalId: id(command.approvalId, "approval id"),
         decision,
         expiresInDays: days ?? null,
       };
@@ -292,6 +308,7 @@ export function createBridgeSession(
 ): BridgeSession {
   const open = new Set<string>();
   let disposed = false;
+  let inFlight = 0;
   /** Task commands act only on tasks this viewer has open. */
   const mine = (key: string) => {
     if (!open.has(key)) throw new Error("This task is not open in this view.");
@@ -313,8 +330,11 @@ export function createBridgeSession(
         return client.retryNow();
       case "openSession":
         if (!open.has(command.key)) {
-          open.add(command.key);
+          if (open.size >= MAX_VIEWER_OPEN_TASKS) {
+            throw new Error(`A view can hold ${MAX_VIEWER_OPEN_TASKS} tasks open at once.`);
+          }
           client.openSession(command.key);
+          open.add(command.key);
         }
         return;
       case "closeSession":
@@ -344,8 +364,10 @@ export function createBridgeSession(
       case "sendQueuedNow":
         return client.sendQueuedNow(mine(command.key), command.messageId);
       case "createTask": {
+        // Until the gateway is asked, a viewer that goes away takes its request with it.
         const key = await client.createTask(command.botId, command.text, {
           ...(command.label ? { label: command.label } : {}),
+          cancelled: () => disposed,
         });
         // The client already counts this viewer's interest in the new task.
         if (disposed || open.has(key)) client.closeSession(key);
@@ -367,7 +389,17 @@ export function createBridgeSession(
     }
   };
   return {
-    apply: <C extends BridgeCommand>(command: C) => run(command) as Promise<BridgeResultFor<C>>,
+    apply: <C extends BridgeCommand>(command: C) => {
+      if (inFlight >= MAX_VIEWER_PENDING_COMMANDS) {
+        return Promise.reject(
+          new Error("Too many requests are waiting; try again when they finish."),
+        );
+      }
+      inFlight += 1;
+      return run(command).finally(() => {
+        inFlight -= 1;
+      }) as Promise<BridgeResultFor<C>>;
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

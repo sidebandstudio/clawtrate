@@ -5,6 +5,9 @@
 import {
   AttachmentTooLargeError,
   batchSnapshots,
+  type AttachmentReservation,
+  MAX_BRIDGE_FRAME_BYTES,
+  type ClawtrateState,
   createBridgeSession,
   parseBridgeCommand,
   type BridgeServerMessage,
@@ -19,6 +22,66 @@ import type { HostRuntime } from "../host/runtime.ts";
 
 export const ACCESS_COOKIE = "clawtrate_access";
 export const ATTACHMENTS_PATH = "/attachments";
+/** Bridge sockets served at once. */
+export const MAX_WEB_VIEWERS = 32;
+/** Longest command id a viewer may use; it is echoed back in the result. */
+export const MAX_COMMAND_ID_CHARS = 64;
+/** While a viewer's socket buffers more than this, state snapshots wait and only the latest is sent. */
+export const SNAPSHOT_SOFT_BUFFER_BYTES = 1024 * 1024;
+/** A viewer buffering more than this is too slow to keep: its socket is closed. */
+export const SNAPSHOT_HARD_BUFFER_BYTES = 16 * 1024 * 1024;
+/** How often a held-back snapshot is retried. */
+const SNAPSHOT_RETRY_MS = 50;
+
+type ViewerSocket = {
+  readonly readyState: number;
+  readonly OPEN: number;
+  readonly bufferedAmount: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+};
+
+/**
+ * Sending to one viewer within bounded memory. Results and the hello always go
+ * out; state snapshots wait while the socket is backed up, and only the latest
+ * is kept. A viewer that backs up past the hard bound is closed.
+ */
+export function createViewerChannel(ws: ViewerSocket) {
+  let latest: ClawtrateState | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const tooSlow = () => {
+    if (ws.bufferedAmount <= SNAPSHOT_HARD_BUFFER_BYTES) return false;
+    ws.close(1013, "viewer too slow");
+    return true;
+  };
+  const write = (message: BridgeServerMessage) => {
+    if (ws.readyState !== ws.OPEN || tooSlow()) return;
+    ws.send(JSON.stringify(message));
+  };
+  const flush = () => {
+    timer = null;
+    if (!latest || ws.readyState !== ws.OPEN || tooSlow()) return;
+    if (ws.bufferedAmount > SNAPSHOT_SOFT_BUFFER_BYTES) {
+      timer = setTimeout(flush, SNAPSHOT_RETRY_MS);
+      return;
+    }
+    const state = latest;
+    latest = null;
+    write({ type: "state", state });
+  };
+  return {
+    send: write,
+    sendState(state: ClawtrateState) {
+      latest = state;
+      if (!timer) flush();
+    },
+    stop() {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      latest = null;
+    },
+  };
+}
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -191,8 +254,10 @@ export function startWebHost(options: WebHostOptions) {
       return refuse(411, "A content length is required.");
     }
     const meta = { fileName: url.searchParams.get("name"), mimeType: url.searchParams.get("type") };
+    // Room is held before any byte is read, so uploads at the same time cannot together exceed the bounds.
+    let reservation: AttachmentReservation;
     try {
-      store.check(meta, declared);
+      reservation = store.reserve(meta, declared);
     } catch (error) {
       const status = error instanceof AttachmentTooLargeError ? 413 : 400;
       return refuse(status, error instanceof Error ? error.message : String(error));
@@ -200,21 +265,27 @@ export function startWebHost(options: WebHostOptions) {
     const chunks: Buffer[] = [];
     let received = 0;
     let overflow = false;
-    await new Promise<void>((resolveRead, rejectRead) => {
-      req.on("data", (chunk: Buffer) => {
-        received += chunk.length;
-        if (received > declared) {
-          overflow = true;
-          req.destroy();
-          resolveRead();
-          return;
-        }
-        chunks.push(chunk);
+    try {
+      await new Promise<void>((resolveRead, rejectRead) => {
+        req.on("data", (chunk: Buffer) => {
+          received += chunk.length;
+          if (received > declared) {
+            overflow = true;
+            req.destroy();
+            resolveRead();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        req.on("end", () => resolveRead());
+        req.on("error", (error) => (overflow ? resolveRead() : rejectRead(error)));
       });
-      req.on("end", () => resolveRead());
-      req.on("error", (error) => (overflow ? resolveRead() : rejectRead(error)));
-    });
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
     if (overflow || received !== declared) {
+      reservation.release();
       if (!res.headersSent) reply(400, { error: "The body does not match its declared length." });
       return;
     }
@@ -222,15 +293,16 @@ export function startWebHost(options: WebHostOptions) {
       const data = Buffer.concat(chunks, received);
       reply(
         200,
-        store.add(meta, received, () => data.toString("base64")),
+        reservation.commit(() => data.toString("base64")),
       );
     } catch (error) {
+      reservation.release();
       const status = error instanceof AttachmentTooLargeError ? 413 : 400;
       reply(status, { error: error instanceof Error ? error.message : String(error) });
     }
   };
 
-  const sockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_BRIDGE_FRAME_BYTES });
 
   const refuseUpgrade = (socket: Duplex, status: "400 Bad Request" | "401 Unauthorized") => {
     socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
@@ -256,15 +328,25 @@ export function startWebHost(options: WebHostOptions) {
   });
 
   sockets.on("connection", (ws: WebSocket) => {
-    const send = (message: BridgeServerMessage) => {
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
-    };
-    send({ type: "hello", info: runtime.info, state: runtime.client.state });
+    if (sockets.clients.size > MAX_WEB_VIEWERS) {
+      ws.close(1013, "too many viewers");
+      return;
+    }
+    const channel = createViewerChannel(ws);
+    channel.send({ type: "hello", info: runtime.info, state: runtime.client.state });
     const stop = batchSnapshots(runtime.client.store.subscribe, (state) =>
-      send({ type: "state", state }),
+      channel.sendState(state),
     );
     // Each tab is its own viewer: its open transcripts are released when it goes away.
     const session = createBridgeSession(runtime.client, runtime.policy);
+    let ended = false;
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      stop();
+      channel.stop();
+      session.dispose();
+    };
     ws.on("message", (data) => {
       let id = "";
       try {
@@ -273,19 +355,24 @@ export function startWebHost(options: WebHostOptions) {
           id?: unknown;
           command?: unknown;
         };
-        if (message.type !== "command" || typeof message.id !== "string")
+        if (
+          message.type !== "command" ||
+          typeof message.id !== "string" ||
+          message.id.length > MAX_COMMAND_ID_CHARS
+        ) {
           throw new Error("invalid message");
+        }
         id = message.id;
         const command = parseBridgeCommand(message.command);
         session.apply(command).then(
           (value) =>
-            send(
+            channel.send(
               value === undefined
                 ? { type: "result", id, ok: true }
                 : { type: "result", id, ok: true, value },
             ),
           (error: unknown) =>
-            send({
+            channel.send({
               type: "result",
               id,
               ok: false,
@@ -293,7 +380,7 @@ export function startWebHost(options: WebHostOptions) {
             }),
         );
       } catch (error) {
-        send({
+        channel.send({
           type: "result",
           id,
           ok: false,
@@ -301,10 +388,12 @@ export function startWebHost(options: WebHostOptions) {
         });
       }
     });
-    ws.on("close", () => {
-      stop();
-      session.dispose();
+    // An oversized or malformed frame surfaces here; the viewer goes, the host stays.
+    ws.on("error", () => {
+      end();
+      ws.terminate();
     });
+    ws.on("close", end);
   });
 
   server.listen(options.port, options.host);

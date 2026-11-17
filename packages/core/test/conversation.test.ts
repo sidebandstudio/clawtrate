@@ -533,11 +533,15 @@ describe("resync after a gap or a reconnect (F-107)", () => {
     client.stop();
   });
 
-  it("reloads a run after a gap in its own agent seq", async () => {
+  it("does not take a jump in a run's own seq as loss: the gateway coalesces those frames", async () => {
     const { client, gateway, transcript } = await openTask();
+    const reads = gateway.calls("chat.history").length;
     gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
     gateway.emit("agent", agentEvent("run-x", 4, "thinking", { text: "a", delta: "a" }));
-    await until(() => transcript().caughtUp?.reason === "gap");
+    await until(() => transcript().runs[0]?.steps.length === 1);
+    await sleep(200);
+    expect(transcript().caughtUp).toBeNull();
+    expect(gateway.calls("chat.history").length).toBe(reads);
     client.stop();
   });
 

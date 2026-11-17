@@ -13,6 +13,18 @@ export const MAX_IMAGE_BYTES = 6_291_456;
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 /** Most files one message may name. */
 export const MAX_ATTACHMENTS_PER_MESSAGE = 20;
+/** Most files the host keeps waiting at once, counting ones still arriving. */
+export const MAX_PENDING_ATTACHMENTS = 64;
+/** Bytes the host keeps waiting at once, counting ones still arriving. */
+export const MAX_PENDING_ATTACHMENT_BYTES = 128 * 1024 * 1024;
+/** How long an added file waits for a message. */
+export const ATTACHMENT_TTL_MS = 15 * 60_000;
+
+/** Room held for a file while its bytes arrive. Release it on failure, or commit it. */
+export type AttachmentReservation = {
+  commit(encode: () => string): AttachmentInfo;
+  release(): void;
+};
 
 export type AttachmentInfo = { id: string; fileName: string; mimeType: string; sizeBytes: number };
 
@@ -65,6 +77,8 @@ type Entry = { info: AttachmentInfo; attachment: OutgoingAttachment; expiresAt: 
  */
 export class AttachmentStore {
   private readonly entries = new Map<string, Entry>();
+  /** Bytes held for files still arriving, by reservation. */
+  private readonly reserved = new Map<object, number>();
   private readonly options: {
     newId: () => string;
     now: () => number;
@@ -81,16 +95,17 @@ export class AttachmentStore {
     this.options = {
       newId: options.newId,
       now: options.now ?? (() => Date.now()),
-      ttlMs: options.ttlMs ?? 15 * 60_000,
-      maxTotalBytes: options.maxTotalBytes ?? 128 * 1024 * 1024,
+      ttlMs: options.ttlMs ?? ATTACHMENT_TTL_MS,
+      maxTotalBytes: options.maxTotalBytes ?? MAX_PENDING_ATTACHMENT_BYTES,
     };
   }
 
-  /** Room left for new files, after dropping expired ones. */
+  /** Room left for new files, after dropping expired ones and counting files still arriving. */
   available(): number {
     this.sweep();
     let used = 0;
     for (const entry of this.entries.values()) used += entry.info.sizeBytes;
+    for (const bytes of this.reserved.values()) used += bytes;
     return Math.max(0, this.options.maxTotalBytes - used);
   }
 
@@ -106,8 +121,35 @@ export class AttachmentStore {
     const limit = attachmentLimit(valid.mimeType);
     if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0) throw new Error("invalid file size");
     if (sizeBytes > limit) throw new AttachmentTooLargeError(valid.fileName, sizeBytes, limit);
-    if (sizeBytes > this.available()) throw new Error("Too many files are waiting to be sent.");
+    if (
+      sizeBytes > this.available() ||
+      this.entries.size + this.reserved.size >= MAX_PENDING_ATTACHMENTS
+    ) {
+      throw new Error("Too many files are waiting to be sent.");
+    }
     return valid;
+  }
+
+  /**
+   * Hold room for a file before reading its bytes, so files arriving at the
+   * same time cannot together exceed the bounds. Throws as `check` does.
+   */
+  reserve(
+    meta: { fileName: unknown; mimeType: unknown },
+    sizeBytes: number,
+  ): AttachmentReservation {
+    const { fileName, mimeType } = this.check(meta, sizeBytes);
+    const handle = {};
+    this.reserved.set(handle, sizeBytes);
+    return {
+      commit: (encode) => {
+        if (!this.reserved.delete(handle)) throw new Error("The reservation was released.");
+        return this.keep(fileName, mimeType, sizeBytes, encode());
+      },
+      release: () => {
+        this.reserved.delete(handle);
+      },
+    };
   }
 
   /** Add a file once its bytes are in. `encode` gives its base64 and runs only after the checks pass. */
@@ -117,7 +159,15 @@ export class AttachmentStore {
     encode: () => string,
   ): AttachmentInfo {
     const { fileName, mimeType } = this.check(meta, sizeBytes);
-    const base64 = encode();
+    return this.keep(fileName, mimeType, sizeBytes, encode());
+  }
+
+  private keep(
+    fileName: string,
+    mimeType: string,
+    sizeBytes: number,
+    base64: string,
+  ): AttachmentInfo {
     const info: AttachmentInfo = { id: this.options.newId(), fileName, mimeType, sizeBytes };
     this.entries.set(info.id, {
       info,

@@ -31,6 +31,13 @@ export type ExecApprovalDetail = {
   warningText: string | null;
   /** `commandAnalysis` as sent; its shape is not documented in the map. */
   commandAnalysis: unknown;
+  /**
+   * Where it runs. A command on a node is governed by that node's rules, not
+   * the gateway's, and a saved rule there does not bypass an "always ask" host.
+   */
+  runsOn: "gateway" | "node";
+  /** A node's run plan (`systemRunPlan`), as sent. */
+  systemRunPlan: unknown;
 };
 
 export type PluginApprovalDetail = {
@@ -67,8 +74,18 @@ export type ApprovalCard = {
   expiresAt: number | null;
   resolvedAt: number | null;
   resolvedBy: string | null;
-  /** The decisions the gateway offers. Always contains `deny`. */
+  /**
+   * The decisions the request offers, and nothing it did not: a standing allow
+   * appears only when offered. Always contains `deny`.
+   */
   allowedDecisions: ApprovalDecision[];
+  /** Decisions the request says are not available (`unavailableDecisions`), as sent. */
+  unavailableDecisions: ApprovalDecision[];
+  /**
+   * The task whose run started the one that asked, when the asking session is a
+   * helper or a bot messaged by another (`spawnedBy` on its events).
+   */
+  parentSessionKey: string | null;
   exec: ExecApprovalDetail | null;
   plugin: PluginApprovalDetail | null;
   systemAgent: SystemAgentApprovalDetail | null;
@@ -98,17 +115,23 @@ function decision(value: unknown): ApprovalDecision | null {
   return DECISIONS.includes(value as ApprovalDecision) ? (value as ApprovalDecision) : null;
 }
 
-/** The offered decisions, in a fixed order. Deny is always possible. */
-function decisions(value: unknown): ApprovalDecision[] {
-  const offered = new Set(
-    (Array.isArray(value) ? value : [])
-      .map(decision)
-      .filter((d): d is ApprovalDecision => d !== null),
+function decisionList(value: unknown): ApprovalDecision[] {
+  return (Array.isArray(value) ? value : [])
+    .map(decision)
+    .filter((d): d is ApprovalDecision => d !== null);
+}
+
+/**
+ * The offered decisions, in a fixed order: the listed ones; without a list,
+ * allow once less anything marked unavailable. A standing allow is never
+ * assumed. Deny is always possible.
+ */
+function decisions(allowed: unknown, unavailable: unknown = undefined): ApprovalDecision[] {
+  const listed = decisionList(allowed);
+  const offered = new Set<ApprovalDecision>(
+    Array.isArray(allowed) && listed.length > 0 ? listed : ["allow-once"],
   );
-  if (offered.size === 0) {
-    offered.add("allow-once");
-    offered.add("allow-always");
-  }
+  for (const each of decisionList(unavailable)) if (each !== "deny") offered.delete(each);
   offered.add("deny");
   return DECISIONS.filter((each) => offered.has(each));
 }
@@ -131,6 +154,8 @@ function blank(id: string, kind: ApprovalKind, raw: unknown): ApprovalCard {
     resolvedAt: null,
     resolvedBy: null,
     allowedDecisions: decisions(undefined),
+    unavailableDecisions: [],
+    parentSessionKey: null,
     exec: null,
     plugin: null,
     systemAgent: null,
@@ -162,7 +187,8 @@ export function parseExecApproval(value: unknown): ApprovalCard | null {
     toolCallId: str(request.toolCallId),
     createdAt: num(record.createdAtMs),
     expiresAt: num(record.expiresAtMs),
-    allowedDecisions: decisions(request.allowedDecisions),
+    allowedDecisions: decisions(request.allowedDecisions, request.unavailableDecisions),
+    unavailableDecisions: decisionList(request.unavailableDecisions),
     scope: request.scope ?? null,
     exec: {
       command: str(request.command),
@@ -175,6 +201,8 @@ export function parseExecApproval(value: unknown): ApprovalCard | null {
       resolvedPath: str(request.resolvedPath),
       warningText: str(request.warningText),
       commandAnalysis: request.commandAnalysis ?? null,
+      runsOn: str(request.nodeId) || str(request.host) === "node" ? "node" : "gateway",
+      systemRunPlan: request.systemRunPlan ?? null,
     },
   };
 }
@@ -197,7 +225,8 @@ export function parsePluginApproval(value: unknown): ApprovalCard | null {
     toolCallId: str(request.toolCallId),
     createdAt: num(record.createdAtMs),
     expiresAt: num(record.expiresAtMs),
-    allowedDecisions: decisions(request.allowedDecisions),
+    allowedDecisions: decisions(request.allowedDecisions, request.unavailableDecisions),
+    unavailableDecisions: decisionList(request.unavailableDecisions),
     scope: request.scope ?? null,
     plugin: {
       title: str(request.title),
@@ -244,6 +273,7 @@ export function parseApprovalSnapshot(
   };
   if (kind === "exec") {
     card.exec = {
+      // The generic snapshot's presentation names it `commandText`; the interactive request names it `command`.
       command: str(presentation.commandText),
       commandArgv: null,
       cwd: null,
@@ -254,6 +284,8 @@ export function parseApprovalSnapshot(
       resolvedPath: null,
       warningText: str(presentation.warningText),
       commandAnalysis: null,
+      runsOn: str(presentation.nodeId) ? "node" : "gateway",
+      systemRunPlan: null,
     };
   } else if (kind === "plugin") {
     card.plugin = {
@@ -418,13 +450,16 @@ export function settleUnlistedApprovals(
   activity: TaskActivity,
   kinds: readonly ApprovalKind[],
   listed: Set<string>,
+  /** Ids pending when the list was asked for; one that arrived since is never settled by it. */
+  pendingBefore?: ReadonlySet<string>,
 ): TaskActivity {
   let next = activity;
   for (const approval of activity.approvals) {
     if (
       approval.status === "pending" &&
       kinds.includes(approval.kind) &&
-      !listed.has(approval.id)
+      !listed.has(approval.id) &&
+      (pendingBefore === undefined || pendingBefore.has(approval.id))
     ) {
       next = applyApprovalResolved(next, {
         id: approval.id,

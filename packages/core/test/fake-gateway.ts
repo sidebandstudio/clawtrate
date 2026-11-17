@@ -69,7 +69,7 @@ class FakeSocket implements WebSocketLike {
     const method = frame.method;
     if (method === "connect") {
       this.gateway.connects.push(frame.params);
-      const reply = this.gateway.connectReply(frame.params);
+      const reply = this.gateway.connectReply(frame.params, this.url);
       setTimeout(() => this.reply(id, reply), 0);
       return;
     }
@@ -120,7 +120,7 @@ export class FakeGateway {
     "sessions.messages.unsubscribe": () => ({ ok: true }),
     "chat.history": () => ({ messages: [], hasMore: false }),
   };
-  connectReply: (params: unknown) => Reply = () => ({ ok: true, payload: helloOk() });
+  connectReply: (params: unknown, url: string) => Reply = () => ({ ok: true, payload: helloOk() });
 
   readonly createWebSocket = (url: string): WebSocketLike => {
     const socket = new FakeSocket(this, url);
@@ -202,4 +202,35 @@ export function deferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+/**
+ * Memory storage whose reads of chosen keys can be held, to interleave a
+ * credential write with a gateway switch.
+ */
+export function gatedStorage(initial: Record<string, string> = {}) {
+  const base = memoryStorage(initial);
+  const gates = new Map<string, Array<() => void>>();
+  const held = new Set<string>();
+  return {
+    ...base,
+    hold(key: string) {
+      held.add(key);
+    },
+    /** Let every held read of the key go, and stop holding new ones. */
+    release(key: string) {
+      held.delete(key);
+      for (const resume of gates.get(key) ?? []) resume();
+      gates.delete(key);
+    },
+    waiting(key: string) {
+      return gates.get(key)?.length ?? 0;
+    },
+    get: async (key: string) => {
+      if (held.has(key)) {
+        await new Promise<void>((resume) => gates.set(key, [...(gates.get(key) ?? []), resume]));
+      }
+      return base.data.get(key) ?? null;
+    },
+  };
 }

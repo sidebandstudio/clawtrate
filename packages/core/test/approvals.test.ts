@@ -608,13 +608,140 @@ describe("approvals through the client (F-163, F-165, F-166, F-168)", () => {
 
   it("expires a pending approval at its expiry time", async () => {
     const gateway = approvalGateway();
-    gateway.handlers["exec.approval.list"] = () => [
-      { ...execItem("ap-1"), expiresAtMs: Date.now() + 60 },
-    ];
+    const expiresAtMs = Date.now() + 150;
+    gateway.handlers["exec.approval.list"] = () => [{ ...execItem("ap-1"), expiresAtMs }];
     const { client, transcript } = await openTask(INTERACTIVE_SCOPES, gateway);
     await until(() => transcript().approvals.length === 1);
-    gateway.handlers["exec.approval.list"] = () => [];
+    // The gateway still lists it until it expires; the client marks the expiry itself.
     await until(() => transcript().approvals[0]!.status === "expired");
+    expect(transcript().approvals[0]!.reason).toBe("timeout");
+    client.stop();
+  });
+});
+
+describe("decisions, node plans and origins (F-166, F-167, F-098)", () => {
+  it("offers only the decisions the request offers, and never synthesizes an always allow", () => {
+    expect(
+      parseExecApproval(execItem("a", { allowedDecisions: ["allow-once", "deny"] }))!
+        .allowedDecisions,
+    ).toEqual(["allow-once", "deny"]);
+    expect(
+      parseExecApproval(
+        execItem("b", { allowedDecisions: undefined, unavailableDecisions: ["allow-always"] }),
+      )!,
+    ).toMatchObject({
+      allowedDecisions: ["allow-once", "deny"],
+      unavailableDecisions: ["allow-always"],
+    });
+    expect(
+      parseExecApproval(execItem("c", { allowedDecisions: undefined }))!.allowedDecisions,
+    ).toEqual(["allow-once", "deny"]);
+    expect(
+      parseExecApproval(execItem("d", { allowedDecisions: ["allow-always"] }))!.allowedDecisions,
+    ).toEqual(["allow-always", "deny"]);
+  });
+
+  it("reads what will run from the request's command, and keeps a node's plan apart", () => {
+    const card = parseExecApproval(
+      execItem("n", {
+        command: "ls -la",
+        host: "node",
+        nodeId: "node-1",
+        systemRunPlan: { commandText: "ls -la", argv: ["ls", "-la"] },
+      }),
+    )!;
+    expect(card.exec).toMatchObject({
+      command: "ls -la",
+      runsOn: "node",
+      nodeId: "node-1",
+      systemRunPlan: { argv: ["ls", "-la"] },
+    });
+    expect(parseExecApproval(execItem("g"))!.exec!.runsOn).toBe("gateway");
+  });
+});
+
+describe("approvals raised by a helper run (F-098)", () => {
+  it("shows a helper's approval in its parent task, with where it came from, and its cancellation", async () => {
+    const gateway = approvalGateway();
+    gateway.handlers["exec.approval.list"] = () => [];
+    const { client, transcript } = await openTask(INTERACTIVE_SCOPES, gateway);
+    await until(() => transcript().approvalAccess === "ready");
+    const helper = "agent:otto:subagent:sweep";
+    gateway.emit("agent", {
+      runId: "run-h",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1,
+      sessionKey: helper,
+      spawnedBy: KEY,
+      data: { phase: "start" },
+    });
+    gateway.emit(
+      "exec.approval.requested",
+      execItem("ap-h", {
+        sessionKey: helper,
+        runId: "run-h",
+        toolCallId: "call_h",
+        agentId: "otto",
+      }),
+    );
+    await until(() => transcript().approvals.length === 1);
+    expect(transcript().approvals[0]).toMatchObject({
+      id: "ap-h",
+      sessionKey: helper,
+      runId: "run-h",
+      agentId: "otto",
+      parentSessionKey: KEY,
+      status: "pending",
+    });
+    gateway.emit("exec.approval.resolved", { id: "ap-h", decision: "deny", ts: 2 });
+    gateway.emit("openclaw.approval.resolved", {
+      id: "ap-h",
+      urlPath: "/a",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      resolvedAtMs: 3,
+      status: "cancelled",
+      reason: "run-aborted",
+      presentation: { kind: "exec", commandText: "uname -s", allowedDecisions: ["deny"] },
+    });
+    await until(() => transcript().approvals[0]!.status !== "pending");
+    client.stop();
+  });
+});
+
+describe("slow approval and question lists", () => {
+  it("never settle what arrived after the list was asked for", async () => {
+    const gateway = approvalGateway();
+    gateway.handlers["exec.approval.list"] = () => [];
+    const { client, transcript } = await openTask(INTERACTIVE_SCOPES, gateway);
+    await until(() => transcript().approvalAccess === "ready");
+    let releaseList!: (value: unknown) => void;
+    gateway.handlers["exec.approval.list"] = () =>
+      new Promise((resolve) => (releaseList = resolve));
+    let releaseQuestions!: (value: unknown) => void;
+    gateway.handlers["question.list"] = () =>
+      new Promise((resolve) => (releaseQuestions = resolve));
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => typeof releaseList === "function" && typeof releaseQuestions === "function");
+    gateway.emit("exec.approval.requested", execItem("ap-new"));
+    gateway.emit("question.requested", {
+      id: "ask_new",
+      questions: [
+        { questionId: "q", header: "Q", question: "?", options: [{ label: "A" }, { label: "B" }] },
+      ],
+      sessionKey: KEY,
+      runId: "run-1",
+      createdAtMs: 1,
+      expiresAtMs: 9_000_000_000_000,
+      status: "pending",
+    });
+    await until(() => transcript().approvals.length === 1 && transcript().questions.length === 1);
+    releaseList([]);
+    releaseQuestions({ questions: [] });
+    await sleep(50);
+    expect(transcript().approvals[0]!.status).toBe("pending");
+    expect(transcript().questions[0]!.status).toBe("pending");
     client.stop();
   });
 });

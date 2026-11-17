@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
+import { createBridgeSession, MAX_OPAQUE_ID_CHARS, parseBridgeCommand } from "../src/bridge.ts";
 import type { ClawtrateClient } from "../src/client.ts";
 
 describe("parseBridgeCommand", () => {
@@ -95,9 +95,25 @@ describe("parseBridgeCommand for the live conversation", () => {
       parseBridgeCommand({ type: "sendMessage", key, text: "x".repeat(32_001) }),
     ).toThrow("invalid text");
     expect(() => parseBridgeCommand({ type: "sendMessage", key: "../x", text: "hi" })).toThrow();
-    expect(() => parseBridgeCommand({ type: "retryMessage", key, messageId: "a b" })).toThrow();
     expect(() =>
-      parseBridgeCommand({ type: "sendMessage", key, text: "hi", attachmentIds: ["../x"] }),
+      parseBridgeCommand({ type: "retryMessage", key, messageId: "a\u0000b" }),
+    ).toThrow();
+    expect(() =>
+      parseBridgeCommand({
+        type: "retryMessage",
+        key,
+        messageId: "x".repeat(MAX_OPAQUE_ID_CHARS + 1),
+      }),
+    ).toThrow();
+    expect(
+      parseBridgeCommand({ type: "retryMessage", key, messageId: "x".repeat(MAX_OPAQUE_ID_CHARS) }),
+    ).toMatchObject({ messageId: "x".repeat(MAX_OPAQUE_ID_CHARS) });
+    // Gateway ids are opaque: the Responses adapter pairs them with a vertical bar.
+    expect(
+      parseBridgeCommand({ type: "readStepRaw", key, stepId: "tool:call_123|fc_456" }),
+    ).toMatchObject({ stepId: "tool:call_123|fc_456" });
+    expect(() =>
+      parseBridgeCommand({ type: "sendMessage", key, text: "hi", attachmentIds: ["a\nb"] }),
     ).toThrow("invalid attachments");
     expect(() =>
       parseBridgeCommand({
