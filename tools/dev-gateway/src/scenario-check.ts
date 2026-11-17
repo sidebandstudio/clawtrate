@@ -148,10 +148,18 @@ export class RunView {
         (e) => this.data(e).toolCallId === id && this.data(e).phase === "end",
       );
       expect(itemStart && itemEnd, `${where} item start and end`);
+      // Every item event of the call, start, updates and end, names the call
+      // and its action; the end also says how it went.
+      const callItems = items.filter((e) => this.data(e).toolCallId === id);
       same(
-        [this.data(itemStart).name, this.data(itemStart).title, this.data(itemEnd).status],
-        [call.name, call.title, call.status ?? (call.isError ? "failed" : "completed")],
-        `${where} item name, title and end status`,
+        callItems.map((e) => [this.data(e).phase, this.data(e).name, this.data(e).title]),
+        callItems.map((e) => [this.data(e).phase, call.name, call.title]),
+        `${where} item names and titles`,
+      );
+      same(
+        this.data(itemEnd).status,
+        call.status ?? (call.isError ? "failed" : "completed"),
+        `${where} item end status`,
       );
     }
     TRACKED.get(this.runId)!.calls = true;
