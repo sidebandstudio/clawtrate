@@ -238,6 +238,9 @@ describe("slow viewers (one snapshot per viewer beyond what its socket accepted)
     });
     try {
       await once(socket, "message");
+      // Anything the viewer receives once it stops reading would be a snapshot left to flush.
+      let delivered = 0;
+      socket.on("message", () => (delivered += 1));
       // The viewer stops reading.
       (socket as unknown as { _socket: { pause(): void } })._socket.pause();
       const big = "x".repeat(8 * 1024 * 1024);
@@ -248,11 +251,15 @@ describe("slow viewers (one snapshot per viewer beyond what its socket accepted)
       await new Promise((resolve) => setTimeout(resolve, 50));
       // One written and not accepted; the newer ones wait as one reference, not as copies.
       expect(written).toHaveLength(1);
-      const closed = once(socket, "close");
+      const closed = once(socket, "close") as Promise<[number, Buffer]>;
       await new Promise((resolve) => setTimeout(resolve, drain + 200));
       (socket as unknown as { _socket: { resume(): void } })._socket.resume();
-      await closed;
+      const [code] = await closed;
       expect(written).toHaveLength(1);
+      // Dropped with what it left buffered: no close frame (1006), and nothing flushed to it after.
+      // A graceful close would deliver the buffered snapshot and then a 1013 close frame.
+      expect(code).toBe(1006);
+      expect(delivered).toBe(0);
     } finally {
       WebSocket.prototype.send = send;
       socket.terminate();
