@@ -309,12 +309,15 @@ export function ActionScope({
         called.add(entry.call.name);
         return repeat ? { ...entry, call: { ...entry.call, repeat: true } } : entry;
       });
+    const engineRunIds = new Set(engineRuns.map((run) => run.id));
     const items = new Map<string, { groups: Groups; revision: number }>();
     let previousUser: string | null = null;
     for (const item of transcript.items) {
       if (item.role === "user") previousUser = item.id;
       if (item.role !== "assistant") continue;
       const run = runOfItem(item, previousUser, index, transcript.runs);
+      // A run drawn from the engine is drawn there alone: its rows history already holds are not drawn twice.
+      if (run && engineRunIds.has(run.id)) continue;
       const entries = markRepeats(itemEntries(item, run, index, skip, cards));
       items.set(item.id, {
         groups: groupFeed(entries, ctx),

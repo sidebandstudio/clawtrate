@@ -74,6 +74,15 @@ Key a step's view state (expansion, selection, a link) by `Step.id`. A tool step
 
 `selectMessageCards` (`src/cards.ts`) derives the "Messaged <bot>" and MCP cards from a task's runs. It is a pure view and changes nothing in state.
 
+## Reading an action
+
+`src/actions.ts` reads a tool call as an action (`docs/design/conversation.md`, sections 7 and 8), and `src/action-feed.ts` lays a run's actions out. Both are pure and keep nothing; every word comes from one catalogue, `src/action-words.ts` (exported as `actionWords`), so a translation replaces that module alone. The iOS app uses the same functions.
+
+- An `ActionCall` is a call as the reading takes it: its name, arguments, `status` (what the events established: `running`, `waiting`, `review`, `returned`, `stopped`, `cut-off`, or `unreturned` when its run ended otherwise with no result), the result's text, `isError` and `details`. `callFromStep(step, run)` and `callFromBlock(block, step, run)` build one from the engine's state, live or from a history item.
+- `kindOf` gives the kind of 8.1 and the fold key (null: never folds); `outcomeOf` the outcome of 7.3: the event's status first, then the kind's adapter, then the general reading of the payload (`payloadOutcome`); nothing reaches Done by default. `lineOf` gives the line's words, state and accessible name; `foldLineOf` a fold's; `readableOf` the opened card's readable view, as data.
+- `groupFeed(entries)` groups a run's ordered record (actions, reasoning, bubbles, cards and other breaks) into cards, folds and "Thought" lines, keyed by the gateway's tool call ids (a fold by its first member's). The live run and history go through it alike. `runLineOf` gives the run line; `phraseCall` the call whose running words the status line says.
+- A step keeps what the reading needs even when its raw payload is too large to travel: `Step.args` and `Step.details` are bounded projections (`projectArgs`, `projectDetails`, at most `MAX_ACTION_FACTS_CHARS` each), and `Step.commandBearing` is the gateway's mark. A run keeps the text the model wrote beside a tool call in `Run.preambles` (`item` events of kind `preamble`), each placed before the tool step that follows it (`beforeTools`).
+
 Every bounded object may carry `cut?: string[]`, the paths of fields cut to their bound. It is a diagnostic list, not a safety fact; for approvals, that fact is `decisionCut`.
 
 ## What each state establishes
@@ -123,3 +132,4 @@ Since the guide first described the engine, these changes are not additive. Code
 - Removed exports: `EngineContext.ids` (the client-wide reasoning id allocator); `CLIENT_FOREIGN`, `VIEWER_FOREIGN` and `ATTACHMENT_FOREIGN`, replaced by `CLIENT_NOT_WALKED`, `VIEWER_NOT_WALKED` and `ATTACHMENT_NOT_WALKED`, records that give a reason for each property; `GATEWAY_HISTORY_RESPONSE_BYTES`. `HistoryMerge.fromHistory` is now a `Set<string>` of step ids, not a `Map` from step id to source id.
 - New refusals a caller must handle: `client.store.subscribe` throws past `MAX_STORE_LISTENERS` (32) listeners, and `readApprovalText` now shares the gate of four concurrent whole reads with `readStepRaw` and `readHistoryItem`, so a fifth whole read of any kind is refused with an error to show.
 - New in this round: the `not-established` and `too-large-for-gateway` results of `readStepRaw`, and `Run.reasoningRevision` with its rule.
+- Additive since then: `Step.args`, `Step.details` and `Step.commandBearing`, and `Run.preambles`, all optional, so code that builds `Step` and `Run` values keeps compiling; a step without them is read from `argsText` and its result text alone. The worst case of a step and of a run grew with them (`docs/decisions.md`).

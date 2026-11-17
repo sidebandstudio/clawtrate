@@ -217,13 +217,18 @@ test("F-002 F-003 F-009: pairs with the development gateway in steps, says when 
   await expect(turns.nth(1)).toContainText("The usual suspects on a media box");
   await expect(page.getByTestId("tool-call")).toHaveCount(3);
 
-  // Thoughts and tool calls are folded into one line per run. Opened, a tool
-  // call still shows its full arguments and the gateway's result.
-  const read = page.getByTestId("tool-call").filter({ hasText: "read" });
-  await page.locator("details.steps").filter({ has: read }).locator(":scope > summary").click();
-  await read.locator("summary").click();
-  await expect(read).toContainText('"path": "AGENTS.md"');
-  await expect(read).toContainText("You are Otto, the operator for a small home server.");
+  // Each action is a card. Opened, it shows what came back; its Raw tab, the
+  // arguments and the gateway's result as sent.
+  const read = page.locator('[data-testid="tool-call"][data-kind="read"]');
+  await expect(read.locator(":scope > summary")).toHaveAccessibleName(/^Read AGENTS\.md/);
+  await read.locator(":scope > summary").click();
+  await expect(read.getByRole("tabpanel")).toContainText(
+    "You are Otto, the operator for a small home server.",
+  );
+  await read.getByRole("tab", { name: "Raw" }).click();
+  await expect(read.getByRole("region", { name: "What the gateway sent" })).toContainText(
+    '"path": "AGENTS.md"',
+  );
 
   // The footer is the gateway menu's button; its name and dot carry the state.
   const gateway = page.getByRole("button", { name: /, connected\. Open the gateway menu\.$/ });
@@ -707,9 +712,9 @@ test("tool calls open to their arguments, result and error", async ({ page }) =>
   const bridge = await proxyBridge(page);
   await openShell(page);
   await openTask(page, "Otto", "Disk almost full on the media box");
-  const read = page.getByTestId("tool-call").filter({ hasText: "read" });
-  await page.locator("details.steps").filter({ has: read }).locator(":scope > summary").click();
-  await read.locator("summary").click();
+  const read = page.locator('[data-testid="tool-call"][data-kind="read"]');
+  await read.locator(":scope > summary").click();
+  await read.getByRole("tab", { name: "Raw" }).click();
   await expect(read).toContainText("Arguments");
   await expect(read).toContainText("Result");
 
@@ -738,10 +743,11 @@ test("tool calls open to their arguments, result and error", async ({ page }) =>
     });
     return state;
   });
-  const failed = page.getByTestId("tool-call").filter({ hasText: "/etc/hosts" });
-  await page.locator("details.steps").filter({ has: failed }).locator(":scope > summary").click();
-  await expect(failed).toContainText("failed");
-  await failed.locator("summary").click();
+  const failed = page.locator('[data-testid="tool-call"][data-call="injected"]');
+  await expect(failed.locator(":scope > summary")).toHaveAccessibleName(
+    "Couldn't edit hosts, Permission denied, failed",
+  );
+  await failed.locator(":scope > summary").click();
   await expect(failed).toContainText("Error");
   await expect(failed).toContainText("Permission denied");
 });
@@ -912,7 +918,7 @@ test("F-027: a hidden bot keeps working: a run on the gateway shows in the Hidde
   await expect(page.locator('.bot-list > .bot-group > .bot[data-bot="marlow"]')).toHaveCount(0);
 });
 
-test("F-088: a gateway run that narrates between its tool calls shows each narration as its own short bubble, with the tool calls folded between", async ({
+test("F-088: a gateway run that narrates between its tool calls shows each narration as its own short bubble, with its action cards between", async ({
   page,
 }) => {
   await openShell(page);
@@ -934,19 +940,19 @@ test("F-088: a gateway run that narrates between its tool calls shows each narra
   const turn = page.getByTestId("transcript-turn").last();
   await expect(turn).toContainText("I wrote notes/scratch.md.");
   const parts = await turn
-    .locator(':scope > .msg[data-role="assistant"], :scope > .steps')
+    .locator(':scope > .msg[data-role="assistant"], :scope > .action')
     .evaluateAll((nodes) =>
       nodes.map((node) =>
-        node.classList.contains("steps")
-          ? `[${node.querySelector("summary")!.textContent!.trim()}]`
+        node.classList.contains("action")
+          ? `[${node.querySelector("summary")!.getAttribute("aria-label")!.split(",")[0]}]`
           : node.textContent!.trim(),
       ),
     );
   expect(parts).toEqual([
     "Here is a plain reply, streamed in small pieces with no reasoning first.",
-    "[Used 1 tool]",
+    "[Looked in .]",
     "Those are the files in my workspace.",
-    "[Used 1 tool]",
+    "[Created scratch.md]",
     "I wrote notes/scratch.md.",
   ]);
   await expect(turn.locator('.msg[data-role="assistant"] .bubble')).toHaveCount(3);
@@ -1189,7 +1195,7 @@ test("F-097: Stop during a real run is offered beside Send, and the gateway's co
   await expect(page.getByRole("button", { name: "Steer this turn" })).toBeVisible();
   await page.getByRole("button", { name: "Stop Otto" }).click();
   await expect(page.getByTestId("stop-note").last()).toContainText(
-    "Completed steps are not undone.",
+    "Completed actions are not undone.",
     { timeout: 30_000 },
   );
   await expect(page.getByTestId("stop-note").last()).toContainText(/^Stopped/);
@@ -1210,7 +1216,7 @@ test("F-097: a typed /stop stops the run, and the note does not say it came from
   await composer(page).fill("/stop");
   await page.keyboard.press("Enter");
   const note = page.getByTestId("stop-note").last();
-  await expect(note).toContainText("Completed steps are not undone.", { timeout: 30_000 });
+  await expect(note).toContainText("Completed actions are not undone.", { timeout: 30_000 });
   await expect(note).not.toContainText("another device");
   await expect(page.getByTestId("status-line")).toHaveCount(0);
 });
@@ -1383,7 +1389,7 @@ test("F-468: a message queued behind a slow reply stays Not sent after a confirm
   await expect(row).toContainText("Queued");
   await page.getByRole("button", { name: "Stop Otto" }).click();
   const note = page.getByTestId("stop-note").last();
-  await expect(note).toContainText("Completed steps are not undone.", { timeout: 30_000 });
+  await expect(note).toContainText("Completed actions are not undone.", { timeout: 30_000 });
   await expect(note).toContainText(/^Stopped/);
   // The engine decides when the stop is confirmed: the message stays, not sent, until asked.
   await expect(row).toContainText("Not sent");
@@ -1424,6 +1430,93 @@ test("F-468: a real question holds a message typed while it is pending, and answ
     .toBe(true);
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("transcript-turn").filter({ hasText: text })).not.toHaveCount(0);
+});
+
+/** The action cards' and folds' lines in a transcript, in order. */
+const actionLines = (page: Page) =>
+  page
+    .locator(".transcript details.card.action > summary")
+    .evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute("aria-label")!.replace(/, [0-9.]+ seconds$/, "")),
+    );
+
+test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five files fold into one card, the status line says the running card and brings it into view, and the run ends with a run line", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  await composer(page).fill("Go through the workspace. #read-six #slow-tool 8");
+  await page.keyboard.press("Enter");
+  // While the slow tool runs: the reads are one card, the slow call its own card, running.
+  const status = page.getByTestId("status-line");
+  const running = page.locator('.transcript details.card.action[data-status="running"]');
+  await expect(running).toHaveCount(1, { timeout: 30_000 });
+  const reads = page.locator(".transcript details.card.action[data-fold]").last();
+  await expect(reads).toHaveAttribute("data-fold", "6");
+  // The scenario reads AGENTS.md twice: five distinct files, six reads (7.4, counting).
+  await expect(reads.locator(":scope > summary")).toHaveAccessibleName(
+    /^Read 5 files · 6 reads, AGENTS\.md, SOUL\.md, IDENTITY\.md, USER\.md, BOOTSTRAP\.md, /,
+  );
+  const words = (await running.locator(".action-sentence").textContent())!
+    .replace(/\s+/g, " ")
+    .trim();
+  await expect(status.getByTestId("status-phrase")).toHaveText(words);
+  await expect(status).toHaveAttribute("title", words);
+  await expect(status).toHaveAccessibleName(`Otto, working: ${words}. Show the action.`);
+  const live = await actionLines(page);
+  // The status line brings the running card into view and focuses its line, without opening it.
+  await page.getByTestId("transcript").evaluate((element) => (element.scrollTop = 0));
+  await status.click();
+  await expect(running.locator(":scope > summary")).toBeFocused();
+  await expect(running).not.toHaveAttribute("open", "");
+  // No reasoning text is on screen.
+  await expect(
+    page.getByText("I will read through my workspace files one after another."),
+  ).toBeHidden();
+  // The run ends: a run line counts its actions, and the reads are still one card.
+  await expect(status).toHaveCount(0, { timeout: 60_000 });
+  const run = page.getByTestId("run-line").last();
+  await expect(run.locator("summary")).toHaveAccessibleName(/^Worked for \d+s · 7 actions$/);
+  const ended = await actionLines(page);
+  expect(ended.find((line) => line.startsWith("Read 5 files"))).toBe(
+    live.find((line) => line.startsWith("Read 5 files")),
+  );
+
+  // History reloaded: the page is loaded again and reads the task anew; the same cards.
+  await page.reload();
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  await openTask(page, "Otto", "Weekly backup check");
+  await expect(page.getByTestId("run-line").last()).toBeVisible({ timeout: 30_000 });
+  // Every card is the same, except that the gateway's history keeps no `details` for a
+  // tool-server result: without `mcpServer` and `mcpTool` the call is the general card (8.2).
+  expect(await actionLines(page)).toEqual(
+    ended.map((line) => (line === "Used coder, slow task" ? "Used coder slow task" : line)),
+  );
+  expect(ended).toContain("Used coder, slow task");
+});
+
+test("F-092 F-294: a real step that fails shows its failure on its own line, and the run line counts it", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  await composer(page).fill("Look for my old notes. #tool-fail");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  const failed = page.locator('.transcript details.card.action[data-status="failed"]').last();
+  await expect(failed.locator(":scope > summary")).toHaveAccessibleName(
+    /^Couldn't read old-notes\.md, .*, failed$/,
+  );
+  await expect(failed.locator(".action-state")).toHaveText("Failed");
+  await expect(page.getByTestId("run-line").last().locator("summary")).toHaveAccessibleName(
+    /^Worked for \d+s · 1 action · 1 failed$/,
+  );
+  // The error stays in Raw as the gateway sent it.
+  await failed.locator(":scope > summary").click();
+  await failed.getByRole("tab", { name: "Raw" }).click();
+  await expect(failed.getByRole("region", { name: "What the gateway sent" })).toContainText(
+    "missing/old-notes.md",
+  );
 });
 
 test("leaves every other instance's gateway as it found it", () => {

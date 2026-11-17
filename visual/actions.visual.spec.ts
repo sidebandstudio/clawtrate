@@ -4,7 +4,7 @@
 // the gateway's own shapes and go through the engine
 // (apps/desktop/src/fixture/actions.ts).
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import type { ClawtrateState } from "@clawtrate/core";
+import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const open = (page: Page, scene: string, theme: "light" | "dark" = "light", extra = "") =>
