@@ -3,8 +3,11 @@ import {
   applySidebarChange,
   changeSidebar,
   MAX_SIDEBAR_BOTS,
+  MAX_SECTION_NAME_CHARS,
+  MAX_SIDEBAR_BYTES,
   MAX_SIDEBAR_SECTIONS,
   parseSidebar,
+  sidebarBytes,
   readSidebar,
   SIDEBAR_PREF_KEY,
   SIDEBAR_WRITE_ATTEMPTS,
@@ -142,6 +145,75 @@ describe("the rail's arrangement on the gateway", () => {
     const state = await changeSidebar(store.ctx, { op: "pin", botId: "pip", pinned: true }, null);
     expect(state.prefs?.pins).toEqual(["otto", "pip"]);
     expect(store.calls.filter((call) => call.method === "users.prefs.set")).toHaveLength(2);
+  });
+
+  it("F-014 F-016: a change that would take the arrangement past the gateway's 4,096 bytes is refused in plain words, and nothing is written", async () => {
+    // Long but legal ids: 31 of them pinned leave the arrangement just under the gateway's limit.
+    const pins = Array.from({ length: 31 }, (_, index) => `p${index}`.padEnd(125, "x"));
+    const sections: Array<{ name: string; bots: string[] }> = [];
+    const store = prefsStore({ pins, sections, hidden: [], order: [] });
+    expect(sidebarBytes(parseSidebar(store.value()))).toBeLessThanOrEqual(MAX_SIDEBAR_BYTES);
+    await expect(
+      changeSidebar(
+        store.ctx,
+        { op: "section", botId: "extra", section: "é".repeat(MAX_SECTION_NAME_CHARS) },
+        null,
+      ),
+    ).rejects.toThrow("The gateway keeps at most 4,096 bytes of arrangement");
+    expect(store.calls.filter((call) => call.method === "users.prefs.set")).toHaveLength(0);
+  });
+
+  it("F-014: pinning past the cap is refused in plain words rather than dropped", () => {
+    const pins = Array.from({ length: MAX_SIDEBAR_BOTS }, (_, index) => `b${index}`);
+    expect(() =>
+      applySidebarChange(parseSidebar({ pins }), { op: "pin", botId: "one-more", pinned: true }),
+    ).toThrow(`At most ${MAX_SIDEBAR_BOTS} bots can be pinned.`);
+  });
+
+  it("F-014: a move keeps every other bot where the gateway holds it, so another device's move made meanwhile survives", async () => {
+    // Another device moves Cato to the front between our read and our write.
+    let value: unknown = {
+      pins: [],
+      sections: [],
+      hidden: [],
+      order: ["atlas", "bree", "cato", "dax"],
+    };
+    let meddled = false;
+    const calls: string[] = [];
+    const ctx: SidebarContext = {
+      request: async (method, raw) => {
+        calls.push(method);
+        const params = raw as Record<string, Record<string, unknown>>;
+        if (method === "users.prefs.get")
+          return { status: "ok", entries: { [SIDEBAR_PREF_KEY]: value } };
+        if (!meddled) {
+          meddled = true;
+          value = { pins: [], sections: [], hidden: [], order: ["cato", "atlas", "bree", "dax"] };
+          return { status: "conflict" };
+        }
+        value = params.entries![SIDEBAR_PREF_KEY];
+        return { status: "ok" };
+      },
+      ensureWrite: async () => {},
+    };
+    // This device moves Dax before Atlas.
+    const state = await changeSidebar(
+      ctx,
+      { op: "move", botId: "dax", before: "atlas", shown: ["atlas", "bree", "cato", "dax"] },
+      null,
+    );
+    expect(state.prefs?.order).toEqual(["cato", "dax", "atlas", "bree"]);
+    expect(calls.filter((method) => method === "users.prefs.set")).toHaveLength(2);
+  });
+
+  it("F-014: a move places the bots the stored order does not name yet in the order shown", () => {
+    const moved = applySidebarChange(parseSidebar({ order: ["bree"] }), {
+      op: "move",
+      botId: "atlas",
+      before: null,
+      shown: ["bree", "cato", "atlas"],
+    });
+    expect(moved.order).toEqual(["bree", "cato", "atlas"]);
   });
 
   it("gives up after a bounded number of conflicts", async () => {

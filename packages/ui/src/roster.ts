@@ -142,8 +142,14 @@ function applyLocal(prefs: RosterPrefs, change: SidebarChange): RosterPrefs {
           ? [...new Set([...prefs.hidden, change.botId])]
           : prefs.hidden.filter((x) => x !== change.botId),
       };
-    case "order":
-      return { ...prefs, manual: change.order };
+    case "move": {
+      const order = [...prefs.manual];
+      for (const id of change.shown) if (!order.includes(id)) order.push(id);
+      const without = order.filter((id) => id !== change.botId);
+      const at = change.before === null ? -1 : without.indexOf(change.before);
+      without.splice(at === -1 ? without.length : at, 0, change.botId);
+      return { ...prefs, manual: without };
+    }
     case "section": {
       const sections = prefs.sections
         .map((section) => ({ ...section, bots: section.bots.filter((x) => x !== change.botId) }))
@@ -298,7 +304,12 @@ export function useRoster(
       (id: string, hide: boolean) => apply({ op: "hide", botId: id, hidden: hide }),
       [apply],
     ),
-    setManual: useCallback((manual: string[]) => apply({ op: "order", order: manual }), [apply]),
+    /** Move a bot before another in the manual order (null: to the end); `shown` is the list as shown. */
+    move: useCallback(
+      (id: string, before: string | null, shown: string[]) =>
+        apply({ op: "move", botId: id, before, shown }),
+      [apply],
+    ),
     moveToSection: useCallback(
       (id: string, section: string | null) => apply({ op: "section", botId: id, section }),
       [apply],

@@ -52,7 +52,7 @@ import {
   useActionRunner,
   type DialogSpec,
 } from "./RailActions.tsx";
-import { arrange, moveInOrder, rosterScope, SORT_ORDERS, useRoster } from "./roster.ts";
+import { arrange, rosterScope, SORT_ORDERS, useRoster } from "./roster.ts";
 import {
   botLabel,
   summarize,
@@ -794,8 +794,13 @@ export function Rail({
   /** Move a bot within the manual order of the list. */
   const moveBot = (id: string, toIndex: number) => {
     const shown = arranged.list.map((bot) => bot.id);
-    const next = moveInOrder(shown, id, toIndex);
-    roster.setManual([...next, ...roster.prefs.manual.filter((other) => !next.includes(other))]);
+    const without = shown.filter((other) => other !== id);
+    const before = without[Math.max(0, toIndex)] ?? null;
+    // One bot's move: every other bot keeps the place the arrangement holds, so another
+    // device's moves made meanwhile survive.
+    void runner.run(`move ${bots.find((bot) => bot.id === id)?.name ?? id}`, () =>
+      roster.move(id, before, shown),
+    );
   };
 
   const openBotMenu = (botId: string, trigger: HTMLElement, x: number, y: number) => {

@@ -8,6 +8,7 @@
 // user profile; a connection without one (a shared token) gets
 // `no_durable_identity`, and the rail then keeps its arrangement per device.
 
+import { utf8Length } from "./encoding.ts";
 import { asRecord } from "./mapping.ts";
 
 export const SIDEBAR_PREF_KEY = "clawtrate.sidebar";
@@ -19,6 +20,25 @@ export const MAX_SECTION_NAME_CHARS = 64;
 export const MAX_SIDEBAR_ID_CHARS = 128;
 /** Times a change is applied again after a conflict before it gives up. */
 export const SIDEBAR_WRITE_ATTEMPTS = 4;
+/**
+ * The most the gateway keeps in one preference: 4,096 UTF-8 bytes of its JSON
+ * (`prepareEntries`, OpenClaw 2026.10.6 `user-preferences` validation, which
+ * refuses more with `value-too-large`).
+ */
+export const MAX_SIDEBAR_BYTES = 4_096;
+
+/** A change the gateway would refuse as too large, or a list already full: said in plain words. */
+export class SidebarFullError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SidebarFullError";
+  }
+}
+
+/** The bytes the gateway counts for an arrangement. */
+export function sidebarBytes(prefs: SidebarPrefs): number {
+  return utf8Length(JSON.stringify(prefs));
+}
 
 export type SidebarSection = { name: string; bots: string[] };
 
@@ -48,7 +68,13 @@ export const initialSidebar: SidebarState = { status: "unknown", prefs: null };
 export type SidebarChange =
   | { op: "pin"; botId: string; pinned: boolean }
   | { op: "hide"; botId: string; hidden: boolean }
-  | { op: "order"; order: string[] }
+  /**
+   * Move one bot in the manual order: before `before`, or to the end when null.
+   * `shown` is the order this device shows, which places the bots the stored
+   * order does not name yet; every other bot keeps the place the gateway holds,
+   * so another device's moves made meanwhile survive.
+   */
+  | { op: "move"; botId: string; before: string | null; shown: string[] }
   /** Move a bot into a section, made when new; null takes it out of every section. */
   | { op: "section"; botId: string; section: string | null };
 
@@ -105,6 +131,8 @@ export function applySidebarChange(prefs: SidebarPrefs, change: SidebarChange): 
   const without = (list: string[], id: string) => list.filter((other) => other !== id);
   switch (change.op) {
     case "pin":
+      if (change.pinned && !prefs.pins.includes(change.botId) && prefs.pins.length >= MAX_SIDEBAR_BOTS)
+        throw new SidebarFullError(`At most ${MAX_SIDEBAR_BOTS} bots can be pinned.`);
       return parseSidebar({
         ...prefs,
         pins: change.pinned
@@ -120,8 +148,14 @@ export function applySidebarChange(prefs: SidebarPrefs, change: SidebarChange): 
         // A hidden bot is not pinned.
         pins: change.hidden ? without(prefs.pins, change.botId) : prefs.pins,
       });
-    case "order":
-      return parseSidebar({ ...prefs, order: change.order });
+    case "move": {
+      const order = [...prefs.order];
+      for (const id of change.shown) if (!order.includes(id)) order.push(id);
+      const without = order.filter((id) => id !== change.botId);
+      const at = change.before === null ? -1 : without.indexOf(change.before);
+      without.splice(at === -1 ? without.length : at, 0, change.botId);
+      return parseSidebar({ ...prefs, order: without });
+    }
     case "section": {
       const sections = prefs.sections.map((section) => ({
         name: section.name,
@@ -192,6 +226,10 @@ export async function changeSidebar(
         ? parseSidebar(base ?? {})
         : parseSidebar(read.raw);
     const next = applySidebarChange(from, change);
+    if (sidebarBytes(next) > MAX_SIDEBAR_BYTES)
+      throw new SidebarFullError(
+        "The gateway keeps at most 4,096 bytes of arrangement, and this change would pass that. Remove a section or shorten section names first.",
+      );
     const result = asRecord(
       await ctx.request("users.prefs.set", {
         entries: { [SIDEBAR_PREF_KEY]: next },

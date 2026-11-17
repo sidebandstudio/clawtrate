@@ -308,10 +308,17 @@ function sidebarChange(value: unknown): SidebarChange {
       return { op: "pin", botId: botId(change.botId), pinned: flag(change.pinned) };
     case "hide":
       return { op: "hide", botId: botId(change.botId), hidden: flag(change.hidden) };
-    case "order":
-      if (!Array.isArray(change.order) || change.order.length > MAX_SIDEBAR_BOTS)
+    case "move": {
+      if (!Array.isArray(change.shown) || change.shown.length > MAX_SIDEBAR_BOTS)
         throw new Error("invalid order");
-      return { op: "order", order: change.order.map(botId) };
+      const before = change.before;
+      return {
+        op: "move",
+        botId: botId(change.botId),
+        before: before === null ? null : botId(before),
+        shown: change.shown.map(botId),
+      };
+    }
     case "section": {
       const section = change.section;
       if (section !== null && typeof section !== "string") throw new Error("invalid section");

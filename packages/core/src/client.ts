@@ -660,6 +660,9 @@ export class ClawtrateClient {
   private readonly waiting = new WaitingIndex();
   /** Tasks whose read on opening is on its way: one per task at a time, however often it is asked. */
   private readonly openedReads = new Set<string>();
+  /** Reads and writes of the rail's arrangement in the order they were made, and the newest shown. */
+  private sidebarIssued = 0;
+  private sidebarShown = 0;
   /** Open transcripts, counted, so several viewers can share one. */
   private readonly openSessions = new Map<string, number>();
   /** The streaming reply text of each task's newest `MAX_STREAMS_PER_TASK` runs, only while they stream. */
@@ -4674,22 +4677,28 @@ export class ClawtrateClient {
   ): Promise<void> {
     const generation = this.generation;
     const next = await changeSidebar(this.actionContext(options.owner ?? null), change, base);
-    if (generation === this.generation) this.setSidebar(next);
+    // What the gateway holds once this write was made: newer than any read asked before now.
+    if (generation === this.generation) this.setSidebar(next, ++this.sidebarIssued);
   }
 
-  private setSidebar(sidebar: SidebarState): void {
+  /** Show an arrangement unless something newer than it is already shown. */
+  private setSidebar(sidebar: SidebarState, issued: number): void {
+    if (issued <= this.sidebarShown) return;
+    this.sidebarShown = issued;
     this.store.update((state) => ({ ...state, sidebar }));
   }
 
   /** Read the arrangement the gateway keeps; on any failure the rail keeps its own. */
   private async loadSidebar(generation: number): Promise<void> {
+    // A read's answer is as new as the moment it was asked: an older one never replaces a newer.
+    const issued = ++this.sidebarIssued;
     try {
       const sidebar = await readSidebar(this.actionContext(null));
-      if (generation === this.generation) this.setSidebar(sidebar);
+      if (generation === this.generation) this.setSidebar(sidebar, issued);
     } catch (error) {
       this.log("warn", `users.prefs.get failed: ${errorMessage(error)}`);
       if (generation === this.generation && this.state.sidebar?.status !== "ok")
-        this.setSidebar({ ...initialSidebar, status: "unavailable" });
+        this.setSidebar({ ...initialSidebar, status: "unavailable" }, issued);
     }
   }
 

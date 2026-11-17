@@ -174,6 +174,31 @@ describe("the rail's actions through the client", () => {
     client.stop();
   });
 
+  it("F-014: an answer older than what is shown never replaces it", async () => {
+    const { client, gateway, setPrefs } = await connected(INTERACTIVE_SCOPES);
+    // A read asked on users.prefs.changed answers late, after a newer write was shown.
+    let answerLate: () => void = () => {};
+    const stale = {
+      status: "ok",
+      entries: { [SIDEBAR_PREF_KEY]: { pins: ["main"], sections: [], hidden: [], order: [] } },
+    };
+    gateway.handlers["users.prefs.get"] = () =>
+      new Promise((resolve) => {
+        answerLate = () => resolve(stale);
+      });
+    gateway.emit("users.prefs.changed", { profileId: "owner", keys: [SIDEBAR_PREF_KEY] });
+    await until(() => gateway.calls("users.prefs.get").length >= 2);
+    const pending = answerLate;
+    setPrefs(undefined);
+    gateway.handlers["users.prefs.get"] = () => ({ status: "ok", entries: {} });
+    await client.changeSidebar({ op: "pin", botId: "pip", pinned: true }, null);
+    expect(client.state.sidebar?.prefs?.pins).toEqual(["pip"]);
+    pending();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(client.state.sidebar?.prefs?.pins).toEqual(["pip"]);
+    client.stop();
+  });
+
   it("F-021: a task whose run waits for an approval is waiting until the approval resolves", async () => {
     const { client, gateway } = await connected(INTERACTIVE_SCOPES);
     gateway.emit("sessions.changed", {
@@ -259,12 +284,12 @@ describe("the rail's actions through the client", () => {
     expect(
       parseBridgeCommand({
         type: "changeSidebar",
-        change: { op: "order", order: ["pip", "main"] },
+        change: { op: "move", botId: "pip", before: "main", shown: ["main", "pip"] },
         base: { pins: ["pip"], junk: 1 },
       }),
     ).toEqual({
       type: "changeSidebar",
-      change: { op: "order", order: ["pip", "main"] },
+      change: { op: "move", botId: "pip", before: "main", shown: ["main", "pip"] },
       base: { pins: ["pip"], sections: [], hidden: [], order: [] },
     });
     expect(parseBridgeCommand({ type: "markTask", key: "agent:pip:main", unread: true })).toEqual({
