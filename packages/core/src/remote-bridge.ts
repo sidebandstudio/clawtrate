@@ -93,7 +93,13 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
           info = message.info;
           emit(message.state);
           // A new socket is a new viewer to the host: open this viewer's tasks again.
-          if (!first) for (const key of wanted) write({ type: "openSession", key }, null);
+          // One the host refuses now is not asked for again.
+          if (!first)
+            for (const key of wanted)
+              write(
+                { type: "openSession", key },
+                { resolve: () => {}, reject: () => wanted.delete(key) },
+              );
           if (first) resolveBridge(bridge(message.info));
         } else if (message.type === "state") {
           emit(message.state);
@@ -140,10 +146,15 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
           reject(new Error("Not connected to the preview host"));
           return;
         }
+        // An open the host refuses (a viewer holds at most `MAX_VIEWER_OPEN_TASKS`) is not restored later.
+        const refused = (error: Error) => {
+          if (command.type === "openSession") wanted.delete(command.key);
+          reject(error);
+        };
         try {
-          write(command, { resolve, reject });
+          write(command, { resolve, reject: refused });
         } catch (error) {
-          reject(error instanceof Error ? error : new Error(String(error)));
+          refused(error instanceof Error ? error : new Error(String(error)));
         }
       });
 

@@ -1,8 +1,11 @@
 // Every map, set and array the host keeps outside its state, with its bound:
 // the client's own collections, a viewer's bridge session's, and the waiting
-// files'. A test reflects over the live objects' own properties and fails for
-// any collection this registry does not name, and checks each one's size
-// against its `max`. `hostWorstCase` adds each entry's `max × each` to the
+// files'. Two tests hold it to that: one reflects over the live objects' own
+// properties, and the values of their maps, sets and arrays, and fails for any
+// collection this registry does not name or past its `max`; the other scans
+// the source and fails for any collection kept in a class field, at module
+// level or in a closure that is neither a field named here nor on its
+// allowlist. `hostWorstCase` adds each entry's `max × each` to the
 // part of the host's worst case it names (`row`), so the documented table is
 // arithmetic over this registry. Sizes are JSON characters, as in
 // `state-bounds.ts`; an entry whose values are the state's own objects counts
@@ -22,6 +25,7 @@ import {
 } from "./client.ts";
 import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
 import { emptyActivity } from "./runs.ts";
+import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   APPROVAL_OUTCOME,
   MAX_CREATIONS,
@@ -43,10 +47,19 @@ import {
 export type Owner = {
   max: number;
   each: number;
-  /** The part of `hostWorstCase` its entries are counted in; null when it keeps nothing. */
+  /**
+   * The part of `hostWorstCase` its entries are counted in; null when it
+   * keeps nothing, holds only functions or handles, or is inside another
+   * entry's values and counted in that entry's `each`.
+   */
   row: string | null;
   /** Entries die with the objects they name (a WeakSet), so there is no count to keep. */
   weak?: boolean;
+  /**
+   * Its values are bounded by a schema or a budget, not walked further for
+   * collections: what bounds them.
+   */
+  opaque?: string;
 };
 
 const T = MAX_TRACKED_TASKS;
@@ -58,11 +71,19 @@ const SHORT = 32;
 /** A digest key (`digestKey`): three base-36 numbers. */
 const DIGEST = 32;
 const runWithoutSteps = worstCase(RUN, new Map([["steps", 0]]));
+const ROW = ID + WORST_ROW_CHARS;
 
-/** The client's own collections, by property path. */
+/**
+ * The client's own collections, by property path. `*` stands for the values
+ * of a map or set and the items of an array: a collection inside them is
+ * named here too, with its count per value.
+ */
 export const CLIENT_OWNERS: Record<string, Owner> = {
   // Task list rows: only the fields read, the newest `MAX_LISTED_TASKS`.
-  rows: { max: MAX_LISTED_TASKS, each: ID + WORST_ROW_CHARS, row: "sessionRows" },
+  rows: { max: MAX_LISTED_TASKS, each: ROW, row: "sessionRows", opaque: "`SESSION_ROW`" },
+  // Task lists being read: a hello's and one refresh's, each its rows so far, bounded per page.
+  listings: { max: 2, each: MAX_LISTED_TASKS * ROW, row: "sessionRows" },
+  "listings.*": { max: MAX_LISTED_TASKS, each: ROW, row: null, opaque: "`SESSION_ROW`" },
   // Per followed task: keys and small values.
   openSessions: { max: T, each: ID + N, row: "bookkeeping" },
   retained: { max: T, each: ID, row: "bookkeeping" },
@@ -86,7 +107,12 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "streamBaselines",
   },
   // Raw payloads: their content is the table's budget; these are their keys.
-  "raw.entries": { max: T * MAX_STEPS_PER_TASK, each: 3 * ID + 1 + N, row: "rawPayloads" },
+  "raw.entries": {
+    max: T * MAX_STEPS_PER_TASK,
+    each: 3 * ID + 1 + N,
+    row: "rawPayloads",
+    opaque: "the raw table's budget, `MAX_RAW_BYTES`",
+  },
   "raw.perTask": { max: T, each: ID + N, row: "rawPayloads" },
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
@@ -94,17 +120,29 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: ID + jsonLength(emptyActivity) + FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
     row: "foreignRuns",
   },
+  "foreign.*.runs": {
+    max: FOREIGN_RUNS_PER_SESSION,
+    each: runWithoutSteps,
+    row: null,
+    opaque: "`RUN`, its steps dropped",
+  },
+  "foreign.*.outbox": { max: 0, each: 0, row: null },
+  "foreign.*.questions": { max: 0, each: 0, row: null },
+  "foreign.*.approvals": { max: 0, each: 0, row: null },
   "foreignRaw.entries": { max: 0, each: 0, row: null },
   "foreignRaw.perTask": { max: 0, each: 0, row: null },
   spawnedBy: { max: MAX_SPAWN_LINKS, each: 2 * ID, row: "spawnLinks" },
   recipients: { max: T, each: ID + 2 * MAX_STEPS_PER_TASK * ID, row: "recipientLinks" },
+  "recipients.*.runs": { max: MAX_STEPS_PER_TASK, each: ID, row: null },
+  "recipients.*.sessions": { max: MAX_STEPS_PER_TASK, each: ID, row: null },
   approvalOutcomes: {
     max: MAX_APPROVAL_OUTCOMES,
     each: ID + worstCase(APPROVAL_OUTCOME),
     row: "approvalOutcomes",
+    opaque: "`APPROVAL_OUTCOME`",
   },
   // The same objects as the state's `unroutedApprovals`: only the keys are more.
-  unrouted: { max: MAX_UNROUTED, each: ID, row: "bookkeeping" },
+  unrouted: { max: MAX_UNROUTED, each: ID, row: "bookkeeping", opaque: "`APPROVAL`" },
   lookingUp: { max: MAX_OUTCOME_LOOKUPS, each: ID, row: "bookkeeping" },
   // Whole reads of pending approvals' text: the digest given to each viewer.
   approvalReads: {
@@ -112,10 +150,12 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: 2 * ID + 1 + MAX_APPROVAL_READERS * DIGEST,
     row: "approvalReads",
   },
+  "approvalReads.*": { max: MAX_APPROVAL_READERS, each: DIGEST, row: null },
   // Creations: the same objects as the state's `creations`, and their timers, waiters and slots.
-  creations: { max: MAX_CREATIONS, each: ID, row: "bookkeeping" },
+  creations: { max: MAX_CREATIONS, each: ID, row: "bookkeeping", opaque: "`CREATION`" },
   creationTimers: { max: MAX_CREATIONS, each: ID, row: "bookkeeping" },
   creationWaiters: { max: MAX_CREATIONS, each: ID, row: "bookkeeping" },
+  "creationWaiters.*": { max: MAX_ACCESS_WAITERS, each: 0, row: null },
   checkingSlots: { max: MAX_CREATIONS, each: ID, row: "bookkeeping" },
   accessWaiters: { max: MAX_ACCESS_WAITERS, each: SHORT, row: "bookkeeping" },
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
@@ -124,22 +164,47 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: 2 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
     row: "outboxFiles",
   },
+  "attachmentContent.*.files": {
+    max: MAX_ATTACHMENTS_PER_MESSAGE,
+    each: 3 * MAX_FILE_NAME_CHARS,
+    row: null,
+    opaque: "file content, counted in `outboxFiles`",
+  },
+  // The store's listeners: a host's windows and web viewers.
+  "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
   // Viewers that went away; an entry lives only as long as the viewer's own object.
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
 };
 
 /**
- * Properties of the client that are not its own collections: what the host
- * passed in, and the official client package's objects, which keep their own.
+ * Properties of the client that are not walked for collections, and why: what
+ * the host passed in, the official client package's objects, and the state.
  */
-export const CLIENT_FOREIGN: readonly string[] = ["host", "protocol", "auth", "scopeUpgrade"];
+export const CLIENT_NOT_WALKED: Record<string, string> = {
+  host: "the host's own objects: its socket factory, storage and signer",
+  protocol: "the official client package's protocol client; its requests time out",
+  auth: "the official client package's device-auth lifecycle and this connection's token store",
+  scopeUpgrade: "the official client package's access request, one at a time",
+  "store.value": "the state, bounded by its schema (`state-bounds.ts`) and counted in `state`",
+};
+
+/** The class of each client property whose own collections are named under it. */
+export const CLIENT_PARTS: Record<string, string> = {
+  raw: "RawTable",
+  foreignRaw: "RawTable",
+  streams: "ChatTextBaselines",
+  store: "ObservableStore",
+};
 
 /** One viewer's bridge session, per viewer (`MAX_WEB_VIEWERS` on the web host). */
 export const VIEWER_OWNERS: Record<string, Owner> = {
   open: { max: MAX_VIEWER_OPEN_TASKS, each: ID, row: "viewers" },
 };
-/** Properties of a viewer's session that are not its own: the client and the host's policy. */
-export const VIEWER_FOREIGN: readonly string[] = ["client", "policy"];
+/** Properties of a viewer's session that are not walked: the client and the host's policy. */
+export const VIEWER_NOT_WALKED: Record<string, string> = {
+  client: "the client, walked on its own",
+  policy: "the host's policy; its waiting files are walked on their own (`ATTACHMENT_OWNERS`)",
+};
 
 /** The files waiting for a message (`AttachmentStore`); their content is `uploads`. */
 export const ATTACHMENT_OWNERS: Record<string, Owner> = {
@@ -147,10 +212,35 @@ export const ATTACHMENT_OWNERS: Record<string, Owner> = {
     max: MAX_PENDING_ATTACHMENTS,
     each: 2 * ID + 3 * MAX_FILE_NAME_CHARS,
     row: "uploads",
+    opaque: "file content within `MAX_PENDING_ATTACHMENT_BYTES`",
   },
   reserved: { max: MAX_PENDING_ATTACHMENTS, each: N, row: "uploads" },
 };
-export const ATTACHMENT_FOREIGN: readonly string[] = ["options"];
+export const ATTACHMENT_NOT_WALKED: Record<string, string> = {
+  options: "the store's settings: an id source, a clock and two numbers",
+};
+
+/**
+ * The collection fields of each class whose instances the host keeps, from
+ * the registry: what a class's source may declare. A field not named here is
+ * found by the source scan.
+ */
+export function ownerClassFields(): Record<string, string[]> {
+  const fields: Record<string, Set<string>> = {
+    ClawtrateClient: new Set(),
+    ViewerSession: new Set(Object.keys(VIEWER_OWNERS)),
+    AttachmentStore: new Set(Object.keys(ATTACHMENT_OWNERS)),
+  };
+  for (const path of Object.keys(CLIENT_OWNERS)) {
+    const parts = path.split(".");
+    if (parts.length === 1) fields.ClawtrateClient!.add(path);
+    else if (parts.length === 2 && CLIENT_PARTS[parts[0]!]) {
+      const owner = CLIENT_PARTS[parts[0]!]!;
+      (fields[owner] ??= new Set()).add(parts[1]!);
+    }
+  }
+  return Object.fromEntries(Object.entries(fields).map(([name, set]) => [name, [...set].sort()]));
+}
 
 /** JSON characters each registry row adds to the host's worst case, with `viewers` bridge sessions. */
 export function ownerRows(viewers: number): Record<string, number> {

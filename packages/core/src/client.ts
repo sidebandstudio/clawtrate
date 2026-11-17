@@ -266,7 +266,7 @@ function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
 export const FOREIGN_SESSIONS = 16;
 export const FOREIGN_RUNS_PER_SESSION = 4;
 const MAX_TIMER_MS = 2_147_483_647;
-/** Whole reads from history (`readStepRaw`, `readHistoryItem`) in flight at once; past it one is refused. */
+/** Whole reads (`readStepRaw`, `readHistoryItem`, `readApprovalText`) in flight at once; past it one is refused. */
 export const MAX_FULL_READS = 4;
 /** The text length `chat.history` gives when not asked for more (OpenClaw 2026.10.6). */
 export const GATEWAY_HISTORY_TEXT_CHARS = 8_000;
@@ -665,6 +665,14 @@ export class ClawtrateClient {
   private readonly listApplied = new Map<string, number>();
   /** Whole reads from history in flight (`MAX_FULL_READS`). */
   private fullReads = 0;
+  /**
+   * Task lists being read, each its rows so far, already bounded: at most two,
+   * a hello's and one refresh (refreshes run one at a time; a changed
+   * connection's read ends when its requests are flushed).
+   */
+  private readonly listings = new Set<Map<string, RawRecord>>();
+  private refreshing = false;
+  private refreshAgain = false;
 
   /** Tasks followed at once: the host's count, at most `MAX_TRACKED_TASKS`. */
   private readonly trackedLimit: number;
@@ -2598,7 +2606,8 @@ export class ClawtrateClient {
     const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
     if (!approval) throw new Error("That approval is not in this task.");
     const source = APPROVAL_SOURCES.find((each) => each.kind === approval.kind)!;
-    const value = await this.request(source.method, {});
+    // A whole read like the others: it shares their gate, so viewers cannot hold many lists at once.
+    const value = await this.wholeRead(() => this.request(source.method, {}));
     const record = asRecord(value);
     const items = Array.isArray(value)
       ? value
@@ -2643,13 +2652,20 @@ export class ClawtrateClient {
    * asking the gateway for text up to `maxChars` (it cuts to 8,000 otherwise).
    */
   private async readHistoryWhole(key: string, maxChars: number): Promise<RawRecord | null> {
+    return asRecord(
+      await this.wholeRead(() =>
+        this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT, maxChars }),
+      ),
+    );
+  }
+
+  /** One whole read (history or an approval list), at most `MAX_FULL_READS` at once; past it, refused. */
+  private async wholeRead<T>(read: () => Promise<T>): Promise<T> {
     if (this.fullReads >= MAX_FULL_READS)
       throw new Error("Other whole texts are being read; try again in a moment.");
     this.fullReads += 1;
     try {
-      return asRecord(
-        await this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT, maxChars }),
-      );
+      return await read();
     } finally {
       this.fullReads -= 1;
     }
@@ -3324,19 +3340,27 @@ export class ClawtrateClient {
     const first = asRecord(await this.request(firstMethod, SESSION_LIST_PARAMS));
     let page = firstMethod === "sessions.subscribe" ? asRecord(first?.list) : first;
     // Each page is bounded as it arrives: only task rows, only the fields read, the newest
-    // `MAX_LISTED_TASKS` of them, so nothing accumulates across pages.
-    let rows = new Map<string, RawRecord>();
-    for (let pages = 1; ; pages += 1) {
-      rows = newestRows([...rows.values(), ...sessionRowsFromList(page)]);
-      const nextOffset = page?.nextOffset;
-      const more = page?.hasMore === true && typeof nextOffset === "number";
-      if (!more) return { rows, partial: false };
-      if (pages >= MAX_SESSION_PAGES || generation !== this.generation) {
-        return { rows, partial: true };
+    // `MAX_LISTED_TASKS` of them, so nothing accumulates across pages. The rows so far are
+    // kept where the retention registry sees them (`listings`) until the read ends.
+    const rows = new Map<string, RawRecord>();
+    this.listings.add(rows);
+    try {
+      for (let pages = 1; ; pages += 1) {
+        const next = newestRows([...rows.values(), ...sessionRowsFromList(page)]);
+        rows.clear();
+        for (const [key, row] of next) rows.set(key, row);
+        const nextOffset = page?.nextOffset;
+        const more = page?.hasMore === true && typeof nextOffset === "number";
+        if (!more) return { rows, partial: false };
+        if (pages >= MAX_SESSION_PAGES || generation !== this.generation) {
+          return { rows, partial: true };
+        }
+        page = asRecord(
+          await this.request("sessions.list", { ...SESSION_LIST_PARAMS, offset: nextOffset }),
+        );
       }
-      page = asRecord(
-        await this.request("sessions.list", { ...SESSION_LIST_PARAMS, offset: nextOffset }),
-      );
+    } finally {
+      this.listings.delete(rows);
     }
   }
 
@@ -3350,14 +3374,27 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, tasksByBot }));
   }
 
+  /** One refresh at a time; one asked for meanwhile runs once after it. */
   private async refreshSessions(generation: number): Promise<void> {
+    if (this.refreshing) {
+      this.refreshAgain = true;
+      return;
+    }
+    this.refreshing = true;
     try {
-      const { rows, partial } = await this.loadAllSessions(generation, "sessions.list");
-      if (generation !== this.generation) return;
-      this.replaceRows(rows);
-      this.setDiscovery({ partial });
-    } catch (error) {
-      this.log("warn", `sessions.list failed: ${String(error)}`);
+      do {
+        this.refreshAgain = false;
+        try {
+          const { rows, partial } = await this.loadAllSessions(generation, "sessions.list");
+          if (generation !== this.generation) return;
+          this.replaceRows(rows);
+          this.setDiscovery({ partial });
+        } catch (error) {
+          this.log("warn", `sessions.list failed: ${String(error)}`);
+        }
+      } while (this.refreshAgain && generation === this.generation);
+    } finally {
+      this.refreshing = false;
     }
   }
 

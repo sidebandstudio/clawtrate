@@ -1,19 +1,17 @@
-// The most the host can keep, as arithmetic over the named bounds: the state
-// (`state-bounds.ts`), the raw table, files, the client's own maps, and what
-// the web host's viewers can have queued. `docs/decisions.md` states these
-// same totals, and a test checks that they agree.
+// The most the host retains between events, as arithmetic over the named
+// bounds: the state (`state-bounds.ts`), the raw table, files, the client's
+// own collections (`owners.ts`), and what the web host's viewers can have
+// queued. Lists and pages being read from the gateway are in flight, not
+// retained, and their size is the gateway's: they are gated (one history read
+// per task, `MAX_FULL_READS` whole reads, one listing at a time) but not
+// counted here. `docs/decisions.md` states these same totals, and a test
+// checks that they agree.
 
 import { MAX_FILE_BYTES, MAX_PENDING_ATTACHMENT_BYTES } from "./attachments.ts";
-import { MAX_FULL_READS, MAX_RETAINED_ATTACHMENT_BYTES } from "./client.ts";
+import { MAX_RETAINED_ATTACHMENT_BYTES } from "./client.ts";
 import { ownerRows } from "./owners.ts";
 import { MAX_RAW_BYTES, MAX_RAW_ENTRY_CHARS } from "./runs.ts";
-import { MAX_TRACKED_TASKS, WORST_STATE_CHARS, worstViewerChars } from "./state-bounds.ts";
-
-/**
- * The most a `chat.history` response can be (OpenClaw 2026.10.6). One read of
- * each followed task can be in flight, held until it is mapped and bounded.
- */
-export const GATEWAY_HISTORY_RESPONSE_BYTES = 524_288;
+import { WORST_STATE_CHARS, worstViewerChars } from "./state-bounds.ts";
 
 /** The base64 length of a file of `bytes` bytes: what the host holds once it has the file. */
 export function base64Length(bytes: number): number {
@@ -47,9 +45,6 @@ export function hostWorstCase(limits: ViewerLimits): Record<string, number> {
   for (const [part, chars] of Object.entries(owners)) parts[part] = (parts[part] ?? 0) + chars;
   return {
     ...parts,
-    // One history read per followed task and `MAX_FULL_READS` whole reads (`readStepRaw`,
-    // `readHistoryItem`) until they are mapped and dropped, and one page's payloads rebuilt at a time.
-    historyReads: (MAX_TRACKED_TASKS + MAX_FULL_READS + 1) * GATEWAY_HISTORY_RESPONSE_BYTES,
     snapshotsQueued: limits.snapshotsInFlight * viewer,
     resultsQueued: limits.viewers * limits.commandsPerViewer * limits.resultChars,
     serializing: viewer,
