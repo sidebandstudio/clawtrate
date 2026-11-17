@@ -1,5 +1,13 @@
 // The Files tab's words and change parsing (work-pane.md, sections 4, 7 and 8).
+import {
+  FileTransfers,
+  fromBase64,
+  MAX_TRANSFER_BYTES,
+  type ClawtrateBridge,
+  type FileRead,
+} from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
+import { collect, isShown } from "../src/work/content.ts";
 import { formatSize, limitSentence, nameParts } from "../src/work/files-format.ts";
 import { parseNumberedDiff, parsePatch, patchCounts } from "../src/work/patch.ts";
 
@@ -89,4 +97,41 @@ describe("changes", () => {
       { kind: "add", text: "Leave at 9:00.", oldLine: null, newLine: 1 },
     ]);
   });
+});
+
+describe("content put together from its chunks", () => {
+  // The desktop host's policy sets no `maxResultChars`, so its viewer reads in the largest chunks.
+  const DESKTOP_MAX_CHARS = undefined;
+
+  it("F-319: content over 1 MiB and up to the picture limit reaches the desktop whole, in the desktop's chunks", async () => {
+    for (const size of [1_048_577, 3_145_730, MAX_TRANSFER_BYTES]) {
+      const transfers = new FileTransfers(() => 0);
+      const owner = {};
+      const bytes = Uint8Array.from({ length: size }, (_, i) => (i * 29 + 5) & 255);
+      const transfer = transfers.start(owner, bytes, DESKTOP_MAX_CHARS);
+      expect(transfer.chunks).toBeGreaterThan(1);
+      const bridge = {
+        invoke: async (command: { type: string; id: string; index: number }) =>
+          transfers.chunk(owner, command.id, command.index),
+        send: async () => {},
+      } as unknown as ClawtrateBridge;
+      const read: FileRead = {
+        status: "content",
+        facts: { name: "summit.png", path: "summit.png", size, updatedAt: null, mimeType: null },
+        reader: "agents.workspace.get",
+        kind: "image",
+        mimeType: "image/png",
+        bytes: size,
+        hash: "",
+        transfer,
+      };
+      const shown = await collect(bridge, read);
+      expect(isShown(shown), `${size} bytes`).toBe(true);
+      const data = isShown(shown) ? shown.data : new Uint8Array();
+      expect(data.length).toBe(size);
+      expect(data.findIndex((byte, i) => byte !== bytes[i])).toBe(-1);
+      expect(fromBase64(transfer.data)).not.toBeNull();
+      expect(transfers.size).toBe(0);
+    }
+  }, 60_000);
 });

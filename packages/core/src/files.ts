@@ -503,18 +503,22 @@ export function refusalOf(error: unknown): {
 export const MAX_FILE_TRANSFERS = 4;
 /** A transfer not read for this long is dropped. */
 export const FILE_TRANSFER_TTL_MS = 60_000;
-/** The largest chunk, in bytes (a host with no channel limit). */
-export const MAX_CHUNK_BYTES = 1_048_576;
+/**
+ * The largest chunk, in bytes (a host with no channel limit, such as the
+ * desktop app's). A multiple of 3, as every chunk size is, so that each
+ * chunk's base64 ends on a four-character boundary and decodes by itself.
+ */
+export const MAX_CHUNK_BYTES = 1_048_575;
 /** Room in an answer for everything but a chunk's data. */
 export const FILE_ANSWER_ROOM_CHARS = 8_192;
 /** The largest content any reader sends: the workspace reader's picture limit. */
 export const MAX_TRANSFER_BYTES = WORKSPACE_PICTURE_MAX_BYTES;
 
-/** Bytes per chunk so one chunk's base64 fits an answer of `maxChars`. */
+/** Bytes per chunk so one chunk's base64 fits an answer of `maxChars`: always a multiple of 3. */
 export function chunkBytesFor(maxChars: number | undefined): number {
-  if (maxChars === undefined) return MAX_CHUNK_BYTES;
-  const room = Math.max(4, maxChars - FILE_ANSWER_ROOM_CHARS);
-  return Math.max(3, Math.min(MAX_CHUNK_BYTES, Math.floor(room / 4) * 3));
+  const room = maxChars === undefined ? Infinity : Math.max(4, maxChars - FILE_ANSWER_ROOM_CHARS);
+  const bytes = Math.min(MAX_CHUNK_BYTES, Math.floor(room / 4) * 3);
+  return Math.max(3, bytes - (bytes % 3));
 }
 
 type Transfer = {
