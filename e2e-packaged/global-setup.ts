@@ -21,7 +21,18 @@
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
@@ -70,6 +81,7 @@ function fingerprint(paths: string[]): string {
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 /**
  * The processes listening on the protected ports, each by PID, start time and
@@ -102,6 +114,78 @@ export function protectedListeners(): string[] {
   return [...new Set(rows)].sort();
 }
 
+/**
+ * The macOS preferences file of the app's bundle id. It lives outside the
+ * temporary data folder, and Chromium writes it at every launch, so the run
+ * saves it before the launch and puts it back afterwards: the same bytes, mode
+ * and times if it existed, gone if it did not. The preferences daemon caches
+ * the file, so it is told first (`defaults import` or `defaults delete`) and
+ * the file is then written, or removed, and read back after a pause.
+ */
+function preferencesKeeper(app: string) {
+  const domain = execFileSync(
+    "plutil",
+    ["-extract", "CFBundleIdentifier", "raw", join(app, "Contents/Info.plist")],
+    { encoding: "utf8" },
+  ).trim();
+  if (!/^[A-Za-z0-9.-]+$/.test(domain)) throw new Error(`unexpected bundle id ${domain}`);
+  const path = join(homedir(), "Library/Preferences", `${domain}.plist`);
+  let before: { bytes: Buffer; mode: number; atime: Date; mtime: Date } | null = null;
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile()) throw new Error(`${path} is not a regular file; the check leaves it alone`);
+    before = {
+      bytes: readFileSync(path),
+      mode: stat.mode & 0o7777,
+      atime: stat.atime,
+      mtime: stat.mtime,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  let restored: string | null | undefined;
+  /** Puts the file back, once. Returns a problem, or null. Synchronous, for signal handlers too. */
+  const restore = (): string | null => {
+    if (restored !== undefined) return restored;
+    try {
+      if (before) {
+        execFileSync("defaults", ["import", domain, "-"], {
+          input: before.bytes,
+          stdio: ["pipe", "ignore", "ignore"],
+        });
+        writeFileSync(path, before.bytes);
+        chmodSync(path, before.mode);
+        utimesSync(path, before.atime, before.mtime);
+      } else {
+        try {
+          execFileSync("defaults", ["delete", domain], { stdio: "ignore" });
+        } catch {
+          // the domain was never written
+        }
+        rmSync(path, { force: true });
+      }
+      sleepSync(2000);
+      if (before) {
+        const now = lstatSync(path);
+        restored =
+          readFileSync(path).equals(before.bytes) &&
+          (now.mode & 0o7777) === before.mode &&
+          now.mtimeMs === before.mtime.getTime()
+            ? null
+            : `${path} could not be restored to its earlier contents`;
+      } else {
+        restored = existsSync(path)
+          ? `${path} was created by the run and could not be removed`
+          : null;
+      }
+    } catch (error) {
+      restored = `restoring ${path}: ${String(error)}`;
+    }
+    return restored;
+  };
+  return { restore };
+}
+
 /** The processes whose command line names `dir`: the app and its helpers, which all carry its data folder. */
 export function processesUsing(dir: string): number[] {
   const out = execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" });
@@ -131,6 +215,8 @@ export default async function globalSetup() {
   if (process.platform !== "darwin") throw new Error("the launch check runs on macOS");
   const app = packagedApp();
   if (!existsSync(app)) throw new Error(`${app} does not exist. Run \`pnpm package:mac\` first.`);
+  // Saved before anything runs; put back by every way this run ends.
+  const preferences = preferencesKeeper(app);
 
   const run = process.env.CLAWTRATE_E2E_RUN ?? randomBytes(4).toString("hex");
   if (!/^[0-9a-f]{8}$/.test(run)) throw new Error("CLAWTRATE_E2E_RUN must be 8 hex digits");
@@ -164,14 +250,21 @@ export default async function globalSetup() {
   };
   let cleaned: string[] | null = null;
   const cleanUpOnce = () => (cleaned ??= cleanUp(RECORDS, record, reset));
+  // Restored after the app is gone, which cleanUp makes sure of.
+  const finish = () => {
+    const problems = [...cleanUpOnce()];
+    const prefs = preferences.restore();
+    if (prefs) problems.push(prefs);
+    return problems;
+  };
   const onSignal = (signal: NodeJS.Signals) => {
-    const problems = cleanUpOnce();
+    const problems = finish();
     if (problems.length > 0) console.error(problems.join("\n"));
     process.exit(signal === "SIGINT" ? 130 : 143);
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
-  process.on("exit", () => void cleanUpOnce());
+  process.on("exit", () => void finish());
 
   const sentinel = `${name}-other`;
   const sentinelState = () => {
@@ -206,7 +299,7 @@ export default async function globalSetup() {
     if (sentinelBefore !== null && sentinelState() !== sentinelBefore) {
       problems.push(`the sentinel instance changed: ${sentinelBefore} -> ${sentinelState()}`);
     }
-    problems.push(...cleanUpOnce());
+    problems.push(...finish());
     if (fingerprint(REAL_DATA) !== realBefore) {
       problems.push("the data folder of this machine's own Clawtrate changed");
     }
@@ -226,7 +319,9 @@ export default async function globalSetup() {
       problems.push(`instance ${name} or ${sentinel} was not removed`);
     }
     if (problems.length > 0) throw new Error(problems.join("\n"));
-    console.log(`Quit the packaged app, removed instances ${name} and ${sentinel} and ${dir}`);
+    console.log(
+      `Quit the packaged app, removed instances ${name} and ${sentinel} and ${dir}, and restored the bundle id's preferences`,
+    );
   };
 
   /** Start an instance, recording its name and run id first. */
