@@ -599,34 +599,7 @@ export function ReceivedCardView({
             </NoteItem>
           )}
         </ol>
-        <CardFoot
-          disclosure={raw}
-          raw={{
-            state: "loaded",
-            events: [
-              [
-                "The message, as the gateway's history gave it",
-                {
-                  text: message.text,
-                  provenance: {
-                    kind: "inter_session",
-                    sourceSessionKey: message.sourceSessionKey,
-                    sourceTool: message.sourceTool,
-                  },
-                  senderLabel: message.senderLabel,
-                  timestamp: message.timestamp,
-                },
-              ],
-            ],
-            ids: [
-              ...(message.sourceSessionKey
-                ? [{ label: "Sender session", value: message.sourceSessionKey }]
-                : []),
-              ...(run ? [{ label: "Run", value: run.id }] : []),
-            ],
-            notes: ["This is the engine's reading of the history row, not the row itself."],
-          }}
-        >
+        <CardFoot disclosure={raw} raw={incomingRaw(message, run)}>
           {pending && (
             <button
               type="button"
@@ -713,6 +686,28 @@ function agentOf(key: string | null): string | null {
   return key ? (/^agent:([^:]+):/.exec(key)?.[1] ?? null) : null;
 }
 
+/**
+ * Raw for a message from another session. The engine keeps the message's text
+ * and where it came from, not the history row itself, so Raw says so and shows
+ * the identifiers it does keep; it invents no record.
+ */
+function incomingRaw(message: InterSessionMessage, run: Run | undefined): RawContent {
+  return {
+    state: "loaded",
+    notes: [
+      "This app does not keep the history row this message came from: only its text, shown above, and the identifiers below.",
+    ],
+    ids: [
+      { label: "Message", value: message.itemId },
+      ...(message.sourceSessionKey
+        ? [{ label: "Sender session", value: message.sourceSessionKey }]
+        : []),
+      ...(message.sourceTool ? [{ label: "Sent with", value: message.sourceTool }] : []),
+      ...(run ? [{ label: "Run", value: run.id }] : []),
+    ],
+  };
+}
+
 /** A message no card accounts for: a line that opens to the text and its Raw. */
 export function IncomingLine({ message }: { message: InterSessionMessage }) {
   const env = useCardEnv();
@@ -728,31 +723,7 @@ export function IncomingLine({ message }: { message: InterSessionMessage }) {
       </summary>
       <div className="card event-body">
         <div className="exchange-text">{message.text}</div>
-        <CardFoot
-          disclosure={raw}
-          raw={{
-            state: "loaded",
-            events: [
-              [
-                "The message, as the gateway's history gave it",
-                {
-                  text: message.text,
-                  provenance: {
-                    kind: "inter_session",
-                    sourceSessionKey: message.sourceSessionKey,
-                    sourceTool: message.sourceTool,
-                  },
-                  senderLabel: message.senderLabel,
-                  timestamp: message.timestamp,
-                },
-              ],
-            ],
-            ids: message.sourceSessionKey
-              ? [{ label: "Sender session", value: message.sourceSessionKey }]
-              : [],
-            notes: ["This is the engine's reading of the history row, not the row itself."],
-          }}
-        />
+        <CardFoot disclosure={raw} raw={incomingRaw(message, undefined)} />
       </div>
     </details>
   );

@@ -26,6 +26,13 @@ import {
   type RawContent,
 } from "./parts.tsx";
 
+/** The list method whose items carry the same record as the requested event. */
+const LIST_NAMES: Record<Approval["kind"], string> = {
+  exec: "exec.approval.list",
+  plugin: "plugin.approval.list",
+  "system-agent": "openclaw.approval.list",
+};
+
 const EVENT_NAMES: Record<Approval["kind"], string> = {
   exec: "exec.approval.requested",
   plugin: "plugin.approval.requested",
@@ -36,8 +43,8 @@ function approvalRaw(card: Approval): RawContent {
   const record = card.raw as Record<string, unknown> | null;
   const label =
     record && typeof record === "object" && "presentation" in record
-      ? "approval.get, as the gateway sent it"
-      : `${EVENT_NAMES[card.kind]}, as the gateway sent it`;
+      ? "The approval snapshot, as the gateway sent it (approval.get)"
+      : `The request record, as the gateway sent it (${EVENT_NAMES[card.kind]} or ${LIST_NAMES[card.kind]})`;
   const ids = [
     { label: "Approval", value: card.id },
     ...(card.toolCallId ? [{ label: "Tool call", value: card.toolCallId }] : []),

@@ -501,7 +501,7 @@ test.describe("approval cards", () => {
     await expect(raw).toHaveAttribute("aria-expanded", "true");
     const panel = card.getByRole("region", { name: "What the gateway sent" });
     await expect(panel.locator(".code-label").first()).toHaveText(
-      "exec.approval.requested, as the gateway sent it",
+      "The request record, as the gateway sent it (exec.approval.requested or exec.approval.list)",
     );
     await expect(panel.locator("pre").first()).toContainText('"allowedDecisions"');
     await expect(panel.getByRole("button", { name: "Copy approval id" })).toBeVisible();
@@ -509,6 +509,40 @@ test.describe("approval cards", () => {
     await page.keyboard.press("Escape");
     await expect(panel).toBeHidden();
     await expect(raw).toBeFocused();
+  });
+
+  test("F-163 F-113: Raw shows the gateway's own records only, and says what this app does not keep", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=approval-denied", "light");
+    let card = approvalCard(page);
+    await card.locator("summary").first().click();
+    await card.getByRole("button", { name: "Raw" }).click();
+    let panel = card.getByRole("region", { name: "What the gateway sent" });
+    await expect(panel).toContainText("This app does not keep the event that settled it.");
+    await expect(panel.locator(".code-label")).toHaveText([
+      "The request record, as the gateway sent it (exec.approval.requested or exec.approval.list)",
+      "Identifiers",
+    ]);
+
+    await openFixture(page, "scene=question-answered", "light");
+    card = questionCard(page);
+    await card.getByRole("button", { name: "Raw" }).click();
+    panel = card.getByRole("region", { name: "What the gateway sent" });
+    await expect(panel).toContainText("This app does not keep the event that settled it.");
+    await expect(panel).not.toContainText("Answers, as");
+    await expect(panel.locator("pre")).toHaveCount(1);
+    await expect(panel.locator("pre")).toContainText('"status": "pending"');
+
+    await openFixture(page, "scene=incoming-line", "light");
+    const line = page.getByTestId("incoming-line");
+    await line.locator("summary").click();
+    await line.getByRole("button", { name: "Raw" }).click();
+    panel = line.getByRole("region", { name: "What the gateway sent" });
+    await expect(panel).toContainText(
+      "This app does not keep the history row this message came from",
+    );
+    await expect(panel.locator("pre")).toHaveCount(0);
   });
 
   test("F-163: a request this device can read but not answer has no decisions and offers Request access", async ({

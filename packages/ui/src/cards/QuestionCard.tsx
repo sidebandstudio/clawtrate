@@ -15,21 +15,27 @@ import {
   type RawContent,
 } from "./parts.tsx";
 
+/**
+ * Raw for a question: the record as the gateway sent it, which the engine keeps
+ * (`question.requested`, or the same record from `question.list`). The engine
+ * keeps the answers of a settled question but not the event that settled it,
+ * so Raw says so and invents no event.
+ */
 function questionRaw(card: Question): RawContent {
   const notes: string[] = [];
   if (card.raw === null) notes.push("The question was too long for this app to keep as received.");
+  if (card.status !== "pending") notes.push("This app does not keep the event that settled it.");
   return {
     state: "loaded",
-    events: [
-      ...(card.raw === null
+    events:
+      card.raw === null
         ? []
-        : ([["question.requested, as the gateway sent it", card.raw]] as Array<[string, unknown]>)),
-      ...(card.answers
-        ? ([["Answers, as the gateway returned them", { answers: card.answers }]] as Array<
-            [string, unknown]
-          >)
-        : []),
-    ],
+        : [
+            [
+              "The question record, as the gateway sent it (question.requested or question.list)",
+              card.raw,
+            ],
+          ],
     ids: [
       { label: "Question", value: card.id },
       ...(card.runId ? [{ label: "Run", value: card.runId }] : []),
