@@ -196,6 +196,27 @@ test.describe("sending", () => {
   });
 });
 
+test("F-074: files can be dragged into the composer or pasted into its field", async ({ page }) => {
+  await open(page, "composer");
+  await page.locator(".composer-box").evaluate((box) => {
+    const data = new DataTransfer();
+    data.items.add(new File(["dragged"], "dragged.txt", { type: "text/plain" }));
+    box.dispatchEvent(
+      new DragEvent("drop", { dataTransfer: data, bubbles: true, cancelable: true }),
+    );
+  });
+  await field(page).evaluate((input) => {
+    const data = new DataTransfer();
+    data.items.add(new File(["pasted"], "pasted.png", { type: "image/png" }));
+    input.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }),
+    );
+  });
+  await expect(page.locator(".attachments .chip")).toHaveText([/dragged\.txt/, /pasted\.png/]);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByTestId("outgoing")).toContainText("dragged.txt, pasted.png");
+});
+
 test.describe("the status line", () => {
   test("F-082 F-086: a running step's title is the phrase and the avatar works; F-087: the phrase is its own tooltip", async ({
     page,
@@ -671,7 +692,7 @@ test.describe("errors and resync", () => {
     await expect(page.getByTestId("status-strip")).toContainText("Reconnecting");
   });
 
-  test("F-107 F-105: after a reconnect the conversation catches up without showing a message twice", async ({
+  test("F-107: after a reconnect the conversation catches up without showing a message twice", async ({
     page,
   }) => {
     await open(page, "run-working");

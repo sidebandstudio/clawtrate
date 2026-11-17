@@ -675,6 +675,22 @@ test("F-097: Stop during a real run shows Stopping…, and the gateway's confirm
   expect(samples.some((sample) => sample.phrase === "Stopping…")).toBe(true);
 });
 
+test("F-097: a typed /stop stops the run, and the note does not say it came from elsewhere", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  await composer(page).fill("Look through every backup set again.");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await composer(page).fill("/stop");
+  await page.keyboard.press("Enter");
+  const note = page.getByTestId("stop-note").last();
+  await expect(note).toContainText("Completed steps are not undone.", { timeout: 30_000 });
+  await expect(note).not.toContainText("another device");
+  await expect(page.getByTestId("status-line")).toHaveCount(0);
+});
+
 test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
   page,
 }) => {

@@ -469,6 +469,7 @@ export function liveCommand(
   command: BridgeCommand,
   get: () => ClawtrateState,
   set: (state: ClawtrateState) => void,
+  files: ReadonlyMap<string, OutgoingMessage["attachments"][number]> = new Map(),
 ): Promise<unknown> | undefined {
   const now = Date.now();
   const update = (change: (t: Transcript) => Transcript) => set(withTranscript(get(), change));
@@ -490,6 +491,10 @@ export function liveCommand(
     }
     case "sendMessage": {
       const id = `msg-${Math.random().toString(36).slice(2, 8)}`;
+      const attachments = command.attachmentIds.flatMap((each) => {
+        const file = files.get(each);
+        return file ? [file] : [];
+      });
       update((transcript) => {
         const active = transcript.runs.find((each) =>
           ["running", "waiting", "stopping"].includes(each.state),
@@ -498,7 +503,10 @@ export function liveCommand(
         if (!active) {
           return {
             ...transcript,
-            outbox: [...transcript.outbox, message(id, command.text, now, { runId: id })],
+            outbox: [
+              ...transcript.outbox,
+              message(id, command.text, now, { runId: id, attachments }),
+            ],
             runs: [
               ...transcript.runs,
               newRun(id, { state: "running", origin: "local", bound: true, messageId: id }, now),

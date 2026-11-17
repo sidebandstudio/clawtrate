@@ -228,7 +228,7 @@ export function RunEnding({
     moved.current = true;
     setDismissed(next);
   };
-  const ending = endingOf(run);
+  const ending = endingOf(run, transcript);
   if (!ending) return null;
   if (ending.kind === "stopped") {
     return (

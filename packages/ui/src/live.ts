@@ -326,15 +326,26 @@ export type RunEnding =
   | { kind: "turn-limit"; minutes: number | null; reason: string | null }
   | { kind: "failed"; reason: string };
 
-/** How a finished run ended, when the transcript says more than its text. */
-export function endingOf(run: Run): RunEnding | null {
+/**
+ * How a finished run ended, when the transcript says more than its text. A
+ * stop is from elsewhere only when this device neither pressed Stop nor sent
+ * a stop command (`/stop`, which the gateway handles without a run) while
+ * the run was going.
+ */
+export function endingOf(run: Run, transcript?: Transcript): RunEnding | null {
   if (run.state === "completed" && run.finishedBeforeStop) return { kind: "finished-before-stop" };
   if (run.state === "stopped") {
     if (!run.outcomeKnown) return null;
+    const commanded = (transcript?.outbox ?? []).some(
+      (message) =>
+        message.status === "handled" &&
+        (run.startedAt === null || message.createdAt >= run.startedAt) &&
+        (run.endedAt === null || message.createdAt <= run.endedAt),
+    );
     return {
       kind: "stopped",
       after: runDuration(run),
-      elsewhere: run.stopRequestedAt === null,
+      elsewhere: run.stopRequestedAt === null && !commanded,
     };
   }
   if (run.state === "failed") {

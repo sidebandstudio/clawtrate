@@ -310,11 +310,14 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
   for (const step of steps) setTimeout(() => set(step.change(state)), step.after);
   let pairingChecks = 0;
 
+  // Files are named and counted, never kept.
+  const files = new Map<string, { fileName: string; mimeType: string; sizeBytes: number }>();
   async function apply(command: BridgeCommand): Promise<unknown> {
     const live = liveCommand(
       command,
       () => state,
       (next) => set(next),
+      files,
     );
     if (live) return live;
     switch (command.type) {
@@ -348,7 +351,6 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
     }
   }
 
-  let files = 0;
   return {
     info: name === "access-pinned" ? { ...FIXTURE_INFO, readOnly: true } : FIXTURE_INFO,
     getState: () => state,
@@ -365,13 +367,16 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
         throw new Error(`the fixture does not answer ${command.type}`);
       return answer as never;
     },
-    // Files are named and counted, never kept.
-    attach: async (file) => ({
-      id: `file-${(files += 1)}`,
-      fileName: file.name,
-      mimeType: file.type,
-      sizeBytes: file.data.byteLength,
-    }),
+    attach: async (file) => {
+      const info = {
+        id: `file-${files.size + 1}`,
+        fileName: file.name,
+        mimeType: file.type,
+        sizeBytes: file.data.byteLength,
+      };
+      files.set(info.id, info);
+      return info;
+    },
     setState: (change) => set(change(state)),
   };
 }
