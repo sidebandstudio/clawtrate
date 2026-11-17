@@ -10,7 +10,7 @@ A desktop and iOS client for [OpenClaw](https://github.com/openclaw/openclaw). C
 
 Clawtrate is an independent project and is not affiliated with OpenClaw or xAI.
 
-Status: early development. This first version is read-only. It pairs with a gateway, lists bots and their tasks, and shows each conversation with its reasoning and tool calls.
+Status: early development. This first version is read-only. It pairs with a gateway and shows your bots in one list, each drawn as its own character (or with the picture the gateway gives it), with its latest activity, whether it is working, and whether anything is unread. A bot with several tasks unfolds to show them under it. The open task reads as a conversation of bubbles; the bot's reasoning and tool calls are folded into one line per run and open to the full arguments and results. A Work pane beside the conversation shows the task's details, and becomes a drawer on narrower windows. The same interface works at phone width, one pane at a time. While the connection drops and returns, everything stays on screen and one small strip says what is happening.
 
 ## Quickstart
 
@@ -26,7 +26,7 @@ pnpm install
 pnpm dev-gateway start
 ```
 
-This runs `openclaw --dev gateway run` on `ws://127.0.0.1:19001` with its state in `~/.openclaw-dev`, so it never touches a gateway you use day to day. It talks only to a scripted model server on `127.0.0.1:19091`; no model provider account is used. It then seeds four sample bots with their own instructions and avatars, and eleven conversations with reasoning and tool calls. Each seeded run is checked against its script. `pnpm dev-gateway up` does the same.
+This runs `openclaw --dev gateway run` on `ws://127.0.0.1:19001` with its state in `~/.openclaw-dev`, so it never touches a gateway you use day to day. It talks only to a scripted model server on `127.0.0.1:19091`; no model provider account is used. It then seeds four sample bots, each with its own instructions, and eleven conversations with reasoning and tool calls. Each seeded run is checked against its script. `pnpm dev-gateway up` does the same.
 
 Every start is a fresh, seeded gateway. It stops the gateway this checkout started before, deletes `~/.openclaw-dev` and creates it again empty. OpenClaw keeps credentials in the same SQLite stores a clean profile has, so the tool never reuses state rather than trying to prove old state clean. If `~/.openclaw-dev` was not created by this tool, or is a symlink, `start` refuses and changes nothing. The tool records every process it starts by PID and start time, and it deletes a state folder only with proof that nothing runs on it: every recorded process is gone and nothing listens on the instance's ports. A process counts as gone only when the system says there is no such process, or shows it as a zombie. When the tool cannot tell, for example because `ps` fails or prints something it cannot read, it treats the process as running, signals and deletes nothing, and says what it could not determine. So if the folder's gateway may be running and this checkout cannot prove it started it, `start` and `reset` refuse, say which instance is in use, and change nothing. `stop` signals only processes it can prove this checkout started; anything it cannot prove, it reports and leaves alone. A state folder made by an older version of the tool is refused for good; see [Migrating from an older version](#migrating-from-an-older-version). Because the gateway is new each time, preview hosts and the desktop app pair again after a start.
 
@@ -99,6 +99,17 @@ pnpm test
 pnpm exec playwright install chromium   # once
 pnpm e2e
 ```
+
+### Without a gateway: the fixture mode and the visual tests
+
+```bash
+pnpm fixture   # builds the interface on fixed sample data and serves it on 127.0.0.1:5341
+pnpm visual    # screenshot, legibility and behaviour tests against the fixture mode
+```
+
+The fixture mode is the real interface fed a fixed state through the same bridge the hosts use. It needs no gateway and makes no request of its own. Pick what it shows from the address: `?scene=` with `main`, `connect`, `connect-error`, `connecting`, `pairing`, `reconnecting`, `reconnecting-unloaded`, `offline`, `offline-long-address`, `catching-up`, `synced`, `sync-pending`, `sync-failed`, `refresh-failed`, `load-failed`, `loading`, `discovery-error`, `discovering`, `empty`, `partial` or `zero-tasks`; `&bot=otto&task=agent:otto:disk-space` to open a task; `&panel=open`; `&theme=dark`. It is a separate build, never part of the desktop app or the web preview.
+
+`pnpm visual` compares screenshots with the baselines in `visual/baselines/`, which are taken on macOS and only valid there. After an intended change, `pnpm visual:update` rewrites them; look at every changed image before committing it.
 
 `pnpm e2e` never uses the default instance or its ports. Each run creates its own instance named `e2e-<random>`, plus an unseeded second instance so another gateway is always listening while it runs. It starts the gateway, its scripted model and a preview host with a fresh device identity on free ports, approves the pairing request the page raises, and checks that the bots, a task list and a transcript render, and that every other running instance is left as it was. Afterwards it removes exactly what it created: its two instances by name and run id, its preview host and its temporary folders, also when a test fails or the run is stopped with Ctrl-C or SIGTERM. A run killed outright, at any point, leaves a record in `tools/dev-gateway/.run/e2e/`, and the next `pnpm e2e` in the same checkout cleans it up once that run is proven to have ended. Every gateway, scripted model and preview host is written to a record before it can run, so none is left that the next run cannot find. A `dev-gateway` command or renderer build that the killed run left behind finishes on its own; the next run's cleanup of an instance waits for that instance's lock. If the next run cannot determine whether the earlier one has ended, or whether its preview host has exited, it leaves the record and the folders alone and says why. Runs in several checkouts, or several in one, can go at the same time.
 

@@ -39,7 +39,6 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { renderAvatar } from "./avatars.ts";
 import {
   activityRefusal,
   ForeignStateError,
@@ -839,7 +838,6 @@ async function configureBot(
   }
   mkdirSync(workspace, { recursive: true });
   writeFileSync(join(workspace, "AGENTS.md"), bot.instructions);
-  writeFileSync(join(workspace, "avatar.png"), renderAvatar(bot));
   await must(inst, [
     "agents",
     "set-identity",
@@ -851,8 +849,6 @@ async function configureBot(
     bot.emoji,
     "--theme",
     bot.theme,
-    "--avatar",
-    "avatar.png",
     "--json",
   ]);
 }

@@ -520,6 +520,7 @@ export class ClawtrateClient {
       pairing: null,
       error: null,
       retryAt: null,
+      connectedAt: Date.now(),
       paired: true,
     });
     void this.bootstrap(generation);
@@ -669,6 +670,7 @@ export class ClawtrateClient {
       error: null,
       hasMore: false,
       live: null,
+      loadedAt: null,
     };
   }
 
@@ -705,6 +707,7 @@ export class ClawtrateClient {
                 text: typeof inFlight.text === "string" ? inFlight.text : "",
               }
             : null,
+        loadedAt: Date.now(),
       }));
     } catch (error) {
       if (generation !== this.generation || !this.openSessions.has(key)) return;

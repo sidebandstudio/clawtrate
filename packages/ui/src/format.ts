@@ -2,16 +2,42 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-/** Compact list time: "now", "5m", "3h", "Tue", "Mar 4". */
-export function shortTime(timestamp: number | null, now = Date.now()): string {
-  if (timestamp === null) return "";
-  const delta = now - timestamp;
-  if (delta < MINUTE) return "now";
-  if (delta < HOUR) return `${Math.floor(delta / MINUTE)}m`;
-  if (delta < DAY) return `${Math.floor(delta / HOUR)}h`;
+function dayIndex(timestamp: number): number {
   const date = new Date(timestamp);
-  if (delta < 6 * DAY) return date.toLocaleDateString(undefined, { weekday: "short" });
+  return Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / DAY);
+}
+
+/** Whole calendar days between a time and now, in the viewer's time zone. */
+export function daysAgo(timestamp: number, now = Date.now()): number {
+  return dayIndex(now) - dayIndex(timestamp);
+}
+
+/**
+ * The time on a rail row: today as "5:36 PM", then "Yesterday", a weekday
+ * within the week, and "Nov 9" after that.
+ */
+export function rowTime(timestamp: number | null, now = Date.now()): string {
+  if (timestamp === null) return "";
+  const days = daysAgo(timestamp, now);
+  const date = new Date(timestamp);
+  if (days <= 0) return clockTime(timestamp);
+  if (days === 1) return "Yesterday";
+  if (days < 7) return date.toLocaleDateString(undefined, { weekday: "short" });
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** A stamp between messages: "Today 5:36 PM", "Yesterday 9:02 AM", "Mon, Nov 9 2:14 PM". */
+export function stampTime(timestamp: number, now = Date.now()): string {
+  const days = daysAgo(timestamp, now);
+  if (days <= 0) return `Today ${clockTime(timestamp)}`;
+  if (days === 1) return `Yesterday ${clockTime(timestamp)}`;
+  const date = new Date(timestamp);
+  const day = date.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  return `${day} ${clockTime(timestamp)}`;
 }
 
 export function clockTime(timestamp: number | null): string {
