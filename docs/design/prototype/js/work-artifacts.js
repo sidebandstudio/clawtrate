@@ -75,17 +75,21 @@
     "a-terms": { task: "j2", msg: "msg-j-1", kind: "file", name: "lending-terms.pdf", typeWords: "PDF", mime: "application/pdf", size: 412 * 1024, download: "bytes", time: "3:02 PM", icon: "page", pages: 3 },
     "a-screens": { task: "j2", msg: "msg-j-1", kind: "file", name: "app-screens.zip", typeWords: "ZIP archive", mime: "application/zip", size: 8808038, download: "url", time: "3:02 PM", icon: "list" },
     "a-card": { task: "j2", msg: "msg-j-1", kind: "file", name: "library-card.pkpass", typeWords: "File", size: undefined, download: "unsupported", time: "3:02 PM", icon: "file" },
-    "a-cover": { task: "j2", msg: "msg-j-2", group: "g-j2", kind: "image", name: "cover.jpg", typeWords: "JPEG image", mime: "image/jpeg", size: 214000, download: "unsupported", previewOnly: true, time: "3:04 PM", art: cover },
+    // Listed by the gateway, but with no content it can send: a quiet tile, kept out of the viewer.
+    "a-cover": { task: "j2", msg: "msg-j-2", group: "g-j2", kind: "image", name: "cover.jpg", typeWords: "JPEG image", mime: "image/jpeg", size: 214000, download: "unsupported", time: "3:04 PM", art: cover },
+    // At an address that is not on the gateway: opened only in the browser, by the person's choice.
+    "a-faq": { task: "j2", msg: "msg-j-1", kind: "file", name: "lending-faq.pdf", typeWords: "PDF", mime: "application/pdf", download: "url", external: "help.library.example", time: "3:02 PM", icon: "page" },
     "a-chart": { task: "j2", msg: "msg-j-2", group: "g-j2", kind: "image", name: "apps-compared.png", typeWords: "PNG image", mime: "image/png", size: 61200, download: "bytes", time: "3:04 PM", art: appsChart },
     "a-walk": { task: "j2", msg: "msg-j-2", group: "g-j2", kind: "video", name: "borrowing-walkthrough.mp4", typeWords: "MP4 video", mime: "video/mp4", size: 14 * 1024 * 1024, download: "url", time: "3:04 PM", duration: "1:12", art: poster },
     "a-note": { task: "j2", msg: "msg-j-2", kind: "audio", name: "voice-note.m4a", typeWords: "Audio", mime: "audio/mp4", size: 640 * 1024, download: "bytes", time: "3:04 PM", duration: "1:04" },
   };
   const byTask = (taskId) => Object.keys(A).filter((id) => A[id].task === taskId);
-  const fetchable = (a) => a.download !== "unsupported";
+  // Only content on the gateway is fetched: in the transcript, or at an address there.
+  const fetchable = (a) => a.download !== "unsupported" && !a.external;
   const loaded = new Set(); // items opened once already
   let failNext = params.get("artifactload") === "failed";
 
-  const sub = (a) => [a.typeWords, W.size(a.size)].filter(Boolean).join(" · ");
+  const sub = (a) => (a.external ? `${a.typeWords} · from ${a.external}` : [a.typeWords, W.size(a.size)].filter(Boolean).join(" · "));
 
   // Cards -------------------------------------------------------------------------------------
 
@@ -95,7 +99,7 @@
   function fileCard(id) {
     const a = A[id];
     const tile = a.kind === "audio" ? `<span class="artifact-tile" data-round="true">${icon("play")}</span>` : `<span class="artifact-tile">${icon(a.icon || "file")}</span>`;
-    const spoken = `${a.name}, ${[a.typeWords, W.size(a.size)].filter(Boolean).join(", ")}. Open in the Work pane.`;
+    const spoken = `${a.name}, ${a.external ? `${a.typeWords}, from ${a.external}` : [a.typeWords, W.size(a.size)].filter(Boolean).join(", ")}. Open in the Work pane.`;
     return (
       `<div class="artifact" data-kind="${a.kind}" id="card-${id}" data-artifact="${id}">` +
       (a.kind === "audio"
@@ -111,14 +115,15 @@
 
   function mediaCell(id) {
     const a = A[id];
-    const thumbFailed = a.thumbnail && params.get("thumbs") === "failed";
-    const quiet = a.thumbnail && (thumbFailed || !thumbsReady);
+    // The thumbnail fails, or comes back as the original over 2 MB: no preview.
+    const thumbFailed = (a.thumbnail && ["failed", "original"].includes(params.get("thumbs"))) || !fetchable(a);
+    const quiet = (a.thumbnail && (thumbFailed || !thumbsReady)) || !fetchable(a);
     const inner = quiet
       ? `<span class="media-quiet">${icon("image")}<span>${esc(a.name)}</span><span>${thumbFailed ? "No preview" : W.size(a.size)}</span></span>`
       : fill(a.art());
     const play = a.kind === "video" ? `<span class="media-play" aria-hidden="true">${icon("play")}</span><span class="media-duration">${a.duration}</span>` : "";
     return (
-      `<button type="button" class="media-cell" data-kind="${a.kind}" data-viewer="${id}" data-artifact="${id}" id="card-${id}"${quiet && !thumbFailed ? ' aria-busy="true"' : ""}` +
+      `<button type="button" class="media-cell" data-kind="${a.kind}" ${fetchable(a) ? `data-viewer="${id}"` : `data-open-artifact="${id}"`} data-artifact="${id}" id="card-${id}"${quiet && !thumbFailed ? ' aria-busy="true"' : ""}` +
       ` aria-label="${esc(`${a.name}, ${a.kind === "video" ? `video, ${a.duration}. Play` : "Open full size"}`)}">${inner}${play}</button>`
     );
   }
@@ -154,7 +159,7 @@
       W.turn(
         "assistant",
         W.bubble("assistant", "<p>Your library lends e-books through Shelfwise. I compared it with the other two apps libraries use, and made a page you can sort.</p>", true).replace('class="msg"', 'class="msg" id="msg-j-1"') +
-          holder("msg-j-1", linkCard() + pageCard() + fileCard("a-terms") + fileCard("a-screens") + fileCard("a-card")),
+          holder("msg-j-1", linkCard() + pageCard() + fileCard("a-terms") + fileCard("a-screens") + fileCard("a-card") + fileCard("a-faq")),
       ) +
       CT.stamp("Today 3:04 PM") +
       W.turn("user", W.bubble("user", "Show me what borrowing looks like.")) +
@@ -214,12 +219,19 @@
     if (level.state === "loading") body = `<p class="files-note" aria-busy="true">Loading ${esc(a.name)}…</p>`;
     else if (level.state === "failed")
       body = `<p class="files-alert" role="alert">Couldn't open ${esc(a.name)}. The gateway's download link expired before it was used.<button type="button" class="button" data-size="sm" data-art="retry">Try again</button></p>`;
-    else if (a.download === "unsupported" && !a.previewOnly)
-      body = factsHtml("The gateway has this item's name and type, but not its content, so it can't be opened or downloaded.");
+    else if (a.external)
+      body = factsHtml(
+        `This file is at ${a.external}, outside the gateway. Opening it leaves the app, and it may have changed since it was sent.`,
+        `<p><button type="button" class="button" data-art="browser" aria-label="Open ${esc(a.name)} at ${a.external} in your browser">${icon("external")}Open in your browser</button></p>`,
+      );
+    else if (a.download === "unsupported" && a.kind === "image")
+      body = `<div class="media-quiet reader-quiet">${icon("image")}<span>${esc(a.name)}</span><span>No preview</span></div><p class="reader-why">The gateway lists this picture, but not its content, so it can't be shown or downloaded here.</p>`;
+    else if (a.download === "unsupported")
+      body = factsHtml("The gateway lists this item, but not its content, so it can't be opened or downloaded here.");
     else if (a.kind === "image")
       body =
         `<button type="button" class="reader-image" data-viewer="${id}" aria-label="Open ${esc(a.name)} full size">${a.art()}</button>` +
-        (a.previewOnly ? `<p class="reader-why">The gateway kept a preview of this picture only. It can't be downloaded.</p>` : "");
+        "";
     else if (a.kind === "file" && a.content) {
       const view = level.view || "preview";
       level.view = view;
@@ -238,7 +250,7 @@
       events: [
         [
           "Artifact, a sample in the app's own shape",
-          JSON.stringify({ id: `artifact_${id.slice(2)}7Qe`, type: a.kind, title: a.name, mimeType: a.mime, sizeBytes: a.size, runId: "run_77d413", messageSeq: 14, source: a.previewOnly ? "session-transcript-preview" : "session-transcript", download: { mode: a.download } }, null, 2),
+          JSON.stringify({ id: `artifact_${id.slice(2)}7Qe`, type: a.kind, title: a.name, mimeType: a.mime, sizeBytes: a.size, runId: "run_77d413", messageSeq: 14, source: "session-transcript", download: { mode: a.download } }, null, 2),
         ],
       ],
       ids: [["Artifact", `artifact_${id.slice(2)}7Qe`], ["Run", "run_77d413"]],
@@ -269,6 +281,11 @@
   // A picture saved or copied is a file of its own, so it carries the SVG namespace.
   const standalone = (svg) => svg.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
 
+  // The name a download proposes: the record's title, with an extension from its
+  // media type when the title has none. The title is not proof of an original name.
+  const extensions = { "text/markdown": "md", "image/png": "png", "image/jpeg": "jpg", "application/pdf": "pdf", "application/zip": "zip", "audio/mp4": "m4a", "video/mp4": "mp4" };
+  const fileName = (a) => (/\.[a-z0-9]{1,5}$/i.test(a.name) || !extensions[a.mime] ? a.name : `${a.name}.${extensions[a.mime]}`);
+
   function blobFor(a) {
     if (a.content) return new Blob([new TextEncoder().encode(a.content)], { type: a.mime });
     if (a.art) return new Blob([standalone(a.art())], { type: "image/svg+xml" });
@@ -277,7 +294,7 @@
   function save(a, verb = "Downloaded") {
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blobFor(a));
-    link.download = a.name;
+    link.download = fileName(a);
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -332,6 +349,7 @@
     menu.innerHTML =
       item("Open", `data-mi="open" data-id="${id}"`) +
       (fetchable(a) ? item("Download", `data-mi="download" data-id="${id}"`) : "") +
+      (a.external ? item(`Open in your browser`, `data-mi="browser" data-id="${id}" aria-label="Open ${esc(a.name)} at ${a.external} in your browser"`) : "") +
       (fetchable(a) && a.kind === "image" ? item("Copy image", `data-mi="copy-image" data-id="${id}"`) + item("Save image…", `data-mi="save" data-id="${id}"`) : "") +
       (fetchable(a) && a.kind === "video" ? item("Save video…", `data-mi="save" data-id="${id}"`) : "") +
       (fetchable(a) && a.content ? item("Copy text", `data-mi="copy-text" data-id="${id}"`) : "") +
@@ -360,7 +378,8 @@
     if (id === "page") return ["page"];
     const a = A[id];
     if (a.pages) return [id];
-    return a.group ? byTask(a.task).filter((k) => A[k].group === a.group) : [id];
+    // An item with no content at the gateway is not offered in the viewer's sequence.
+    return a.group ? byTask(a.task).filter((k) => A[k].group === a.group && fetchable(A[k])) : [id];
   }
   function stage(id, page) {
     if (id === "page") {
@@ -405,7 +424,7 @@
     viewer.setAttribute("aria-label", `${a.name}${several ? `, ${i + 1} of ${ids.length}` : ""}`);
     const canFetch = a.download && fetchable(a);
     viewer.innerHTML =
-      `<div class="viewer-bar"><div class="viewer-title"><strong>${esc(a.name)}</strong>${several ? `<span>${i + 1} of ${ids.length}</span>` : ""}${a.previewOnly ? `<span>Preview only</span>` : ""}</div>` +
+      `<div class="viewer-bar"><div class="viewer-title"><strong>${esc(a.name)}</strong>${several ? `<span>${i + 1} of ${ids.length}</span>` : ""}</div>` +
       (canFetch ? `<button type="button" class="icon-button" data-v="download" aria-label="Download ${esc(a.name)}" title="Download (⌘S)">${icon("download")}</button>` : "") +
       (canFetch && a.kind === "image" ? `<button type="button" class="icon-button" data-v="copy" aria-label="Copy the image" title="Copy (⌘C)">${icon("copy")}</button>` : "") +
       `<button type="button" class="icon-button" data-v="close" aria-label="Close the viewer" title="Close (Esc)">${icon("x")}</button></div>` +
@@ -522,6 +541,7 @@
       closeMenu(what !== "open" && what !== "files");
       if (what === "open") return A[id].kind === "image" || A[id].kind === "video" ? openViewer(id, opener) : openArtifact(id);
       if (what === "download") return save(A[id]);
+      if (what === "browser") return CT.toast(`Opens ${A[id].name} at ${A[id].external} in your browser. Nothing is fetched before that.`);
       if (what === "save") return save(A[id], "Saved");
       if (what === "copy-image") return copyImage(A[id]);
       if (what === "copy-text") {
@@ -563,6 +583,7 @@
       const level = W.paneFor(W.current()).stack.at(-1);
       const a = A[level.path];
       if (art === "download") return save(a);
+      if (art === "browser") return CT.toast(`Opens ${a.name} at ${a.external} in your browser. Nothing is fetched before that.`);
       if (art === "copy") {
         if (a.kind === "image") return copyImage(a);
         return W.copyText(a.content, a.name, t.closest("[data-art]"), ".code-view, .reader-preview");
