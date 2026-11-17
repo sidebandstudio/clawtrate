@@ -344,6 +344,7 @@ export function BotMessageCardView({
               aria-label={`Open this message in ${recipient.name}'s task`}
               onClick={() => {
                 rememberReturn(env.taskKey, domId);
+                arriveAt(card.recipient.sessionKey!, card.recipientRunId);
                 env.openTask!(recipient.id!, card.recipient.sessionKey!);
               }}
             >
@@ -551,6 +552,7 @@ export function ReceivedCardView({
   return (
     <details
       className="card messaged"
+      data-run-id={run?.id}
       data-target="from"
       data-state={state}
       data-connection={lost ? "lost" : undefined}
@@ -640,7 +642,13 @@ export function ReceivedCardView({
               type="button"
               className="link-button"
               aria-label={`Open this message in ${senderName}'s task`}
-              onClick={() => env.openTask!(senderId, message.sourceSessionKey!)}
+              onClick={() => {
+                if (returnPoint?.taskKey !== message.sourceSessionKey) {
+                  // Not arrived from there: open the sender's task at its end.
+                  returnPoint = null;
+                }
+                env.openTask!(senderId, message.sourceSessionKey!);
+              }}
             >
               Open in {senderName}
             </button>
@@ -759,6 +767,21 @@ export function focusCard(domId: string): void {
 
 /** Where the reader was when "Open in <bot>" took them away, for coming back. */
 let returnPoint: { taskKey: string; domId: string } | null = null;
+
+/** Where "Open in <bot>" goes: the receiving card of the run the send's result named. */
+let arrival: { taskKey: string; runId: string | null } | null = null;
+
+function arriveAt(taskKey: string, runId: string | null): void {
+  arrival = { taskKey, runId };
+}
+
+/** The receiving card to open and focus when a task opens from "Open in <bot>", once. */
+export function takeArrival(taskKey: string): string | null {
+  if (arrival?.taskKey !== taskKey) return null;
+  const { runId } = arrival;
+  arrival = null;
+  return runId;
+}
 
 function rememberReturn(taskKey: string, domId: string): void {
   returnPoint = { taskKey, domId };

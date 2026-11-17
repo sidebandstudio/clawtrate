@@ -13,7 +13,7 @@ import {
   type Transcript,
 } from "@clawtrate/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RawContent } from "./parts.tsx";
+import type { RawContent } from "./raw.ts";
 
 /** A call's raw payload, as far as this view knows it. */
 export type StepRawState =

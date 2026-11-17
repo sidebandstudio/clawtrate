@@ -229,11 +229,7 @@ describe("approval cards from the engine's state", () => {
 
 describe("question cards from the engine's state", () => {
   it("F-112 F-006: ordinary records are answerable; any other is readable only", () => {
-    for (const name of [
-      "question-single",
-      "question-multi",
-      "question-three",
-    ] as CardSceneName[]) {
+    for (const name of ["question-single", "question-multi", "question-three"] as CardSceneName[]) {
       expect(question(name).card.ordinary, name).toBe(true);
     }
     expect(question("question-unanswerable").card.ordinary).toBe(false);
@@ -297,13 +293,14 @@ describe("Messaged cards from the engine's state", () => {
   it("F-119 F-122 F-434 F-469: every state of a message to another bot comes from the events that establish it", () => {
     for (const [name, key] of expected) {
       const { selected } = cards(name);
-      expect(selected.botMessages, name).toHaveLength(1);
-      expect(botMessageKey(selected.botMessages[0]!), name).toBe(key);
+      const card = selected.botMessages.find((each) => each.id === "tool:call_msg");
+      expect(card, name).toBeDefined();
+      expect(botMessageKey(card!), name).toBe(key);
     }
   });
 
   it("F-123 F-438: the card carries the exact text sent, the reply and the recipient's run", () => {
-    const replied = cards("messaged-replied").selected.botMessages[0]!;
+    const replied = cards("messaged-replied").selected.botMessages.at(-1)!;
     expect(replied.text).toMatch(/^Write a two-line entry for the house log/);
     expect(replied.reply?.text).toMatch(/^Nov 16/);
     expect(replied.recipient).toMatchObject({ agentId: "marlow", source: "result" });
@@ -324,7 +321,9 @@ describe("Messaged cards from the engine's state", () => {
         run,
       );
     };
-    expect(say("messaged-started")).toBe("Otto began this call. Nothing yet shows that it was made.");
+    expect(say("messaged-started")).toBe(
+      "Otto began this call. Nothing yet shows that it was made.",
+    );
     expect(say("messaged-approval")).toBe(
       "This message waits for your approval. Nothing has been sent.",
     );
@@ -348,6 +347,7 @@ describe("Messaged cards from the engine's state", () => {
     const { transcript, selected } = cards("messaged-replied");
     const placement = placeCards(transcript, selected);
     expect(placement.afterItem.get(transcript.items[0]!.id)).toEqual([
+      { kind: "bot-message", id: "tool:call_msg0" },
       { kind: "bot-message", id: "tool:call_msg" },
     ]);
     const received = scene("received-working").transcript;

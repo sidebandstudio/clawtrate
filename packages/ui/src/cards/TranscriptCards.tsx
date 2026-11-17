@@ -28,6 +28,7 @@ import {
   IncomingLine,
   ReceivedCardView,
   T3CodeCardView,
+  takeArrival,
   takeReturnPoint,
 } from "./MessagedCard.tsx";
 import { nameOf } from "./model.ts";
@@ -123,6 +124,23 @@ export function CardScope({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [transcript]);
+
+  // Arriving from "Open in <bot>": the receiving card of that run, open, in view and focused.
+  useLayoutEffect(() => {
+    const runId = takeArrival(taskKey);
+    if (runId === null) return;
+    const open = () => {
+      const element = document.querySelector<HTMLDetailsElement>(
+        `details[data-target="from"][data-run-id="${CSS.escape(runId)}"]`,
+      );
+      if (!element) return false;
+      element.open = true;
+      element.scrollIntoView({ block: "center" });
+      element.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+      return true;
+    };
+    if (!open()) requestAnimationFrame(() => void open());
+  }, [taskKey]);
 
   // Coming back from "Open in <bot>": the card open again, in view, focus on that control.
   useLayoutEffect(() => {

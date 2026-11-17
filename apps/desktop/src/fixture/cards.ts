@@ -736,9 +736,32 @@ function build(
           error: "No reply within 120 seconds.",
         }),
       };
-    case "messaged-replied":
+    case "messaged-replied": {
+      // An earlier exchange with Marlow in the same run, for "Show full exchange".
+      const earlier = new Builder(CARD_TASK, now)
+        .start(ago(3))
+        .toolStart(
+          "sessions_send",
+          "call_msg0",
+          { sessionKey: MARLOW_KEY, message: "Is the house log open for this week?" },
+          ago(2.6),
+        )
+        .toolResult(
+          "sessions_send",
+          "call_msg0",
+          {
+            content: text("Yes. The week of Nov 16 is open."),
+            details: {
+              status: "ok",
+              runId: "run_m41a",
+              sessionKey: MARLOW_KEY,
+              reply: "Yes. The week of Nov 16 is open.",
+            },
+          },
+          ago(2.4),
+        );
       return {
-        b: sendResult(messaged(now), now, {
+        b: sendResult(messaged(now, earlier), now, {
           status: "ok",
           runId: MARLOW_RUN,
           sessionKey: MARLOW_KEY,
@@ -746,6 +769,7 @@ function build(
         }),
         extra: { linkedRuns: linked("completed", now) },
       };
+    }
     case "messaged-recipient-stopped":
       return {
         b: sendResult(messaged(now), now, {
@@ -1025,14 +1049,29 @@ export function cardScene(name: CardSceneName, now: number): CardScene {
   const decisions: DecisionMode =
     name === "approval-refused" ? "refuse" : name === "approval-unknown" ? "silent" : "apply";
 
+  // A message to Marlow: Marlow's task holds the run it started, for "Open in Marlow" and back.
+  const companion =
+    name.startsWith("messaged") && name !== "messaged-not-sent" && name !== "messaged-blocked"
+      ? cardScene(
+          name === "messaged-replied" || name === "messaged-no-reply"
+            ? "received-completed"
+            : "received-working",
+          now,
+        )
+      : null;
   return {
     task,
     decisions,
-    change: (state) => {
+    change: (before) => {
+      const state = companion ? companion.change(before) : before;
+      const add = (list: Task[] | undefined, row: Task) => [
+        row,
+        ...(list ?? []).filter((each) => each.key !== row.key),
+      ];
       const withTasks = {
         ...state.tasksByBot,
-        otto: [taskRow(CARD_TASKS.otto, now), ...(state.tasksByBot.otto ?? [])],
-        marlow: [taskRow(CARD_TASKS.marlow, now), ...(state.tasksByBot.marlow ?? [])],
+        otto: add(state.tasksByBot.otto, taskRow(CARD_TASKS.otto, now)),
+        marlow: add(state.tasksByBot.marlow, taskRow(CARD_TASKS.marlow, now)),
       };
       const readOnly = name.endsWith("readonly");
       const reconnecting = name === "messaged-last-seen";
