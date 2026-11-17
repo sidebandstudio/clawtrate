@@ -223,6 +223,7 @@ export default async function globalSetup() {
     process.env.CLAWTRATE_PACKAGED_CDP = `http://127.0.0.1:${port}`;
     process.env.CLAWTRATE_PACKAGED_APP = app;
     process.env.CLAWTRATE_PACKAGED_USER_DATA = userData;
+    process.env.CLAWTRATE_PACKAGED_PID = String(appProcess.pid);
   } catch (error) {
     await teardown().catch((problem: unknown) => console.error(String(problem)));
     throw error;

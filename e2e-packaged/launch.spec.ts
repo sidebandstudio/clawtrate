@@ -1,6 +1,7 @@
 // The packaged app launches, shows its window and connect screen, and pairs
 // with a development gateway instance of this run's own.
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,39 @@ const ROOT = join(import.meta.dirname, "..");
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const APP = process.env.CLAWTRATE_PACKAGED_APP!;
 const USER_DATA = process.env.CLAWTRATE_PACKAGED_USER_DATA!;
+const APP_PID = Number(process.env.CLAWTRATE_PACKAGED_PID);
+
+/** The app's direct children, as the system reports them: PID and full command line. */
+function helpers(): { pid: number; command: string }[] {
+  const out = execFileSync("ps", ["-axww", "-o", "pid=,ppid=,command="], { encoding: "utf8" });
+  return out.split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    return match && Number(match[2]) === APP_PID
+      ? [{ pid: Number(match[1]), command: match[3]! }]
+      : [];
+  });
+}
+
+/**
+ * The kernel's answer to whether a process is confined by a sandbox:
+ * `sandbox_check(pid, NULL, 0)` from libSystem returns 1 for a process that
+ * has entered a Seatbelt profile and 0 for one that has not. Node has no way
+ * to call it, so Apple's Python (part of the command line tools that git on
+ * macOS already needs) calls it through ctypes.
+ */
+function kernelSaysSandboxed(pid: number): number {
+  const script = [
+    "import ctypes, sys",
+    "lib = ctypes.CDLL('/usr/lib/libSystem.B.dylib')",
+    "lib.sandbox_check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]",
+    "print(lib.sandbox_check(int(sys.argv[1]), None, 0))",
+  ].join("\n");
+  return Number(
+    execFileSync("/usr/bin/python3", ["-I", "-c", script, String(pid)], {
+      encoding: "utf8",
+    }).trim(),
+  );
+}
 
 let browser: Browser;
 let page: Page;
@@ -57,6 +91,28 @@ test("opens its window from the packaged app on the connect screen", async () =>
   expect(page_.host).toEqual(["hello", "onState", "platform", "send"]);
   expect(page_.csp).toContain("default-src 'self'");
   expect(page_.csp).toContain("script-src 'self'");
+});
+
+test("runs its renderer in the operating system's sandbox", () => {
+  // The page having no Node globals says nothing about the sandbox; context
+  // isolation alone gives that. So the evidence is the renderer process
+  // itself, from outside it. Its launch arguments show how Chromium started
+  // it: a sandboxed renderer gets --seatbelt-client, the pipe over which it
+  // receives its Seatbelt profile and enters it before running any page code,
+  // and an unsandboxed one gets --no-sandbox and no seatbelt client. The
+  // kernel then confirms the process is actually confined. Neither can be
+  // satisfied when `sandbox: false` or a missing app.enableSandbox() lets the
+  // renderer run unsandboxed, which is what this test exists to catch.
+  expect(Number.isInteger(APP_PID) && APP_PID > 1).toBe(true);
+  const renderers = helpers().filter(({ command }) => /\s--type=renderer(\s|$)/.test(command));
+  expect(renderers.length, "the app's renderer processes").toBeGreaterThan(0);
+  for (const { pid, command } of renderers) {
+    expect(command, `renderer ${pid}`).toMatch(/\s--seatbelt-client=\d+(\s|$)/);
+    expect(command, `renderer ${pid}`).not.toMatch(/\s--no-sandbox(\s|$)/);
+    expect(kernelSaysSandboxed(pid), `sandbox_check for renderer ${pid}`).toBe(1);
+  }
+  // The same query tells an unsandboxed process apart: the main process is not sandboxed.
+  expect(kernelSaysSandboxed(APP_PID), "sandbox_check for the main process").toBe(0);
 });
 
 test("pairs with its own development gateway instance and shows the seeded bots", async () => {
