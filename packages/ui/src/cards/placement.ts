@@ -59,40 +59,48 @@ export function placeCards(input: PlacementInput, selected: SelectedCards): Card
     } else trailing.push(ref);
   };
 
-  // Calls, in the order their steps began.
-  const calls: Array<{ at: number; order: number; runId: string; ref: CardRef }> = [];
+  // Calls and requests in one order: when the gateway reports each began (a call's
+  // start, a request's creation). At the same time a call comes before a request,
+  // which is how an approval for a call arrives; otherwise the engine's own order
+  // holds. A card the gateway gave no time sorts after those it did.
+  type Arrival = { at: number; kind: 0 | 1; order: number; runId: string | null; ref: CardRef };
+  const arrivals: Arrival[] = [];
   const stepOrder = new Map<string, number>();
   input.runs.forEach((run, r) =>
     run.steps.forEach((step, s) => stepOrder.set(step.id, r * 10_000 + s)),
   );
+  const timeOf = (at: number | null) => at ?? Number.POSITIVE_INFINITY;
   const pushCall = (card: BotMessageCard | McpCallCard, kind: "bot-message" | "t3-code") =>
-    calls.push({
-      at: card.requestedAt ?? 0,
+    arrivals.push({
+      at: timeOf(card.requestedAt),
+      kind: 0,
       order: stepOrder.get(card.stepId) ?? 0,
       runId: card.runId,
       ref: { kind, id: card.id },
     });
   for (const card of selected.botMessages) pushCall(card, "bot-message");
   for (const card of codingCalls(selected)) pushCall(card, "t3-code");
-  calls.sort((a, b) => a.order - b.order);
-  for (const call of calls) add(call.runId, call.ref);
-
-  // Requests, in the order they were asked. An approval that belongs to no
-  // known run is still drawn, at the end.
-  const requests: Array<{ at: number; runId: string | null; ref: CardRef }> = [
-    ...input.approvals.map((card) => ({
-      at: card.createdAt ?? 0,
+  input.approvals.forEach((card, order) =>
+    arrivals.push({
+      at: timeOf(card.createdAt),
+      kind: 1,
+      order,
       runId: card.runId,
-      ref: { kind: "approval", id: card.id } as CardRef,
-    })),
-    ...input.questions.map((card) => ({
-      at: card.createdAt ?? 0,
+      ref: { kind: "approval", id: card.id },
+    }),
+  );
+  input.questions.forEach((card, order) =>
+    arrivals.push({
+      at: timeOf(card.createdAt),
+      kind: 1,
+      order: 1_000 + order,
       runId: card.runId,
-      ref: { kind: "question", id: card.id } as CardRef,
-    })),
-  ];
-  requests.sort((a, b) => a.at - b.at);
-  for (const request of requests) add(request.runId, request.ref);
+      ref: { kind: "question", id: card.id },
+    }),
+  );
+  const byTime = (a: number, b: number) => (a === b ? 0 : a < b ? -1 : 1);
+  arrivals.sort((a, b) => byTime(a.at, b.at) || a.kind - b.kind || a.order - b.order);
+  for (const arrival of arrivals) add(arrival.runId, arrival.ref);
 
   for (const run of input.runs) {
     const refs = byRun.get(run.id);

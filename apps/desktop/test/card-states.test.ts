@@ -5,7 +5,10 @@ import {
   applyAgentEvent,
   emptyActivity,
   initialState,
+  applyApprovalRequested,
+  applyQuestionRequested,
   parseExecApproval,
+  parsePluginApproval,
   RawTable,
   type TaskActivity,
   type ApprovalCard,
@@ -675,5 +678,107 @@ describe("the Messaged cards claim only what an event established", () => {
     for (const key of notDelivered) expect(sentVerb(key as MessagedKey), key).toBe("asked to send");
     // Every state is one or the other.
     expect([...delivered, ...notDelivered].sort()).toEqual(Object.keys(MESSAGED_STATES).sort());
+  });
+});
+
+describe("cards in the order the gateway's events establish", () => {
+  it("F-119: a request asked before a later call comes first; a call comes before the approval it waits on", () => {
+    const KEY = "agent:otto:order2";
+    const raw = new RawTable();
+    let seq = 0;
+    const ctx = () => ({ sessionKey: KEY, now: 9_000, raw });
+    const tool = (activity: TaskActivity, data: Record<string, unknown>, ts: number) =>
+      applyAgentEvent(
+        activity,
+        { runId: "run-x", seq: (seq += 1), stream: "tool", ts, sessionKey: KEY, data },
+        ctx(),
+      ).activity;
+    let a = applyAgentEvent(
+      emptyActivity,
+      {
+        runId: "run-x",
+        seq: (seq += 1),
+        stream: "lifecycle",
+        ts: 1_000,
+        sessionKey: KEY,
+        data: { phase: "start" },
+      },
+      ctx(),
+    ).activity;
+    // A question at 2,000, then a message to Marlow at 3,000, then an approval for that message at 3,000.
+    a = applyQuestionRequested(
+      a,
+      {
+        id: "q1",
+        runId: "run-x",
+        sessionKey: KEY,
+        createdAtMs: 2_000,
+        expiresAtMs: 900_000,
+        status: "pending",
+        questions: [
+          {
+            questionId: "a",
+            header: "A",
+            question: "Which?",
+            options: [{ label: "x" }, { label: "y" }],
+            isOther: true,
+          },
+        ],
+      },
+      ctx(),
+    );
+    a = tool(
+      a,
+      {
+        phase: "start",
+        name: "sessions_send",
+        toolCallId: "m1",
+        args: { sessionKey: "agent:marlow:main", message: "Hi" },
+      },
+      3_000,
+    );
+    const approval = parsePluginApproval({
+      id: "ap1",
+      request: {
+        title: "message Marlow",
+        toolCallId: "m1",
+        runId: "run-x",
+        sessionKey: KEY,
+        agentId: "otto",
+      },
+      createdAtMs: 3_000,
+      expiresAtMs: 900_000,
+    })!;
+    a = applyApprovalRequested(a, approval);
+    // And an exec approval asked at 1,500, before both.
+    a = applyApprovalRequested(
+      a,
+      parseExecApproval({
+        id: "ap0",
+        request: {
+          command: "ls",
+          runId: "run-x",
+          sessionKey: KEY,
+          agentId: "otto",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 1_500,
+        expiresAtMs: 900_000,
+      })!,
+    );
+    const placed = placeCards(
+      { runs: a.runs, approvals: a.approvals, questions: a.questions, items: [], interSession: [] },
+      selectCards(
+        { runs: a.runs, approvals: a.approvals, linkedRuns: {}, interSession: [] },
+        [],
+        rawOf,
+      ),
+    );
+    expect(placed.byRun.get("run-x")).toEqual([
+      { kind: "approval", id: "ap0" },
+      { kind: "question", id: "q1" },
+      { kind: "bot-message", id: "tool:m1" },
+      { kind: "approval", id: "ap1" },
+    ]);
   });
 });
