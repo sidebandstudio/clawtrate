@@ -55,28 +55,36 @@ T3 Code's interface unverified. This file does not edit the map.
    (`oauth`, `token`, `api_key`) does not say whether an account is a
    subscription. **[source, partly probe]**
 2. **A bot can select an account: `<provider>/<model>@<profileId>` on its
-   model, and a conversation can select one through `sessions.patch
-   {model}`.** Neither is exclusive. A selection is put first in the list of
-   candidate accounts, and the gateway moves on to the provider's other
-   accounts when it fails or is cooling down. A stored one-profile order for
-   the bot removes the others from that list, but only the gateway's command
-   line can write it; the gateway method insists on listing every profile
-   (A.4). **[source, probe]**
+   model; a conversation (`sessions.patch {model}`), a new task
+   (`sessions.create {model}`), a routine (`payload.model`) and a helper can
+   each select one too, and theirs wins.** None is exclusive: a selection is
+   put first among the candidate accounts, and the gateway moves on to the
+   provider's other accounts when it fails or is cooling down. A stored
+   one-profile order for the bot removes the others from the automatic
+   candidates. No account method writes it (`models.authOrderSet` insists on
+   every profile); the gateway's command line does, and so does anything
+   that can run that command on the gateway host, which includes an admin
+   client through a routine. Clawtrate's supported ways are the person
+   running the command, or a plugin (A.4, C.2). **[source, probe]**
 3. **In the probe, a pinned bot with empty fallbacks moved to the other
    account of its provider on a 401, a 402 and a 429, in the same run, and
    stayed there while the first account cooled down. With the stored
-   one-profile order it failed with a visible error instead and never used
-   the other account** (A.13). Model fallback across providers follows
-   `model.fallbacks`; a bot with its own model and `fallbacks: []` never used
-   the inherited default fallback. Codex's cyber escalation and Anthropic's
-   in-request refusal fallback are separate routes with their own controls
-   (A.7). **[probe, source]**
-4. **No client-visible record names the account that served a turn.** When
-   a run moved accounts, the client saw a failed attempt (`lifecycle`
-   `finishing` with an error) and a second start on the same provider and
-   model, and nothing naming either account. `chat.metadata`'s
-   `accountSelection` is a preference, documented as not a receipt, and lagged
-   one run behind. The gateway knows the account internally (A.9). **[probe,
+   one-profile order its ordinary runs failed with a visible error instead
+   and never used the other account; an explicit selection of the other
+   account, by a conversation, a new task or a routine, still ran there**
+   (A.13). The order is a fence for ordinary runs, not for every run (C.2).
+   Model fallback across providers follows `model.fallbacks`; a bot with its
+   own model and `fallbacks: []` never used the inherited default fallback.
+   Codex's cyber escalation and Anthropic's in-request refusal fallback are
+   separate routes with their own controls (A.7). **[probe, source]**
+4. **No per-turn receipt names the serving account, but a switch can be
+   noticed afterwards.** The run's events, history and receipt name provider
+   and model only. Three other reads do help: `logs.tail` (`operator.read`)
+   returns the gateway's `rotate_profile` decision for the run, with a stable
+   hash of the account that failed, as the run happens; `models.authStatus`
+   gives admin connections `lastUsedAt` per account, for accounts in the
+   bot's own store; and `chat.metadata`'s account preference follows one run
+   late (A.9, C.3). None says which account answered a given turn. **[probe,
    source]**
 5. **Removing an account follows where its credential is stored.** A shared
    profile is removed for every bot that inherits it, its `@profile`
@@ -105,7 +113,7 @@ message (B.2). The gateway can hold such a server (`mcp.servers.<name>` with
 F-482 assumes. The gateway's sign-in for it, `mcp.authLogin`, needs an admin
 connection with a browser origin. Clawtrate's present connection has none, but
 a desktop connection in `webchat` mode with a qualifying `https` origin could
-start it without a plugin (B.5, C.4; not exercised).
+start it without a plugin (B.5, C.5; not exercised).
 
 ---
 
@@ -346,11 +354,27 @@ found.
   `SystemAgentSetupAuthStartParams` and `ModelsAuthSetApiKeyParams` have none,
   and `saveModelProviderApiKey` is called without one
   (`<openclaw>/dist/models-auth-status-DDLxf-39.mjs`, the `models.authSetApiKey`
-  handler, lines 338-362). `displayName` and `email` come from the provider and
-  are returned only to admin connections (same file, lines 431, 530-534).
-  No user-set label exists: searched `<protocol>` definitions for `label` on
-  auth profiles, found only `UserModelAccount.label` (personal accounts).
-  **[source]**
+  handler, lines 338-362).
+- **Labels: a configurable display name.** Config accepts
+  `auth.profiles.<profileId>.displayName` (with `provider` and `mode`, and an
+  optional `email`; `<openclaw>/dist/zod-schema-DVpq3IiD.mjs` lines 1001-1014),
+  and the gateway prefers that configured value over the display name stored
+  with the credential (`resolveAuthProfileMetadata`,
+  `<openclaw>/dist/identity-DVxLdta7.mjs` lines 6-12). `models.authStatus`
+  returns `displayName` and `email` only to admin connections
+  (`models-auth-status-DDLxf-39.mjs` lines 521-534). So a user-set label per
+  account is stock: Clawtrate writes it with `config.patch` (`operator.admin`)
+  and reads it back on an admin connection. A read-only connection does not
+  receive it, so a label every client can read, or one editable below admin,
+  would need Clawtrate's own record or a plugin. The protocol has no separate
+  label field for shared profiles (searched `<protocol>` definitions for
+  `label`; found `UserModelAccount.label` for personal accounts and the
+  `accountSelection.label` of `chat.metadata`, which is derived). Observed
+  **[probe, A.13]**: a configured `displayName` came back from admin
+  `models.authStatus` and not from a read-only one, and `chat.metadata`'s
+  label still showed the profile id, since it reads the stored credential's
+  name (`chat-metadata-session-projection-DuoPBWYl.mjs` lines 56-70).
+  **[source, probe]**
 - **Through gateway methods, a second API key for the same provider is not
   possible**: `models.authSetApiKey` replaces the configured or active key, or
   creates `<provider>:manual` (`auth-api-key-B25pB09w.mjs` lines 64-81). In the
@@ -448,7 +472,7 @@ found.
   selection; literal keys with `auth:"api-key"` suppress profile candidates
   altogether (`prepare-auth-DF3PBMSe.mjs` lines 157-176). A user selection
   skips the binding. **[source]**
-- **A stored one-profile order, from the command line only.**
+- **A stored one-profile order: no account method writes it.**
   `models.authOrderSet {provider, profileIds, agentId}` (`operator.admin`,
   line 2682) writes the bot's stored order, but refuses an order that does not
   list every available profile, an order when `auth.order` config controls
@@ -463,10 +487,39 @@ found.
   `profiles-ouASNfE0.mjs` lines 857-869) and asks the running gateway to
   refresh its auth state. Observed **[probe]**: it accepted `ord401:one` for
   bot `ord-401`, `order get` read it back, and when that account then failed,
-  the bot's runs failed instead of moving to `ord401:two`. It is still not an
-  unconditional fence: a user selection is prepended to it (above), a
-  provider-entry binding outranks it, and an all-missing order is repaired.
-  **[source, probe]**
+  the bot's runs failed instead of moving to `ord401:two`. **[source, probe]**
+
+  Who else can write it. Searched `dist/*.mjs` for `setAuthProfileOrder`,
+  `promoteAuthProfileInOrder` and other writers of a store's `order`:
+  - a sign-in: saving a newly signed-in profile calls
+    `promoteAuthProfileInOrder`, which puts the new profile first in an
+    existing order or creates one (`profiles-ouASNfE0.mjs` lines 874-893;
+    reached from login persistence, `auth-BVSjnQ2w.mjs` lines 257-286,
+    330-345). So a later `models.authLogin` for that bot's provider can widen a
+    one-profile order without anyone editing it;
+  - batch persistence of imported profiles and its rollback
+    (`profiles-ouASNfE0.mjs` lines 690-737, 769-780);
+  - `applyAuthProfileConfig` adjusting the global `auth.order` during
+    login or key setup (`provider-auth-helpers-AG063uEU.mjs` lines 65-107),
+    which is the global order, not the bot's;
+  - plugins, through the SDK's store writers (`plugin-sdk/provider-auth.d.ts`
+    exports `updateAuthProfileStoreWithLock`);
+  - anything that can run the gateway's command line on its host, including a
+    paired admin client: `cron.add` (`operator.admin`) accepts a routine whose
+    payload is a command (`payload.kind:"command"`; `cron.add` handler,
+    `<openclaw>/dist/cron-DuUhgXqx.mjs` lines 1527-1607; a bot acting through
+    its own routine tool cannot manage command routines, lines 474-483), and
+    `cron.run` runs it on the gateway host. An independent review ran `openclaw models auth order
+    set` this way on a named development instance and read the one-profile
+    order back from `models.authStatus`. Clawtrate will not use that route:
+    the supported ways for Clawtrate are the gateway's own command line run
+    by the person, or a plugin method (Part C).
+  **[source; the routine route observed by that review, not by this probe]**
+
+  It is a fence for ordinary runs of that bot on that provider, not for
+  every run: it limits the automatic candidates, and every selection that
+  names an account is put in front of it. Part C, layer 2, lists every way
+  round it.
 - **Global order**: `auth.order.<provider>` in config filters the automatic
   candidates the same way; a stored profile left out of it "is not silently
   tried later" (`<openclaw>/docs/auth-credential-semantics.md`, "Explicit auth
@@ -643,7 +696,7 @@ scripted provider. Other runtimes and providers were not run.
 | Automatic move | What controls it | What a client can observe |
 | --- | --- | --- |
 | Retry the same provider, model and account (rate limits up to 10 attempts in all, other transient failures eight retries in a 90-second window) | The embedded runtime's session setting `retry.provider.maxRetries` (`0` disables retries; rate limits stay capped at 10); not an `openclaw.json` key and not per bot (`model-failover.md` lines 343-354) | `chat` `state:"status"` with `retry {attempt, maxAttempts, reason}` for rate limits (`<protocol>` `ChatStatusEvent`); each failed attempt also ends with a `lifecycle` `phase:"finishing"` event carrying `error` and `errorObservation` **[probe]** |
-| **Move to another account of the same provider** on auth, billing, rate-limit (after the retries), overload and timeout failures; a bot or session pin is prepended, not exclusive (A.4) | The candidate list: the bot's stored order, else `auth.order.<provider>`, else configured, else stored profiles; a provider-entry binding; profiles in cooldown are skipped. Not by the pin and not by empty `fallbacks` | **No event names either account.** **[probe, A.13]**: a `lifecycle` `phase:"finishing"` with `error` and `errorObservation {provider, model, failoverReason}`, then a second `start` and `model` for the same provider and model in the same run, then `final`. The `terminalReceipt` reads `requested` = `effective`; no `fallback_step`; no notice; the history row names provider and model only. `chat.metadata {sessionKey}` `accountSelection` named the pinned account after that run and the other account only after the next one. |
+| **Move to another account of the same provider** on auth, billing, rate-limit (after the retries), overload and timeout failures; a bot or session pin is prepended, not exclusive (A.4) | The candidate list: the bot's stored order, else `auth.order.<provider>`, else configured, else stored profiles; a provider-entry binding; profiles in cooldown are skipped. Not by the pin and not by empty `fallbacks` | **No event names either account.** **[probe, A.13]**: a `lifecycle` `phase:"finishing"` with `error` and `errorObservation {provider, model, failoverReason}`, then a second `start` and `model` for the same provider and model in the same run, then `final`. The `terminalReceipt` reads `requested` = `effective`; no `fallback_step`; no notice; the history row names provider and model only. `chat.metadata {sessionKey}` `accountSelection` named the pinned account after that run and the other account only after the next one. Afterwards: the `rotate_profile` log record with the failed account's hash, and admin `lastUsedAt` for bot-local accounts (C.3) **[probe]** |
 | Move to the next model (possibly another provider) along the fallback chain | The bot's `model.fallbacks`; a bot with its own `model` and no `fallbacks` is strict, and `fallbacks: []` makes it explicit; bots without a model of their own inherit `agents.defaults.model.fallbacks`; an explicit session or user selection is strict; cron jobs have their own `payload.fallbacks` (`model-failover.md` "Selection source policy" lines 134-149). **[probe]**: with `agents.defaults.model.fallbacks: ["other/dev-1"]`, no pinned bot with `fallbacks: []` ever reached `other`. | `lifecycle` `phase:"fallback_step"` with `fallbackStepFromModel`, `fallbackStepToModel`, failure reason and detail, `fallbackStepFinalOutcome` (`next_fallback`, `chain_exhausted`); `lifecycle` `phase:"model"` for the new model; the `terminalReceipt` `requested`/`effective`/`rerouted`; the assistant row's provider and model; a "↪️ Model Fallback" notice in one-to-one conversations when it succeeds (`model-failover.md` lines 475-510) **[source, probe]** |
 | Embedded OpenAI cyber-policy escalation to `openai/gpt-daybreak-blue-latest` | `agents.defaults.embeddedAgent.cyberFailover.mode` (`auto` or `off`), global; a strict or locked selection suppresses it (`model-failover.md` lines 79-132) | Effective model and receipt; refusal and reroute outcomes |
 | Codex harness cyber escalation and upstream reroutes | `plugins.entries.codex.config.appServer.cyberFailover`, on by default, separate from the embedded switch; no per-bot setting found (`docs/plugins/codex-harness/runtime-behavior.md` lines 193-254) | `agent` `notice` stream, `phase:"provider_policy"`, `provider:"openai"`, `category:"cyber"`, `state` `buffering`/`blocked`/`fallback`/`escalated`/`unavailable`/`cleared`, with model fields when upstream sends them |
@@ -687,8 +740,14 @@ and Anthropic's in-request fallback. Part C lists what does.
 
 ### A.9 Does a turn record its account
 
-Not in anything a client receives. The gateway does know the account inside
-a run; it does not publish which account served a turn.
+No record of a turn names the account that served it: not the run's events,
+its receipt, its history row or its session row. The gateway knows the
+account inside a run and writes some of it to places a client can read
+afterwards (the last two bullets; C.3 has the full account): a diagnostic
+log with the failed account's hash, a last-used time per account for
+accounts in a bot's own store, and the conversation's account preference.
+Together they let a client notice that a bot's run was served by another
+account, without a per-turn receipt.
 
 - **What a client receives** **[probe]**:
   - `chat.history` assistant row: `role, content, api, provider, model, usage,
@@ -726,9 +785,28 @@ a run; it does not publish which account served a turn.
   exposed as a plugin hook (searched `dist/*.mjs` for its callers). None of
   these reaches a client event, history row or session row. **[source]**
 
+- **The failover decision log** **[source, probe]**. The embedded runner
+  logs each failover decision as a JSON record with `event:
+  "embedded_run_failover_decision"`, `runId`, `stage`, `decision`
+  (`rotate_profile`, `fallback_model`, `surface_error`, `continue_normal`,
+  `retry_thinking_level`), `failoverReason`, `provider`, `model` and
+  `profileId` as `sha256:` plus 12 hex digits of the profile id's SHA-256
+  (`embedded-agent-CPls2oXD.mjs` lines 1682-1732; `node-crypto-BG4u3UnX.mjs`
+  lines 38-43). `logs.tail` (`operator.read`) returns lines of the gateway's
+  configured log file. In A.13, on a read-only connection, every pin-only
+  run that moved had a `rotate_profile` record carrying the hash of the
+  failed `…:one` and none for `…:two`; ordered runs that failed had
+  `surface_error`.
+- **Last use per account** **[source, probe]**. `models.authStatus
+  {agentId}` returns `lastUsedAt` per profile to admin connections, set when
+  a call succeeds, but only for profiles in the bot's own store, not
+  inherited shared ones (`models-auth-status-DDLxf-39.mjs` lines 521-534;
+  `usage-kernel-Bey5tAH9.mjs` lines 159-167). In A.13 it moved from the bound
+  account to the other one when a bot-local run switched.
+
 So F-479's "each turn's record includes the account the run used" needs a
-receipt the gateway does not publish; Part C says where a plugin could add
-one.
+receipt the gateway does not publish; what Clawtrate can say instead, and
+when, is in C.3.
 
 ### A.10 Tools that come with a provider; xAI
 
@@ -861,17 +939,19 @@ Part C has the full answer. In short, after the corrections above:
 | Need | Stock gateway | Plugin would need |
 | --- | --- | --- |
 | Select one account for a bot | Available: `<provider>/<model>@<profileId>` on the bot's model (A.4) | Nothing |
-| Never run that bot on another account | Not available as a guarantee: a pin is a preference; a stored one-profile order (command line only) held in the probe but yields to session selections, provider bindings and repair (A.4, A.13) | Enforcement at run time (Part C) |
-| A user-set label per account | No label field | Plugin-owned metadata keyed by profile id |
-| Which bots use an account | Derivable from `agents.list` model suffixes and stored orders, not reported | Or the plugin's own binding record |
-| Turn names its account | Not published (A.9) | A receipt written by the plugin (Part C) |
-| Sign-in below admin | Only personal accounts (`users.authConnect.*`, `operator.write`) | A plugin method that runs the flow itself (A.2, Part C) |
+| Never run that bot on another account | Not as a guarantee: a pin is a preference; a stored one-profile order fences ordinary runs, has no account method to set it, and yields to explicit selections, sign-ins and removals (A.4, C.2) | A method that writes the order and a guard around it, which needs `hooks.allowConversationAccess` (C.4) |
+| A user-set label per account | Available to admin: `auth.profiles.<id>.displayName` (A.3) | Only for labels below admin or readable by every client |
+| Which bots use an account | Derivable from `agents.list` model suffixes and `models.authStatus {agentId}` `profileOrder`, not reported | Or the plugin's own record |
+| Notice that another account served a run | Partly: the failover log (`logs.tail`, `operator.read`), admin `lastUsedAt` for bot-local accounts, the lagging `chat.metadata` preference (A.9, C.3) | — |
+| Turn names its serving account | Not published (A.9) | Not possible from plugin hooks in this build; needs the gateway (C.4) |
+| Sign-in below admin | Only personal accounts (`users.authConnect.*`, `operator.write`) | A plugin method that runs the flow itself (A.2, C.4) |
 
 ### A.13 Probe: a bot pinned to one account when that account fails
 
-Script `docs/research/dev-gateway/provider-accounts/pin-probe.mjs`, run twice
-on a fresh named instance with the same results, the second time with all
-39 checks passing (gateway 2026.10.6, embedded runtime,
+Script `docs/research/dev-gateway/provider-accounts/pin-probe.mjs`, run three
+times on a fresh named instance with the same routing results; the latest
+version, which also reads the switch signals and tries the other start paths,
+passed all 75 checks (gateway 2026.10.6, embedded runtime,
 OpenAI-compatible scripted provider). Everything below is **[probe]**; each
 statement in the result table is one of the script's checks or is read from
 its recorded events.
@@ -962,9 +1042,9 @@ with `terminalReceipt` whose `requested` and `effective` were both
 the history row named provider and model only. `chat.metadata {sessionKey}`
 read `accountSelection {kind:"shared", authProfileId:"pin401:one",
 source:"auto"}` after that run, and `pin401:two` only after the next one.
-`models.authStatus` showed both profiles `status:"static"` throughout. So a
-client can see that an attempt failed and the run went on, but not that it
-went on with another account.
+`models.authStatus` showed both profiles `status:"static"` throughout. So
+the run's own events show that an attempt failed and the run went on, but
+not that it went on with another account; the reads below do.
 
 **What the client received when it did not move (`ord-*`).** First run: the
 same `finishing` event, then `lifecycle` `fallback_step
@@ -1001,9 +1081,58 @@ waited out.
 `final`; `chat.metadata` then read `source:"user"`. That move is visible to a
 client, because the client made it or sees the session change.
 
+**Other ways to start a run on the other account of an ordered bot.** With
+`ord-401`'s stored order `[ord401:one]` in place and the account healthy:
+
+- `sessions.create {agentId:"ord-401", key, model:"ord401/dev-1@ord401:two"}`
+  returned an `entry` with `authProfileOverride:"ord401:two"`,
+  `authProfileOverrideSource:"user"`, `modelOverrideSource:"user"`, and the
+  task's first run went to `ord401:two` and ended `final`;
+- a routine added with `cron.add {agentId:"ord-401", enabled:false,
+  sessionTarget:"isolated", payload:{kind:"agentTurn", message,
+  model:"ord401/dev-1@ord401:two"}}` and run with `cron.run {mode:"force"}`
+  sent its request with `ord401:two`'s key; the probe removed the routine.
+
+So the order fences ordinary runs only; C.2 lists the remaining paths.
+
+**What a client could read afterwards** (the second connection had only
+`operator.read`):
+
+- `logs.tail` read the instance's log file, which the probe had pointed at
+  its own state folder with `config.patch {logging:{file}}`. For the first
+  run of each pin-only bot (the run that moved) it held one
+  `embedded_run_failover_decision` record with `decision:"rotate_profile"`,
+  `stage:"assistant"`, `failoverReason` `auth`, `billing` or `rate_limit`,
+  `provider`, `model`, and `profileId` equal to `sha256:` plus the first 12
+  hex digits of the SHA-256 of `<p>:one`, the account that failed; no record
+  named `<p>:two`. Each ordered bot's failed first run had
+  `decision:"surface_error"` with the hash of `<p>:one`. A pin-only bot's
+  second run, which started directly on `<p>:two` because `<p>:one` was
+  cooling down, left no failover record at all; an ordered bot's refused run
+  during the cooldown left a `model_fallback_decision` record
+  (`decision:"skip_candidate"`, `reason:"auth"`) without any profile.
+- `lastUsedAt`, for `loc-401`, whose two profiles were saved into its own
+  store (`paste-api-key --agent loc-401 --profile-id …`, `source:"saved"`):
+  after the baseline run only `loc401:one` had a `lastUsedAt`; after a run
+  that moved on a 401, `loc401:two` had one 2.6 seconds later than
+  `loc401:one`'s, readable as soon as the run had ended. A read-only
+  connection got no `lastUsedAt`. The shared profiles of `pin401`
+  (`source:"inherited"` for `pin-401`) had none at all, even after use.
+- `chat.metadata` as in the table above: one run late.
+
+**A configured label.** After `config.patch {auth:{profiles:{"acct:one":
+{provider:"acct", mode:"api_key", displayName:"Work account"}}}}`,
+`models.authStatus` returned `displayName:"Work account"` for `acct:one` to
+the admin connection and no `displayName` to the read-only one;
+`chat.metadata`'s `accountSelection.label` still read `acct:one`, because it
+takes the label from the stored credential, not the config.
+
 **Not covered**: OAuth profiles, a real provider, other runtimes (Codex,
-ACP, CLI harnesses), bots created after the order was set, and
+ACP, CLI harnesses), helpers, recipient sessions, sign-ins that widen the
+order, bots created after the order was set, and
 `allowAuthProfileFallback`. Timeouts and overloads were not scripted.
+Requests are attributed to runs by a `RUN-…` tag in each message, so the
+gateway's own maintenance runs do not count.
 
 ---
 
@@ -1512,85 +1641,129 @@ For the designer and the builders. Each statement is marked **[source]**
 providers, embedded runtime) or **[inferred]**. Nothing here was run against a
 real provider, an OAuth account or a running T3 Code.
 
-### C.1 The strictest stock configuration for one bot on one account
+Three layers. The first is what Clawtrate sets on every bot. The second is a
+stronger lock that Clawtrate cannot set through the gateway's account
+methods. The third is how Clawtrate finds out afterwards that a run was
+served by another account. None of them is a per-turn receipt or a lock
+without ways round it; C.4 says what only a plugin could add.
 
-Four layers, from the one every bot needs to the ones that close gaps.
+### C.1 Layer 1: the pin and empty fallbacks, set by Clawtrate
 
-| Layer | Exact setting | How it is set, and at which scope | Can a paired client set it? |
+| Setting | Exact value | How and at which scope | Authority |
 | --- | --- | --- | --- |
-| 1. The pin | `agents.entries.<bot>.model.primary: "<provider>/<model>@<profileId>"` | `agents.create {model}` or `agents.update {agentId, model}` (string form) or `config.patch` (object form); per bot | Yes, `operator.admin` **[source, probe]** |
-| 2. No model fallback | `agents.entries.<bot>.model.fallbacks: []` in the same object; for bots someone else creates without a model, `agents.defaults.model.fallbacks: []` | `config.patch`; per bot, and gateway-wide for the default | Yes, `operator.admin`. A bot with its own model ignores the default's fallbacks **[source, probe]** |
-| 3a. A stored one-profile order | the bot's local auth store holds `order.<provider>: ["<profileId>"]` | **Only** the gateway's command line: `openclaw [--profile <p>] models auth order set --provider <provider> --agent <bot> <profileId>`; per bot and provider. `models.authOrderSet` refuses a one-profile order whenever the provider has other profiles | No: no gateway method writes it **[source, probe]** |
-| 3b. Or a global one-profile order | `auth.order.<provider>: ["<profileId>"]` | `config.patch`; gateway-wide for that provider | Yes, `operator.admin`, but it forces every bot without a stored order onto that one account, so it cannot serve two bots on two accounts of one provider **[source]** |
-| 4. Or a bot-local credential | the account's credential only in that bot's store, and no other profile of that provider in the shared store | sign-in or key entry with that bot's `agentId` (`models.authLogin {agentId}`; `models.authSetApiKey {agentId}` lands locally only when the provider has no `models.providers` entry and no existing profile is replaced, A.8); or `openclaw models auth paste-api-key --agent <bot> --profile-id <id>` | Partly. Only a real separation when the shared store has no other eligible profile of that provider **[source]** |
+| The pin | `agents.entries.<bot>.model.primary: "<provider>/<model>@<profileId>"` | `agents.create {model}` or `agents.update {agentId, model}` (string form), or `config.patch` (object form); per bot | `operator.admin` **[source, probe]** |
+| No model fallback | `agents.entries.<bot>.model.fallbacks: []` in the same object | `config.patch`; per bot. A bot with its own model ignores `agents.defaults.model.fallbacks` | `operator.admin` **[source, probe]** |
+| A label | `auth.profiles.<profileId>.displayName` (with `provider` and `mode`) | `config.patch`; per account, gateway-wide | `operator.admin`; read back from `models.authStatus` on admin connections only; `chat.metadata` does not use it (A.3) **[source, probe]** |
 
-Also set, because they are separate routes (A.7): the Codex plugin's
-`plugins.entries.codex.config.appServer.cyberFailover` if the bot runs on the
-Codex harness, global, `config.patch`; and do not offer Anthropic Opus 5.5,
-Opus 5, Sonnet 5.5, Fable 5.1 or Fable 5 on a direct API key to a bot that
-must stay on its model, since that fallback cannot be switched off per bot.
-`agents.defaults.embeddedAgent.cyberFailover` needs no change: a strict
-selection already suppresses it. **[source]**
+And one rule: **Clawtrate never gives a conversation, a routine or a helper
+a different account by itself.** Every surface that takes a model reference
+can carry `@<profileId>` and that selection beats the bot's pin: a session
+(`sessions.patch {model}`), a new task (`sessions.create {model}`), a
+routine (`cron.add` `payload.model`), a helper bot (its model override or
+configured subagent model). Clawtrate writes the bot's own `@<profileId>` or
+no account at all on those surfaces, never another. **[source, probe; the
+rule is a product decision]**
 
-What the probe showed for layers 1+2 and 1+2+3a is in A.13: with the pin
-and empty fallbacks only, a 401, 402 or 429 on the pinned account moved the
-run to the other account of the same provider; with the stored order added,
-the run failed with a visible error instead and never used the other
-account. **[probe]**
+What layer 1 does and does not do, on the embedded runtime with
+OpenAI-compatible scripted providers **[probe, A.13]**: while the pinned
+account works, every run uses it. When it fails with 401, 402 or 429, the
+same run moves to another account of the same provider and succeeds; later
+runs go straight to the other account while the pinned one cools down
+(30 seconds and up for auth, ten minutes and up for billing, 30 seconds and
+up for rate limits), then come back to it. No inherited fallback provider is
+ever used. Two model-level routes are outside it: the Codex harness's cyber
+escalation (`plugins.entries.codex.config.appServer.cyberFailover`, global,
+on by default) and Anthropic's in-request refusal fallback for Opus 5.5,
+Opus 5, Sonnet 5.5, Fable 5.1 and Fable 5 on a direct API key, which cannot
+be switched off per bot (A.7). A bot whose session runtime owns its auth
+natively cannot take a pin at all and runs on that runtime's own account
+(`embedded-agent-CPls2oXD.mjs` lines 5604-5609; `prepare-auth-DF3PBMSe.mjs`
+line 137). **[source]**
 
-A bot whose session runtime owns its auth natively (`nativeSessionRuntime.auth:
-"native"`, which prepares auth with `allowHarnessAuthProfileForwarding:
-false`, `embedded-agent-CPls2oXD.mjs` lines 5604-5609) cannot take the pin at
-all: the
-run fails with "Auth profile … cannot be forwarded to the selected agent
-harness. Configure that harness's native account instead."
-(`prepare-auth-DF3PBMSe.mjs` line 137). The account for such a bot is
-whatever that harness is signed in with. **[source]**
+### C.2 Layer 2: the stored one-profile order, a stronger lock
 
-### C.2 How a run can still end up on another account, model or provider
+**What it is.** The bot's local auth store holds `order.<provider>:
+["<profileId>"]`. The automatic candidates for that bot on that provider are
+then only that profile, so an ordinary run that fails on it fails visibly
+instead of moving (A.13: no request ever used the other account, for 401,
+402 and 429). **[source, probe]**
 
-With layers 1 to 3a in place:
+**Who can set it.** No account method: `models.authOrderSet` refuses any
+order that leaves out an available profile (A.4). The supported ways for
+Clawtrate are:
 
-| Route | Account, model or provider? | What a client can observe | What it cannot |
+- the person runs the gateway's command line on its host:
+  `openclaw models auth order set --provider <provider> --agent <bot>
+  <profileId>`; Clawtrate shows that command and then confirms the result
+  from `models.authStatus {agentId}` `profileOrder` (`operator.read`)
+  **[source, probe]**;
+- a plugin method (C.4).
+
+A paired admin client could also set it by adding and running a routine that
+runs that command on the gateway host (`cron.add` with a command payload,
+then `cron.run`, both `operator.admin`). That path exists (A.4), but
+Clawtrate does not use it: the app does not run commands on the gateway's
+machine through a routine. **[source; observed by an independent review]**
+
+**Every way round it**, with whether a client can see or prevent it:
+
+| Way round | Source | Detect | Prevent |
 | --- | --- | --- | --- |
-| Someone selects another account or model for a conversation: `sessions.patch {model:"…@<other>"}` (`operator.write`), `/model …@<other> -s` in the chat, or the model picker | account or model | The `sessions.patch` result's entry (`authProfileOverride`, `authProfileOverrideSource:"user"`), `sessions.list` `modelOverrideSource:"user"`, `chat.metadata` `accountSelection {authProfileId, source:"user"}`. **[probe]**: it overrode the stored order. | Which client made the change, unless Clawtrate made it |
-| The pinned account is removed (`models.authLogout`, or the CLI) | account | The logout strips `@<profileId>` from every bot model that named it and keeps the model (`auth-logout-OeafO1t3.mjs` lines 207-224; `model-failover.md` "Session stickiness"), so `agents.list` / `config.get` show the bot's model without its suffix. The bot is then on automatic selection, and an order whose profiles are all missing is repaired to the remaining stored profiles (`order-hOATlAZf.mjs` lines 198-201) **[source; not probed]** | The next run's account (A.9) |
-| Someone changes the bot's model or the order: `agents.update`, `config.patch`, `models auth order set/clear`, or `auth.order` in config | any | `agents.list` model and `config.get` change; `models.authStatus {agentId}` `profileOrder` and `profileOrderLocked` **[source, probe]** | A change to the stored order shows only in `models.authStatus` `profileOrder`, with no event; poll it |
-| A provider-entry binding appears (`models.authSetApiKey` on that provider writes `models.providers.<p>.apiKey`) | account | `config.get` shows the binding (redacted value, A.8); `models.authStatus` `profileOrderLocked:"provider-config"` | The binding outranks automatic order for runs without a user selection; whether the bot's configured pin counts as one at that point is read from source (`session-override-5SZAWDJR.mjs` returns it with source `user`, and a user selection skips the binding, `prepare-auth-DF3PBMSe.mjs` lines 158-166) **[source, inferred; not probed]** |
-| Pin only, without layer 3: the pinned account fails (auth, billing, rate limit after ten attempts, overload, timeout) | account | A `lifecycle` `finishing` event with `error` and `errorObservation`, then a second `start` and `model` for the same provider and model in the same run; for rate limits `chat` `status` `retry` events. `chat.metadata` `accountSelection` changes one run later. **[probe]** | That another account served the turn, and which. No `fallback_step`, notice, receipt field or history field **[probe]** |
-| Pin only: the pinned account is in cooldown at the start of a run (30 s, 60 s, 5 min for auth; 10 min doubling to 24 h for billing; 30 s and up for rate limits) | account | Nothing: the run simply succeeds on another account with no failure event, and once the cooldown ends the next run returns to the pinned account, again with no event **[probe]** | Everything |
-| A bot created later, by Clawtrate or elsewhere, without its own model | model or provider | `agents.list` shows no model; it inherits `agents.defaults.model` and its fallbacks **[source]** | — |
-| Codex harness cyber escalation, Codex upstream reroute | model | `agent` `notice` `phase:"provider_policy"` with `state` and model fields **[source]** | The account (same harness account) |
-| Anthropic server-side refusal fallback | model | `provider_fallback` diagnostic and `responseModel` on the assistant message **[source]** | — |
-| Cron jobs with their own `payload.model` and `payload.fallbacks` | model or provider | The cron job's configuration **[source]** | — |
-| Utility-model calls (titles and the like) | model, separately routed | Not part of the conversation's turns **[source]** | — |
+| A conversation selects another account: `sessions.patch {model:"…@<other>"}`, `/model …@<other> -s`, the model picker | `session-override-5SZAWDJR.mjs` 377-412 (session user selection first, line 391); `prepare-auth-DF3PBMSe.mjs` 133-188 (prepended to the order) | Yes: `sessions.patch` result, `sessions.list` `modelOverrideSource:"user"`, `chat.metadata` `accountSelection {authProfileId, source:"user"}` **[probe]** | Only by not doing it (the rule above); another client or the chat command can |
+| An existing conversation already pinned to another account, including a personal account (`user-link`) | same | Yes, as above, by reading the session before sending | Clawtrate can refuse to send into it; other senders cannot be stopped |
+| A new task created with another account: `sessions.create {model:"…@<other>"}` (`operator.write`; more fields can need admin) | `sessions-create-BBtQVEho.mjs` 340-344, 602-606; `session-create-service-C4VfBnbk.mjs` 904-933 apply the same patch path | Yes: the create result's `entry` (`authProfileOverride`, source `user`) and the session row **[probe, A.13]** | Not by the order; only by the rule |
+| A routine whose `payload.model` names another account (`cron.add`, `operator.admin`, or a bot's own routine tool) | `isolated-agent-Ftw_3NLt.mjs` 648-676, 783-802, 1293-1320 (payload suffix becomes the run's configured profile) | The routine's definition (`cron.list`), before it runs; the run itself as layer 3 **[probe, A.13]** | Not by the order; Clawtrate can audit routines |
+| A helper bot spawned with a model override or a configured subagent model that carries another account | `model-selection-Bz5RpQCp.mjs` 106-138; `spawn-thread-binding-DTeozSeq.mjs` 417-500 (writes `authProfileOverride`, source `user`); `sessions-spawn-tool-CMHR26Kp.mjs` 4078-4079 | The helper's session (`sessions.list`, `chat.metadata`) once it exists | Config audit of subagent models; not by the order **[source only]** |
+| A message from another bot into a recipient session that already has another account selected | `sessions-messaging-C7un2CNT.mjs` 65-160 sends into that session; its selection wins | The recipient session's metadata | No **[source only]** |
+| The gateway's command line on the host: reusing an overridden session, `--model` for another provider, or isolated, environment-only or native-harness execution | `register.agent-turn-CsKykIVU.mjs` 11; `agent-command-DFdm3k6d.mjs` 2222-2258, 3343; `agent-exec-D7BmkfZW.mjs` 244-283 | No, apart from the session it writes | No: host execution is outside any client's reach **[source only]** |
+| A provider binding or a required direct credential for that provider (for runs without a user selection) | `prepare-auth-DF3PBMSe.mjs` 157-225 | `config.get` (`models.providers.<p>.apiKey`, redacted), `models.authStatus` `profileOrderLocked:"provider-config"` | Clawtrate does not write one for a bound provider **[source only]** |
+| A sign-in that saves a new profile for that provider and puts it first in the order | `profiles-ouASNfE0.mjs` 874-893; `auth-BVSjnQ2w.mjs` 257-286, 330-345 | `models.authStatus {agentId}` `profileOrder` grows | Clawtrate re-checks and re-sets the order after any sign-in it starts **[source only]** |
+| The bound profile is removed: logout strips `@<profileId>` from bot models, and an order whose profiles are all missing is repaired to the remaining stored profiles | `auth-logout-OeafO1t3.mjs` 207-224; `order-hOATlAZf.mjs` 198-201 | `agents.list` model loses its suffix; `profileOrder` changes | Clawtrate treats the bot as having no account (rows) **[source only]** |
+| Another provider: a routine, helper, channel or hook route that selects provider Q; an order on P says nothing about Q, and empty chat fallbacks do not bar an explicit Q | as the rows above | The selection, where it is stored | Not by the order **[source only]** |
 
-Under layers 1 to 3a the probe saw none of the rows except the first; the
-rest are read in source and docs. On the runtimes and providers not run
-(Codex harness, ACP, CLI backends, OAuth providers), the probe does not
-apply.
+So layer 2 is a fence for the bot's ordinary runs on its provider. It does
+not stop a run that is started with another account named, and it can be
+widened or repaired by sign-ins and removals. **[source, probe]**
 
-The error a client sees when the strict configuration refuses to move
-carries no account name (A.13). Clawtrate can still say which account
-failed, because under layer 3a the bot has exactly one: the one in its model
-suffix and stored order. That is Clawtrate naming its own binding, not a
-gateway report. **[inferred]**
+### C.3 Layer 3: noticing afterwards that another account served a run
 
-### C.3 What only a plugin could add
+Three read paths, none a per-turn receipt **[source; probe in A.13]**:
+
+| Signal | Method and scope | Fields | Relating it to an account | When | What it cannot tell |
+| --- | --- | --- | --- | --- | --- |
+| The failover decision log | `logs.tail {cursor?, limit?, maxBytes?}`, `operator.read` (`logs-DeEIp8tB.mjs` 7-10), returns `{file, cursor, size, lines[]}` from the gateway's configured log file (`log-tail-Dc55kdGi.mjs` 100-120) | A JSON log record with `event:"embedded_run_failover_decision"`, `runId`, `stage`, `decision` (`rotate_profile` when the run moves to another account; also `fallback_model`, `surface_error`, …), `failoverReason`, `provider`, `model`, `profileId` (`embedded-agent-CPls2oXD.mjs` 1682-1732, 1986-2000) | `profileId` is `sha256:` plus the first 12 hex digits of the SHA-256 of the failed profile's id (`node-crypto-BG4u3UnX.mjs` 38-43). Clawtrate hashes each `profileId` from `models.authStatus {agentId}` and matches | Written during the run, readable as soon as it is; follow the log with `cursor` | It names the account that failed, not the one that served. A run that starts on the other account because the bound one is cooling down has no rotation record (A.13). It is a diagnostic log: its file and level are the operator's configuration, it covers every bot, and its format is not a protocol contract |
+| Last use per account | `models.authStatus {agentId}`, `profiles[].lastUsedAt` (ms), **admin connections only** (`models-auth-status-DDLxf-39.mjs` 521-534) | `lastUsedAt` on each profile | Direct: it is keyed by profile id | Set when a call succeeds (`usage-kernel-Bey5tAH9.mjs` 159-167); readable right after the run | Only for profiles the bot owns in its own store; a bot using inherited shared profiles gets none (A.13). It is the last use by any run of that bot, so it cannot tell two concurrent runs apart |
+| The conversation's account preference | `chat.metadata {sessionKey}`, `operator.read` | `accountSelection {kind, authProfileId, label, source}` | Direct | Lags: in A.13 it named the other account only after the run following the switch, and still named it after the bot had returned | Documented as "not a receipt for the account that served a turn" (`chat-metadata-session-projection-DuoPBWYl.mjs` 56-70) |
+
+What Clawtrate can truthfully say, and when **[inferred from the above]**:
+
+- During or right after a run, from the log: "&lt;Bot&gt;'s account
+  &lt;label&gt; failed (&lt;reason&gt;) and the gateway tried another account
+  in this run." If the bot's provider has exactly one other eligible account,
+  "… and continued on &lt;other label&gt;" is an inference Clawtrate can make
+  and should mark as such.
+- After a run, for a bot whose accounts live in its own store, from
+  `lastUsedAt`: "&lt;other label&gt; was last used by &lt;Bot&gt; at
+  &lt;time&gt;", which, with no concurrent runs, means that run.
+- For a conversation, from `chat.metadata`: "This conversation's account is
+  now &lt;other label&gt;", one run late.
+- Not: "this turn was answered by &lt;account&gt;". Under layers 1 and 2 with
+  none of the ways round in use, the bound account is the only one an
+  ordinary run can use, and Clawtrate may label a turn "bound to
+  &lt;label&gt;", but that is its own binding, not a gateway report.
+
+### C.4 What only a plugin could add
 
 Entry points read in the plugin SDK types and docs; none was built or run.
-A plugin runs inside the gateway with the gateway's authority over its own
-stores; the caller's authority is what its registered method demands.
 
-| Need | Entry points | Caller's authority | Notes |
+| Need | Entry points | Caller's authority and permissions | Notes |
 | --- | --- | --- | --- |
-| A gateway method for the stored one-profile order, so Clawtrate can set layer 3a | `api.registerGatewayMethod(name, handler, {scope})` (`config-contracts-C65kIjn4.d.ts` lines 43128-43138); the SDK exports `updateAuthProfileStoreWithLock`, `ensureAuthProfileStore`, `resolveAgentDir` (`plugin-sdk/provider-auth.d.ts`, `plugin-sdk/agent-runtime.d.ts`) | Declared by the plugin; `operator.admin` would match the stock order method. Gateway methods require a verified profile unless declared `profileAccess:"independent"` (`docs/plugins/sdk-overview/infrastructure.md` line 41) | Same effect as the CLI command; must do its own checks that the profile exists and belongs to the provider **[source; inferred design]** |
-| A hard fence | `before_agent_run` (receives the run, may return a block decision, `config-contracts-C65kIjn4.d.ts` lines 10060-10077) to refuse a run whose session selection or bot model no longer names the bound account, combined with the one-profile order | Hook code runs with gateway authority; no caller | No plugin hook found that filters auth-profile candidates: `before_model_resolve` returns only model and provider overrides, a provider plugin's `resolveAuthProfileId` only reorders, and no hook event carries an auth profile (searched the `PluginHook*Event` types: `model_call_started`/`ended` have `provider`, `model`, `api`, `transport`, no profile). Within one run, the one-profile order is what stops rotation; the hook guards the conditions around it **[source; inferred design]** |
-| A public receipt of the serving account per turn | No hook delivers the serving profile (above); the internal `onSuccessfulAuthBinding` callback is not a plugin hook (A.9) | — | A plugin can only record the *bound* account at `agent_end` and state that, under the fence, a `final` turn can have been served by no other. That is a derived receipt, not the gateway's observation; a true receipt needs the gateway to publish the profile **[inferred]** |
-| User-set labels | Plugin-owned records keyed by profile id, behind a plugin method | `operator.read` to list, `operator.admin` to edit would match account management | No stock label field exists (A.3) **[inferred design]** |
-| Sign-in below admin | A plugin method at `operator.write` running the provider flow itself; the SDK exports the login runners (`plugin-sdk/provider-auth-login-flow-runtime.js`) | `dispatchGatewayMethod` keeps the caller's authority, so wrapping `models.authLogin` still needs admin (`plugin-sdk/gateway-method-runtime.d.ts`) | Whether a plugin method at `operator.write` may write shared credentials is a policy question the source does not settle; the method must check its own caller and owner. The person's credentials stay on the gateway either way **[source; inferred design]** |
+| A per-turn receipt of the serving account | None in this build. No plugin hook event carries an auth profile (searched the `PluginHook*Event` types; `model_call_started`/`ended` carry `provider`, `model`, `api`, `transport`), and the internal `onSuccessfulAuthBinding` callback that does carry it is not a plugin hook (A.9) | — | A true receipt needs the gateway to publish the serving profile. A plugin can only derive one from layers 2 and 3 |
+| A lock with no ways round it | A gateway method that writes the one-profile order (`api.registerGatewayMethod(name, handler, {scope})`, `config-contracts-C65kIjn4.d.ts` 43128-43138, with the SDK's `updateAuthProfileStoreWithLock`), plus a `before_agent_run` guard that refuses a run of a bound bot whose session, routine payload or helper selection names another account (the hook may return a block decision, lines 10060-10077) | The method declares its scope (`operator.admin` matches the stock order method) and checks profile, bot and provider itself; methods require a verified profile unless declared `profileAccess:"independent"`. A non-bundled plugin's `before_agent_run` registers **only if** `plugins.entries.<pluginId>.hooks.allowConversationAccess: true` is set (`config.patch`, `operator.admin`); without it the hook is dropped with a warning, not failing closed (`registry-Ctt4xQAS.mjs` 2597-2609, 2828-2834) | Unproved. The hook receives the prompt, history and context, not the resolved auth profile, so it must re-derive the selection from the session, the routine and the bot; transient selections (a routine's payload) and races are its builder's to cover. After writing an order the plugin must have the gateway refresh its auth state |
+| Labels below admin, or labels every client can read | Plugin records keyed by profile id behind a plugin method | Declared by the plugin | Stock admin labels exist (C.1); this is only for lower scopes |
+| Sign-in below admin | A plugin method at `operator.write` that runs the provider flow itself (`plugin-sdk/provider-auth-login-flow-runtime.js`) | `dispatchGatewayMethod` keeps the caller's authority, so wrapping `models.authLogin` still needs admin | Whether a plugin method below admin may write shared credentials is a policy question the source does not settle |
 
-### C.4 T3 Code
+### C.5 T3 Code
 
 **When the desktop app could start the gateway's T3 Code sign-in itself**
 (B.5 has the source): a connection in `webchat` mode, sending an `Origin`
@@ -1632,32 +1805,42 @@ gateway's own Settings page. **[source; not exercised]**
 
 ## Rows whose target cannot be true as written (summary)
 
-- **F-476** "a Bot bound to one never runs on the other": a bot can select an
-  account (A.4), but on a stock gateway with only that selection it moved to
-  the other account when its own failed (A.13). It held with a stored
-  one-profile order, which only the gateway's command line can write, and
-  that order still yields to a conversation's explicit selection and to the
-  account's removal (C.2). True as a guarantee only with a plugin that writes
-  and guards the order (C.3), or with the owner running the command line.
+- **F-472** "with nothing chosen it uses the gateway's default account, which
+  the step names": the gateway has a default model, not a default account.
+  `agents.defaults.model.primary` is a model reference that may carry an
+  `@<profileId>`; without one, the account is chosen per run by order,
+  eligibility, cooldown and stickiness and cannot be named in advance. "each
+  with its provider, label and kind": labels are stock for admin connections
+  (A.3); the kind (subscription or API key) is Clawtrate's, from the sign-in
+  method. The endpoint check fails for two accounts of one provider, which
+  share an endpoint; check by the key the scripted server receives (A.13).
+- **F-476** "a Bot bound to one never runs on the other": the pin alone moved
+  runs to the other account (A.13). The stored one-profile order fences
+  ordinary runs but has no account method, and explicit selections by a
+  conversation, a new task, a routine or a helper still win (C.2). A full
+  guarantee needs a plugin method plus a guard, which needs
+  `hooks.allowConversationAccess` and is unproved (C.4). Labels are not the
+  obstacle: `auth.profiles.<id>.displayName` is stock.
 - **F-479** "each turn's record includes the account the run used": no
-  client-visible record names the serving account (A.9). Clawtrate can show
-  the account the bot is bound to; under the strict configuration of C.1 that
-  is the only account a successful turn can have used, which is an inference
-  and not a gateway receipt.
+  record of a turn names it (A.9). Clawtrate can show the account the bot is
+  bound to, labelled as such, and report afterwards, from the log, last-use
+  times and the conversation's preference, that another account was used
+  (C.3).
 - **F-480** "says which account": errors name the provider and model only
-  (A.7, A.13). Under the strict configuration Clawtrate can name the bot's
-  one bound account itself. "Never moves a Bot by itself" holds on the probed
-  runtime only with the stored order (C.1), and not for Codex's and
+  (A.7, A.13); Clawtrate names the bot's bound account itself, and the log
+  names the failed account's hash. "Never moves a Bot by itself" holds for
+  ordinary runs only with the stored order (C.2), and not for Codex's and
   Anthropic's own model routes.
 - **F-482** "its access credential, which goes to the gateway's secret store":
   T3 Code has no static credential for outside agents. It uses OAuth with
   30-day sessions; the gateway holds the token. Clawtrate's present
   connection cannot start the gateway's MCP sign-in, but a desktop connection
-  that meets the conditions in C.4 could (B.1, B.5).
+  that meets the conditions in C.5 could (B.1, B.5).
 - **F-483** "turning it on gives the Bot the T3 Code tools", with "off by
   default": a tool server reaches every bot whose tool policy permits it,
   including new ones, so "off" needs a deny on every other bot or a plugin
-  (B.5, C.4).
+  tool factory; a bot created elsewhere has the tools until it is denied
+  (B.5, C.5).
 - **F-475** "the key is sent once to the gateway's secret store": keys go to
   the auth-profile store through `models.authSetApiKey`, not to `secrets.*`
   (A.8).
