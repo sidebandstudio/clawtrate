@@ -9,10 +9,16 @@ export type Store<T> = {
   subscribe(listener: Listener<T>): () => void;
 };
 
-export function createStore<T>(initial: T): Store<T> {
-  let value = initial;
+/**
+ * `normalize` runs on every value written, before listeners see it: the
+ * client uses it to bring state within its bounds where it enters.
+ */
+export function createStore<T>(initial: T, normalize: (next: T) => T = (next) => next): Store<T> {
+  let value = normalize(initial);
   const listeners = new Set<Listener<T>>();
-  const set = (next: T) => {
+  const set = (written: T) => {
+    if (Object.is(written, value)) return;
+    const next = normalize(written);
     if (Object.is(next, value)) return;
     value = next;
     for (const listener of [...listeners]) listener(value);

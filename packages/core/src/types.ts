@@ -1,5 +1,9 @@
 // View models the interface renders. Gateway payloads are mapped into these in
-// mapping.ts; nothing outside core needs to know the wire shapes.
+// mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
+
+import type { ApprovalCard } from "./approvals.ts";
+import type { InterSessionMessage, LinkedRun } from "./cards.ts";
+import type { TaskActivity } from "./runs.ts";
 
 export type ConnectionStatus =
   /** No gateway configured yet. */
@@ -26,12 +30,47 @@ export type PairingRequest = {
 
 export type ConnectionError = { code: string; message: string; hint: string | null };
 
+export type ScopeUpgradeStatus =
+  | "idle"
+  /** `device.scopes.requestUpgrade` is on its way. */
+  | "requesting"
+  /** The gateway holds a pending request; its owner has to approve it. */
+  | "pending"
+  /** Approved; the client reconnected with the new grant. */
+  | "approved"
+  | "rejected"
+  | "expired"
+  /** The request failed, or was approved without the scope it asked for. */
+  | "error";
+
+/** Stepping up from `operator.read` to `operator.write`. */
+export type ScopeUpgradeState = {
+  status: ScopeUpgradeStatus;
+  /** The scopes asked for. */
+  scopes: string[];
+  requestId: string | null;
+  /** What the person approving runs, chosen by the host as for pairing. */
+  approveCommand: string | null;
+  approveNote: string | null;
+  error: string | null;
+};
+
 export type ConnectionState = {
   status: ConnectionStatus;
   gatewayUrl: string | null;
   serverVersion: string | null;
   protocol: number | null;
+  /** Scopes the gateway granted this connection (`hello-ok.auth.scopes`). */
   scopes: string[];
+  /** Scopes this client asks for on every connect. Never more than it means to hold. */
+  requestedScopes: string[];
+  /** True while the connection holds `operator.write`, so sending and stopping work. */
+  canWrite: boolean;
+  /** True while the connection holds `operator.questions`, so question cards can be answered. */
+  canAnswer: boolean;
+  /** True while the connection holds `operator.approvals`, so approvals can be seen and resolved. */
+  canApprove: boolean;
+  upgrade: ScopeUpgradeState;
   deviceId: string | null;
   pairing: PairingRequest | null;
   error: ConnectionError | null;
@@ -52,6 +91,8 @@ export type Bot = {
   theme: string | null;
   model: string | null;
   isDefault: boolean;
+  /** Paths of fields cut to their bound (an avatar too large to keep is dropped). */
+  cut?: string[];
 };
 
 export type TaskStatus = "running" | "done" | "failed" | "idle";
@@ -65,6 +106,8 @@ export type Task = {
   updatedAt: number | null;
   status: TaskStatus;
   unread: boolean;
+  /** Paths of fields cut to their bound. */
+  cut?: string[];
 };
 
 export type ToolResult = { isError: boolean; text: string };
@@ -88,16 +131,28 @@ export type TranscriptItem = {
   timestamp: number | null;
   blocks: TranscriptBlock[];
   model: string | null;
+  /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
+  cut?: string[];
 };
 
-export type Transcript = {
+/** One open task: its durable transcript plus its live runs and outgoing messages. */
+export type Transcript = TaskActivity & {
   sessionKey: string;
   status: "loading" | "ready" | "error";
   items: TranscriptItem[];
   error: string | null;
   hasMore: boolean;
-  /** Text of a run that is streaming right now, before it lands in history. */
+  /**
+   * Text of the task's active run, before it lands in history. Derived from
+   * `runs`; kept for views that only draw one streaming bubble.
+   */
   live: { runId: string; text: string } | null;
+  /** Recipient runs that this task's bot-to-bot sends name, where this connection saw them. */
+  linkedRuns: Record<string, LinkedRun>;
+  /** Messages from other sessions in this task's history (inter-session provenance). */
+  interSession: InterSessionMessage[];
+  /** Paths of fields cut to their bound that no item beneath records itself. */
+  cut?: string[];
   /** Epoch ms of the latest successful history load. */
   loadedAt: number | null;
 };
@@ -117,6 +172,68 @@ export type ClawtrateState = {
   bots: Bot[];
   tasksByBot: Record<string, Task[]>;
   transcripts: Record<string, Transcript>;
+  /**
+   * Pending approvals no followed task can show yet: the asking session is not
+   * open, and no open task is known to have spawned or messaged it. Kept, with
+   * their origin, until a task they belong to is known or the gateway settles
+   * them; at most `MAX_UNROUTED_APPROVALS`.
+   */
+  unroutedApprovals: ApprovalCard[];
+  /** Pending approvals not kept because `unroutedApprovals` was full; a list read brings them back. */
+  unroutedApprovalsOmitted: number;
+  /** Task creations this client has asked for and not yet seen settled (`TaskCreation`). */
+  creations: TaskCreation[];
+  /**
+   * A secondary alarm: roughly what the state takes, against the arithmetic
+   * bound of `state-bounds.ts`. The bound holds by construction; `near` only
+   * says it is being approached.
+   */
+  retention: { estimated: number; bound: number; near: boolean };
+  /** Paths of fields cut to their bound that nothing beneath records itself. */
+  cut?: string[];
+};
+
+/**
+ * A task creation the user asked for. Kept from before `sessions.create` is
+ * sent until the gateway's answer is known, so a request that times out is
+ * neither lost nor sent twice: it is checked again with the same idempotency
+ * key, which the gateway answers with the original outcome.
+ */
+export type TaskCreation = {
+  /** Also the `idempotencyKey`. */
+  id: string;
+  botId: string;
+  text: string;
+  label: string | null;
+  /**
+   * `creating` while the request is out; `checking` when the answer did not
+   * come and the same gateway start is being asked again with the same key;
+   * `failed` when the gateway refused it (retry or dismiss); `unknown` when
+   * nothing establishes whether it happened (dismiss, or the user's own retry,
+   * which may create a second task: `error` says so); `created` once the task
+   * exists.
+   */
+  status: "creating" | "checking" | "failed" | "unknown" | "created";
+  /** When it was last asked of the gateway; its key is asked again only within `CREATION_KEY_WINDOW_MS` of it. */
+  createdAt: number;
+  error: string | null;
+  /** The new task, once created. */
+  key: string | null;
+  /**
+   * The `hello-ok.server.bootId` of the gateway start the request went to;
+   * null if the hello carried none. The key is asked again automatically only
+   * of that same start, which holds its idempotency record.
+   */
+  gatewayBootId: string | null;
+};
+
+export const initialScopeUpgrade: ScopeUpgradeState = {
+  status: "idle",
+  scopes: [],
+  requestId: null,
+  approveCommand: null,
+  approveNote: null,
+  error: null,
 };
 
 export const initialConnectionState: ConnectionState = {
@@ -125,6 +242,11 @@ export const initialConnectionState: ConnectionState = {
   serverVersion: null,
   protocol: null,
   scopes: [],
+  requestedScopes: [],
+  canWrite: false,
+  canAnswer: false,
+  canApprove: false,
+  upgrade: initialScopeUpgrade,
   deviceId: null,
   pairing: null,
   error: null,
@@ -145,4 +267,8 @@ export const initialState: ClawtrateState = {
   bots: [],
   tasksByBot: {},
   transcripts: {},
+  unroutedApprovals: [],
+  unroutedApprovalsOmitted: 0,
+  creations: [],
+  retention: { estimated: 0, bound: 0, near: false },
 };

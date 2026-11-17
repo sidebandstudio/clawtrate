@@ -1,0 +1,105 @@
+# @clawtrate/core
+
+The gateway client and the live conversation engine. A host process (Electron main, or the web preview host) owns one `ClawtrateClient`, which holds the gateway connection, the device key and every task's runs. The interface never talks to the gateway: it reads state snapshots and sends commands through a bridge. This guide is for building the interface on top of it. The reasons behind each behaviour are in `docs/decisions.md`.
+
+## The bridge
+
+The interface holds a `ClawtrateBridge` (`src/bridge.ts`):
+
+- `getState()` and `subscribe(listener)`: the latest `ClawtrateState` and every later one. Hosts coalesce store updates to one snapshot per 16 ms (`batchSnapshots`).
+- `send(command)`: run a `BridgeCommand` and ignore its answer.
+- `invoke(command)`: run it and resolve with its answer, typed by `BridgeResultFor<C>`.
+- `attach(file)`: hand a file's bytes to the host for a later message; resolves with an `AttachmentInfo` (`src/attachments.ts`) whose `id` the message names.
+
+The desktop renderer gets one over IPC (`apps/desktop/src/renderer/bridge-desktop.ts`), and a browser gets one over the web host's socket (`createRemoteBridge` in `src/remote-bridge.ts`, used by `apps/desktop/src/renderer/bridge-web.ts`). Each window or tab is its own viewer (`createBridgeSession`). Hosts validate every command (`parseBridgeCommand`) before it reaches the client. A command that acts on a task is refused unless this viewer has that task open.
+
+## What the interface calls
+
+| To                                   | Command                                                                | Answer                                  |
+| ------------------------------------ | ---------------------------------------------------------------------- | --------------------------------------- |
+| Open or close a task                 | `openSession` / `closeSession` with `key`                              | none                                    |
+| Create a task with its first message | `createTask` with `botId`, `text`, `label`                             | `{ key }`, already open for this viewer |
+| Retry or forget a task creation      | `retryCreation` / `dismissCreation` with `creationId`                  | `{ key }` / none                        |
+| Send                                 | `sendMessage` with `key`, `text`, `mode: "auto"`, `attachmentIds`      | `{ messageId }`                         |
+| Steer                                | `sendMessage` with `mode: "auto"` while a run is running or waiting    | `{ messageId }`                         |
+| Queue after this turn                | `sendMessage` with `mode: "queue"`                                     | `{ messageId }`                         |
+| Send a queued message now, as steer  | `sendQueuedNow` with `key`, `messageId`                                | none                                    |
+| Cancel a queued message              | `cancelQueued` with `key`, `messageId`                                 | none                                    |
+| Retry or delete a message            | `retryMessage` / `deleteMessage` with `key`, `messageId`               | none                                    |
+| Stop                                 | `stopRun` with `key`, `runId`                                          | none                                    |
+| Answer or dismiss a question         | `answerQuestion` with `answers` / `dismissQuestion`                    | none                                    |
+| Resolve an approval                  | `resolveApproval` with `decision`, `expiresInDays`, `shownDigest`      | none                                    |
+| Read an approval's whole text        | `readApprovalText` with `key`, `approvalId`                            | `{ text, digest }`                      |
+| Read a step's whole raw call/result  | `readStepRaw` with `key`, `stepId`                                     | `StepRead`, or null for an unknown step |
+| Read a history item whole            | `readHistoryItem` with `key`, `itemId`                                 | `TranscriptItem`, or null               |
+| Request more access                  | `requestAccess`                                                        | none; progress in `connection.upgrade`  |
+| Connect, disconnect, retry           | `connect` (`url`, `token`), `connectDevGateway`, `disconnect`, `retry` | none                                    |
+
+There is no separate steer command. `mode: "auto"` starts a new run when the task has no active run, steers into the active run when it is running or waiting, and queues when it is stopping. `mode: "queue"` always queues. A steer while a question from the run is pending is held, not sent, until the question is answered or dismissed.
+
+A question answer maps each question id to its answers. Each answer is either text as typed or `{ option: index }`, where `index` is the option's `QuestionOption.index`. At most 3 questions and 8 answers each are accepted.
+
+An approval offers only the decisions in its `allowedDecisions`; deny is always among them. `expiresInDays` (1 to 3650) goes only with `allow-always`. When `decisionCut` is set, only deny is accepted until this viewer has called `readApprovalText` and passes the returned `digest` as `shownDigest`. Echoing the card's own `decisionDigest` does not count.
+
+A step's text on the snapshot (`argsText`, `output`, `result`) is a `StepText`: up to 2,000 characters of `text` plus the whole length in `totalChars`. The exact gateway payload is `Step.raw`, a `StepRaw`, carried inline only when its JSON form is at most 2,048 characters; otherwise it is null, and `readStepRaw` reads it. `readStepRaw` answers `{ status: "available", raw }`, or `{ status: "not-available-yet", reason }` when the payload was too long to keep and history does not hold the step yet. Show the `reason`. A `TranscriptItem` whose `cut` names fields is read whole with `readHistoryItem`. None of these whole reads is kept in state.
+
+Writes need access the device may not hold. The first send, stop, answer, resolution or creation on a read-only device asks the gateway's owner for `operator.write`, `operator.approvals` and `operator.questions` in one request; `requestAccess` asks without acting. While the request is pending, a message shows `awaiting-access` and the other actions wait. When the gateway refuses or the connection stops, they fail with an error the interface can show.
+
+## The state
+
+`ClawtrateState` (`src/types.ts`):
+
+- `connection: ConnectionState`. `status` is `idle`, `connecting`, `pairing`, `connected`, `reconnecting` or `error`. `canWrite`, `canAnswer` and `canApprove` follow the scopes the gateway granted (`scopes`); a dropped connection clears them until the next hello. `upgrade: ScopeUpgradeState` tracks an access request and carries the request id and the approve command to show. `pairing` carries the same for pairing. `connectedAt` is the latest hello. Anything loaded before it is not yet known to be in sync.
+- `discovery: DiscoveryState`, the bot and task lists. `partial` means the gateway listed more tasks than were read.
+- `bots: Bot[]` and `tasksByBot: Record<botId, Task[]>`.
+- `transcripts: Record<key, Transcript>`: one per task the client follows. On the web host a viewer's snapshot carries only the tasks that viewer has open (`viewerState` in `apps/desktop/src/web-host/server.ts`). The Electron window receives the client's whole state.
+- `unroutedApprovals: ApprovalCard[]`: pending approvals no followed task can show yet. `unroutedApprovalsOmitted` counts the ones not kept.
+- `creations: TaskCreation[]`: task creations asked for and not yet settled.
+- `retention`: the estimated size of the state against its arithmetic bound. `near` is true past 80% of the bound.
+
+`Transcript` is `TaskActivity` (`src/runs.ts`) plus the task's history:
+
+- `status` (`loading`, `ready`, `error`), `items: TranscriptItem[]` (the last 200 history rows), `hasMore`, `loadedAt` (the latest successful history load), `interSession` and `linkedRuns` (`src/cards.ts`).
+- `live`: the active run's text, derived from `runs`, for a view that draws one streaming bubble.
+- `runs: Run[]`. Each run has `state`, `steps: Step[]`, `pendingCards`, `closedCards`, the streaming `text`, `error`, `ending` and `attemptErrors`.
+- `outbox: OutgoingMessage[]`, the user's messages until history holds them.
+- `questions: QuestionCard[]` and `approvals: ApprovalCard[]` (`src/approvals.ts`), with `approvalAccess` and `approvalSources` saying whether the approval lists could be read at all.
+- `caughtUp`: set when the task was reloaded after an event gap or a reconnect.
+
+`selectMessageCards` (`src/cards.ts`) derives the "Messaged <bot>" and MCP cards from a task's runs. It is a pure view and changes nothing in state.
+
+Every bounded object may carry `cut?: string[]`, the paths of fields cut to their bound. It is a diagnostic list, not a safety fact; for approvals, that fact is `decisionCut`.
+
+## What each state establishes
+
+Runs (`RunState`):
+
+- `queued`: held by this client until the active run ends. It has not been sent.
+- `running`: the gateway's events say the run is under way.
+- `waiting`: the run holds a card in `pendingCards`, because its lifecycle reported `waiting-approval` or it asked a question. An approval record alone does not make a run `waiting`.
+- `stopping`: Stop was pressed and `chat.abort` is on its way or unanswered. The run becomes `stopped` when the abort took, or `completed` with `finishedBeforeStop` when it finished first. A failed stop puts the run back and sets `stopError`.
+- `completed`, `stopped`, `failed`, `cancelled`: the gateway's terminal event, or history, said so.
+- `bound` is false until the gateway has named the run; until then `id` is this client's key. `outcomeKnown: false` means the run is known to have ended but nothing established how; its terminal state is a stand-in.
+
+Outgoing messages (`OutgoingStatus`): `sending`, then `sent` once the gateway accepted it. The message leaves the outbox when history holds it. `checking` means no answer came, so whether the gateway took the message is unknown and history is being read. `unconfirmed` means it was accepted, its run ended, and no history row ties to it. `handled` means the gateway treated it as a command and started no run. `failed` and `cancelled` are what they say. `held` and `queued` have not been sent. A retry reuses the message id as the idempotency key, so the gateway delivers it at most once.
+
+Questions: `pending`, `answered`, `dismissed`, `expired`, `cancelled` (the run was stopped), or `closed` (no longer pending on the gateway, and this client did not see how it ended).
+
+Approvals: `pending`, `allowed`, `denied`, `expired`, `cancelled`, `closed`. `inferred` means the terminal status is this client's inference (expiry passed, or a reload no longer listed it); the gateway's own outcome replaces it. `outcomeUnknown` means the gateway said the approval is settled but not how. `runEnded` means the approval is still pending after its run ended, and allowing it may still act.
+
+Task creations: `creating`, `checking` (no answer; asked again with the same key), `failed` (refused; retry or dismiss), `unknown` (nothing establishes whether the task exists; a retry may create a second task), `created`.
+
+Message cards: a tool start is the model's request, not a delivery, so a card is `started` until a result says more. `sentAt` is always null, because the gateway reports no delivery time. A late reply from another bot appears in `interSession` and is never attached to a card.
+
+## Limits
+
+- A viewer holds at most `MAX_VIEWER_OPEN_TASKS` (4) tasks open, and fewer when the host sets `maxOpenTasks`. It may have at most `MAX_VIEWER_PENDING_COMMANDS` (16) commands in flight.
+- The client follows at most `MAX_TRACKED_TASKS` (8) tasks: open in some viewer, kept for unsent work after the last viewer closed them, or being created. The host may set fewer (`limits.trackedTasks`).
+- Message text: at most `MAX_MESSAGE_CHARS` (32,000), never cut, refused if longer. One task's outbox holds at most 16 messages in any status. A new message past that is refused; nothing is dropped.
+- Files: at most 20 per message; at most 64 files and 32 MiB waiting on the host, each kept for 15 minutes; images up to 6 MiB (less if the gateway says so), other files up to 20 MiB; the whole send within the gateway's frame limit. Oversized sends throw `SendTooLargeError` before anything is sent.
+- The web bridge refuses a command frame over 64 KiB (`MAX_BRIDGE_FRAME_BYTES`). A command's answer on the web host must fit one result frame of `MAX_RESULT_CHARS` (262,144) JSON characters. An approval text too long for it is not given, so that approval stays deny-only for that viewer.
+- Per task: 32 runs, 128 steps shared by its runs (older finished steps go first; `omittedSteps` counts them), 4 pending questions (`questionsOmitted`), 16 pending approvals (more wait in `unroutedApprovals`), the last 200 history rows. Earlier history pages are not loaded.
+- Question cards show at most 8 options per question (`optionsOmitted` counts the rest) and 3 questions.
+- At most 4 whole reads (`readStepRaw` from history, `readHistoryItem`) run at once; a fifth is refused.
+- A run this client started fails after 50 minutes (`DEFAULT_TURN_LIMIT_MS`). A request unanswered for 60 seconds fails locally.
+- Not promised: a reasoning step's id after its task is closed and reopened; that a step's whole text can be read before history holds it; that history itself is uncut (`Step.truncated` marks a result the gateway cut); delivery of a message whose status is `checking` or `unconfirmed`; any order or link between a late reply and the send it answers.
