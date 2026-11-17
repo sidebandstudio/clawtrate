@@ -608,6 +608,7 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
     name: "sign-in with a link and a code: approved, refused, expired, cancelled",
     rows: [6],
     run: async (h) => {
+      const before = profileIds(await providerView(h.admin, "pip", "acme"));
       const approved = await deviceSignIn(h, "pip", "approve", "devok");
       same(approved.end.status, "done", "approved");
       const step = approved.codeStep;
@@ -634,18 +635,14 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
         Boolean(s.deviceCode),
       );
       h.observe(`device code cancelled: ${canonical(cancelled)}`);
-      const ids = profileIds(await providerView(h.admin, "pip", "acme"));
-      same(
-        ["acme:devok", "acme:devno", "acme:devlate"].map((id) => ids.includes(id)),
-        [true, false, false],
-        "only the approved sign-in saved an account",
-      );
+      await expectPipAccounts(h, before, ["acme:devok"]);
     },
   },
   {
     name: "sign-in in the browser with the code pasted back: approved, refused, expired, cancelled",
     rows: [6],
     run: async (h) => {
+      const before = profileIds(await providerView(h.admin, "pip", "acme"));
       const byCode = await browserSignIn(h, "approve", "browok", "code");
       same(byCode.end.status, "done", "approved, the code pasted");
       const byAddress = await browserSignIn(h, "approve", "browaddr", "address");
@@ -663,20 +660,14 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
       same(expired.end.status, "error", "expired");
       h.observe(`browser ended: refused "${refused.end.error}"; expired "${expired.end.error}"`);
       await cancelledSignIn(h, SIGNIN_CHOICES.browser, (s) => s.type === "text");
-      const ids = profileIds(await providerView(h.admin, "pip", "acme"));
-      same(
-        ["acme:browok", "acme:browaddr", "acme:browno", "acme:browlate"].map((id) =>
-          ids.includes(id),
-        ),
-        [true, true, false, false],
-        "only the approved sign-ins saved an account",
-      );
+      await expectPipAccounts(h, before, ["acme:browok", "acme:browaddr"]);
     },
   },
   {
     name: "sign-in with an API key: saved, refused, expired, cancelled; one sign-in at a time",
     rows: [6],
     run: async (h) => {
+      const before = profileIds(await providerView(h.admin, "pip", "acme"));
       same(await signInKey(h, "pip", "keyok"), "acme:keyok", "the saved key's account");
       for (const outcome of ["refuse", "expire"] as const) {
         const key = credentialFor("api_key", "acme", `key${outcome}`);
@@ -704,14 +695,8 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
         );
       expect(second !== "started", "a second sign-in started while one was running");
       h.observe(`a second sign-in while one runs: "${second}"`);
-      const cancel = await h.admin.request<JsonRecord>("wizard.cancel", { sessionId: first });
-      same(cancel.status, "cancelled", "cancelling the waiting key step");
-      const ids = profileIds(await providerView(h.admin, "pip", "acme"));
-      same(
-        ["acme:keyok", "acme:keyrefuse", "acme:keyexpire"].map((id) => ids.includes(id)),
-        [true, false, false],
-        "only the saved key is an account",
-      );
+      await cancelAndCheck(h, first);
+      await expectPipAccounts(h, before, ["acme:keyok"]);
     },
   },
   {
@@ -1038,7 +1023,24 @@ async function browserSignIn(
   return { end: next.done ? next : await stepToEnd(h, sessionId), steps: [...steps], pasteStep };
 }
 
-/** Start a sign-in for pip, wait for the step, cancel it, and return what the gateway answers. */
+/**
+ * Cancel a sign-in that waits, and assert both what `wizard.cancel` answers
+ * and the terminal answer the next `wizard.next` gives.
+ */
+async function cancelAndCheck(h: AccountHarness, sessionId: string): Promise<JsonRecord> {
+  const cancel = await h.admin.request<JsonRecord>("wizard.cancel", { sessionId });
+  same(cancel, { status: "cancelled", error: "cancelled" }, "what wizard.cancel answers");
+  const next = await wizardNext(h, sessionId);
+  const after = { done: next.done, status: next.status, error: next.error, step: next.step };
+  same(
+    after,
+    { done: true, status: "cancelled", error: "cancelled", step: undefined },
+    "the sign-in's terminal answer after the cancel",
+  );
+  return { cancel, after };
+}
+
+/** Start a sign-in for pip, wait for the step, cancel it, and check its end. */
 async function cancelledSignIn(
   h: AccountHarness,
   choice: string,
@@ -1046,13 +1048,16 @@ async function cancelledSignIn(
 ): Promise<JsonRecord> {
   const sessionId = await startSignIn(h, choice, "pip");
   await stepUntil(h, sessionId, at);
-  const cancel = await h.admin.request<JsonRecord>("wizard.cancel", { sessionId });
-  same(cancel.status, "cancelled", "wizard.cancel");
-  const after = await wizardNext(h, sessionId).then(
-    (next) => ({ done: next.done, status: next.status, error: next.error }),
-    (error: unknown) => ({ refused: error instanceof Error ? error.message : String(error) }),
+  return cancelAndCheck(h, sessionId);
+}
+
+/** Pip's acme accounts after some sign-ins: exactly those before, and the approved ones. */
+async function expectPipAccounts(h: AccountHarness, before: string[], approved: string[]) {
+  same(
+    profileIds(await providerView(h.admin, "pip", "acme")),
+    [...before, ...approved].sort(),
+    "pip's complete acme accounts: those before, and the approved sign-ins only",
   );
-  return { cancel, after };
 }
 
 /** Run the account checks. One line per check; notes and differences for the report. */
