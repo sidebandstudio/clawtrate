@@ -15,3 +15,6 @@ test-results/
 
 # Private run state and third-party reference images. Never commit.
 .orchestrator/
+
+# Development gateway run state (PIDs, logs, local token)
+tools/dev-gateway/.run/
