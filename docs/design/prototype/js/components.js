@@ -367,15 +367,16 @@
 
   // Request cards -----------------------------------------------------------------
 
-  // review: the automatic review's line. cause: why the gateway asked, with "Edit rule".
-  CT.fullRequest = ({ reason, command, fields, review = "", cause = "", open = false }) =>
+  // review: the automatic review's line. cause: { text, label, where }, why the
+  // gateway asked and the action that goes with it ("Edit rule", "Manage settings").
+  CT.fullRequest = ({ reason, command, fields, review = "", cause, open = false }) =>
     `<details class="request-full"${open ? " open" : ""}><summary>` +
     `<span class="when-closed">Show full request</span><span class="when-open">Hide full request</span>${icon("chevron", "icon chevron")}</summary>` +
     `<div class="request-inset"><p class="request-reason">${esc(reason)}</p>` +
     `<div class="command-line"><code>${esc(command)}</code>${copyButton("command", command)}</div>` +
     CT.fields(fields.concat(review ? [["Review", review]] : [])) +
     (cause
-      ? `<p class="request-cause">${esc(cause)} ${CT.linkButton("Edit rule", { action: "elsewhere", attrs: 'data-where="Opens Settings, Permissions, at this rule. That needs admin access, asked for the first time it is opened."' })}</p>`
+      ? `<p class="request-cause">${esc(cause.text)} ${CT.linkButton(cause.label, { action: "elsewhere", attrs: `data-where="${esc(cause.where)}"` })}</p>`
       : "") +
     `</div></details>`;
 

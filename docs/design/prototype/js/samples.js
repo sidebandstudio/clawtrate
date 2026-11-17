@@ -502,6 +502,11 @@
         ["Asked by", "Your message in this task, 5:24 PM"],
       ],
       review: S.reviewAsk,
+      cause: {
+        text: "The automatic review asks before commands like this.",
+        label: "Manage settings",
+        where: "Opens Settings, Permissions, at the automatic review. That needs admin access, asked for the first time it is opened.",
+      },
     },
     // What this request offers, as the request carries it.
     decisions: ["once", "always", "deny"],

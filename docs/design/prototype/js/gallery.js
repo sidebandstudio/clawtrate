@@ -552,7 +552,16 @@
           note: "A card. The full request names the rule that asked.",
           html: approval({
             ...S.approval,
-            full: { ...S.approval.full, open: true, review: "", cause: "Asked because of Otto's rule “ask before moving anything under /srv/media”. It outranks the saved allow." },
+            full: {
+              ...S.approval.full,
+              open: true,
+              review: "",
+              cause: {
+                text: "Asked because of Otto's rule “ask before moving anything under /srv/media”. It outranks the saved allow.",
+                label: "Edit rule",
+                where: "Opens Settings, Permissions, at this rule. That needs admin access, asked for the first time it is opened.",
+              },
+            },
           }),
         },
         {
