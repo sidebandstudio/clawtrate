@@ -333,7 +333,12 @@ function weekTranscript(now: number): TranscriptItem[] {
     item("user", at - 3 * MINUTE, [text("Plan my week. Keep Thursday clear.")]),
     item("assistant", at - 2 * MINUTE, [
       text("On it. Checking your calendar first."),
-      tool("w1", "read", { path: "calendar/this-week.md" }, { text: "Mon: dentist 9:00\nWed: school play 18:30" }),
+      tool(
+        "w1",
+        "read",
+        { path: "calendar/this-week.md" },
+        { text: "Mon: dentist 9:00\nWed: school play 18:30" },
+      ),
       text("Reading Thursday's notes now. The table is next."),
       tool("w2", "read", { path: "calendar/thursday.md" }, { text: "Nothing booked." }),
       text("Thursday is empty, so I kept it that way."),
