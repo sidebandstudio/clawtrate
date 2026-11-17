@@ -173,7 +173,8 @@ export function statusLineFor(
       startedAt: null,
     };
   }
-  view.startedAt = run.startedAt;
+  // A clock only for a start the gateway reported, never this client's own send time.
+  view.startedAt = run.reportedStartAt;
   if (!options.connected) {
     const last = view.phrase.replace(/…$/, "");
     return {

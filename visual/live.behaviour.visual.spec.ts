@@ -179,6 +179,8 @@ test.describe("sending", () => {
     await expect(line.getByTestId("status-phrase")).toHaveText("Thinking");
     await expect(line.locator(".presence")).toHaveAttribute("data-state", "thinking");
     await expect(line).toHaveAccessibleName("Otto, thinking: Thinking. No steps yet.");
+    // The gateway has not reported when the run started: no clock.
+    await expect(line.locator(".status-elapsed")).toHaveCount(0);
   });
 
   test("F-465 F-466: Cmd/Ctrl+I focuses the composer, and Cmd/Ctrl+L puts exactly the selected text in it", async ({
@@ -512,6 +514,17 @@ test.describe("the status line", () => {
     // No message that only says it is done.
     await expect(page.locator(".transcript")).not.toContainText(/Otto is done|finished\./);
     await expect(announcer(page)).toHaveText("Otto finished");
+  });
+
+  test("F-089: a run whose ending nothing established is not announced as finished or stopped", async ({
+    page,
+  }) => {
+    await open(page, "run-working");
+    await setRun(page, { state: "stopped", outcomeKnown: false, endedAt: Date.now() });
+    await expect(page.getByTestId("status-line")).toHaveCount(0);
+    await page.waitForTimeout(100);
+    await expect(announcer(page)).not.toHaveText(/Stopped|finished|couldn't finish/);
+    await expect(page.getByTestId("stop-note")).toHaveCount(0);
   });
 
   test("F-095 F-433: the reply streams with a caret and aria-busy until the gateway says it is complete", async ({

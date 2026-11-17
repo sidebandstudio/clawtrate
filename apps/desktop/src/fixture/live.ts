@@ -139,7 +139,14 @@ const REPLY =
 function run(now: number, change: Partial<Run>): Run {
   return newRun(
     "run-live",
-    { state: "running", origin: "local", bound: true, messageId: "msg-1", ...change },
+    {
+      state: "running",
+      origin: "local",
+      bound: true,
+      messageId: "msg-1",
+      reportedStartAt: now - 42 * SECOND,
+      ...change,
+    },
     now - 42 * SECOND,
   );
 }
@@ -259,7 +266,12 @@ export function liveScene(
           runs: [
             newRun(
               "run-elsewhere",
-              { state: "waiting", origin: "gateway", bound: true },
+              {
+                state: "waiting",
+                origin: "gateway",
+                bound: true,
+                reportedStartAt: now - 75 * SECOND,
+              },
               now - 75 * SECOND,
             ),
           ],

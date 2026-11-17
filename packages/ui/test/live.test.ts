@@ -50,7 +50,11 @@ function transcript(runs: Run[], change: Partial<Transcript> = {}): Transcript {
 }
 
 const run = (change: Partial<Run> = {}): Run =>
-  newRun("run-1", { state: "running", origin: "local", bound: true, ...change }, NOW - 42_000);
+  newRun(
+    "run-1",
+    { state: "running", origin: "local", bound: true, reportedStartAt: NOW - 42_000, ...change },
+    NOW - 42_000,
+  );
 
 function step(name: string, args: Record<string, unknown>, change: Partial<Step> = {}): Step {
   const text = JSON.stringify(args);
@@ -192,6 +196,13 @@ describe("the status line", () => {
     expect(
       statusLineFor(waiting, transcript([waiting]), { connected: true, interactive: false }),
     ).toMatchObject({ badge: "blocked", phrase: "Waiting for an answer", tone: "muted" });
+  });
+
+  it("F-081: the clock shows only a start the gateway reported, never this client's send time", () => {
+    const unreported = run({ reportedStartAt: null });
+    expect(statusLineFor(unreported, transcript([unreported]), live).startedAt).toBeNull();
+    const reported = run({ reportedStartAt: NOW - 5_000 });
+    expect(statusLineFor(reported, transcript([reported]), live).startedAt).toBe(NOW - 5_000);
   });
 
   it("F-081: elapsed time reads m:ss, and a duration the gateway reported reads 48s, 1m 12s, 1h 04m", () => {

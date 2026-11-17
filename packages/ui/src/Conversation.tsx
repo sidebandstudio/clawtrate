@@ -658,7 +658,8 @@ function lifecycleWords(bot: Bot, run: Run | undefined, last: Run | undefined): 
       return `${bot.name} is waiting for you`;
     return `${bot.name} is working`;
   }
-  if (!last) return null;
+  // An ending nothing established is not announced as one.
+  if (!last || !last.outcomeKnown) return null;
   if (last.state === "stopped") return "Stopped";
   if (last.state === "completed") return `${bot.name} finished`;
   if (last.state === "failed") return `${bot.name} couldn't finish`;
