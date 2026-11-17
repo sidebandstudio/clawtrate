@@ -1466,3 +1466,16 @@ describe("a call with no result in a run that ended without a stop", () => {
     );
   });
 });
+
+describe("a plan saved again", () => {
+  it("is Made the first time in a task and Saved after that, by order or by the gateway's revision", () => {
+    const plan = call(
+      "progress_card",
+      { plan: [{ step: "a", status: "pending" }] },
+      { details: { revision: 1, steps: {} } },
+    );
+    expect(words(plan)).toBe("Made a plan");
+    expect(words({ ...plan, repeat: true })).toBe("Saved the plan");
+    expect(words({ ...plan, details: { revision: 3, steps: {} } })).toBe("Saved the plan");
+  });
+});

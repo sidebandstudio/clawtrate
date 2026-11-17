@@ -300,13 +300,22 @@ export function ActionScope({
     const skip = new Set(
       engineRuns.flatMap((run) => run.steps.flatMap((s) => (s.toolCallId ? [s.toolCallId] : []))),
     );
+    // Tools already called earlier in the task, in its order: a plan after the first is saved again.
+    const called = new Set<string>();
+    const markRepeats = (entries: FeedEntry<FeedRef>[]) =>
+      entries.map((entry) => {
+        if (entry.type !== "action") return entry;
+        const repeat = called.has(entry.call.name);
+        called.add(entry.call.name);
+        return repeat ? { ...entry, call: { ...entry.call, repeat: true } } : entry;
+      });
     const items = new Map<string, { groups: Groups; revision: number }>();
     let previousUser: string | null = null;
     for (const item of transcript.items) {
       if (item.role === "user") previousUser = item.id;
       if (item.role !== "assistant") continue;
       const run = runOfItem(item, previousUser, index, transcript.runs);
-      const entries = itemEntries(item, run, index, skip, cards);
+      const entries = markRepeats(itemEntries(item, run, index, skip, cards));
       items.set(item.id, {
         groups: groupFeed(entries, ctx),
         revision: run?.reasoningRevision ?? 0,
@@ -316,7 +325,7 @@ export function ActionScope({
     for (const run of engineRuns) {
       const rest = placement.byRun.get(run.id) ?? [];
       runs.set(run.id, {
-        groups: groupFeed(runEntries(run, cards, rest), ctx),
+        groups: groupFeed(markRepeats(runEntries(run, cards, rest)), ctx),
         revision: run.reasoningRevision,
       });
     }

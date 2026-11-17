@@ -28,7 +28,6 @@ async function setState(page: Page, change: string, arg?: unknown) {
           clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
         }
       ).clawtrateFixture;
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval
       const apply = new Function("state", "value", source) as (
         s: ClawtrateState,
         v: unknown,
@@ -37,6 +36,20 @@ async function setState(page: Page, change: string, arg?: unknown) {
     },
     [change, arg] as const,
   );
+}
+
+/** Scroll so an element's top is at the reading line, the same way every time. */
+async function atReadingLine(target: Locator) {
+  await settle(target.page());
+  await target.evaluate((element) => {
+    const scroller = element.closest<HTMLElement>('[data-testid="transcript"]')!;
+    const band = Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
+    scroller.scrollTop += Math.round(
+      element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band,
+    );
+    scroller.dispatchEvent(new Event("scroll"));
+  });
+  await settle(target.page());
 }
 
 // Baselines ---------------------------------------------------------------------------
@@ -56,7 +69,7 @@ const BASELINES: Array<{ scene: string; rows: string; prepare?: (page: Page) => 
       const fold = cards(page).first();
       await line(fold).click();
       await fold.locator(".step").nth(1).locator(":scope > summary").click();
-      await line(fold).scrollIntoViewIfNeeded();
+      await atReadingLine(line(fold));
     },
   },
   {
@@ -68,7 +81,7 @@ const BASELINES: Array<{ scene: string; rows: string; prepare?: (page: Page) => 
       await line(command).click();
       await command.getByRole("tab", { name: "Raw" }).click();
       await expect(command.getByText("Arguments")).toBeVisible();
-      await line(command).scrollIntoViewIfNeeded();
+      await atReadingLine(line(command));
     },
   },
 ];
@@ -81,7 +94,9 @@ for (const size of SIZES) {
         const name = `${view.scene}${view.prepare ? `-${view.rows.split(" ")[0]}` : ""}`;
         test(`${view.rows}: ${name} matches its baseline`, async ({ page }) => {
           await open(page, view.scene, theme);
-          await expect(cards(page).first()).toBeVisible();
+          await expect(
+            page.locator(".transcript :is(details.card.action, .thought)").first(),
+          ).toBeVisible();
           if (view.prepare) await view.prepare(page);
           await settle(page);
           await expect(page).toHaveScreenshot(`actions-${name}-${theme}-${size.name}.png`);

@@ -82,6 +82,8 @@ export type ActionCall = {
   readOnly?: boolean;
   /** The connection was lost while the call was open. */
   lastSeen?: boolean;
+  /** An earlier call of the same tool came before it in the task: a plan saved again, not made. */
+  repeat?: boolean;
 };
 
 /** What the reading needs to know beyond the call. */
@@ -1146,9 +1148,11 @@ function wordsOf(call: ActionCall, kind: ActionKind, ctx: ReadingContext): Words
       if (call.name === "get_goal") return three(VERBS.check, OBJECTS.theGoal);
       const steps = list(a.plan).map(rec);
       const done = steps.filter((s) => s?.status === "completed").length;
+      // The first plan in a task is made; later ones save it again (the gateway's revision says so too).
+      const again = call.repeat === true || (num(d.revision) ?? 1) > 1;
       return three(
-        VERBS.makePlan,
-        OBJECTS.aPlan,
+        again ? VERBS.savePlan : VERBS.makePlan,
+        again ? OBJECTS.thePlan : OBJECTS.aPlan,
         done ? FORMS.ofDone(done, steps.length) : PLURALS.steps(steps.length),
       );
     }
