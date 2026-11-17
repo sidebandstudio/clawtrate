@@ -713,11 +713,14 @@
 
   const confirmDialog = $("#confirm-dialog");
   let confirmAction = null;
-  function confirmBox({ title, text, action, label, run }) {
+  // A confirmation: Cancel, an optional second action (alt), and the action itself.
+  let confirmAlt = null;
+  function confirmBox({ title, text, action, label, run, alt }) {
     confirmAction = run;
+    confirmAlt = alt ? alt[1] : null;
     confirmDialog.innerHTML =
       `<div class="b-confirm"><h2 id="confirm-title">${title}</h2><p id="confirm-text">${text}</p>` +
-      `<div class="b-actions">${button("Cancel", 'data-b="confirm-cancel"', "quiet")}${button(label, `data-b="confirm-ok" data-tone="${action}"`)}</div></div>`;
+      `<div class="b-actions">${button("Cancel", 'data-b="confirm-cancel"', "quiet")}${alt ? button(alt[0], 'data-b="confirm-alt"') : ""}${button(label, `data-b="confirm-ok"${action ? ` data-tone="${action}"` : ""}`)}</div></div>`;
     confirmDialog.showModal();
     $('[data-b="confirm-cancel"]', confirmDialog).focus();
   }
@@ -1213,6 +1216,17 @@
       case "confirm-ok":
         confirmDialog.close();
         confirmAction?.();
+        break;
+      case "confirm-alt":
+        confirmDialog.close();
+        confirmAlt?.();
+        break;
+      case "request-write":
+        // The interactive tier's request (conversation.md section 3), granted here at once.
+        B.access = "write";
+        app.model.access = "write";
+        rerender();
+        announce("Access granted. You can send, stop and answer.");
         break;
       case "request":
         requestAdmin();

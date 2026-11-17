@@ -42,11 +42,12 @@ Every setting can be given in the address, which is how the screenshots are take
 | `apikey` | `open`, the API key path opened (bots) |
 | `access` | `read`, `write` or `admin` (the default), what the connection may do (bots) |
 | `req` | The request for admin access: `asking`, `requested`, `denied`, `expired`, `failed` (bots) |
-| `accounts`, `chosen`, `name`, `create` | `accounts=none` for no accounts; the account chosen in the Account step; the new bot's name; `create=creating`, `slow` or `failed` (bots) |
+| `accounts`, `chosen`, `name`, `create` | `accounts=none` for no accounts; the account chosen in the Account step; the new bot's name; `create=creating`, `slow`, `failed`, `partial` (the bot made, its fallback list refused) or `timeout` (bots) |
 | `tab=settings`, `bview` | The bot's Settings tab in the Work pane (with `panel=open`), and a page in it: `account`, `change`, `t3` (bots) |
-| `lock` | The open bot's lock: `watching`, `locked`, `stale` (bots) |
+| `lock` | What the page last read of the open bot's lock: `bound`, `watching`, `locked`, `stale`, `gone`, `readfail`, `old`, `multi` (bots). The prototype bar's "Gateway: lock set", "Gateway: lock cleared" and "Gateway: order unreadable" change the gateway's side, which the page then reads by itself |
+| `defacct`, `accts`, `saved`, `log`, `xaitools` | `defacct=<id>`: the gateway's default model names that account; `accts=loading` or `error`: the Account step's list; `saved=1`: an unclean sign-in that saved a credential; `log=none` or `gap`: the gateway's log unreadable or partly missed; `xaitools=1`: xAI's tools switched on for every model (bots) |
 | `served`, `fail`, `differs`, `running`, `long`, `bstate` | `served=1`: Marlow's last run was served by another account; `fail=quota` or `signedout`: Otto's last run failed on its account; `differs=1`: Pip's model has fallbacks; `running=1`: the open bot has a run in progress; `long=1`: a long account label; `bstate=loading` or `error` (bots) |
-| `t3`, `t3server`, `t3signin`, `t3origin`, `t3plugin`, `t3found` | `t3=on` turns the integration on; `t3server=none`; `t3signin=none`, `starting`, `waiting`, `failed`, `expired`, `cancelled`, `unseen`, `expiring`; `t3origin=1` when this connection can start the sign-in; `t3plugin=0` without Clawtrate's plugin; `t3found=1` a bot with the tools that was not turned on (bots) |
+| `t3`, `t3server`, `t3obs`, `t3signin`, `t3origin`, `t3listing`, `t3plugin`, `t3found`, `t3withheld`, `t3catalog`, `t3write` | `t3=on` turns the integration on for this person; `t3server=none`; `t3obs=none`, `saved`, `worked`, `refused`: what Clawtrate last observed of the gateway's sign-in; `t3signin=starting`, `waiting`, `failed`, `expired`, `cancelled`: the app-started sign-in; `t3origin=1` when this connection can start it; `t3listing=notconnected` or `stale`; `t3plugin=0` without Clawtrate's plugin; `t3found=1` a bot with the tools that was not turned on; `t3withheld=1` a bot turned on whose tools the gateway withholds; `t3catalog=loading` or `error`; `t3write=refused`, `timeout` or `partial`: how the next gateway write ends (bots) |
 
 ## Checks
 
