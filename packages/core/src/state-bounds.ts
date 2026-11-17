@@ -364,6 +364,7 @@ const item = flagged<TranscriptItem>()({
   timestamp: NUMBER,
   blocks: list(MAX_BLOCKS_PER_ITEM, block, { pool: "blocks" }),
   model: NAME,
+  truncated: FLAG,
 });
 const interSession = flagged<InterSessionMessage>()({
   itemId: ID,

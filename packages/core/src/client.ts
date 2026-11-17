@@ -268,6 +268,10 @@ export const FOREIGN_RUNS_PER_SESSION = 4;
 const MAX_TIMER_MS = 2_147_483_647;
 /** Whole reads from history (`readStepRaw`, `readHistoryItem`) in flight at once; past it one is refused. */
 export const MAX_FULL_READS = 4;
+/** The text length `chat.history` gives when not asked for more (OpenClaw 2026.10.6). */
+export const GATEWAY_HISTORY_TEXT_CHARS = 8_000;
+/** The most text per row a whole read asks `chat.history` for: the protocol's `maxChars` maximum. */
+export const MAX_HISTORY_READ_CHARS = 500_000;
 /** Runs of one task whose streaming `chat` text is kept to build on the next delta. */
 export const MAX_STREAMS_PER_TASK = 2;
 /** Spawn links kept (`spawnedBy`), newest. */
@@ -2636,18 +2640,22 @@ export class ClawtrateClient {
    */
   async readHistoryItem(key: string, itemId: string): Promise<TranscriptItem | null> {
     if (!this.state.transcripts[key]) return null;
-    const history = await this.readHistoryWhole(key);
+    // The length needed is not known here: the most the gateway gives. An item it still cut says so.
+    const history = await this.readHistoryWhole(key, MAX_HISTORY_READ_CHARS);
     return mapHistory(history?.messages).find((item) => item.id === itemId) ?? null;
   }
 
-  /** A history page read for a whole value, at most `MAX_FULL_READS` at once. */
-  private async readHistoryWhole(key: string): Promise<RawRecord | null> {
+  /**
+   * A history page read for a whole value, at most `MAX_FULL_READS` at once,
+   * asking the gateway for text up to `maxChars` (it cuts to 8,000 otherwise).
+   */
+  private async readHistoryWhole(key: string, maxChars: number): Promise<RawRecord | null> {
     if (this.fullReads >= MAX_FULL_READS)
       throw new Error("Other whole texts are being read; try again in a moment.");
     this.fullReads += 1;
     try {
       return asRecord(
-        await this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
+        await this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT, maxChars }),
       );
     } finally {
       this.fullReads -= 1;
@@ -2667,27 +2675,51 @@ export class ClawtrateClient {
    * Null only when the task has no such step.
    */
   async readStepRaw(key: string, stepId: string): Promise<StepRead | null> {
-    const has = () =>
-      this.state.transcripts[key]?.runs.some((run) => run.steps.some((step) => step.id === stepId));
-    if (!has()) return null;
+    const find = () =>
+      this.state.transcripts[key]?.runs
+        .flatMap((run) => run.steps)
+        .find((step) => step.id === stepId);
+    const step = find();
+    if (!step) return null;
+    // What the raw table keeps is whole unless a history row it came from was cut.
     const kept = this.raw.get(key, stepId);
-    if (kept) return { status: "available", raw: kept };
-    const history = await this.readHistoryWhole(key);
+    if (kept && !step.truncated) return { status: "available", raw: kept };
+    // Ask for the length the step needs; one the gateway cut gives no length, so the most it gives.
+    const known = Math.max(
+      ...[step.argsText, step.output, step.result].map((text) => text?.totalChars ?? 0),
+    );
+    const maxChars = step.truncated
+      ? MAX_HISTORY_READ_CHARS
+      : Math.min(MAX_HISTORY_READ_CHARS, Math.max(GATEWAY_HISTORY_TEXT_CHARS, known + 64));
+    const history = await this.readHistoryWhole(key, maxChars);
     const current = this.state.transcripts[key];
-    if (!current || !has()) return null;
+    if (!current || !find()) return null;
     // Rebuilt aside, as a resync would, into a table dropped after this read.
     const scratch = new RawTable(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
     const ctx = { ...this.context(key), raw: scratch };
     const fromHistory = runsFromHistory(history?.messages, asRecord(history?.inFlightRun), ctx);
     const merge = mergeHistoryRuns(current.runs, fromHistory, ctx);
-    const whole = scratch.get(key, merge.fromHistory.get(stepId) ?? stepId);
-    return whole
-      ? { status: "available", raw: whole }
-      : {
-          status: "not-available-yet",
-          reason:
-            "This step's whole text was too long to keep here; it can be read once the gateway's history holds it.",
-        };
+    const source = merge.fromHistory.get(stepId) ?? stepId;
+    const whole = scratch.get(key, source);
+    const read = fromHistory.flatMap((run) => run.steps).find((each) => each.id === source);
+    if (!whole || !read) {
+      return {
+        status: "not-available-yet",
+        reason:
+          "This step's whole text was too long to keep here; it can be read once the gateway's history holds it.",
+      };
+    }
+    if (read.truncated) {
+      return {
+        status: "cut-by-gateway",
+        raw: whole,
+        receivedChars: Math.max(
+          ...[read.argsText, read.output, read.result].map((text) => text?.totalChars ?? 0),
+        ),
+        reason: "The gateway's history holds this step's text only cut to a shorter length.",
+      };
+    }
+    return { status: "available", raw: whole };
   }
 
   // Activity ------------------------------------------------------------------------

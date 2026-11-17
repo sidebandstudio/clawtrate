@@ -134,7 +134,12 @@ export type Step = {
   approvalId: string | null;
   /** The tool's own failure kind, for example `overall-timeout` for an exec that ran out of time. */
   failureKind: string | null;
-  /** The gateway cut the result (`__openclaw.truncated` on the history row). */
+  /**
+   * The gateway cut this step's text: a history row it came from says so
+   * (`__openclaw.truncated`, for tool calls, results and reasoning alike), or
+   * its live result did (`details.truncated`). Its whole text is then not
+   * known here; `readStepRaw` asks for more and says if it is still cut.
+   */
   truncated: boolean;
   /** The gateway marked the result `replaceable`: a later `replace` frame may correct it. */
   replaceable: boolean;
@@ -439,7 +444,14 @@ export { MAX_STEPS_PER_TASK };
  * `not-available-yet`, never presented as recoverable.
  */
 export type StepRead =
-  { status: "available"; raw: StepRaw } | { status: "not-available-yet"; reason: string };
+  | { status: "available"; raw: StepRaw }
+  | { status: "not-available-yet"; reason: string }
+  /**
+   * History holds the step, but the gateway cut its row to a display length
+   * even at the length asked for (`__openclaw.truncated`): `raw` is what it
+   * sent, a prefix of what it stored, `receivedChars` that text's length.
+   */
+  | { status: "cut-by-gateway"; raw: StepRaw; receivedChars: number; reason: string };
 
 /** Full raw payloads, keyed by task and step id. Owned by the client, never snapshotted. */
 export class RawTable {
@@ -1807,7 +1819,8 @@ export function runsFromHistory(
                 error: null,
                 approvalId: null,
                 failureKind: null,
-                truncated: false,
+                // A reasoning row carries the gateway's cut like a tool row does.
+                truncated: meta(message).truncated === true,
                 replaceable: false,
                 correction: 0,
                 continuation: digestOf(block.thinking),
@@ -1827,6 +1840,7 @@ export function runsFromHistory(
           run = upsertStep(run, {
             ...blankToolStep(toolCallId, name, at),
             argsText: capText(prettyArgs(block.arguments ?? block.input)),
+            truncated: meta(message).truncated === true,
           });
         }
       });
@@ -1850,7 +1864,7 @@ export function runsFromHistory(
               result: capText(text),
               error: isError ? capError(text || "The tool reported an error.") : null,
               failureKind: isError ? str(asRecord(message.details)?.failureKind) : null,
-              truncated: meta(message).truncated === true,
+              truncated: step.truncated || meta(message).truncated === true,
             },
             ctx,
           ),
