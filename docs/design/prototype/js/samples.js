@@ -783,6 +783,7 @@
     t3Launch: t3("call_01HXK9T", "t3_thread_launch", { projectId: "proj_backup", title: "Exclude the transcode cache", message: S.t3Sent, workspaceStrategy: { type: "worktree", baseRef: "main", branch: "exclude-cache" } }, { threadId: S.t3Thread, link: S.t3ThreadLink, projectId: "proj_backup", modelSelection: { instanceId: "coder", model: "coder-large" }, runId: "run_t3_1", status: "running" }, { took: "0.8s" }),
     t3Wait: t3("call_01HXKA2", "t3_thread_wait", { threadId: S.t3Thread, timeoutMs: 50000 }, { threadId: S.t3Thread, runId: "run_t3_1", status: "running", timedOut: true }, { took: "50s" }),
     t3Send: t3("call_01HXM2A", "t3_thread_send", { threadId: S.t3Thread, message: S.t3Followup }, { threadId: S.t3Thread, link: S.t3ThreadLink, messageId: "msg_2", runId: "run_t3_1", status: "running", delivery: "steered" }, { took: "0.5s" }),
+    t3ReadFail: t3("call_01HXM7D", "t3_thread_read", { threadId: S.t3Thread }, { code: "orchestration_error", message: "The thread store did not answer." }, { status: "failed", isError: true, took: "0.3s" }),
     t3Read: t3("call_01HXM7C", "t3_thread_read", { threadId: S.t3Thread, runLimit: 1 }, {
       thread: { threadId: S.t3Thread, title: "Exclude the transcode cache", link: S.t3ThreadLink, status: "completed", latestRunId: "run_t3_1", activeRunId: null, settled: true },
       recentRuns: [{ runId: "run_t3_1", status: "completed" }],
@@ -790,7 +791,6 @@
       nextPosition: null,
       hasMore: false,
     }, { took: "0.6s" }),
-    t3ReadFail: t3("call_01HXM7D", "t3_thread_read", { threadId: S.t3Thread }, { code: "orchestration_error", message: "The thread store did not answer." }, { status: "failed", isError: true, took: "0.3s" }),
     t3Stop: t3("call_01HXM9F", "t3_thread_interrupt", { threadId: S.t3Thread, stop: true }, { threadId: S.t3Thread, runId: "run_t3_1", status: "interrupt_requested" }, { took: "0.4s" }),
     t3Projects: t3("call_01HXL01", "t3_project_list", { limit: 20 }, { projects: [{ id: "proj_backup", title: "backup-scripts" }, { id: "proj_site", title: "house-site" }, { id: "proj_recipes", title: "recipes" }, { id: "proj_notes", title: "notes" }], nextCursor: null }),
     t3Threads: t3("call_01HXL02", "t3_thread_list", { projectId: "proj_backup" }, { projectId: "proj_backup", currentThreadId: null, threads: [{ threadId: S.t3Thread, title: "Exclude the transcode cache", status: "running" }, { threadId: "mcp:22c1", title: "Faster prune", status: "completed" }], nextCursor: null, total: 2 }),
