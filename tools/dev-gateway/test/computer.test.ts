@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { chromium } from "@playwright/test";
 import {
@@ -34,7 +34,8 @@ import {
   botBrowsersProblems,
   loadDevPlugin,
 } from "../src/dev-plugins.ts";
-import { CHECKOUT_DIR } from "../src/env.ts";
+import { CHECKOUT_DIR, OpenclawRunner } from "../src/env.ts";
+import { CHECKOUT as FIXTURE_CHECKOUT, seedInstance, testInstance } from "./fixtures.ts";
 import { choosePorts } from "../src/registry.ts";
 import { PAGES_RECORD_PATH, REFUSED_TITLE, startScriptedPages } from "../src/scripted-pages.ts";
 
@@ -173,12 +174,48 @@ describe("the browser setup the tool writes", () => {
     expect(c.tools.allow).not.toContain("browser");
   });
 
-  it("R3-04, C-04: the browser keeps its data in the instance and never uses the owner's browsers", () => {
+  it("R3-04, C-04: the gateway the launcher starts keeps each bot's browser data in the instance and never uses the owner's browsers", () => {
+    const home = temp();
+    const runRoot = temp();
+    const { stateDir, runId } = seedInstance(home, "alpha", { runRoot });
+    // The launcher's own spawn of the gateway, recorded and never run.
+    const spawned: { args: string[]; env: NodeJS.ProcessEnv; cwd: string }[] = [];
+    const runner = new OpenclawRunner({
+      instance: "alpha",
+      stateDir,
+      runFile: testInstance(home, runRoot, "alpha").runFile,
+      checkout: FIXTURE_CHECKOUT,
+      spawnImpl: ((
+        _bin: string,
+        args: string[],
+        options: { env: NodeJS.ProcessEnv; cwd: string },
+      ) => {
+        spawned.push({ args, env: options.env, cwd: options.cwd });
+        throw new Error("a test must never reach a real spawn");
+      }) as never,
+    });
+    runner.freshRunId = runId;
+    expect(() => runner.spawnGated(["gateway", "run"], { stdio: "ignore" })).toThrow(/never reach/);
+    const [gateway] = spawned;
+    // The gateway's own rule (OpenClaw 2026.10.6, resolveConfigDir and
+    // resolveOpenClawUserDataDir): a managed profile's data is
+    // <OPENCLAW_STATE_DIR, else the folder of OPENCLAW_CONFIG_PATH, else ~/.openclaw>/browser/<profile>/user-data.
+    const env = gateway!.env;
+    const root =
+      env.OPENCLAW_STATE_DIR?.trim() ||
+      (env.OPENCLAW_CONFIG_PATH?.trim() ? dirname(env.OPENCLAW_CONFIG_PATH.trim()) : undefined) ||
+      join(String(env.HOME), ".openclaw");
+    expect(root).toBe(stateDir);
+    expect(dirname(String(env.OPENCLAW_CONFIG_PATH))).toBe(stateDir);
+    expect(gateway!.cwd).toBe(stateDir);
     const { browser } = browserConfig(PORTS, plugin().botBrowsers!, CHROMIUM);
     for (const [name, profile] of Object.entries(browser.profiles)) {
       // No userDataDir, cdpUrl, attach or driver: each is a managed profile the
-      // gateway launches with its data under the instance's state folder.
+      // gateway launches, with its data where the rule above puts it.
       expect(Object.keys(profile), name).toEqual(["cdpPort"]);
+      const data = join(root, "browser", name, "user-data");
+      expect(relative(stateDir, data).startsWith(".."), data).toBe(false);
+      expect(isAbsolute(relative(stateDir, data)), data).toBe(false);
     }
     expect(browser.allowSystemProfileImport).toBe(false);
     expect(Object.keys(browser)).not.toContain("cdpUrl");
