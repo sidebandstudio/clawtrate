@@ -13,7 +13,7 @@ export function formatSize(bytes: number | null): string {
     value /= 1024;
     unit += 1;
   }
-  const shown = value < 10 ? (Math.floor(value * 10) / 10).toFixed(1) : String(Math.floor(value));
+  const shown = value < 9.95 ? value.toFixed(1) : String(Math.round(value));
   return `${shown.replace(/\.0$/, "")} ${units[unit]}`;
 }
 

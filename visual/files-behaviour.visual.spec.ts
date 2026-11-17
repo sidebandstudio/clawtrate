@@ -246,9 +246,9 @@ test.describe("the Files tab", () => {
     await openRow(page, "transcode.log");
     const cannot = page.getByTestId("reader-cannot");
     await expect(cannot.locator("dt")).toHaveText(["Name", "Size", "Modified", "Folder"]);
-    await expect(cannot.locator("dd").nth(1)).toHaveText("3.3 MB");
+    await expect(cannot.locator("dd").nth(1)).toHaveText("3.4 MB");
     await expect(cannot).toContainText(
-      "transcode.log is 3.3 MB. The gateway's file readers send text up to 256 KB, so it can't be shown or downloaded here.",
+      "transcode.log is 3.4 MB. The gateway's file readers send text up to 256 KB, so it can't be shown or downloaded here.",
     );
     await expect(page.getByRole("button", { name: /^Download/ })).toHaveCount(0);
     await page.getByRole("button", { name: "Back to this task's files" }).click();
