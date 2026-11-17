@@ -552,7 +552,7 @@ The shell stays mounted with its cached content when the connection drops. One c
 | A bot's task list | The bot's avatar and name, its task rows at touch sizes (title, time, mark), and "New task" | Home                |
 | A task's chat     | The conversation                                                                            | The bot's task list |
 
-Tapping a bot opens its task list, tapping a task opens its chat, Back returns to the task list, and Back again returns to Home. A bot with exactly one task opens that task's chat directly, and Back from it still goes to its task list, then Home. The narrow desktop window keeps the single unfolding list described above, because there the rail and its tasks are one pane.
+Tapping a bot opens its task list, tapping a task opens its chat, Back returns to the task list, and Back again returns to Home. This holds for every bot, whatever its number of tasks. The narrow desktop window keeps the single unfolding list described above, because there the rail and its tasks are one pane.
 
 ## 13. Accessibility
 
