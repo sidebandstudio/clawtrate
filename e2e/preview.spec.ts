@@ -1146,7 +1146,8 @@ test("F-081 F-082 F-083 F-085 F-089 F-095 F-433: a sent message shows the status
   await openShell(page);
   await openTask(page, "Otto", "Weekly backup check");
   const seen = await watchRun(page);
-  await composer(page).fill("How full is the backup disk this week?");
+  // A reply that streams for a few seconds, so it is on screen while the run goes on.
+  await composer(page).fill("How full is the backup disk this week? #stream 3");
   const sent = Date.now();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible({ timeout: 1000 });
@@ -1166,8 +1167,13 @@ test("F-081 F-082 F-083 F-085 F-089 F-095 F-433: a sent message shows the status
   ).toBe(true);
   // Once complete, history holds the message and its reply once each.
   await expect(
-    page.getByText("How full is the backup disk this week?", { exact: true }),
-  ).toHaveCount(2);
+    page.getByText("How full is the backup disk this week? #stream 3", { exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    page
+      .getByTestId("transcript-turn")
+      .filter({ hasText: "Here is a long answer, streamed slowly." }),
+  ).toHaveCount(1);
   await expect(page.getByTestId("outgoing")).toHaveCount(0);
   await expect(page.getByTestId("live-turn")).toHaveCount(0);
 });
@@ -1177,7 +1183,7 @@ test("F-097: Stop during a real run is offered beside Send, and the gateway's co
 }) => {
   await openShell(page);
   await openTask(page, "Otto", "Weekly backup check");
-  await composer(page).fill("Check the backup disk once more, slowly.");
+  await composer(page).fill("Check the backup disk once more, slowly. #slow 15");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
   await expect(page.getByRole("button", { name: "Steer this turn" })).toBeVisible();
@@ -1196,8 +1202,9 @@ test("F-097: a typed /stop stops the run, and the note does not say it came from
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Otto", "Weekly backup check");
-  await composer(page).fill("Look through every backup set again.");
+  // A task of its own: on this gateway a typed /stop can bring back a turn stopped earlier in the same task.
+  await openTask(page, "Otto", "List the workspace (approved)");
+  await composer(page).fill("Look through every backup set again. #slow 15");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
   await composer(page).fill("/stop");
@@ -1213,7 +1220,7 @@ test("F-061: Queue after this turn holds a message on the shelf and runs it once
 }) => {
   await openShell(page);
   await openTask(page, "Otto", "Certificate renewal warning");
-  await composer(page).fill("Which certificate is it?");
+  await composer(page).fill("Which certificate is it? #stream 3");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
   await composer(page).fill("And when does it renew?");
@@ -1239,7 +1246,7 @@ test("F-096: a message sent while the run works is steered into it and captioned
   await openShell(page);
   await openTask(page, "Otto", "Weekly backup check");
   const seen = await watchRun(page);
-  await composer(page).fill("Start on the backup report.");
+  await composer(page).fill("Start on the backup report. #slow-tool 5");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
   await composer(page).fill("Only the photos set, please.");
@@ -1255,7 +1262,7 @@ test("F-096: a message sent while the run works is steered into it and captioned
 test("F-058: two tasks of one bot run at the same time", async ({ page }) => {
   await openShell(page);
   await openTask(page, "Otto", "Disk almost full on the media box");
-  await composer(page).fill("First of two at once.");
+  await composer(page).fill("First of two at once. #stream 5");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
   await openTask(page, "Otto", "Certificate renewal warning");
@@ -1293,7 +1300,12 @@ test("F-058: two tasks of one bot run at the same time", async ({ page }) => {
   expect(secondAsked).toBeLessThan(firstReplied);
   await expect(
     page.getByTestId("transcript-turn").filter({ hasText: "First of two at once." }),
-  ).toHaveCount(2);
+  ).toHaveCount(1);
+  await expect(
+    page
+      .getByTestId("transcript-turn")
+      .filter({ hasText: "Here is a long answer, streamed slowly." }),
+  ).not.toHaveCount(0);
 });
 
 test("F-282: Start as new task runs the message in a new task under the same bot", async ({
@@ -1344,7 +1356,7 @@ test("F-468: a message queued behind a slow reply stays Not sent after a confirm
   await openShell(page);
   await openTask(page, "Otto", "Weekly backup check");
   // The scripted model's slow reply: still going when Stop is pressed, whatever the machine.
-  await composer(page).fill("#slow 120");
+  await composer(page).fill("#slow 15");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
   await composer(page).fill("Then send me a summary of the stop test.");
