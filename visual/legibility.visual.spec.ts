@@ -3,6 +3,7 @@
 // translucent fills composited over their real parents. Text behind the Work
 // drawer's scrim is inert and deliberately concealed, so it is not measured.
 import { expect, test, type Page } from "@playwright/test";
+import { CARD_SCENES } from "../apps/desktop/src/fixture/cards.ts";
 import {
   contextFor,
   FIXTURE_PORT,
@@ -168,6 +169,22 @@ const SCENES: Scene[] = [
     },
   },
 ];
+
+/** Every card scene, with every card, full request and Raw panel open. */
+const openCards = async (page: Page) => {
+  await page.locator(".app").waitFor();
+  await page.evaluate(() => {
+    for (const details of document.querySelectorAll(".transcript details")) {
+      (details as HTMLDetailsElement).open = true;
+    }
+  });
+  const raws = page.locator('.transcript .card-actions button:text-is("Raw")');
+  for (let i = 0; i < (await raws.count()); i += 1) await raws.nth(i).click();
+};
+
+for (const scene of CARD_SCENES) {
+  SCENES.push({ name: `card ${scene}`, query: `scene=${scene}`, prepare: openCards });
+}
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
