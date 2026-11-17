@@ -97,7 +97,7 @@
   CT.filesOf = (c) => {
     if (c.name === "apply_patch") return [...String(c.args.input || "").matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$/gm)].map((m) => (m[1] || m[2]).trim());
     if (c.name === "pdf") return c.args.pdfs || (c.args.pdf ? [c.args.pdf] : []);
-    if (c.name === "view_image") return c.args.paths || c.args.urls || [c.args.path || c.args.url].filter(Boolean);
+    if (c.name === "view_image") return c.args.paths || [c.args.path].filter(Boolean);
     return c.args.path ? [c.args.path] : [];
   };
 
@@ -157,7 +157,8 @@
         detail: c.details?.diff ? diffText(diffCount(c.details.diff)) : "",
       };
     },
-    outcome: (c) => (c.name === "apply_patch" || c.details?.changed !== undefined || c.details?.diff ? "done" : "made"),
+    outcome: (c) => (c.details?.changed === false ? "unchanged" : c.name === "apply_patch" || c.details?.changed || c.details?.diff ? "done" : "made"),
+    neutral: () => "File edits",
     plural: (n, calls) => fileCount(calls, "Edited", "edits"),
     foldDetail: (calls) => diffText(calls.reduce((t, c) => ((d) => ({ added: t.added + d.added, removed: t.removed + d.removed }))(diffCount(c.details?.diff)), { added: 0, removed: 0 })),
   };
@@ -165,22 +166,30 @@
   K.memory = {
     icon: "memory",
     words: (c) => three("Saving to", "Saved to", "Couldn't save to", "memory", c.name === "write" ? firstWords(c.args.content) : c.details?.diff ? diffText(diffCount(c.details.diff)) : ""),
-    outcome: (c) => (c.details?.changed !== undefined || c.details?.diff ? "done" : "made"),
-    plural: (n) => ["Saved", `${n} notes to memory`],
+    outcome: (c) => (c.details?.changed === false ? "unchanged" : c.details?.changed || c.details?.diff ? "done" : "made"),
+    neutral: () => "Memory notes",
+    foldDetail: (calls) => [...new Set(calls.map((c) => base(c.args.path)))].join(", "),
+    // Notes are counted once, by their path; more writes than notes are said as times.
+    plural: (n, calls) => {
+      const notes = new Set(calls.map((c) => relative(c.args.path))).size;
+      return ["Saved", `${plural(notes, "note", "notes")} to memory${n > notes ? ` · ${n} times` : ""}`];
+    },
   };
 
   K.recall = {
     icon: "recall",
     words: (c) =>
       c.name === "memory_get"
-        ? three("Reading a note from memory:", "Read from memory:", "Couldn't read from memory:", base(c.args.path))
+        ? { ...three("Reading a note from memory:", "Read from memory:", "Couldn't read from memory:", base(c.args.path)), notfound: ["Found no note", `${base(c.args.path)} in memory`] }
         : three("Searching memory for", "Searched memory for", "Couldn't search memory for", quote(c.args.query), Array.isArray(c.details?.results) && !c.details.unavailable ? `${plural(c.details.results.length, "match", "matches")}${c.details.staleness?.warning ? " · may be out of date" : ""}` : ""),
     outcome: (c) => {
-      if (c.name === "memory_get") return c.text ? "done" : "made";
+      // A read says status ok, not_found or error, with the code and error (memory-tool contract).
+      if (c.name === "memory_get") return c.details?.status === "ok" ? "done" : c.details?.status === "not_found" ? "notfound" : c.details?.status === "error" ? "failed" : "made";
       if (c.details?.unavailable || c.details?.disabled) return "unavailable";
       if (c.details?.partial) return "partial";
       return Array.isArray(c.details?.results) ? "done" : "made";
     },
+    neutral: (calls) => (calls[0].name === "memory_get" ? "Memory reads" : "Memory search"),
     plural: (n, calls) => [calls[0].name === "memory_get" ? "Read from memory" : "Searched memory", `${n} times`],
   };
 
@@ -191,7 +200,8 @@
       const exit = c.details?.exitCode;
       return three("Running", "Ran", "Couldn't run", CT.programOf(c.args.command) || "a command", c.args.command || "", { mono: true, exit: exit ? `exit ${exit}` : "" });
     },
-    outcome: (c) => (c.name === "code_execution" ? (c.text ? "done" : "made") : c.details?.exitCode !== undefined ? "done" : "made"),
+    outcome: (c) => (c.details?.status === "approval-pending" ? "waiting" : c.name === "code_execution" ? (c.text ? "done" : "made") : c.details?.exitCode !== undefined ? "done" : "made"),
+    neutral: () => "Commands",
     plural: (n) => ["Ran", `${n} commands`],
     foldDetail: (calls) => {
       const programs = [...new Set(calls.map((c) => CT.programOf(c.args.command) || "a command"))];
@@ -278,28 +288,49 @@
       if (a === "take_control") return t("Handing you", "Handed you", "the computer");
       return t("Using", "Used", "the computer");
     },
-    // A mutation's effect: confirmed, or not seen (7.3, Not confirmed).
+    // A mutation's metadata is projected into details.result: ok, and effect when the
+    // computer reports one (confirmed, unverifiable, suspected_noop).
     outcome: (c) => {
       if (OBSERVE.includes(c.args.action)) return "done";
-      const effect = c.details?.effect;
-      return effect === "confirmed" ? "done" : effect === "unverifiable" || effect === "suspected_noop" ? "unconfirmed" : "made";
+      const r = c.details?.result || {};
+      if (r.ok === false) return "failed";
+      return r.effect === "confirmed" ? "done" : r.effect === "unverifiable" || r.effect === "suspected_noop" ? "unconfirmed" : "made";
     },
     plural: (n) => ["Used the computer", `${n} actions`],
   };
 
   K.phone = {
     icon: "screen",
+    // [running, done, base] for each act: the base form says what was not done.
     words: (c) => {
-      const t = (run, done, object) => ({ ...three(run, done, "Couldn't use", object, c.args.node || ""), fail: ["Couldn't use", "the phone"] });
-      if (c.args.action === "observe") return t("Looking at", "Looked at", "the phone");
       const m = c.args.mobileAction || {};
-      if (m.type === "tap" || m.type === "activate") return t("Tapping on", "Tapped on", "the phone");
-      if (m.type === "set_text") return t("Entering text on", "Entered text on", "the phone");
-      if (m.type === "swipe" || m.type === "scroll") return t("Swiping on", "Swiped on", "the phone");
-      if (m.type === "global_action") return t("Pressing", "Pressed", CT.nameWords(m.name || "a button").replace(/^./, (x) => x.toUpperCase()));
-      if (m.type === "wait") return t("Waiting on", "Waited on", "the phone");
-      return t("Using", "Used", "the phone");
+      const [run, done, base, object] =
+        c.args.action === "observe"
+          ? ["Looking at", "Looked at", "Look at", "the phone"]
+          : m.type === "tap" || m.type === "activate"
+            ? ["Tapping on", "Tapped on", "Tap on", "the phone"]
+            : m.type === "set_text"
+              ? ["Entering text on", "Entered text on", "Enter text on", "the phone"]
+              : m.type === "swipe" || m.type === "scroll"
+                ? ["Swiping on", "Swiped on", "Swipe on", "the phone"]
+                : m.type === "global_action"
+                  ? ["Pressing", "Pressed", "Press", CT.nameWords(m.name || "a button").replace(/^./, (x) => x.toUpperCase())]
+                  : m.type === "wait"
+                    ? ["Waiting on", "Waited on", "Wait on", "the phone"]
+                    : ["Using", "Used", "Use", "the phone"];
+      return { ...three(run, done, "Couldn't use", object, c.args.node || ""), fail: ["Couldn't use", "the phone"], noun: [base, object], refused: ["Didn't " + lower(base), object] };
     },
+    // observe gives a snapshot. An act that ran gives the device's outcome code, which the
+    // gateway does not fix (open point 7): Call made with the code. confirmation_required
+    // and the re-observe codes mean nothing was done.
+    outcome: (c) => {
+      if (c.args.action === "observe") return c.details?.snapshotId ? "done" : "made";
+      if (c.details?.code === "confirmation_required") return { outcome: "refused", word: "Needs confirmation" };
+      const code = c.details?.outcome?.code;
+      if (["target_stale", "target_not_found", "secure_content", "package_changed"].includes(code)) return { outcome: "refused", word: CT.nameWords(code).replace(/^./, (x) => x.toUpperCase()) };
+      return { outcome: "made", word: code ? CT.nameWords(code).replace(/^./, (x) => x.toUpperCase()) : "Call made" };
+    },
+    neutral: () => "Phone",
     plural: (n) => ["Used the phone", `${n} actions`],
   };
 
@@ -336,16 +367,30 @@
         case "update":
           return name ? three("Changing routine", "Changed routine", "Couldn't change routine", name, when) : three("Changing", "Changed", "Couldn't change", "a routine", when);
         case "remove":
-          return name ? three("Removing routine", "Removed routine", "Couldn't remove routine", name) : three("Removing", "Removed", "Couldn't remove", "a routine");
+          return { ...(name ? three("Removing routine", "Removed routine", "Couldn't remove routine", name) : three("Removing", "Removed", "Couldn't remove", "a routine")), notfound: ["Found no routine", `${name || ""} to remove`.trim()] };
         case "run":
           return { ...three("Running routine", "Ran routine", "Couldn't run routine", name || "a routine"), queued: ["Asked routine", `${name || "a routine"} to run`] };
+        case "next_check": {
+          const ms = c.details?.delayMs;
+          const when = ms ? (ms >= 3600000 ? `${Math.round(ms / 3600000)}h` : `${Math.round(ms / 60000)}m`) : c.args.in || "";
+          return three("Proposing", "Proposed", "Couldn't propose", `the next check${when ? ` in ${when}` : ""}`);
+        }
         case "wake":
           return three("Waking", "Woke", "Couldn't wake", "the scheduler");
         default:
           return three("Looking at", "Looked at", "Couldn't look at", "routines");
       }
     },
-    outcome: (c) => (c.args.action === "run" ? (c.details?.run ? "done" : c.details?.enqueued ? "queued" : "made") : "done"),
+    outcome: (c) => {
+      const d = c.details || {};
+      if (c.args.action === "run") return d.run ? "done" : d.enqueued ? "queued" : "made";
+      // Removal is established by the deletion result, not by a job.
+      if (c.args.action === "remove") return d.removed === true ? "done" : d.removed === false ? "notfound" : "made";
+      if (c.args.action === "next_check") return d.ok === true && d.delayMs ? "done" : "made";
+      if (c.args.action === "add" || c.args.action === "update") return d.id ? "done" : "made";
+      return "done";
+    },
+    neutral: () => "Routine look-ups",
     plural: (n) => ["Looked at routines", `${n} times`],
   };
 
@@ -375,15 +420,22 @@
         return three("Looking at", "Looked at", "Couldn't look at", "helpers");
       }
       const label = c.args.label || "";
-      return { ...three("Starting", "Started a helper:", "Couldn't start", label || "a helper", firstWords(c.args.task, 8)), noun: ["Helper", label || "for a task"], started: ["Started a helper:", label || "untitled"] };
+      return { ...three("Starting", "Started a helper:", "Couldn't start", label || "a helper", firstWords(c.args.task, 8)), noun: ["Helper", label || "for a task"], started: ["Started a helper:", label || "untitled"], refused: ["Didn't start a helper:", label || "untitled"] };
     },
-    outcome: (c) => (c.name === "sessions_spawn" ? (c.details?.status === "accepted" ? "started" : "made") : c.name === "subagents" && c.args.action === "list" ? "done" : "made"),
+    outcome: (c) => {
+      if (c.name === "sessions_spawn") {
+        const s = c.details?.status;
+        return s === "accepted" ? "started" : s === "forbidden" ? { outcome: "refused", word: "Not run" } : s === "error" ? "failed" : "made";
+      }
+      return c.name === "subagents" && c.args.action === "list" ? "done" : "made";
+    },
     plural: (n) => ["Used helpers", `${n} times`],
   };
 
   K.question = {
     icon: "question",
     words: (c) => three("Asking you", "Asked you", "Couldn't ask", "a question", c.args.questions?.[0]?.question || ""),
+    outcome: (c) => (c.details?.status === "answered" ? { outcome: "done", word: "Answered" } : c.details?.status ? { outcome: "made", word: CT.nameWords(c.details.status).replace(/^./, (x) => x.toUpperCase()) } : "made"),
     plural: (n) => ["Asked you", `${n} questions`],
   };
 
@@ -429,11 +481,18 @@
       if (c.name === "tts") return c.details?.audioPath ? "done" : "made";
       return c.details?.media || c.details?.paths ? "done" : "made";
     },
+    // Each operation has its own plural: listing models or checking a task is not making media.
     plural: (n, calls) => {
       if (calls[0].name === "tts") return ["Made", `${n} voice clips`];
-      const [, many] = MEDIA[calls[0].name];
-      return ["Made", `${many} · ${n} times`];
+      const [one, many] = MEDIA[calls[0].name];
+      if (calls[0].args.action === "list") return ["Looked at", `${one} models · ${n} times`];
+      if (calls[0].args.action === "status") return ["Checked", `${one} generation · ${n} times`];
+      const made = calls.reduce((t, c) => t + (c.details?.paths?.length || c.details?.count || 0), 0);
+      return ["Made", made ? `${made} ${made === 1 ? one : many}` : `${many} · ${n} times`];
     },
+    foldDetail: (calls) => (calls[0].args.action === "list" || calls[0].args.action === "status" ? "" : [...new Set(calls.map((c) => firstWords(c.args.prompt || c.args.text, 4)))].join(", ")),
+    startedPlural: (n, calls) => ["Started making", `${MEDIA[calls[0].name]?.[1] || "voice clips"} · ${n} times`],
+    neutral: (calls) => (calls[0].name === "tts" ? "Speech" : `${MEDIA[calls[0].name][0][0].toUpperCase()}${MEDIA[calls[0].name][0].slice(1)} ${calls[0].args.action === "list" ? "models" : calls[0].args.action === "status" ? "status" : "generation"}`),
   };
 
   K.look = {
@@ -444,7 +503,17 @@
       const o = files.length > 1 ? `${files.length} ${pdf ? "PDFs" : "images"}` : base(files[0]);
       return pdf ? three("Reading", "Read", "Couldn't read", o, c.args.pages ? `pages ${c.args.pages}` : firstWords(c.args.prompt)) : three("Looking at", "Looked at", "Couldn't look at", o, firstWords(c.args.prompt));
     },
-    plural: (n, calls) => (calls[0].name === "pdf" ? ["Read", `${n} PDFs`] : ["Looked at", `${n} images`]),
+    // Documents and images are counted once each; more calls than objects are said as times.
+    plural: (n, calls) => {
+      const pdf = calls[0].name === "pdf";
+      const objects = calls.map(CT.filesOf);
+      if (objects.some((f) => !f.length)) return [pdf ? "Read PDFs" : "Looked at images", `${n} times`];
+      const k = new Set(objects.flat()).size;
+      const label = pdf ? plural(k, "PDF", "PDFs") : plural(k, "image", "images");
+      return [pdf ? "Read" : "Looked at", n > 1 && objects.flat().length > k ? `${label} · ${n} times` : label];
+    },
+    neutral: (calls) => (calls[0].name === "pdf" ? "PDF reading" : "Image viewing"),
+    foldDetail: (calls) => [...new Set(calls.flatMap(CT.filesOf).map(base))].join(", "),
   };
 
   K.channel = {
@@ -492,9 +561,16 @@
 
   K.tool = {
     icon: "tool",
+    neutral: (calls) => CT.nameWords(calls[0].name).replace(/^./, (x) => x.toUpperCase()),
     words: (c) => three("Using", "Used", "Couldn't use", CT.nameWords(c.name), CT.generalDetail(c.args)),
+    outcome: (c) => CT.payloadOutcome(c) || "done",
     plural: (n, calls) => [`Used ${CT.nameWords(calls[0].name)}`, `${n} times`],
   };
+
+  // Each kind's neutral noun: the operation, claiming no outcome (7.4).
+  const NEUTRAL = { read: "File reads", list: "Folder listings", web: "Web search", xsearch: "Search on X", page: "Page fetches", browser: "Browser actions", computer: "Computer actions", screen: "Control UI changes", terminal: "Terminal actions", tasks: "Task look-ups", plan: "Plan updates", t3list: "T3 Code look-ups" };
+  Object.entries(NEUTRAL).forEach(([k, noun]) => (K[k].neutral = K[k].neutral || (() => noun)));
+  K.server.neutral = (calls) => `Tool server ${calls[0].mcp.server}`;
 
   CT.kinds = K;
 
@@ -552,11 +628,26 @@
     const kind = TABLE[c.name];
     if (!kind) return { kind: "tool", key: c.builtin ? `tool:${c.name}` : `once:${c.id}` }; // an unknown name folds only when the inventory lists it as built-in
     if (["message", "helper", "question", "channel"].includes(kind)) return { kind, key: `once:${c.id}` };
-    if (kind === "routine") return { kind, key: ["status", "list", "get", "runs", "next_check"].includes(c.args.action) ? "routine:look" : `once:${c.id}` };
+    if (kind === "routine") return { kind, key: ["status", "list", "get", "runs"].includes(c.args.action) ? `routine:${c.args.action}` : `once:${c.id}` };
     if (["terminal", "media"].includes(kind)) return { kind, key: `${c.name}:${c.args.action || "generate"}` };
     if (["recall", "tasks", "plan", "look"].includes(kind)) return { kind, key: c.name };
     if (kind === "edit" || kind === "read") return { kind, key: kind === "read" ? "read" : "files" };
     return { kind, key: c.name };
+  };
+
+  // The general rule (7.3): a payload that carries its own status or code is read from it.
+  // Returns an outcome, or null when the payload says nothing of the kind.
+  const SUCCESS = ["ok", "completed", "success", "sent", "accepted", "answered"];
+  CT.payloadOutcome = (c) => {
+    const d = c.details || {};
+    if (d.ok === false || d.error || ["error", "failed"].includes(d.status)) return { outcome: "failed" };
+    if (d.status === "forbidden") return { outcome: "refused", word: "Not run" };
+    if (d.status === "not_found") return { outcome: "notfound" };
+    if (d.code === "confirmation_required") return { outcome: "refused", word: "Needs confirmation" };
+    if (d.status === "approval-pending") return { outcome: "waiting" };
+    if (d.status && !SUCCESS.includes(d.status)) return { outcome: "made", word: CT.nameWords(d.status) };
+    if (d.code && !SUCCESS.includes(d.code)) return { outcome: "made", word: CT.nameWords(d.code) };
+    return null;
   };
 
   // Outcomes ------------------------------------------------------------------------------
@@ -566,15 +657,18 @@
 
   // What the call's state says: the event's status, or for a result, the adapter's outcome.
   CT.outcomeOf = (c) => {
-    if (c.status !== "done") return { outcome: c.status };
+    if ((c.status || "done") !== "done") return { outcome: c.status };
     const k = K[CT.kindOf(c).kind];
     const o = k?.outcome ? k.outcome(c) : "done";
     return typeof o === "string" ? { outcome: o } : o;
   };
 
   // The problem words, in their fixed order (7.4), for a fold's line and the run line.
-  const PROBLEMS = { failed: "failed", blocked: "not run", denied: "not run", unavailable: "unavailable", suppressed: "suppressed", stopped: "stopped", unknown: "unknown" };
-  const PROBLEM_ORDER = ["failed", "not run", "unavailable", "suppressed", "stopped", "unknown"];
+  const PROBLEMS = { failed: "failed", blocked: "not run", denied: "not run", refused: "not run", unavailable: "unavailable", notfound: "not found", suppressed: "suppressed", stopped: "stopped", unknown: "unknown" };
+  const PROBLEM_ORDER = ["failed", "not run", "unavailable", "not found", "suppressed", "stopped", "unknown"];
+  // Settled outcomes short of Done, counted after the problems, in this order (7.4).
+  const SHORT = { started: "started", queued: "queued", unconfirmed: "not confirmed", made: "call made", unchanged: "no change", partial: "partial" };
+  const SHORT_ORDER = ["started", "queued", "not confirmed", "call made", "no change", "partial"];
   CT.problemOf = (c) => PROBLEMS[CT.outcomeOf(c).outcome] || "";
 
   // The state at the right, for an outcome.
@@ -597,6 +691,12 @@
         return span(o.word ? "queued" : "check", o.word || "Call made");
       case "unconfirmed":
         return span("queued", "Not confirmed");
+      case "unchanged":
+        return span("queued", "No change");
+      case "notfound":
+        return span("queued", "Not found");
+      case "refused":
+        return span("stopped", o.word || "Not run");
       case "suppressed":
         return span("stopped", "Suppressed");
       case "unavailable":
@@ -633,11 +733,14 @@
       queued: w.queued || w.noun || w.done,
       made: w.noun || w.done,
       unconfirmed: w.done,
+      unchanged: w.unchanged || ["Left", `${w.done[1]} unchanged`],
+      notfound: w.notfound || ["Found no", lower(w.done[1] || "result")],
+      refused: w.refused || (info.kind === "command" ? ["Didn't run", w.run[1]] : ["Not run:", lower(w.run.join(" "))]),
       suppressed: w.suppressed || ["Didn't", lower(w.run.join(" "))],
       unavailable: w.fail,
       failed: w.fail,
       blocked: [c.blockedBy === "review" ? "Blocked by review" : "Blocked by policy", ""],
-      denied: info.kind === "command" ? ["Didn't run", w.run[1]] : ["Didn't", lower(w.run.join(" "))],
+      denied: info.kind === "command" ? ["Didn't run", w.run[1]] : w.refused || ["Not run:", lower(w.run.join(" "))],
       stopped: ["Stopped", lower(w.run.join(" "))],
       unknown: w.noun || ["Stopped", lower(w.run.join(" "))],
     }[o.outcome] || w.done;
@@ -651,7 +754,9 @@
       mono = false;
     }
     // A failure's detail is what went wrong, never a count from a result it did not give.
-    if (o.outcome === "failed" && !c.timedOut && !c.cutOff) [detail, mono] = [String(c.text || "").split("\n")[0].slice(0, 120) || (info.kind === "command" ? detail : ""), info.kind === "command" && !c.text];
+    if (o.outcome === "failed" && !c.timedOut && !c.cutOff) [detail, mono] = [String(c.details?.error || c.text || "").split("\n")[0].slice(0, 120) || (info.kind === "command" ? detail : ""), info.kind === "command" && !c.text && !c.details?.error];
+    if (o.outcome === "refused" && c.details?.proposedEffect) detail = `would ${c.details.proposedEffect}`;
+    if (o.outcome === "refused" && c.details?.error) detail = c.details.error;
     if (o.outcome === "unavailable" && c.details?.warning) detail = c.details.warning;
     if (o.outcome === "unavailable" && c.details?.error) detail = String(c.details.message || c.details.error).split(/[.\n]/)[0];
     return { kind: info.kind, icon: w.icon || k.icon, verb, object, detail, mono, exit: o.outcome === "done" ? w.exit : "", outcome: o };
@@ -672,7 +777,7 @@
     `<span class="action-state">${state}</span>${CT.icon("chevron", "icon chevron")}</summary>`;
 
   const stateWords = (c, o) =>
-    ({ running: c.leaves ? "call started" : "running", review: "under review", waiting: "waiting for you", partial: "partial", started: "started", queued: "queued", made: (o.word || "call made").toLowerCase(), unconfirmed: "not confirmed", suppressed: "suppressed", unavailable: "unavailable", failed: (c.failWord || "failed").toLowerCase(), blocked: "not run", denied: "denied", stopped: "stopped", unknown: "unknown" })[o.outcome] ||
+    ({ running: c.leaves ? "call started" : "running", review: "under review", waiting: "waiting for you", partial: "partial", started: "started", queued: "queued", made: (o.word || "call made").toLowerCase(), unconfirmed: "not confirmed", unchanged: "no change", notfound: "not found", refused: (o.word || "not run").toLowerCase(), suppressed: "suppressed", unavailable: "unavailable", failed: (c.failWord || "failed").toLowerCase(), blocked: "not run", denied: "denied", stopped: "stopped", unknown: "unknown" })[o.outcome] ||
     (o.word ? o.word.toLowerCase() : c.took ? c.took.replace(/s$/, " seconds") : "done");
 
   CT.toolTitle = (name) => String(name).split(/[_\s.]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
@@ -685,6 +790,9 @@
     unconfirmed: "The action ran, but its effect was not seen on the screen.",
     suppressed: "The gateway chose not to deliver this message.",
     partial: "Only part of the work was done.",
+    unchanged: "The gateway reports that nothing changed.",
+    notfound: "What was asked for was not there.",
+    refused: "Nothing was done.",
   };
   CT.readableOf = (c) => {
     const { kind } = CT.kindOf(c);
@@ -755,7 +863,9 @@
         add("Action", [a.action, a.request?.kind, a.mobileAction?.type].filter(Boolean).join(", "));
         add("Target", a.targetUrl || a.request?.element || a.request?.text || (a.coordinate ? a.coordinate.join(", ") : ""));
         add("Typed", a.request?.kind === "type" ? a.request.text : a.action === "type" ? a.text : a.mobileAction?.type === "set_text" ? a.mobileAction.text : "");
-        add("Effect", c.details?.effect);
+        add("Effect", c.details?.result?.effect ? { confirmed: "confirmed", unverifiable: "could not be checked", suspected_noop: "no change was seen" }[c.details.result.effect] : "");
+        add("Needs confirmation", c.details?.code === "confirmation_required" ? `${c.details.proposedEffect} (${c.details.target}, in ${c.details.package})` : "");
+        add("Device said", c.details?.outcome?.code ? `${c.details.outcome.code}${c.details.outcome.message ? `: ${c.details.outcome.message}` : ""}` : "");
         break;
       case "screen":
         add("Action", a.action);
@@ -874,14 +984,14 @@
   };
 
   // A row inside an opened fold: the shell's step row, in the singular.
-  const ROW_STATUS = { done: "done", partial: "done", started: "done", queued: "done", made: "done", unconfirmed: "done", running: "running", review: "running", waiting: "waiting", failed: "failed", blocked: "failed", unavailable: "failed", denied: "skipped", suppressed: "skipped", stopped: "skipped", unknown: "skipped" };
+  const ROW_STATUS = { done: "done", partial: "done", started: "done", queued: "done", made: "done", unconfirmed: "done", unchanged: "done", notfound: "skipped", refused: "skipped", running: "running", review: "running", waiting: "waiting", failed: "failed", blocked: "failed", unavailable: "failed", denied: "skipped", suppressed: "skipped", stopped: "skipped", unknown: "skipped" };
   CT.foldRow = (c, { open = false, view = "readable", fresh = false, thought } = {}) => {
     c = { status: "done", ...c };
     const line = CT.lineOf(c);
     const words = [line.verb, line.object].filter(Boolean).join(" ");
     const o = line.outcome.outcome;
     const statusText =
-      { failed: c.failWord || "Failed", blocked: "Not run", unavailable: "Unavailable", waiting: "Waiting for you", denied: c.deniedWord || "Denied", suppressed: "Suppressed", stopped: "Stopped", unknown: "Unknown", made: line.outcome.word || "Call made", started: "Started", queued: "Queued", partial: "Partial", unconfirmed: "Not confirmed" }[o] ??
+      { failed: c.failWord || "Failed", blocked: "Not run", unavailable: "Unavailable", waiting: "Waiting for you", denied: c.deniedWord || "Denied", suppressed: "Suppressed", stopped: "Stopped", unknown: "Unknown", made: line.outcome.word || "Call made", started: "Started", queued: "Queued", partial: "Partial", unconfirmed: "Not confirmed", unchanged: "No change", notfound: "Not found", refused: line.outcome.word || "Not run" }[o] ??
       (isOpen(c) ? (c.lastSeen ? "Last seen running" : c.elapsed || "") : c.took || "");
     return CT.step({
       id: c.id,
@@ -901,12 +1011,24 @@
     calls = calls.map((c) => ({ status: "done", ...c }));
     const { kind } = CT.kindOf(calls[0]);
     const k = K[kind];
-    const [verb, object] = k.plural(calls.length, calls);
+    // The plural is never more complete than the least-established member (7.4).
+    const settled = calls.filter((c) => !isOpen(c));
+    const outcomes = settled.map((c) => CT.outcomeOf(c).outcome);
+    const allDone = outcomes.every((o) => o === "done" || o === "partial");
+    const allStarted = outcomes.length && outcomes.every((o) => o === "started");
+    const problemsAny = settled.some((c) => CT.problemOf(c));
+    const neutral = () => [(k.neutral ? k.neutral(calls) : CT.nameWords(kind).replace(/^./, (x) => x.toUpperCase())), `· ${plural(calls.length, "call", "calls")}`];
+    // Done (or Partial, whose past verb is true) beside problems keeps the done plural, with
+    // the problems counted; Started alone has its own plural; any other mix is neutral.
+    const doneOrProblem = outcomes.every((o) => o === "done" || o === "partial" || PROBLEMS[o]);
+    const [verb, object] = allDone || (problemsAny && doneOrProblem) ? k.plural(calls.length, calls) : allStarted && k.startedPlural ? k.startedPlural(calls.length, calls) : neutral();
     const live = [...calls].reverse().find(isOpen); // the latest to start
     const waiting = calls.find((c) => c.status === "waiting");
     const problems = calls.filter((c) => CT.problemOf(c));
     const counts = PROBLEM_ORDER.map((p) => [p, calls.filter((c) => CT.problemOf(c) === p).length]).filter(([, n]) => n);
     const countWords = counts.map(([p, n]) => `${n} ${p}`).join(" · ");
+    const shortCounts = SHORT_ORDER.map((w) => [w, settled.filter((c) => SHORT[CT.outcomeOf(c).outcome] === w).length]).filter(([, n]) => n);
+    const allWords = [...counts, ...shortCounts].map(([p, n]) => `${n} ${p}`).join(" · ");
     const danger = counts.some(([p]) => p === "failed" || p === "not run");
     const words = (c) => {
       const l = CT.lineOf(c);
@@ -934,16 +1056,18 @@
     } else if (live) {
       state = lostLive ? `<span class="state">${CT.glyph("working")}Last seen running</span>` : `<span class="action-elapsed">${esc(live.elapsed || "")}</span>`;
       status = "running";
-    } else if (problems.length) {
-      state = `<span class="state"${danger ? ' data-tone="danger"' : ""}>${CT.glyph(danger ? "failed" : "stopped")}${esc(countWords)}</span>`;
-      status = danger ? "failed" : "problem";
+    } else if (problems.length || shortCounts.length) {
+      // Every outcome short of Done is counted, problems first; no duration then.
+      const glyph = danger ? "failed" : problems.length ? "stopped" : shortCounts[0][0] === "started" ? "check" : "queued";
+      state = `<span class="state"${danger ? ' data-tone="danger"' : ""}>${CT.glyph(glyph)}${esc(allWords)}</span>`;
+      status = danger ? "failed" : problems.length ? "problem" : "short";
     } else {
       const timed = calls.every((c) => c.took);
       const total = calls.reduce((t, c) => t + (parseFloat(c.took) || 0), 0);
       state = `<time class="action-time">${timed && total ? `${total < 10 ? total.toFixed(1) : Math.round(total)}s` : ""}</time>`;
     }
     const label = `${verb} ${object}`;
-    const spoken = `${label}, ${detail}, ${waiting ? "waiting for you" : live ? "running" : countWords || "done"}`;
+    const spoken = `${label}, ${detail}, ${waiting ? "waiting for you" : live ? "running" : allWords.replace(/ · /g, ", ") || "done"}`;
     return (
       `<details class="card action" data-fold="${calls.length}" data-kind="${kind}" data-status="${status}"` +
       ` id="fold-${esc(calls[0].id)}" data-first="${esc(calls[0].id)}"${open ? " open" : ""}${fresh ? ' data-fresh="true"' : ""}>` +
@@ -1031,9 +1155,15 @@
     if (op === "interrupt") parts.push(`${status(sc.status)}.${sc.status === "interrupt_requested" ? " This does not show that T3 Code stopped." : ""}`);
     let reply = "";
     if (op === "read" && Array.isArray(sc.items)) {
+      // Two dimensions: more pages (hasMore), and an item whose text was cut (textTruncated).
       const run = sc.thread?.latestRunId;
-      const said = sc.items.filter((i) => i.runId === run && i.type === "assistant_message").map((i) => i.text).join("\n\n");
-      if (said) reply = `<div class="exchange-text"><p>${esc(said)}</p></div>` + CT.note(sc.hasMore ? "First page only: the reply may continue." : "Read to the end.");
+      const items = sc.items.filter((i) => i.runId === run && i.type === "assistant_message");
+      const said = items.map((i) => i.text).join("\n\n");
+      const cut = items.some((i) => i.textTruncated);
+      if (said) {
+        const how = [sc.hasMore ? "First page only: the reply may continue." : "", cut ? "Part of the reply only: its text was cut, and the rest was not read." : ""].filter(Boolean);
+        reply = `<div class="exchange-text"><p>${esc(said)}</p></div>` + (how.length ? how.map((h) => CT.note(h)).join("") : CT.note("Read to the end."));
+      }
     }
     const final = ["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(sc.status || sc.thread?.status);
     return CT.note(parts.join(" ")) + reply + (final ? "" : CT.note("This shows the call was made. It does not show that the work is finished."));
@@ -1143,7 +1273,7 @@
       else if (f.rowSummary) target = scope.querySelector(":scope > summary");
       else if (f.thought) target = scope.querySelector(".thought > summary");
       else if (f.view) target = scope.querySelector(`[data-view-button="${f.view}"]`) || scope.querySelector('[aria-label="Raw for this call"]');
-      else if (f.label) target = scope.querySelector(`[aria-label="${CSS.escape(f.label)}"]`) || (f.action === "raw" ? scope.querySelector('[aria-label="Raw for this call"]') : null);
+      else if (f.label) target = scope.querySelector(`[aria-label="${CSS.escape(f.label)}"]`) || (f.action === "raw" ? scope.querySelector('[aria-label="Raw for this call"]') || scope.querySelector('[data-view-button="raw"]') : null);
       (target || el.querySelector(":scope > summary"))?.focus({ preventScroll: true });
     };
 
@@ -1177,7 +1307,12 @@
         const raw = kept?.items?.[list[0].id]?.raw || (kept?.type === "card" && kept.view === "raw");
         return CT.t3Line(list[0], { open: kept?.open, rawOpen: raw, fresh, thread: group.type === "line" ? group.thread : null });
       }
-      if (list.length === 1) return CT.actionCard(list[0], { open: kept?.open, view: kept?.view, fresh, thought: kept?.thought });
+      // From a T3 Code line back to an ordinary card (the result overruled the mapping):
+      // open stays open, and the item's open Raw becomes the Raw tab.
+      if (list.length === 1) {
+        const view = kept?.type === "t3" ? (kept.items?.[list[0].id]?.raw ? "raw" : "readable") : kept?.view;
+        return CT.actionCard(list[0], { open: kept?.open, view, fresh, thought: kept?.thought });
+      }
       // Becoming a fold: an open card opens the fold with its first row open, in its view.
       const rows = { ...(kept?.rows || {}) };
       if (kept && kept.type === "card") rows[list[0].id] = { open: kept.open, view: kept.view, thought: kept.thought };
