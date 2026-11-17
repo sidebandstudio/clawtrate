@@ -402,6 +402,7 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   live: object<NonNullable<Transcript["live"]>>()({ runId: ID, text: text(MAX_RUN_TEXT_CHARS) }),
   linkedRuns: map(MAX_LINKED_RUNS, MAX_ID_CHARS, linkedRun),
   interSession: list(MAX_INTER_SESSION, interSession),
+  loadedAt: NUMBER,
 });
 
 const pairing = object<PairingRequest>()({
@@ -440,6 +441,7 @@ const connection = object<ConnectionState>()({
   pairing,
   error: connectionError,
   retryAt: NUMBER,
+  connectedAt: NUMBER,
   paired: FLAG,
 });
 const discovery = object<DiscoveryState>()({
