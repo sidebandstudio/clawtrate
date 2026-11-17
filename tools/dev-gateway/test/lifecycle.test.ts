@@ -56,6 +56,14 @@ function noPs(): void {
 const FAILURES: [string, () => void][] = [
   ["ps exits with an error", () => brokenPs("exit 2")],
   ["ps prints something unreadable", () => brokenPs("echo '???'")],
+  // Exit status 0 with words that are not a process row must not pass for an identity.
+  ["ps prints an error message", () => brokenPs("echo 'ERROR permission denied'")],
+  ["ps prints a state without a start time", () => brokenPs("echo 'S permission denied'")],
+  ["ps prints a zombie state without a start time", () => brokenPs("echo 'Z garbage here'")],
+  [
+    "ps prints more than one row",
+    () => brokenPs("printf 'S    Mon Nov 16 21:00:00 2026\\nS    Mon Nov 16 21:00:01 2026\\n'"),
+  ],
   ["ps cannot be run", noPs],
 ];
 

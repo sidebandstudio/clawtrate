@@ -156,6 +156,14 @@ function kernelSaysAbsent(pid: number): boolean | string {
   }
 }
 
+/**
+ * One row of `ps -o stat= -o lstart=` in the C locale: a state field, then a
+ * start time such as `Mon Nov 16 21:27:01 2026`. The state's first character
+ * varies by system; macOS shows `?E` for a process that is exiting.
+ */
+const PS_ROW =
+  /^\s*([DIRSTUWXZt?][A-Za-z+<>]{0,7})\s+((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s*$/;
+
 /** The process's start time from `ps`, which together with its PID identifies it. */
 export const processIdentity: Identify = (pid) => {
   if (!validPid(pid)) return unknown(`${String(pid)} is not a process id this tool checks`);
@@ -165,6 +173,8 @@ export const processIdentity: Identify = (pid) => {
   const result = spawnSync("ps", ["-o", "stat=", "-o", "lstart=", "-p", String(pid)], {
     encoding: "utf8",
     timeout: 5000,
+    // The start time is validated below, so its day and month names must be English.
+    env: { ...process.env, LC_ALL: "C" },
   });
   // A process that exited between the two looks makes ps fail; that much is still positive.
   const failed = (reason: string): Lookup =>
@@ -173,8 +183,11 @@ export const processIdentity: Identify = (pid) => {
   if (result.status !== 0) {
     return failed(`ps for pid ${pid} exited with ${result.status ?? result.signal}`);
   }
-  // The state field varies by system; macOS shows `?E` for a process that is exiting.
-  const match = /^\s*(\S+)\s+(\S.*\S)\s*$/.exec(result.stdout);
+  // Only one complete row counts: a known state field and a whole start time. Anything
+  // else, such as an error message printed with exit status 0, is not an answer, and
+  // must never become an identity that differs from the recorded one.
+  const rows = result.stdout.split("\n").filter((line) => line.trim() !== "");
+  const match = rows.length === 1 ? PS_ROW.exec(rows[0]!) : null;
   if (!match) return failed(`could not read ps output for pid ${pid}`);
   // A zombie has exited; only its parent has not collected it yet.
   if (match[1]!.startsWith("Z")) return { state: "exited", how: "zombie" };

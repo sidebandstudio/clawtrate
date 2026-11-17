@@ -80,6 +80,7 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
   for (const [what, script] of [
     ["ps exits with an error", "exit 2"],
     ["ps prints something unreadable", "echo '???'"],
+    ["ps prints an error message", "echo 'ERROR permission denied'"],
   ] as const) {
     it(`leaves a live run alone when ${what}, and says so`, () => {
       const run = aRun(liveProcess());
