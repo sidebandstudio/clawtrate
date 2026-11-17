@@ -189,9 +189,11 @@ export function Shell({
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
   const phase = useSyncPhase(state, taskKey);
+  // Access arriving reconnects with the new grant: "Access granted" is the
+  // news then, unless something failed.
+  const connectionStrip = stripFor(state, phase, taskKey);
   const strip =
-    stripFor(state, phase, taskKey) ??
-    (granted
+    granted && connectionStrip?.tone !== "danger"
       ? {
           tone: "ok" as const,
           text: "Access granted",
@@ -199,7 +201,7 @@ export function Shell({
           action: null,
           countdown: false,
         }
-      : null);
+      : connectionStrip;
   const catchingUp =
     phase === "dropped" && state.connection.status === "connected" && strip?.tone === "warn";
   const reload = useCallback(() => {
