@@ -1152,6 +1152,29 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
+    name: "a phrase sent the way the app sends it plays its scenario",
+    covers: [],
+    run: async (h) => {
+      // chat.send with exactly the app's parameters (packages/core client.ts
+      // sendParams): the key, the text, an idempotency key and the queue mode,
+      // from an operator client in ui mode. The gateway puts a "Conversation
+      // info" block before the text the model receives.
+      const key = await h.session("main", "app-phrase");
+      const phrase = "Could you please show your work?";
+      const view = await h.run("plain", key, phrase, { queueMode: "followup" });
+      view.expectCalls([await lsCall(h, "main"), await fileCall(h, "main", "AGENTS.md")]);
+      view.expectEnd("final", scriptedFinalText("#steps"));
+      const history = await h
+        .op("plain")
+        .request<{ messages?: JsonRecord[] }>("chat.history", { sessionKey: key });
+      same(
+        (history.messages ?? []).filter((row) => row.role === "user").map((row) => row.content),
+        [phrase],
+        "the user's message as the task shows it",
+      );
+    },
+  },
+  {
     name: "a slow stream, stopped mid-run",
     covers: ["#slow"],
     run: async (h) => {
