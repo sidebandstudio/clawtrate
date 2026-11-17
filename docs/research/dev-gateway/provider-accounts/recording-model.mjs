@@ -4,7 +4,7 @@
 //   node recording-model.mjs --port <19200-19999> --label <name> --log <file.jsonl>
 //
 // Every POST /v1/chat/completions appends one JSON line to the log:
-//   {label, port, auth, model, marker, serverTools}
+//   {t, label, port, auth, model, marker, serverTools}
 // where `auth` is the Authorization header the gateway sent (a scripted
 // placeholder key, never a real credential) and `marker` is the control word
 // found in the last user message, if any. Prompt text is not logged: the
@@ -16,8 +16,16 @@
 // The last user text can ask for a failure, so error handling can be observed:
 //   contains "FAIL401" -> HTTP 401 {"error":{"type":"authentication_error"}}
 //   contains "FAIL402" -> HTTP 402 {"error":{"type":"insufficient_quota"}}
+//   contains "FAIL429" -> HTTP 429 {"error":{"type":"rate_limit_exceeded"}}, retry-after 1
 //   contains "SLOW"    -> succeeds after 4 seconds
 // Anything else succeeds at once.
+//
+// One account can also be made to fail whatever the prompt says, so a run that
+// moves to another account of the same provider can be told apart by its key:
+//   POST /control {"failKeys": {"<scripted key>": 401 | 402 | 429}}
+// replaces the set of failing keys ({} clears it). The key is the bearer value
+// without "Bearer ". A request whose key is listed gets that status; the log
+// line then has `marker: "key-<status>"`.
 //
 // It listens on 127.0.0.1 only, and only on a port in the named-instance range
 // 19200-19999, so it cannot take the default instance's or a preview's port.
@@ -43,6 +51,7 @@ if (!values.log) {
   process.exit(2);
 }
 const label = values.label;
+let failKeys = {};
 
 const text = (content) =>
   typeof content === "string"
@@ -71,6 +80,17 @@ const server = createServer(async (req, res) => {
     json(res, 200, { object: "list", data: [{ id: "dev-1", object: "model", owned_by: label }] });
     return;
   }
+  if (req.method === "POST" && url.pathname === "/control") {
+    try {
+      const next = JSON.parse(await readBody(req)).failKeys ?? {};
+      if (Object.values(next).some((status) => ![401, 402, 429].includes(status))) throw new Error("status");
+      failKeys = next;
+      json(res, 200, { failKeys });
+    } catch {
+      json(res, 400, { error: { message: "failKeys must map keys to 401, 402 or 429" } });
+    }
+    return;
+  }
   if (req.method !== "POST" || url.pathname !== "/v1/chat/completions") {
     json(res, 404, { error: { message: "not found" } });
     return;
@@ -84,17 +104,26 @@ const server = createServer(async (req, res) => {
   }
   const users = (body.messages ?? []).filter((m) => m.role === "user");
   const prompt = text(users.at(-1)?.content);
-  const marker = ["FAIL401", "FAIL402", "SLOW"].find((word) => prompt.includes(word)) ?? null;
+  const key = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+  const keyStatus = failKeys[key] ?? null;
+  const promptMarker = ["FAIL401", "FAIL402", "FAIL429", "SLOW"].find((word) => prompt.includes(word)) ?? null;
+  const marker = keyStatus ? `key-${keyStatus}` : promptMarker;
   appendFileSync(
     values.log,
-    `${JSON.stringify({ label, port, auth: req.headers.authorization ?? null, model: body.model ?? null, marker, serverTools: (body.tools ?? []).map((t) => t.function?.name).filter((n) => typeof n === "string" && n.includes("__")) })}\n`,
+    `${JSON.stringify({ t: Date.now(), label, port, auth: req.headers.authorization ?? null, model: body.model ?? null, marker, serverTools: (body.tools ?? []).map((t) => t.function?.name).filter((n) => typeof n === "string" && n.includes("__")) })}\n`,
   );
   if (marker === "SLOW") await new Promise((resolve) => setTimeout(resolve, 4000));
-  if (marker === "FAIL401") {
+  const failure = keyStatus ?? { FAIL401: 401, FAIL402: 402, FAIL429: 429 }[marker] ?? null;
+  if (failure === 429) {
+    res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
+    res.end(JSON.stringify({ error: { message: "Rate limit reached (scripted)", type: "rate_limit_exceeded", code: "rate_limit_exceeded" } }));
+    return;
+  }
+  if (failure === 401) {
     json(res, 401, { error: { message: "Invalid API key (scripted)", type: "authentication_error", code: "invalid_api_key" } });
     return;
   }
-  if (marker === "FAIL402") {
+  if (failure === 402) {
     json(res, 402, {
       error: { message: "You exceeded your current quota (scripted insufficient credits)", type: "insufficient_quota", code: "insufficient_quota" },
     });
@@ -123,6 +152,10 @@ const server = createServer(async (req, res) => {
   res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`);
   res.write("data: [DONE]\n\n");
   res.end();
+});
+server.on("error", (err) => {
+  console.error(`recording model ${label} could not listen on 127.0.0.1:${port}: ${err.message}`);
+  process.exit(1);
 });
 server.listen(port, "127.0.0.1", () => console.log(`recording model ${label} on 127.0.0.1:${port}`));
 const stop = () => server.close(() => process.exit(0));

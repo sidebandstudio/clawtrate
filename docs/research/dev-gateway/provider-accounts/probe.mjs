@@ -1,178 +1,68 @@
 // Provider-account probe for docs/research/provider-accounts-and-t3-code.md.
-// Research code: it prints what it saw and asserts nothing about the gateway.
+// Research code: it prints what it saw and checks the facts the document states
+// from it, exiting 1 if any check fails.
 //
 //   pnpm dev-gateway start --instance <name> --no-seed
 //   CLAWTRATE_DEV_INSTANCE=<name> node docs/research/dev-gateway/provider-accounts/probe.mjs
-//   pnpm dev-gateway reset --instance <name>
+//   pnpm dev-gateway stop --instance <name> && pnpm dev-gateway reset --instance <name>
 //
-// It runs only against a named development instance that this checkout started:
-//   - CLAWTRATE_DEV_INSTANCE must be a valid instance name other than the default;
-//   - the endpoint and token come from this checkout's run folder for that instance,
-//     whose run id must match the instance state folder's marker;
-//   - the endpoint must be ws://127.0.0.1:<port> with the port in 19200-19999;
-//   - after connecting, the gateway must report 2026.10.6.
-// It starts three recording model servers (recording-model.mjs) on the
-// instance's scripted-model port + 1, + 2 and + 3, inside the instance's block,
-// and stops them by PID at the end. Every provider it configures points at one
-// of them or at the instance's own scripted model. No real provider is used.
-// It pairs its own device and approves it with `pnpm dev-gateway approve`.
+// The target check is instance-guard.mjs: a named instance this checkout started,
+// whose recorded gateway is still running; after connecting, the gateway must
+// report 2026.10.6. It starts three recording model servers (recording-model.mjs)
+// on the instance's scripted-model port + 1, + 2 and + 3, inside the instance's
+// block, waits until each listens, and stops them by PID at the end. Every
+// provider it configures points at one of them or at the instance's own scripted
+// model. No real provider is used. It pairs its own device and approves it with
+// `pnpm dev-gateway approve --instance <name>`. It changes the instance's config,
+// bots and sessions, so reset the instance afterwards.
 
-import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
-import { existsSync, lstatSync, mkdtempSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { homedir, tmpdir } from "node:os";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { resolveInstance } from "./instance-guard.mjs";
+import { connectGateway, sendAndCapture, sleep, startRecorders } from "./probe-client.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const checkout = path.resolve(here, "../../../..");
-const name = process.env.CLAWTRATE_DEV_INSTANCE ?? "";
-if (!/^[a-z0-9](?:[a-z0-9-]{0,22}[a-z0-9])?$/.test(name) || name.includes("--") || ["default", "dev"].includes(name)) {
-  console.error("Set CLAWTRATE_DEV_INSTANCE to a named development instance started from this checkout.");
-  process.exit(2);
-}
-const runDir = path.join(checkout, "tools/dev-gateway/.run/instances", name);
-const stateDir = path.join(homedir(), `.openclaw-clawtrate-dev-${name}`);
-const readJson = (file) => JSON.parse(readFileSync(file, "utf8"));
-const refuse = (why) => {
-  console.error(`probe refuses this target: ${why}`);
-  process.exit(2);
-};
-if (!existsSync(path.join(runDir, "connection.json")) || !existsSync(path.join(runDir, "state.json"))) refuse("no run files for this instance in this checkout");
-if (!existsSync(stateDir) || lstatSync(stateDir).isSymbolicLink()) refuse("instance state folder missing or a link");
-const connection = readJson(path.join(runDir, "connection.json"));
-const runState = readJson(path.join(runDir, "state.json"));
-const marker = readJson(path.join(stateDir, ".clawtrate-dev-gateway"));
-if (connection.instance !== name || runState.instance !== name || marker.instance !== name) refuse("instance names disagree");
-if (connection.runId !== runState.runId || marker.runId !== runState.runId) refuse("run ids disagree");
-const url = new URL(connection.url);
-const gatewayPort = Number(url.port);
-if (url.protocol !== "ws:" || url.hostname !== "127.0.0.1" || gatewayPort < 19200 || gatewayPort > 19999 || gatewayPort !== runState.gatewayPort) refuse("endpoint is not this named instance");
-const scriptedPort = runState.providerPort;
+const inst = resolveInstance();
+const { stateDir, gatewayPort, scriptedPort } = inst;
 const recPorts = [scriptedPort + 1, scriptedPort + 2, scriptedPort + 3];
-if (recPorts.some((p) => p >= gatewayPort + 20)) refuse("recording ports would leave the instance's block");
+if (recPorts.some((p) => p >= gatewayPort + 20)) {
+  console.error("recording ports would leave the instance's block");
+  process.exit(2);
+}
 
-const require = createRequire(path.join(checkout, "packages/core/package.json"));
-const { GatewayClient } = await import(pathToFileURL(require.resolve("@openclaw/gateway-client")).href);
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const show = (label, value) => console.log(`\n## ${label}\n${typeof value === "string" ? value : JSON.stringify(value, null, 2)}`);
-
-// ---- recording model servers -------------------------------------------------
-const logDir = mkdtempSync(path.join(tmpdir(), "clawtrate-accounts-probe-"));
-const recLog = path.join(logDir, "requests.jsonl");
-const children = [];
-for (const [i, port] of recPorts.entries()) {
-  const label = ["acct-a", "acct-b", "acct-x"][i];
-  const child = spawn(process.execPath, [path.join(here, "recording-model.mjs"), "--port", String(port), "--label", label, "--log", recLog], { stdio: "ignore" });
-  children.push(child);
-}
-const stopChildren = () => {
-  for (const child of children) if (child.pid && child.exitCode === null) process.kill(child.pid, "SIGTERM");
+const checks = [];
+const check = (ok, label) => {
+  checks.push({ ok: Boolean(ok), label });
+  console.log(`${ok ? "PASS" : "FAIL"} ${label}`);
 };
-process.on("exit", stopChildren);
-const requests = () => (existsSync(recLog) ? readFileSync(recLog, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
 
-// ---- gateway client ----------------------------------------------------------
-const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-const raw = publicKey.export({ type: "spki", format: "der" }).subarray(-32);
-const deviceIdentity = {
-  deviceId: crypto.createHash("sha256").update(raw).digest("hex"),
-  publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
-  privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }),
-};
-const tokens = {};
-const events = [];
-const waiters = new Set();
+const recorders = await startRecorders(
+  recPorts.map((port, i) => ({ port, label: ["acct-a", "acct-b", "acct-x"][i] })),
+  path.join(mkdtempSync(path.join(tmpdir(), "clawtrate-accounts-probe-")), "requests.jsonl"),
+);
+const requests = recorders.requests;
+const gw = await connectGateway(inst);
+const { hello, call, waitFor, patchConfig } = gw;
 
-function connectOnce(scopes) {
-  return new Promise((resolve, reject) => {
-    const client = new GatewayClient({
-      url: connection.url,
-      token: connection.token,
-      clientName: "gateway-client",
-      mode: "ui",
-      clientDisplayName: "Clawtrate probe accounts",
-      clientVersion: "0.0.1",
-      platform: process.platform,
-      role: "operator",
-      scopes,
-      caps: ["tool-events"],
-      minProtocol: 4,
-      maxProtocol: 4,
-      deviceIdentity,
-      hostDeps: {
-        signDevicePayload: (pem, payload) => crypto.sign(null, Buffer.from(payload), crypto.createPrivateKey(pem)).toString("base64url"),
-        publicKeyRawBase64UrlFromPem: (pem) => crypto.createPublicKey(pem).export({ type: "spki", format: "der" }).subarray(-32).toString("base64url"),
-        loadDeviceAuthToken: ({ deviceId, role }) => tokens[`${deviceId}:${role}`],
-        storeDeviceAuthToken: (rec) => (tokens[`${rec.deviceId}:${rec.role}`] = rec),
-        clearDeviceAuthToken: ({ deviceId, role }) => delete tokens[`${deviceId}:${role}`],
-      },
-      onEvent: (e) => {
-        const rec = { t: Date.now(), event: e.event, payload: e.payload };
-        events.push(rec);
-        for (const w of waiters) w(rec);
-      },
-      onHelloOk: (hello) => resolve({ client, hello }),
-      onConnectError: (err) => {
-        reject(err);
-        client.stopAndWait().catch(() => {});
-      },
-    });
-    client.start();
-  });
-}
-
-async function connect(scopes) {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    try {
-      return await connectOnce(scopes);
-    } catch (err) {
-      const text = `${err?.message ?? err} ${JSON.stringify(err?.details ?? err?.data ?? {})}`;
-      if (!/pair/i.test(text)) throw err;
-      spawnSync("pnpm", ["dev-gateway", "approve", "--instance", name], { cwd: checkout, stdio: "ignore" });
-      await sleep(1000);
-    }
-  }
-  throw new Error("pairing was not approved");
-}
-
-const { client, hello } = await connect(["operator.read", "operator.write", "operator.admin"]);
-if (hello?.server?.version !== "2026.10.6") refuse(`gateway reports ${hello?.server?.version}`);
-const call = (method, params = {}, timeoutMs = 60_000) => client.request(method, params, { timeoutMs });
-const waitFor = (pred, timeoutMs = 90_000) =>
-  new Promise((res, rej) => {
-    const hit = events.find(pred);
-    if (hit) return res(hit);
-    const t = setTimeout(() => (waiters.delete(w), rej(new Error(`timed out after ${timeoutMs} ms`))), timeoutMs);
-    const w = (rec) => {
-      if (pred(rec)) {
-        clearTimeout(t);
-        waiters.delete(w);
-        res(rec);
-      }
-    };
-    waiters.add(w);
-  });
+const textOf = (message) => (typeof message?.content === "string" ? message.content : (message?.content ?? []).map((c) => c.text ?? "").join(""));
 async function send(sessionKey, message) {
   const before = requests().length;
-  const r = await call("chat.send", { sessionKey, message, idempotencyKey: crypto.randomUUID() });
-  const done = await waitFor((e) => e.event === "chat" && e.payload?.runId === r.runId && ["final", "aborted", "error"].includes(e.payload?.state));
-  const model = events.find((e) => e.event === "agent" && e.payload?.runId === r.runId && e.payload?.stream === "lifecycle" && e.payload?.data?.phase === "model");
-  const lifecycleEnd = events.filter((e) => e.event === "agent" && e.payload?.runId === r.runId && e.payload?.stream === "lifecycle" && e.payload?.data?.phase !== "model" && e.payload?.data?.phase !== "start");
-  const { message: _m, ...terminal } = done.payload;
+  const r = await sendAndCapture(gw, sessionKey, message);
+  const own = r.events.filter((e) => e.payload?.runId === r.runId);
+  const model = own.find((e) => e.event === "agent" && e.payload?.stream === "lifecycle" && e.payload?.data?.phase === "model");
+  const lifecycleEnd = own.filter((e) => e.event === "agent" && e.payload?.stream === "lifecycle" && !["model", "start"].includes(e.payload?.data?.phase));
+  const { message: finalMessage, ...terminal } = r.terminal;
   return {
     sessionKey,
-    terminal,
+    terminal: { ...terminal, text: finalMessage ? textOf(finalMessage) : undefined },
     lifecycleModel: model?.payload?.data,
     lifecycleOther: lifecycleEnd.map((e) => e.payload.data),
     reached: requests().slice(before),
   };
-}
-async function patchConfig(patch) {
-  const { hash } = await call("config.get", {});
-  return call("config.patch", { raw: JSON.stringify(patch), baseHash: hash });
 }
 const provider = (port, apiKey) => ({
   baseUrl: `http://127.0.0.1:${port}/v1`,
@@ -184,6 +74,7 @@ const authStatus = async (agentId) => {
   const s = await call("models.authStatus", { agentId });
   return s.providers.map((p) => ({ provider: p.provider, status: p.status, apiKey: p.apiKey, profileOrder: p.profileOrder, profiles: p.profiles }));
 };
+const answeredBy = (r, label) => r.terminal.state === "final" && r.terminal.text === `Answered by ${label}.` && r.reached.length === 1 && r.reached[0].label === label;
 
 try {
   show("hello", { version: hello.server?.version, scopes: hello.auth?.scopes });
@@ -201,7 +92,7 @@ try {
   show("config.patch fixture", fixture);
   await patchConfig(fixture);
   await sleep(1500);
-  const bots = [["probe-a", "acct-a/dev-1"], ["probe-b", "acct-b/dev-1"], ["probe-x1", "acct-x/dev-1"], ["probe-x2", "acct-x/dev-1"], ["probe-fb", "acct-b/dev-1"]];
+  const bots = [["probe-a", "acct-a/dev-1"], ["probe-a2", "acct-a/dev-1"], ["probe-b", "acct-b/dev-1"], ["probe-x1", "acct-x/dev-1"], ["probe-x2", "acct-x/dev-1"], ["probe-fb", "acct-b/dev-1"]];
   for (const [id, model] of bots) await call("agents.create", { name: id, workspace: path.join(stateDir, `workspace-${id}`), model });
   show("agents.list model fields", (await call("agents.list", {})).agents.map((a) => ({ id: a.id, model: a.model })));
   for (const path_ of ["agents.entries", "auth.order", "auth.profiles"]) {
@@ -214,18 +105,37 @@ try {
   }
 
   // 2. Same provider, one API key per bot through models.authSetApiKey {agentId}.
-  for (const [agentId, apiKey] of [["probe-x1", "scripted-key-x1"], ["probe-x2", "scripted-key-x2"]]) show(`models.authSetApiKey ${agentId}`, await call("models.authSetApiKey", { provider: "acct-x", apiKey, agentId }));
+  const keyResults = [];
+  for (const [agentId, apiKey] of [["probe-x1", "scripted-key-x1"], ["probe-x2", "scripted-key-x2"]]) {
+    const r = await call("models.authSetApiKey", { provider: "acct-x", apiKey, agentId });
+    keyResults.push(r);
+    show(`models.authSetApiKey ${agentId}`, r);
+  }
+  check(keyResults.every((r) => r.profileId === "acct-x:manual"), "authSetApiKey for two bots returned the same profile acct-x:manual");
   const cfgAfterKeys = await call("config.get", {});
   show("config after authSetApiKey", { acctXApiKey: cfgAfterKeys.config?.models?.providers?.["acct-x"]?.apiKey, auth: cfgAfterKeys.config?.auth });
   for (const agentId of ["probe-x1", "probe-x2"]) show(`models.authStatus ${agentId} acct-x`, (await authStatus(agentId)).filter((p) => p.provider === "acct-x"));
   try {
     show("models.authOrderSet acct-x probe-x1", await call("models.authOrderSet", { provider: "acct-x", profileIds: ["acct-x:manual"], agentId: "probe-x1" }));
+    check(false, "authOrderSet refuses an order when the provider config binds the profile");
   } catch (err) {
     show("models.authOrderSet acct-x probe-x1 refused", String(err?.message ?? err));
+    check(/provider configuration/.test(String(err?.message ?? err)), "authOrderSet refuses an order when the provider config binds the profile");
   }
 
-  // 3. Which server and key each bot's run reached.
-  for (const agentId of ["main", "probe-a", "probe-b", "probe-x1", "probe-x2"]) show(`run ${agentId}`, await send(`agent:${agentId}:probe`, "Which account answers?"));
+  // 3. Which server and key each bot's run reached, and that the streamed answer arrived.
+  const runs = {};
+  for (const agentId of ["main", "probe-a", "probe-b", "probe-x1", "probe-x2"]) {
+    runs[agentId] = await send(`agent:${agentId}:probe`, "Which account answers?");
+    show(`run ${agentId}`, runs[agentId]);
+  }
+  check(runs.main.terminal.state === "final" && runs.main.reached.length === 0, "main ran on the tool's scripted model and reached no recording server");
+  check(answeredBy(runs["probe-a"], "acct-a") && runs["probe-a"].reached[0].auth === "Bearer scripted-key-a", "probe-a: final streamed answer from acct-a with key a");
+  check(answeredBy(runs["probe-b"], "acct-b") && runs["probe-b"].reached[0].auth === "Bearer scripted-key-b", "probe-b: final streamed answer from acct-b with key b");
+  for (const id of ["probe-x1", "probe-x2"]) check(answeredBy(runs[id], "acct-x") && runs[id].reached[0].auth === "Bearer scripted-key-x2", `${id}: final answer from acct-x sent with the second key`);
+  const histB = await call("chat.history", { sessionKey: "agent:probe-b:probe", limit: 10 });
+  const lastB = (histB.messages ?? []).filter((m) => m.role === "assistant").at(-1);
+  check(lastB?.provider === "acct-b" && textOf(lastB) === "Answered by acct-b.", "chat.history keeps probe-b's streamed answer with provider acct-b");
   for (const agentId of ["probe-a", "probe-x1"]) {
     const m = await call("models.list", { agentId });
     show(`models.list ${agentId}`, { models: m.models.map((x) => `${x.provider}/${x.id} available=${x.available}`), accountSelection: m.accountSelection });
@@ -236,42 +146,65 @@ try {
   await patchConfig({ mcp: { servers: { t3stand: { command: process.execPath, args: [standIn] } } }, agents: { entries: { "probe-b": { tools: { deny: ["t3stand__*"] } } } } });
   await sleep(1500);
   await call("agents.create", { name: "probe-new", workspace: path.join(stateDir, "workspace-probe-new"), model: "acct-a/dev-1" });
+  const offered = {};
   for (const agentId of ["probe-a", "probe-b", "probe-new"]) {
     const r = await send(`agent:${agentId}:tools`, "Which tools do you have?");
+    offered[agentId] = r.reached.flatMap((x) => x.serverTools);
     show(`tool-server tools offered to ${agentId}`, r.reached.map((x) => x.serverTools));
   }
-
+  check(offered["probe-a"].includes("t3stand__send_message") && offered["probe-new"].includes("t3stand__send_message") && offered["probe-b"].length === 0, "the tool server reached probe-a and the later probe-new, not probe-b with the deny");
 
   // 4. Change a bot's account while its run is in progress.
-  const slow = call("chat.send", { sessionKey: "agent:probe-a:switch", message: "SLOW first", idempotencyKey: crypto.randomUUID() });
-  const slowRun = await slow;
+  const slowRun = await call("chat.send", { sessionKey: "agent:probe-a:switch", message: "SLOW first", idempotencyKey: crypto.randomUUID() });
   await sleep(1200);
   await call("agents.update", { agentId: "probe-a", model: "acct-b/dev-1" });
   const slowDone = await waitFor((e) => e.event === "chat" && e.payload?.runId === slowRun.runId && ["final", "aborted", "error"].includes(e.payload?.state));
-  show("run in progress when probe-a moved to acct-b", { state: slowDone.payload.state, reached: requests().filter((r) => r.marker === "SLOW") });
-  show("next run of probe-a", await send("agent:probe-a:switch", "Which account answers after the change?"));
+  const slowReached = requests().filter((r) => r.marker === "SLOW");
+  show("run in progress when probe-a moved to acct-b", { state: slowDone.payload.state, text: textOf(slowDone.payload.message), reached: slowReached });
+  check(slowDone.payload.state === "final" && slowReached.length === 1 && slowReached[0].label === "acct-a", "the run in progress finished on acct-a");
+  const next = await send("agent:probe-a:switch", "Which account answers after the change?");
+  show("next run of probe-a", next);
+  check(answeredBy(next, "acct-b"), "the next run used acct-b");
   const switchHistory = await call("chat.history", { sessionKey: "agent:probe-a:switch", limit: 20 });
-  show("probe-a:switch history roles and system text", (switchHistory.messages ?? []).map((m) => ({ role: m.role, provider: m.provider, model: m.model, text: m.role === "assistant" ? undefined : String(typeof m.content === "string" ? m.content : (m.content ?? []).map((c) => c.text ?? "").join("")).slice(0, 80) })));
+  const rows = (switchHistory.messages ?? []).map((m) => ({ role: m.role, provider: m.provider, model: m.model, text: textOf(m).slice(0, 80) }));
+  show("probe-a:switch history roles and text", rows);
+  check(rows.map((r) => `${r.role}:${r.provider ?? ""}`).join(",") === "user:,assistant:acct-a,user:,assistant:acct-b", "history is user, assistant on acct-a, user, assistant on acct-b, with no line marking the change");
   await call("agents.update", { agentId: "probe-a", model: "acct-a/dev-1" });
 
   // 5. Errors on a bot with a plain model string (no fallbacks of its own).
-  show("run probe-b FAIL401", await send("agent:probe-b:errors-401", "FAIL401 please"));
-  show("run probe-a FAIL402", await send("agent:probe-a:errors-402", "FAIL402 please"));
+  const e401 = await send("agent:probe-b:errors-401", "FAIL401 please");
+  show("run probe-b FAIL401", e401);
+  check(e401.terminal.state === "error" && e401.terminal.errorDetail?.failoverReason === "auth", "401: chat error with errorDetail.failoverReason auth");
+  const e402 = await send("agent:probe-a:errors-402", "FAIL402 please");
+  show("run probe-a FAIL402", e402);
+  check(e402.terminal.state === "error" && e402.terminal.errorDetail?.failoverReason === "billing", "402: chat error with errorDetail.failoverReason billing");
   show("authStatus after errors", (await authStatus("probe-a")).filter((p) => ["acct-a", "acct-b"].includes(p.provider)));
-  show("run probe-a again after its 402", await send("agent:probe-a:errors-402", "Try again"));
+  const again = await send("agent:probe-a:errors-402", "Try again");
+  show("run probe-a again after its 402", again);
+  check(again.terminal.state === "error" && again.reached.length === 0, "probe-a's next run after its 402 was refused without a request");
+  const other = await send("agent:probe-a2:after-402", "Does another bot on acct-a still run?");
+  show("run probe-a2 (same provider and config key) after probe-a's 402", other);
+  check(answeredBy(other, "acct-a"), "probe-a2, on the same provider and key, still ran after probe-a's billing failure");
 
   // 6. A bot whose model has a fallback on another account.
   await patchConfig({ agents: { entries: { "probe-fb": { model: { primary: "acct-b/dev-1", fallbacks: ["acct-x/dev-1"] } } } } });
   await sleep(1500);
   show("agents.list probe-fb model", (await call("agents.list", {})).agents.find((a) => a.id === "probe-fb")?.model);
-  show("run probe-fb FAIL401 (primary acct-b, fallback acct-x)", await send("agent:probe-fb:fallback", "FAIL401 fallback test"));
+  const fb = await send("agent:probe-fb:fallback", "FAIL401 fallback test");
+  show("run probe-fb FAIL401 (primary acct-b, fallback acct-x)", fb);
+  const step = fb.lifecycleOther.find((d) => d.phase === "fallback_step" && d.fallbackStepToModel);
+  check(fb.reached.map((r) => r.label).join(",") === "acct-b,acct-x" && step?.fallbackStepFromModel === "acct-b/dev-1" && step?.fallbackStepToModel === "acct-x/dev-1", "probe-fb went from acct-b to its fallback acct-x in the same run, with a fallback_step event");
 
   // 7. Remove one bot's account and run both bots that used that provider.
   show("models.authLogout acct-x for probe-x2", await call("models.authLogout", { provider: "acct-x", agentId: "probe-x2" }));
   show("models.authStatus probe-x1 after logout", (await authStatus("probe-x1")).filter((p) => p.provider === "acct-x"));
-  show("config after logout", { acctXApiKey: (await call("config.get", {})).config?.models?.providers?.["acct-x"]?.apiKey ?? null });
-  show("run probe-x2 after logout", await send("agent:probe-x2:probe", "Which account answers now?"));
-  show("run probe-x1 after probe-x2's logout", await send("agent:probe-x1:probe", "Which account answers now?"));
+  const keyAfter = (await call("config.get", {})).config?.models?.providers?.["acct-x"]?.apiKey ?? null;
+  show("config after logout", { acctXApiKey: keyAfter });
+  const x2 = await send("agent:probe-x2:probe", "Which account answers now?");
+  const x1 = await send("agent:probe-x1:probe", "Which account answers now?");
+  show("run probe-x2 after logout", x2);
+  show("run probe-x1 after probe-x2's logout", x1);
+  check(keyAfter === null && [x1, x2].every((r) => r.reached.length === 1 && r.reached[0].auth === null), "after the logout both bots' runs reached acct-x with no Authorization header");
 
   // 8. What a client can read back about keys, and what a turn records.
   const cfg = await call("config.get", {});
@@ -279,11 +212,18 @@ try {
   const history = await call("chat.history", { sessionKey: "agent:probe-b:probe", limit: 10 });
   const last = (history.messages ?? []).filter((m) => m.role === "assistant").at(-1);
   show("chat.history last assistant row (probe-b)", { keys: Object.keys(last ?? {}), provider: last?.provider, model: last?.model, openclawKeys: Object.keys(last?.__openclaw ?? {}) });
+  check(last && !Object.keys(last).some((k) => /auth|profile|account/i.test(k)), "the assistant history row has no field naming an account");
   const sessions = await call("sessions.list", { limit: 50 });
   const row = (sessions.sessions ?? []).find((s) => s.key === "agent:probe-b:probe");
   show("sessions.list row fields about auth or model (probe-b)", Object.fromEntries(Object.entries(row ?? {}).filter(([k]) => /auth|model|provider|account/i.test(k))));
   show("all recorded requests", requests());
+} catch (err) {
+  show("probe stopped", String(err?.stack ?? err));
+  check(false, "probe ran to the end");
 } finally {
-  await client.stopAndWait().catch(() => {});
-  stopChildren();
+  await gw.stop();
+  recorders.stop();
+  const failed = checks.filter((c) => !c.ok);
+  console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);
+  process.exitCode = failed.length ? 1 : 0;
 }
