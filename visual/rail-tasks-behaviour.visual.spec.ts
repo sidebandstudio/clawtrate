@@ -17,13 +17,6 @@ const tasksOf = (page: Page, name: string) =>
   page.getByRole("list", { name: `${name}'s tasks` }).getByTestId("task");
 const taskRow = (page: Page, title: string) =>
   page.getByTestId("task").filter({ hasText: title }).first();
-const focusedName = (page: Page) =>
-  page.evaluate(
-    () =>
-      document.activeElement?.getAttribute("aria-label") ??
-      document.activeElement?.textContent?.trim() ??
-      "",
-  );
 /** The commands the interface sent the host, of one kind. */
 const sent = (page: Page, type: string) =>
   page.evaluate(
