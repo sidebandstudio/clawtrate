@@ -159,6 +159,8 @@ export type ApprovalCard = {
   cut?: string[];
   /** A resolution from this client is on its way, or the last one failed. */
   submitting: boolean;
+  /** The decision on its way while `submitting`; a Deny may still follow an allow. */
+  submittingDecision: ApprovalDecision | null;
   error: string | null;
   /**
    * What the last failed resolution from this client establishes. `refused`:
@@ -268,6 +270,7 @@ function blank(id: string, kind: ApprovalKind, raw: unknown): ApprovalCard {
     decisionDigest: "",
     decisionCut: false,
     submitting: false,
+    submittingDecision: null,
     error: null,
     decisionError: null,
     stillOpen: false,
@@ -603,6 +606,7 @@ export function applyApprovalRequested(activity: TaskActivity, card: ApprovalCar
             ? { ...card.exec, ...pickSet(existing.exec) }
             : (existing.exec ?? card.exec),
         submitting: existing.submitting,
+        submittingDecision: existing.submittingDecision,
         error: existing.error,
         decisionError: existing.decisionError,
         stillOpen: existing.stillOpen,
@@ -692,6 +696,7 @@ export function applyApprovalResolved(
       inferred: !resolution.authoritative,
       outcomeUnknown: resolution.lossy,
       submitting: false,
+      submittingDecision: null,
       error: null,
       decisionError: null,
       stillOpen: false,
@@ -719,11 +724,13 @@ export function markApproval(
   activity: TaskActivity,
   id: string,
   patch: Pick<ApprovalCard, "submitting" | "error"> &
-    Partial<Pick<ApprovalCard, "decisionError" | "stillOpen">>,
+    Partial<Pick<ApprovalCard, "decisionError" | "stillOpen" | "submittingDecision">>,
 ): TaskActivity {
+  // Nothing on its way when nothing is submitting.
+  const full = patch.submitting ? patch : { submittingDecision: null, ...patch };
   return {
     ...activity,
-    approvals: activity.approvals.map((each) => (each.id === id ? { ...each, ...patch } : each)),
+    approvals: activity.approvals.map((each) => (each.id === id ? { ...each, ...full } : each)),
   };
 }
 

@@ -1888,7 +1888,7 @@ export class ClawtrateClient {
       throw new Error("That approval is no longer open.");
     // Deny stays possible while an earlier decision is on its way: the gateway applies
     // whichever arrives first and answers the other as already resolved. A second allow does not.
-    if (approval.submitting && decision !== "deny")
+    if (approval.submitting && (decision !== "deny" || approval.submittingDecision === "deny"))
       throw new Error("An answer to that approval is already on its way.");
     // A decision with no answer may have been applied: nothing but deny is sent until its state is read back.
     if (decision !== "deny" && approval.decisionError === "unknown") {
@@ -1923,6 +1923,7 @@ export class ClawtrateClient {
     this.updateActivity(key, (activity) =>
       markApproval(activity, approvalId, {
         submitting: true,
+        submittingDecision: decision,
         error: null,
         decisionError: null,
         stillOpen: false,

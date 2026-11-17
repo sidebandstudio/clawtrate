@@ -340,6 +340,7 @@ export const APPROVAL: Bound = flagged<ApprovalCard>()({
   decisionDigest: NAME,
   decisionCut: FLAG,
   submitting: FLAG,
+  submittingDecision: ENUM,
   error: text(MAX_ERROR_JSON_CHARS),
   decisionError: ENUM,
   stillOpen: FLAG,

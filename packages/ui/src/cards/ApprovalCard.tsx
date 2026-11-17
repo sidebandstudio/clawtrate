@@ -286,7 +286,7 @@ function PendingApproval({
     if (!mayDecide) return;
     // A second decision while one is on its way is only ever Deny, which the gateway may still take.
     if (!sendable.has(decision) || (card.submitting && decision !== "deny")) return;
-    if (card.submitting && chosen === "deny") return;
+    if (card.submitting && card.submittingDecision === "deny") return;
     setChosen(decision);
     void env
       .invoke({

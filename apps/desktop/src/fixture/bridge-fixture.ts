@@ -404,7 +404,7 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
         const card = approval(key, approvalId);
         if (!card || card.status !== "pending") throw new Error("That approval is no longer open.");
         // As the engine: Deny goes out while another decision is on its way; a second allow does not.
-        if (card.submitting && decision !== "deny") {
+        if (card.submitting && (decision !== "deny" || card.submittingDecision === "deny")) {
           throw new Error("An answer to that approval is already on its way.");
         }
         if (decision !== "deny" && card.decisionError === "unknown") {
@@ -421,6 +421,7 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
           inTask(state, key, (a) =>
             markApproval(a, approvalId, {
               submitting: true,
+              submittingDecision: decision,
               error: null,
               decisionError: null,
               stillOpen: false,
