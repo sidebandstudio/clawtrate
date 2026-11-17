@@ -1618,9 +1618,13 @@ Live, Pixel to Atlas, each in a new task:
     - An exact general match needs a plugin-provided receipt.
     - A sub-agent's completion uses `sourceTool:"subagent_announce"`;
       it is not this path.
-- **Recipient waiting on an approval**: does not occur. The recipient's
-  exec failed to register its approval ("missing scope:
-  operator.approvals") and the sender got `status:"ok"` (live, row 20).
+- **Recipient waiting on an approval**: possible. The source admits a
+  recipient's approval request subject to scopes and live run authority;
+  it has no rule against nested runs (row 20). Live, a recipient raised a
+  card when the sender's run was started from a device holding
+  `operator.admin`. From a read/write/approvals/questions device, the
+  recipient's exec failed to register its approval. That failure is not
+  explained. Keep recipient approval-card handling.
 - **Who may message whom** (source:
   `<openclaw>/docs/concepts/session-tool.md`, "Sending cross-session
   messages"):
@@ -1899,32 +1903,43 @@ the launcher's controlled environment.
 
 #### Approvals raised outside the user's own run
 
-- **Observed in the probe (unresolved)**: a sub-agent started with
-  `sessions_spawn`, and the recipient of a `sessions_send`, each ran an
-  exec needing approval. Each child's own transcript holds the tool error
-  "Exec approval registration failed: GatewayClientRequestError: missing
-  scope: operator.approvals", and no card was raised (live,
-  `helper-and-recipient-approvals.mjs`, which reads the child transcript
-  and reports `CARD`, `FAILED` or `UNKNOWN`).
-- **Not a version-wide rule.** The registration helper only wraps the
-  error (`<openclaw>/dist/bash-tools.exec-approval-request-DeVkQIN2.mjs`
-  lines 44-46 and 129-135). It does not forbid approvals for helpers or
-  recipients.
-  - The call goes through `callGatewayTool`
-    (`<openclaw>/dist/gateway-0s_-cY-q.mjs` lines 397-425). That uses
-    in-process dispatch with minimum synthetic scopes when a gateway
-    context is bound, and a transport fallback otherwise
-    (`<openclaw>/dist/in-process-gateway-BE6BFDfY.mjs` lines 94-128).
-  - Which path the nested runs took on the probe, and why it lacked the
-    scope, was not established.
-- So: treat helper and recipient cards as possible.
+- **What the source permits**: helpers and recipients can raise approval
+  cards, subject to scopes and live run authority. The source has no rule
+  against nested runs.
+  - Admission: `callGatewayTool` (`<openclaw>/dist/gateway-0s_-cY-q.mjs`
+    lines 276, 310 and 397) resolves the required scopes and the live
+    runtime identity.
+  - It then dispatches either in-process or through the transport
+    fallback (`<openclaw>/dist/in-process-gateway-BE6BFDfY.mjs` line 94;
+    `server-plugin-in-process-dispatch-woZlNPqI.mjs` lines 36 and 204).
+  - In-process, the requested scopes are projected through the captured
+    source or operator authority; minimum scopes are not an escalation.
+  - An exec approval request needs `operator.approvals` (or admin, which
+    satisfies it) and valid run-bound authority after that dispatch.
+- **What the probe showed** (live, `helper-and-recipient-approvals.mjs`,
+  which reports `CARD`, `FAILED`, `RAN` or `UNKNOWN` from the child's own
+  call and result):
+  - parent run started from a device holding `operator.admin`: a
+    `sessions_spawn` helper and a `sessions_send` recipient each raised a
+    real card (`CARD`);
+  - parent run started from a device holding read, write, approvals and
+    questions: each child's exec result was `isError:true`, "Exec approval
+    registration failed: GatewayClientRequestError: missing scope:
+    operator.approvals" (`FAILED`).
+
+  Why the second case lacked the scope remains **unexplained**: the dispatch
+  path the nested call took was not traced.
+- So: keep helper and recipient approval-card handling.
   - The gateway delivers child approvals to ancestor audiences
     (`session.approval`, row 19).
   - `chat.abort` cancels controlled descendants
     (`<openclaw>/dist/chat-abort-handler-ta8mBb_q.mjs` lines 183-205).
   - Run-bound approvals are cancelled when their owner ends.
-  - Raising a real child approval and showing its cancellation remain
-    **unverified**.
+  - Live: once the parent run had already finished (a spawn returns
+    `accepted` at once), `chat.abort` on the parent's session aborted
+    nothing (`runIds:[]`). The helper's card stayed pending until the probe
+    denied it. Cancellation of a child card by stopping a still-active
+    parent was not shown.
 - **Side runs** (`/btw`) on the direct-provider path are one-shot provider
   calls without tools (`<openclaw>/docs/tools/btw.md`). Codex-harness side
   questions and CLI backends have their own contracts, so this does not
@@ -2253,6 +2268,11 @@ Live pairing behavior on loopback:
 
 #### Memory
 
+- **Recommendation**: new clients should send `memory.search {version:2}`,
+  keep each hit's complete `reference` as an opaque value, and pass it
+  unchanged to `memory.get`. Treat the default (v1) response as a
+  compatibility branch for the built-in backend only. `memory.get` needs
+  the reference shape, not a `version` field.
 - **`memory.search` has two response versions**
   (`<openclaw>/dist/memory-search-CKxnFvV7.mjs` lines 34-140;
   `<openclaw>/dist/memory-provider-DcxG9TJs.mjs` lines 33-66 and 145-160).
@@ -2473,6 +2493,11 @@ A failed probe is evidence about that probe, not about the version. Each
 absence names its search. Each `operator.admin` claim was checked against
 the non-admin method inventory at the top of row 20.
 
+The scenarios are observational scripts against the scripted fake gateway,
+not passing parity checks. They do not show real delivery, OS permission
+prompts, APNs decryption, real-provider voice, or completed external side
+effects.
+
 #### Routines
 
 - **Methods and scopes** (`schema` method map; row 9):
@@ -2483,10 +2508,23 @@ the non-admin method inventory at the top of row 20.
     `cron.*` method is a read. The bot's own `automations` tool (below)
     acts with the bot's authority, not the client's.
   - Pause and resume is `cron.update {patch:{enabled}}`.
-  - Plugin at a lower scope: possible for pause, resume and run-now of
-    existing jobs. It must not accept a payload or schedule edit, and must
-    check that the job belongs to a bot the caller may use. Creating jobs
-    should stay admin, because a payload runs tools unattended.
+  - Plugin at a lower scope (**unverified proposal**): pause, resume and
+    run-now of existing jobs at `operator.write`.
+    - Entry point: a method registered with `api.registerGatewayMethod`
+      receives handler options whose context includes the serving cron
+      service (`<openclaw>/dist/registry-Ctt4xQAS.mjs` line 1650;
+      `GatewayCronServiceContract`, `config-contracts-C65kIjn4.d.ts` line
+      53941).
+    - It must update through `updateWithPrecondition`, with a check on the
+      current job and revision (line 13395), not on a job id taken from the
+      client alone.
+    - It must check the caller's current session or bot authority over that
+      job.
+    - It must refuse payload and schedule edits.
+
+    This relies on host context rather than a stable SDK facility, so it
+    must be proven before use. Creating jobs should stay admin, because a
+    payload runs tools unattended.
 - **The bot's own tool**: the `automations` tool (legacy name `cron`, in the
   `coding` profile; `<openclaw>/dist/cron-tool-B3cH3Sr5.mjs` lines
   1318-1340).
@@ -2557,7 +2595,13 @@ the non-admin method inventory at the top of row 20.
 - **Delivery**: the default delivery announces to a channel. With no
   channel configured, the run's model work completed, but the run ended
   `status:"error"`, "Channel is required (no configured channels
-  detected)…" (live). Use `delivery:{mode:"none"}` to keep results in
+  detected)…" (live).
+  - That observation is not a general rule. The documented contract keeps
+    payload execution in `status` and whole-run completion in
+    `completionStatus`. A delivery-only failure can leave `status:"ok"`
+    with `completionStatus:"failed"`, unless `delivery.bestEffort` is set
+    (`<openclaw>/docs/automation/cron-jobs/managing-jobs.md` line 153).
+  - Read both fields. Use `delivery:{mode:"none"}` to keep results in
   history only (live, `routine-history.mjs`).
 - **Approvals from a routine** (live, `routines.mjs`):
   - The run raised an ordinary `exec.approval.requested` in its run
@@ -2645,9 +2689,14 @@ the non-admin method inventory at the top of row 20.
 - **What a notification names**: the notification built for an event is
   `{category, title, body, tag, path?}`, for example `path: "ask/<id>"` for
   a question (`resolveEventWebPushNotification`, same file, line 2618
-  onward). No gateway identifier was found in it. How the sender wraps it
-  in the encrypted payload was not traced. A client should map each
-  subscription endpoint to its gateway.
+  onward).
+  - The encrypted payload actually sent is `{title, body, tag, renotify,
+    url}`. Here `url` is the Control UI address for `path`, and the title can
+    carry the device's label (`<openclaw>/dist/server-start-D6vaUNGz.mjs`
+    lines 2675-2744; sent by `push-web-BDeMIeg_.mjs` line 296).
+  - No gateway identifier field was found. The `url` origin can help tell
+    gateways apart; mapping each subscription endpoint to its gateway also
+    works.
 
 #### Skills
 
@@ -2661,18 +2710,25 @@ All methods and scopes are from the `schema` method map; live parts are in
     eligible, …}]}` (live).
   - Search and detail: `skills.search`, `skills.detail`, `skills.skillCard`
     (`operator.read`).
-- **The user's library** (`operator.write`; live):
-  - `skills.library.save {skillId?, expectedRevision|null, slug, content,
-    files?}` returns `{state:"published", target:"personal", entry:{skillId,
-    slug, revision, enabled, shared, …}}`;
-  - `skills.library.list {scope: mine|team|all}`;
-  - `skills.library.read {skillId, revision?}`;
+- **The user's library** (live):
+  - reads, `operator.read` (`<openclaw>/dist/core-method-policy-DkntKRY_.mjs`
+    lines 939-949): `skills.library.list {scope: mine|team|all}` and
+    `skills.library.read {skillId, revision?}`;
+  - writes, `operator.write`: `skills.library.save {skillId?,
+    expectedRevision|null, slug, content, files?}` returns
+    `{state:"published", target:"personal", entry:{skillId, slug, revision,
+    enabled, shared, …}}`;
   - `skills.library.mutate {skillId, expectedRevision, action: share |
     unshare | transfer | remove | enable | disable | rollback}`. Live:
     `disable` set `enabled:false`, and `remove` returned `state:"removed"`.
   - Every write is a compare-and-set on the 64-hex `revision`.
   - `skills.library.activate {sessionKey, action: attach|detach|refresh,
-    skillId?}` attaches a library skill to one task.
+    skillId?, revision?}` changes one task's selections.
+  - A task pins skill revisions. Publishing a new revision does not change
+    an existing session's selection. `activate` with `refresh` (or attach)
+    updates it and returns `sessionActivation:"next-turn"`
+    (`<openclaw>/dist/skills-library-f1x0CvB1.mjs` lines 274-291). New
+    sessions start from the current selections.
 - **Per bot**: `agents.entries.<id>.skills` is an allowlist; `[]` means no
   skills (`<openclaw>/docs/tools/skills-config.md`, config, **admin**).
   - Global enablement of an installed skill is `skills.update {skillKey,
@@ -2681,9 +2737,17 @@ All methods and scopes are from the `schema` method map; live parts are in
     (`operator.write`) switches the user's **library** skills, not
     installed or per-bot skills. `skills.library.activate` attaches one to a
     single task.
-  - Plugin at a lower scope: a per-bot skill switch at `operator.write` is
-    possible. It must change only `agents.entries.<id>.skills` and must not
-    install or enable skill code.
+  - Plugin at a lower scope (**unverified proposal**): a per-bot skill
+    switch at `operator.write` would use `api.registerGatewayMethod` and
+    `api.runtime.config.mutateConfigFile` with `baseHash` and `afterWrite`
+    (`<openclaw>/dist/config-contracts-C65kIjn4.d.ts` line 44646). It must:
+    - check the caller's current authenticated access to that bot or
+      session (`registry-runtime-session-ownership-Ce5YcIfj.mjs` line 80);
+    - accept only skills from an admin-approved set;
+    - write only `agents.entries.<id>.skills`.
+
+    A caller-supplied bot id or path is not authorization, and the plugin
+    must never install or enable skill code.
 - **Where skills live**:
   - bundled skills under the package;
   - managed skills (`managedSkillsDir`);
@@ -2694,9 +2758,31 @@ All methods and scopes are from the `schema` method map; live parts are in
   - the library in the state database
   (`<openclaw>/docs/tools/skill-workshop.md`, "Where files live").
 - **A bot creating or editing a skill ("teach a task")**: `/learn
-  [request]` asks the bot to save the current workflow. The bot uses the
-  `skill_workshop` tool (`coding` profile) with `create`, `patch`,
-  `write_file`, `archive` or `restore`.
+  [request]` asks the bot to save the current workflow with its
+  `skill_workshop` tool (`coding` profile). That tool has **two
+  contracts**, chosen per run (`<openclaw>/dist/openclaw-tools-DV-z1IAc.mjs`
+  lines 14127-14139):
+  - **Personal library** (`SkillLibraryWorkshopSchema`, same file lines
+    13747-13790, implemented at 13794-13830): actions `list`, `read`,
+    `create`, `update`, `share`, `unshare`, `transfer`, `activate`,
+    `remove`, `rollback`, with `name`, `skill_id`, `expected_revision`,
+    `proposal_content`, `files`, `delete_files`.
+    - Results are library entries, and changes show in
+      `skills.library.list`, not in the workshop change feed.
+    - The library target is `personal` when the actor has a profile and
+      either several profiles exist or the actor is not admin. It is
+      `workspace` for the admin case
+      (`<openclaw>/dist/state/openclaw-state-read.worker.js` lines
+      113661-113667).
+    - Authoring is bound to ordinary attributed human turns
+      (`<openclaw>/dist/skill-library-authoring-jJOx1dv3.mjs` line 557).
+  - **Learned workshop** (`SkillWorkshopToolSchema`, lines 13918-13936):
+    `create`, `patch`, `write_file`, `remove_file`, `archive`, `restore`,
+    with `content`, `old_text`, `new_text`.
+    - Offered when there is no library authoring for the run. When the
+      library target is `workspace`, the workshop is offered alongside it
+      and selected by omitting `target`.
+    - Changes show in `skills.workshop.changes`.
   - Background review can also save skills, and a change posts "💾 Learned:
     updated `<name>` (…). Say "undo"…" into the conversation.
   - The change feed is `skills.workshop.changes {agentId, limit?, beforeMs?}`
@@ -2707,12 +2793,14 @@ All methods and scopes are from the `schema` method map; live parts are in
   - `skills.changed {reason}` is broadcast about 30 s after a skills-folder
     change (`<openclaw>/dist/server-startup-early-BquJMfnW.mjs` lines
     40-58).
-  - **Unverified live**: in the probe, `skill_workshop` `list` returned the
-    user's library entries, and `create` failed validation with "content:
-    schema is false". That is a probe observation. It does not match the
-    tool schema in `<openclaw>/dist/openclaw-tools-DV-z1IAc.mjs` lines
-    13918-13936, so do not conclude that bots cannot create skills. The
-    bot-created skill's events could not be shown.
+  - Live (`skills-library-and-workshop.mjs`): on the probe's non-admin
+    profile the run got the personal-library contract.
+    - `{action:"create", name, proposal_content}` published a library entry
+      (`state:"published"`, `target:"personal"`).
+    - The workshop-style `{action:"create", name, content}` was rejected
+      ("content: schema is false"). That is the source behavior, not a
+      failure.
+    - Learned-workshop creation was not exercised.
 - **Delete**: library `mutate {action:"remove"}` (`operator.write`, live).
   Workshop skills are archived, not deleted.
 
@@ -2732,8 +2820,12 @@ All methods and scopes are from the `schema` method map; live parts are in
     (`<openclaw>/docs/gateway/protocol/rpc-system-and-channels.md` lines
     95-99; `schema` `PluginsCatalog*`).
 
-  Installing is `plugins.install` (**`operator.admin`**; no non-admin
-  `plugins.*` writer exists). Raw MCP servers are not in that catalog, and
+  Installing is `plugins.install` (**`operator.admin`**). Lower path
+  checked: no non-admin method installs, enables or uninstalls a plugin.
+  This holds for installation only, not every plugin write:
+  `plugins.sessionAction` is dynamic, taking a registered action's
+  declared scopes or `operator.write` by default
+  (`<openclaw>/dist/method-scopes-BdXzw-yD.mjs` lines 66-90). Raw MCP servers are not in that catalog, and
   `tools.catalog` does not list them (live: no `coder` entry). Configured
   servers are in `config.get` `mcp.servers` (`operator.read`, secrets
   redacted). `mcp.app.*` covers interactive MCP Apps.
@@ -2764,8 +2856,13 @@ All methods and scopes are from the `schema` method map; live parts are in
   sign-in method was found; `<openclaw>/dist/mcp-auth-login-DAnddU_m.mjs`
   lines 16-90).
   - It runs a wizard session that asks the client to open an authorization
-    URL. The provider redirects to the gateway's `/oauth/mcp/callback`.
-    The wait limit is 10 minutes.
+    URL; follow the URL the wizard gives. The shared operator flow redirects
+    to the gateway's `/oauth/provider/callback`
+    (`<openclaw>/dist/provider-browser-auth-BOjjbaDz.mjs` lines 10 and 60;
+    `mcp-auth-login-DAnddU_m.mjs` lines 62 and 89-95). The wait limit is
+    10 minutes.
+  - `/oauth/mcp/callback` belongs to the separate per-requester flow
+    below.
   - It requires a connection that came from a browser origin, otherwise:
     "Open Settings on this Gateway to sign in, or use openclaw mcp login in
     its terminal".
@@ -2805,20 +2902,31 @@ All methods and scopes are from the `schema` method map; live parts are in
   reason}`).
   - The answer goes to the shared secret store; the bot sees only metadata
     and a SecretRef (`<openclaw>/docs/tools/secrets.md`).
-  - The user answers with `question.resolve {answers,
-    secretStoreAllowedHosts}` (`operator.questions`).
+  - **Creating** a secret-store question needs `operator.admin` plus
+    trusted live agent-runtime authority. The handler refuses otherwise
+    ("secret store questions require an operator.admin client",
+    `<openclaw>/dist/question-BTDP13J4.mjs` lines 96-112). The tool
+    registers its question with `scopes:[ADMIN_SCOPE]`
+    (`openclaw-tools-DV-z1IAc.mjs` lines 10874-10887).
+  - The user **answers** with `question.resolve {answers,
+    secretStoreAllowedHosts}` (`operator.questions`, plus session
+    access).
   - The egress proxy substitutes the secret only in requests to
     `allowedHosts`.
   - Operator store methods: `secrets.store.list`, `set` and `delete`.
   - Operator store methods are **`operator.admin`** (lower path checked:
     no non-admin `secrets.*` method exists; the bot's request is answered
     at `operator.questions`).
-  - **Observed in the probe (unresolved)**: the bot's `request` failed with
-    "missing scope: operator.questions", whether or not the device that
-    started the run held that scope. The value never appeared in events or
-    the transcript (live, `secrets-request.mjs`). This is a probe
-    observation like the helper-approval failure in row 20, not a rule;
-    the end-to-end save is unverified.
+  - Live (`secrets-request.mjs`):
+    - with the run started from a device holding `operator.admin` and
+      `operator.questions`, a masked question arrived (`isSecret:true`,
+      `secretStore {name, kind:"secret", allowedHosts, reason}`). The
+      probe answered it, and the run finished.
+    - The submitted value was absent from every event and from the
+      transcript, and the probe deleted its own entry.
+    - An earlier run started without `operator.admin` failed with "missing
+      scope: operator.questions". That is consistent with the creation
+      gate above, though the exact error was not traced.
 - **A password vault** of logins, cards and contacts: not found. Method
   names containing `vault`, `password` or `credential` give only
   `plugins.credentials.inspect`; secrets are `secrets.*`.
@@ -2843,16 +2951,36 @@ All from source unless marked: `schema` Talk definitions;
 
   Both are `operator.talk`, which `operator.write` satisfies.
 - **The bot for a call**: pass its `sessionKey` (live in row 17).
-- **Per-call settings**: `provider`, `model`, `voice`, `language` (two
-  letters), `vadThreshold`, `silenceDurationMs`, `prefixPaddingMs`,
-  `reasoningEffort`, `mode: realtime|stt-tts|transcription`, `transport`,
-  `brain: agent-consult|direct-tools|none`, `ttlMs` (1 s to 1 h).
-  - `talk.voice.set {voice, sessionKey?, voiceSessionId?}` sets the voice
-    per session.
-  - No per-bot voice setting was found (search: the talk docs and the
-    `TalkVoiceSetParams`/`TalkVoiceGetParams` schemas, which take a
-    session or voice session, not an agent). Set it on the bot's session
-    instead.
+- **Per-call settings.** The two create methods are closed schemas with
+  different fields (`schema` `TalkClientCreateParams`,
+  `TalkSessionCreateParams`):
+  - both take `sessionKey`, `provider`, `model`, `voice`, `vadThreshold`,
+    `silenceDurationMs`, `prefixPaddingMs`, `reasoningEffort`, `mode:
+    realtime|stt-tts|transcription`, `transport` and `brain:
+    agent-consult|direct-tools|none`;
+  - only `talk.session.create` takes `language` (two letters) and `ttlMs`
+    (1 s to 1 h). `talk.client.create` rejects both, and adds
+    `voiceSessionId` and `capabilities`.
+  - The host passes `language` to its transcription session branch
+    (`<openclaw>/dist/handlers-CjWbukvo.mjs` line 5036), not to every
+    realtime route.
+  - No method that changes language mid-call was found (talk method list).
+    A language change means a new or reconfigured call, under client
+    policy.
+- **Changing the voice** changes an **active call**; it is not a stored
+  default.
+  - `talk.voice.set {voice, sessionKey?, voiceSessionId?}` selects exactly
+    one active call owned by the caller. With no active call it fails ("No
+    active voice call is available").
+  - It checks that the call can change voice and that the voice is in the
+    call's catalog (`handlers-CjWbukvo.mjs` lines 598-616).
+  - For a client-owned call, the gateway sends `talk.voice.change` to that
+    connection (line 5307). The client creates the replacement and
+    acknowledges readiness with `talk.voice.complete` (line 5313 onward).
+  - No per-bot voice setting was found (talk docs; the voice schemas take a
+    session or voice session, not an agent). Keep the bot's preferred voice
+    in client state or `users.prefs`, and pass it as `voice` when creating
+    later calls.
 - **Reconnect after a drop**: `talk.client.create` resumes the logical call
   when the client passes the same `voiceSessionId` while replacing the
   provider transport. Accepted work outlives a replaced connection
@@ -2908,19 +3036,48 @@ What a client must declare and what that costs:
     pairing and refused, "node command not allowed: "clawtrate.app.open" is
     not in the allowlist for platform "macos"".
   - So opening an app on the device needs an admin config allowlist entry,
-    or a gateway plugin registering a node-invoke policy.
+    or a gateway plugin registering a node-invoke policy with
+    `api.registerNodeInvokePolicy` (`config-contracts-C65kIjn4.d.ts` line
+    43155). That policy must still apply the caller, session and node checks
+    and platform admission; a node reporting `permissions` replaces none of
+    them.
 - **Pairing**:
   - Off loopback, a node pairing waits for `node.pair.approve`
     (`operator.pairing`), plus `operator.write` when commands are declared,
     plus **`operator.admin`** for the system, browser and file commands
     (row 13).
   - Each new command surface needs a new approval (row 20, live).
-- **Timeouts**:
-  - the caller's `timeoutMs` reaches the node;
-  - `node.invoke.progress` streams chunks;
-  - `node.invoke.cancel` and `node.invoke.input` events exist;
-  - duplex invokes idle out after 30 s (`NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS`,
-    `<openclaw>/dist/node-commands-Bxo-2Y4j.mjs`).
+- **Timeouts and progress**:
+  - The caller's `timeoutMs` reaches the node, and an ordinary operator gets
+    only the final `node.invoke` result.
+  - `node.invoke.progress` is a **node-to-gateway** RPC. It is accepted
+    only when a progress consumer is registered for that invoke;
+    otherwise it is ignored (`<openclaw>/dist/nodes-BW91tb1K.mjs` line
+    419; `node-registry.invoke-stream-CTVbIuYL.mjs` lines 79-97).
+  - The public `node.invoke` path sets up a streaming consumer only for an
+    owner-bound synthetic plugin client (`nodes-BW91tb1K.mjs` line 688).
+    So duplex progress, `node.invoke.input` and the 30 s idle timeout
+    (`NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS`,
+    `<openclaw>/dist/node-commands-Bxo-2Y4j.mjs`) belong to that separately
+    admitted streaming path. They give a Clawtrate operator connection no
+    progress event.
+- **Deferred commands on iOS** (source):
+  - An iOS or iPadOS node can answer `NODE_BACKGROUND_UNAVAILABLE` for
+    `camera.*`, `screen.*` and `talk.*` commands, or for plugin commands
+    declared foreground-restricted (`nodes-BW91tb1K.mjs` lines 492-500).
+  - The gateway then queues the operator's request and returns
+    `QUEUED_UNTIL_FOREGROUND` with a `queuedActionId` (lines 969-1016).
+  - The node fetches queued actions with the node-role methods
+    `node.pending.pull` and `node.pending.ack` when it returns to the
+    foreground.
+  - The queue holds actions for 10 minutes, at most 64 per node
+    (`nodes-policy-DtB0mmj2.mjs` lines 9-10).
+  - It excludes agent-runtime calls and calls forwarding approval
+    authority, so it does not replay a bot's request after a late
+    permission answer.
+  - A backgrounded iOS node can therefore stay connected and defer work. Do
+    not infer disconnection from backgrounding.
+  - Not exercised live: the probe node was a macOS stand-in.
 - **Permissions**: the node reports `permissions` at connect. The only
   gateway use found is `permissions.accessibility`, which gates node
   presence-activity reports (`<openclaw>/dist/nodes-BW91tb1K.mjs` line 56).
