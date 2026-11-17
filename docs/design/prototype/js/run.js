@@ -41,7 +41,8 @@
     mode: "steer", // what plain Enter does during a run: steer or queue
     menu: false,
     queued: [], // start the next run, in order
-    held: [], // sent into the run once the pending question is answered
+    held: [], // kept while a question is pending; released when the last one is settled
+    unsent: [], // what was held or queued when Stop was confirmed: nothing starts by itself
     outbox: [], // written offline; the host sends them on reconnect
     files: [],
     notices: [],
@@ -209,7 +210,8 @@
             "Queued",
             text,
             index,
-            (state.run === "running" || state.run === "waiting" ? CT.button("Send now", `data-queue="send" data-index="${index}"`) : "") +
+            // Send now is not offered while the run is stopping or while a question is pending.
+            ((state.run === "running" || state.run === "waiting") && pendingKind() !== "question" ? CT.button("Send now", `data-queue="send" data-index="${index}"`) : "") +
               CT.button("Cancel", `data-variant="quiet" data-queue="cancel" data-index="${index}"`),
           ),
         )
@@ -219,6 +221,15 @@
           row("Held until you answer", text, index, CT.button("Edit", `data-held="edit" data-index="${index}"`) + CT.button("Cancel", `data-variant="quiet" data-held="cancel" data-index="${index}"`)),
         )
         .join("");
+    shelf += state.unsent
+      .map((text, index) =>
+        CT.shelfRow({
+          lead: CT.glyph("stopped"),
+          text: `<b>Not sent</b> <span>${CT.esc(text)}</span>`,
+          actions: CT.button("Send", `data-unsent="send" data-index="${index}"`) + CT.button("Remove", `data-variant="quiet" data-unsent="remove" data-index="${index}"`),
+        }),
+      )
+      .join("");
     const kind = pendingKind();
     if (state.run === "waiting" && kind) {
       shelf += CT.shelfRow({
@@ -431,9 +442,7 @@
           state: resolvedState,
           line: S.approval.line,
           when: clockTime(),
-          rule: decision === "always" ? S.approval.rule : undefined,
-          lasts: state.lasts || "forever",
-          saved: clockTime(),
+          saved: decision === "always" ? { kind: "command", request: S.approval.request } : undefined,
           full: S.approval.full,
           raw: S.approvalRaw(event),
         }),
@@ -584,18 +593,18 @@
     },
     {
       label: "message-sending",
-      caption: "Otto starts a message to Marlow. A card appears in the conversation, and a step in the list.",
+      caption: "Otto starts a message to Marlow. A card appears, and a step in the list. The start is the first thing the gateway reports; it is not proof the call was made.",
       wait: 400,
       fn() {
-        add(CT.messaged({ id: "m-marlow", target: "marlow", first: S.marlowFirst, state: "sending", body: S.marlowBody("sending") }));
-        state.marlowCard = "sending";
-        addStep({ id: "s-msg", kind: "message", status: "running", title: "Messaging Marlow", detail: "sending", statusText: "", body: S.messageStepBody("sending") });
+        add(CT.messaged({ id: "m-marlow", target: "marlow", first: S.marlowFirst, state: "call-started", body: S.marlowBody("call-started") }));
+        state.marlowCard = "call-started";
+        addStep({ id: "s-msg", kind: "message", status: "running", title: "Messaging Marlow", detail: "call started", statusText: "", body: S.messageStepBody("call-started") });
         setStatus("working", "Messaging Marlow");
       },
     },
     {
       label: "message-started",
-      caption: "The call has started. That does not show Marlow received it, so the card says Call started, not Sent.",
+      caption: "Still Call started. Nothing yet shows that Marlow received it, so the card does not say Sent.",
       wait: 500,
       fn() {
         setMarlow("call-started");
@@ -642,9 +651,9 @@
       caption: "Otto calls T3 Code. The card is drawn from Otto's own tool call.",
       wait: 300,
       fn() {
-        add(CT.messaged({ id: "m-t3", target: "t3code", first: S.t3First, state: "sending", body: S.t3Body("sending") }));
-        state.t3 = "sending";
-        addStep({ id: "s-t3", kind: "agent", status: "running", title: "Calling T3 Code", detail: "sending", statusText: "", body: S.agentStepBody("sending") });
+        add(CT.messaged({ id: "m-t3", target: "t3code", first: S.t3First, state: "call-started", body: S.t3Body("call-started") }));
+        state.t3 = "call-started";
+        addStep({ id: "s-t3", kind: "agent", status: "running", title: "Calling T3 Code", detail: "call started", statusText: "", body: S.agentStepBody("call-started") });
         setStatus("working", "Calling T3 Code");
       },
     },
@@ -779,8 +788,10 @@
     state.phrase = "";
     state.mode = "steer"; // the mode chosen from the menu lasts for one run
     CT.announce(outcome ? "Stopped" : "Otto finished");
-    // Queued messages start in order once the run has ended.
-    const next = state.queued.shift();
+    // A run that ends by itself: what was held becomes queued, and queued messages
+    // start in order. After a confirmed Stop nothing starts by itself.
+    state.queued.push(...state.held.splice(0));
+    const next = outcome ? null : state.queued.shift();
     if (next) add(CT.msg({ role: "user", html: CT.esc(next) }) + CT.caption("<span>Was queued. In the app this starts the next run.</span>"));
     renderRail();
     renderComposer();
@@ -822,21 +833,22 @@
     }
     $("#unseen-wait")?.remove();
     state.pending = [];
-    state.held.splice(0).forEach((text) => state.queued.push(text)); // nothing left to answer; they start the next run
+    // Nothing starts by itself after a stop: held and queued messages stay on the shelf, unsent.
+    state.unsent.push(...state.held.splice(0), ...state.queued.splice(0));
     $$('#run-activity .step[data-status="running"], #run-activity .step[data-status="waiting"]').forEach((step) => {
       step.dataset.status = "skipped";
       $(".step-status", step).textContent = "Stopped";
       $(".step-node", step).innerHTML = CT.icon("tool");
     });
     const marlowRunning = state.marlow.state === "working";
-    const marlowUnsure = state.marlowCard === "sending" || state.marlowCard === "call-started";
+    const marlowUnsure = state.marlowCard === "call-started";
     if (marlowRunning) {
       state.marlow = { state: "stopped", preview: "Stopped.", time: clockTime(), unread: false };
       setMarlow("recipient-stopped");
     } else if (marlowUnsure) {
       setMarlow("unknown");
     }
-    const t3Unsure = state.t3 === "sending" || state.t3 === "call-started";
+    const t3Unsure = state.t3 === "call-started";
     if (t3Unsure) setT3("delivery-unknown");
     if (state.t3 === "call-made") setT3("call-made", { stopped: true });
     const nothingElse = !marlowRunning && !marlowUnsure && !t3Unsure && state.t3 !== "call-made";
@@ -881,7 +893,7 @@
     $$('#run-activity .step[data-status="running"] .step-status').forEach((node) => (node.textContent = lost ? "Last seen running" : ""));
     $$(".messaged").forEach((card) => {
       const key = card.dataset.state;
-      if (["sending", "call-started", "working"].includes(key)) $(":scope > summary .state", card).outerHTML = CT.state(key, lost);
+      if (["call-started", "working"].includes(key)) $(":scope > summary .state", card).outerHTML = CT.state(key, lost);
     });
     activityLabel();
   }
@@ -1129,15 +1141,20 @@
       state.outbox.push(text);
       clear();
       bubble("Sends when reconnected", "held");
-    } else if (state.run === "stopping" || (active && how === "queue") || (active && how === "plain" && state.mode === "queue" && pendingKind() !== "question")) {
+    } else if (state.run === "stopping") {
       state.queued.push(text);
       clear();
       CT.announce("Queued");
-    } else if (active && pendingKind() === "question" && how !== "steer") {
-      // Not the answer: it is sent into the run once the question is answered or dismissed.
+    } else if (active && pendingKind() === "question") {
+      // A pending question holds every outgoing message in this task, whichever way
+      // it was sent. It is not the answer.
       state.held.push(text);
       clear();
       CT.announce("Held until you answer");
+    } else if (active && (how === "queue" || (how === "plain" && state.mode === "queue"))) {
+      state.queued.push(text);
+      clear();
+      CT.announce("Queued");
     } else if (active) {
       // A steer joins the run. Pending approvals stay pending.
       clear();
@@ -1194,9 +1211,8 @@
     if (card.id !== "approval" || card.dataset.state !== "pending" || !resolveGate) return;
     event.preventDefault();
     if (choice === "always") {
-      // The rule is not shown as saved until the gateway confirms it.
-      state.lasts = $(".standing", card).dataset.lasts;
-      $(".standing", card).outerHTML = CT.standing({ bot: "otto", rule: S.approval.rule, open: true, save: "saving", lasts: state.lasts });
+      // Not shown as saved until the gateway answers that it applied the decision.
+      $(".standing", card).outerHTML = CT.standing({ bot: "otto", request: S.approval.request, open: true, sent: "sending" });
       $('.standing [data-decision="deny"]', card).focus();
       follow();
       return setTimeout(() => {
@@ -1209,12 +1225,13 @@
     resolveGate();
   });
 
-  // The question card: answered or dismissed, the run goes on and held messages are sent.
+  // The last pending question is settled (answered, dismissed or expired): the run
+  // goes on, and held messages are released in the order they were sent.
   document.addEventListener("ct:question", (event) => {
     if (event.detail.card.id !== "question") return;
     state.pending = state.pending.filter((id) => id !== "question");
     if (!state.pending.length && state.run === "waiting") state.run = "running";
-    state.held.splice(0).forEach((text) => add(CT.msg({ role: "user", html: CT.esc(text) }) + CT.caption("<span>Steer</span>")));
+    if (!state.pending.includes("question")) state.held.splice(0).forEach((text) => add(CT.msg({ role: "user", html: CT.esc(text) }) + CT.caption("<span>Steer</span>")));
     setStatus("thinking", "Thinking");
     renderComposer();
     resolveGate?.();
@@ -1296,6 +1313,12 @@
     if (queue) {
       const [text] = state.queued.splice(Number(queue.dataset.index), 1);
       if (queue.dataset.queue === "send") send("steer", text); // through the same operation
+      else renderComposer();
+    }
+    const unsent = target.closest("[data-unsent]");
+    if (unsent) {
+      const [text] = state.unsent.splice(Number(unsent.dataset.index), 1);
+      if (unsent.dataset.unsent === "send") send("plain", text);
       else renderComposer();
     }
     const held = target.closest("[data-held]");
@@ -1530,6 +1553,14 @@
     settleAccess,
     openRecipient,
     openSender,
+    // The pending question expires without an answer.
+    expireQuestion() {
+      const card = $("#question");
+      if (card?.dataset.state !== "pending") return;
+      const parent = card.parentElement;
+      CT.swap(card, CT.questionAnswered({ id: "question", questions: [{ title: S.question.title, answers: [] }], state: "expired", raw: S.questionRaw() }));
+      parent.dispatchEvent(new CustomEvent("ct:question", { bubbles: true, detail: { card: { id: "question" }, state: "expired" } }));
+    },
     state,
   };
 })();
