@@ -30,7 +30,12 @@ import {
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
 import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
-import { MAX_FILE_TRANSFERS, MAX_TRANSFER_BYTES } from "./files.ts";
+import {
+  MAX_FILE_TRANSFERS,
+  MAX_PENDING_SAVES,
+  MAX_SAVE_BYTES,
+  MAX_TRANSFER_BYTES,
+} from "./files.ts";
 import { emptyActivity } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
@@ -244,6 +249,19 @@ export const ATTACHMENT_NOT_WALKED: Record<string, string> = {
 };
 
 /**
+ * Files waiting for their save dialog in the desktop app (`PendingSaves`):
+ * the bytes a viewer handed over, kept as bytes, keyed by its window.
+ */
+export const SAVE_OWNERS: Record<string, Owner> = {
+  held: {
+    max: MAX_PENDING_SAVES,
+    each: N + MAX_SAVE_BYTES,
+    row: "saves",
+    opaque: "file bytes, at most `MAX_SAVE_BYTES` each",
+  },
+};
+
+/**
  * The collection fields of each class whose instances the host keeps, from
  * the registry: what a class's source may declare. A field not named here is
  * found by the source scan.
@@ -253,6 +271,7 @@ export function ownerClassFields(): Record<string, string[]> {
     ClawtrateClient: new Set(),
     ViewerSession: new Set(Object.keys(VIEWER_OWNERS)),
     AttachmentStore: new Set(Object.keys(ATTACHMENT_OWNERS)),
+    PendingSaves: new Set(Object.keys(SAVE_OWNERS)),
   };
   for (const path of Object.keys(CLIENT_OWNERS)) {
     const parts = path.split(".");
@@ -277,5 +296,6 @@ export function ownerRows(viewers: number): Record<string, number> {
   add(CLIENT_OWNERS, 1);
   add(VIEWER_OWNERS, viewers);
   add(ATTACHMENT_OWNERS, 1);
+  add(SAVE_OWNERS, 1);
   return rows;
 }

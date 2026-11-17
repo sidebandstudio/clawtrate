@@ -602,6 +602,59 @@ export class FileTransfers {
   }
 }
 
+// Saving a file the viewer holds (the desktop app's save dialog) --------------
+
+/** The most a viewer may hand the host to save: the largest content any reader sends. */
+export const MAX_SAVE_BYTES = MAX_TRANSFER_BYTES;
+/** Saves waiting for their dialog at once, across every window; the desktop app has one window. */
+export const MAX_PENDING_SAVES = 1;
+
+/**
+ * Bytes a viewer handed the host to save, held only while their save dialog
+ * is open: at most `MAX_PENDING_SAVES`, one per window, each at most
+ * `MAX_SAVE_BYTES`. The host releases one when its dialog is cancelled, when
+ * its write ends either way, and when its window or page goes.
+ */
+export class PendingSaves {
+  /** By ticket: the window that handed the bytes over, and the bytes. */
+  private readonly held = new Map<number, { owner: number; data: ArrayBuffer }>();
+  private next = 0;
+
+  /** Throws, holding nothing, for more than a reader sends or while a save is already waiting. */
+  check(owner: number, bytes: number): void {
+    if (bytes > MAX_SAVE_BYTES)
+      throw new Error("This is more than any of the gateway's readers sends, so it was not saved.");
+    const waiting = [...this.held.values()].some((each) => each.owner === owner);
+    if (waiting || this.held.size >= MAX_PENDING_SAVES)
+      throw new Error("Another file is waiting to be saved. Finish that save first.");
+  }
+
+  /**
+   * Hold `data` for a dialog of `owner`'s, and answer the ticket that names
+   * this save alone. Its bytes move here (`transfer`): what handed them over
+   * is left empty, so they are held in one place only.
+   */
+  hold(owner: number, data: ArrayBuffer): number {
+    this.check(owner, data.byteLength);
+    this.next += 1;
+    this.held.set(this.next, { owner, data: data.transfer() });
+    return this.next;
+  }
+
+  /** The bytes of this save, or null once released. */
+  get(ticket: number): ArrayBuffer | null {
+    return this.held.get(ticket)?.data ?? null;
+  }
+
+  release(ticket: number): void {
+    this.held.delete(ticket);
+  }
+
+  get size(): number {
+    return this.held.size;
+  }
+}
+
 // Reading through the gateway -------------------------------------------------
 
 export type FileRequest = (method: string, params: unknown) => Promise<unknown>;

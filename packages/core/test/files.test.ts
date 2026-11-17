@@ -20,6 +20,8 @@ import {
   finishedChanges,
   listTaskFiles,
   MAX_FILE_TRANSFERS,
+  MAX_SAVE_BYTES,
+  PendingSaves,
   planTaskRead,
   planWorkspaceRead,
   PREVIEW_MAX_BYTES,
@@ -717,6 +719,31 @@ describe("content on its way to a viewer", () => {
     expect(transfers.size).toBe(1);
     transfers.release(two);
     expect(transfers.size).toBe(0);
+  });
+
+  it("F-319: a file waiting to be saved is at most what a reader sends, one per window, and its bytes move", () => {
+    const saves = new PendingSaves();
+    const tooLarge = new ArrayBuffer(MAX_SAVE_BYTES + 1);
+    expect(() => saves.hold(1, tooLarge)).toThrow(/more than any of the gateway's readers sends/);
+    expect(tooLarge.byteLength).toBe(MAX_SAVE_BYTES + 1);
+    expect(saves.size).toBe(0);
+    const handed = Uint8Array.from([239, 187, 191, 97, 10]).buffer;
+    const ticket = saves.hold(1, handed);
+    // Moved, not copied: what handed them over is left empty.
+    expect(handed.byteLength).toBe(0);
+    expect(new Uint8Array(saves.get(ticket)!)).toEqual(Uint8Array.from([239, 187, 191, 97, 10]));
+    expect(() => saves.hold(1, new ArrayBuffer(1))).toThrow(/waiting to be saved/);
+    expect(() => saves.hold(2, new ArrayBuffer(1))).toThrow(/waiting to be saved/);
+    saves.release(ticket);
+    expect(saves.get(ticket)).toBeNull();
+    expect(saves.size).toBe(0);
+    // A later save of the same window has a ticket of its own.
+    const later = saves.hold(1, new ArrayBuffer(2));
+    expect(later).not.toBe(ticket);
+    expect(saves.get(ticket)).toBeNull();
+    saves.release(later);
+    saves.hold(2, new ArrayBuffer(MAX_SAVE_BYTES));
+    expect(saves.size).toBe(1);
   });
 
   it("base64, UTF-8 and SHA-256 give the standard answers", () => {
