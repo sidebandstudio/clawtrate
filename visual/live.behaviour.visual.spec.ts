@@ -768,6 +768,19 @@ test.describe("steering, queueing and holding", () => {
     await expect(steer.locator(".msg-caption")).toHaveText("Steer");
   });
 
+  test("F-096 F-106: a typed Stop now and a quick second message are steers, said as such, and nothing claims a stop or a reply each", async ({
+    page,
+  }) => {
+    await open(page, "run-working");
+    await field(page).fill("Stop now");
+    await page.keyboard.press("Enter");
+    const typed = page.getByTestId("outgoing").filter({ hasText: "Stop now" });
+    await expect(typed.locator(".msg-caption")).toHaveText("Steer");
+    await expect(page.getByTestId("status-phrase")).not.toHaveText("Stopping…");
+    await expect(page.getByRole("button", { name: "Stop Otto" })).toBeVisible();
+    await expect(page.getByTestId("stop-note")).toHaveCount(0);
+  });
+
   test("F-061: the mode word's menu is keyboard operable; Queue after this turn queues as a shelf row", async ({
     page,
   }) => {
