@@ -332,10 +332,10 @@ Every card's state is one the gateway can establish. A call's start is the first
 | Done                 | The result arrived, not flagged as an error                                                                        | Past: "Read"                                          | The duration, when the gateway reported both ends                                                                      |
 | Failed               | The result is flagged as an error                                                                                  | "Couldn't": "Couldn't read"                           | The failed mark and "Failed", "Timed out" or "Aborted" in `--danger`                                                   |
 | Not run              | The approval was denied or expired; a policy or the review refused the call; the gateway skipped it                | "Didn't", or "Blocked by policy", "Blocked by review" | The stopped mark and "Denied", "Expired" or "Not run"; a block is shown as failed, so it stays in view (section 12)    |
-| Stopped              | The run was stopped before the result, and the result says it was aborted or no result came                        | Present, as last shown                                | The stopped mark and "Stopped"                                                                                         |
+| Stopped              | The run was stopped before the result, and the result says it was aborted or no result came                        | "Stopped" and the present: "Stopped reading notes.md" | The stopped mark and "Stopped"                                                                                         |
 | Last seen            | The connection was lost while the call ran                                                                         | Unchanged                                             | "Last seen running", still                                                                                             |
 
-A command that exits with a non-zero code is done, not failed (8.4). A kind whose effect leaves the gateway, such as a message on a chat channel or a helper started, says "Unknown" instead of "Stopped" when the gateway cannot say whether the call was made, as the Messaged card does.
+A command that exits with a non-zero code is done, not failed (8.4). A kind whose effect leaves the gateway, such as a message on a chat channel or a helper started, says "Unknown" instead of "Stopped" when the gateway cannot say whether the call was made, as the Messaged card does: "Stopped sending a message on Telegram", "Unknown".
 
 ### 7.4 Folding
 
@@ -348,6 +348,8 @@ Actions of one kind in a row become one card with a count: "Read 6 files", "Sear
 **What breaks a fold.** An action of another kind; a bubble, including text the bot writes beside a tool call; an approval or question card; a note; your own message sent into the run; the run's end. After a break, the next action of the kind starts a new card.
 
 **Becoming a fold.** The second action of the kind turns the card into a fold in place. Its line changes to the plural ("Read 2 files"), and the first action becomes the fold's first row. Nothing moves: the line keeps its height and position. If the card was open, the fold opens with that first row open in the view it had (Readable or Raw), and focus stays on the control it was on.
+
+**Counting.** A fold counts its actions, except that a kind that acts on files counts each file once: three edits to two files read "Edited 2 files", and the fold's rows still list all three edits. The run line always counts actions (7.7).
 
 **The folded line.**
 
