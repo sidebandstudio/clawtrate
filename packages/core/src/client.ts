@@ -632,13 +632,6 @@ export class ClawtrateClient {
     { task: string; files: OutgoingAttachment[]; bytes: number }
   >();
   private attachmentBytes = 0;
-  /**
-   * Live reasoning ids come from this counter, which never goes backwards for
-   * the life of the client: no id is used twice in a task, whatever is
-   * resynced, closed or reopened.
-   */
-  private nextReasoningId = 0;
-  private readonly ids = { next: () => this.nextReasoningId++ };
   /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
   private readonly withdrawnOwners = new WeakSet<object>();
   /** Task creations not yet settled, oldest first (`MAX_CREATIONS`). */
@@ -2697,11 +2690,12 @@ export class ClawtrateClient {
     // Rebuilt aside, as a resync would, into a table dropped after this read.
     const scratch = new RawTable(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
     const ctx = { ...this.context(key), raw: scratch };
-    const fromHistory = runsFromHistory(history?.messages, asRecord(history?.inFlightRun), ctx);
-    const merge = mergeHistoryRuns(current.runs, fromHistory, ctx);
-    const source = merge.fromHistory.get(stepId) ?? stepId;
-    const whole = scratch.get(key, source);
-    const read = fromHistory.flatMap((run) => run.steps).find((each) => each.id === source);
+    // The same function names the step in the rebuild as here: its payload is under the same id.
+    const fromHistory = runsFromHistory(history?.messages, asRecord(history?.inFlightRun), ctx, {
+      windowCut: history?.hasMore === true,
+    });
+    const whole = scratch.get(key, stepId);
+    const read = fromHistory.flatMap((run) => run.steps).find((each) => each.id === stepId);
     if (!whole || !read) {
       return {
         status: "not-available-yet",
@@ -2725,7 +2719,7 @@ export class ClawtrateClient {
   // Activity ------------------------------------------------------------------------
 
   private context(key: string): EngineContext {
-    return { sessionKey: key, now: this.now(), raw: this.raw, ids: this.ids };
+    return { sessionKey: key, now: this.now(), raw: this.raw };
   }
 
   private updateActivity(
@@ -3519,11 +3513,16 @@ export class ClawtrateClient {
       const ctx = this.context(key);
       // History is built aside; only the steps the merge takes from it bring their raw payloads.
       const scratch = new RawTable();
-      const fromHistory = runsFromHistory(messages, inFlight, { ...ctx, raw: scratch });
+      const fromHistory = runsFromHistory(
+        messages,
+        inFlight,
+        { ...ctx, raw: scratch },
+        { windowCut: history?.hasMore === true },
+      );
       const current = this.state.transcripts[key] ?? this.emptyTranscript(key);
       const merge = mergeHistoryRuns(current.runs, fromHistory, ctx);
-      for (const [stepId, source] of merge.fromHistory) {
-        const payload = scratch.get(key, source);
+      for (const stepId of merge.fromHistory) {
+        const payload = scratch.get(key, stepId);
         if (payload) this.raw.set(key, stepId, payload);
       }
       const runs = settleVanishedRuns(

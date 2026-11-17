@@ -228,6 +228,7 @@ export const RUN: Bound = flagged<Run>()({
   outcomeKnown: FLAG,
   attemptErrors: list(MAX_ATTEMPT_ERROR_COUNT, text(MAX_ATTEMPT_ERROR_CHARS)),
   omittedSteps: NUMBER,
+  reasoningAnchor: ID,
   nextReasoning: NUMBER,
 });
 const attachmentInfo = object<OutgoingAttachmentInfo>()({

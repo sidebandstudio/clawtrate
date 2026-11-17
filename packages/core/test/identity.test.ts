@@ -1,16 +1,16 @@
-// Reasoning identity (ruling 2) and live/history equivalence (ruling 3).
+// Reasoning identity and live/history equivalence.
 //
-// Promised: a segment never overwrites another, whatever its length, since
-// continuation is decided from the whole earlier text's length and digest; a
-// step id is never used twice in a task for the life of the client; and ids
-// are stable while the task stays open, across live streaming and any number
-// of resyncs of the same window. Not promised: that a reasoning step keeps its
-// id after the task is closed and reopened from a different window of history.
-// So live state, a fresh rebuild and two resyncs are compared on the same
-// steps in the same order with the same gateway-established fields and raw
-// contents; ids are compared within a session only.
+// A reasoning step's id is a pure function of its place in its run: the run,
+// the nearest tool call before it (or the run's start), and the count of
+// reasoning blocks since. Live and history compute it alike, so nothing is
+// matched. Promised: a segment never overwrites another, whatever its length;
+// no id is used twice in a task; on a resync of the same window a card keeps
+// its id whenever the blocks before it since its anchor are the same in
+// number. Not promised: when history shows a block, since the same anchor,
+// that the live stream never showed on its own, the cards after it there
+// shift by one; nothing across a reopening or a different window.
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { applyApprovalRequested, normalizeApprovals, parseExecApproval } from "../src/approvals.ts";
 import {
   applyAgentEvent,
@@ -29,12 +29,7 @@ import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./cl
 import { until } from "./fake-gateway.ts";
 
 let raw: RawTable;
-const ctx = (table = raw, ids?: { next(): number }): EngineContext => ({
-  sessionKey: KEY,
-  now: 5_000,
-  raw: table,
-  ...(ids ? { ids } : {}),
-});
+const ctx = (table = raw): EngineContext => ({ sessionKey: KEY, now: 5_000, raw: table });
 beforeEach(() => {
   raw = new RawTable();
 });
@@ -42,17 +37,10 @@ beforeEach(() => {
 const thinking = (seq: number, text: string, runId = "r") =>
   agentEvent(runId, seq, "thinking", { text, delta: text });
 
-function feed(
-  activity: TaskActivity,
-  events: Array<ReturnType<typeof agentEvent>>,
-  table = raw,
-  ids?: { next(): number },
-) {
+function feed(activity: TaskActivity, events: Array<ReturnType<typeof agentEvent>>, table = raw) {
   let next = activity;
   for (const event of events) {
-    next = retainActivity(
-      normalizeApprovals(applyAgentEvent(next, event, ctx(table, ids)).activity),
-    );
+    next = retainActivity(normalizeApprovals(applyAgentEvent(next, event, ctx(table)).activity));
   }
   return next;
 }
@@ -122,8 +110,8 @@ function resync(
     runsFromHistory(rows, inFlight, ctx(scratch)),
     ctx(table),
   );
-  for (const [stepId, source] of merge.fromHistory) {
-    const payload = scratch.get(KEY, source);
+  for (const stepId of merge.fromHistory) {
+    const payload = scratch.get(KEY, stepId);
     if (payload) table.set(KEY, stepId, payload);
   }
   return retainActivity(normalizeApprovals({ ...activity, runs: merge.runs }));
@@ -150,13 +138,13 @@ describe("a restart is a new segment however long the earlier one (A4, B1)", () 
     const live = feed(emptyActivity, [thinking(1, before), thinking(2, restarted)]);
     const steps = live.runs[0]!.steps;
     expect(steps.map((step) => [step.id, step.status])).toEqual([
-      ["reasoning:r:0", "done"],
-      ["reasoning:r:1", "running"],
+      ["reasoning:r:s:0", "done"],
+      ["reasoning:r:s:1", "running"],
     ]);
-    expect((raw.get(KEY, "reasoning:r:0")!.call as { data: { text: string } }).data.text).toBe(
+    expect((raw.get(KEY, "reasoning:r:s:0")!.call as { data: { text: string } }).data.text).toBe(
       before,
     );
-    expect((raw.get(KEY, "reasoning:r:1")!.call as { data: { text: string } }).data.text).toBe(
+    expect((raw.get(KEY, "reasoning:r:s:1")!.call as { data: { text: string } }).data.text).toBe(
       restarted,
     );
     expect(steps[0]!.continuation).toMatchObject({ length: before.length });
@@ -209,14 +197,14 @@ describe("a restart is a new segment however long the earlier one (A4, B1)", () 
 });
 
 describe("a step id is never used twice (B2)", () => {
-  function segments(count: number, allocator?: { next(): number }) {
+  function segments(count: number) {
     const events: Array<ReturnType<typeof agentEvent>> = [];
     let seq = 0;
     for (let i = 0; i < count; i += 1) {
       events.push(thinking((seq += 1), `segment${i}`));
       events.push(agentEvent("r", (seq += 1), "lifecycle", { phase: "model" }));
     }
-    return feed(emptyActivity, events, raw, allocator);
+    return feed(emptyActivity, events, raw);
   }
 
   it.each([MAX_STEPS_PER_RUN, MAX_STEPS_PER_RUN + 1, MAX_STEPS_PER_RUN + 2])(
@@ -226,8 +214,8 @@ describe("a step id is never used twice (B2)", () => {
       const all = run.steps.map((step) => step.id);
       expect(new Set(all).size).toBe(all.length);
       expect(run.omittedSteps).toBe(count - MAX_STEPS_PER_RUN);
-      expect(all.at(-1)).toBe(`reasoning:r:${count - 1}`);
-      expect(raw.get(KEY, `reasoning:r:${count - 1}`)!.call).toMatchObject({
+      expect(all.at(-1)).toBe(`reasoning:r:s:${count - 1}`);
+      expect(raw.get(KEY, `reasoning:r:s:${count - 1}`)!.call).toMatchObject({
         data: { text: `segment${count - 1}` },
       });
     },
@@ -268,7 +256,8 @@ describe("a step id is never used twice (B2)", () => {
     client.openSession(KEY);
     await until(() => transcript()?.status === "ready" && transcript().runs.length === 1);
     const reopened = ids(transcript());
-    expect(reopened).toEqual(["reasoning:r:ha41.0"]);
+    // The page does not show the run's start: its reasoning is numbered from the cut, never as `s`.
+    expect(reopened).toEqual(["reasoning:r:c:0"]);
     for (const id of reopened) expect(live).not.toContain(id);
     note();
     // The next segment takes an id never used in this task.
@@ -364,10 +353,8 @@ describe("live, fresh rebuild and two resyncs agree on what is promised (A6, rul
   });
 
   it("while reasoning still streams, and after the next frame", () => {
-    let n = 0;
-    const allocator = { next: () => n++ };
     const liveTable = new RawTable();
-    const live = withCards(feed(emptyActivity, liveEvents, liveTable, allocator), liveTable);
+    const live = withCards(feed(emptyActivity, liveEvents, liveTable), liveTable);
     const freshTable = new RawTable();
     const fresh = withCards(
       { ...emptyActivity, runs: runsFromHistory(rows, snapshot, ctx(freshTable)) },
@@ -400,8 +387,8 @@ describe("live, fresh rebuild and two resyncs agree on what is promised (A6, rul
     expect(ids(liveTwice)).toEqual(ids(live));
     expect(ids(freshTwice)).toEqual(ids(fresh));
     // The next frame continues the streaming segment in both sessions alike.
-    const nextLive = feed(liveTwice, [thinking(11, "fourth, more")], liveTable, allocator);
-    const nextFresh = feed(freshTwice, [thinking(11, "fourth, more")], freshTable, allocator);
+    const nextLive = feed(liveTwice, [thinking(11, "fourth, more")], liveTable);
+    const nextFresh = feed(freshTwice, [thinking(11, "fourth, more")], freshTable);
     expect(facts(nextFresh, freshTable)).toEqual(facts(nextLive, liveTable));
     expect(ids(nextLive)).toEqual(ids(live));
   });
@@ -426,8 +413,6 @@ describe("live, fresh rebuild and two resyncs agree on what is promised (A6, rul
         __openclaw: { id: "a4", seq: 5, runId: "r" },
       },
     ];
-    let n = 0;
-    const allocator = { next: () => n++ };
     const liveTable = new RawTable();
     const live = feed(
       emptyActivity,
@@ -438,7 +423,6 @@ describe("live, fresh rebuild and two resyncs agree on what is promised (A6, rul
         agentEvent("r", 13, "lifecycle", { phase: "end" }),
       ],
       liveTable,
-      allocator,
     );
     const liveIds = ids(live);
     const once = resync(live, finishedRows, null, liveTable);
@@ -471,52 +455,6 @@ describe("live, fresh rebuild and two resyncs agree on what is promised (A6, rul
     ]);
     expect(thinkingOf(freshTwice, freshTable)).toEqual(thinkingOf(twice, liveTable));
     expect(twice.runs[0]).toMatchObject({ state: "completed", outcomeKnown: true });
-  });
-
-  it("repeated reasoning text pairs in order, and a resync never moves an id to another segment", () => {
-    let n = 0;
-    const allocator = { next: () => n++ };
-    const liveTable = new RawTable();
-    const live = feed(
-      emptyActivity,
-      [thinking(1, "abc"), agentEvent("r", 2, "lifecycle", { phase: "model" }), thinking(3, "abc")],
-      liveTable,
-      allocator,
-    );
-    // The first segment's last character never reached the live view.
-    const repeatRows = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "abcd" },
-          { type: "thinking", thinking: "abc" },
-        ],
-        stopReason: "stop",
-        __openclaw: { id: "a1", seq: 1, runId: "r" },
-      },
-    ];
-    const once = resync(live, repeatRows, null, liveTable);
-    const twice = resync(once, repeatRows, null, liveTable);
-    const freshTable = new RawTable();
-    const fresh = { ...emptyActivity, runs: runsFromHistory(repeatRows, null, ctx(freshTable)) };
-    const freshTwice = resync(
-      resync(fresh, repeatRows, null, freshTable),
-      repeatRows,
-      null,
-      freshTable,
-    );
-    expect(ids(live)).toEqual(["reasoning:r:0", "reasoning:r:1"]);
-    expect(ids(once)).toEqual(ids(live));
-    expect(ids(twice)).toEqual(ids(live));
-    expect(ids(freshTwice)).toEqual(ids(fresh));
-    // Each id keeps its own segment's text, read raw.
-    const thinkingById = (activity: TaskActivity, table: RawTable) =>
-      activity.runs[0]!.steps.map((step) => [step.id, rawFacts(table.get(KEY, step.id))?.thinking]);
-    expect(thinkingById(twice, liveTable)).toEqual([
-      ["reasoning:r:0", "abcd"],
-      ["reasoning:r:1", "abc"],
-    ]);
-    expect(facts(twice, liveTable)).toEqual(facts(freshTwice, freshTable));
   });
 
   it("after retention dropped the oldest steps, a resync drops the same ones again", () => {
@@ -562,5 +500,275 @@ describe("live, fresh rebuild and two resyncs agree on what is promised (A6, rul
       expect(ids(each)).toEqual(ids(streamed));
       expect(each.runs[0]!.omittedSteps).toBe(4);
     }
+  });
+});
+
+/** One finished run's reasoning, streamed live as `segments` with a `model` boundary between each, then resynced with `blocks`. */
+function reasoningResync(segments: string[], blocks: string[]) {
+  const liveTable = new RawTable();
+  const events: Array<ReturnType<typeof agentEvent>> = [];
+  segments.forEach((text, i) => {
+    if (i > 0) events.push(agentEvent("r", i * 2, "lifecycle", { phase: "model" }));
+    events.push(thinking(i * 2 + 1, text));
+  });
+  const live = feed(emptyActivity, events, liveTable);
+  const rows = [
+    {
+      role: "assistant",
+      content: blocks.map((text) => ({ type: "thinking", thinking: text })),
+      stopReason: "stop",
+      __openclaw: { id: "a1", seq: 1, runId: "r" },
+    },
+  ];
+  const once = resync(live, rows, null, liveTable);
+  const twice = resync(once, rows, null, liveTable);
+  const byId = (activity: TaskActivity) =>
+    activity.runs[0]!.steps.map((step) => [
+      step.id,
+      rawFacts(liveTable.get(KEY, step.id))?.thinking,
+    ]);
+  return { live, once, twice, byId };
+}
+
+describe("reasoning ids are their places, so a resync of the same window moves none (D1)", () => {
+  it("abc, abc reconciled with abcd, abc keeps both ids, each on its own block", () => {
+    const { live, once, twice, byId } = reasoningResync(["abc", "abc"], ["abcd", "abc"]);
+    expect(ids(live)).toEqual(["reasoning:r:s:0", "reasoning:r:s:1"]);
+    expect(ids(once)).toEqual(ids(live));
+    expect(byId(twice)).toEqual([
+      ["reasoning:r:s:0", "abcd"],
+      ["reasoning:r:s:1", "abc"],
+    ]);
+  });
+
+  it("a, then abc, reconciled with abc, abc does not give the first block the second card's id", () => {
+    const { live, once, twice, byId } = reasoningResync(["a", "abc"], ["abc", "abc"]);
+    expect(ids(live)).toEqual(["reasoning:r:s:0", "reasoning:r:s:1"]);
+    expect(ids(once)).toEqual(ids(live));
+    expect(ids(twice)).toEqual(ids(live));
+    expect(byId(twice)).toEqual([
+      ["reasoning:r:s:0", "abc"],
+      ["reasoning:r:s:1", "abc"],
+    ]);
+  });
+
+  it("one combined live card keeps its id for the first block, and the next block follows with its own", () => {
+    const { live, once, byId } = reasoningResync(["first\nsecond"], ["first", "second"]);
+    expect(ids(live)).toEqual(["reasoning:r:s:0"]);
+    expect(byId(once)).toEqual([
+      ["reasoning:r:s:0", "first"],
+      ["reasoning:r:s:1", "second"],
+    ]);
+  });
+});
+
+/** A small seeded generator, so a failing case can be replayed. */
+function random(seed: number) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+type Item = { kind: "reasoning"; text: string } | { kind: "tool"; id: string };
+
+describe("reasoning ids follow from the history sequence, however the live stream showed it (property)", () => {
+  /** The pure function: each reasoning block's id from the nearest tool before it and the count since. */
+  function expectedIds(items: Item[]): string[] {
+    let anchor = "s";
+    let n = 0;
+    return items.map((item) => {
+      if (item.kind === "tool") {
+        anchor = `t.${item.id}`;
+        n = 0;
+        return `tool:${item.id}`;
+      }
+      return `reasoning:r:${anchor}:${n++}`;
+    });
+  }
+
+  const stats = { cases: 0, unshown: 0 };
+  // The generator reaches both sides of the promise: cases where every block was shown, and
+  // cases where one was combined or never shown.
+  afterAll(() => {
+    expect(stats.cases).toBe(300);
+    expect(stats.unshown).toBeGreaterThan(50);
+    expect(stats.cases - stats.unshown).toBeGreaterThan(50);
+  });
+
+  for (let seed = 1; seed <= 300; seed += 1) {
+    it(`case ${seed}`, () => {
+      const next = random(seed);
+      const pick = <T>(list: T[]) => list[Math.floor(next() * list.length)]!;
+      // A run: reasoning blocks and tool calls. Repeated, prefix-sharing texts make matching by text fail.
+      const items: Item[] = [];
+      let tools = 0;
+      for (let i = 0, count = 1 + Math.floor(next() * 10); i < count; i += 1) {
+        items.push(
+          next() < 0.7
+            ? { kind: "reasoning", text: pick(["a", "ab", "abc", "abcd", "x", "abc"]) }
+            : { kind: "tool", id: `c${(tools += 1)}` },
+        );
+      }
+      // History: one assistant row per model call, ending at each tool call, then the reply.
+      const rows: unknown[] = [{ role: "user", content: "Go", __openclaw: { id: "u0", seq: 0 } }];
+      let content: unknown[] = [];
+      let seq = 1;
+      for (const item of items) {
+        if (item.kind === "reasoning") {
+          content.push({ type: "thinking", thinking: item.text });
+          continue;
+        }
+        content.push({ type: "toolCall", id: item.id, name: "ls", arguments: {} });
+        rows.push({
+          role: "assistant",
+          content,
+          __openclaw: { id: `a${seq}`, seq: seq++, runId: "r" },
+        });
+        rows.push({
+          role: "toolResult",
+          toolCallId: item.id,
+          isError: false,
+          content: [{ type: "text", text: "ok" }],
+          __openclaw: { id: `t${seq}`, seq: seq++, runId: "r" },
+        });
+        content = [];
+      }
+      content.push({ type: "text", text: "Done" });
+      rows.push({
+        role: "assistant",
+        content,
+        stopReason: "stop",
+        __openclaw: { id: `a${seq}`, seq, runId: "r" },
+      });
+
+      // Live: blocks of one model call may arrive combined into one card (as the gateway
+      // joins them), separately, with a missed tail, or not at all; each card in pieces.
+      const events: Array<ReturnType<typeof agentEvent>> = [];
+      let eventSeq = 0;
+      const emit = (stream: string, data: Record<string, unknown>) =>
+        events.push(agentEvent("r", (eventSeq += 1), stream, data));
+      /** For each block, the live card that showed it first, and whether it was that card's first block. */
+      const shown: Array<{ card: number; first: boolean } | null> = items.map(() => null);
+      let cards = 0;
+      let open: { text: string; blocks: number[] } | null = null;
+      const close = () => {
+        if (!open) return;
+        const text = next() < 0.3 && open.text.length > 1 ? open.text.slice(0, -1) : open.text;
+        for (let end = 1; end <= text.length; end += 1 + Math.floor(next() * 2))
+          emit("thinking", { text: text.slice(0, end), delta: "" });
+        emit("thinking", { text, delta: "" });
+        open = null;
+        emit("lifecycle", { phase: "model" });
+      };
+      emit("lifecycle", { phase: "start" });
+      items.forEach((item, index) => {
+        if (item.kind === "tool") {
+          close();
+          emit("tool", { phase: "start", name: "ls", toolCallId: item.id, args: {} });
+          emit("tool", {
+            phase: "result",
+            name: "ls",
+            toolCallId: item.id,
+            isError: false,
+            result: { content: [{ type: "text", text: "ok" }], details: {} },
+          });
+          emit("lifecycle", { phase: "model" });
+          return;
+        }
+        const way = next();
+        if (way < 0.1) return; // Never shown live.
+        if (open && way < 0.45) {
+          open.text += `\n${item.text}`;
+          open.blocks.push(index);
+          shown[index] = { card: cards - 1, first: false };
+          return;
+        }
+        close();
+        open = { text: item.text, blocks: [index] };
+        shown[index] = { card: cards, first: true };
+        cards += 1;
+      });
+      close();
+      emit("assistant", { text: "Done" });
+      emit("lifecycle", { phase: "end" });
+
+      const table = new RawTable();
+      const live = feed(emptyActivity, events, table);
+      const liveReasoning = live.runs[0]!.steps.filter((step) => step.kind === "reasoning");
+      expect(liveReasoning).toHaveLength(cards);
+      const once = resync(live, rows, null, table);
+      const twice = resync(once, rows, null, table);
+      const expected = expectedIds(items);
+      stats.cases += 1;
+      if (shown.some((each, i) => items[i]!.kind === "reasoning" && !each?.first))
+        stats.unshown += 1;
+
+      // The ids are the pure function of history's sequence, and none is used twice.
+      expect(ids(once)).toEqual(expected);
+      expect(new Set(ids(once)).size).toBe(expected.length);
+      expect(twice).toEqual(once);
+      // The raw record behind each reasoning step is found by the same id.
+      items.forEach((item, index) => {
+        if (item.kind === "reasoning")
+          expect(rawFacts(table.get(KEY, expected[index]!))?.thinking).toBe(item.text);
+      });
+      // Each card the live stream showed keeps its id on the first block it showed, unless an
+      // earlier block since the same anchor was never shown on its own (the stated non-promise).
+      items.forEach((item, index) => {
+        const card = shown[index];
+        if (!card?.first) return;
+        let unshownBefore = false;
+        for (let i = index - 1; i >= 0 && items[i]!.kind === "reasoning"; i -= 1)
+          if (!shown[i]?.first) unshownBefore = true;
+        const before = liveReasoning[card.card]!.id;
+        if (!unshownBefore) expect(before).toBe(expected[index]);
+        // Shifted or not, its old id is one the run's history gives, never one outside it.
+        else expect(expected).toContain(before);
+      });
+    });
+  }
+});
+
+describe("a run still in flight numbers its next reasoning from what history showed", () => {
+  it("after a gap that hid a tool call, the next live block takes the id history will give it", () => {
+    const table = new RawTable();
+    const live = feed(
+      emptyActivity,
+      [agentEvent("r", 1, "lifecycle", { phase: "start" }), thinking(2, "a")],
+      table,
+    );
+    // Missed in a gap: tool c1 and the reasoning after it.
+    const rows = [
+      { role: "user", content: "Go", __openclaw: { id: "u0", seq: 0 } },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "a" },
+          { type: "toolCall", id: "c1", name: "ls", arguments: {} },
+        ],
+        __openclaw: { id: "a1", seq: 1, runId: "r" },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        __openclaw: { id: "t1", seq: 2, runId: "r" },
+      },
+      thinkingRow("b", 3, [{ type: "text", text: "so" }]),
+    ];
+    const resynced = resync(live, rows, { runId: "r" }, table);
+    expect(resynced.runs[0]).toMatchObject({ reasoningAnchor: "t.c1", nextReasoning: 1 });
+    const next = feed(
+      resynced,
+      [agentEvent("r", 9, "lifecycle", { phase: "model" }), thinking(10, "c")],
+      table,
+    );
+    expect(ids(next)).toEqual(["reasoning:r:s:0", "tool:c1", "reasoning:r:t.c1:1"]);
   });
 });

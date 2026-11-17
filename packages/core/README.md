@@ -62,6 +62,9 @@ Writes need access the device may not hold. The first send, stop, answer, resolu
 - `status` (`loading`, `ready`, `error`), `items: TranscriptItem[]` (the last 200 history rows), `hasMore`, `loadedAt` (the latest successful history load), `interSession` and `linkedRuns` (`src/cards.ts`).
 - `live`: the active run's text, derived from `runs`, for a view that draws one streaming bubble.
 - `runs: Run[]`. Each run has `state`, `steps: Step[]`, `pendingCards`, `closedCards`, the streaming `text`, `error`, `ending` and `attemptErrors`.
+
+Key a step's view state (expansion, selection, a link) by `Step.id`. A tool step's id is `tool:<toolCallId>`, the gateway's own. A reasoning step's id is derived from its place in its run, never its text: the nearest tool call before it, or the run's start, and how many reasoning blocks came since (`reasoningStepId`; the run's `reasoningAnchor` and `nextReasoning` say where the next one is numbered from). On a resync of the same history window a reasoning card keeps its id whenever the blocks before it since its anchor are the same in number. A card the live stream showed as one and history holds as several keeps its id for the first; the others appear after it with their own ids. When history shows a block the live stream never showed on its own, the cards after it, since the same anchor, shift by one: clear or remap view state for those, and whenever the task is reopened or a different history window replaces this one.
+
 - `outbox: OutgoingMessage[]`, the user's messages until history holds them.
 - `questions: QuestionCard[]` and `approvals: ApprovalCard[]` (`src/approvals.ts`), with `approvalAccess` and `approvalSources` saying whether the approval lists could be read at all.
 - `caughtUp`: set when the task was reloaded after an event gap or a reconnect.
@@ -102,4 +105,4 @@ Message cards: a tool start is the model's request, not a delivery, so a card is
 - Question cards show at most 8 options per question (`optionsOmitted` counts the rest) and 3 questions.
 - At most 4 whole reads (`readStepRaw` from history, `readHistoryItem`) run at once; a fifth is refused.
 - A run this client started fails after 50 minutes (`DEFAULT_TURN_LIMIT_MS`). A request unanswered for 60 seconds fails locally.
-- Not promised: a reasoning step's id after its task is closed and reopened; that a step's whole text can be read before history holds it; that history itself is uncut (`Step.truncated` and `TranscriptItem.truncated` mark what the gateway cut); delivery of a message whose status is `checking` or `unconfirmed`; any order or link between a late reply and the send it answers.
+- Not promised: a reasoning step's id after its task is closed and reopened or read from a different history window, or after history shows a reasoning block before it, since the same tool call, that the live stream never showed on its own; that a step's whole text can be read before history holds it; that history itself is uncut (`Step.truncated` and `TranscriptItem.truncated` mark what the gateway cut); delivery of a message whose status is `checking` or `unconfirmed`; any order or link between a late reply and the send it answers.
