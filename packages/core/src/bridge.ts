@@ -336,6 +336,12 @@ export type BridgePolicy = {
   devGateway?: { url: string; token: string | null } | null;
   /** Files viewers added for their next message. */
   attachments?: AttachmentStore;
+  /**
+   * The most JSON characters a command's answer may have on this host's
+   * channel. A whole approval text longer than it is not given, and so not
+   * recorded as read: that approval stays deny-only for the viewer.
+   */
+  maxResultChars?: number;
 };
 
 /**
@@ -461,7 +467,10 @@ export function createBridgeSession(
           shownDigest: command.shownDigest ?? null,
         });
       case "readApprovalText":
-        return client.readApprovalText(mine(command.key), command.approvalId);
+        return client.readApprovalText(mine(command.key), command.approvalId, {
+          owner,
+          ...(policy.maxResultChars !== undefined ? { maxChars: policy.maxResultChars } : {}),
+        });
       case "readHistoryItem":
         return client.readHistoryItem(mine(command.key), command.itemId);
       case "retryCreation": {

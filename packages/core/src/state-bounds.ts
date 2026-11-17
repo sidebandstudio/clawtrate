@@ -328,6 +328,7 @@ export const APPROVAL: Bound = flagged<ApprovalCard>()({
   systemAgent: systemAgentDetail,
   scope: json(MAX_RECORD_CHARS),
   decisionDigest: NAME,
+  decisionCut: FLAG,
   submitting: FLAG,
   error: text(MAX_ERROR_JSON_CHARS),
   raw: json(MAX_RECORD_CHARS),

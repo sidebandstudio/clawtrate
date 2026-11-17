@@ -255,3 +255,133 @@ describe("a step whose text is too long for the raw table", () => {
     }
   });
 });
+
+describe("an approval whose decision text was cut cannot be allowed unseen", () => {
+  it("stays deny-only when later cuts push the command out of the diagnostic cut list", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["exec.approval.resolve"] = () => ({ ok: true });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      await until(() => transcript().approvalAccess === "ready");
+      gateway.emit("exec.approval.requested", {
+        id: "many-cuts",
+        request: {
+          sessionKey: KEY,
+          command: "x".repeat(10_000),
+          host: "h".repeat(1000),
+          nodeId: "n".repeat(2000),
+          security: "s".repeat(1000),
+          ask: "a".repeat(1000),
+          resolvedPath: "p".repeat(3000),
+          warningText: "w".repeat(3000),
+          systemRunPlan: {
+            argv: ["z".repeat(3000)],
+            cwd: null,
+            commandText: "plan",
+            agentId: null,
+            sessionKey: KEY,
+          },
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 1,
+        expiresAtMs: 9e12,
+      });
+      await until(() => transcript().approvals.length === 1);
+      const card = transcript().approvals[0]!;
+      await expect(client.resolveApproval(KEY, card.id, "allow-once")).rejects.toThrow(
+        /too long to show in full/,
+      );
+      // The diagnostic list lost the command's entry to later cuts; the flag did not.
+      expect(card.cut).not.toContain("exec.command");
+      expect(card.decisionCut).toBe(true);
+      await expect(
+        client.resolveApproval(KEY, card.id, "allow-once", { shownDigest: card.decisionDigest }),
+      ).rejects.toThrow(/too long to show in full/);
+      expect(gateway.calls("exec.approval.resolve")).toHaveLength(0);
+      // Deny always works.
+      await client.resolveApproval(KEY, card.id, "deny");
+      expect(gateway.calls("exec.approval.resolve")).toEqual([
+        { id: "many-cuts", decision: "deny" },
+      ]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is allowed only by the viewer the host gave the whole text to, never by echoing the state's digest", async () => {
+    const gateway = grantingGateway();
+    const item = execItem("echo", "c".repeat(10_000));
+    gateway.handlers["exec.approval.list"] = () => [item];
+    gateway.handlers["exec.approval.resolve"] = () => ({ ok: true });
+    const { client, transcript } = await openTask({ gateway });
+    const reader = createBridgeSession(client);
+    const other = createBridgeSession(client);
+    try {
+      await reader.apply({ type: "openSession", key: KEY });
+      await other.apply({ type: "openSession", key: KEY });
+      await until(() => transcript().approvals.length === 1);
+      const card = transcript().approvals[0]!;
+      const allow = (viewer: typeof reader, shownDigest: string | null) =>
+        viewer.apply({
+          type: "resolveApproval",
+          key: KEY,
+          approvalId: "echo",
+          decision: "allow-once",
+          expiresInDays: null,
+          shownDigest,
+        });
+      // The digest is in every snapshot; naming it without a read proves nothing.
+      const reads = gateway.calls("exec.approval.list").length;
+      await expect(allow(reader, card.decisionDigest)).rejects.toThrow(/too long to show in full/);
+      await expect(
+        client.resolveApproval(KEY, "echo", "allow-once", { shownDigest: card.decisionDigest }),
+      ).rejects.toThrow(/too long to show in full/);
+      expect(gateway.calls("exec.approval.list")).toHaveLength(reads);
+      expect(gateway.calls("exec.approval.resolve")).toHaveLength(0);
+      // One viewer reads it whole; another viewer's allow is still refused.
+      const read = await reader.apply({ type: "readApprovalText", key: KEY, approvalId: "echo" });
+      expect(read.text.command).toBe(item.request.command);
+      await expect(allow(other, read.digest)).rejects.toThrow(/too long to show in full/);
+      await expect(allow(reader, "another-digest")).rejects.toThrow(/too long to show in full/);
+      expect(gateway.calls("exec.approval.resolve")).toHaveLength(0);
+      await allow(reader, read.digest);
+      expect(gateway.calls("exec.approval.resolve")).toEqual([
+        { id: "echo", decision: "allow-once" },
+      ]);
+    } finally {
+      reader.dispose();
+      other.dispose();
+      client.stop();
+    }
+  });
+
+  it("is not recorded as read when the viewer's channel cannot carry the whole text", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["exec.approval.list"] = () => [execItem("huge", "h".repeat(400_000))];
+    gateway.handlers["exec.approval.resolve"] = () => ({ ok: true });
+    const { client, transcript } = await openTask({ gateway });
+    const viewer = createBridgeSession(client, { maxResultChars: 262_144 });
+    try {
+      await viewer.apply({ type: "openSession", key: KEY });
+      await until(() => transcript().approvals.length === 1);
+      const digest = transcript().approvals[0]!.decisionDigest;
+      await expect(
+        viewer.apply({ type: "readApprovalText", key: KEY, approvalId: "huge" }),
+      ).rejects.toThrow(/too long to show here/);
+      await expect(
+        viewer.apply({
+          type: "resolveApproval",
+          key: KEY,
+          approvalId: "huge",
+          decision: "allow-once",
+          expiresInDays: null,
+          shownDigest: digest,
+        }),
+      ).rejects.toThrow(/too long to show in full/);
+      expect(gateway.calls("exec.approval.resolve")).toHaveLength(0);
+    } finally {
+      viewer.dispose();
+      client.stop();
+    }
+  });
+});

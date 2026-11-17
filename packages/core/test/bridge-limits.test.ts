@@ -89,7 +89,7 @@ describe("per-viewer bounds", () => {
       answerQuestion: record("answerQuestion") as never,
       dismissQuestion: record("dismissQuestion") as never,
       resolveApproval: record("resolveApproval") as never,
-      stepRaw: record("stepRaw") as never,
+      readStepRaw: record("readStepRaw") as never,
     });
     const owner = createBridgeSession(client);
     const other = createBridgeSession(client);

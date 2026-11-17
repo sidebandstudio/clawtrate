@@ -3,7 +3,7 @@
 // An approval that names its tool call is that step's own waiting status; one
 // that names no step is its own card. Everything here needs `operator.approvals`.
 
-import { digestKey, digestOf } from "./bounds.ts";
+import { digestKey, digestOf, enforce } from "./bounds.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import {
   findRun,
@@ -14,6 +14,7 @@ import {
   type Step,
   type TaskActivity,
 } from "./runs.ts";
+import { APPROVAL } from "./state-bounds.ts";
 
 export type ApprovalKind = "exec" | "plugin" | "system-agent";
 export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
@@ -146,7 +147,15 @@ export type ApprovalCard = {
    * allow names this digest.
    */
   decisionDigest: string;
-  /** Paths of fields cut to their bound. */
+  /**
+   * What the reviewer is asked to allow was cut to its bound when this card
+   * was admitted. Set once, at admission, apart from the diagnostic `cut`
+   * list (whose entries later cuts can displace); nothing clears it. While it
+   * is set only deny is accepted, unless the viewer deciding has read the
+   * whole text (`readApprovalText`) and names its digest.
+   */
+  decisionCut: boolean;
+  /** Paths of fields cut to their bound, for diagnosis; never the safety fact. */
   cut?: string[];
   /** A resolution from this client is on its way, or the last one failed. */
   submitting: boolean;
@@ -246,6 +255,7 @@ function blank(id: string, kind: ApprovalKind, raw: unknown): ApprovalCard {
     systemAgent: null,
     scope: null,
     decisionDigest: "",
+    decisionCut: false,
     submitting: false,
     error: null,
     raw,
@@ -582,6 +592,8 @@ export function applyApprovalRequested(activity: TaskActivity, card: ApprovalCar
         submitting: existing.submitting,
         error: existing.error,
         raw: existing.kind === card.kind && existing.raw ? existing.raw : card.raw,
+        // Fields the earlier card set are kept, so its cut text may be what shows: the flag stays.
+        decisionCut: existing.decisionCut || card.decisionCut,
       }
     : card;
   const approvals = existing
@@ -614,6 +626,20 @@ export function decisionText(card: ApprovalCard): Record<string, string | string
     };
   }
   return {};
+}
+
+/**
+ * An approval as the host keeps it: within its bound (`APPROVAL`), and with
+ * `decisionCut` set when that bound cut what the reviewer decides on. Every
+ * card the client keeps, shown or waiting unrouted, is this value; the whole
+ * text is never kept beside it.
+ */
+export function admitApproval(card: ApprovalCard): ApprovalCard {
+  const bounded = enforce(APPROVAL, card);
+  const cut =
+    card.decisionCut ||
+    JSON.stringify(decisionText(bounded)) !== JSON.stringify(decisionText(card));
+  return cut === bounded.decisionCut ? bounded : { ...bounded, decisionCut: cut };
 }
 
 /** A card with the digest of its whole decision text, taken before anything is cut. */

@@ -42,6 +42,8 @@ export const SNAPSHOT_DRAIN_TIMEOUT_MS = 30_000;
  * (`readApprovalText`, `readHistoryItem`) that is longer stays unread.
  */
 export const MAX_RESULT_CHARS = 262_144;
+/** Room in a result frame for its envelope (type, the viewer's command id, ok); the value gets the rest. */
+const RESULT_ENVELOPE_CHARS = 512;
 /**
  * Results a viewer may leave unaccepted: written since its socket last had
  * nothing buffered. One more closes it. This is its command slots, so a
@@ -483,7 +485,11 @@ export function startWebHost(options: WebHostOptions) {
       return;
     }
     // Each tab is its own viewer: its open transcripts are released when it goes away.
-    const session = createBridgeSession(runtime.client, runtime.policy);
+    // A whole value this channel cannot carry is not given, so it is never recorded as read.
+    const session = createBridgeSession(runtime.client, {
+      ...runtime.policy,
+      maxResultChars: MAX_RESULT_CHARS - RESULT_ENVELOPE_CHARS,
+    });
     // Its snapshots carry only the tasks it has open; they go out through the host's snapshot gate.
     const channel = createViewerChannel(
       ws,

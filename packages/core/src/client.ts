@@ -16,6 +16,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import {
+  admitApproval,
   applyApprovalRequested,
   applyApprovalResolved,
   APPROVAL_KINDS,
@@ -117,11 +118,12 @@ import {
   scopeSatisfied,
   WRITE_SCOPE,
 } from "./scopes.ts";
-import { enforce, jsonLength, jsonTextLength } from "./bounds.ts";
+import { capId, enforce, jsonLength, jsonTextLength } from "./bounds.ts";
 import {
   APPROVAL_OUTCOME,
   enforceState,
   MAX_CREATIONS,
+  MAX_ID_CHARS,
   MAX_LINKED_RUNS,
   MAX_LISTED_TASKS,
   MAX_MESSAGE_JSON_CHARS,
@@ -473,15 +475,10 @@ function hasUnsettledWork(activity: TaskActivity): boolean {
   );
 }
 
-/** Where a cut means the reviewer cannot see the whole text they are asked to allow. */
-const DECISION_PATHS = ["exec.command", "exec.commandArgv", "exec.cwd", "plugin.", "systemAgent."];
-
-/** Whether part of what an approval asks the reviewer to allow was cut to its bound. */
-export function decisionTextCut(approval: ApprovalCard): boolean {
-  return (approval.cut ?? []).some((path) =>
-    DECISION_PATHS.some((prefix) => path === prefix || path.startsWith(prefix)),
-  );
-}
+/** Who asks when the client is called directly rather than through a viewer's bridge session. */
+const DIRECT_CALLER = {};
+/** Viewers whose whole read of one approval's text is remembered at once; the oldest give way. */
+export const MAX_APPROVAL_READERS = 8;
 
 /** The secondary alarm: roughly what the state holds against its arithmetic bound. Never the bound itself. */
 function withAlarm(state: ClawtrateState): ClawtrateState {
@@ -629,6 +626,12 @@ export class ClawtrateClient {
   private readonly lookingUp = new Set<string>();
   /** Recipient runs and sessions each task's `sessions_send` results name. */
   private readonly recipients = new Map<string, { runs: Set<string>; sessions: Set<string> }>();
+  /**
+   * Whole reads of a cut approval's text, per approval (`<key>\0<id>`) and per
+   * viewer: the digest of what that viewer was given. Only approvals pending
+   * in a followed task are kept, at most `MAX_APPROVAL_READERS` viewers each.
+   */
+  private readonly approvalReads = new Map<string, Map<object, string>>();
   /** Per task and list (`<key>\0<kind>`): the last list requested, and the newest applied. */
   private readonly listRequested = new Map<string, number>();
   private readonly listApplied = new Map<string, number>();
@@ -776,6 +779,8 @@ export class ClawtrateClient {
       this.dropAttachments(message.id);
     }
     this.recipients.delete(key);
+    for (const readKey of [...this.approvalReads.keys()])
+      if (readKey.startsWith(`${key}\u0000`)) this.approvalReads.delete(readKey);
     for (const map of [this.listRequested, this.listApplied]) {
       for (const listKey of [...map.keys()])
         if (listKey.startsWith(`${key}\u0000`)) map.delete(listKey);
@@ -986,6 +991,7 @@ export class ClawtrateClient {
    */
   withdraw(owner: object): void {
     this.withdrawnOwners.add(owner);
+    for (const readers of this.approvalReads.values()) readers.delete(owner);
     const withdrawn = this.accessWaiters.filter((waiter) => waiter.owner === owner);
     if (withdrawn.length === 0) return;
     this.accessWaiters = this.accessWaiters.filter((waiter) => waiter.owner !== owner);
@@ -1819,12 +1825,10 @@ export class ClawtrateClient {
     if (!approval || approval.status !== "pending")
       throw new Error("That approval is no longer open.");
     if (approval.submitting) throw new Error("An answer to that approval is already on its way.");
-    // Text cut to its bound cannot be allowed unseen: only once its whole text was read and shown.
-    if (
-      decision !== "deny" &&
-      decisionTextCut(approval) &&
-      options.shownDigest !== approval.decisionDigest
-    ) {
+    // Text cut to its bound is allowed only by a viewer this host gave the whole text to, naming
+    // the digest of what it was given. A digest the state already carries proves nothing.
+    const owner = options.owner ?? DIRECT_CALLER;
+    if (decision !== "deny" && approval.decisionCut && !this.readWhole(key, approval, owner, options)) {
       throw new Error(
         "This approval's command is too long to show in full; read it whole (readApprovalText) before allowing it, or deny it.",
       );
@@ -1847,6 +1851,16 @@ export class ClawtrateClient {
     try {
       await this.ensureScope(APPROVALS_SCOPE, options.owner ?? null);
       this.checkNotWithdrawn(options.owner);
+      // Access may have taken a while: what is decided must still be the approval that was checked.
+      const now = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
+      if (
+        !now ||
+        now.status !== "pending" ||
+        now.decisionDigest !== approval.decisionDigest ||
+        (decision !== "deny" && now.decisionCut && !this.readWhole(key, now, owner, options))
+      ) {
+        throw new Error("The approval changed or was settled while access was being approved.");
+      }
       const result = asRecord(await this.request(method, params));
       let resolution: ApprovalResolution | null;
       let applied = true;
@@ -1916,6 +1930,37 @@ export class ClawtrateClient {
     }
     // A settled approval makes room for one that was waiting.
     this.routeUnrouted();
+  }
+
+  /** Whether this viewer was given this approval's whole text, and names the digest of what it was given. */
+  private readWhole(
+    key: string,
+    approval: ApprovalCard,
+    owner: object,
+    options: { shownDigest?: string | null },
+  ): boolean {
+    const read = this.approvalReads.get(`${key}\u0000${approval.id}`)?.get(owner);
+    return (
+      read !== undefined && read === approval.decisionDigest && options.shownDigest === read
+    );
+  }
+
+  /** Remember that a viewer was given an approval's whole text, keeping only reads of pending approvals. */
+  private noteApprovalRead(key: string, approvalId: string, owner: object, digest: string): void {
+    for (const readKey of [...this.approvalReads.keys()]) {
+      const [task, id] = readKey.split("\u0000") as [string, string];
+      const pending = this.state.transcripts[task]?.approvals.some(
+        (each) => each.id === id && each.status === "pending",
+      );
+      if (!pending || !this.tracked(task)) this.approvalReads.delete(readKey);
+    }
+    const readKey = `${key}\u0000${approvalId}`;
+    const readers = this.approvalReads.get(readKey) ?? new Map<object, string>();
+    readers.delete(owner);
+    readers.set(owner, digest);
+    while (readers.size > MAX_APPROVAL_READERS)
+      readers.delete(readers.keys().next().value as object);
+    this.approvalReads.set(readKey, readers);
   }
 
   /**
@@ -2124,7 +2169,8 @@ export class ClawtrateClient {
     let added = 0;
     for (const card of items
       .map((item) => source.parse(item))
-      .filter((each): each is ApprovalCard => each !== null && each.status === "pending")) {
+      .filter((each): each is ApprovalCard => each !== null && each.status === "pending")
+      .map(admitApproval)) {
       const target = this.approvalTarget(card);
       if (target?.key !== key) {
         if (!target && !this.approvalOutcomes.has(card.id)) this.keepUnrouted(card);
@@ -2460,6 +2506,7 @@ export class ClawtrateClient {
   async readApprovalText(
     key: string,
     approvalId: string,
+    options: { owner?: object; maxChars?: number } = {},
   ): Promise<{ text: Record<string, string | string[] | null>; digest: string }> {
     const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
     if (!approval) throw new Error("That approval is not in this task.");
@@ -2475,12 +2522,22 @@ export class ClawtrateClient {
           : [];
     const whole = items
       .map((item) => source.parse(item))
-      .find((card) => card !== null && card.id === approvalId);
+      .find((card) => card !== null && capId(card.id, MAX_ID_CHARS) === approvalId);
     if (!whole) throw new Error("The gateway no longer lists that approval.");
-    if (whole.decisionDigest !== approval.decisionDigest) {
+    const shown = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
+    if (!shown || whole.decisionDigest !== shown.decisionDigest) {
       throw new Error("The approval changed since it was shown; reopen the task.");
     }
-    return { text: decisionText(whole), digest: whole.decisionDigest };
+    const read = { text: decisionText(whole), digest: whole.decisionDigest };
+    // Recorded only once it can be given to the viewer whole: a read its channel cannot carry
+    // leaves the approval deny-only for that viewer.
+    if (options.maxChars !== undefined && jsonLength(read) > options.maxChars) {
+      throw new Error(
+        "This approval's whole text is too long to show here; deny it, or read it in the desktop app.",
+      );
+    }
+    this.noteApprovalRead(key, approvalId, options.owner ?? DIRECT_CALLER, read.digest);
+    return read;
   }
 
   /**
@@ -2926,6 +2983,7 @@ export class ClawtrateClient {
     this.foreignRaw.clear();
     this.listRequested.clear();
     this.listApplied.clear();
+    this.approvalReads.clear();
     for (const { bytes } of this.attachmentContent.values()) this.attachmentBytes -= bytes;
     this.attachmentContent.clear();
   }
@@ -3461,7 +3519,7 @@ export class ClawtrateClient {
             : event.event === "plugin.approval.requested"
               ? parsePluginApproval(event.payload)
               : parseSystemAgentApproval(event.payload);
-        if (card) this.routeApproval(card);
+        if (card) this.routeApproval(admitApproval(card));
         return;
       }
       case "exec.approval.resolved":
