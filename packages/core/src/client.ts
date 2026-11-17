@@ -4,7 +4,6 @@
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   GatewayBrowserDeviceAuthLifecycle,
-  GatewayChatStreamProjection,
   GatewayProtocolClient,
   GatewayProtocolRequestError,
   PROTOCOL_VERSION,
@@ -46,7 +45,8 @@ import {
   recipientRunIds,
   type LinkedRun,
 } from "./cards.ts";
-import { MAX_FILE_BYTES, MAX_IMAGE_BYTES } from "./attachments.ts";
+import { MAX_FILE_BYTES, MAX_IMAGE_BYTES, validateAttachmentMeta } from "./attachments.ts";
+import { ChatTextBaselines } from "./chat-text.ts";
 import { utf8Length } from "./encoding.ts";
 import type { ApprovalInstructions, ClawtrateHost } from "./host.ts";
 import {
@@ -55,7 +55,6 @@ import {
   isExcludedSessionKey,
   isSessionRemoval,
   isTaskSession,
-  liveTextFromChatMessage,
   mapAgents,
   mapHistory,
   mergeSessionRow,
@@ -123,6 +122,7 @@ import {
 import { capId, enforce, jsonLength, jsonTextLength } from "./bounds.ts";
 import {
   APPROVAL_OUTCOME,
+  CREATION,
   enforceState,
   MAX_CREATIONS,
   MAX_ID_CHARS,
@@ -132,6 +132,7 @@ import {
   MAX_OUTBOX,
   MAX_PENDING_APPROVAL_COUNT,
   MAX_RUN_TEXT_CHARS,
+  MAX_TASK_LINE_CHARS,
   MAX_TRACKED_TASKS as TRACKED_TASKS,
   MAX_UNROUTED,
   RUN,
@@ -246,11 +247,31 @@ const SESSION_LIST_PARAMS = {
   excludeSubagents: true,
 };
 const HISTORY_LIMIT = 200;
+
+/** The newest `MAX_LISTED_TASKS` task rows, each only the fields the list reads, cut to their bound, keyed under the id cap. */
+function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
+  const kept = new Map<string, RawRecord>();
+  for (const row of rows) {
+    if (!isTaskSession(row)) continue;
+    const bounded = SESSION_ROW(row);
+    const key = sessionRowKey(bounded);
+    if (key !== null) kept.set(key, bounded);
+  }
+  return new Map(
+    [...kept]
+      .sort(([, a], [, b]) => Number(b.updatedAt ?? 0) - Number(a.updatedAt ?? 0))
+      .slice(0, MAX_LISTED_TASKS),
+  );
+}
 /** How many sessions nobody has open, and how many runs of each, are followed for bot-to-bot cards. */
 /** Sessions nobody has open whose runs are followed for bot-to-bot cards, and runs of each. */
 export const FOREIGN_SESSIONS = 16;
 export const FOREIGN_RUNS_PER_SESSION = 4;
 const MAX_TIMER_MS = 2_147_483_647;
+/** Whole reads from history (`readStepRaw`, `readHistoryItem`) in flight at once; past it one is refused. */
+export const MAX_FULL_READS = 4;
+/** Runs of one task whose streaming `chat` text is kept to build on the next delta. */
+export const MAX_STREAMS_PER_TASK = 2;
 /** Spawn links kept (`spawnedBy`), newest. */
 export const MAX_SPAWN_LINKS = 200;
 const PAIRING_RETRY_MS = 3000;
@@ -551,7 +572,8 @@ export class ClawtrateClient {
   private rows = new Map<string, RawRecord>();
   /** Open transcripts, counted, so several viewers can share one. */
   private readonly openSessions = new Map<string, number>();
-  private readonly streams = new GatewayChatStreamProjection();
+  /** The streaming reply text of each task's newest `MAX_STREAMS_PER_TASK` runs, only while they stream. */
+  private readonly streams = new ChatTextBaselines(MAX_STREAMS_PER_TASK, MAX_RUN_TEXT_CHARS);
   private readonly historyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Why a pending history reload runs, when it is a resync. */
   private readonly resyncReasons = new Map<string, CaughtUp["reason"]>();
@@ -576,7 +598,8 @@ export class ClawtrateClient {
    * follow the recipient's run when this connection receives its events.
    */
   private readonly foreign = new Map<string, TaskActivity>();
-  private readonly foreignRaw = new RawTable();
+  /** Steps of foreign runs are not kept, so neither are their payloads: this table keeps nothing. */
+  private readonly foreignRaw = new RawTable(0, 0);
   /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
   private readonly spawnedBy = new Map<string, string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -590,8 +613,11 @@ export class ClawtrateClient {
   private upgradeWanted = false;
   private scopeUpgrade: GatewayScopeUpgrade | null = null;
   private accessWaiters: Waiter[] = [];
-  /** `hello-ok.policy`, for the frame and attachment ceilings. */
-  private policy: RawRecord | null = null;
+  /** The frame and image ceilings from `hello-ok.policy`; nothing else of it is kept. */
+  private payloadLimits: { maxPayload: number | null; maxImageBytes: number | null } = {
+    maxPayload: null,
+    maxImageBytes: null,
+  };
   /** Attachment content for outgoing messages, kept off the state snapshots, with its decoded size and the characters it holds. */
   private readonly attachmentContent = new Map<
     string,
@@ -636,6 +662,8 @@ export class ClawtrateClient {
   /** Per task and list (`<key>\0<kind>`): the last list requested, and the newest applied. */
   private readonly listRequested = new Map<string, number>();
   private readonly listApplied = new Map<string, number>();
+  /** Whole reads from history in flight (`MAX_FULL_READS`). */
+  private fullReads = 0;
 
   constructor(host: ClawtrateHost, options: ClientOptions = {}) {
     this.host = host;
@@ -707,6 +735,8 @@ export class ClawtrateClient {
 
   /** Open a transcript. Calls are counted; the last matching close releases it. */
   openSession(key: string, reservation = false): void {
+    // A task's key is kept, and keys every map of the task, only within the id cap.
+    if (jsonTextLength(key) > MAX_ID_CHARS) throw new Error("That task key is too long.");
     const taken = this.openSessions.size + this.retained.size + this.reservedTasks;
     if (!this.tracked(key) && !reservation && taken >= MAX_TRACKED_TASKS) {
       throw new Error(`At most ${MAX_TRACKED_TASKS} tasks can be open at once.`);
@@ -766,7 +796,7 @@ export class ClawtrateClient {
     this.incarnations.delete(key);
     this.loads.delete(key);
     // Drop the chat stream baselines this task held.
-    this.streams.retire((scope) => scope.sessionKey === key);
+    this.streams.retire(key);
     const timer = this.historyTimers.get(key);
     if (timer) clearTimeout(timer);
     this.historyTimers.delete(key);
@@ -1072,6 +1102,12 @@ export class ClawtrateClient {
     // Never cut: a message whose escaped form would pass its bound is refused instead.
     if (body.length > MAX_MESSAGE_CHARS || jsonTextLength(body) > MAX_MESSAGE_JSON_CHARS)
       throw new Error("The message is too long.");
+    // A file's name and type are kept beside its content: only valid ones, never cut.
+    for (const each of attachments) {
+      validateAttachmentMeta(each.fileName, each.mimeType);
+      if (typeof each.type !== "string" || each.type.length > 32)
+        throw new Error("invalid file type");
+    }
     this.checkSize(this.sendParams(key, body, "x".repeat(36), "followup", attachments));
     const bytes = attachments.reduce((sum, each) => sum + decodedBytes(each.content), 0);
     if (this.attachmentBytes + bytes > MAX_RETAINED_ATTACHMENT_BYTES) {
@@ -1175,10 +1211,9 @@ export class ClawtrateClient {
 
   /** Refuse a send that breaks the image, file or frame ceiling, before it reaches the socket. */
   private checkSize(params: { attachments?: OutgoingAttachment[] }): void {
-    const limits = asRecord(this.policy?.attachments);
     const imageLimit =
-      typeof limits?.maxImageBytes === "number"
-        ? Math.min(limits.maxImageBytes, MAX_IMAGE_BYTES)
+      this.payloadLimits.maxImageBytes !== null
+        ? Math.min(this.payloadLimits.maxImageBytes, MAX_IMAGE_BYTES)
         : MAX_IMAGE_BYTES;
     for (const attachment of params.attachments ?? []) {
       const size = decodedBytes(attachment.content);
@@ -1189,10 +1224,7 @@ export class ClawtrateClient {
         );
       }
     }
-    const maxPayload =
-      typeof this.policy?.maxPayload === "number"
-        ? this.policy.maxPayload
-        : DEFAULT_MAX_PAYLOAD_BYTES;
+    const maxPayload = this.payloadLimits.maxPayload ?? DEFAULT_MAX_PAYLOAD_BYTES;
     const frame = utf8Length(JSON.stringify(params)) + FRAME_SLACK_BYTES;
     if (frame > maxPayload) {
       throw new SendTooLargeError(
@@ -1312,6 +1344,12 @@ export class ClawtrateClient {
     if (body.length > MAX_MESSAGE_CHARS || jsonTextLength(body) > MAX_MESSAGE_JSON_CHARS)
       throw new Error("The message is too long.");
     const label = options.label?.trim() || null;
+    // Kept as asked, never cut: a cut field would ask the gateway something else on a later ask.
+    if (
+      jsonTextLength(botId) > MAX_ID_CHARS ||
+      (label && jsonTextLength(label) > MAX_TASK_LINE_CHARS)
+    )
+      throw new Error("The bot id or label is too long.");
     // The same request whose earlier attempt the gateway refused is asked again with its own key;
     // one still being checked is not asked twice.
     const earlier = [...this.creations.values()].find(
@@ -1477,7 +1515,9 @@ export class ClawtrateClient {
   }
 
   /** Keep a creation as it now is; once it is settled, callers waiting on it learn how (or `reason`). */
-  private putCreation(creation: TaskCreation, reason?: Error): void {
+  private putCreation(asked: TaskCreation, reason?: Error): void {
+    // The bounded record is the one kept; the state publishes the same object.
+    const creation = enforce(CREATION, asked);
     this.creations.delete(creation.id);
     this.creations.set(creation.id, creation);
     this.publishCreations();
@@ -1515,6 +1555,8 @@ export class ClawtrateClient {
 
   /** The outcome of a creation already under way, once known. */
   private awaitCreation(id: string): Promise<string> {
+    if ((this.creationWaiters.get(id)?.length ?? 0) >= MAX_ACCESS_WAITERS)
+      return Promise.reject(new Error("Too many requests are waiting for this task; try again."));
     return new Promise((resolve, reject) => {
       // Like any caller of `createTask`, one that joins holds an interest in the new task.
       const settle = (key: string) => {
@@ -1934,19 +1976,20 @@ export class ClawtrateClient {
    * arrives later can never make it actionable again.
    */
   private noteApprovalOutcome(resolution: ApprovalResolution): void {
+    // Kept, and keyed, as bounded: the id under its cap, like the cards' ids.
     const known = enforce(
       APPROVAL_OUTCOME,
-      mergeResolution(this.approvalOutcomes.get(resolution.id), resolution),
+      mergeResolution(this.approvalOutcomes.get(capId(resolution.id, MAX_ID_CHARS)), resolution),
     );
-    if (known.lossy) void this.lookUpOutcome(resolution.id);
-    this.approvalOutcomes.delete(resolution.id);
-    this.approvalOutcomes.set(resolution.id, known);
+    if (known.lossy) void this.lookUpOutcome(known.id);
+    this.approvalOutcomes.delete(known.id);
+    this.approvalOutcomes.set(known.id, known);
     while (this.approvalOutcomes.size > MAX_APPROVAL_OUTCOMES) {
       this.approvalOutcomes.delete(this.approvalOutcomes.keys().next().value as string);
     }
-    if (this.unrouted.delete(resolution.id)) this.publishUnrouted();
+    if (this.unrouted.delete(known.id)) this.publishUnrouted();
     for (const transcript of Object.values(this.state.transcripts)) {
-      if (transcript.approvals.some((approval) => approval.id === resolution.id)) {
+      if (transcript.approvals.some((approval) => approval.id === known.id)) {
         this.updateActivity(transcript.sessionKey, (activity) =>
           applyApprovalResolved(activity, known),
         );
@@ -2088,7 +2131,9 @@ export class ClawtrateClient {
   }
 
   /** Keep an approval no task shows yet; past the bound it is not kept and is counted instead. */
-  private keepUnrouted(card: ApprovalCard): void {
+  private keepUnrouted(received: ApprovalCard): void {
+    // Only the bounded card is kept, never the one received beside it.
+    const card = admitApproval(received);
     if (!this.unrouted.has(card.id) && this.unrouted.size >= MAX_UNROUTED_APPROVALS) {
       this.unroutedOmitted += 1;
       this.publishUnrouted();
@@ -2268,9 +2313,11 @@ export class ClawtrateClient {
 
   /** Apply an event to a session nobody has open, keeping a few recent runs of a few sessions. */
   private updateForeign(
-    sessionKey: string,
+    rawKey: string,
     fn: (activity: TaskActivity, ctx: EngineContext) => TaskActivity,
   ): void {
+    // Kept under the id cap, as the state keeps ids.
+    const sessionKey = capId(rawKey, MAX_ID_CHARS);
     const before = this.foreign.get(sessionKey) ?? emptyActivity;
     let next = fn(before, { sessionKey, now: this.now(), raw: this.foreignRaw });
     if (next === before) return;
@@ -2282,7 +2329,6 @@ export class ClawtrateClient {
       ...next,
       runs: next.runs.map((run) => enforce(RUN, run.steps.length ? { ...run, steps: [] } : run)),
     };
-    this.foreignRaw.clearTask(sessionKey);
     this.foreign.delete(sessionKey);
     this.foreign.set(sessionKey, next);
     while (this.foreign.size > FOREIGN_SESSIONS) {
@@ -2319,8 +2365,11 @@ export class ClawtrateClient {
     const rawOf = (step: Run["steps"][number]) => step.raw ?? this.raw.get(key, step.id);
     const links = recipientLinks(transcript.runs, rawOf);
     const known = this.recipients.get(key);
-    const runs = new Set(links.flatMap((link) => (link.runId ? [link.runId] : [])));
-    const sessions = new Set(links.flatMap((link) => (link.sessionKey ? [link.sessionKey] : [])));
+    const cap = (value: string) => capId(value, MAX_ID_CHARS);
+    const runs = new Set(links.flatMap((link) => (link.runId ? [cap(link.runId)] : [])));
+    const sessions = new Set(
+      links.flatMap((link) => (link.sessionKey ? [cap(link.sessionKey)] : [])),
+    );
     const grew =
       [...runs].some((id) => !known?.runs.has(id)) ||
       [...sessions].some((id) => !known?.sessions.has(id));
@@ -2593,10 +2642,22 @@ export class ClawtrateClient {
    */
   async readHistoryItem(key: string, itemId: string): Promise<TranscriptItem | null> {
     if (!this.state.transcripts[key]) return null;
-    const history = asRecord(
-      await this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
-    );
+    const history = await this.readHistoryWhole(key);
     return mapHistory(history?.messages).find((item) => item.id === itemId) ?? null;
+  }
+
+  /** A history page read for a whole value, at most `MAX_FULL_READS` at once. */
+  private async readHistoryWhole(key: string): Promise<RawRecord | null> {
+    if (this.fullReads >= MAX_FULL_READS)
+      throw new Error("Other whole texts are being read; try again in a moment.");
+    this.fullReads += 1;
+    try {
+      return asRecord(
+        await this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
+      );
+    } finally {
+      this.fullReads -= 1;
+    }
   }
 
   /** The raw call and result of a step as the raw table keeps it now; null when it is not kept. */
@@ -2617,9 +2678,7 @@ export class ClawtrateClient {
     if (!has()) return null;
     const kept = this.raw.get(key, stepId);
     if (kept) return { status: "available", raw: kept };
-    const history = asRecord(
-      await this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
-    );
+    const history = await this.readHistoryWhole(key);
     const current = this.state.transcripts[key];
     if (!current || !has()) return null;
     // Rebuilt aside, as a resync would, into a table dropped after this read.
@@ -2686,6 +2745,11 @@ export class ClawtrateClient {
   private afterActivityOnce(key: string): void {
     const transcript = this.state.transcripts[key];
     if (!transcript) return;
+    // A run that ended or left the transcript keeps no stream baseline.
+    this.streams.retire(key, (runId) => {
+      const run = findRun(transcript, runId);
+      return run !== undefined && !isTerminal(run.state);
+    });
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
     for (const run of transcript.runs) {
@@ -3027,7 +3091,6 @@ export class ClawtrateClient {
     this.recipients.clear();
     this.spawnedBy.clear();
     this.foreign.clear();
-    this.foreignRaw.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.approvalReads.clear();
@@ -3125,7 +3188,13 @@ export class ClawtrateClient {
     this.gatewayBootId = typeof bootId === "string" && bootId ? bootId : null;
     const scopes = [...(hello.auth.scopes ?? [])];
     const canWrite = scopeSatisfied(scopes, WRITE_SCOPE);
-    this.policy = asRecord(hello.policy);
+    const policy = asRecord(hello.policy);
+    const number = (value: unknown) =>
+      typeof value === "number" && Number.isFinite(value) ? value : null;
+    this.payloadLimits = {
+      maxPayload: number(policy?.maxPayload),
+      maxImageBytes: number(asRecord(policy?.attachments)?.maxImageBytes),
+    };
     this.setConnection({
       status: "connected",
       serverVersion: hello.server.version,
@@ -3211,17 +3280,19 @@ export class ClawtrateClient {
   private async loadAllSessions(
     generation: number,
     firstMethod: "sessions.subscribe" | "sessions.list",
-  ): Promise<{ rows: RawRecord[]; partial: boolean }> {
+  ): Promise<{ rows: Map<string, RawRecord>; partial: boolean }> {
     const first = asRecord(await this.request(firstMethod, SESSION_LIST_PARAMS));
     let page = firstMethod === "sessions.subscribe" ? asRecord(first?.list) : first;
-    const rows = new Map<string, RawRecord>();
+    // Each page is bounded as it arrives: only task rows, only the fields read, the newest
+    // `MAX_LISTED_TASKS` of them, so nothing accumulates across pages.
+    let rows = new Map<string, RawRecord>();
     for (let pages = 1; ; pages += 1) {
-      for (const row of sessionRowsFromList(page)) rows.set(sessionRowKey(row)!, row);
+      rows = newestRows([...rows.values(), ...sessionRowsFromList(page)]);
       const nextOffset = page?.nextOffset;
       const more = page?.hasMore === true && typeof nextOffset === "number";
-      if (!more) return { rows: [...rows.values()], partial: false };
+      if (!more) return { rows, partial: false };
       if (pages >= MAX_SESSION_PAGES || generation !== this.generation) {
-        return { rows: [...rows.values()], partial: true };
+        return { rows, partial: true };
       }
       page = asRecord(
         await this.request("sessions.list", { ...SESSION_LIST_PARAMS, offset: nextOffset }),
@@ -3229,14 +3300,8 @@ export class ClawtrateClient {
     }
   }
 
-  private replaceRows(rows: RawRecord[]): void {
-    // The newest `MAX_LISTED_TASKS` task rows, each only the fields the list reads, cut to their bound.
-    const kept = rows
-      .filter((row) => isTaskSession(row))
-      .map((row) => SESSION_ROW(row))
-      .sort((a, b) => Number(b.updatedAt ?? 0) - Number(a.updatedAt ?? 0))
-      .slice(0, MAX_LISTED_TASKS);
-    this.rows = new Map(kept.map((row) => [sessionRowKey(row)!, row]));
+  private replaceRows(rows: Map<string, RawRecord>): void {
+    this.rows = rows;
     this.publishTasks();
   }
 
@@ -3273,7 +3338,9 @@ export class ClawtrateClient {
   private handleSessionsChanged(payload: unknown, generation: number): void {
     if (this.bootstrapping) this.changedDuringBootstrap = true;
     const row = sessionChangeRow(payload);
-    const key = row ? sessionRowKey(row) : null;
+    const rowKey = row ? sessionRowKey(row) : null;
+    // Rows are kept under the id cap.
+    const key = rowKey === null ? null : capId(rowKey, MAX_ID_CHARS);
     if (!row || !key) {
       this.scheduleRefresh(generation);
       return;
@@ -3397,6 +3464,8 @@ export class ClawtrateClient {
         await this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
       );
       if (stale()) return;
+      // A resync starts every stream of this task again from what the gateway sends next.
+      if (resync) this.streams.retire(key);
       const inFlight = asRecord(history?.inFlightRun);
       const inFlightId = typeof inFlight?.runId === "string" ? inFlight.runId : null;
       const messages = history?.messages;
@@ -3476,17 +3545,9 @@ export class ClawtrateClient {
       this.updateForeign(key, (activity, ctx) => applyChatEvent(activity, payload, null, ctx));
       return;
     }
-    // Only tasks this client follows keep a stream baseline.
-    const { event: projected } = this.streams.project(event);
-    let text =
-      payload.state === "delta"
-        ? liveTextFromChatMessage(asRecord(projected.payload)?.message)
-        : null;
-    if (text !== null && text.length > MAX_RUN_TEXT_CHARS) {
-      // Past its bound the reply is not followed further here; the transcript will hold it whole.
-      this.streams.retire((scope) => scope.sessionKey === key);
-      text = text.slice(0, MAX_RUN_TEXT_CHARS);
-    }
+    // Only tasks this client follows keep a stream baseline: the text, never the message.
+    const projected = this.streams.project(payload);
+    const text = payload.state === "delta" ? projected : null;
     this.updateActivity(key, (activity, ctx) => applyChatEvent(activity, payload, text, ctx));
     // final, aborted or error: the durable transcript now owns the text.
     if (payload.state !== "delta" && payload.state !== "status") this.scheduleHistory(key);
@@ -3495,9 +3556,10 @@ export class ClawtrateClient {
   /** Agent events carry the session key on the wire; fall back to the open task that knows the run. */
   /** Remember which session spawned which, so a helper's approval reaches its parent task. */
   private noteSpawnedBy(payload: RawRecord): void {
-    const child = payload.sessionKey;
-    const parent = payload.spawnedBy;
-    if (typeof child !== "string" || typeof parent !== "string" || child === parent) return;
+    if (typeof payload.sessionKey !== "string" || typeof payload.spawnedBy !== "string") return;
+    const child = capId(payload.sessionKey, MAX_ID_CHARS);
+    const parent = capId(payload.spawnedBy, MAX_ID_CHARS);
+    if (child === parent) return;
     const known = this.spawnedBy.get(child) === parent;
     this.spawnedBy.delete(child);
     this.spawnedBy.set(child, parent);

@@ -14,6 +14,7 @@ import type {
   SystemAgentApprovalDetail,
 } from "./approvals.ts";
 import {
+  capId,
   cutText,
   enforce,
   flagged,
@@ -462,7 +463,8 @@ const task = flagged<Task>()({
   status: ENUM,
   unread: FLAG,
 });
-const creation = object<TaskCreation>()({
+/** A task creation as kept (`MAX_CREATIONS` of them). */
+export const CREATION: Bound = object<TaskCreation>()({
   id: ID,
   botId: ID,
   text: text(MAX_MESSAGE_JSON_CHARS),
@@ -517,7 +519,13 @@ const SESSION_ROW_FIELDS = [
   "updatedAt",
 ] as const;
 
-/** A session row as the client keeps it: the fields it reads, each string cut to `MAX_TASK_LINE_CHARS`. */
+/** Session-row fields that are ids: kept under the id cap (`#digest` when longer), never cut. */
+const SESSION_ROW_IDS = new Set(["agentId", "key", "sessionId", "sessionKey", "spawnedBy"]);
+
+/**
+ * A session row as the client keeps it: the fields it reads, ids under the id
+ * cap and every other string cut to `MAX_TASK_LINE_CHARS` (both 1,024).
+ */
 export function SESSION_ROW(row: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const field of SESSION_ROW_FIELDS) {
@@ -525,7 +533,9 @@ export function SESSION_ROW(row: Record<string, unknown>): Record<string, unknow
     if (value === undefined) continue;
     out[field] =
       typeof value === "string"
-        ? cutText(value, MAX_TASK_LINE_CHARS)
+        ? SESSION_ROW_IDS.has(field)
+          ? capId(value, MAX_ID_CHARS)
+          : cutText(value, MAX_TASK_LINE_CHARS)
         : typeof value === "object" && value !== null
           ? null
           : value;
@@ -546,7 +556,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   transcripts: map(MAX_TRACKED_TASKS, MAX_ID_CHARS, TRANSCRIPT),
   unroutedApprovals: list(MAX_UNROUTED, APPROVAL),
   unroutedApprovalsOmitted: NUMBER,
-  creations: list(MAX_CREATIONS, creation),
+  creations: list(MAX_CREATIONS, CREATION),
   retention: retentionAlarm,
 });
 /** The listed-tasks pool, applied over the whole state. */

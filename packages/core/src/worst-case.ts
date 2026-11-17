@@ -4,27 +4,10 @@
 // same totals, and a test checks that they agree.
 
 import { MAX_FILE_BYTES, MAX_PENDING_ATTACHMENT_BYTES } from "./attachments.ts";
-import { worstCase } from "./bounds.ts";
-import {
-  FOREIGN_RUNS_PER_SESSION,
-  FOREIGN_SESSIONS,
-  MAX_APPROVAL_OUTCOMES,
-  MAX_RETAINED_ATTACHMENT_BYTES,
-  MAX_SPAWN_LINKS,
-} from "./client.ts";
+import { MAX_FULL_READS, MAX_RETAINED_ATTACHMENT_BYTES } from "./client.ts";
+import { ownerRows } from "./owners.ts";
 import { MAX_RAW_BYTES, MAX_RAW_ENTRY_CHARS } from "./runs.ts";
-import {
-  APPROVAL_OUTCOME,
-  MAX_ID_CHARS,
-  MAX_LISTED_TASKS,
-  MAX_RUN_TEXT_CHARS,
-  MAX_STEPS_PER_TASK,
-  MAX_TRACKED_TASKS,
-  RUN,
-  WORST_ROW_CHARS,
-  WORST_STATE_CHARS,
-  worstViewerChars,
-} from "./state-bounds.ts";
+import { MAX_TRACKED_TASKS, WORST_STATE_CHARS, worstViewerChars } from "./state-bounds.ts";
 
 /**
  * The most a `chat.history` response can be (OpenClaw 2026.10.6). One read of
@@ -46,22 +29,27 @@ export type ViewerLimits = {
   resultChars: number;
 };
 
-/** Each part of the host's worst case, in JSON characters (base64 characters for files). */
+/**
+ * Each part of the host's worst case, in JSON characters (base64 characters
+ * for files). The parts that are the host's own collections come from the
+ * registry (`owners.ts`): each collection's count times the most each entry
+ * holds, added to the part it names.
+ */
 export function hostWorstCase(limits: ViewerLimits): Record<string, number> {
-  const runWithoutSteps = worstCase(RUN, new Map([["steps", 0]]));
   const viewer = worstViewerChars(limits.openTasksPerViewer);
-  return {
+  const owners = ownerRows(limits.viewers);
+  const parts: Record<string, number> = {
     state: WORST_STATE_CHARS,
     rawPayloads: MAX_RAW_BYTES + MAX_RAW_ENTRY_CHARS,
     outboxFiles: base64Length(MAX_RETAINED_ATTACHMENT_BYTES),
     uploads: base64Length(MAX_PENDING_ATTACHMENT_BYTES) + base64Length(MAX_FILE_BYTES),
-    sessionRows: MAX_LISTED_TASKS * WORST_ROW_CHARS,
-    foreignRuns: FOREIGN_SESSIONS * FOREIGN_RUNS_PER_SESSION * runWithoutSteps,
-    approvalOutcomes: MAX_APPROVAL_OUTCOMES * worstCase(APPROVAL_OUTCOME),
-    spawnLinks: MAX_SPAWN_LINKS * 2 * MAX_ID_CHARS,
-    recipientLinks: MAX_TRACKED_TASKS * MAX_STEPS_PER_TASK * 2 * MAX_ID_CHARS,
-    streamBaselines: MAX_TRACKED_TASKS * 2 * MAX_RUN_TEXT_CHARS,
-    historyReads: MAX_TRACKED_TASKS * GATEWAY_HISTORY_RESPONSE_BYTES,
+  };
+  for (const [part, chars] of Object.entries(owners)) parts[part] = (parts[part] ?? 0) + chars;
+  return {
+    ...parts,
+    // One history read per followed task and `MAX_FULL_READS` whole reads (`readStepRaw`,
+    // `readHistoryItem`) until they are mapped and dropped, and one page's payloads rebuilt at a time.
+    historyReads: (MAX_TRACKED_TASKS + MAX_FULL_READS + 1) * GATEWAY_HISTORY_RESPONSE_BYTES,
     snapshotsQueued: limits.snapshotsInFlight * viewer,
     resultsQueued: limits.viewers * limits.commandsPerViewer * limits.resultChars,
     serializing: viewer,

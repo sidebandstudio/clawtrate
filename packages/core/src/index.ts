@@ -9,6 +9,7 @@ export * from "./attachments.ts";
 export { worstCase, type Bound, type Digest } from "./bounds.ts";
 export * from "./state-bounds.ts";
 export * from "./worst-case.ts";
+export * from "./owners.ts";
 export * from "./remote-bridge.ts";
 export { utf8Length } from "./encoding.ts";
 export * from "./scopes.ts";

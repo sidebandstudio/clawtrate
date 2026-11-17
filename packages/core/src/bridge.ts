@@ -384,20 +384,62 @@ export function createBridgeSession(
   client: ClawtrateClient,
   policy: BridgePolicy = {},
 ): BridgeSession {
-  const open = new Set<string>();
+  return new ViewerSession(client, policy);
+}
+
+/**
+ * A viewer's session. Everything it keeps is an own property, so the
+ * retention registry (`owners.ts`) can name each collection and a test can
+ * find any it does not name.
+ */
+class ViewerSession implements BridgeSession {
+  /** The tasks this viewer has open, at most `MAX_VIEWER_OPEN_TASKS`. */
+  private readonly open = new Set<string>();
   /** Task creations under way: they count against this viewer's open tasks before the gateway is asked. */
-  let creating = 0;
-  let disposed = false;
-  let inFlight = 0;
+  private creating = 0;
+  private disposed = false;
+  private inFlight = 0;
   /** Names this viewer to the client, so what it asked for is withdrawn when it goes away. */
-  const owner = {};
+  private readonly owner = {};
+  private readonly client: ClawtrateClient;
+  private readonly policy: BridgePolicy;
+
+  constructor(client: ClawtrateClient, policy: BridgePolicy) {
+    this.client = client;
+    this.policy = policy;
+  }
+
   /** Task commands act only on tasks this viewer has open. */
-  const mine = (key: string) => {
-    if (!open.has(key)) throw new Error("This task is not open in this view.");
+  private mine(key: string): string {
+    if (!this.open.has(key)) throw new Error("This task is not open in this view.");
     return key;
-  };
-  const run = async (command: BridgeCommand): Promise<unknown> => {
-    if (disposed) throw new Error("this viewer has disconnected");
+  }
+
+  private checkRoom(): void {
+    if (this.open.size + this.creating >= MAX_VIEWER_OPEN_TASKS) {
+      throw new Error(`A view can hold ${MAX_VIEWER_OPEN_TASKS} tasks open at once.`);
+    }
+  }
+
+  /** A task this viewer asked to create, or to create again, is one of its open tasks from the start. */
+  private async created(make: () => Promise<string>): Promise<{ key: string }> {
+    this.checkRoom();
+    this.creating += 1;
+    let key: string;
+    try {
+      key = await make();
+    } finally {
+      this.creating -= 1;
+    }
+    // The client already counts this viewer's interest in the new task.
+    if (this.disposed || this.open.has(key)) this.client.closeSession(key);
+    else this.open.add(key);
+    return { key };
+  }
+
+  private async run(command: BridgeCommand): Promise<unknown> {
+    const { client, policy, owner } = this;
+    if (this.disposed) throw new Error("this viewer has disconnected");
     switch (command.type) {
       case "connect":
         return client.connect({ url: command.url, token: command.token ?? null });
@@ -411,21 +453,19 @@ export function createBridgeSession(
       case "retry":
         return client.retryNow();
       case "openSession":
-        if (!open.has(command.key)) {
-          if (open.size + creating >= MAX_VIEWER_OPEN_TASKS) {
-            throw new Error(`A view can hold ${MAX_VIEWER_OPEN_TASKS} tasks open at once.`);
-          }
+        if (!this.open.has(command.key)) {
+          this.checkRoom();
           client.openSession(command.key);
-          open.add(command.key);
+          this.open.add(command.key);
         }
         return;
       case "closeSession":
-        if (open.delete(command.key)) client.closeSession(command.key);
+        if (this.open.delete(command.key)) client.closeSession(command.key);
         return;
       case "requestAccess":
         return client.requestAccess();
       case "sendMessage": {
-        const key = mine(command.key);
+        const key = this.mine(command.key);
         if (command.attachmentIds.length > 0 && !policy.attachments) {
           throw new Error("This host does not take files.");
         }
@@ -447,98 +487,80 @@ export function createBridgeSession(
         }
       }
       case "retryMessage":
-        return client.retryMessage(mine(command.key), command.messageId);
+        return client.retryMessage(this.mine(command.key), command.messageId);
       case "deleteMessage":
-        return client.deleteMessage(mine(command.key), command.messageId);
+        return client.deleteMessage(this.mine(command.key), command.messageId);
       case "cancelQueued":
-        return client.cancelQueued(mine(command.key), command.messageId);
+        return client.cancelQueued(this.mine(command.key), command.messageId);
       case "sendQueuedNow":
-        return client.sendQueuedNow(mine(command.key), command.messageId);
-      case "createTask": {
-        // The new task is one of this viewer's open tasks from the start.
-        if (open.size + creating >= MAX_VIEWER_OPEN_TASKS) {
-          throw new Error(`A view can hold ${MAX_VIEWER_OPEN_TASKS} tasks open at once.`);
-        }
-        creating += 1;
-        let key: string;
-        try {
-          // Until the gateway is asked, a viewer that goes away takes its request with it.
-          key = await client.createTask(command.botId, command.text, {
+        return client.sendQueuedNow(this.mine(command.key), command.messageId);
+      case "createTask":
+        // Until the gateway is asked, a viewer that goes away takes its request with it.
+        return this.created(() =>
+          client.createTask(command.botId, command.text, {
             ...(command.label ? { label: command.label } : {}),
             owner,
-          });
-        } finally {
-          creating -= 1;
-        }
-        // The client already counts this viewer's interest in the new task.
-        if (disposed || open.has(key)) client.closeSession(key);
-        else open.add(key);
-        return { key };
-      }
+          }),
+        );
       case "stopRun":
-        return client.stopRun(mine(command.key), command.runId, { owner });
+        return client.stopRun(this.mine(command.key), command.runId, { owner });
       case "answerQuestion":
-        return client.answerQuestion(mine(command.key), command.questionId, command.answers, {
+        return client.answerQuestion(this.mine(command.key), command.questionId, command.answers, {
           owner,
         });
       case "dismissQuestion":
-        return client.dismissQuestion(mine(command.key), command.questionId, { owner });
+        return client.dismissQuestion(this.mine(command.key), command.questionId, { owner });
       case "resolveApproval":
-        return client.resolveApproval(mine(command.key), command.approvalId, command.decision, {
-          expiresInDays: command.expiresInDays,
-          owner,
-          shownDigest: command.shownDigest ?? null,
-        });
+        return client.resolveApproval(
+          this.mine(command.key),
+          command.approvalId,
+          command.decision,
+          {
+            expiresInDays: command.expiresInDays,
+            owner,
+            shownDigest: command.shownDigest ?? null,
+          },
+        );
       case "readApprovalText":
-        return client.readApprovalText(mine(command.key), command.approvalId, {
+        return client.readApprovalText(this.mine(command.key), command.approvalId, {
           owner,
           ...(policy.maxResultChars !== undefined ? { maxChars: policy.maxResultChars } : {}),
         });
       case "readHistoryItem":
-        return client.readHistoryItem(mine(command.key), command.itemId);
-      case "retryCreation": {
-        if (open.size + creating >= MAX_VIEWER_OPEN_TASKS) {
-          throw new Error(`A view can hold ${MAX_VIEWER_OPEN_TASKS} tasks open at once.`);
-        }
-        creating += 1;
-        let key: string;
-        try {
-          key = await client.retryCreation(command.creationId, { owner });
-        } finally {
-          creating -= 1;
-        }
-        if (disposed || open.has(key)) client.closeSession(key);
-        else open.add(key);
-        return { key };
-      }
+        return client.readHistoryItem(this.mine(command.key), command.itemId);
+      case "retryCreation":
+        return this.created(() => client.retryCreation(command.creationId, { owner }));
       case "dismissCreation":
         return client.dismissCreation(command.creationId);
       case "readStepRaw":
-        return client.readStepRaw(mine(command.key), command.stepId);
+        return client.readStepRaw(this.mine(command.key), command.stepId);
     }
-  };
-  return {
-    apply: <C extends BridgeCommand>(command: C) => {
-      if (inFlight >= MAX_VIEWER_PENDING_COMMANDS) {
-        return Promise.reject(
-          new Error("Too many requests are waiting; try again when they finish."),
-        );
-      }
-      inFlight += 1;
-      return run(command).finally(() => {
-        inFlight -= 1;
-      }) as Promise<BridgeResultFor<C>>;
-    },
-    openTasks: () => open,
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      // What this viewer asked for and the gateway has not been asked yet goes with it, now.
-      client.withdraw(owner);
-      for (const key of open) client.closeSession(key);
-      open.clear();
-    },
-  };
+  }
+
+  apply<C extends BridgeCommand>(command: C): Promise<BridgeResultFor<C>> {
+    if (this.inFlight >= MAX_VIEWER_PENDING_COMMANDS) {
+      return Promise.reject(
+        new Error("Too many requests are waiting; try again when they finish."),
+      );
+    }
+    this.inFlight += 1;
+    return this.run(command).finally(() => {
+      this.inFlight -= 1;
+    }) as Promise<BridgeResultFor<C>>;
+  }
+
+  openTasks(): ReadonlySet<string> {
+    return this.open;
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    // What this viewer asked for and the gateway has not been asked yet goes with it, now.
+    this.client.withdraw(this.owner);
+    for (const key of this.open) this.client.closeSession(key);
+    this.open.clear();
+  }
 }
 
 /**
