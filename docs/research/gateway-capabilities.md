@@ -1740,6 +1740,12 @@ reported it).
 | Recovery | no recover method. Nodes reconnect themselves. `computer.status {probe:true}` re-prepares the gateway computer. A run can be stopped with `chat.abort` | source |
 | What a node reports | its pairing request: `caps`, `commands`, `bins` (programs found on the node's path), `platform`, `deviceFamily`, `modelIdentifier`, `version` (live, `node.pair.list`) | live |
 
+Paired client devices: `device.pair.list` (`operator.pairing`)
+`paired[]` carries `deviceId`, `displayName`, `platform`, `clientId`,
+`role`, `scopes`, `approvedVia`, `createdAtMs`, `approvedAtMs`,
+`lastSeenAtMs`, `lastSeenReason` and `connected` (live). There is no
+separate "last opened" time.
+
 Live pairing behavior on loopback:
 - The node was approved silently ("node capability surface silent
   auto-approve").

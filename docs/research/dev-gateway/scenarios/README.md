@@ -41,3 +41,4 @@ Row 20 scripts:
 | `exec-auto-review.mjs` | `exec.mode: "auto"` verdicts with the scripted reviewer; changes and restores Atlas's exec mode |
 | `memory-save-search.mjs` | a bot writing memory, `memory.status`, `memory.search` |
 | `usage-fields.mjs`, `effort-and-models.mjs` | usage result fields; effort per turn and `models.list` details |
+| `paired-devices.mjs` | fields of paired client devices |
