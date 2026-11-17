@@ -315,7 +315,7 @@
       `<li>A lock is about accounts. An empty fallback list keeps ${name} off other models in the gateway's fallback list, but some providers can still switch the model inside a request.</li></ul></div></details>`;
     if (b.fallbackWriteFailed)
       html += note(
-        `<p>Clawtrate couldn't write ${name}'s empty fallback list. ${name} has no fallbacks of its own, so nothing moves it to another model; the list only makes that explicit.</p>` +
+        `<p>Clawtrate couldn't write ${name}'s empty fallback list. ${name} has no fallback models set, so the gateway's fallback list doesn't apply to it; the empty list only makes that explicit. A provider can still switch the model inside a request, as "What a lock doesn't cover" says.</p>` +
           (isAdmin() ? `<div class="b-actions">${button("Try again", 'data-bs="write-fallbacks" data-size="sm"')}</div>` : ""),
       );
     if (b.fallbacks?.length)

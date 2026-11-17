@@ -171,6 +171,7 @@ await p.waitForTimeout(900);
 await p.evaluate(() => { window.app.setPanel(true); document.querySelector("#tab-settings").click(); });
 await p.click('#panel-settings [data-bs="account"]');
 check("FM-13 created but the fallback write refused: said on the account page, with Try again for that bot", (await text(p, "#panel-settings")).includes("Clawtrate couldn't write Viral's empty fallback list") && (await p.evaluate(() => !!document.querySelector('#panel-settings [data-bs="write-fallbacks"]'))));
+check("R2-02 the note says no fallback models are set and that in-request reroutes remain, not that nothing moves the bot", (await text(p, "#panel-settings")).includes("Viral has no fallback models set, so the gateway's fallback list doesn't apply to it") && (await text(p, "#panel-settings")).includes("A provider can still switch the model inside a request") && !(await text(p, "#panel-settings")).includes("nothing moves it"));
 await p.close();
 p = await open("open=create&step=account&name=Viral&chosen=xai:default&create=timeout");
 await p.click('[data-b="create"]');
