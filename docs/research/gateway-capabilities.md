@@ -2211,6 +2211,19 @@ Live pairing behavior on loopback:
     `tools.agentToAgent` accepts only `enabled` and `allow`
     (`<openclaw>/dist/zod-schema.agent-runtime-iDxKMLd-.mjs` lines 586-591
     and 640-651).
+- **Tool action log**: `audit.activity.list {kind:"tool_action", agentId?,
+  sessionKey?, runId?, status?, …}`, `audit.list` and `audit.run.inspect`
+  (all `operator.read`; source, not called live).
+  - The recorder persists `tool.action.started` and `tool.action.finished`
+    records whether or not an approval was involved
+    (`<openclaw>/dist/audit-recorder-BuwLkiwR.mjs` lines 131-199).
+  - Each record (`schema` `AuditActivityToolActionV1`) carries `eventId`,
+    `occurredAt`, `actor`, `agentId`, `sessionKey?`, `runId`,
+    `toolCallId?`, `toolName?`, `action`, `status` and
+    `redaction:"metadata_only"`.
+  - `audit.run.inspect` adds available decision evidence and its coverage.
+  - These records do not by themselves say which global, bot, grant or
+    default-review rule allowed each action.
 - **What locks a rule** (`<openclaw>/docs/tools/exec-approvals.md` lines
   24-36; `<openclaw>/docs/gateway/permission-modes.md`, "Policy
   precedence"):
