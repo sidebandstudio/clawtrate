@@ -120,11 +120,13 @@
     const clipped = !live && lines > limit;
     return (
       `<div class="code-head"><p class="code-label">${esc(label)}</p>` +
-      `${copyButton(copy.toLowerCase(), text, truncated ? "the first 8,000 characters" : "")}</div>` +
+      `${copyButton(copy.toLowerCase(), text, truncated ? "what was received" : "")}</div>` +
       `<pre class="code-block"${clipped ? ' data-clipped="true"' : ""}${tone ? ` data-tone="${tone}"` : ""}` +
       `${live ? ' data-live="true"' : ""} tabindex="0">${esc(text)}${live ? '<span class="stream-caret"></span>' : ""}</pre>` +
       (truncated
-        ? `<p class="code-truncated">${icon("warning")}Truncated by the gateway. This is the first 8,000 characters; the rest was not sent.</p>`
+        ? `<p class="code-truncated">${icon("warning")}Truncated by the gateway. ` +
+          // The size is given only for plain text; a structured result is not a simple prefix.
+          `${truncated === "structured" ? "The rest was not sent." : `${text.length.toLocaleString("en-US")} characters were received; the rest was not sent.`}</p>`
         : "") +
       (clipped
         ? `<p class="code-more"><button type="button" class="link-button" data-action="unclip" data-lines="${lines}" aria-expanded="false">Show all ${lines} lines</button></p>`
@@ -159,6 +161,7 @@
     }
     const copyRows = (rows, what) => rows.map(([k, v]) => [k, v, { mono: true, copy: true, what: what(k) }]);
     return (
+      `<p class="raw-note">Sample data. A part that says “as the gateway sends it” follows the gateway's schema; the others are samples in the app's own shape.</p>` +
       (raw.tool
         ? `<dl class="fields"><dt>Tool</dt><dd><span class="tool-name">${esc(raw.tool)}</span>${copyButton("tool name", raw.tool)}</dd></dl>`
         : "") +
@@ -166,7 +169,7 @@
       (raw.error
         ? CT.codeBlock({ label: "Error", text: raw.error, tone: "danger" })
         : raw.result
-          ? CT.codeBlock({ label: "Result", text: raw.result, truncated: raw.truncated })
+          ? CT.codeBlock({ label: "Result", text: raw.result, truncated: raw.truncated ? "structured" : false })
           : raw.running
             ? `<p class="exchange-note" style="margin-bottom:12px">No result yet. This call is still running.</p>`
             : "") +
@@ -265,15 +268,15 @@
 
   // Each state is something an event established: [mark, word, tone].
   const states = {
-    sending: ["sending", "Sending", ""],
-    approval: ["waiting", "Waiting for approval", "warn"],
     "call-started": ["sending", "Call started", ""],
+    approval: ["waiting", "Waiting for approval", "warn"],
     sent: ["check", "Sent", ""],
     working: ["working", "Working", "accent"],
     "recipient-waiting": ["waiting", "Recipient waiting", "warn"],
     "no-reply": ["queued", "No reply yet", ""],
     replied: ["check", "Replied", "accent"],
     "recipient-stopped": ["stopped", "Recipient stopped", ""],
+    "recipient-failed": ["failed", "Recipient failed", "danger"],
     failed: ["failed", "Failed", "danger"],
     blocked: ["failed", "Blocked by policy", "danger"],
     "not-sent": ["stopped", "Not sent", ""],
@@ -319,18 +322,16 @@
   CT.exchange = (items, attrs = "") => `<ol class="exchange" ${attrs}>${items.map(CT.exchangeItem).join("")}</ol>`;
 
   // What the card can say about the other side, for each state.
-  CT.cameBack = (state, { sender, recipient, phrase, reply, time, error, rule, denied }) => {
+  CT.cameBack = (state, { sender, recipient, phrase, reply, time, error, rule, denied, timeout }) => {
     const s = CT.bots[sender].name;
     const t3 = recipient === "t3code";
     const r = t3 ? "T3 Code" : CT.bots[recipient].name;
     const line = (text) => ({ who: recipient, verb: "", html: CT.note(text) });
     switch (state) {
-      case "sending":
-        return line(`${s} is preparing this ${t3 ? "call" : "message"}.`);
       case "approval":
-        return line("This message waits for your approval. Nothing has been sent.");
+        return line(`This ${t3 ? "call" : "message"} waits for your approval. Nothing has been sent.`);
       case "call-started":
-        return line(t3 ? `${s} started the call. Nothing more is reported until it returns.` : `${s} started the call. The gateway has not said whether ${r} received it.`);
+        return line(`${s} began this call. Nothing yet shows that it was made${t3 ? ", and nothing more is reported until it returns" : ""}.`);
       case "sent":
         return line(`${r} received it. No reply yet.`);
       case "working":
@@ -339,11 +340,15 @@
       case "recipient-waiting":
         return line(`${r} asked a question in its own task and is waiting for the answer.`);
       case "no-reply":
-        return line(`${r}'s run finished without a reply. A reply that names this message appears here; any other arrives as a message from ${r}.`);
+        return line(
+          `${timeout ? "The message was sent, and no reply came in time." : `${r}'s run finished without a reply.`} A reply that names this message appears here; any other arrives as a message from ${r}.`,
+        );
       case "replied":
         return { who: recipient, verb: "replied", time, html: `<div class="exchange-text">${reply}</div>` };
       case "recipient-stopped":
         return line(`${r}'s run for this message was stopped before it replied.`);
+      case "recipient-failed":
+        return line(`${r} received it, and its run for this message then failed: the model provider was overloaded.`);
       case "failed":
         return { who: recipient, verb: "", html: CT.note("The call failed.") + CT.codeBlock({ label: "Error", text: error, tone: "danger" }) };
       case "blocked":
@@ -380,60 +385,73 @@
       : "") +
     `</div></details>`;
 
-  // A rule is shown from the fields the request carries, never from a fixed sentence:
-  // rule: { text, covers, where, days?: true, stillAsks?: "…" }
-  // lasts: "forever", or a number of days. saved: when the gateway saved it.
+  // "Always allow" shows what the request carries and nothing else: the gateway
+  // names no rule in advance and returns none. `request` is the request's own
+  // fields; `kind` says what the gateway keeps for a request of that kind:
+  //   "command"  an entry on the host's allowlist, with no expiry
+  //   "routine"  a standing grant for a routine's command, with a lifetime in days
+  //   "other"    whatever the gateway keeps for that kind
+  CT.requestRows = (request) =>
+    `<dl class="standing-grid">` +
+    [
+      ["Command", request.command && `<code class="tool-name">${esc(request.command)}</code>`],
+      ["Folder", request.cwd && `<code class="tool-name">${esc(request.cwd)}</code>`],
+      ["Runs on", request.host && esc(request.host)],
+      ["Bot", request.agent && esc(request.agent)],
+      ["For", request.routine && `The routine ${esc(request.routine)}`],
+    ]
+      .filter(([, value]) => value) // a field the request does not carry has no row
+      .map(([label, value]) => `<dt>${label}</dt><dd>${value}</dd>`)
+      .join("") +
+    `</dl>`;
+
   const until = (days) => {
     const date = new Date(2026, 10, 16 + Number(days));
     const text = date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
     return date.getFullYear() === 2026 ? text : `${text}, ${date.getFullYear()}`;
   };
-  CT.lastsText = (lasts, saved = "") =>
-    lasts === "forever" || !lasts ? "Until removed" : saved ? `Until ${until(lasts)}, ${saved}` : `${lasts} ${Number(lasts) === 1 ? "day" : "days"}, until ${until(lasts)}`;
+  CT.until = until;
 
-  CT.ruleRows = ({ rule, lasts = "forever", saved = "", choose = false }) =>
-    `<dl class="standing-grid"><dt>Rule</dt><dd><code class="tool-name">${esc(rule.text)}</code></dd>` +
-    `<dt>Covers</dt><dd>${esc(rule.covers)}</dd>` +
-    `<dt>Saved on</dt><dd>${esc(rule.where)}</dd>` +
-    `<dt>Lasts</dt><dd>` +
-    (choose
-      ? `<div class="seg" role="radiogroup" aria-label="Lasts">` +
-        `<button type="button" role="radio" aria-checked="${lasts === "forever"}" tabindex="${lasts === "forever" ? 0 : -1}" data-lasts="forever">Until removed</button>` +
-        `<button type="button" role="radio" aria-checked="${lasts !== "forever"}" tabindex="${lasts !== "forever" ? 0 : -1}" data-lasts="days">For a number of days</button></div>` +
-        `<label class="days"${lasts === "forever" ? " hidden" : ""}><input type="number" min="1" max="3650" step="1" inputmode="numeric" value="${lasts === "forever" ? 30 : lasts}" aria-label="Number of days"> days</label>` +
-        `<p class="days-error" hidden>Between 1 and 3650 days.</p>`
-      : `${CT.lastsText(lasts, saved)}${saved && lasts === "forever" ? `. Saved ${saved}.` : ""}`) +
-    `</dd></dl>` +
-    (rule.stillAsks ? `<p class="standing-note">${icon("warning")}${esc(rule.stillAsks)}</p>` : "");
+  // What "Always allow" saves, in words, no more precisely than the gateway decides it.
+  CT.savedWords = (kind, request, bot) => {
+    const name = CT.bots[bot].name;
+    if (kind === "routine") return `The routine ${request.routine} may run this command without asking.`;
+    if (kind === "other") return "The gateway will remember this decision for requests it treats as the same.";
+    return `The gateway will add this to ${request.host}'s allowlist, so ${name} is not asked again for commands it matches. The gateway decides what that covers; it can be wider than this exact command.`;
+  };
 
-  CT.standingOutcome = (bot, lasts) =>
-    `${CT.bots[bot].name} can run this without asking, ${lasts === "forever" ? "until the rule is removed" : `for ${lasts} ${Number(lasts) === 1 ? "day" : "days"}, until ${until(lasts)}`}.`;
-
-  // The standing-allow form: the rule, who it covers, where it is saved, and a
-  // lifetime in days only when the request's kind accepts one. Deny stays.
-  // save: "", "saving" or "failed". nextTime: the expired card's variant.
-  CT.standing = ({ bot, rule, open = false, save = "", reason = "", nextTime = false, lasts = "forever" }) => {
+  // The form, and what happens to a decision. Deny stays in every state.
+  // sent: "" (open), "sending", "refused", "unknown". nextTime: the rules plugin's variant.
+  CT.standing = ({ bot, request, kind = "command", open = false, sent = "", reason = "", days = "", nextTime = false }) => {
+    const lifetime =
+      kind === "routine" && !sent
+        ? `<label class="days">Lasts <input type="number" min="1" max="3650" step="1" inputmode="numeric" value="${days}" placeholder="default" aria-label="Number of days"> days</label>` +
+          `<p class="days-error" hidden>Between 1 and 3650 days.</p>`
+        : "";
     const body =
-      save === "saving"
-        ? `<p class="standing-outcome" aria-busy="true">Saving the rule…</p>`
-        : save === "failed"
-          ? `<div class="standing-error" role="alert"><b>Couldn't save the rule.</b> ${esc(reason)} The command has not run.</div>`
-          : `<p class="standing-outcome"><span data-outcome>${CT.standingOutcome(bot, lasts)}</span> ` +
-            `Saved rules are listed in Settings, under Permissions; opening that needs admin access.</p>`;
+      sent === "sending"
+        ? `<p class="standing-outcome" aria-busy="true">Sending your decision…</p>`
+        : sent === "refused"
+          ? `<div class="standing-error" role="alert"><b>The gateway refused this decision.</b> ${esc(reason)} The request is still open.</div>`
+          : sent === "unknown"
+            ? `<div class="standing-note" role="status">${icon("warning")}<span><b>No answer from the gateway.</b> Your decision may or may not have been applied.</span></div>`
+            : `<p class="standing-outcome">${esc(CT.savedWords(kind, request, bot))}</p>${lifetime}`;
     const primary = nextTime
       ? `<button type="button" class="button" data-variant="primary" data-decision="next-time">Save rule for next time</button>`
-      : save === "saving"
-        ? `<button type="button" class="button" data-variant="primary" disabled>Saving…</button>`
-        : save === "failed"
+      : sent === "sending"
+        ? `<button type="button" class="button" data-variant="primary" disabled>Sending…</button>`
+        : sent === "refused"
           ? `<button type="button" class="button" data-variant="primary" data-decision="always">Try again</button>` +
             `<button type="button" class="button" data-decision="once">Allow once instead</button>`
-          : `<button type="button" class="button" data-variant="primary" data-decision="always">Allow and save rule</button>`;
+          : sent === "unknown"
+            ? `<button type="button" class="button" data-variant="primary" data-action="check-decision">Check again</button>`
+            : `<button type="button" class="button" data-variant="primary" data-decision="always">Allow and save</button>`;
     return (
-      `<div class="standing" role="group" aria-label="Always allow" data-bot="${bot}" data-lasts="${lasts}"${save ? ` data-save="${save}"` : ""}${open ? "" : " hidden"}>` +
-      CT.ruleRows({ rule, lasts, choose: Boolean(rule.days) && !save }) +
+      `<div class="standing" role="group" aria-label="Always allow" data-bot="${bot}" data-kind="${kind}"${sent ? ` data-sent="${sent}"` : ""}${open ? "" : " hidden"}>` +
+      CT.requestRows(request) +
       body +
       `<div class="request-actions">${primary}` +
-      `<button type="button" class="button" data-variant="quiet" data-action="standing-close"${save === "saving" ? " disabled" : ""}>Back</button>` +
+      (sent === "unknown" ? "" : `<button type="button" class="button" data-variant="quiet" data-action="standing-close"${sent === "sending" ? " disabled" : ""}>Back</button>`) +
       (nextTime ? "" : `<span class="spacer"></span><button type="button" class="button" data-variant="quiet" data-decision="deny">Deny</button>`) +
       `</div></div>`
     );
@@ -441,18 +459,20 @@
 
   // A pending approval. `what` completes "<Bot> wants to …".
   // decisions: the decisions this request offers; Deny is always among them.
+  // request, kind: what the "Always allow" form shows (see CT.standing).
   // asker: { title, line } when a helper or a messaged bot is asking.
-  // runEnded: the run is over and the request still stands.
+  // runEnded: the run is over and the request is still pending.
   // readonly: this device can read the request and cannot answer it.
   CT.approval = ({
-    id, bot, what = "run a command", summary, line = "", warnings = [], full, foot = "", rule, decisions = ["once", "always", "deny"],
-    asker, formOpen = false, save = "", saveReason = "", lasts = "forever", runEnded = false, readonly = false, raw, rawOpen = false,
+    id, bot, what = "run a command", summary, line = "", warnings = [], full, foot = "", request, kind = "command",
+    decisions = ["once", "always", "deny"], asker, formOpen = false, sent = "", sentReason = "", days = "", runEnded = false,
+    readonly = false, raw, rawOpen = false,
   }) => {
     const name = CT.bots[bot].name;
     const title = asker?.title || `${name} wants to ${what}`;
-    const always = decisions.includes("always") && rule;
+    const always = decisions.includes("always") && request;
     id = id || CT.uid("approval");
-    CT.defs[id] = { bot, line, full, rule, raw };
+    CT.defs[id] = { bot, line, full, request, kind, raw };
     return (
       `<section class="card request" data-kind="approval" data-state="pending" id="${id}" data-line="${esc(line)}" tabindex="-1"` +
       ` role="region" aria-label="${esc(title)}. Needs approval.">` +
@@ -463,9 +483,7 @@
       (warnings.length
         ? `<ul class="request-warnings">${warnings.map((w) => `<li>${icon("warning")}${esc(w)}</li>`).join("")}</ul>`
         : "") +
-      (runEnded
-        ? `<p class="request-ended">${name}'s run has ended. If you allow this, the command runs now, on its own; ${name} sees the result only when you next message it.</p>`
-        : "") +
+      (runEnded ? `<p class="request-ended">${name}'s run has ended. This request is still open, and you can still answer it.</p>` : "") +
       CT.fullRequest(full) +
       (readonly
         ? `<p class="request-ended">You can read this request but not answer it from this device.</p>` +
@@ -475,7 +493,7 @@
           (always ? `<button type="button" class="button" data-action="standing-open" aria-expanded="${formOpen}">Always allow…</button>` : "") +
           `<span class="spacer"></span>` +
           `<button type="button" class="button" data-variant="quiet" data-decision="deny">Deny</button></div>` +
-          (always ? CT.standing({ bot, rule, open: formOpen, save, reason: saveReason, lasts }) : "")) +
+          (always ? CT.standing({ bot, request, kind, open: formOpen, sent, reason: sentReason, days }) : "")) +
       (foot ? `<p class="request-foot">${foot}</p>` : "") +
       CT.cardFoot("", raw, rawOpen) +
       `</section>`
@@ -495,7 +513,7 @@
   // What the gateway reported, and no more. Allowing is not proof of running.
   CT.outcomes = (name) => ({
     once: `Allowed once. The command can run now. ${name} will ask again next time.`,
-    always: "Allowed, and saved as a rule. The command can run now.",
+    always: "Allowed, and saved. The command can run now.",
     denied: `Denied. The command was not run. ${name} won't do this, and won't ask again until you send another message.`,
     expired: "Expired at 5:53 PM without an answer. The command was not run.",
     "closed-ended": "The run ended before this was answered. The command was not run.",
@@ -504,23 +522,29 @@
   });
 
   // A resolved approval: one line that opens to the outcome and the request.
-  // rule: the saved rule as the gateway returned it. nextTime: the expired
-  // request offered a rule the gateway still accepts.
-  CT.approvalResolved = ({ id, bot = "otto", state, line, when, outcome, rule, lasts = "forever", saved = "", replaced = "", nextTime = false, full, open = false, raw }) => {
+  // saved: { kind, request, days } what "allow always" kept, in the form's own words.
+  // winner: who decided, when another decision won. nextTime: the rules plugin's form.
+  CT.approvalResolved = ({ id, bot = "otto", state, line, when, outcome, saved, winner = "", nextTime, full, open = false, raw }) => {
     const [word, tone] = resolved[state];
     const name = CT.bots[bot].name;
+    const kept = saved
+      ? saved.kind === "routine"
+        ? `${CT.savedWords("routine", saved.request, bot).replace(/\.$/, "")}, ${saved.days ? `until ${until(saved.days)}` : "for the gateway's default time"}.`
+        : saved.kind === "other"
+          ? "The gateway will remember this decision for requests it treats as the same."
+          : `Added to ${saved.request.host}'s allowlist. The gateway decides what it covers. Seeing that list needs admin access.`
+      : "";
     return (
       `<details class="card request" data-kind="approval" data-state="${state}" data-resolved${id ? ` id="${id}"` : ""}${open ? " open" : ""}>` +
       `<summary><span class="tag"${tone ? ` data-tone="${tone}"` : ""}>${word}</span>` +
       `<span class="request-line">${line}</span><time class="request-when">${when}</time>${icon("chevron", "icon chevron")}</summary>` +
-      `<div class="request-resolved-body"><p>${outcome || CT.outcomes(name)[state]}${replaced ? ` It replaced the oldest rule: “${esc(replaced)}”.` : ""}</p>` +
-      (rule
-        ? `<div class="request-rule">${CT.ruleRows({ rule, lasts, saved })}</div>` +
-          `<p class="request-foot">To see or remove it, open Settings, then Permissions. That needs admin access.</p>`
+      `<div class="request-resolved-body"><p>${outcome || CT.outcomes(name)[state]}${winner ? ` ${esc(winner)}` : ""}</p>` +
+      (kept
+        ? `<p>${esc(kept)}</p><p class="request-foot">${CT.linkButton("Saved rules", { action: "elsewhere", attrs: 'data-where="Opens Settings, Permissions. Standing grants are listed and revoked there with the access that answers approvals; a host\'s allowlist needs admin."' })}</p>`
         : "") +
       (nextTime
         ? `<div class="request-actions" data-row="main"><button type="button" class="button" data-action="standing-open" aria-expanded="false">Always allow next time</button></div>` +
-          CT.standing({ bot, rule: nextTime, nextTime: true })
+          CT.standing({ bot, ...nextTime, nextTime: true })
         : "") +
       CT.fullRequest({ ...full, open: true }) +
       CT.cardFoot("", raw) +
@@ -586,6 +610,24 @@
       `</section>`
     );
   };
+
+  // A question record outside the ordinary ask-user subset: shown readable, with
+  // its Raw, and no way to answer it here.
+  CT.questionReadOnly = ({ id, bot = "otto", questions, status = "pending", raw }) =>
+    `<section class="card request" data-kind="question" data-state="unanswerable"${id ? ` id="${id}"` : ""} tabindex="-1" role="region"` +
+    ` aria-label="${CT.bots[bot].name} asked something this app can't answer yet">` +
+    `<h3 class="request-title">${CT.bots[bot].name} asked something this app can't answer yet</h3>` +
+    questions
+      .map(
+        (q) =>
+          `<p class="request-summary">${esc(q.question)}</p>` +
+          (q.options.length ? `<p class="request-foot">Options: ${q.options.map(esc).join(" · ")}</p>` : "") +
+          (q.why ? `<p class="request-foot">${esc(q.why)}</p>` : ""),
+      )
+      .join("") +
+    `<p class="request-foot">State: ${status}. Nothing is sent for it from here.</p>` +
+    CT.cardFoot("", raw) +
+    `</section>`;
 
   const questionNotes = {
     dismissed: "Dismissed",

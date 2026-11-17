@@ -55,9 +55,8 @@
   const question = S.question;
   const skip = { title: "Which folders should the backup skip?", multi: true, options: [["Transcode cache"], ["Downloads in progress"], ["Thumbnails"], ["Trash"]] };
 
-  // An approval for each variant, from the same request.
-  const withDays = { ...S.approval.rule, where: "The gateway", days: true };
-  const stillAsks = { ...S.approval.rule, stillAsks: "Otto is set to always ask on media-box, so you will still be asked each time. The rule takes effect if that setting changes." };
+  // A request raised by a routine: the one kind that mints a grant with a lifetime in days.
+  const routine = { request: { ...S.approval.request, routine: "Weekly cleanup" }, kind: "routine" };
 
   const shelf = (rows) => rows.join("");
   const queuedRow = (kind = "Queued", actions = CT.button("Send now") + CT.button("Cancel", 'data-variant="quiet"')) =>
@@ -301,7 +300,7 @@
         },
         {
           name: "Output the gateway cut",
-          note: "The gateway sends about 8,000 characters and flags the cut. Copy copies what was received and says so.",
+          note: "The line gives the size actually received when it is plain text, and says only that it was cut when the result is structured. Copy copies what was received and says so.",
           html: activity({
             state: "completed",
             label: "Worked for 22s",
@@ -355,18 +354,28 @@
       specimens: [
         {
           name: "Folded, every state",
-          html: Object.keys({ sending: 1, approval: 1, "call-started": 1, sent: 1, working: 1, "recipient-waiting": 1, "no-reply": 1, replied: 1, "recipient-stopped": 1, failed: 1, blocked: 1, "not-sent": 1, unknown: 1 })
+          html: Object.keys({ "call-started": 1, approval: 1, sent: 1, working: 1, "recipient-waiting": 1, "no-reply": 1, replied: 1, "recipient-stopped": 1, "recipient-failed": 1, failed: 1, blocked: 1, "not-sent": 1, unknown: 1 })
             .map((state) => messaged({ target: "marlow", first, state, body: S.marlowBody(state) }))
             .join(""),
         },
-        { name: "Open, call started", note: "The call started. That does not show the message was delivered.", html: messaged({ target: "marlow", first, state: "call-started", open: true, body: S.marlowBody("call-started") }) },
+        { name: "Open, call started", note: "The start is the first thing the gateway reports, and it is never proof the call was made.", html: messaged({ target: "marlow", first, state: "call-started", open: true, body: S.marlowBody("call-started") }) },
         { name: "Open, waiting for approval", html: messaged({ target: "marlow", first, state: "approval", open: true, body: S.marlowBody("approval") }) },
         { name: "Open, sent", html: messaged({ target: "marlow", first, state: "sent", open: true, body: S.marlowBody("sent") }) },
         { name: "Open, the recipient is working", note: "One row for the recipient: its state avatar, its name and its current phrase.", html: messaged({ target: "marlow", first, state: "working", open: true, body: S.marlowBody("working") }) },
         { name: "Open, the recipient is waiting", html: messaged({ target: "marlow", first, state: "recipient-waiting", open: true, body: S.marlowBody("recipient-waiting") }) },
         { name: "Open, no reply yet", html: messaged({ target: "marlow", first, state: "no-reply", open: true, body: S.marlowBody("no-reply") }) },
+        {
+          name: "Open, no reply after a timeout that says the message was sent",
+          note: "Not a failure: a reply that names this message can still arrive.",
+          html: messaged({ target: "marlow", first, state: "no-reply", open: true, body: S.marlowBody("no-reply", { timeout: true }) }),
+        },
         { name: "Open, replied", note: "Show full exchange opens every message between the two bots in this task, in place.", html: messaged({ target: "marlow", first, state: "replied", open: true, body: S.marlowBody("replied") }) },
         { name: "Open, the recipient was stopped", html: messaged({ target: "marlow", first, state: "recipient-stopped", open: true, body: S.marlowBody("recipient-stopped") }) },
+        {
+          name: "Open, the recipient's run failed",
+          note: "The message was delivered; the failure is the recipient's. The sender's card never stays Working.",
+          html: messaged({ target: "marlow", first, state: "recipient-failed", open: true, body: S.marlowBody("recipient-failed") }),
+        },
         { name: "Open, failed", html: messaged({ target: "marlow", first, state: "failed", open: true, body: S.marlowBody("failed") }) },
         { name: "Open, blocked by policy", html: messaged({ target: "marlow", first, state: "blocked", open: true, body: S.marlowBody("blocked") }) },
         { name: "Open, not sent", html: messaged({ target: "marlow", first, state: "not-sent", open: true, body: S.marlowBody("not-sent") }) },
@@ -398,11 +407,12 @@
       specimens: [
         {
           name: "Folded, every state",
-          html: ["sending", "call-started", "call-made", "delivery-unknown", "failed", "not-sent"]
+          html: ["call-started", "approval", "call-made", "delivery-unknown", "failed", "not-sent"]
             .map((state) => messaged({ target: "t3code", first: S.t3First, state, body: S.t3Body(state) }))
             .join(""),
         },
         { name: "Open, call started", note: "No progress arrives while the call runs.", html: messaged({ target: "t3code", first: S.t3First, state: "call-started", open: true, body: S.t3Body("call-started") }) },
+        { name: "Open, waiting for approval", note: "The call had started; it is held, and goes on as the same call when allowed.", html: messaged({ target: "t3code", first: S.t3First, state: "approval", open: true, body: S.t3Body("approval") }) },
         { name: "Open, call made, with a link in the result", html: messaged({ target: "t3code", first: S.t3First, state: "call-made", open: true, body: S.t3Body("call-made") }) },
         {
           name: "Open, call made, no link and no target fields",
@@ -426,23 +436,34 @@
       note: "The card shows the decisions the request offers and no others. Deny is always among them and always visible. Answer any of these: the outcome says what the gateway confirmed.",
       specimens: [
         { name: "Pending", html: approval(S.approval) },
-        { name: "Pending, full request and Raw open", html: approval({ ...S.approval, full: { ...S.approval.full, open: true }, rawOpen: true }) },
-        { name: "Always allow: the rule, who it covers, where it is saved", note: "Deny stays beside the form's buttons.", html: approval({ ...S.approval, formOpen: true }) },
+        { name: "Pending, full request and Raw open", note: "Raw holds the request's fields as the gateway builds them.", html: approval({ ...S.approval, full: { ...S.approval.full, open: true }, rawOpen: true }) },
         {
-          name: "Always allow, where the request accepts a lifetime",
-          note: "Whole days, from 1 to 3650. Offered only when this kind of request accepts one.",
-          html: approval({ ...S.approval, rule: withDays, formOpen: true, lasts: "30" }),
+          name: "Always allow, for an ordinary command",
+          note: "The request's own fields, and in words what the gateway keeps: an allowlist entry whose reach the gateway decides. No lifetime. Deny stays beside the form's buttons.",
+          html: approval({ ...S.approval, formOpen: true }),
         },
         {
-          name: "Always allow, where a stricter setting still asks",
-          html: approval({ ...S.approval, rule: stillAsks, formOpen: true }),
+          name: "Always allow, for a command raised by a routine",
+          note: "The one kind that mints a dated grant: whole days, from 1 to 3650, filled with the request's default.",
+          html: approval({ ...S.approval, ...routine, formOpen: true, days: "30", foot: "Asked by the routine <b>Weekly cleanup</b>." }),
         },
-        { name: "Always allow: saving", note: "Not marked resolved until the gateway confirms. Deny stays.", still: true, html: approval({ ...S.approval, formOpen: true, save: "saving" }) },
+        { name: "A decision is being sent", note: "Not marked resolved until the gateway answers. Deny stays.", still: true, html: approval({ ...S.approval, formOpen: true, sent: "sending" }) },
         {
-          name: "Always allow: couldn't save",
-          html: approval({ ...S.approval, formOpen: true, save: "failed", saveReason: "media-box did not answer." }),
+          name: "The gateway refused the decision",
+          note: "A refusal comes with the gateway's reason, and the request is still open.",
+          html: approval({ ...S.approval, formOpen: true, sent: "refused", sentReason: "media-box did not accept a change to its allowlist." }),
         },
-        { name: "A request that offers no reusable rule", note: "The choice is Allow or Deny.", html: approval({ ...S.approval, decisions: ["once", "deny"] }) },
+        {
+          name: "No answer came",
+          note: "Unknown is its own outcome. The card never says the command did not run, and offers no allow again until the request's state is known.",
+          html: approval({ ...S.approval, formOpen: true, sent: "unknown" }),
+        },
+        {
+          name: "Another decision won",
+          note: "The card shows the winner.",
+          html: approvalResolved({ state: "denied", line: S.approval.line, when: "5:25 PM", open: true, outcome: "Denied by another reviewer at 5:25 PM. Your decision was not applied.", full: S.approval.full, raw: S.approvalRaw("deny") }),
+        },
+        { name: "A request that does not offer Always allow", note: "The host is set to always ask, or the gateway finds nothing reusable to save. The choice is Allow or Deny.", html: approval({ ...S.approval, decisions: ["once", "deny"] }) },
         {
           name: "Asked by a helper",
           html: approval({ ...S.approval, asker: { title: "A helper of Otto wants to run a command", line: "Asked by a helper Otto started for this task." } }),
@@ -456,10 +477,10 @@
             asker: { title: "Marlow wants to run a command", line: "Marlow is working on a message from Otto." },
             summary: "Append two lines to <b>notes/house-log.md</b> in Otto's workspace.",
             line: "Append two lines to notes/house-log.md",
-            rule: { ...S.approval.rule, covers: "Marlow only", where: "The gateway" },
+            request: { ...S.approval.request, agent: "Marlow", host: "The gateway's host" },
           }),
         },
-        { name: "The run has already ended, and the request still stands", html: approval({ ...S.approval, runEnded: true }) },
+        { name: "The run has already ended, and the request is still pending", note: "It says only what is known.", html: approval({ ...S.approval, runEnded: true }) },
         {
           name: "With warnings and an expiry",
           html: approval({
@@ -480,7 +501,8 @@
             line: "Message Marlow: Write a two-line entry for the house log.",
             summary: "“Write a two-line entry for the house log…”",
             full: { reason: "Otto's outgoing messages are set to ask first.", command: S.marlowSent, fields: [["To", "Marlow"], ["Asked by", "Your message in this task, 5:24 PM"]] },
-            rule: { text: "Messages from Otto to Marlow", covers: "Otto only", where: "The gateway" },
+            request: { agent: "Otto" },
+            kind: "other",
             raw: S.approvalRaw(),
           }),
         },
@@ -493,8 +515,7 @@
                 line: S.approval.line,
                 when: "5:25 PM",
                 full: S.approval.full,
-                rule: state === "always" ? S.approval.rule : undefined,
-                saved: "5:25 PM",
+                saved: state === "always" ? { kind: "command", request: S.approval.request } : undefined,
                 raw: S.approvalRaw(state === "once" ? "allow-once" : state === "always" ? "allow-always" : state === "denied" ? "deny" : ""),
               }),
             )
@@ -506,49 +527,57 @@
           html: approvalResolved({ state: "once", line: S.approval.line, when: "5:25 PM", open: true, full: S.approval.full, raw: S.approvalRaw("allow-once") }),
         },
         {
-          name: "Resolved and open: always allowed",
-          note: "The rule as the gateway saved it.",
-          html: approvalResolved({ state: "always", line: S.approval.line, when: "5:25 PM", open: true, rule: S.approval.rule, saved: "5:25 PM", full: S.approval.full, raw: S.approvalRaw("allow-always") }),
+          name: "Resolved and open: always allowed, an ordinary command",
+          note: "What was kept, in the form's own words. The gateway returns no saved rule, so none is shown.",
+          html: approvalResolved({ state: "always", line: S.approval.line, when: "5:25 PM", open: true, saved: { kind: "command", request: S.approval.request }, full: S.approval.full, raw: S.approvalRaw("allow-always") }),
         },
         {
-          name: "Resolved and open: always allowed for 30 days, replacing the oldest rule",
-          html: approvalResolved({
-            state: "always",
-            line: S.approval.line,
-            when: "5:25 PM",
-            open: true,
-            rule: withDays,
-            lasts: "30",
-            saved: "5:25 PM",
-            replaced: "ls /srv/media (run in /srv)",
-            full: S.approval.full,
-            raw: S.approvalRaw("allow-always"),
-          }),
+          name: "Resolved and open: always allowed, a routine's command, for 30 days",
+          html: approvalResolved({ state: "always", line: S.approval.line, when: "5:25 PM", open: true, saved: { ...routine, days: "30" }, full: S.approval.full, raw: S.approvalRaw("allow-always") }),
         },
         { name: "Resolved and open: denied", html: approvalResolved({ state: "denied", line: S.approval.line, when: "5:25 PM", open: true, full: S.approval.full, raw: S.approvalRaw("deny") }) },
         {
-          name: "Expired, where the request offered a rule",
-          note: "Always allow next time saves the rule for future requests and never runs the expired command.",
-          html: approvalResolved({ state: "expired", line: S.approval.line, when: "5:53 PM", open: true, nextTime: S.approval.rule, full: S.approval.full, raw: S.approvalRaw() }),
+          name: "Expired",
+          note: "An expired request cannot be answered again on the installed gateway, so the card has no action.",
+          html: approvalResolved({ state: "expired", line: S.approval.line, when: "5:53 PM", open: true, full: S.approval.full, raw: S.approvalRaw() }),
         },
       ],
     },
     {
       id: "order",
       title: "The permission order",
-      note: "The gateway decides; the app shows the case that applied. Strongest first.",
+      note: "The gateway decides; the app shows what happened and never implies a review or a question that did not happen. First what the installed gateway does by itself, then the rules that need Clawtrate's rules plugin.",
       specimens: [
         {
-          name: "1. A denial configured on the gateway",
+          name: "The installed gateway: its policy refuses the command",
           note: "A failed step. No card; nothing to approve.",
           html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", failed: 1, open: true, steps: stepBlocked("gateway", { open: true }) }),
         },
         {
-          name: "2. A deny rule for this bot",
+          name: "The installed gateway: its policy allows the command with no request",
+          note: "Full access with asking off, an allowlist entry, or a routine's grant. An ordinary step: no card and no review line.",
+          html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", open: true, steps: step({ kind: "command", title: "Ran mv", detail: "exit 0", statusText: "1.2s", open: true, body: S.allowedBody() }) }),
+        },
+        {
+          name: "The installed gateway: the automatic review approved",
+          html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", open: true, steps: step({ kind: "command", title: "Ran df", detail: "exit 0", statusText: "0.1s", open: true, body: S.reviewedBody() }) }),
+        },
+        {
+          name: "The installed gateway: the automatic review denied, and the gateway then asks",
+          note: "The ordinary approval card, with the review's line in the full request.",
+          html: approval({ ...S.approval, full: { ...S.approval.full, open: true } }),
+        },
+        {
+          name: "The installed gateway: the automatic review denied, and the gateway refuses",
+          note: "A failed step that stays in view under a folded block.",
+          html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", failed: 1, open: true, steps: stepBlocked("review", { open: true }) }),
+        },
+        {
+          name: "With Clawtrate's rules plugin: a deny rule for this bot",
           html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", failed: 1, open: true, steps: stepBlocked("bot", { open: true }) }),
         },
         {
-          name: "3. An ask rule that matches, though a saved allow also matches",
+          name: "With Clawtrate's rules plugin: an ask rule that outranks an allow",
           note: "A card. The full request names the rule that asked.",
           html: approval({
             ...S.approval,
@@ -563,21 +592,6 @@
               },
             },
           }),
-        },
-        {
-          name: "4. A saved allow that is in scope and has not expired",
-          note: "An ordinary step that runs. Opened, one line names the rule.",
-          html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", open: true, steps: step({ kind: "command", title: "Ran mv", detail: "exit 0", statusText: "1.2s", open: true, body: S.allowedBody() }) }),
-        },
-        {
-          name: "5. The default review: approved",
-          html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", open: true, steps: step({ kind: "command", title: "Ran df", detail: "exit 0", statusText: "0.1s", open: true, body: S.reviewedBody() }) }),
-        },
-        { name: "5. The default review: asks", note: "The ordinary approval card, with the review's line in the full request.", html: approval({ ...S.approval, full: { ...S.approval.full, open: true } }) },
-        {
-          name: "5. The default review: denied",
-          note: "A failed step that stays in view under a folded block.",
-          html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", failed: 1, open: true, steps: stepBlocked("review", { open: true }) }),
         },
       ],
     },
@@ -609,6 +623,11 @@
         { name: "Cancelled by Stop", html: CT.questionAnswered({ title: question.title, state: "cancelled", raw: S.questionRaw() }) },
         { name: "Closed because the run ended", html: CT.questionAnswered({ title: question.title, state: "closed-ended", raw: S.questionRaw() }) },
         { name: "Closed because the run failed", html: CT.questionAnswered({ title: question.title, state: "closed-failed", raw: S.questionRaw() }) },
+        {
+          name: "A question record this card does not take",
+          note: "A form, a link, a secret, or options outside two to four. Shown readable, with its Raw, and not answerable here.",
+          html: CT.questionReadOnly({ questions: [{ question: "Sign in to the backup provider, then confirm.", options: [], why: "This is a form with a link." }], raw: S.questionOtherRaw }),
+        },
       ],
     },
     {
@@ -649,7 +668,7 @@
         },
         {
           name: "A held message",
-          note: "Sent into the run once the question is answered or dismissed.",
+          note: "Released when the last pending question is answered, dismissed or expires. It has no Send now.",
           still: true,
           html: CT.composer({
             bot: "otto",
@@ -684,6 +703,15 @@
             bot: "otto",
             run: "running",
             shelf: CT.shelfRow({ tone: "danger", lead: CT.icon("warning"), text: "<b>Couldn't stop Otto.</b> <span>The gateway did not answer the stop request.</span>", actions: CT.button("Try again") + `<button type="button" class="icon-button" data-variant="quiet" aria-label="Dismiss this notice">${CT.icon("x")}</button>` }),
+          }),
+        },
+        {
+          name: "After Stop: nothing starts by itself",
+          note: "Messages that were held or queued stay on the shelf, unsent, until each is sent or removed.",
+          still: true,
+          html: CT.composer({
+            bot: "otto",
+            shelf: CT.shelfRow({ lead: glyph("stopped"), text: "<b>Not sent</b> <span>Then check the certificate warning too.</span>", actions: CT.button("Send") + CT.button("Remove", 'data-variant="quiet"') }),
           }),
         },
         { name: "Offline", note: "Send works: the host holds the message and sends it once on reconnect.", still: true, html: CT.composer({ bot: "otto", run: "offline", text: "Is the disk still at 61%?" }) },

@@ -80,7 +80,7 @@
       view,
       readable: `<p class="step-thought">${text}</p>`,
       raw: {
-        events: [["Event as received", json({ stream: "thinking", runId: "run_7f3a91c2", seq, ts: 1794878651204 + seq * 900, data: { text } })]],
+        events: [["Event (a sample in the app's own shape)", json({ stream: "thinking", runId: "run_7f3a91c2", seq, ts: 1794878651204 + seq * 900, data: { text } })]],
         ids: [
           ["Run", "run_7f3a91c2"],
           ["Session", "agent:otto:weekly-backup-check"],
@@ -140,7 +140,30 @@
   // A command -----------------------------------------------------------------------
 
   S.command = "mv /srv/media/transcode-cache /srv/scratch/transcode-cache";
-  S.reviewAsk = "Reviewed automatically: asks you. Medium risk. Moves a folder that is outside the bot's workspace.";
+  S.reviewAsk = "Reviewed automatically: not approved. Medium risk. Moves a folder that is outside the bot's workspace.";
+
+  // The review's record, in the tool event the gateway emits for it.
+  const reviewEvent = (status, decided) => {
+    const toolCallId = decided?.toolCallId || "call_01HXKB";
+    return json({
+      runId: "run_7f3a91c2",
+      sessionKey: "agent:otto:weekly-backup-check",
+      stream: "tool",
+      data: {
+        phase: "review",
+        name: "exec",
+        toolCallId,
+        hideFromChannelProgress: true,
+        approvalReviewOutcome: status === "in_progress" ? "reviewing" : status,
+        review: {
+          id: `guardian:${toolCallId}`,
+          label: "Guardian",
+          status,
+          ...(decided ? { riskLevel: decided.riskLevel || "medium", rationale: decided.rationale || "Moves a folder that is outside the bot's workspace." } : {}),
+        },
+      },
+    });
+  };
 
   // stage: review, waiting, running, done, denied.
   S.commandBody = (stage = "done") => {
@@ -169,10 +192,10 @@
         running: stage === "running",
         events:
           stage === "review"
-            ? [["Review as received", json({ type: "exec.review", id: "rev_02c1", state: "running" })]]
+            ? [["Tool event, phase review, as the gateway sends it", reviewEvent("in_progress")]]
             : [
-                ["Review as received", json({ type: "exec.review", id: "rev_02c1", verdict: "ask", risk: "medium", reason: "Moves a folder that is outside the bot's workspace." })],
-                ...(stage === "waiting" ? [] : [["Approval as received", S.approvalEvents(stage === "denied" ? "deny" : "allow-once")[1][1]]]),
+                ["Tool event, phase review, as the gateway sends it", reviewEvent("denied", {})],
+                ...(stage === "waiting" ? [] : [S.approvalEvents(stage === "denied" ? "deny" : "allow-once")[1]]),
               ],
         timing: done ? timing("5:25:42 PM", "5:25:43 PM", "1.2 s") : stage === "running" ? timing("5:25:42 PM") : undefined,
         ids: S.ids("call_01HXKB"),
@@ -225,9 +248,9 @@
       },
     });
 
-  // Output the gateway cut: exactly the first 8,000 characters.
+  // Output the gateway cut. Where it cuts depends on the path and the settings.
   const journal = Array.from({ length: 140 }, (_, i) => `Nov 16 02:${String(14 + Math.floor(i / 6)).padStart(2, "0")}:${String((i * 9) % 60).padStart(2, "0")} media-box transcoded[812]: cache write segment ${String(i + 1).padStart(4, "0")} ok`).join("\n");
-  S.cut = journal.slice(0, 8000);
+  S.cut = journal.slice(0, 7930) + "\n…(truncated)…"; // the gateway's own marker, shown as received
   S.truncatedBody = (view = "readable") =>
     CT.stepBody({
       view,
@@ -238,7 +261,7 @@
       raw: {
         tool: "exec",
         args: json({ command: "journalctl -u transcoded --since yesterday", host: "media-box" }),
-        result: toolResult(S.cut, { exitCode: 0, truncated: true, limit: 8000 }),
+        result: toolResult(S.cut, { exitCode: 0 }),
         truncated: true,
         timing: timing("5:24:44 PM", "5:24:45 PM", "0.9 s"),
         ids: S.ids("call_01HXKA"),
@@ -268,15 +291,14 @@
     });
   };
 
-  // An ordinary step that a saved rule allowed.
+  // A command the gateway's policy allowed with no request. No review line, no rule line.
   S.allowedBody = () =>
     CT.stepBody({
       readable:
         CT.fields([["Command", S.command, { mono: true, copy: true }], ["Runs on", "media-box"], ["Folder", "/srv/media", { mono: true }]]) +
-        CT.note("Allowed by a saved rule: this command run in /srv/media, for Otto only, saved on media-box.") +
         CT.note("The command printed nothing.") +
         CT.fields([["Exit code", "0"]]),
-      raw: { tool: "exec", args: json({ command: S.command, cwd: "/srv/media", host: "media-box" }), result: toolResult("", { exitCode: 0, allowedBy: "rule_19" }), timing: timing("5:25:42 PM", "5:25:43 PM", "1.2 s"), ids: S.ids("call_01HXKF") },
+      raw: { tool: "exec", args: json({ command: S.command, cwd: "/srv/media", host: "media-box" }), result: toolResult("", { exitCode: 0 }), timing: timing("5:25:42 PM", "5:25:43 PM", "1.2 s"), ids: S.ids("call_01HXKF") },
     });
 
   // A command the review approved: one quiet line.
@@ -291,7 +313,7 @@
         tool: "exec",
         args: json({ command: "df -h /srv/media", host: "media-box" }),
         result: toolResult("Filesystem      Size  Used Avail Use% Mounted on\n/dev/sdb1       1.8T  1.1T  640G  64% /srv/media", { exitCode: 0 }),
-        events: [["Review as received", json({ type: "exec.review", id: "rev_02b7", verdict: "allow", risk: "low", reason: "Reads disk usage and changes nothing." })]],
+        events: [["Tool event, phase review, as the gateway sends it", reviewEvent("approved", { toolCallId: "call_01HXKC", riskLevel: "low", rationale: "Reads disk usage and changes nothing." })]],
         timing: timing("5:24:30 PM", "5:24:30 PM", "0.1 s"),
         ids: S.ids("call_01HXKC"),
       },
@@ -306,14 +328,15 @@
     "<p><strong>Nov 16.</strong> Last night's backup ran long: 71 minutes, not the usual 23, because 182 GB of transcode cache was swept in.</p><p>The cache has been moved out of the backed-up folder, so tonight's run should be back to normal.</p>";
 
   const sendArgs = json({ sessionKey: "agent:marlow:main", message: S.marlowSent });
+  const target = { runId: "run_41b0c7d9", sessionKey: "agent:marlow:main" };
   const sendResults = {
-    sent: { status: "accepted", runId: "run_41b0c7d9", sessionKey: "agent:marlow:main" },
-    replied: { status: "ok", runId: "run_41b0c7d9", sessionKey: "agent:marlow:main", reply: "Nov 16. Last night's backup ran long: 71 minutes, not the usual 23, because 182 GB of transcode cache was swept in. The cache has been moved out of the backed-up folder, so tonight's run should be back to normal." },
-    "no-reply": { status: "timeout", runId: "run_41b0c7d9", sessionKey: "agent:marlow:main" },
-    "recipient-stopped": { status: "aborted", runId: "run_41b0c7d9", sessionKey: "agent:marlow:main" },
+    sent: { ...target, status: "accepted", targetDisposition: "queued", delivery: { status: "skipped" } },
+    replied: { ...target, status: "ok", delivery: { status: "skipped" }, reply: "Nov 16. Last night's backup ran long: 71 minutes, not the usual 23, because 182 GB of transcode cache was swept in. The cache has been moved out of the backed-up folder, so tonight's run should be back to normal." },
+    "no-reply": { ...target, status: "no_reply", message: "The target run finished without a reply." },
+    timeout: { ...target, status: "timeout", error: "timed out waiting for a reply", sentBeforeError: true },
   };
   S.marlowRaw = (state) => {
-    const settled = { working: "sent", "recipient-waiting": "sent" }[state] || state;
+    const settled = { working: "sent", "recipient-waiting": "sent", "recipient-stopped": "sent", "recipient-failed": "sent" }[state] || state;
     const result = sendResults[settled];
     return {
       tool: "sessions_send",
@@ -325,7 +348,7 @@
           : state === "blocked"
             ? json({ denied: true, source: "agent-policy", reason: "Otto may not message other bots after 11 PM" })
             : "",
-      running: ["sending", "call-started", "approval"].includes(state),
+      running: ["call-started", "approval"].includes(state),
       timing: result || state === "failed" ? timing("5:24:58 PM", "5:25:39 PM", "41 s") : timing("5:24:58 PM"),
       ids: [...S.ids("call_01HXK8M"), ...(result ? [["Recipient run", "run_41b0c7d9"], ["Recipient session", "agent:marlow:main"]] : [])],
     };
@@ -340,7 +363,7 @@
   ];
 
   // The expanded body of a Messaged card to another bot, for any state.
-  S.marlowBody = (state, { phrase = "Reading the house log", denied = true } = {}) => {
+  S.marlowBody = (state, { phrase = "Reading the house log", denied = true, timeout = false } = {}) => {
     const sent = { who: "otto", verb: "sent", time: "5:24 PM", html: `<div class="exchange-text"><p>${S.marlowSent}</p></div>` };
     const back = CT.cameBack(state, {
       sender: "otto",
@@ -351,8 +374,9 @@
       error: "sessions_send: the recipient's session could not be started (model provider overloaded)",
       rule: "Otto may not message other bots after 11 PM",
       denied,
+      timeout,
     });
-    const known = ["sent", "working", "recipient-waiting", "no-reply", "replied", "recipient-stopped"].includes(state); // the result named Marlow's task
+    const known = ["sent", "working", "recipient-waiting", "no-reply", "replied", "recipient-stopped", "recipient-failed"].includes(state); // the result named Marlow's task
     return (
       CT.exchange([sent, back], 'data-exchange="one"') +
       CT.exchange(fullExchange(state === "replied"), 'data-exchange="all" hidden') +
@@ -360,7 +384,7 @@
         (state === "approval" ? CT.linkButton("Show the approval", { action: "show-approval", name: "Show the approval for this message" }) : "") +
           (known ? CT.linkButton("Open in Marlow", { icon: "external", action: "open-recipient", name: "Open this message in Marlow's task" }) : "") +
           (known ? CT.linkButton("Show full exchange", { action: "full-exchange", attrs: 'aria-expanded="false"', name: "Show every message between Otto and Marlow in this task" }) : ""),
-        S.marlowRaw(state),
+        S.marlowRaw(timeout ? "timeout" : state),
       )
     );
   };
@@ -380,7 +404,7 @@
     return (
       CT.exchange([sent, back]) +
       CT.cardFoot(CT.linkButton("Open in Otto", { icon: "external", action: "open-sender", name: "Open this message in Otto's task" }), {
-        events: [["Event as received", json({ type: "session.message", from: "agent:otto:weekly-backup-check", runId: "run_41b0c7d9", message: S.marlowSent })]],
+        events: [["Event (a sample in the app's own shape)", json({ type: "session.message", from: "agent:otto:weekly-backup-check", runId: "run_41b0c7d9", message: S.marlowSent })]],
         ids: [["Run", "run_41b0c7d9"], ["Session", "agent:marlow:main"], ["Sender run", "run_7f3a91c2"], ["Sender session", "agent:otto:weekly-backup-check"]],
       })
     );
@@ -390,7 +414,7 @@
   S.incomingBody = (who, text) =>
     CT.exchange([{ who, verb: "sent", time: "5:41 PM", html: `<div class="exchange-text"><p>${text}</p></div>` }]) +
     CT.cardFoot("", {
-      events: [["Event as received", json({ type: "session.message", from: `agent:${who}:main`, message: text })]],
+      events: [["Event (a sample in the app's own shape)", json({ type: "session.message", from: `agent:${who}:main`, message: text })]],
       ids: [["Session", "agent:otto:weekly-backup-check"], ["Sender session", `agent:${who}:main`]],
     });
 
@@ -443,7 +467,7 @@
           args: json(args),
           result: made ? toolResult(json(result)) : "",
           error: state === "failed" ? "connect ECONNREFUSED: the coding agent's server did not answer" : "",
-          running: state === "sending" || state === "call-started",
+          running: state === "call-started" || state === "approval",
           timing: made || state === "failed" ? timing("5:25:41 PM", "5:25:42 PM", "0.8 s") : timing("5:25:41 PM"),
           ids: S.ids("call_01HXK9T"),
         },
@@ -478,10 +502,25 @@
 
   // Approvals -----------------------------------------------------------------------
 
-  // The request, and the resolving event once there is one.
+  // The request's fields as the gateway builds them, and the decision as the app
+  // sends it. The gateway's confirmation carries no saved rule.
+  S.approvalRequest = {
+    command: S.command,
+    cwd: "/srv/media",
+    nodeId: "media-box",
+    host: "node",
+    security: "allowlist",
+    ask: "on-miss",
+    warningText: null,
+    allowedDecisions: ["allow-once", "allow-always", "deny"],
+    agentId: "otto",
+    sessionKey: "agent:otto:weekly-backup-check",
+    runId: "run_7f3a91c2",
+    toolCallId: "call_01HXKB",
+  };
   S.approvalEvents = (decision = "") => [
-    ["Request as received", json({ type: "exec.approval.requested", id: "apr_5d2a", runId: "run_7f3a91c2", toolCallId: "call_01HXKB", command: S.command, cwd: "/srv/media", host: "media-box", allowAlways: true })],
-    ...(decision ? [["Resolution as received", json({ type: "exec.approval.resolved", id: "apr_5d2a", decision, ...(decision === "allow-always" ? { rule: { id: "rule_19", agent: "otto", command: S.command, cwd: "/srv/media" } } : {}) })]] : []),
+    ["Request fields, as the gateway builds them", json(S.approvalRequest)],
+    ...(decision ? [["Decision (exec.approval.resolve), as the app sends it", json({ id: "apr_5d2a", decision })]] : []),
   ];
   S.approvalRaw = (decision = "") => ({
     events: S.approvalEvents(decision),
@@ -503,14 +542,15 @@
       ],
       review: S.reviewAsk,
       cause: {
-        text: "The automatic review asks before commands like this.",
+        text: "The automatic review did not approve this, so the gateway asks.",
         label: "Manage settings",
         where: "Opens Settings, Permissions, at the automatic review. That needs admin access, asked for the first time it is opened.",
       },
     },
     // What this request offers, as the request carries it.
     decisions: ["once", "always", "deny"],
-    rule: { text: `${S.command}\nrun in /srv/media`, covers: "Otto only", where: "media-box, the machine this runs on" },
+    request: { command: S.command, cwd: "/srv/media", host: "media-box", agent: "Otto" },
+    kind: "command",
     raw: S.approvalRaw(),
   };
 
@@ -522,14 +562,53 @@
   };
   S.questionRaw = (answer) => ({
     events: [
-      ["Question as received", json({ type: "question.requested", id: "qst_81f0", runId: "run_7f3a91c2", questions: [{ title: S.question.title, options: S.question.options.map(([label]) => label), multiSelect: false }] })],
-      ...(answer ? [["Answer as sent", json({ type: "question.resolved", id: "qst_81f0", ...answer })]] : []),
+      [
+        "question.requested, as the gateway sends it",
+        json({
+          id: "qst_81f0",
+          questions: [{ questionId: "keep_cache", header: "Keep cache", question: S.question.title, options: S.question.options.map(([label]) => ({ label })), isOther: true }],
+          agentId: "otto",
+          sessionKey: "agent:otto:weekly-backup-check",
+          runId: "run_7f3a91c2",
+          createdAtMs: 1794878774000,
+          expiresAtMs: 1794879674000,
+          status: "pending",
+        }),
+      ],
+      ...(answer
+        ? [
+            [
+              "question.resolved, as the gateway sends it",
+              json(answer.dismissed ? { id: "qst_81f0", status: "cancelled" } : { id: "qst_81f0", status: "answered", answers: { answers: { keep_cache: answer.answers.flat() } } }),
+            ],
+          ]
+        : []),
     ],
     ids: [["Question", "qst_81f0"], ["Run", "run_7f3a91c2"], ["Session", "agent:otto:weekly-backup-check"]],
   });
 
+  // A record the ordinary card does not take: a form with a link.
+  S.questionOtherRaw = {
+    events: [
+      [
+        "question.requested, as the gateway sends it",
+        json({
+          id: "qst_90a2",
+          questions: [{ questionId: "sign_in", header: "Sign in", question: "Sign in to the backup provider, then confirm.", url: "https://backup.example/sign-in", options: [], presentation: "form" }],
+          agentId: "otto",
+          sessionKey: "agent:otto:weekly-backup-check",
+          runId: "run_7f3a91c2",
+          createdAtMs: 1794878774000,
+          expiresAtMs: 1794879674000,
+          status: "pending",
+        }),
+      ],
+    ],
+    ids: [["Question", "qst_90a2"], ["Run", "run_7f3a91c2"], ["Session", "agent:otto:weekly-backup-check"]],
+  };
+
   S.turnErrorRaw = {
-    events: [["Event as received", json({ type: "chat", state: "error", runId: "run_7f3a91c2", error: { code: "provider_overloaded", message: "The model provider is overloaded.", requestId: "req_9c1e44a0" } })]],
+    events: [["Event (a sample in the app's own shape)", json({ type: "chat", state: "error", runId: "run_7f3a91c2", error: { code: "provider_overloaded", message: "The model provider is overloaded.", requestId: "req_9c1e44a0" } })]],
     ids: [["Request", "req_9c1e44a0"], ["Run", "run_7f3a91c2"], ["Session", "agent:otto:weekly-backup-check"]],
   };
 })();

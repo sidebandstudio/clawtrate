@@ -2143,6 +2143,23 @@ dl.standing-grid {
   display: none;
 }
 
+/* A routine's grant: the lifetime sits under the sentence. */
+.standing-outcome + .days {
+  margin: 10px 0 0;
+}
+
+.standing-note b {
+  font-weight: var(--weight-medium);
+}
+
+/* What a sample Raw panel is. Prototype only. */
+.raw-note {
+  margin: 0 0 10px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
 .days input {
   width: 72px;
   height: 30px;

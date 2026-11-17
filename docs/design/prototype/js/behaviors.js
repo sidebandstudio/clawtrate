@@ -134,27 +134,13 @@
     (open ? $("[data-decision]", form) : opener).focus();
   }
 
-  // The lifetime of a rule, where the request's kind accepts one: until it is
-  // taken away, or a whole number of days from 1 to 3650.
-  function setLasts(form) {
-    const days = $('[data-lasts="days"]', form)?.getAttribute("aria-checked") === "true";
+  // A routine's grant takes a lifetime in whole days, 1 to 3650; empty leaves the gateway's default.
+  function setDays(form) {
     const input = $(".days input", form);
     const value = Number(input.value);
-    const valid = !days || (Number.isInteger(value) && value >= 1 && value <= 3650);
-    $(".days", form).hidden = !days;
+    const valid = input.value === "" || (Number.isInteger(value) && value >= 1 && value <= 3650);
     $(".days-error", form).hidden = valid;
-    $('[data-decision="always"], [data-decision="next-time"]', form).disabled = !valid;
-    form.dataset.lasts = days ? String(value) : "forever";
-    if (valid) $("[data-outcome]", form).textContent = CT.standingOutcome(form.dataset.bot, form.dataset.lasts);
-  }
-
-  function chooseLasts(radio, focus = false) {
-    $$('[role="radio"]', radio.parentElement).forEach((other) => {
-      other.setAttribute("aria-checked", String(other === radio));
-      other.tabIndex = other === radio ? 0 : -1;
-    });
-    if (focus) radio.focus();
-    setLasts(radio.closest(".standing"));
+    $('[data-decision="always"]', form).disabled = !valid;
   }
 
   // Approvals answered where nothing else is listening (the gallery). The scripted
@@ -169,21 +155,48 @@
       return;
     }
     if (decision === "always") {
-      // Not marked resolved until the gateway confirms the rule was saved.
+      // Not marked resolved until the gateway answers that it applied the decision.
       const form = $(".standing", card);
-      const lasts = form.dataset.lasts;
-      form.outerHTML = CT.standing({ bot: def.bot, rule: def.rule, open: true, save: "saving", lasts });
+      const days = $(".days input", form)?.value || "";
+      form.outerHTML = CT.standing({ bot: def.bot, request: def.request, kind: def.kind, open: true, sent: "sending" });
       $(".standing [data-decision='deny']", card).focus();
       setTimeout(() => {
         if (!document.contains(card) || card.dataset.state !== "pending") return;
-        CT.swap(card, CT.approvalResolved({ ...base, state: "always", rule: def.rule, lasts, saved: "5:25 PM", raw: CT.samples.approvalRaw("allow-always") }));
-        CT.announce("Allowed, and saved as a rule");
+        CT.swap(card, CT.approvalResolved({ ...base, state: "always", saved: { kind: def.kind, request: def.request, days }, raw: CT.samples.approvalRaw("allow-always") }));
+        CT.announce("Allowed, and saved");
       }, 900);
       return;
     }
     const state = decision === "once" ? "once" : "denied";
     CT.swap(card, CT.approvalResolved({ ...base, state, raw: CT.samples.approvalRaw(decision === "once" ? "allow-once" : "deny") }));
     CT.announce(state === "once" ? "Allowed once" : "Denied");
+  }
+
+  // "Check again", when no answer came: the client asks the gateway for the
+  // request's state. Here the gateway answers that the earlier decision was applied.
+  function checkDecision(card) {
+    const def = CT.defs[card.id] || {};
+    const button = $('[data-action="check-decision"]', card);
+    button.disabled = true;
+    button.textContent = "Checking…";
+    setTimeout(() => {
+      if (!document.contains(card)) return;
+      CT.swap(
+        card,
+        CT.approvalResolved({
+          id: card.id,
+          bot: def.bot,
+          line: def.line || card.dataset.line,
+          when: "5:25 PM",
+          full: def.full,
+          open: true,
+          state: "always",
+          saved: { kind: def.kind, request: def.request },
+          raw: CT.samples.approvalRaw("allow-always"),
+        }),
+      );
+      CT.announce("The gateway had applied your decision: allowed, and saved");
+    }, 700);
   }
 
   // Question cards --------------------------------------------------------------------
@@ -308,8 +321,7 @@
 
     if (action === "standing-open" || action === "standing-close") return setForm(actor.closest(".request"), action === "standing-open");
 
-    const lasts = target.closest("[data-lasts][role='radio']");
-    if (lasts) return chooseLasts(lasts);
+    if (action === "check-decision") return checkDecision(actor.closest(".request"));
 
     const decision = target.closest("[data-decision]");
     if (decision) {
@@ -399,20 +411,13 @@
       return button.focus();
     }
 
-    // The lifetime choice is a radio group: the arrow keys move and choose.
-    if (target.matches('[data-lasts][role="radio"]') && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
-      event.preventDefault();
-      const radios = $$('[role="radio"]', target.parentElement);
-      return chooseLasts(radios[(radios.indexOf(target) + 1) % radios.length], true);
-    }
-
     const card = target.closest('.request[data-state="pending"]');
     if (!card) return;
 
     if (card.dataset.kind === "approval") {
       const form = $(".standing", card);
       const formOpen = form && !form.hidden;
-      if (event.key === "Escape" && formOpen && !form.dataset.save) {
+      if (event.key === "Escape" && formOpen && !form.dataset.sent) {
         event.preventDefault();
         return setForm(card, false);
       }
@@ -476,7 +481,7 @@
   // Typing your own answer replaces the chosen options of that question.
   document.addEventListener("input", (event) => {
     const input = event.target;
-    if (input.matches?.(".days input")) return setLasts(input.closest(".standing"));
+    if (input.matches?.(".days input")) return setDays(input.closest(".standing"));
     if (!input.matches?.(".own-answer input")) return;
     const block = input.closest(".question");
     if (input.value) $$(".option", block).forEach((option) => option.setAttribute("aria-checked", "false"));
