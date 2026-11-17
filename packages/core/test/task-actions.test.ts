@@ -114,8 +114,19 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
           return { ok: true, deleted: true };
         case "sessions.create": {
           const label = params.label as string | undefined;
-          if (label === "Main" || label === "Main 2")
-            throw new Error(`label already in use: ${label}`);
+          if (typeof params.key === "string") {
+            // Another client is making the same key: the first try is refused, the retry answers it.
+            if (!mainMade) {
+              mainMade = true;
+              throw new Error("session changed before sessions.create; retry the request");
+            }
+            return {
+              ok: true,
+              key: params.key,
+              sessionId: "s-main",
+              entry: { sessionId: "s-main" },
+            };
+          }
           return {
             ok: true,
             key: "agent:pip:dashboard:new",
@@ -180,10 +191,21 @@ describe("the rail's task actions", () => {
     });
   });
 
-  it("F-424: a bot's replacement first task is Main, or the next free Main", async () => {
+  it("F-424: a bot's replacement first task is its canonical main; a client that meets another's create retries and adopts the same task", async () => {
     const { ctx, calls } = fakeGateway({});
-    await newMainTask(ctx, "pip");
-    expect(calls.map((call) => call.params.label)).toEqual(["Main", "Main 2", "Main 3"]);
+    const made = await newMainTask(ctx, "pip");
+    expect(calls.map((call) => call.params)).toEqual([
+      { agentId: "pip", key: "agent:pip:main" },
+      { agentId: "pip", key: "agent:pip:main" },
+    ]);
+    expect(made.key).toBe("agent:pip:main");
+    expect(createScope(calls[0]!.params)).toBe("operator.write");
+    // Any other refusal is the person's to read, not retried.
+    const failing = fakeGateway({});
+    failing.ctx.request = async () => {
+      throw new Error("Unknown agent id");
+    };
+    await expect(newMainTask(failing.ctx, "pip")).rejects.toThrow("Unknown agent id");
   });
 
   it("F-056: a rename taken by another task of the bot says so in the person's words", async () => {

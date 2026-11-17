@@ -18,10 +18,18 @@ export const MAX_ARCHIVED_LISTED = 50;
 export const STOP_SETTLE_MS = 15_000;
 /** Between two reads of a task's row while a stop settles. */
 export const STOP_POLL_MS = 250;
-/** The name a bot's replacement first task takes (F-424); labels are unique per bot. */
-export const MAIN_LABEL = "Main";
-/** Labels tried for the replacement Main before it is made without one. */
-const MAIN_ATTEMPTS = 5;
+/**
+ * A bot's canonical main task: the key the gateway treats as the bot's main
+ * session (`isMain`), which it never archives or deletes, and which
+ * `sessions.create` makes once: a second create of the same key while the
+ * first is under way is refused with "session changed before sessions.create;
+ * retry the request", and the retry answers the same session.
+ */
+export function mainTaskKey(botId: string): string {
+  return `agent:${botId}:main`;
+}
+/** Times a create of the canonical main is retried after the gateway says another made it meanwhile. */
+const MAIN_ATTEMPTS = 4;
 
 /** What these actions need from the client: the gateway, the write tier, and time. */
 export type TaskActionContext = {
@@ -73,6 +81,11 @@ export function taskLabel(value: string): string {
 /** A new, empty task: only `agentId` and `label`, which keeps `sessions.create` at write. */
 export function newTaskParams(botId: string, label: string | null): Record<string, unknown> {
   return { agentId: botId, ...(label ? { label: taskLabel(label) } : {}) };
+}
+
+/** The bot's canonical main task: `agentId` and its key, still write (the key is not incognito). */
+export function mainTaskParams(botId: string): Record<string, unknown> {
+  return { agentId: botId, key: mainTaskKey(botId) };
 }
 
 export function renameParams(key: string, label: string): Record<string, unknown> {
@@ -245,21 +258,22 @@ export async function newTask(
 }
 
 /**
- * A bot's replacement first task, "Main" (F-424). Labels are unique per bot and
- * an archived task keeps its label, so "Main 2" and on are tried, then none.
+ * A bot's replacement first task (F-424): its canonical main, titled "Main",
+ * empty. However many clients ask at once, the gateway makes one session for
+ * the key; a client whose create met another's retries and is answered with
+ * that same session, so every client selects the same task.
  */
 export async function newMainTask(ctx: TaskActionContext, botId: string): Promise<CreatedTask> {
   await ctx.ensureWrite();
-  for (let attempt = 1; attempt <= MAIN_ATTEMPTS; attempt += 1) {
-    const label = attempt === 1 ? MAIN_LABEL : `${MAIN_LABEL} ${attempt}`;
+  for (let attempt = 1; ; attempt += 1) {
     try {
-      return created(await ctx.request("sessions.create", newTaskParams(botId, label)), botId);
+      return created(await ctx.request("sessions.create", mainTaskParams(botId)), botId);
     } catch (error) {
-      if (!/label already in use/.test(error instanceof Error ? error.message : String(error)))
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt >= MAIN_ATTEMPTS || !/session changed before sessions\.create/.test(message))
         throw actionError(error);
     }
   }
-  return created(await call(ctx, "sessions.create", newTaskParams(botId, null)), botId);
 }
 
 export async function renameTask(
