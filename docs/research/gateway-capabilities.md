@@ -167,9 +167,15 @@ stand-ins for read and write on session-shaped methods
   `sessions.patchMany`, `sessions.fork`, `sessions.recover`,
   `sessions.send`, `sessions.steer`, `sessions.abort`,
   `sessions.processes.stop`, `sessions.goal.update`/`clear`, and
-  `question.*` in place of `operator.questions`. This holds only where the
-  parameters would not need admin, and "mutation owners must bind the
-  caller's own row". In practice it is for the caller's own sessions.
+  `question.list`, `question.get`, `question.resolve`, `question.request`
+  and `question.waitAnswer` in place of `operator.questions`. This holds
+  only where the parameters would not need admin, and "mutation owners must
+  bind the caller's own row". In practice it is for the caller's own
+  sessions. The session-scope path also needs a verified user profile. A
+  paired device holding read and write was refused every `question.*`
+  call with "Session-scoped access requires a verified user profile", and
+  got no question events. Clawtrate should request `operator.questions`
+  (row 19, question cards).
   `sessions.github.publish` requires it directly. A plugin method can accept
   it through `sessionAccess.allowOwnSessionScope`.
 - Neither one substitutes for read or write on any method outside these two
@@ -221,7 +227,7 @@ means a plugin is needed.
 | --- | --- | --- |
 | 1 | Connect, challenge signing, pairing, token reuse, scope upgrade, caps | available |
 | 2 | List bots, identity, name, avatar, description | available (description is config-only) |
-| 3 | Create, edit, delete a bot with all its settings | partial |
+| 3 | Create, edit, delete a bot with all its settings | partial (admin; one bot edit spans three method families and is not atomic) |
 | 4 | Sessions per bot, subscriptions, history, stable ids | available |
 | 5 | Send, attach, abort, queue, steer | available (steer caveat) |
 | 6 | Streaming text, thinking, run lifecycle | available |
@@ -232,11 +238,12 @@ means a plugin is needed.
 | 11 | Files and artifacts | available |
 | 12 | Models and effort | available |
 | 13 | Nodes and machine choice | available (not exercised live) |
-| 14 | Tool permissions and exec policy per bot | available (admin) |
+| 14 | Tool permissions and exec policy per bot | available (admin; one atomic `config.patch`) |
 | 15 | Usage, cost, context window | available |
 | 16 | Notifications and mobile push | missing for a third-party iOS app |
 | 17 | Voice and talk | available (not exercised live) |
 | 18 | The bot's computer: browser, canvas, screens | partial |
+| 19 | Questions, run behavior, reasoning, tool detail, bot-to-bot states, lists, attachments | available, with the gaps listed in row 19 |
 
 ### 1. Connect, challenge, pairing, device tokens, scope upgrades, caps
 
@@ -290,9 +297,10 @@ means a plugin is needed.
   create a pending request instead. The connect fails with
   `details.code: "PAIRING_REQUIRED"` and a request id. The owner approves
   with `device.pair.approve {requestId}` (`operator.pairing`) or
-  `openclaw devices approve <requestId>`. Waiting sockets receive
-  `device.pair.resolved` (source: `<openclaw>/docs/gateway/protocol/auth.md`;
-  the remote path was not exercised live). Related methods:
+  `openclaw devices approve <requestId>`. Only `openclaw-control-ui` and
+  `openclaw-tui` sockets are held open to receive `device.pair.resolved`.
+  Other clients must reconnect (row 19, rejected or expired pairing; the
+  remote path was not exercised live). Related methods:
   `device.pair.list`, `device.pair.reject`, `device.pair.remove`,
   `device.pair.rename`, `device.token.rotate`, `device.token.revoke` (all
   `operator.pairing`). Events: `device.pair.requested`,
@@ -364,7 +372,7 @@ means a plugin is needed.
 | name, emoji, avatar, workspace, model | `agents.create {name, workspace?, model?, emoji?, avatar?}` returns `{ok, agentId, name, workspace}`; `agents.update {agentId, name?, workspace?, model?: string\|null, agentRuntime?, emoji?, avatar?}` | `operator.admin` |
 | delete | `agents.delete {agentId, deleteFiles?}` returns `{ok, agentId, removedBindings, removed[], failed[]}`; files go to trash | `operator.admin` |
 | instructions / system prompt | workspace bootstrap files: `agents.files.list {agentId}`, `agents.files.get {agentId, name}`, `agents.files.set {agentId, name, content, expectedHash?, expectedMissing?}`. `get` and `set` accept `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md` and `MEMORY.md` (`ALLOWED_FILE_NAMES`). `agents.files.list` omits `IDENTITY.md` on purpose (`CORE_FILE_NAMES`), and omits `BOOTSTRAP.md` after onboarding (`<openclaw>/dist/agents-DAPW-UCQ.mjs` lines 259-267, 383; names in `<openclaw>/dist/workspace-bootstrap-policy-BQw7Lpx1.mjs`). `TOOLS.md` is not accepted | `operator.read` for list and get; `operator.admin` for set |
-| reasoning effort default, tools, exec policy, bot-to-bot targets, description | `config.patch {raw, baseHash}` with a merge patch under `agents.entries.<id>` (`thinkingDefault`, `reasoningDefault`, `tools.{profile, allow, deny, alsoAllow, exec.mode, agentToAgent.send}`, `description`, `identity.*`). `baseHash` comes from `config.get().hash`; without it the patch is refused ("config base hash required") | `config.patch`, `config.set` and `config.apply` are `operator.admin`. `config.get`, `config.schema` and `config.schema.lookup` are `operator.read` |
+| reasoning effort default, tools, exec policy, bot-to-bot targets, description | `config.patch {raw, baseHash}` with a merge patch under `agents.entries.<id>` (`thinkingDefault`, `reasoningDefault`, `tools.*` as listed in row 14, `description`, `identity.*`). `baseHash` comes from `config.get().hash`; without it the patch is refused ("config base hash required") | `config.patch`, `config.set` and `config.apply` are `operator.admin`. `config.get`, `config.schema` and `config.schema.lookup` are `operator.read` |
 
 Live: `agents.create`, `agents.update`, `agents.delete`, `agents.files.set`
 and `config.patch` all succeeded. A patch setting `tools.deny: ["exec"]` on
@@ -378,7 +386,11 @@ across two families, and there is no single atomic update. Config writes go
 through compare-and-swap on `baseHash`.
 
 **Status: partial.** Everything is possible, but only for an admin
-connection and not atomically. See plugin P1.
+connection and not atomically. See plugin P1. The tool-permission part on
+its own is one `config.patch` under `agents.entries.<id>.tools`, which is
+atomic through `baseHash`. That is why row 14 is "available (admin)" while
+this row, which also needs `agents.update` and `agents.files.set`, is
+partial. Both rows use the same field list (row 14).
 
 ### 4. Sessions (tasks) per bot
 
@@ -475,11 +487,12 @@ connection and not atomically. See plugin P1.
   `{type, mimeType, fileName, content (base64), sizeBytes?, width?, height?,
   origin?: paste|file}`, open object (`schema`). Live: a 1×1 PNG with
   `type: "image"` was accepted, and the model turn carried
-  `source_modality: "image"`. Limits: the per-file ceilings in
-  `hello-ok.policy.attachments`, plus the whole frame under
-  `policy.maxPayload`. Base64 inflates by about a third, so a file near
-  `maxBytes` overflows the frame on its own. There is no chunked upload for
-  chat attachments.
+  `source_modality: "image"`. Limits, where they are enforced and the
+  errors are in row 19 (attachments). In short: images 6 MiB and files 20
+  MiB decoded, each checked by `chat.send`; the advertised `maxBytes`
+  (about 18.56 MiB) is the largest file that fits the 25 MiB frame; an
+  oversized frame closes the socket with 1009. There is no chunked upload
+  for chat attachments.
 - `sessions.send {key, message, agentId?, attachments?, thinking?,
   timeoutMs?, idempotencyKey?}` (`operator.write`) is the session-keyed
   equivalent.
@@ -497,9 +510,10 @@ connection and not atomically. See plugin P1.
   `{runId, status:"started", interruptedActiveRun:true}`. Do not use it;
   use `chat.send` with an explicit `queueMode`. Separately,
   `chat.send` with `queueMode: "steer"` during a streaming text reply
-  aborted the active run. The steer run then failed with
+  once aborted the active run. The steer run then failed with
   `chat state:"error"`, `errorMessage: "Session reader operation is no
-  longer current"`. With a real model, steering is meant to inject at tool
+  longer current"`. A later rerun did not reproduce this: the steer was
+  injected into the active run (row 19, run behavior). With a real model, steering is meant to inject at tool
   boundaries (`<openclaw>/docs/concepts/queue-steering.md`). With the
   scripted model it interrupted. **Builders should cover steer with an e2e
   test and not assume in-place injection.**
@@ -535,7 +549,8 @@ Two projections exist. Pick one per view; consuming both double-counts text.
   - `usage`: `{outputTokens}`.
   - `tool`, `item` and `command_output`: see row 7.
   - Also emitted in source, not seen live: `plan`, `approval`,
-    `compaction`, `patch`, `execution`, `error`, `stdout`, `stderr`, `acp`
+    `compaction` (shape in row 19), `patch`, `execution`, `error`,
+    `stdout`, `stderr`, `acp`
     (`stream: "<name>"` literals across `<openclaw>/dist/*.mjs`).
 - Ordering: `payload.seq` is per run, and the outer frame `seq` is per
   connection. On a forward gap, reload history
@@ -642,6 +657,27 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
   `hello-ok` to backfill.
 - Per-bot policy: `agents.entries.<id>.tools.exec.mode` is one of `deny`,
   `allowlist`, `ask`, `auto` or `full`, set via `config.patch` (admin).
+  Each mode stands for a `security` / `ask` pair
+  (`<openclaw>/docs/tools/permission-modes.md`):
+
+  | Mode | security / ask | Behavior |
+  | --- | --- | --- |
+  | `deny` | `deny` / `off` | host exec blocked |
+  | `allowlist` | `allowlist` / `off` | allowlisted commands run; misses are silently denied |
+  | `ask` | `allowlist` / `on-miss` | allowlisted commands run; misses ask a human |
+  | `auto` | `allowlist` / `on-miss` | as `ask`, but a miss first goes to the built-in auto-reviewer. Its `allow` verdict runs one low- or medium-risk command. `deny` returns a reason to the agent. `ask`, a review failure, or three denials in a row go to a human approval |
+  | `full` | `full` / `off` | no ordinary prompts |
+
+  - `exec.security` is `deny`, `allowlist` or `full`.
+  - `exec.ask` is `off`, `on-miss` or `always`. `always` prompts on every
+    command, and an `allow-always` grant does not suppress it
+    (`<openclaw>/docs/tools/exec-approvals.md`).
+  - A host's own `ask: "always"` in the approvals document wins over
+    session or config defaults.
+  - Setting `exec.security`/`exec.ask` directly overrides the mode's pair.
+  - Under `auto`, a human sees an ordinary `exec.approval.requested` only
+    for the escalated cases. The reviewer's own verdicts were not observed
+    on the wire (source only; the probe had no reviewer model).
   Live: `mode: "ask"` on one bot turned an unlisted command into an
   approval. The host approvals document is
   `exec.approvals.get` / `exec.approvals.set {file, baseHash}`
@@ -786,7 +822,18 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
   - any of `system.run.prepare`, `system.run`, `system.which`,
     `system.execApprovals.get`, `system.execApprovals.set`,
     `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir` or
-    `terminal.upload`: `operator.pairing` plus `operator.admin`. Invoke with
+    `terminal.upload`: `operator.pairing` plus `operator.admin`.
+  - This is not at odds with `node.invoke` being `operator.write`.
+    `node.invoke` refuses `system.execApprovals.get`/`set` outright with
+    `INVALID_REQUEST` "node.invoke does not allow system.execApprovals.*;
+    use exec.approvals.node.*"
+    (`<openclaw>/dist/nodes-BW91tb1K.mjs` lines 697-699). The replacements
+    `exec.approvals.node.get`/`set` are `operator.admin`
+    (`<openclaw>/dist/core-method-policy-DkntKRY_.mjs` lines 236-246).
+  - `system.run` through `node.invoke` at write cannot carry approval
+    flags (`approved`, `approvalDecision`) without a real `exec.approval.*`
+    record (`sanitizeSystemRunParamsForForwarding`, same file).
+  - So approval policy on a node is admin-only either way. Invoke with
   `node.invoke {nodeId, command, params?, idempotencyKey}` (dynamic:
   `operator.write`, or `operator.admin` for the admin-only node commands,
   which are the browser proxy commands, `fs.listDir` and terminal upload
@@ -827,7 +874,11 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
     has a closed schema that rejects all three, even for admin (`schema`
     `SessionsCreateParams`, row 4).
 - Host approvals: `exec.approvals.get`/`set` (admin).
-- **Status: available** for admin connections.
+- `exec.mode` values and the `exec.ask` and `exec.security` values they stand
+  for are in row 8.
+- **Status: available** for admin connections. Unlike row 3, this is a
+  single `config.patch`, so it is atomic. The admin requirement is the only
+  condition.
 
 ### 15. Usage, cost and context
 
@@ -887,8 +938,22 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
   `tts.convert`, `tts.setProvider`, `tts.setPersona` and `tts.speak` are
   `operator.write` (policy table).
 - Events: `talk.event`, `talk.mode` and `talk.voice.change`.
-- Multi-agent gateways need `talk.agentId` in config. Without it,
-  `talk.catalog` failed with `AGENT_SELECTION_REQUIRED` (live).
+- `talk.agentId` is only the owner of Talk sessions created **without** an
+  agent-scoped session key (config help text in
+  `<openclaw>/dist/schema-CZzk-3S5.mjs` line 562;
+  `<openclaw>/dist/session-sharing-D-SULyec.mjs` line 181).
+  - To choose a bot per call, pass that bot's session key:
+    `talk.session.create {sessionKey}` and `talk.client.create
+    {sessionKey}`. Both schemas accept `sessionKey`, and neither accepts
+    `agentId`.
+  - Live, multi-agent, no `talk.agentId`: with no key, `talk.session.create`
+    failed "Multiple agents are configured, but Talk session ownership has
+    no explicit owner". With Pixel's key, both calls passed agent selection
+    and stopped at the next check, "Realtime voice provider "openai" is
+    not configured".
+  - `talk.catalog {provider?, model?}` takes no key. On a multi-agent
+    gateway it still needs `talk.agentId` (live:
+    `AGENT_SELECTION_REQUIRED`).
 - **Status: available** by schema. Not exercised beyond that error.
 
 ### 18. The bot's computer
@@ -1072,6 +1137,463 @@ What the user must approve, compared with the built-in route:
 
 **Status: partial** in the gateway. **Available with plugin P4**, for bots
 configured with their own browser profile, within the limits under P4.
+
+### 19. Conversation and shell details
+
+This section fills in what the client needs to draw a conversation and its
+sidebar. Each finding is marked:
+
+- **live**: shown on the probe gateway with the scripted model;
+- **source**: read from shipped code or docs;
+- **unverified**: not settled, with what was tried.
+
+The probe scenarios are `docs/research/dev-gateway/scenarios/*.mjs`. They run
+against a launcher-started profile, through `probe-lib.mjs`.
+
+#### Which events reach a connection
+
+Events are filtered per connection by `EVENT_SCOPE_GUARDS`
+(`<openclaw>/dist/server-start-D6vaUNGz.mjs` lines 4268-4330, region
+`src/gateway/server-broadcast-scopes.ts`). An event missing from the table
+is not scope-filtered there. `session-read` means `operator.read`, or
+`operator.sessions.read` for the caller's own sessions.
+
+| Scope needed | Events |
+| --- | --- |
+| none | `health`, `heartbeat`, `tick`, `shutdown`, `gateway.suspension`, `update.available` |
+| session-read | `agent`, `chat`, `chat.metadata.changed`, `chat.side_result`, `progressCard.changed`, `sessions.changed`, `session.message`, `session.narration`, `session.observer`, `users.prefs.changed` |
+| `operator.read` | `cron`, `presence`, `task`, `task.suggestion`, `talk.event`, `config.changed`, `mentions.changed`, `skills.changed`, `plugins.changed`, `node.presence`, `node.hostStats`, `session.operation`, `session.sharing`, `board.changed`, `ui.command`, `chat.send_timing`, `voicewake.changed` and others |
+| `operator.approvals` | `exec.approval.requested`/`resolved`, `plugin.approval.requested`/`resolved`, `openclaw.approval.requested`/`resolved`, `session.approval` |
+| `operator.questions` | `question.requested`, `question.resolved` |
+| `operator.pairing` | `device.pair.requested`, `device.pair.resolved`, `device.pair.changed`, `device.pair.setup.*`, `node.pair.requested`, `node.pair.resolved` |
+| `operator.talk` | `talk.mode`, `talk.voice.change` |
+| `operator.admin` | `plugins.install.progress`, the update-run event |
+
+Two narrower rules apply on top of the table:
+
+- Question events can reach a connection without `operator.questions`
+  when the broker names it as a recipient (`questionRecipient`, same file
+  line 4514).
+- With the `session-scoped-events` cap, the session events arrive only for
+  sessions subscribed with `sessions.messages.subscribe`.
+
+Live: a read+write device did not receive `question.requested` at all.
+
+#### Question cards (`ask_user`)
+
+A bot asks with the `ask_user` tool. The tool is in the `coding` profile.
+Its arguments are:
+
+```text
+{questions:[{id, header, question, options:[{label, description?}], multiSelect?}],
+ timeoutSeconds?}
+```
+
+Limits (source: `AskUserToolSchema` in
+`<openclaw>/dist/ask-user-tool-normalization-CAWKFwDq.mjs` lines 8-74):
+
+- 1-3 questions, each with 2-4 options;
+- `id` is snake_case;
+- `header` is cut to 12 characters;
+- option labels are up to 64 characters;
+- the timeout defaults to 900 s and is clamped to 30-3600 s.
+
+The tool adds `isOther: true` to every question, so free text is always
+allowed.
+
+- **Event** `question.requested`, payload `QuestionRecord` (live):
+
+  ```text
+  {id:"ask_<hash>", questions:[{questionId, header, question,
+   options:[{label, description?}], multiSelect?, isOther:true}],
+   agentId, sessionKey, runId, createdAtMs, expiresAtMs, status:"pending"}
+  ```
+
+  `QuestionRecord` also allows the following per question: `url`,
+  `presentation:"form"`, `resource`, `answerFormat:"lines"`, `allowEmpty`,
+  `defaultAnswers`, `isSecret` and `secretStore`. `ask_user` does not set
+  them (`schema` `Question`).
+- **Event** `question.resolved` is `{id, status, answers?}`.
+  - `status` is `answered`, `cancelled` or `expired` (live: all three).
+  - `answers` is `{answers:{<questionId>:[string…]}}`.
+- **Methods** (all `operator.questions`, policy table in
+  `<openclaw>/dist/session-method-policy-B7o-3I76.mjs` lines 288-320):
+  - `question.list {}` returns `{questions:[record]}`;
+  - `question.get {id}` returns `{question}`;
+  - `question.resolve` is either `{id, answers, resolvedBy?, resolutionId?,
+    secretStoreAllowedHosts?}` or `{id, cancel, resolvedBy?}`
+    (`QuestionResolveParams`);
+  - `question.request` and `question.waitAnswer`. The agent runtime uses
+    these two; a client does not need them.
+- **Answering** (live):
+  - Single choice: `{answers:{color:["Blue"]}}`.
+  - Multiple choice with free text: `{answers:{langs:["TypeScript",
+    "Kotlin (typed in)"]}}`. A typed answer is just another string.
+  - Two questions in one card are answered in one call.
+  - The tool result is `details:{status:"answered", answers}`, and the run
+    continues.
+- **Dismiss** (live): cancelling through `question.resolve` emits
+  `question.resolved {status:"cancelled"}`. The tool returns
+  `{status:"no_answer"}` with the text "The question was cancelled; proceed
+  with best judgment." The run finishes normally.
+- **No answer** (live, with a 30 s timeout): `question.resolved
+  {status:"expired"}`. The tool returns `no_answer`, with the text "No answer
+  arrived; proceed with best judgment." The run finishes normally
+  (`noAnswerResult`, `<openclaw>/dist/ask-user-tool-rpHQnkkO.mjs` lines
+  228-231 and 331-333).
+- **Run stopped while asking** (live): `chat.abort` emits
+  `question.resolved {status:"cancelled"}`. The tool result has `isError:
+  true`, and the run ends `aborted`.
+- **Plain text while a question is pending** (live): a normal `chat.send`
+  answers the pending question.
+  - For a single-choice question, the whole text is the answer.
+  - For a multiple-choice question, the text is split on commas.
+  - Each time, the asking run then ended with `chat state:"error"`,
+    `errorMessage: "SQLite transcript changed while preparing rewrite for
+    …"`, while the answering send got its own run.
+  - Clients should answer with `question.resolve` and not with text.
+- One pending question per session. A second `ask_user` in the same
+  session fails with "ask_user already has a pending question for this
+  session".
+- **Scope** (live): a paired device with `operator.read` and
+  `operator.write` got no question events. Its `question.list`, `get` and
+  `resolve` calls failed with `FORBIDDEN` "Session-scoped access requires a
+  verified user profile." That error comes from the session-scope path
+  (`authorizeAuthenticatedProfileForMethod`,
+  `<openclaw>/dist/gateway-client-identity-E44CR5D-.mjs` line 28). The
+  `operator.sessions.write` substitution in the scopes section therefore
+  works only for an operator actor with a profile id, and that was not
+  shown live. **Request `operator.questions`**. A device holding it
+  received the events and resolved questions (live).
+- A sidebar "waiting for you" flag comes from `question.list` at connect,
+  then `question.requested`/`resolved` keyed by `sessionKey`. The run's
+  lifecycle has no question phase (live: `start > model … end` only).
+
+#### Run behavior
+
+- **Queue modes** (live, both during a streamed reply and during a tool
+  call). The default is `steer`. Omitted `queueMode` behaved exactly like
+  `steer` (`<openclaw>/docs/concepts/queue.md` "Defaults";
+  `<openclaw>/dist/chat-send-handler-D_7lP5Io.mjs` lines 4995-4996 and
+  5222).
+  - `steer`: the message is injected into the active run. The send returns
+    its own `runId`, and that run settles at once with an empty `chat
+    final`. The answer streams under the active run's `runId`. During a
+    tool call, the tool finished first, then the model got the steered
+    text. Correction to row 5: an earlier probe saw a steer during
+    streaming abort the run with "Session reader operation is no longer
+    current". It did not happen again with the current scripted model.
+    Keep the e2e test.
+  - `followup` and `collect`: the active run finishes untouched, then the
+    message gets its own run with its own final reply. The difference,
+    batching several queued messages into one turn, was not exercised.
+  - `interrupt`: the send returns `interruptedActiveRun: true`. The active
+    run ends `chat state:"aborted"`, and the new run answers. Its partial
+    text is not kept in history.
+- **Interrupt in practice** (live): `chat.abort {sessionKey}` returns `{ok,
+  aborted, runIds}`. The run ends `chat state:"aborted", stopReason:"rpc"`
+  and `lifecycle end {status:"cancelled", aborted:true}`. A tool in flight
+  reports `tool result {isError:true, result.content:[{text:"Aborted"}]}`.
+- **A tool that never returns** (live): `chat.abort` cancels it. A 600 s
+  MCP `slow_task` was aborted after 2 s, and the next run in the same
+  session started within half a second.
+- **Timeouts** (live): a run with `chat.send {timeoutMs:3000}` during a 20 s
+  tool produced the following, with no dedicated timeout event or error
+  kind:
+  - `tool result {isError:true, content:"Aborted"}`;
+  - `lifecycle {phase:"error", error:"⚠️ Coder Slow Task failed"}`;
+  - `chat {state:"error", errorMessage:"⚠️ Coder Slow Task failed"}`.
+
+  An exec that hits its own timeout is a tool error with `details:
+  {status:"failed", failureKind:"overall-timeout", timedOut:true,
+  exitSignal:"SIGTERM"}` (see tool events below).
+- **Compaction.**
+  - Manual: `/compact [focus]` sent with `chat.send` works from
+    `operator.write` (live). The reply is a `chat final` whose message is a
+    status notice (`openclawStatusNotice: true`), "⚙️ Compacted (120 → 33)".
+  - History gains a row `{role:"system", __openclaw:{kind:"compaction",
+    tokensBefore, tokensAfter, id, itemId}}` (live).
+  - Under the default `compaction.mode: "safeguard"`, the scripted
+    summary failed the quality audit. The reply said "⚙️ Compaction failed:
+    …" and history was unchanged (live).
+  - `sessions.compact` needs `operator.admin` (live: "missing scope").
+  - Automatic: it runs near the context limit or after an overflow error
+    (`<openclaw>/docs/concepts/compaction.md`). The run then streams
+    `agent stream:"compaction"` with `{phase:"start", itemId?}` and
+    `{phase:"end", itemId?, completed, willRetry, outcome, reason?}`
+    (source: `<openclaw>/dist/builtin-openclaw-CcrkVuBH.mjs` lines
+    4911-4991; not triggered live).
+  - Watch `sessions.list` row `contextBudgetStatus` for an approaching
+    compaction.
+- **Pending approvals** (live, an exec approval held open):
+  - a new message with the default `steer` leaves it pending, and
+    `exec.approval.list` still lists it;
+  - `interrupt` cancels it;
+  - `chat.abort` cancels it, and the run ends `aborted`;
+  - a run `timeoutMs` shorter than the wait does not end a run blocked on
+    the approval: the approval stayed listed.
+
+  A run cannot end while one of its approvals is pending, because it is
+  blocked on it.
+- **Side runs and helpers** (source):
+  - `/btw` and `/side` run a one-shot side question that never enters
+    history. The answer arrives as `chat.side_result` (session-read)
+    (`<openclaw>/docs/tools/btw.md`).
+  - `chat.abort {preserveSideRuns:true}` leaves `/btw` runs running
+    (`turnKind === "btw"`, `<openclaw>/dist/chat-abort-runtime-DN2xZ73h.mjs`
+    lines 226 and 245).
+  - Approvals raised by sub-agents reach the parent's subscribers through
+    the persisted ancestor audience of `session.approval`. The event's
+    `sourceSessionKey` names the raising session and `sessionKey` the
+    audience (`<openclaw>/docs/gateway/protocol/rpc-bootstrap-and-events.md`).
+    Live: own-session approvals carry both keys equal. A child-raised
+    approval was not produced.
+- **Parallel runs** (source):
+  - one run at a time per session, through the `session:<key>` lane;
+  - across sessions, the global cap is `agents.defaults.maxConcurrent`,
+    default `max(8, CPUs × 4)` (`<openclaw>/dist/agent-limits-CB2bq0ey.mjs`
+    lines 4-20);
+  - sub-agents: 8 per spawning session (`agents.defaults.subagents.
+    maxConcurrent`);
+  - there is no per-bot limit.
+- **Reset** (live):
+  - `/new` and `/reset` sent with `chat.send` from `operator.write` are
+    refused with the reply "⚠️ You are not authorized to reset this
+    session. Gateway resets require operator.admin…";
+  - `sessions.reset {key}` (admin) keeps the `sessionId`, changes
+    `lifecycleRevision`, and leaves a single `[reset]` boundary row in
+    history.
+
+#### Reasoning
+
+Live, a run with reasoning, a tool and more reasoning emitted, in order:
+
+```text
+seq 3  lifecycle start      seq 5  lifecycle model
+seq 6-7  thinking {text, delta}           (segment 1)
+seq 9  item start  itemId "tool:<id>"      seq 10 tool start
+seq 11 tool result                         seq 12 item end
+seq 13 lifecycle model
+seq 15 thinking {text, delta}             (segment 2, text restarts)
+seq 17 assistant {text, delta, itemId "<runId>:2"}
+seq 18 lifecycle finishing   seq 20 lifecycle end
+```
+
+- Reasoning carries no item id. Segments are split by `lifecycle
+  phase:"model"`, which marks each model call, and by the tool items. Order
+  is the per-run `payload.seq`.
+- Within a segment, `text` is cumulative and `delta` is the appended part.
+- A new segment starts when the new text does not extend the previous one
+  (`emitReasoningStream`, `<openclaw>/dist/builtin-openclaw-CcrkVuBH.mjs`
+  lines 8350-8376).
+- History keeps reasoning as `{type:"thinking", thinking}` blocks in each
+  assistant row, before that row's `toolCall` or `text` block.
+- A run with reasoning and no tool emits the following, and one assistant
+  row `[thinking, text]` (live):
+
+  ```text
+  lifecycle start, model, thinking…, assistant…, finishing, model, end
+  ```
+
+#### Tool events in depth
+
+- **Titles** (source): `item.title` and `meta` are built
+  deterministically, in English, from the tool name and arguments
+  (`resolveToolDisplay`, `<openclaw>/dist/tool-display-H962ONhl.mjs`). No
+  locale is read.
+  - `chat.toolTitles` is deprecated and returns `{titles:{}, disabled:true}`
+    (`<openclaw>/docs/gateway/protocol/rpc-session-control.md`).
+  - Titles in the user's language must be made by the client.
+  - The docs mention "a short purpose description supplied by the acting
+    agent", but no such field was found in the tool events
+    (**unverified**).
+- **Error kinds** (live):
+  - A thrown or aborted tool gives `tool result {isError:true}`, with text
+    content. The text is "Aborted" for aborts and run timeouts.
+  - An exec that exceeds its own timeout gives `isError:true, details:
+    {status:"failed", exitCode:null, exitSignal:"SIGTERM", failureKind:
+    "overall-timeout", exitReason:"overall-timeout", timedOut:true,
+    durationMs}`.
+  - An exec that exits non-zero is **not** an error: `isError:false,
+    details:{status:"completed", exitCode:1, exitReason:"exit"}`, and the
+    text ends "(Command exited with code 1)".
+  - A plugin block (P5) is a tool error with the hook's `deniedReason`
+    (source).
+- **Long output** (live, about 1 MB of exec output):
+  - `command_output` deltas stop at a retention cap. The first line says
+    "[earlier output was discarded at the retention cap…]".
+  - The `tool result` text is about 8 000 characters and ends
+    "…(truncated)…".
+  - The `toolResult` history row holds 8 000 characters, with
+    `__openclaw.truncated` and `reason`.
+  - `chat.history {toolResultMaxChars}` and `chat.message.get` can return
+    more (live: 31 996 characters from `chat.message.get`).
+- **Raw fields** (live):
+  - Call: `tool start {name, toolCallId, args}`, and history
+    `{type:"toolCall", id, name, arguments}`.
+  - Result: `tool result {name, toolCallId, isError, commandBearing, meta?,
+    result:{content[], details}}`, and history `{role:"toolResult",
+    toolCallId, toolName, content, details, isError}`.
+  - MCP tools are named `<server>__<tool>` (live: `coder__slow_task`), and
+    `details` carries the MCP `structuredContent`.
+
+#### Bot-to-bot (`sessions_send`) recipient states
+
+Live, Pixel to Atlas, each in a new task:
+
+| Recipient state | What the sender sees |
+| --- | --- |
+| replied in time | `{status:"ok", runId, sessionKey, delivery:{status:"skipped"}, reply}` |
+| accepted, still working | `{status:"accepted", runId, sessionKey, targetDisposition:"queued", delivery:{status:"pending"}}`. Returned for a 0 s wait and also for 2 s and 6 s waits on a slow recipient; no `status:"timeout"` was observed |
+| replied later | one assistant row in the **sender's** session with `provenance:{kind:"inter_session", sourceSessionKey, sourceTool:"sessions_send"}`, `senderLabel:"Forwarded from <agentId>"`, `senderSession:{sessionKey, agentId}`. It starts a new sender run, which answers it |
+| asks its user | `accepted` as above; `question.requested` carries the **recipient's** `sessionKey`, `agentId` and `runId`, with no field naming the sender; after the answer, the late reply arrives as above |
+| finished without a reply (`NO_REPLY`) | the gateway re-prompted the recipient ("The previous attempt did not produce a user-visible answer…") and the sender got `status:"ok"` with that reply; `status:"no_reply"` exists in the schema but was not produced |
+| stopped | `{status:"error", error:"agent error", sentBeforeError:true, runId, sessionKey}` |
+| with `watch:true` | as `accepted`, plus `watched:true`; the later reply arrives as above |
+
+- **Late-reply correlation.** The send result's `runId` equals the
+  recipient run's `runId` (live). The late row has no source run id, only
+  `sourceSessionKey` and `senderSession`. Match a late reply to the most
+  recent `accepted` send to that session key.
+- **Recipient waiting on an approval**: **unverified**. The scripted
+  recipient did not reach its exec call.
+- **Who may message whom** (source:
+  `<openclaw>/docs/concepts/session-tool.md`, "Sending cross-session
+  messages"):
+  - a global agent-to-agent allowlist that applies in both directions;
+  - per bot, an outbound list `agents.entries.<id>.tools.agentToAgent.send`
+    (admin; `[]` denies, omission keeps the global policy; live with
+    `["atlas"]`);
+  - session visibility rules.
+
+  There is no inbound list per recipient. A plugin `before_tool_call` hook
+  can check `args.sessionKey` (P5).
+- **Usage by trigger.** A recipient run is a normal run in the recipient's
+  session. Its usage is on that session (`sessions.usage`, the row's
+  `estimatedCostUsd`) and its turn is marked by the inter-session
+  provenance. No usage field names the trigger, so "usage by source" must be
+  derived by the client from provenance (source and live row keys).
+
+#### External coding agent over MCP
+
+- **Accepted but unfinished** (live): a long MCP call shows `item
+  start {status:"running"}` and `tool start {args}`, then nothing until it
+  ends. MCP progress notifications are not forwarded as `tool
+  phase:"update"`. No progress handling was found in source
+  (**unverified**).
+- **Stopped run** (live): the `tool start` event and the transcript's
+  `toolCall` block show the call was made. The result is `isError:true`,
+  "Aborted". Whether the MCP server is sent `notifications/cancelled` was
+  not checked (**unverified**).
+- **Identifiers**: `toolCallId`, the item id `tool:<toolCallId>`, `runId`
+  and `sessionKey`. A coding-thread id exists only in the tool's own result
+  (`structuredContent.threadId`, live, section 5).
+
+#### Lists and metadata
+
+- **Time fields** (schema `SessionRow`; live values on a new task):
+  - session rows: `createdAt`, `updatedAt`, `lastInteractionAt`,
+    `lastActivityAt`, `snapshotAt`, `pinnedAt`, `archivedAt`, `snoozedAt`,
+    `lastReadAt`, `markedUnreadAt`, plus `startedAt` and `endedAt` of the
+    latest run (live: all present except the unset pin, archive, snooze
+    and read times);
+  - messages: `timestamp`, set at creation, and
+    `__openclaw.recordTimestampMs`, set when written to the transcript;
+  - all are epoch milliseconds. Sort the sidebar by `lastInteractionAt`
+    (`sessions.list` and `sessions.search` `scope.sortBy` accept
+    `updatedAt`, `lastInteractionAt` and `activity`).
+- **`sessions.search`** (`operator.read`, `SessionsSearchParams`):
+  - params: `{query, agentId?, sessionKeys?:[1-200], scope?:{activeMinutes,
+    activeOnly, sortBy, label, projectId, workspaceDir, exclude*…},
+    limit?}`;
+  - result: `{results:[{sessionKey, sessionId, messageId, role:
+    user|assistant, timestamp, snippet, score}], sessions?:[compact
+    rows]}`;
+  - live: with `sessionKeys` or with `scope` it returned both matching
+    rows with snippets;
+  - on a multi-agent gateway, `query` alone fails ("session key "main" has
+    no explicit owner"), and `agentId` without `sessionKeys` fails
+    ("agentId requires sessionKeys").
+- **Rejected or expired pairing** (source):
+  - `device.pair.resolved` is `{requestId, deviceId, decision, ts}`.
+  - Broadcasts to `operator.pairing` connections carry `decision:
+    "approved"` or `"rejected"` (`<openclaw>/dist/devices-mOg4_HQd.mjs`
+    lines 101, 400 and 437).
+  - The connecting socket itself is held open and told only when its
+    `client.id` is `openclaw-control-ui` or `openclaw-tui`
+    (`waitForResolution`,
+    `<openclaw>/dist/message-handler-CRCo2VX0.mjs` line 2057). It then gets
+    `device.pair.resolved` with `decision` `approved`, `rejected` or
+    `expired`, then a close with code 1008 and reason `pairing <decision>`
+    (lines 2193-2209; `waitForDevicePairingResolution`,
+    `<openclaw>/dist/device-pairing-D17Yb5Sp.mjs`, `"expired"` at
+    `expiresAtMs`). A superseded request closes without the event.
+  - A `gateway-client` connect is refused with `PAIRING_REQUIRED` and gets
+    no later event. It must reconnect: a reconnect after rejection or
+    expiry creates a new request. It cannot tell the two apart without
+    `operator.pairing` (**unverified live**: the remote pairing path still
+    needs a non-loopback connect).
+- **`users.prefs`** (`<openclaw>/dist/users-BUx10Lx0.mjs` lines 161-163
+  and 403-426):
+  - `users.prefs.get {keys?:[≤32]}` (`operator.read`) returns `{status:
+    "ok", entries:{<key>:<any JSON>}}` or `{status:"no_durable_identity"}`;
+  - `users.prefs.set {entries:{≤32}, expectedEntries?}`
+    (`operator.write`) returns `ok`, `conflict` or `no_durable_identity`;
+  - keys are 1-256 characters, and a profile holds at most 128 keys
+    (`USER_PREFS_LIMIT_EXCEEDED`);
+  - `expectedEntries` is a compare-and-set, and a `null` there means "must
+    be absent";
+  - a `null` value deletes the key (`writeUserPreferences`,
+    `<openclaw>/dist/user-preferences.store-BbmywMbP.mjs` lines 109-125;
+    deletion not exercised live);
+  - event `users.prefs.changed {profileId, keys}` (session-read).
+  - Live: a paired device stored and read back, unchanged,
+    `{"clawtrate.sidebar":{pins:["atlas"], sections:[{name:"Work",
+    bots:["pixel"]}], hidden:[], order:["atlas","pixel"]}}`. So pins,
+    sections, hidden bots and manual order fit in one key.
+  - A shared-token backend connection gets `no_durable_identity`. The store
+    is per user profile, so every device of that user sees it.
+- **Default or primary bot** (source:
+  `<openclaw>/dist/agent-list-NuNAO01y.mjs` lines 28-67):
+  - `agents.list` returns `defaultId` and puts it first;
+  - with one agent it is that agent; in an explicit multi-agent config it
+    is the first configured entry;
+  - there is no method or config field to set it, and reordering
+    `agents.entries` through `config.patch` (admin) is the only lever;
+  - store a Clawtrate "primary bot" in `users.prefs`.
+- **Reactions** (live):
+  - `session.reactions.set {sessionKey, messageId, emoji, remove?}`
+    (`operator.write`) returns `{messageId, reactions:[{emoji, count,
+    identities:[{id, label}]}], mirror:{status, reason?}}`. `remove:true`
+    removes the reaction.
+  - `session.reactions.list {sessionKey}` (`operator.read`) returns
+    `{sessionId, reactions:{<messageId>:[…]}}`.
+  - Event `session.reaction {sessionKey, agentId, sessionId, messageId,
+    emoji, action:"added"|"removed", actor:{type, id, label}, reactions}`.
+- **Reply threads** (live): `chat.send {replyToId}` stores `__openclaw.
+  replyToId`, `replyToPreview:{text, senderLabel}` and `replyToMessage` on
+  the user row. This is a reply reference, not a separate thread. No
+  thread listing method exists.
+
+#### Attachments
+
+Live and source agree on these ceilings:
+
+| Ceiling | Value | Enforced in | Error |
+| --- | --- | --- | --- |
+| WebSocket frame | 26 214 400 bytes (25 MiB) after `connect`; 65 536 before | `ws` `maxPayload`, raised after the handshake (`<openclaw>/dist/ws-connection-Cq7PPwbb.mjs` lines 559-584; constants in `<openclaw>/dist/server-constants-BH_EolwD.mjs`) | the socket closes with code **1009** and no response (live: "gateway closed (1009)"; gateway log "Max payload size exceeded") |
+| image | 6 291 456 bytes decoded | `parseMessageWithAttachments` (`<openclaw>/dist/chat-attachments-Bmvu3oSJ.mjs` line 232; `MAX_IMAGE_BYTES` in `constants-GzjKtFvA.mjs`) | `chat.send` fails `INVALID_REQUEST`, "Error: attachment big.png: image exceeds size limit (6291457 > 6291456 bytes)" (live) |
+| any file | `agents.defaults.mediaMaxMb`, default 20 MiB decoded | `prepareMediaAttachment` (same file, line 24), with `resolveChatAttachmentMaxBytes` (`chat-send-handler-D_7lP5Io.mjs` line 3167) | `INVALID_REQUEST`, "attachment <name>: exceeds size limit (<n> > <max> bytes)" (source) |
+| advertised `hello-ok.policy.attachments.maxBytes` | 19 464 192 = `min(mediaMaxMb, floor((25 MiB − envelope slack) × 3/4))` | not enforced as such; it is the largest single file whose base64 fits the frame (`chat-attachment-policy-B0H4omOp.mjs`, `chat-attachment-frame-budget-BBmKdOhk.mjs`) | live: a 19 464 193-byte text file was **accepted**, because the 20 MiB file check passed and the frame still fit |
+
+- So "about 18.5 MiB per file" is the advertised safe size, not a gateway
+  check. The frame is the real limit for a whole `chat.send`: several
+  files must fit in one 25 MiB frame together.
+- A save failure returns `UNAVAILABLE` "[Gateway Error] Failed to save
+  intercepted media to disk…" (`MediaOffloadError`,
+  `chat-send-handler-D_7lP5Io.mjs` line 3215).
+- A text-only model given an image returns `INVALID_REQUEST` "active model
+  does not accept image inputs" (source).
 
 ## 3. Plugin API
 
@@ -1435,6 +1957,8 @@ committed under `docs/research/dev-gateway/`:
 | `fake-coding-mcp.mjs` | Stand-in coding-agent MCP server (section 5). |
 | `probe-plugin/` | Minimal plugin proving methods, events and routes (section 3). Also reports the gateway's environment variable names for `check-env`. |
 | `computer-plugin/` | Prototype of plugin P4: browser view and takeover without admin (section 3), with offline tests. |
+| `probe-lib.mjs` | Probe client helper: pairs a device identity on loopback with chosen scopes and caps, records events, waits for a run's terminal event. |
+| `scenarios/` | The probe scripts behind row 19, with a README. |
 
 Profile and port: the project uses `--dev` (state in `~/.openclaw-dev`, port
 19001). The launcher deliberately refuses that profile: it accepts only names
