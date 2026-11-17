@@ -1254,9 +1254,16 @@ test("F-096: a message sent while the run works is steered into it and captioned
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
   expect((await seen()).some((sample) => sample.steer)).toBe(true);
+  // The gateway took it into the run; on screen it stays, as its bubble until history settles it.
+  await expect
+    .poll(() => gatewayHasMessage("agent:otto:backup-check", "Only the photos set, please."), {
+      timeout: 30_000,
+    })
+    .toBe(true);
   await expect(
-    page.getByTestId("transcript-turn").filter({ hasText: "Only the photos set, please." }),
+    page.locator(".transcript").getByText("Only the photos set, please.", { exact: true }),
   ).not.toHaveCount(0);
+  await expect.poll(() => gatewayIdle("agent:otto:backup-check"), { timeout: 30_000 }).toBe(true);
 });
 
 test("F-058: two tasks of one bot run at the same time", async ({ page }) => {
@@ -1339,6 +1346,15 @@ test("F-282: Start as new task runs the message in a new task under the same bot
   );
 });
 
+/** Whether the gateway has nothing in flight or waiting in a task, so a check leaves it as it found it. */
+async function gatewayIdle(key: string): Promise<boolean> {
+  const history = await gatewayCall<{
+    inFlightRun?: unknown;
+    pendingInputs?: { items?: unknown[] };
+  }>("chat.history", { sessionKey: key, limit: 1 });
+  return !history.inFlightRun && (history.pendingInputs?.items ?? []).length === 0;
+}
+
 /** Whether the gateway's history of a task holds a message of yours with this text. */
 async function gatewayHasMessage(key: string, text: string): Promise<boolean> {
   const history = await gatewayCall<{ messages: Array<{ role: string; content?: unknown }> }>(
@@ -1379,6 +1395,7 @@ test("F-468: a message queued behind a slow reply stays Not sent after a confirm
   // Removed, it never reaches the gateway.
   await row.getByRole("button", { name: "Remove" }).click();
   await expect(row).toHaveCount(0);
+  await expect.poll(() => gatewayIdle("agent:otto:backup-check"), { timeout: 30_000 }).toBe(true);
 });
 
 test("F-468: a real question holds a message typed while it is pending, and answering releases it", async ({
