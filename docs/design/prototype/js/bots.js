@@ -91,6 +91,11 @@
     domain: "Your company's GitHub address, then a code",
   };
   const KEY_PROVIDERS = ["openai", "anthropic", "xai", "openrouter", "minimax"];
+  // Where a sign-in lands is read after it, from each bot's view (section 5).
+  // nomain=1: the gateway has no main bot without a folder of its own, so it is
+  // known before the sign-in that the account will be kept by one bot.
+  const NO_MAIN = p("nomain") === "1";
+  const LANDED = p("landed") || (NO_MAIN ? "otto" : null);
 
   const BOT_ART_BODIES = ["pebble", "block", "arch", "bloom", "disc", "hex", "drop", "gem"];
   const BOT_ART_COLORS = ["#58c26f", "#5b8dff", "#ff8552", "#a98bff", "#f6bd3b", "#ff6f9c", "#45bdf5", "#a5d955"];
@@ -337,6 +342,7 @@
           ? ""
           : `<ul class="b-choices" style="margin-top:12px"><li><button type="button" class="b-choice" data-kind="add" data-b="connect"${isAdmin() ? "" : ' aria-disabled="true" disabled'}>${icon("plus")}<span class="b-choice-text"><span class="b-choice-title">${shared().length ? "Connect another account" : "Connect an account"}</span></span></button></li></ul>`) +
         (DEFAULT_MODEL.account && B.draft.account === DEFAULT_MODEL.account ? `<p class="b-hint">Chosen because the gateway's default model names it.</p>` : "") +
+        (B.createNote ? note(`<p>${esc(B.createNote)}</p>`) : "") +
         chosenPart(name);
       const busy = ["creating", "slow", "checking"].includes(B.create.status);
       const none = !B.draft.account;
@@ -456,7 +462,15 @@
       `<span class="b-choice-text"><span class="b-choice-title">${esc(o.label)} <span>· ${esc(o.hint)}</span></span>` +
       `<span class="b-choice-sub">${FLOW_WORDS[o.flow]}</span></span>${icon("chevron")}</button></li>`;
     const has = accounts.some((a) => a.provider === B.connect.apikey.provider && a.kind === "key");
+    const target = app.bots.find((x) => x.id === LANDED)?.name || "Otto";
+    const draftName = B.draft.name.trim() || "the new bot";
     const body =
+      (NO_MAIN
+        ? note(
+            `<p>This gateway keeps this sign-in for ${esc(target)} only. Other bots, and a bot you are creating, won't be able to use it.</p>` +
+              (B.connect.from === "create" ? `<p>To give ${esc(draftName)} an account of its own, create it with "Let the gateway choose", then connect from its settings.</p>` : ""),
+          )
+        : "") +
       `<p class="b-lead">Sign in with a subscription you already pay for. Your gateway does the sign-in and keeps it; Clawtrate never sees your password and never keeps the sign-in.</p>` +
       `<h4 class="b-group">Subscriptions</h4><ul class="b-choices">${OPTIONS.filter((o) => o.group === "sub").map(row).join("")}</ul>` +
       `<h4 class="b-group">Billed per token</h4><ul class="b-choices">${OPTIONS.filter((o) => o.group === "token").map(row).join("")}</ul>` +
@@ -575,6 +589,13 @@
     const locked = Object.entries(binding).filter(([, b]) => b.evidence?.state === "matched" && acct(b.account)?.provider === provider);
     const body =
       result("ok", "check", c.keyProvider ? "Key saved" : `Connected to ${esc(who)}`, c.keyProvider ? `Your gateway keeps the key.` : `Your gateway keeps the sign-in.`).replace(" data-b-focus", "") +
+      (() => {
+        const owner = acct(c.newId)?.owner;
+        const name = app.bots.find((x) => x.id === owner)?.name;
+        return owner
+          ? `<p class="b-hint" role="status" style="text-align:center">Saved for ${esc(name)} only. Other bots can't use it.</p>`
+          : `<p class="b-hint" role="status" style="text-align:center">Every bot can use it: the gateway shows it to other bots as shared.</p>`;
+      })() +
       `<label class="b-field"><span>Label</span><input class="input" data-b-label data-b-focus maxlength="32" placeholder="${others.length ? "For example, Home or Studio" : "For example, Personal"}" value="${esc(c.label)}" aria-describedby="b-label-help" /></label>` +
       (clash
         ? `<p class="b-field-error" id="b-label-help">Another ${esc(who)} account is called ${esc(clash.label)}. Choose a different label.</p>`
@@ -595,7 +616,8 @@
     if (stage === "connected") {
       const o = option();
       const id = `${o.provider}:${["home", "studio", "second", "third"].find((x) => !acct(`${o.provider}:${x}`)) || Date.now()}`;
-      accounts.push({ id, provider: o.provider, label: "", kind: o.group === "token" ? "key" : "subscription", how: `${o.label}: ${FLOW_WORDS[o.flow].toLowerCase()}`, status: "ok", fresh: true });
+      // landed=<bot>: the gateway's views show the account in that bot's store only.
+      accounts.push({ id, provider: o.provider, label: "", kind: o.group === "token" ? "key" : "subscription", how: `${o.label}: ${FLOW_WORDS[o.flow].toLowerCase()}`, status: "ok", fresh: true, ...(LANDED ? { owner: LANDED } : {}) });
       B.connect.newId = id;
       B.connect.view = "label";
       announce(`Connected to ${providerName(o.provider)}`);
@@ -1184,8 +1206,11 @@
         B.connect = null;
         if (from === "create") {
           B.create.step = "account";
-          B.draft.account = a.id;
-          B.draft.model = MODELS[a.provider][0];
+          if (a.owner) B.createNote = `${acctName(a)} was saved for ${app.bots.find((x) => x.id === a.owner)?.name} only, so ${B.draft.name.trim() || "the new bot"} can't use it.`;
+          else {
+            B.draft.account = a.id;
+            B.draft.model = MODELS[a.provider][0];
+          }
         }
         rerender(true);
         CT.botsChanged?.();

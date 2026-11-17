@@ -150,6 +150,24 @@ p = await open("access=read");
 check("P1 read-only: no way to create a bot", await p.evaluate(() => document.querySelector("#new-button").hidden));
 await p.close();
 
+// R2-03: where a sign-in lands is read after it, and said before it when known.
+p = await open("open=create&step=connect&name=Viral&connect=xai/xai-oauth&stage=waiting&landed=juniper");
+await p.evaluate(() => window.bots.connectTo("connected"));
+await p.waitForTimeout(100);
+check("R2-03 a sign-in that turns out not to be shared says whose it is", (await text(p, "#create-dialog")).includes("Saved for Juniper only. Other bots can't use it."));
+await p.keyboard.type("Studio");
+await p.click('[data-b="label-done"]');
+check("R2-03 and New bot does not offer it, saying why", await p.evaluate(() => !document.querySelector('[data-b-choose^="xai:"][aria-checked="true"]') && !document.querySelector('#create-dialog [data-b-choose="xai:home"]') && document.querySelector("#create-dialog").textContent.includes("was saved for Juniper only, so Viral can't use it.")));
+await p.close();
+p = await open("open=create&step=connect&name=Viral&connect=xai/xai-oauth&stage=waiting");
+await p.evaluate(() => window.bots.connectTo("connected"));
+await p.waitForTimeout(100);
+check("R2-03 a shared sign-in is called available to every bot only from the gateway's views", (await text(p, "#create-dialog")).includes("Every bot can use it: the gateway shows it to other bots as shared."));
+await p.close();
+p = await open("open=create&step=connect&name=Viral&nomain=1");
+check("R2-03 when it is known before the sign-in that it can't be shared, the screen says so first", (await text(p, "#create-dialog")).includes("This gateway keeps this sign-in for Otto only. Other bots, and a bot you are creating, won't be able to use it.") && (await text(p, "#create-dialog")).includes('create it with "Let the gateway choose", then connect from its settings'));
+await p.close();
+
 // FM-01: Let the gateway choose, and the default model's own account.
 p = await open("open=create&step=account&name=Viral");
 await p.click('[data-b-choose="__gateway"]');
