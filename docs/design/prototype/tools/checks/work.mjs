@@ -121,6 +121,13 @@ const [dl] = await Promise.all([p.waitForEvent("download"), p.click('[data-files
 const bytes = await readFile(await dl.path());
 const expected = await q(p, () => window.CT.work.files["notes/disk-2026-11-16.md"].content);
 check("F-319 Download saves the file under its name with its bytes", dl.suggestedFilename() === "disk-2026-11-16.md" && bytes.equals(Buffer.from(expected, "utf8")));
+await p.close();
+p = await open(`${files}&file=notes/disk-2026-11-16.md&fileview=changes&checkout=1`);
+check("M2 the checkout's comparison is labelled with its base, never as this task's", await q(p, () => {
+  const groups = [...document.querySelectorAll(".change-group")].map((h) => h.textContent).join();
+  const t = document.querySelector("#reader-body").textContent;
+  return groups === "This task's changes,In the checkout" && t.includes("Compared with main") && t.includes("This can include changes made before this task.") && !/since (this|the) task began/i.test(t);
+}));
 check("a source line links to the step", await q(p, () => document.querySelector(".reader-source").textContent.startsWith("Edited by Otto at 5:36 PM")));
 await p.close();
 

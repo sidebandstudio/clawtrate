@@ -642,7 +642,24 @@
   }
   CT.markdown = markdown;
 
+  // The checkout's comparison (?checkout=1): compared with where the branch left
+  // main, which can include work from before this task. Never "since this task began".
+  const checkoutDiff = () =>
+    `<h3 class="change-group">In the checkout</h3>` +
+    `<section class="change" role="region" aria-label="Compared with main, plus 9, minus 1"><p class="change-head"><strong>Compared with main</strong><span class="change-count">+9 −1</span></p>` +
+    `<p class="change-note">In this checkout. This can include changes made before this task.</p>` +
+    `<div class="diff" tabindex="0"><div class="diff-hunk">Lines 1–9</div>` +
+    lines(note2)
+      .slice(0, 9)
+      .map((text, i) => `<div class="diff-line" data-kind="add"><span class="ln" aria-hidden="true"></span><span class="ln" aria-hidden="true">${i + 1}</span><span class="sign" aria-hidden="true">+</span><span class="visually-hidden">added: </span><span class="lc">${esc(text) || " "}</span></div>`)
+      .join("") +
+    `</div></section>`;
+
   function changesView(f) {
+    return `<h3 class="change-group">This task's changes</h3>` + changesOfTask(f) + (params.get("checkout") === "1" ? checkoutDiff() : "");
+  }
+
+  function changesOfTask(f) {
     return f.changes
       .map((c) => {
         const headLine =

@@ -1759,3 +1759,17 @@
 .tabs[data-clip="both"] {
   mask-image: linear-gradient(to right, transparent, #000 16px, #000 calc(100% - 16px), transparent);
 }
+
+/* Changes: the task's own changes first, then the checkout's comparison. */
+.change-group {
+  margin: 4px 4px 8px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text-faint);
+}
+
+.change-note {
+  margin: -2px 4px 8px;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
