@@ -47,6 +47,7 @@ const prefs = (change: Partial<RosterPrefs>): RosterPrefs => ({
   hidden: [],
   sort: "recent",
   manual: [],
+  sections: [],
   ...change,
 });
 const names = (list: Bot[]) => list.map((b) => b.name);

@@ -3,10 +3,16 @@
 // granted) and offers Reconnect and Disconnect. A modal dialog: focus stays
 // inside it, Escape closes it, and focus returns to where it was.
 
-import type { ConnectionState, HostInfo } from "@clawtrate/core";
+import {
+  INTERACTIVE_SCOPES,
+  scopeSatisfied,
+  type ConnectionState,
+  type HostInfo,
+} from "@clawtrate/core";
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { useCommand } from "./bridge.tsx";
-import { failureTitle } from "./ConnectScreen.tsx";
+import { CopyValue } from "./AccessBar.tsx";
+import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
 import { CloseIcon } from "./icons.tsx";
 
@@ -14,7 +20,10 @@ import { CloseIcon } from "./icons.tsx";
 export function gatewayState(connection: ConnectionState): string {
   switch (connection.status) {
     case "connected":
-      return "Connected";
+      // Re-pairing: the gateway holds this device's new authorization until its owner decides.
+      return connection.upgrade.status === "requesting" || connection.upgrade.status === "pending"
+        ? "Pairing pending"
+        : "Connected";
     case "pairing":
       return "Pairing pending";
     case "disconnected":
@@ -67,6 +76,22 @@ export function Settings({
     connection.status === "reconnecting";
   const deviceName =
     info.deviceName ?? (info.kind === "desktop" ? "Clawtrate Desktop" : "Clawtrate Web");
+  // Re-pair (F-456): ask the gateway's owner for this device's interactive access. The old
+  // authorization keeps working until they approve; then the new one replaces it.
+  const upgrade = connection.upgrade;
+  const holdsAll =
+    connection.status === "connected" &&
+    INTERACTIVE_SCOPES.every((scope) => scopeSatisfied(connection.scopes, scope));
+  const rePairing = upgrade.status === "requesting" || upgrade.status === "pending";
+  const canRePair = !info.readOnly && connection.status === "connected" && !holdsAll && !rePairing;
+  const rePairProblem =
+    upgrade.status === "rejected"
+      ? "The gateway's owner rejected the new pairing. This device keeps its earlier access."
+      : upgrade.status === "expired"
+        ? "The pairing request expired before it was approved. This device keeps its earlier access."
+        : upgrade.status === "error"
+          ? `Couldn't re-pair. ${upgrade.error ?? ""}`.trim()
+          : null;
 
   useEffect(() => {
     dialogRef.current?.querySelector<HTMLElement>(".settings-close")?.focus();
@@ -191,7 +216,40 @@ export function Settings({
               {problem.message}
             </div>
           )}
+          {!info.readOnly && rePairProblem && !holdsAll && (
+            <div className="form-error" role="alert" data-testid="repair-problem">
+              {rePairProblem}
+            </div>
+          )}
+          {!info.readOnly && connection.status === "connected" && rePairing && (
+            <div className="settings-repair" data-testid="repair-pending">
+              <p>
+                Waiting for the gateway's owner to approve this device's new pairing. It changes by
+                itself once they approve or reject it; until then this device keeps its earlier
+                access.
+              </p>
+              {upgrade.approveCommand && (
+                <CommandLine command={upgrade.approveCommand} label="Copy approve command" />
+              )}
+              {upgrade.requestId && (
+                <div className="access-id">
+                  <span className="mono">Request {upgrade.requestId.slice(0, 8)}</span>
+                  <CopyValue value={upgrade.requestId} label="Copy request id" />
+                </div>
+              )}
+            </div>
+          )}
           <div className="settings-actions">
+            {canRePair && (
+              <button
+                type="button"
+                className="button"
+                data-variant="primary"
+                onClick={() => void send({ type: "requestAccess" }).catch(() => {})}
+              >
+                Re-pair
+              </button>
+            )}
             {canReconnect && (
               <button
                 type="button"
@@ -228,7 +286,12 @@ export function Settings({
           {connection.gatewayUrl && (
             <p className="settings-note">
               {gatewayLabel(connection.gatewayUrl)} keeps this device's pairing while it is
-              disconnected. This device asks for read access only.
+              disconnected.{" "}
+              {holdsAll
+                ? "This device can send, stop and answer."
+                : info.readOnly
+                  ? "This device asks for read access only."
+                  : "This device reads. Re-pair to ask for sending, stopping and answering."}
             </p>
           )}
         </section>

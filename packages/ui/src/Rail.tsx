@@ -1,4 +1,11 @@
-import type { Bot, ConnectionState, DiscoveryState, Task } from "@clawtrate/core";
+import type {
+  ArchivedTask,
+  Bot,
+  ConnectionState,
+  DiscoveryState,
+  SidebarState,
+  Task,
+} from "@clawtrate/core";
 import {
   useCallback,
   useEffect,
@@ -10,25 +17,41 @@ import {
   type MouseEvent,
 } from "react";
 import { Avatar } from "./Avatar.tsx";
-import { useCommand } from "./bridge.tsx";
+import { useBridge, useCommand } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
 import { gatewayLabel, rowTime } from "./format.ts";
 import {
+  ArchiveIcon,
   ArrowDownIcon,
   ArrowUpIcon,
   ChevronIcon,
   CloseIcon,
   CopyIcon,
+  EditIcon,
   EyeIcon,
   HideIcon,
   PinIcon,
+  PlusIcon,
+  RestoreIcon,
   SearchIcon,
+  SectionIcon,
   SettingsIcon,
   SortIcon,
   StarIcon,
+  TrashIcon,
+  UnreadIcon,
 } from "./icons.tsx";
 import { Menu, type MenuEntry } from "./Menu.tsx";
 import type { BubbleChoice, ThemeChoice } from "./preferences.ts";
+import {
+  ArchivedGroup,
+  isActive,
+  neighbour,
+  RailDialog,
+  RenameField,
+  useActionRunner,
+  type DialogSpec,
+} from "./RailActions.tsx";
 import { arrange, moveInOrder, rosterScope, SORT_ORDERS, useRoster } from "./roster.ts";
 import {
   botLabel,
@@ -109,12 +132,35 @@ function Presence({ bot, state, primary }: { bot: Bot; state: RunState | null; p
 
 type Tip = { text: string; top: number; left: number };
 
+/** How a task's state ends its row's accessible name (conversation.md, section 20). */
+const SPOKEN: Record<RunState, string> = {
+  working: ", working",
+  waiting: ", needs you",
+  blocked: ", blocked",
+  failed: ", last run failed",
+  "done-with-failures": ", done with failures",
+  stopped: ", stopped",
+  queued: ", queued",
+};
+
+/** What a bot's rows can do: set only when the connection writes. */
+type TaskActions = {
+  renaming: string | null;
+  onRename: (task: Task) => void;
+  commitRename: (task: Task, label: string) => Promise<void>;
+  endRename: (task: Task, renamed: boolean) => void;
+  onNewTask: (bot: Bot) => void;
+};
+
 function TaskRows({
   bot,
   tasks,
   selection,
   onOpenTask,
   onTip,
+  onTaskMenu,
+  actions,
+  archived,
   now,
 }: {
   bot: Bot;
@@ -122,6 +168,13 @@ function TaskRows({
   selection: SelectionModel;
   onOpenTask: (botId: string, key: string) => void;
   onTip: (tip: Tip | null) => void;
+  onTaskMenu: (task: Task, trigger: HTMLElement, x: number, y: number) => void;
+  actions: TaskActions | null;
+  archived: {
+    open: boolean;
+    onToggle: () => void;
+    onMenu: (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => void;
+  };
   now: number;
 }) {
   const currentKey = selection.bot?.id === bot.id ? (selection.task?.key ?? null) : null;
@@ -141,29 +194,32 @@ function TaskRows({
     <ul className="task-list" aria-label={`${bot.name}'s tasks`} data-testid="task-list">
       {visibleTasks(tasks, currentKey, all).map((task) => {
         const current = task.key === currentKey;
-        const unread = !current && isUnread(task, selection.seen);
+        const unread =
+          (!current || selection.keptUnread.has(task.key)) && isUnread(task, selection.seen);
         const state = taskState(task, selection.seen, selection.task?.key ?? null);
         const spoken =
           task.title +
-          (state === "working"
-            ? ", working"
-            : state === "waiting"
-              ? ", needs you"
-              : state === "blocked"
-                ? ", blocked"
-                : state === "failed"
-                  ? ", last run failed"
-                  : state === "done-with-failures"
-                    ? ", done with failures"
-                    : unread
-                      ? ", unread"
-                      : "");
+          (task.pinned ? ", pinned" : "") +
+          (state ? SPOKEN[state] : unread ? ", unread" : "");
+        if (actions?.renaming === task.key) {
+          return (
+            <li key={task.key}>
+              <RenameField
+                task={task}
+                onCommit={(label) => actions.commitRename(task, label)}
+                onDone={(renamed) => actions.endRename(task, renamed)}
+              />
+            </li>
+          );
+        }
         return (
           <li key={task.key}>
             <button
               type="button"
               className="task"
               data-testid="task"
+              data-key={task.key}
+              data-pinned={task.pinned || undefined}
               data-status={task.status}
               data-state={state ?? undefined}
               data-unread={unread}
@@ -175,11 +231,18 @@ function TaskRows({
                   : `Last activity ${task.status === "running" ? "now" : rowTime(task.updatedAt, now)}`
               }
               onClick={() => onOpenTask(bot.id, task.key)}
+              onDoubleClick={actions ? () => actions.onRename(task) : undefined}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                onTip(null);
+                onTaskMenu(task, event.currentTarget, event.clientX, event.clientY);
+              }}
               onMouseEnter={(event) => showTip(event.currentTarget, task.title)}
               onMouseLeave={() => onTip(null)}
               onFocus={(event) => showTip(event.currentTarget, task.title)}
               onBlur={() => onTip(null)}
             >
+              {task.pinned && <PinIcon className="task-pin" />}
               <span className="task-title">{task.title}</span>
               {task.updatedAt !== null && (
                 <time className="task-time" aria-hidden="true">
@@ -209,6 +272,27 @@ function TaskRows({
           </button>
         </li>
       )}
+      {actions && (
+        <li>
+          <button
+            type="button"
+            className="task task-more task-new"
+            data-testid="new-task-row"
+            onClick={() => actions.onNewTask(bot)}
+          >
+            <PlusIcon />
+            <span className="task-title">New task</span>
+          </button>
+        </li>
+      )}
+      <ArchivedGroup
+        bot={bot}
+        tasks={tasks}
+        open={archived.open}
+        onToggle={archived.onToggle}
+        onMenu={archived.onMenu}
+        now={now}
+      />
     </ul>
   );
 }
@@ -216,7 +300,24 @@ function TaskRows({
 type MenuState =
   | { kind: "gateway"; trigger: HTMLElement }
   | { kind: "sort"; trigger: HTMLElement }
-  | { kind: "bot"; botId: string; trigger: HTMLElement; x: number; y: number };
+  | { kind: "plus"; trigger: HTMLElement }
+  | { kind: "bot"; botId: string; trigger: HTMLElement; x: number; y: number }
+  /** "Move to": the sections a bot can go to, in place of its menu. */
+  | { kind: "move"; botId: string; trigger: HTMLElement; x: number; y: number }
+  | { kind: "task"; botId: string; key: string; trigger: HTMLElement; x: number; y: number }
+  | { kind: "archived"; task: ArchivedTask; trigger: HTMLElement; x: number; y: number };
+
+/** What a bot's line two says while one of its tasks waits for the person (F-021). */
+export function waitingWords(tasks: Task[]): string | null {
+  const waiting = tasks.filter((task) => task.status === "waiting");
+  if (waiting.length === 0) return null;
+  const first = waiting.reduce((a, b) => ((b.waitingSince ?? 0) < (a.waitingSince ?? 0) ? b : a));
+  return first.waitingFor === "question"
+    ? "Waiting for you: a question"
+    : first.waitingFor === "approval"
+      ? "Waiting for you: approve a command"
+      : "Waiting for you";
+}
 
 /** Drop the separators a menu would start or end with, or show twice in a row. */
 function tidy(entries: MenuEntry[]): MenuEntry[] {
@@ -243,6 +344,9 @@ export function Rail({
   onBubbles,
   onOpenSettings,
   inert,
+  interactive = false,
+  sidebar,
+  newTaskHint = "⌘T",
 }: {
   bots: Bot[];
   tasksByBot: Record<string, Task[]>;
@@ -263,8 +367,15 @@ export function Rail({
   onBubbles: (choice: BubbleChoice) => void;
   onOpenSettings: () => void;
   inert: boolean;
+  /** The connection writes: the rail offers New task and every task and arrangement action. */
+  interactive?: boolean;
+  /** The arrangement as the gateway keeps it. */
+  sidebar?: SidebarState | undefined;
+  /** The New task shortcut as this host takes it: ⌘T in the desktop app, ⌥T in a browser. */
+  newTaskHint?: string;
 }) {
   const send = useCommand();
+  const bridge = useBridge();
   const now = useMinuteClock();
   // The arrangement belongs to the gateway. Its identity arrives with its bots,
   // so the scope is settled only once there are bots.
@@ -273,6 +384,11 @@ export function Rail({
     connection.gatewayUrl
       ? rosterScope({ gatewayId: null, gatewayUrl: connection.gatewayUrl })
       : null,
+    {
+      sidebar,
+      interactive,
+      change: (change, base) => bridge.invoke({ type: "changeSidebar", change, base }),
+    },
   );
   const [tip, setTip] = useState<Tip | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -307,15 +423,23 @@ export function Rail({
   const matches = useMemo(
     () =>
       needle
-        ? [...arranged.pinned, ...arranged.list, ...arranged.hidden].filter((bot) =>
-            bot.name.toLowerCase().includes(needle),
-          )
+        ? [
+            ...arranged.pinned,
+            ...arranged.list,
+            ...arranged.sections.flatMap((section) => section.bots),
+            ...arranged.hidden,
+          ].filter((bot) => bot.name.toLowerCase().includes(needle))
         : null,
     [arranged, needle],
   );
   /** The bots in the order the rail shows them, for the shortcuts. Hidden bots are not in it. */
   const ordered = useMemo(
-    () => matches ?? [...arranged.pinned, ...arranged.list],
+    () =>
+      matches ?? [
+        ...arranged.pinned,
+        ...arranged.list,
+        ...arranged.sections.flatMap((section) => section.bots),
+      ],
     [matches, arranged],
   );
   const owner = matches
@@ -342,6 +466,156 @@ export function Rail({
     selection.selectTask(botId, key);
     onOpen();
   };
+
+  // Task actions ---------------------------------------------------------------
+
+  const runner = useActionRunner(setAnnouncement);
+  const [dialog, setDialog] = useState<DialogSpec | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  /** Bots whose Archived group is open. */
+  const [archivedOpen, setArchivedOpen] = useState<Set<string>>(() => new Set());
+  /** Where focus goes once the rail has rendered after an action: a task's row, or the composer. */
+  const [focusTask, setFocusTask] = useState<{
+    key: string | null;
+    bot: string;
+    composer?: boolean;
+  } | null>(null);
+
+  const toggleArchived = (botId: string) =>
+    setArchivedOpen((current) => {
+      const next = new Set(current);
+      if (!next.delete(botId)) next.add(botId);
+      return next;
+    });
+
+  /** New task (F-054): an empty task under the bot, selected, with focus in its composer. */
+  const newTask = (bot: Bot) => {
+    setMenu(null);
+    void runner.run(`start a task for ${bot.name}`, async () => {
+      const { key } = await bridge.invoke({ type: "newTask", botId: bot.id, label: null });
+      selection.selectTask(bot.id, key);
+      selection.unfold(bot.id);
+      setFocusTask({ key, bot: bot.id, composer: true });
+      onOpen();
+      setAnnouncement(`Started a new task for ${bot.name}.`);
+    });
+  };
+
+  /** After a task left the list: F-424's Main when it was the last, then focus where it was. */
+  const afterRemoval = async (bot: Bot, task: Task, remaining: Task[], next: string | null) => {
+    if (remaining.length === 0) {
+      const { key } = await bridge.invoke({ type: "newMainTask", botId: bot.id });
+      selection.selectTask(bot.id, key);
+      setFocusTask({ key: null, bot: bot.id });
+      return;
+    }
+    if (selection.task?.key === task.key && next) selection.selectTask(bot.id, next);
+    setFocusTask({ key: next, bot: bot.id });
+  };
+
+  const archive = (bot: Bot, task: Task, trigger: HTMLElement | null) => {
+    const tasks = tasksByBot[bot.id] ?? [];
+    const remaining = tasks.filter((other) => other.key !== task.key);
+    const next = neighbour(tasks, task.key);
+    const act = async (stop: boolean) => {
+      await bridge.invoke({ type: "archiveTask", key: task.key, stop });
+      setAnnouncement(`Archived ${task.title}.`);
+      await afterRemoval(bot, task, remaining, next);
+    };
+    if (isActive(task)) {
+      setDialog({
+        title: `Stop and archive “${task.title}”?`,
+        body: <p>{bot.name} is still working on this task. Archiving it stops its run first.</p>,
+        confirm: { label: "Stop and archive" },
+        onConfirm: () => act(true),
+        returnTo: trigger,
+      });
+      return;
+    }
+    void runner.run(`archive ${task.title}`, () => act(false));
+  };
+
+  const remove = (
+    bot: Bot,
+    task: { key: string; title: string; status?: Task["status"] },
+    trigger: HTMLElement | null,
+    listed: boolean,
+  ) => {
+    const tasks = tasksByBot[bot.id] ?? [];
+    const remaining = tasks.filter((other) => other.key !== task.key);
+    const next = neighbour(tasks, task.key);
+    setDialog({
+      title: `Delete “${task.title}”?`,
+      body: (
+        <>
+          <p>
+            This removes the task and its conversation from the gateway. It can't be undone. What{" "}
+            {bot.name} saved to memory during it stays.
+          </p>
+          {task.status && isActive({ status: task.status }) && <p>Its run is stopped first.</p>}
+        </>
+      ),
+      confirm: { label: "Delete", tone: "danger" },
+      onConfirm: async () => {
+        await bridge.invoke({ type: "deleteTask", key: task.key });
+        setAnnouncement(`Deleted ${task.title}.`);
+        if (listed) await afterRemoval(bot, task as Task, remaining, next);
+        else setFocusTask({ key: null, bot: bot.id });
+      },
+      returnTo: trigger,
+    });
+  };
+
+  const restore = (task: ArchivedTask) => {
+    void runner.run(`restore ${task.title}`, async () => {
+      await bridge.invoke({ type: "restoreTask", key: task.key });
+      setAnnouncement(`Restored ${task.title}.`);
+      setFocusTask({ key: task.key, bot: task.botId });
+    });
+  };
+
+  const taskActions: TaskActions | null = interactive
+    ? {
+        renaming,
+        onRename: (task) => {
+          setTip(null);
+          setRenaming(task.key);
+        },
+        commitRename: async (task, label) => {
+          await bridge.invoke({ type: "renameTask", key: task.key, label });
+          setAnnouncement(`Renamed to ${label}.`);
+        },
+        endRename: (task) => {
+          setRenaming(null);
+          setFocusTask({ key: task.key, bot: task.botId });
+        },
+        onNewTask: newTask,
+      }
+    : null;
+
+  /** Mark unread or read (F-022), on the gateway and in this viewer. */
+  const mark = (task: Task, unread: boolean) =>
+    void runner.run(unread ? "mark it unread" : "mark it read", async () => {
+      if (unread) selection.markUnreadHere(task.key);
+      else selection.markReadHere(task);
+      await bridge.invoke({ type: "markTask", key: task.key, unread, opened: false });
+    });
+
+  const openTaskMenu = (task: Task, trigger: HTMLElement, x: number, y: number) => {
+    setTip(null);
+    setMenu({ kind: "task", botId: task.botId, key: task.key, trigger, x, y });
+  };
+
+  const openArchivedMenu = (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => {
+    setTip(null);
+    setMenu({ kind: "archived", task, trigger, x, y });
+  };
+
+  const archivedProps = (bot: Bot) => ({
+    open: archivedOpen.has(bot.id),
+    onToggle: () => toggleArchived(bot.id),
+    onMenu: openArchivedMenu,
+  });
 
   const clickBot = (bot: Bot, count: number) => {
     if (count < 2) {
@@ -410,6 +684,32 @@ export function Rail({
     if (refocus) focusBot(refocus.bot);
   }, [refocus]);
 
+  // After an action: the composer of a new task once it is selected, or the row a task
+  // left, or the restored or renamed task's row, once it has rendered. Each target is
+  // used once.
+  const focusedFor = useRef<object | null>(null);
+  const selectedKey = selection.task?.key ?? null;
+  useEffect(() => {
+    if (!focusTask || focusedFor.current === focusTask) return;
+    if (focusTask.composer) {
+      if (selectedKey !== focusTask.key) return;
+      const field = document.querySelector<HTMLElement>(".composer-input");
+      if (!field) return;
+      focusedFor.current = focusTask;
+      field.focus();
+      return;
+    }
+    const row = focusTask.key
+      ? listRef.current?.querySelector<HTMLElement>(
+          `.task[data-key="${CSS.escape(focusTask.key)}"]`,
+        )
+      : null;
+    if (focusTask.key && !row) return;
+    focusedFor.current = focusTask;
+    if (row) row.focus();
+    else focusBot(focusTask.bot);
+  }, [focusTask, selectedKey, tasksByBot, archivedOpen]);
+
   // Shortcuts that work anywhere in the shell: ⌘⇧F searches bots, ⌘1 to ⌘9
   // open a bot, Alt+Up and Alt+Down or Control+Tab and Control+Shift+Tab
   // move to the previous or next bot. The drawer, while open, keeps them out.
@@ -428,6 +728,18 @@ export function Rail({
       if (command && event.shiftKey && event.key.toLowerCase() === "f") {
         event.preventDefault();
         openSearch();
+        return;
+      }
+      // New task for the open bot: ⌘T in the desktop app, ⌥T in a browser (which keeps ⌘T).
+      if (
+        event.code === "KeyT" &&
+        !event.shiftKey &&
+        ((command && !event.altKey) || (event.altKey && !command)) &&
+        interactive &&
+        selection.bot
+      ) {
+        event.preventDefault();
+        newTask(selection.bot);
         return;
       }
       let target: Bot | undefined;
@@ -455,7 +767,8 @@ export function Rail({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inert, openSearch, onOpen, selection, ordered]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- newTask reads the latest render's state
+  }, [inert, openSearch, onOpen, selection, ordered, interactive]);
 
   const onSearchKey = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape") {
@@ -564,6 +877,29 @@ export function Rail({
       event.preventDefault();
       const rect = row.getBoundingClientRect();
       openBotMenu(botId, row, rect.left + 40, rect.bottom - 6);
+    } else if (
+      row.dataset.key &&
+      (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))
+    ) {
+      event.preventDefault();
+      const rect = row.getBoundingClientRect();
+      if (row.classList.contains("archived-task")) {
+        row.click();
+        return;
+      }
+      const task = Object.values(tasksByBot)
+        .flat()
+        .find((each) => each.key === row.dataset.key);
+      if (task) openTaskMenu(task, row, rect.left + 40, rect.bottom - 6);
+    } else if (
+      event.key === "F2" &&
+      taskActions &&
+      row.dataset.key &&
+      !row.classList.contains("archived-task")
+    ) {
+      event.preventDefault();
+      setTip(null);
+      setRenaming(row.dataset.key);
     }
   };
 
@@ -660,7 +996,20 @@ export function Rail({
       setMenu(null);
       setRefocus({ bot: bot.id });
     };
+    const unreadTasks = tasks.filter((each) => isUnread(each, selection.seen));
+    const only = tasks.length === 1 ? tasks[0]! : null;
     return tidy([
+      ...(interactive
+        ? [
+            {
+              kind: "item" as const,
+              label: "New task",
+              icon: <PlusIcon />,
+              onSelect: () => newTask(bot),
+            },
+            { kind: "rule" as const },
+          ]
+        : []),
       ...(tasks.length > 1 && !hidden
         ? [
             {
@@ -684,8 +1033,23 @@ export function Rail({
               icon: <PinIcon />,
               onSelect: after(() => {
                 if (pinned) selection.release([bot.id]);
-                roster.togglePin(bot.id);
+                void runner.run(pinned ? `unpin ${bot.name}` : `pin ${bot.name}`, () =>
+                  roster.togglePin(bot.id),
+                );
               }),
+            },
+          ]
+        : []),
+      ...(!hidden && !pinned && roster.editable
+        ? [
+            {
+              kind: "item" as const,
+              label: "Move to…",
+              icon: <SectionIcon />,
+              onSelect: () =>
+                setMenu((current) =>
+                  current?.kind === "bot" ? { ...current, kind: "move", botId: bot.id } : current,
+                ),
             },
           ]
         : []),
@@ -710,6 +1074,52 @@ export function Rail({
           ]
         : []),
       { kind: "rule" },
+      ...(interactive && tasks.length > 0
+        ? [
+            unreadTasks.length > 0
+              ? {
+                  kind: "item" as const,
+                  label: "Mark as read",
+                  icon: <UnreadIcon />,
+                  onSelect: after(() => unreadTasks.forEach((each) => mark(each, false))),
+                }
+              : {
+                  kind: "item" as const,
+                  label: "Mark as unread",
+                  icon: <UnreadIcon />,
+                  onSelect: after(() =>
+                    mark(
+                      tasks.reduce((a, b) => ((b.updatedAt ?? 0) > (a.updatedAt ?? 0) ? b : a)),
+                      true,
+                    ),
+                  ),
+                },
+          ]
+        : []),
+      ...(interactive && only
+        ? [
+            {
+              kind: "item" as const,
+              label: "Rename task…",
+              icon: <EditIcon />,
+              onSelect: () => {
+                const trigger = menu?.trigger ?? null;
+                setMenu(null);
+                setDialog({
+                  title: `Rename “${only.title}”`,
+                  body: <p>The new name shows in the list and at the top of the conversation.</p>,
+                  confirm: { label: "Rename" },
+                  field: { label: "Name", placeholder: only.title },
+                  onConfirm: async (label) => {
+                    await bridge.invoke({ type: "renameTask", key: only.key, label });
+                    setAnnouncement(`Renamed to ${label.trim()}.`);
+                  },
+                  returnTo: trigger,
+                });
+              },
+            },
+          ]
+        : []),
       ...(task
         ? [
             {
@@ -743,20 +1153,237 @@ export function Rail({
             // The row goes into the folded section, so focus goes to its toggle.
             onSelect: after(() => {
               selection.release([bot.id]);
-              roster.setHidden(bot.id, true);
+              void runner.run(`hide ${bot.name}`, () => roster.setHidden(bot.id, true));
               setAnnouncement(`${bot.name} is hidden. Hidden bots keep working.`);
             }),
           },
+      ...(interactive && only
+        ? [
+            { kind: "rule" as const },
+            {
+              kind: "item" as const,
+              label: "Archive task",
+              icon: <ArchiveIcon />,
+              onSelect: () => {
+                const trigger = menu?.trigger ?? null;
+                setMenu(null);
+                archive(bot, only, trigger);
+              },
+            },
+            {
+              kind: "item" as const,
+              label: "Delete task…",
+              icon: <TrashIcon />,
+              tone: "danger" as const,
+              onSelect: () => {
+                const trigger = menu?.trigger ?? null;
+                setMenu(null);
+                remove(bot, only, trigger, true);
+              },
+            },
+          ]
+        : []),
     ]);
   };
 
+  /** "Move to": the bot's sections, a new one, or none (F-016). */
+  const moveEntries = (bot: Bot): MenuEntry[] => {
+    const current = roster.prefs.sections.find((section) => section.bots.includes(bot.id))?.name;
+    const done = (text: string) => {
+      setMenu(null);
+      setRefocus({ bot: bot.id });
+      setAnnouncement(text);
+    };
+    return tidy([
+      { kind: "label", text: `Move ${bot.name} to` },
+      ...roster.prefs.sections
+        .filter((section) => section.name !== current)
+        .map((section): MenuEntry => ({
+          kind: "item",
+          label: section.name,
+          icon: <SectionIcon />,
+          onSelect: () => {
+            void runner.run(`move ${bot.name}`, () => roster.moveToSection(bot.id, section.name));
+            done(`Moved ${bot.name} to ${section.name}.`);
+          },
+        })),
+      { kind: "rule" },
+      {
+        kind: "item",
+        label: "New section…",
+        icon: <PlusIcon />,
+        onSelect: () => {
+          const trigger = menu?.trigger ?? null;
+          setMenu(null);
+          setDialog({
+            title: "Move to a new section",
+            body: <p>{bot.name} moves into the section; others can join it with Move to.</p>,
+            confirm: { label: "Create section" },
+            field: { label: "Section name", placeholder: "Work" },
+            onConfirm: async (name) => {
+              await roster.moveToSection(bot.id, name);
+              setRefocus({ bot: bot.id });
+              setAnnouncement(`Moved ${bot.name} to ${name.trim()}.`);
+            },
+            returnTo: trigger,
+          });
+        },
+      },
+      ...(current
+        ? [
+            {
+              kind: "item" as const,
+              label: `Remove from ${current}`,
+              icon: <CloseIcon />,
+              onSelect: () => {
+                void runner.run(`move ${bot.name}`, () => roster.moveToSection(bot.id, null));
+                done(`${bot.name} is no longer in ${current}.`);
+              },
+            },
+          ]
+        : []),
+    ]);
+  };
+
+  /** A task's menu: on its row, by right-click, Shift+F10 or the Menu key. */
+  const taskEntries = (bot: Bot, task: Task): MenuEntry[] => {
+    const unread =
+      isUnread(task, selection.seen) &&
+      (task.key !== selection.task?.key || selection.keptUnread.has(task.key));
+    const trigger = menu?.trigger ?? null;
+    const close = () => setMenu(null);
+    return tidy([
+      ...(interactive
+        ? [
+            {
+              kind: "item" as const,
+              label: "Rename",
+              icon: <EditIcon />,
+              hint: "F2",
+              onSelect: () => {
+                close();
+                setRenaming(task.key);
+              },
+            },
+            {
+              kind: "item" as const,
+              label: task.pinned ? "Unpin" : "Pin",
+              icon: <PinIcon />,
+              onSelect: () => {
+                close();
+                void runner.run(task.pinned ? "unpin it" : "pin it", async () => {
+                  await bridge.invoke({ type: "pinTask", key: task.key, pinned: !task.pinned });
+                  setAnnouncement(`${task.pinned ? "Unpinned" : "Pinned"} ${task.title}.`);
+                  setFocusTask({ key: task.key, bot: bot.id });
+                });
+              },
+            },
+            {
+              kind: "item" as const,
+              label: unread ? "Mark as read" : "Mark as unread",
+              icon: <UnreadIcon />,
+              onSelect: () => {
+                closeMenu(true);
+                mark(task, !unread);
+              },
+            },
+          ]
+        : []),
+      {
+        kind: "item",
+        label: "Copy conversation ID",
+        icon: <CopyIcon />,
+        onSelect: () => {
+          closeMenu(true);
+          void copyText(task.key).then((result) =>
+            setAnnouncement(
+              result === "copied"
+                ? `Copied the conversation ID of ${task.title}.`
+                : "Couldn't copy the conversation ID.",
+            ),
+          );
+        },
+      },
+      ...(interactive
+        ? [
+            { kind: "rule" as const },
+            {
+              kind: "item" as const,
+              label: isActive(task) ? "Stop and archive…" : "Archive",
+              icon: <ArchiveIcon />,
+              onSelect: () => {
+                close();
+                archive(bot, task, trigger);
+              },
+            },
+            {
+              kind: "item" as const,
+              label: "Delete…",
+              icon: <TrashIcon />,
+              tone: "danger" as const,
+              onSelect: () => {
+                close();
+                remove(bot, task, trigger, true);
+              },
+            },
+          ]
+        : []),
+    ]);
+  };
+
+  /** An archived task's menu: Restore and Delete, when the connection writes. */
+  const archivedEntries = (task: ArchivedTask): MenuEntry[] => {
+    const bot = bots.find((each) => each.id === task.botId);
+    const trigger = menu?.trigger ?? null;
+    if (!interactive || !bot) return [{ kind: "head", title: task.title, lines: ["Archived"] }];
+    return [
+      {
+        kind: "item",
+        label: "Restore",
+        icon: <RestoreIcon />,
+        onSelect: () => {
+          setMenu(null);
+          restore(task);
+        },
+      },
+      { kind: "rule" },
+      {
+        kind: "item",
+        label: "Delete…",
+        icon: <TrashIcon />,
+        tone: "danger",
+        onSelect: () => {
+          setMenu(null);
+          remove(bot, task, trigger, false);
+        },
+      },
+    ];
+  };
+
+  /** The "+" menu: New task for the open bot. "New bot" joins it with the bots flow. */
+  const plusEntries = (bot: Bot): MenuEntry[] => [
+    {
+      kind: "item",
+      label: `New task for ${bot.name}`,
+      icon: <PlusIcon />,
+      hint: newTaskHint,
+      onSelect: () => newTask(bot),
+    },
+  ];
+
   const gatewayName = `${gateway}, ${words.replace("…", "").toLowerCase()}. Open the gateway menu.`;
 
-  // "now" while any of the bot's tasks runs, whichever state the row shows.
-  const time = (tasks: Task[], summary: BotSummary) =>
-    tasks.some((task) => task.status === "running")
+  // Since it began waiting, while a task waits for the person (conversation.md,
+  // section 20); "now" while any of the bot's tasks runs; else the latest activity.
+  const time = (tasks: Task[], summary: BotSummary) => {
+    const waiting = tasks
+      .filter((task) => task.status === "waiting" && task.waitingSince !== undefined)
+      .map((task) => task.waitingSince!);
+    if (waiting.length > 0) return rowTime(Math.min(...waiting), now);
+    return tasks.some((task) => task.status === "running")
       ? "now"
       : rowTime(summary.latest?.updatedAt ?? null, now);
+  };
 
   const onContextMenu = (bot: Bot) => (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -788,9 +1415,10 @@ export function Rail({
         }
       : {};
 
-  const renderRow = (bot: Bot, place: "list" | "hidden" | "search") => {
+  const renderRow = (bot: Bot, place: "list" | "section" | "hidden" | "search") => {
     const tasks = tasksByBot[bot.id] ?? [];
     const summary = summarize(tasks, selection.seen, onScreenKey);
+    const waiting = waitingWords(tasks);
     const open = place !== "search" && selection.isOpen(bot.id);
     const several = tasks.length > 1;
     const selected = bot.id === selection.bot?.id;
@@ -842,12 +1470,13 @@ export function Rail({
               <time className="bot-time">{time(tasks, summary)}</time>
             </span>
             <span className="bot-line">
-              <span className="bot-preview">
-                {latest
-                  ? (latest.preview ?? latest.title)
-                  : discovery.status === "loading"
-                    ? "Loading tasks"
-                    : "No tasks yet"}
+              <span className="bot-preview" data-tone={waiting ? "warn" : undefined}>
+                {waiting ??
+                  (latest
+                    ? (latest.preview ?? latest.title)
+                    : discovery.status === "loading"
+                      ? "Loading tasks"
+                      : "No tasks yet")}
               </span>
               {summary.unread && <span className="unread-dot" />}
             </span>
@@ -864,13 +1493,16 @@ export function Rail({
             <ChevronIcon />
           </button>
         )}
-        {open && (
+        {(open || (place !== "search" && archivedOpen.has(bot.id))) && (
           <TaskRows
             bot={bot}
             tasks={tasks}
             selection={selection}
             onOpenTask={openTask}
             onTip={setTip}
+            onTaskMenu={openTaskMenu}
+            actions={taskActions}
+            archived={archivedProps(bot)}
             now={now}
           />
         )}
@@ -951,6 +1583,25 @@ export function Rail({
             >
               <SearchIcon />
             </button>
+            {interactive && selection.bot && (
+              <button
+                type="button"
+                className="icon-button rail-plus"
+                aria-haspopup="menu"
+                aria-expanded={menu?.kind === "plus"}
+                aria-label="New"
+                title="New"
+                onClick={(event) => {
+                  const trigger = event.currentTarget;
+                  setTip(null);
+                  setMenu((current) =>
+                    current?.kind === "plus" ? null : { kind: "plus", trigger },
+                  );
+                }}
+              >
+                <PlusIcon />
+              </button>
+            )}
           </>
         ) : (
           <div className="rail-search" role="search">
@@ -1028,11 +1679,24 @@ export function Rail({
                   selection={selection}
                   onOpenTask={openTask}
                   onTip={setTip}
+                  onTaskMenu={openTaskMenu}
+                  actions={taskActions}
+                  archived={archivedProps(owner)}
                   now={now}
                 />
               </li>
             )}
             {arranged.list.map((bot) => renderRow(bot, "list"))}
+            {arranged.sections.map((section) => (
+              <li key={`section:${section.name}`} className="rail-section-group">
+                <p className="rail-section" id={`section-${section.name}`}>
+                  {section.name}
+                </p>
+                <ul className="section-list" aria-labelledby={`section-${section.name}`}>
+                  {section.bots.map((bot) => renderRow(bot, "section"))}
+                </ul>
+              </li>
+            ))}
             {arranged.hidden.length > 0 && (
               <li className="rail-hidden">
                 <button
@@ -1059,6 +1723,25 @@ export function Rail({
       <p className="visually-hidden" role="status">
         {announcement}
       </p>
+      {runner.notice && (
+        <div className="rail-notice" role="alert" data-testid="rail-notice">
+          <span>{runner.notice}</span>
+          <button
+            type="button"
+            className="icon-button"
+            data-variant="quiet"
+            aria-label="Dismiss"
+            onClick={runner.dismiss}
+          >
+            <CloseIcon />
+          </button>
+        </div>
+      )}
+      {interactive && connection.upgrade.status === "pending" && (
+        <p className="rail-notice" data-tone="wait" role="status" data-testid="rail-access-wait">
+          Waiting for the gateway's owner to approve access. The change is made once they do.
+        </p>
+      )}
       <div className="rail-footer">
         <button
           type="button"
@@ -1111,6 +1794,65 @@ export function Rail({
           trigger={menu.trigger}
         />
       )}
+      {menu?.kind === "plus" && selection.bot && (
+        <Menu
+          label="New"
+          className="rail-menu plus-menu"
+          style={{
+            left: Math.max(8, menu.trigger.getBoundingClientRect().right - 232),
+            top: menu.trigger.getBoundingClientRect().bottom + 6,
+          }}
+          entries={plusEntries(selection.bot)}
+          onClose={closeMenu}
+          trigger={menu.trigger}
+        />
+      )}
+      {menu?.kind === "move" && bots.find((b) => b.id === menu.botId) && (
+        <Menu
+          label={`Move ${bots.find((b) => b.id === menu.botId)!.name} to`}
+          className="rail-menu"
+          style={{
+            left: Math.max(8, Math.min(menu.x, window.innerWidth - 244)),
+            top: Math.max(8, Math.min(menu.y, window.innerHeight - 320)),
+          }}
+          entries={moveEntries(bots.find((b) => b.id === menu.botId)!)}
+          onClose={closeMenu}
+          trigger={menu.trigger}
+        />
+      )}
+      {menu?.kind === "task" &&
+        (() => {
+          const bot = bots.find((b) => b.id === menu.botId);
+          const task = (tasksByBot[menu.botId] ?? []).find((each) => each.key === menu.key);
+          if (!bot || !task) return null;
+          return (
+            <Menu
+              label={task.title}
+              className="rail-menu task-menu"
+              style={{
+                left: Math.max(8, Math.min(menu.x, window.innerWidth - 244)),
+                top: Math.max(8, Math.min(menu.y, window.innerHeight - 300)),
+              }}
+              entries={taskEntries(bot, task)}
+              onClose={closeMenu}
+              trigger={menu.trigger}
+            />
+          );
+        })()}
+      {menu?.kind === "archived" && (
+        <Menu
+          label={menu.task.title}
+          className="rail-menu"
+          style={{
+            left: Math.max(8, Math.min(menu.x, window.innerWidth - 244)),
+            top: Math.max(8, Math.min(menu.y, window.innerHeight - 140)),
+          }}
+          entries={archivedEntries(menu.task)}
+          onClose={closeMenu}
+          trigger={menu.trigger}
+        />
+      )}
+      {dialog && <RailDialog spec={dialog} onClose={() => setDialog(null)} />}
       {tip && (
         <div
           className="rail-tooltip"

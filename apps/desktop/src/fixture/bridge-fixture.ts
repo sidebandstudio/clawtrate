@@ -46,6 +46,7 @@ import {
 } from "./data.ts";
 import { FILE_COMMANDS, fileAnswers, withFileRuns, type FileParams } from "./files.ts";
 import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
+import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -90,6 +91,7 @@ export const SCENES = [
   "offline-unreachable",
   "offline-down",
   ...LIVE_SCENES,
+  ...RAIL_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -222,6 +224,7 @@ function failTranscript(state: ClawtrateState, key: string, keepItems: boolean):
 function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: Step[] } {
   const base = loaded(now);
   if (isCardScene(name)) return { initial: cardScene(name, now).change(base), steps: [] };
+  if (isRailScene(name)) return { initial: railScene(name, base, now), steps: [] };
   switch (name) {
     case "main":
       return { initial: base, steps: [] };
@@ -477,7 +480,18 @@ export function createFixtureBridge(
 
   // Files are named and counted, never kept.
   const files = new Map<string, { fileName: string; mimeType: string; sizeBytes: number }>();
+  // The rail's task actions, answered as the engine would.
+  const railCommand = railCommands(now);
   async function apply(command: BridgeCommand): Promise<unknown> {
+    const rail = railCommand(
+      command,
+      () => state,
+      (next) => set(next),
+    );
+    if (rail) {
+      sent.push(command);
+      return rail;
+    }
     const live = liveCommand(
       command,
       () => state,

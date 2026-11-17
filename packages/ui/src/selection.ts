@@ -6,7 +6,8 @@ import { isUnread, markSeen, type SeenMap } from "./unread.ts";
 /** Rows shown under an unfolded bot before "Show all". */
 export const TASK_CAP = 6;
 
-export type RunState = "waiting" | "failed" | "blocked" | "done-with-failures" | "working";
+export type RunState =
+  "waiting" | "failed" | "blocked" | "done-with-failures" | "working" | "stopped" | "queued";
 
 export type BotSummary = {
   /** The task with the latest activity, across all of the bot's tasks. */
@@ -37,13 +38,25 @@ export function taskState(task: Task, seen: SeenMap, onScreenKey: string | null)
     case "blocked":
       return task.status;
     case "done-with-failures":
-      return task.key !== onScreenKey && unseen(task, seen) ? "done-with-failures" : null;
+    case "stopped":
+      // Until the next run, or until the task is opened (conversation.md, section 4).
+      return task.key !== onScreenKey && unseen(task, seen) ? task.status : null;
+    case "queued":
+      return "queued";
     default:
       return null;
   }
 }
 
-const URGENCY: RunState[] = ["waiting", "failed", "blocked", "done-with-failures", "working"];
+/** The order of section 4 for the avatar: a queued task counts as idle. */
+const URGENCY: RunState[] = [
+  "waiting",
+  "failed",
+  "blocked",
+  "done-with-failures",
+  "working",
+  "stopped",
+];
 
 /**
  * What a bot's row says about all of its tasks. The three signals are
@@ -70,6 +83,8 @@ export const STATE_WORDS: Record<RunState, string> = {
   blocked: "blocked",
   "done-with-failures": "done with failures",
   working: "working",
+  stopped: "stopped",
+  queued: "queued",
 };
 
 /**
@@ -126,6 +141,8 @@ export function useSelection(state: ClawtrateState) {
   const [held, setHeld] = useState<Set<string>>(() => readIdSet("unfolded"));
   const [openFolded, setOpenFolded] = useState(() => readPreference("folded") === "true");
   const [showAll, setShowAll] = useState<Set<string>>(() => new Set());
+  /** Tasks marked unread while open: leaving them does not mark them read again. */
+  const [keptUnread, setKeptUnread] = useState<Set<string>>(() => new Set());
 
   const bot = state.bots.find((b) => b.id === botId) ?? state.bots[0];
   const tasks = useMemo(
@@ -138,13 +155,43 @@ export function useSelection(state: ClawtrateState) {
   // Leaving a task marks it read as of its latest activity, so its dot only
   // returns for activity that happens after this viewer saw it.
   const markRead = useCallback(() => {
-    if (!task) return;
+    if (!task || keptUnread.has(task.key)) return;
     setSeen((current) => {
       const next = markSeen(current, task);
       if (next !== current) writePreference(SEEN_KEY, JSON.stringify(next));
       return next;
     });
-  }, [task]);
+  }, [task, keptUnread]);
+
+  /**
+   * "Mark as unread": this viewer forgets having read the task, so the
+   * gateway's unread decides, and leaving it open does not read it again.
+   */
+  const markUnreadHere = useCallback((key: string) => {
+    setSeen((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      writePreference(SEEN_KEY, JSON.stringify(next));
+      return next;
+    });
+    setKeptUnread((current) => new Set(current).add(key));
+  }, []);
+
+  /** "Mark as read": as if this viewer had just read it. */
+  const markReadHere = useCallback((target: Task) => {
+    setKeptUnread((current) => {
+      if (!current.has(target.key)) return current;
+      const next = new Set(current);
+      next.delete(target.key);
+      return next;
+    });
+    setSeen((current) => {
+      const next = markSeen(current, target);
+      if (next !== current) writePreference(SEEN_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   const setFolded = useCallback((folded: boolean) => {
     setOpenFolded(folded);
@@ -177,6 +224,13 @@ export function useSelection(state: ClawtrateState) {
     (id: string, key: string) => {
       if (id === bot?.id && key === task?.key) return;
       markRead();
+      // Opening a task kept unread reads it again from now on.
+      setKeptUnread((current) => {
+        if (!current.has(key)) return current;
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
       if (id !== bot?.id) {
         setBotId(id);
         writePreference("bot", id);
@@ -225,6 +279,15 @@ export function useSelection(state: ClawtrateState) {
     [updateHeld, state.tasksByBot, bot, setFolded],
   );
 
+  /** Unfold a bot by hand, as Right does: a bot whose new second task was just created. */
+  const unfold = useCallback(
+    (id: string) => {
+      updateHeld((ids) => ids.add(id));
+      if (id === bot?.id) setFolded(false);
+    },
+    [updateHeld, bot, setFolded],
+  );
+
   /** Forget that these bots were unfolded by hand. */
   const release = useCallback(
     (ids: string[]) => updateHeld((held) => ids.forEach((id) => held.delete(id))),
@@ -262,6 +325,10 @@ export function useSelection(state: ClawtrateState) {
     unfoldOnly,
     release,
     taskFor,
+    unfold,
+    keptUnread,
+    markUnreadHere,
+    markReadHere,
   };
 }
 

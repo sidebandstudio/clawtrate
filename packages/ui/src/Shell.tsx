@@ -193,6 +193,41 @@ export function Shell({
     return () => void send({ type: "closeSession", key: taskKey });
   }, [taskKey, send]);
 
+  // Opening a task reads it on the gateway too (F-022), and so do new replies while it
+  // is open and leaving it. The engine makes that read only while the connection
+  // already writes, never asking for access. A task marked unread here while open is
+  // left unread, and so is one another device marked unread while it was open here
+  // (the gateway's explicit marker), until it is opened again.
+  const keptRef = useRef(selection.keptUnread);
+  const taskUnread = task?.unread === true;
+  const marker = task?.unreadMarker ?? null;
+  // Each listed task's explicit marker, as it was, for the read made on leaving it.
+  const markersRef = useRef<Record<string, number | null>>({});
+  useEffect(() => {
+    keptRef.current = selection.keptUnread;
+    markersRef.current = Object.fromEntries(
+      Object.values(state.tasksByBot)
+        .flat()
+        .map((each) => [each.key, each.unreadMarker ?? null]),
+    );
+  });
+  const readTask = useCallback(
+    (key: string, explicitToo: boolean) => {
+      if (keptRef.current.has(key) || (!explicitToo && (markersRef.current[key] ?? null) !== null))
+        return;
+      void send({ type: "markTask", key, unread: false, opened: true }).catch(() => {});
+    },
+    [send],
+  );
+  useEffect(() => {
+    if (!taskKey || !connectedNow) return;
+    readTask(taskKey, true);
+    return () => readTask(taskKey, false);
+  }, [taskKey, connectedNow, readTask]);
+  useEffect(() => {
+    if (taskKey && taskUnread && marker === null && connectedNow) readTask(taskKey, false);
+  }, [taskKey, taskUnread, marker, connectedNow, readTask]);
+
   // The one place that moves focus for Work. As a drawer it takes focus, unless
   // focus is already inside it. When the pane closes, focus that was inside it
   // (a drawer's, or a docked pane's that went with it) returns to the control
@@ -367,6 +402,9 @@ export function Shell({
         onBubbles={onBubbles}
         onOpenSettings={onOpenSettings}
         inert={drawerOpen || inert}
+        interactive={interactive}
+        sidebar={state.sidebar}
+        newTaskHint={info.kind === "desktop" ? "⌘T" : "⌥T"}
       />
       <div className="main-pane" ref={mainRef}>
         <OpenTaskContext.Provider value={selection.selectTask}>

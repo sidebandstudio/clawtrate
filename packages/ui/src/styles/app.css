@@ -2862,3 +2862,203 @@ textarea {
   font-size: var(--text-sm);
   color: var(--text-faint);
 }
+
+/* ---------------------------------------------------------------------------
+   The rail's task actions and the user's sections (visual-language.md,
+   section 7): New task, rename in place, pins, the Archived group, sections,
+   the waiting preview, the rail's notice and its dialogs.
+   --------------------------------------------------------------------------- */
+
+/* The last row of an unfolded bot's tasks: a plus and the words, faint. */
+.task-new .icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
+/* A pinned task's small pin before its title. */
+.task-pin {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--text-faint);
+}
+
+/* Rename in place: the row's title as a field, the same height as the row. */
+.task-rename {
+  padding: 2px 4px 2px 14px;
+}
+
+.task-rename input {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  font: inherit;
+  font-size: var(--text-md);
+  color: var(--text);
+}
+
+.task-rename input:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 0;
+}
+
+.task-rename-error {
+  margin: 4px 0 2px;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--danger);
+}
+
+[data-input="touch"] .task-rename input {
+  height: 40px;
+  font-size: var(--text-base);
+}
+
+/* The bot's Archived group: a faint row that folds its archived tasks away. */
+.archived-toggle .icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  transition: transform var(--dur-quick) var(--ease-out);
+}
+
+.archived-toggle[aria-expanded="true"] .icon {
+  transform: rotate(90deg);
+}
+
+.archived-list {
+  padding: 0;
+}
+
+.archived-task {
+  padding-left: 30px;
+}
+
+.archived-note {
+  padding: 6px 10px 6px 30px;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+/* The user's sections: a small grey word, 14 px above and 6 px below. */
+.rail-section-group {
+  list-style: none;
+}
+
+.rail-section {
+  margin: 14px 0 6px;
+  padding: 0 12px;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--text-faint);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.section-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* While a task waits for the person, line two says so in the warning colour. */
+.bot-preview[data-tone="warn"] {
+  color: var(--warn);
+}
+
+/* A refused action, or one waiting for the gateway's owner, above the footer. */
+.rail-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 12px 8px;
+  padding: 8px 6px 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--danger);
+}
+
+.rail-notice > span {
+  flex: 1;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.rail-notice[data-tone="wait"] {
+  padding-right: 12px;
+  background: var(--warn-soft);
+  color: var(--text);
+}
+
+/* A destructive confirmation: the danger colour on its soft fill, never opacity. */
+.button[data-variant="danger"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.button[data-variant="danger"]:hover {
+  background: color-mix(in srgb, var(--danger-soft) 70%, var(--danger));
+  color: var(--text-inverse);
+}
+
+/* The rail's dialogs reuse Settings' surface. */
+.rail-dialog {
+  width: min(420px, 100%);
+}
+
+.rail-dialog h2 {
+  margin: 0 0 8px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.rail-dialog-body p {
+  margin: 0 0 8px;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.rail-dialog-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.rail-dialog-field input {
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font: inherit;
+  font-size: var(--text-md);
+  color: var(--text);
+}
+
+.rail-dialog-actions {
+  justify-content: flex-end;
+}
+
+/* Re-pair: what the gateway's owner runs, while the new pairing waits. */
+.settings-repair {
+  margin-top: var(--space-3);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.settings-repair p {
+  margin: 0 0 8px;
+}
