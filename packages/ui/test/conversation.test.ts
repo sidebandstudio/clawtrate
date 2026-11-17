@@ -1,4 +1,5 @@
 import {
+  emptyActivity,
   initialState,
   type ClawtrateState,
   type ConnectionStatus,
@@ -21,6 +22,9 @@ function state(
 }
 
 const failed: Transcript = {
+  ...emptyActivity,
+  linkedRuns: {},
+  interSession: [],
   sessionKey: "agent:otto:a",
   status: "error",
   items: [{ id: "1", role: "user", timestamp: 1, blocks: [], model: null }],

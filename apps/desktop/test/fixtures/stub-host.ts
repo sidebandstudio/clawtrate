@@ -18,6 +18,10 @@ const runtime: HostRuntime = {
     get state() {
       return store.get();
     },
+    // Viewers may open and close tasks; the stub keeps nothing for them.
+    openSession: () => {},
+    closeSession: () => {},
+    withdraw: () => {},
   } as unknown as ClawtrateClient,
   info: { kind: "web", version: "test", devGateway: null },
   policy: {},

@@ -4,7 +4,6 @@
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   GatewayBrowserDeviceAuthLifecycle,
-  GatewayChatStreamProjection,
   GatewayProtocolClient,
   GatewayProtocolRequestError,
   PROTOCOL_VERSION,
@@ -14,6 +13,41 @@ import {
   type GatewayBrowserDeviceTokenStore,
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
+import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
+import {
+  admitApproval,
+  applyApprovalRequested,
+  applyApprovalResolved,
+  APPROVAL_KINDS,
+  decisionText,
+  expireApprovals,
+  markApproval,
+  mergeResolution,
+  normalizeApprovals,
+  parseApprovalResolved,
+  parseExecApproval,
+  parsePluginApproval,
+  parseSystemAgentApproval,
+  resolutionFromSnapshot,
+  resolveRequest,
+  settleUnlistedApprovals,
+  type ApprovalAccess,
+  type ApprovalCard,
+  type ApprovalDecision,
+  type ApprovalKind,
+  type ApprovalResolution,
+  type ApprovalSourceAccess,
+} from "./approvals.ts";
+import {
+  interSessionMessages,
+  linkedRunOf,
+  recipientLinks,
+  recipientRunIds,
+  type LinkedRun,
+} from "./cards.ts";
+import { MAX_FILE_BYTES, MAX_IMAGE_BYTES, validateAttachmentMeta } from "./attachments.ts";
+import { ChatTextBaselines } from "./chat-text.ts";
+import { utf8Length } from "./encoding.ts";
 import type { ApprovalInstructions, ClawtrateHost } from "./host.ts";
 import {
   asRecord,
@@ -21,7 +55,6 @@ import {
   isExcludedSessionKey,
   isSessionRemoval,
   isTaskSession,
-  liveTextFromChatMessage,
   mapAgents,
   mapHistory,
   mergeSessionRow,
@@ -36,23 +69,120 @@ import {
   protocolMessage,
   protocolMismatch,
 } from "./connect-errors.ts";
+import {
+  activeRun,
+  activitySize,
+  applyAgentEvent,
+  applyChatEvent,
+  applyQuestionRequested,
+  applyQuestionResolved,
+  bindRun,
+  cancelQueuedRun,
+  dropUnboundRun,
+  emptyActivity,
+  failRun,
+  failRunStart,
+  findRun,
+  isActive,
+  cachedSize,
+  isTerminal,
+  markUnconfirmed,
+  markQuestion,
+  mergeHistoryRuns,
+  queueLocalRun,
+  RawTable,
+  reconcileOutbox,
+  registerSteerAlias,
+  removeMessage,
+  requestStop,
+  revertStop,
+  runsFromHistory,
+  settleMissingQuestions,
+  settleQuestionsOfEndedRuns,
+  settleVanishedRuns,
+  retainActivity,
+  startLocalRun,
+  startQueuedRun,
+  updateMessage,
+  type CaughtUp,
+  type EngineContext,
+  type OutgoingMessage,
+  type QuestionAnswer,
+  type QuestionCard,
+  type QuestionOption,
+  type Run,
+  type StepRaw,
+  type StepRead,
+  type TaskActivity,
+} from "./runs.ts";
+import {
+  APPROVALS_SCOPE,
+  heldFromGrant,
+  INTERACTIVE_SCOPES,
+  normalizeHeldScopes,
+  QUESTIONS_SCOPE,
+  READ_SCOPES,
+  scopeSatisfied,
+  WRITE_SCOPE,
+} from "./scopes.ts";
+import { capId, enforce, jsonLength, jsonTextLength } from "./bounds.ts";
+import {
+  APPROVAL_OUTCOME,
+  CREATION,
+  enforceState,
+  MAX_CREATIONS,
+  MAX_ID_CHARS,
+  MAX_LINKED_RUNS,
+  MAX_LISTED_TASKS,
+  MAX_MESSAGE_JSON_CHARS,
+  MAX_OUTBOX,
+  MAX_PENDING_APPROVAL_COUNT,
+  MAX_RUN_TEXT_CHARS,
+  MAX_TASK_LINE_CHARS,
+  MAX_TRACKED_TASKS as TRACKED_TASKS,
+  MAX_UNROUTED,
+  RUN,
+  SESSION_ROW,
+  WORST_STATE_CHARS,
+} from "./state-bounds.ts";
 import { createStore, type Store } from "./store.ts";
 import {
   initialConnectionState,
+  initialScopeUpgrade,
   initialState,
   type ClawtrateState,
   type ConnectionState,
   type DiscoveryState,
+  type ScopeUpgradeState,
+  type TaskCreation,
+  type TranscriptItem,
   type Transcript,
 } from "./types.ts";
 
-/** This slice reads only. Every connect requests exactly these scopes, nothing more. */
+/** A read-only connection's scopes. Every connect asks for these until write access is approved. */
 export const REQUESTED_SCOPES = ["operator.read"] as const;
 /**
- * Client capabilities advertised in `connect`. Empty on purpose: this slice does
- * not render live tool events or approvals, so it claims none of those contracts.
+ * Client capabilities advertised in `connect`. `tool-events` is the only one
+ * the live run view needs: without it the gateway sends no tool lifecycle
+ * events. Approval caps are not claimed, because this client does not show or
+ * resolve approvals.
  */
-export const CLIENT_CAPS: readonly string[] = [];
+export const CLIENT_CAPS: readonly string[] = ["tool-events"];
+/**
+ * Added when the connect asks for `operator.approvals`: without `approvals` and
+ * `exec-approvals` the gateway auto-denies exec approvals as `no-route`, and
+ * `plugin-approvals` routes plugin approvals. A read-only connect does not claim
+ * them, so the gateway never waits on a connection that cannot see approvals.
+ */
+export const APPROVAL_CAPS: readonly string[] = ["approvals", "exec-approvals", "plugin-approvals"];
+
+/** The caps a connect requesting these scopes advertises. */
+export function capsFor(scopes: readonly string[]): string[] {
+  return scopes.includes(APPROVALS_SCOPE) ? [...CLIENT_CAPS, ...APPROVAL_CAPS] : [...CLIENT_CAPS];
+}
+
+/** Longest standing allow the gateway accepts (`grantExpiresInDays`). */
+export const MAX_GRANT_DAYS = 3650;
 /** A registered client id for third-party operator UIs; we do not claim an OpenClaw product id. */
 export const CLIENT_ID = "gateway-client";
 export const CLIENT_MODE = "ui";
@@ -61,6 +191,58 @@ export const CLIENT_MODE = "ui";
 export const SESSION_PAGE_SIZE = 200;
 /** A ceiling so a huge gateway cannot make one reconnect read forever. */
 export const MAX_SESSION_PAGES = 50;
+/** Clawtrate's turn limit (F-100): a run this client started fails after it. */
+export const DEFAULT_TURN_LIMIT_MS = 50 * 60_000;
+/** Tasks the client follows at once: open in some viewer, kept for their unsent work, or being created. */
+export const MAX_TRACKED_TASKS = TRACKED_TASKS;
+/**
+ * Messages one task's outbox may hold, whatever their state: waiting, being
+ * sent, accepted but not yet in history, unconfirmed, failed or cancelled. A
+ * new message past it is refused before anything is kept; nothing accepted is
+ * dropped to make room.
+ */
+export const MAX_OUTBOX_PER_TASK = MAX_OUTBOX;
+/**
+ * Decoded bytes of files the client keeps for messages in outboxes, across
+ * every task, until history confirms them or the user deletes them. With the
+ * waiting uploads (`MAX_PENDING_ATTACHMENT_BYTES`) this is all the file
+ * content the host keeps.
+ */
+export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
+/** Operations waiting for access at once; past it a new one is refused. */
+export const MAX_ACCESS_WAITERS = 128;
+/**
+ * Approval outcomes the gateway reported, kept by id apart from the visible
+ * cards so a request or list entry that arrives after its resolution can never
+ * make it actionable again. The oldest give way; switching gateways clears them.
+ */
+export const MAX_APPROVAL_OUTCOMES = 512;
+/**
+ * Pending approvals kept while no followed task can show them, or while the
+ * task they belong to already shows `MAX_PENDING_APPROVALS_PER_TASK`
+ * (`unroutedApprovals`). Past it a new one is not kept and is counted in
+ * `unroutedApprovalsOmitted`; the next list read brings it back.
+ */
+export const MAX_UNROUTED_APPROVALS = MAX_UNROUTED;
+/** `approval.get` lookups of ambiguous legacy outcomes in flight at once; past it the outcome stays unknown. */
+export const MAX_OUTCOME_LOOKUPS = 16;
+/** Pending approvals one task shows; more wait in `unroutedApprovals` until one settles. */
+export const MAX_PENDING_APPROVALS_PER_TASK = MAX_PENDING_APPROVAL_COUNT;
+
+/**
+ * How long a request may go unanswered on a live connection before it fails
+ * locally. Nothing the client sent waits for ever: a send that times out is
+ * failed with its outcome unknown, to retry with the same idempotency key.
+ * Waits the gateway answers late by design (`device.scopes.waitUpgrade`) opt out.
+ */
+export const REQUEST_TIMEOUT_MS = 60_000;
+
+/** Longest message text the client sends. */
+export const MAX_MESSAGE_CHARS = 32_000;
+/** The gateway's frame ceiling after `connect` when `hello-ok.policy.maxPayload` is absent (25 MiB). */
+export const DEFAULT_MAX_PAYLOAD_BYTES = 26_214_400;
+/** Room left in a frame for the request envelope around the params. */
+const FRAME_SLACK_BYTES = 1024;
 const SESSION_LIST_PARAMS = {
   limit: SESSION_PAGE_SIZE,
   includeDerivedTitles: true,
@@ -69,6 +251,37 @@ const SESSION_LIST_PARAMS = {
   excludeSubagents: true,
 };
 const HISTORY_LIMIT = 200;
+
+/** The newest `MAX_LISTED_TASKS` task rows, each only the fields the list reads, cut to their bound, keyed under the id cap. */
+function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
+  const kept = new Map<string, RawRecord>();
+  for (const row of rows) {
+    if (!isTaskSession(row)) continue;
+    const bounded = SESSION_ROW(row);
+    const key = sessionRowKey(bounded);
+    if (key !== null) kept.set(key, bounded);
+  }
+  return new Map(
+    [...kept]
+      .sort(([, a], [, b]) => Number(b.updatedAt ?? 0) - Number(a.updatedAt ?? 0))
+      .slice(0, MAX_LISTED_TASKS),
+  );
+}
+/** How many sessions nobody has open, and how many runs of each, are followed for bot-to-bot cards. */
+/** Sessions nobody has open whose runs are followed for bot-to-bot cards, and runs of each. */
+export const FOREIGN_SESSIONS = 16;
+export const FOREIGN_RUNS_PER_SESSION = 4;
+const MAX_TIMER_MS = 2_147_483_647;
+/** Whole reads (`readStepRaw`, `readHistoryItem`, `readApprovalText`) in flight at once; past it one is refused. */
+export const MAX_FULL_READS = 4;
+/** The text length `chat.history` gives when not asked for more (OpenClaw 2026.10.6). */
+export const GATEWAY_HISTORY_TEXT_CHARS = 8_000;
+/** The most text per row a whole read asks `chat.history` for: the protocol's `maxChars` maximum. */
+export const MAX_HISTORY_READ_CHARS = 500_000;
+/** Runs of one task whose streaming `chat` text is kept to build on the next delta. */
+export const MAX_STREAMS_PER_TASK = 2;
+/** Spawn links kept (`spawnedBy`), newest. */
+export const MAX_SPAWN_LINKS = 200;
 const PAIRING_RETRY_MS = 3000;
 
 const SETTINGS_KEY = "connection";
@@ -82,6 +295,14 @@ export type ConnectionSettings = {
 
 export type ConnectOptions = { url: string; token?: string | null };
 
+/**
+ * How to deliver a message while the task has an active run. Either way a
+ * message to an idle task starts a new run, and a message sent while the run is
+ * stopping is queued (§5.6). `auto` is the composer's Enter: a steer while the
+ * run is running or waiting. `queue` is "Queue after this turn".
+ */
+export type SendMode = "auto" | "queue";
+
 export type ClientOptions = {
   /**
    * Gateways this client may open. Checked before every connection, including
@@ -90,15 +311,157 @@ export type ClientOptions = {
   allowGatewayUrl?: (url: string) => boolean;
   /** Reconnect backoff. Tests shorten it. */
   reconnect?: { initialMs: number; maxMs: number };
+  /** Turn limit for runs this client starts. */
+  turnLimitMs?: number;
+  /** `REQUEST_TIMEOUT_MS` unless a test shortens it. */
+  requestTimeoutMs?: number;
+  /** First wait before a creation without an answer is asked again; `CREATION_CHECK_MS` unless a test shortens it. */
+  creationCheckMs?: number;
+  /**
+   * Counts the host sets for its device. Each defaults to the bound the
+   * retention arithmetic assumes and may only be lower: `trackedTasks`, the
+   * tasks followed at once (`MAX_TRACKED_TASKS`).
+   */
+  limits?: { trackedTasks?: number };
 };
+
+/** A file sent with a message, as `chat.send` takes it: base64 content. */
+export type OutgoingAttachment = {
+  type: string;
+  mimeType: string;
+  fileName: string;
+  content: string;
+};
+
+export type SendOptions = { mode?: SendMode; attachments?: OutgoingAttachment[] };
+
+/**
+ * A send that would break a gateway ceiling. Checked before anything reaches
+ * the socket: an oversized frame would close the connection with code 1009 and
+ * no answer, and an oversized image or file would be refused anyway.
+ */
+export class SendTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SendTooLargeError";
+  }
+}
+
+function decodedBytes(base64: string): number {
+  const clean = base64.replace(/\s+/g, "");
+  const padding = clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((clean.length * 3) / 4) - padding);
+}
+
+function isImage(attachment: OutgoingAttachment): boolean {
+  return attachment.type === "image" || attachment.mimeType.toLowerCase().startsWith("image/");
+}
 
 type Plan = GatewayBrowserDeviceAuthPlan;
 
-/** A device token record. The grant is kept for reference; it never sets the requested scopes. */
-type StoredDeviceToken = { token: string; grantedScopes: string[] };
+/**
+ * A device token record. `grantedScopes` is what the gateway granted and is
+ * kept for reference only. `heldScopes` is what this client means to hold and
+ * is the only thing a connect ever requests.
+ */
+type StoredDeviceToken = { token: string; grantedScopes: string[]; heldScopes: string[] };
+
+type Waiter = {
+  scope: string;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  /** Who asked: a viewer's operations are withdrawn with `withdraw` when it goes away. */
+  owner: object | null;
+};
+
+/** The approval kinds' list methods and readers. */
+const APPROVAL_SOURCES: ReadonlyArray<{
+  kind: ApprovalKind;
+  method: string;
+  parse: (value: unknown) => ApprovalCard | null;
+}> = [
+  { kind: "exec", method: "exec.approval.list", parse: parseExecApproval },
+  { kind: "plugin", method: "plugin.approval.list", parse: parsePluginApproval },
+  { kind: "system-agent", method: "openclaw.approval.list", parse: parseSystemAgentApproval },
+];
+
+function approvalAccessOf(sources: Record<ApprovalKind, ApprovalSourceAccess>): ApprovalAccess {
+  const values = APPROVAL_KINDS.map((kind) => sources[kind]);
+  if (values.every((each) => each === "ready")) return "ready";
+  if (values.every((each) => each === "unavailable")) return "unavailable";
+  if (values.some((each) => each === "loading")) return "loading";
+  if (values.some((each) => each === "ready")) return "partial";
+  return "error";
+}
+
+/** A request that never left this client: nothing happened. */
+export class NotSentError extends Error {
+  constructor() {
+    super("not connected");
+    this.name = "NotSentError";
+  }
+}
+
+/** The gateway's answer did not come: what happened is not known yet, and is being checked. */
+export class OutcomeUnknownError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OutcomeUnknownError";
+  }
+}
+
+/** The parameters of a creation, identical on every ask, as the gateway's idempotency requires. */
+function creationParams(creation: TaskCreation) {
+  return {
+    agentId: creation.botId,
+    message: creation.text,
+    idempotencyKey: creation.id,
+    ...(creation.label ? { label: creation.label } : {}),
+  };
+}
+
+/** What a creation whose outcome could not be established says: retrying is the user's call, and may duplicate. */
+export const CREATION_UNKNOWN_WARNING =
+  "Whether the task was created could not be established. Check the task list: retrying may create a second task.";
+
+/** How long a creation's key is asked again: within the 300 s the gateway remembers it, with a margin. */
+export const CREATION_KEY_WINDOW_MS = 240_000;
+const CREATION_CHECK_MS = 2_000;
+const CREATION_CHECK_MAX_MS = 30_000;
+
+/** A withdrawn operation: its viewer went away before the gateway was asked. */
+export class WithdrawnError extends Error {
+  constructor() {
+    super("The request was withdrawn.");
+    this.name = "WithdrawnError";
+  }
+}
+
+/** The interactive scopes were asked for and not granted. */
+export class AccessRequestError extends Error {
+  readonly status: "rejected" | "expired" | "error";
+  constructor(status: "rejected" | "expired" | "error", detail?: string) {
+    super(
+      status === "rejected"
+        ? "The gateway's owner did not approve sending and answering from this device."
+        : status === "expired"
+          ? "The request to send and answer from this device expired before it was approved."
+          : `Access could not be requested${detail ? `: ${detail}` : "."}`,
+    );
+    this.name = "AccessRequestError";
+    this.status = status;
+  }
+}
 
 function isRetryableNetworkFailure(error: Error): boolean {
   return !(error instanceof GatewayProtocolRequestError);
+}
+
+function isMissingScope(error: unknown): boolean {
+  return (
+    error instanceof GatewayProtocolRequestError &&
+    asRecord(error.details)?.code === "MISSING_SCOPE"
+  );
 }
 
 export function validateGatewayUrl(raw: string): string {
@@ -123,13 +486,95 @@ export class GatewayNotAllowedError extends Error {
   }
 }
 
+/**
+ * Whether the run has a question pending, by the question records as well as
+ * the run's cards, so a plain message is never sent while the gateway would
+ * take it as the answer.
+ */
+function questionPending(activity: TaskActivity, run: Run): boolean {
+  return (
+    activity.questions.some(
+      (question) => question.status === "pending" && question.runId === run.id,
+    ) || [...run.pendingCards, ...run.suspendedCards].some((card) => card.kind === "question")
+  );
+}
+
+/**
+ * A task holds work that must outlive its viewers: unsent or failed words,
+ * words the gateway accepted that history has not confirmed, or a run this
+ * client started. Cancelled messages are not work.
+ */
+function hasUnsettledWork(activity: TaskActivity): boolean {
+  return (
+    activity.outbox.some(
+      (message) => message.status !== "cancelled" && message.status !== "handled",
+    ) || activity.runs.some((run) => run.origin === "local" && !isTerminal(run.state))
+  );
+}
+
+/** Who asks when the client is called directly rather than through a viewer's bridge session. */
+const DIRECT_CALLER = {};
+/** Viewers whose whole read of one approval's text is remembered at once; the oldest give way. */
+export const MAX_APPROVAL_READERS = 8;
+
+/** The secondary alarm: roughly what the state holds against its arithmetic bound. Never the bound itself. */
+function withAlarm(state: ClawtrateState): ClawtrateState {
+  let estimated = 0;
+  for (const transcript of Object.values(state.transcripts)) {
+    estimated +=
+      activitySize(transcript) +
+      cachedSize(transcript.items, jsonLength) +
+      cachedSize(transcript.interSession, jsonLength);
+  }
+  const near = estimated > ALARM_FRACTION * WORST_STATE_CHARS;
+  const shown = state.retention;
+  if (
+    shown.near === near &&
+    shown.bound === WORST_STATE_CHARS &&
+    Math.abs(shown.estimated - estimated) < WORST_STATE_CHARS / 100
+  ) {
+    return state;
+  }
+  return { ...state, retention: { estimated, bound: WORST_STATE_CHARS, near } };
+}
+
+/** The share of the arithmetic bound past which the alarm says it is near. */
+export const ALARM_FRACTION = 0.8;
+
+function withLive(transcript: Transcript): Transcript {
+  const active = transcript.runs.find((run) => isActive(run.state));
+  const live = active ? { runId: active.id, text: active.text } : null;
+  const same =
+    live === transcript.live ||
+    (live !== null &&
+      transcript.live !== null &&
+      live.runId === transcript.live.runId &&
+      live.text === transcript.live.text);
+  return same ? transcript : { ...transcript, live };
+}
+
 export class ClawtrateClient {
-  readonly store: Store<ClawtrateState> = createStore(initialState);
+  /**
+   * The state, brought within its bounds (`state-bounds.ts`) every time it is
+   * written, so nothing the host keeps can exceed its arithmetic worst case.
+   */
+  readonly store: Store<ClawtrateState> = createStore(initialState, (next) =>
+    withAlarm(enforceState(next)),
+  );
 
   private readonly host: ClawtrateHost;
   private readonly options: ClientOptions;
-  private readonly lifecycle: GatewayBrowserDeviceAuthLifecycle;
-  private readonly tokenStore: GatewayBrowserDeviceTokenStore;
+  /**
+   * The credential store and device-auth lifecycle of the current connection,
+   * bound to its gateway URL and generation. A new connection gets new ones,
+   * so nothing an older connection finishes can write another gateway's token.
+   */
+  private auth: {
+    url: string;
+    generation: number;
+    tokenStore: GatewayBrowserDeviceTokenStore;
+    lifecycle: GatewayBrowserDeviceAuthLifecycle;
+  } | null = null;
   private protocol: GatewayProtocolClient<Plan> | null = null;
   private settings: ConnectionSettings | null = null;
   private identity: { deviceId: string; publicKey: string } | null = null;
@@ -137,11 +582,45 @@ export class ClawtrateClient {
   private generation = 0;
   /** True once the current connection has reached hello at least once. */
   private everConnected = false;
+  /**
+   * The gateway's `hello-ok.server.bootId`: a random id per gateway start, the
+   * lifetime of its in-memory `sessions.create` idempotency cache. Null when
+   * the hello does not carry one.
+   */
+  private gatewayBootId: string | null = null;
   private rows = new Map<string, RawRecord>();
   /** Open transcripts, counted, so several viewers can share one. */
   private readonly openSessions = new Map<string, number>();
-  private readonly streams = new GatewayChatStreamProjection();
+  /** The streaming reply text of each task's newest `MAX_STREAMS_PER_TASK` runs, only while they stream. */
+  private readonly streams = new ChatTextBaselines(MAX_STREAMS_PER_TASK, MAX_RUN_TEXT_CHARS);
   private readonly historyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Why a pending history reload runs, when it is a resync. */
+  private readonly resyncReasons = new Map<string, CaughtUp["reason"]>();
+  private readonly raw = new RawTable();
+  private readonly turnTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Tasks no viewer has open that still hold unsent words or a run this client started. */
+  private readonly retained = new Set<string>();
+  private readonly deliveries = new Map<string, Promise<void>>();
+  /** History reads per task, one at a time with at most one more waiting. */
+  private readonly loads = new Map<
+    string,
+    { done: Promise<void>; again: { subscribe: boolean; resync: CaughtUp["reason"] | null } | null }
+  >();
+  /** Bumped each time a task is opened afresh, so a read from an earlier opening is dropped. */
+  private readonly incarnations = new Map<string, number>();
+  private nextIncarnation = 0;
+  private readonly afterRunning = new Set<string>();
+  private readonly afterAgain = new Set<string>();
+  private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * Runs of sessions no viewer has open, kept small, so a bot-to-bot card can
+   * follow the recipient's run when this connection receives its events.
+   */
+  private readonly foreign = new Map<string, TaskActivity>();
+  /** Steps of foreign runs are not kept, so neither are their payloads: this table keeps nothing. */
+  private readonly foreignRaw = new RawTable(0, 0);
+  /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
+  private readonly spawnedBy = new Map<string, string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapping = false;
   private changedDuringBootstrap = false;
@@ -149,33 +628,74 @@ export class ClawtrateClient {
   private pairingSeen: string | null = null;
   /** The current attempt reached hello. */
   private attemptGreeted = false;
+  /** Set by the protocol client's gap callback; the reconnect it forces reloads with this reason. */
+  private pendingResync: CaughtUp["reason"] | null = null;
+  /** The next hello follows a reconnect this client made on purpose, so it is not a resync. */
+  private quietReconnect = false;
+  /** The user asked for write access and it is not settled yet. */
+  private upgradeWanted = false;
+  private scopeUpgrade: GatewayScopeUpgrade | null = null;
+  private accessWaiters: Waiter[] = [];
+  /** The frame and image ceilings from `hello-ok.policy`; nothing else of it is kept. */
+  private payloadLimits: { maxPayload: number | null; maxImageBytes: number | null } = {
+    maxPayload: null,
+    maxImageBytes: null,
+  };
+  /** Attachment content for outgoing messages, kept off the state snapshots, with its decoded size and the characters it holds. */
+  private readonly attachmentContent = new Map<
+    string,
+    { task: string; files: OutgoingAttachment[]; bytes: number }
+  >();
+  private attachmentBytes = 0;
+  /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
+  private readonly withdrawnOwners = new WeakSet<object>();
+  /** Task creations not yet settled, oldest first (`MAX_CREATIONS`). */
+  private readonly creations = new Map<string, TaskCreation>();
+  private readonly creationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly creationWaiters = new Map<
+    string,
+    Array<{ resolve: (key: string) => void; reject: (error: Error) => void }>
+  >();
+  /** Task slots held for tasks being created, so a creation never exceeds `MAX_TRACKED_TASKS`. */
+  private reservedTasks = 0;
+  /** Creations being checked, each still holding its task slot until it settles. */
+  private readonly checkingSlots = new Set<string>();
+  /** What the gateway reported about approvals, by id, newest last (`MAX_APPROVAL_OUTCOMES`). */
+  private readonly approvalOutcomes = new Map<string, ApprovalResolution>();
+  /** Pending approvals no followed task can show yet, oldest first (`MAX_UNROUTED_APPROVALS`). */
+  private readonly unrouted = new Map<string, ApprovalCard>();
+  private unroutedOmitted = 0;
+  /** Approvals whose outcome is being looked up (`approval.get`). */
+  private readonly lookingUp = new Set<string>();
+  /** Recipient runs and sessions each task's `sessions_send` results name. */
+  private readonly recipients = new Map<string, { runs: Set<string>; sessions: Set<string> }>();
+  /**
+   * Whole reads of a cut approval's text, per approval (`<key>\0<id>`) and per
+   * viewer: the digest of what that viewer was given. Only approvals pending
+   * in a followed task are kept, at most `MAX_APPROVAL_READERS` viewers each.
+   */
+  private readonly approvalReads = new Map<string, Map<object, string>>();
+  /** Per task and list (`<key>\0<kind>`): the last list requested, and the newest applied. */
+  private readonly listRequested = new Map<string, number>();
+  private readonly listApplied = new Map<string, number>();
+  /** Whole reads from history in flight (`MAX_FULL_READS`). */
+  private fullReads = 0;
+  /**
+   * Task lists being read, each its rows so far, already bounded: at most two,
+   * a hello's and one refresh (refreshes run one at a time; a changed
+   * connection's read ends when its requests are flushed).
+   */
+  private readonly listings = new Set<Map<string, RawRecord>>();
+  private refreshing = false;
+  private refreshAgain = false;
+
+  /** Tasks followed at once: the host's count, at most `MAX_TRACKED_TASKS`. */
+  private readonly trackedLimit: number;
 
   constructor(host: ClawtrateHost, options: ClientOptions = {}) {
     this.host = host;
     this.options = options;
-    this.tokenStore = {
-      // The lifecycle uses the record's scopes for reconnects. Report the
-      // scopes this client requests, so a broader grant is never asked for.
-      load: async ({ deviceId, role }) => {
-        const record = await this.loadToken(deviceId, role);
-        return record ? { token: record.token, scopes: [...REQUESTED_SCOPES] } : null;
-      },
-      store: async ({ deviceId, role, token, scopes }) => {
-        const record: StoredDeviceToken = { token, grantedScopes: scopes };
-        await host.storage.set(this.tokenKey(deviceId, role), JSON.stringify(record));
-      },
-      clear: async ({ deviceId, role }) => {
-        await host.storage.delete(this.tokenKey(deviceId, role));
-      },
-    };
-    this.lifecycle = new GatewayBrowserDeviceAuthLifecycle({
-      loadIdentity: async () => {
-        const identity = await this.loadIdentity();
-        return { ...identity, sign: (payload) => host.signer.sign(payload) };
-      },
-      tokenStore: this.tokenStore,
-      nowMs: () => this.now(),
-    });
+    this.trackedLimit = hostLimit(options.limits?.trackedTasks, MAX_TRACKED_TASKS, "trackedTasks");
   }
 
   get state(): ClawtrateState {
@@ -210,6 +730,7 @@ export class ClawtrateClient {
     const url = validateGatewayUrl(options.url);
     if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
     const token = options.token?.trim() || null;
+    if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
     this.settings = { url, token };
     this.pairingSeen = null;
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
@@ -218,10 +739,14 @@ export class ClawtrateClient {
 
   /** Close the connection and forget the gateway. The device key and any device token remain. */
   async disconnect(): Promise<void> {
+    this.abandonAccessRequest("Disconnected from the gateway.");
     this.close();
     this.settings = null;
     this.pairingSeen = null;
     this.rows = new Map();
+    this.raw.clear();
+    this.retained.clear();
+    this.forgetGatewayState();
     await this.host.storage.delete(SETTINGS_KEY);
     this.store.set({
       ...initialState,
@@ -236,7 +761,7 @@ export class ClawtrateClient {
   async retryNow(): Promise<void> {
     if (!this.settings) return;
     if (this.protocol?.connected && this.state.connection.status === "connected") {
-      await this.bootstrap(this.generation);
+      await this.bootstrap(this.generation, null);
       return;
     }
     if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
@@ -251,8 +776,10 @@ export class ClawtrateClient {
     if (!this.settings) return;
     // Saved, so a restart does not reconnect by itself.
     await this.saveSettings({ ...this.settings, suspended: true });
+    // The connection stops: writes waiting for access fail, as on any lost connection.
+    // Runs are kept as they are and reconciled with history after Reconnect.
+    this.abandonAccessRequest("Disconnected from the gateway.");
     this.close();
-    this.clearLiveText();
     this.setConnection({ status: "disconnected", retryAt: null, error: null, pairing: null });
   }
 
@@ -262,14 +789,42 @@ export class ClawtrateClient {
   }
 
   /** Open a transcript. Calls are counted; the last matching close releases it. */
-  openSession(key: string): void {
+  openSession(key: string, reservation = false): void {
+    // A task's key is kept, and keys every map of the task, only within the id cap.
+    if (jsonTextLength(key) > MAX_ID_CHARS) throw new Error("That task key is too long.");
+    const taken = this.openSessions.size + this.retained.size + this.reservedTasks;
+    if (!this.tracked(key) && !reservation && taken >= this.trackedLimit) {
+      throw new Error(`At most ${this.trackedLimit} tasks can be open at once.`);
+    }
     const count = this.openSessions.get(key) ?? 0;
     this.openSessions.set(key, count + 1);
     if (count > 0) return;
+    // A task closed with unsent work was kept: reopening shows the same queue.
+    const kept = this.retained.delete(key);
+    if (!kept || !this.incarnations.has(key))
+      this.incarnations.set(key, (this.nextIncarnation += 1));
     this.setTranscript(key, (current) => current ?? this.emptyTranscript(key));
-    if (this.state.connection.status === "connected") void this.loadTranscript(key, true);
+    // An approval waiting for a task that can show it may belong here now.
+    this.routeUnrouted();
+    if (this.state.connection.status === "connected") void this.loadTranscript(key, !kept, null);
   }
 
+  /** Raw payloads of steps retention took out of view go too. */
+  private dropRawOfRemovedSteps(key: string, before: TaskActivity, after: TaskActivity): void {
+    if (before.runs === after.runs) return;
+    const kept = new Set(after.runs.flatMap((run) => run.steps.map((step) => step.id)));
+    const gone = before.runs.flatMap((run) =>
+      run.steps.filter((step) => !kept.has(step.id)).map((step) => step.id),
+    );
+    if (gone.length > 0) this.raw.dropSteps(key, gone);
+  }
+
+  /**
+   * Release a viewer's interest. When the last one goes, a task that still holds
+   * unsent, unconfirmed or failed words, or a run this client started, is kept
+   * and followed until that work is done or the user cancels it; otherwise it
+   * is released.
+   */
   closeSession(key: string): void {
     const count = this.openSessions.get(key);
     if (!count) return;
@@ -278,9 +833,44 @@ export class ClawtrateClient {
       return;
     }
     this.openSessions.delete(key);
+    const transcript = this.state.transcripts[key];
+    if (transcript && hasUnsettledWork(transcript)) {
+      this.retained.add(key);
+      return;
+    }
+    this.releaseTask(key);
+  }
+
+  /** Whether events and reloads for this task are followed: a viewer has it open, or it is kept for its work. */
+  private tracked(key: string): boolean {
+    return this.openSessions.has(key) || this.retained.has(key);
+  }
+
+  private releaseTask(key: string): void {
+    this.retained.delete(key);
+    this.incarnations.delete(key);
+    this.loads.delete(key);
+    // Drop the chat stream baselines this task held.
+    this.streams.retire(key);
     const timer = this.historyTimers.get(key);
     if (timer) clearTimeout(timer);
     this.historyTimers.delete(key);
+    this.resyncReasons.delete(key);
+    this.raw.clearTask(key);
+    this.clearTurnTimers(key);
+    const expiry = this.expiryTimers.get(key);
+    if (expiry) clearTimeout(expiry);
+    this.expiryTimers.delete(key);
+    for (const message of this.state.transcripts[key]?.outbox ?? []) {
+      this.dropAttachments(message.id);
+    }
+    this.recipients.delete(key);
+    for (const readKey of [...this.approvalReads.keys()])
+      if (readKey.startsWith(`${key}\u0000`)) this.approvalReads.delete(readKey);
+    for (const map of [this.listRequested, this.listApplied]) {
+      for (const listKey of [...map.keys()])
+        if (listKey.startsWith(`${key}\u0000`)) map.delete(listKey);
+    }
     if (this.state.connection.status === "connected") {
       this.request("sessions.messages.unsubscribe", { key }).catch(() => {});
     }
@@ -294,6 +884,2086 @@ export class ClawtrateClient {
   /** How many viewers hold a transcript open. */
   sessionInterest(key: string): number {
     return this.openSessions.get(key) ?? 0;
+  }
+
+  // Write access ----------------------------------------------------------------
+
+  /**
+   * Ask the gateway's owner, in one request, for the interactive scopes
+   * (`operator.write`, `operator.approvals`, `operator.questions`) through
+   * `device.scopes.requestUpgrade`. Returns once the request is under way; the
+   * pending request id and approve command appear in `connection.upgrade`.
+   * When it is approved the client stores the rotated device token and
+   * reconnects asking for exactly what was granted of that set.
+   */
+  async requestAccess(): Promise<void> {
+    if (INTERACTIVE_SCOPES.every((scope) => this.holds(scope))) return;
+    if (!this.settings) throw new Error("Connect to a gateway first.");
+    this.upgradeWanted = true;
+    if (this.state.connection.status === "connected") this.startUpgrade();
+  }
+
+  private holds(scope: string): boolean {
+    const connection = this.state.connection;
+    return connection.status === "connected" && scopeSatisfied(connection.scopes, scope);
+  }
+
+  private setUpgrade(patch: Partial<ScopeUpgradeState>): void {
+    this.store.update((state) => ({
+      ...state,
+      connection: { ...state.connection, upgrade: { ...state.connection.upgrade, ...patch } },
+    }));
+  }
+
+  private startUpgrade(): void {
+    const protocol = this.protocol;
+    const identity = this.identity;
+    const url = this.settings?.url;
+    const auth = this.auth;
+    if (this.scopeUpgrade || !protocol || !identity || !url || !auth || auth.url !== url) return;
+    const generation = this.generation;
+    const target = [...INTERACTIVE_SCOPES];
+    const upgrade = new GatewayScopeUpgrade({
+      request: (method, params, options) => protocol.request(method, params, options),
+      tokenStore: {
+        load: auth.tokenStore.load,
+        clear: auth.tokenStore.clear,
+        // The rotated token carries the new grant; from now on connect asks for exactly what it covers.
+        // It belongs to this gateway and this connection only.
+        store: async ({ deviceId, role, token, scopes }) => {
+          if (generation !== this.generation || this.settings?.url !== url) {
+            throw new Error("The gateway changed while access was being approved.");
+          }
+          await this.writeToken(url, deviceId, role, {
+            token,
+            grantedScopes: scopes,
+            heldScopes: heldFromGrant(scopes),
+          });
+        },
+      },
+      reconnect: () => {
+        if (generation !== this.generation || this.settings?.url !== url) return;
+        this.quietReconnect = true;
+        void this.open();
+      },
+    });
+    this.scopeUpgrade = upgrade;
+    this.setUpgrade({
+      ...initialScopeUpgrade,
+      status: "requesting",
+      scopes: target,
+    });
+    upgrade
+      .requestScopeUpgrade({
+        binding: { clientId: CLIENT_ID, deviceId: identity.deviceId, role: "operator" },
+        scopes: target,
+        onPending: (requestId) => {
+          const instructions = (this.host.approvalInstructions ?? defaultApprovalInstructions)(
+            url,
+            requestId,
+          );
+          this.setUpgrade({
+            status: "pending",
+            requestId,
+            approveCommand: instructions.command,
+            approveNote: instructions.note,
+          });
+        },
+      })
+      .then(
+        (outcome) => {
+          if (this.scopeUpgrade === upgrade) this.scopeUpgrade = null;
+          if (outcome.status === "approved") {
+            if (!scopeSatisfied(outcome.scopes, WRITE_SCOPE)) {
+              this.failAccess(
+                new AccessRequestError(
+                  "error",
+                  `the gateway granted only ${outcome.scopes.join(", ")}`,
+                ),
+              );
+              return;
+            }
+            // Settled. The reconnect is under way; its hello settles the waiters.
+            this.upgradeWanted = false;
+            this.setUpgrade({ status: "approved", error: null });
+            return;
+          }
+          this.failAccess(new AccessRequestError(outcome.status));
+        },
+        (error: unknown) => {
+          if (this.scopeUpgrade === upgrade) this.scopeUpgrade = null;
+          if (!this.upgradeWanted) return;
+          if (!(error instanceof GatewayProtocolRequestError) && !this.protocol?.connected) {
+            // The connection dropped while waiting. Ask again after the next hello.
+            return;
+          }
+          this.failAccess(new AccessRequestError("error", errorMessage(error)));
+        },
+      );
+  }
+
+  private failAccess(error: AccessRequestError): void {
+    this.upgradeWanted = false;
+    this.setUpgrade({ status: error.status, error: error.message });
+    const waiters = this.accessWaiters;
+    this.accessWaiters = [];
+    for (const waiter of waiters) waiter.reject(error);
+  }
+
+  private abandonAccessRequest(reason: string): void {
+    this.scopeUpgrade?.cancelScopeUpgrade();
+    this.scopeUpgrade = null;
+    this.upgradeWanted = false;
+    const waiters = this.accessWaiters;
+    this.accessWaiters = [];
+    for (const waiter of waiters) waiter.reject(new Error(reason));
+  }
+
+  /** After a hello: resolve waiters the grant covers; once nothing is being asked for, refuse the rest. */
+  private settleAccessWaiters(): void {
+    const waiters = this.accessWaiters;
+    this.accessWaiters = [];
+    for (const waiter of waiters) {
+      if (this.holds(waiter.scope)) waiter.resolve();
+      else if (this.upgradeWanted) this.accessWaiters.push(waiter);
+      else waiter.reject(new Error(`The gateway did not grant ${waiter.scope}.`));
+    }
+  }
+
+  /**
+   * Resolves once the connection holds `scope`. When the client does not mean
+   * to hold it yet, this asks for the interactive scopes; when it already does
+   * (the connection is only down), it waits for the next hello. A connection
+   * that has stopped (the gateway refused the device, or reconnecting gave up)
+   * will not bring one, so the operation fails at once and stays retryable.
+   * `owner` names the viewer that asked, so its operations can be withdrawn.
+   */
+  private ensureScope(scope: string, owner: object | null = null): Promise<void> {
+    if (this.holds(scope)) return Promise.resolve();
+    const connection = this.state.connection;
+    if (connection.status === "error" || connection.status === "idle" || !this.protocol) {
+      return Promise.reject(
+        new Error(
+          `Not connected to the gateway${connection.error ? `: ${connection.error.message}` : "."}`,
+        ),
+      );
+    }
+    if (this.accessWaiters.length >= MAX_ACCESS_WAITERS) {
+      return Promise.reject(
+        new Error("Too many operations are waiting for access; try again when they finish."),
+      );
+    }
+    const waiting = new Promise<void>((resolve, reject) => {
+      this.accessWaiters.push({ scope, resolve, reject, owner });
+    });
+    // Not meant to be held yet, or held and then lost (capped or revoked) on a
+    // live connection: ask the gateway's owner. Otherwise the connection is
+    // only down, and the next hello settles it.
+    if (
+      !this.state.connection.requestedScopes.includes(scope) ||
+      this.state.connection.status === "connected"
+    ) {
+      this.requestAccess().catch((error: unknown) => {
+        this.failAccess(new AccessRequestError("error", errorMessage(error)));
+      });
+    }
+    return waiting;
+  }
+
+  /**
+   * A viewer went away: everything it asked for that is still waiting for
+   * access is withdrawn now, before the gateway is asked, and nothing of it is
+   * kept. Work the client owns (outgoing messages) is not a viewer's.
+   */
+  withdraw(owner: object): void {
+    this.withdrawnOwners.add(owner);
+    for (const readers of this.approvalReads.values()) readers.delete(owner);
+    const withdrawn = this.accessWaiters.filter((waiter) => waiter.owner === owner);
+    if (withdrawn.length === 0) return;
+    this.accessWaiters = this.accessWaiters.filter((waiter) => waiter.owner !== owner);
+    for (const waiter of withdrawn) waiter.reject(new WithdrawnError());
+  }
+
+  /**
+   * The last check before an operation asks the gateway: its viewer has not
+   * gone away. Waiter withdrawal covers an operation still waiting for access;
+   * this covers one whose access was already held or just settled.
+   */
+  private checkNotWithdrawn(owner: object | null | undefined): void {
+    if (owner && this.withdrawnOwners.has(owner)) throw new WithdrawnError();
+  }
+
+  /** Operations waiting for access, for tests and diagnostics. */
+  get pendingAccessWaiters(): number {
+    return this.accessWaiters.length;
+  }
+
+  /** Reject every operation waiting for access, without changing what is being asked for. */
+  private rejectAccessWaiters(error: Error): void {
+    this.upgradeWanted = false;
+    const waiters = this.accessWaiters;
+    this.accessWaiters = [];
+    for (const waiter of waiters) waiter.reject(error);
+  }
+
+  /**
+   * The gateway refused a call for a missing scope: this connection does not
+   * hold it, whatever the last hello said. Drop it from the effective scopes,
+   * so the next use asks for it again instead of repeating the refused call.
+   */
+  private noteMissingScope(error: unknown): void {
+    if (!isMissingScope(error)) return;
+    const details = asRecord((error as GatewayProtocolRequestError).details);
+    const missing = typeof details?.missingScope === "string" ? details.missingScope : null;
+    if (!missing) return;
+    this.setEffectiveScopes(
+      this.state.connection.scopes.filter(
+        (scope) => scope !== missing && scope !== "operator.admin",
+      ),
+    );
+    // Without the scope no list can be read: say so, rather than show what was read before as current.
+    if (!this.holds(APPROVALS_SCOPE)) {
+      for (const key of Object.keys(this.state.transcripts)) {
+        for (const kind of APPROVAL_KINDS) this.setApprovalSource(key, kind, "unavailable");
+      }
+    }
+  }
+
+  /** The scopes this connection holds, and every flag derived from them, set together. */
+  private setEffectiveScopes(scopes: string[]): void {
+    this.setConnection({
+      scopes,
+      canWrite: scopeSatisfied(scopes, WRITE_SCOPE),
+      canAnswer: scopeSatisfied(scopes, QUESTIONS_SCOPE),
+      canApprove: scopeSatisfied(scopes, APPROVALS_SCOPE),
+    });
+  }
+
+  // Sending ---------------------------------------------------------------------
+
+  /**
+   * Send a message to an open task. It shows at once in the task's outbox and
+   * leaves it when history holds it. The idempotency key is the message id,
+   * so a retry is never delivered twice. Returns the message id. Throws
+   * `SendTooLargeError` before anything is sent when it would break a ceiling.
+   */
+  sendMessage(key: string, text: string, options: SendOptions = {}): string {
+    const transcript = this.state.transcripts[key];
+    if (!transcript) throw new Error("Open the task before sending to it.");
+    const body = text.trim();
+    const attachments = options.attachments ?? [];
+    this.checkOutboxRoom(key);
+    if (!body && attachments.length === 0) throw new Error("The message is empty.");
+    // Never cut: a message whose escaped form would pass its bound is refused instead.
+    if (body.length > MAX_MESSAGE_CHARS || jsonTextLength(body) > MAX_MESSAGE_JSON_CHARS)
+      throw new Error("The message is too long.");
+    // A file's name and type are kept beside its content: only valid ones, never cut.
+    for (const each of attachments) {
+      validateAttachmentMeta(each.fileName, each.mimeType);
+      if (typeof each.type !== "string" || each.type.length > 32)
+        throw new Error("invalid file type");
+    }
+    this.checkSize(this.sendParams(key, body, "x".repeat(36), "followup", attachments));
+    const bytes = attachments.reduce((sum, each) => sum + decodedBytes(each.content), 0);
+    if (this.attachmentBytes + bytes > MAX_RETAINED_ATTACHMENT_BYTES) {
+      throw new Error(
+        "Files of earlier messages are still waiting to go out; send or delete some of them first.",
+      );
+    }
+    const active = activeRun(transcript);
+    const resolved = !active
+      ? "new"
+      : active.state === "stopping" || options.mode === "queue"
+        ? "queue"
+        : "steer";
+    const held = resolved === "steer" && questionPending(transcript, active!);
+    const message: OutgoingMessage = {
+      id: this.randomId(),
+      text: body,
+      mode: resolved,
+      status: resolved === "queue" ? "queued" : held ? "held" : "sending",
+      runId: resolved === "steer" ? active!.id : null,
+      messageSeq: null,
+      createdAt: this.now(),
+      error: null,
+      attachments: attachments.map((attachment) => ({
+        fileName: attachment.fileName,
+        mimeType: attachment.mimeType,
+        sizeBytes: decodedBytes(attachment.content),
+      })),
+    };
+    if (attachments.length > 0) {
+      this.attachmentContent.set(message.id, { task: key, files: attachments, bytes });
+      this.attachmentBytes += bytes;
+    }
+    this.updateActivity(key, (activity) => {
+      const withMessage = { ...activity, outbox: [...activity.outbox, message] };
+      if (resolved === "new") return startLocalRun(withMessage, message, this.now());
+      if (resolved === "queue") return queueLocalRun(withMessage, message, this.now());
+      return withMessage;
+    });
+    if (message.status === "sending") this.enqueueDelivery(key, message.id);
+    return message.id;
+  }
+
+  /**
+   * Refuse a new outgoing message beyond the per-task and per-client bounds,
+   * before keeping anything. Every message the outbox holds counts, failed and
+   * unconfirmed ones included, so retrying and deleting are always possible
+   * and nothing accepted is dropped to make room.
+   */
+  private checkOutboxRoom(key: string): void {
+    const here = (this.state.transcripts[key] ?? emptyActivity).outbox.length;
+    if (here >= MAX_OUTBOX_PER_TASK) {
+      throw new Error(
+        `This task already holds ${MAX_OUTBOX_PER_TASK} messages waiting to be sent, confirmed, retried or deleted.`,
+      );
+    }
+  }
+
+  /** Forget a message's file content and give its bytes back. */
+  private dropAttachments(messageId: string): void {
+    const kept = this.attachmentContent.get(messageId);
+    if (!kept) return;
+    this.attachmentContent.delete(messageId);
+    this.attachmentBytes -= kept.bytes;
+  }
+
+  /** Decoded bytes of files held for outgoing messages, for tests and diagnostics. */
+  get retainedAttachmentBytes(): number {
+    return this.attachmentBytes;
+  }
+
+  private sendParams(
+    key: string,
+    text: string,
+    idempotencyKey: string,
+    queueMode: "steer" | "followup",
+    attachments: OutgoingAttachment[],
+  ) {
+    return {
+      sessionKey: key,
+      message: text,
+      idempotencyKey,
+      // Always the mode meant: with none the gateway steers.
+      queueMode,
+      ...(attachments.length > 0 ? { attachments } : {}),
+    };
+  }
+
+  /** Refuse a send that breaks the image, file or frame ceiling, before it reaches the socket. */
+  private checkSize(params: { attachments?: OutgoingAttachment[] }): void {
+    const imageLimit =
+      this.payloadLimits.maxImageBytes !== null
+        ? Math.min(this.payloadLimits.maxImageBytes, MAX_IMAGE_BYTES)
+        : MAX_IMAGE_BYTES;
+    for (const attachment of params.attachments ?? []) {
+      const size = decodedBytes(attachment.content);
+      const limit = isImage(attachment) ? imageLimit : MAX_FILE_BYTES;
+      if (size > limit) {
+        throw new SendTooLargeError(
+          `${attachment.fileName} is ${size} bytes; the gateway accepts ${isImage(attachment) ? "images" : "files"} up to ${limit} bytes.`,
+        );
+      }
+    }
+    const maxPayload = this.payloadLimits.maxPayload ?? DEFAULT_MAX_PAYLOAD_BYTES;
+    const frame = utf8Length(JSON.stringify(params)) + FRAME_SLACK_BYTES;
+    if (frame > maxPayload) {
+      throw new SendTooLargeError(
+        `The message and its files come to ${frame} bytes; one message can carry at most ${maxPayload}.`,
+      );
+    }
+  }
+
+  /**
+   * Send a failed or unconfirmed message again, with the same idempotency key,
+   * so the gateway delivers it at most once. It already counts against the
+   * outbox bounds, so a retry is never refused for room.
+   */
+  retryMessage(key: string, messageId: string): void {
+    const message = this.outgoing(key, messageId);
+    if (!message || (message.status !== "failed" && message.status !== "unconfirmed")) return;
+    const transcript = this.state.transcripts[key]!;
+    const active = activeRun(transcript);
+    const mode = !active ? "new" : active.state === "stopping" ? "queue" : "steer";
+    const held = mode === "steer" && questionPending(transcript, active!);
+    this.updateActivity(key, (activity) => {
+      // A run the gateway refused never started; the retry is a new attempt.
+      const cleared = {
+        ...activity,
+        runs: activity.runs.filter(
+          (run) => !(run.id === messageId && run.origin === "local" && !run.bound),
+        ),
+      };
+      const next = updateMessage(cleared, messageId, {
+        mode,
+        status: mode === "queue" ? "queued" : held ? "held" : "sending",
+        error: null,
+        runId: mode === "steer" ? active!.id : null,
+      });
+      const updated = next.outbox.find((each) => each.id === messageId)!;
+      if (mode === "new") return startLocalRun(next, updated, this.now());
+      if (mode === "queue") return queueLocalRun(next, updated, this.now());
+      return next;
+    });
+    if (mode !== "queue" && !held) this.enqueueDelivery(key, messageId);
+  }
+
+  /** Remove a failed, cancelled or unconfirmed message, and the run that never started with it. */
+  deleteMessage(key: string, messageId: string): void {
+    const message = this.outgoing(key, messageId);
+    if (
+      !message ||
+      (message.status !== "failed" &&
+        message.status !== "cancelled" &&
+        message.status !== "unconfirmed" &&
+        message.status !== "handled")
+    )
+      return;
+    this.dropAttachments(messageId);
+    this.updateActivity(key, (activity) => ({
+      ...removeMessage(activity, messageId),
+      runs: activity.runs.filter(
+        (run) => !(run.id === messageId && run.origin === "local" && !run.bound),
+      ),
+    }));
+  }
+
+  /** "Cancel" on a queued message's chip: it never runs. */
+  cancelQueued(key: string, messageId: string): void {
+    const message = this.outgoing(key, messageId);
+    if (!message || message.status !== "queued") return;
+    // A cancelled message is never sent: its files are not kept.
+    this.dropAttachments(messageId);
+    this.updateActivity(key, (activity) =>
+      updateMessage(cancelQueuedRun(activity, messageId, this.now()), messageId, {
+        status: "cancelled",
+      }),
+    );
+  }
+
+  /** "Send now" on a queued message's chip: a steer into the running or waiting run. */
+  sendQueuedNow(key: string, messageId: string): void {
+    const message = this.outgoing(key, messageId);
+    if (!message || message.status !== "queued") return;
+    const active = activeRun(this.state.transcripts[key]!);
+    if (active?.state === "stopping")
+      throw new Error("Send now is unavailable while the run stops.");
+    this.updateActivity(key, (activity) => {
+      if (!active)
+        return startQueuedRun(
+          updateMessage(activity, messageId, { status: "sending" }),
+          messageId,
+          this.now(),
+        );
+      const withoutQueued = {
+        ...activity,
+        runs: activity.runs.filter((run) => run.id !== messageId),
+      };
+      const held = questionPending(activity, active);
+      return updateMessage(withoutQueued, messageId, {
+        mode: "steer",
+        status: held ? "held" : "sending",
+        runId: active.id,
+      });
+    });
+    if (this.outgoing(key, messageId)?.status === "sending") this.enqueueDelivery(key, messageId);
+  }
+
+  /**
+   * Create a task under a bot with its first message. `sessions.create`
+   * carries only `agentId`, `message`, `idempotencyKey` and `label`, which keep
+   * it at `operator.write`. The caller holds one interest in the new task, as
+   * if it had called `openSession`, and releases it with `closeSession`.
+   */
+  async createTask(
+    botId: string,
+    text: string,
+    options: { label?: string; owner?: object; retryUnknown?: boolean } = {},
+  ): Promise<string> {
+    const body = text.trim();
+    if (!body) throw new Error("The message is empty.");
+    if (body.length > MAX_MESSAGE_CHARS || jsonTextLength(body) > MAX_MESSAGE_JSON_CHARS)
+      throw new Error("The message is too long.");
+    const label = options.label?.trim() || null;
+    // Kept as asked, never cut: a cut field would ask the gateway something else on a later ask.
+    if (
+      jsonTextLength(botId) > MAX_ID_CHARS ||
+      (label && jsonTextLength(label) > MAX_TASK_LINE_CHARS)
+    )
+      throw new Error("The bot id or label is too long.");
+    // The same request whose earlier attempt the gateway refused is asked again with its own key;
+    // one still being checked is not asked twice.
+    const earlier = [...this.creations.values()].find(
+      (each) => each.botId === botId && each.text === body && each.label === label,
+    );
+    if (earlier && (earlier.status === "creating" || earlier.status === "checking")) {
+      // Asked again while the first is out or being checked: the same request, so the same outcome.
+      return this.awaitCreation(earlier.id);
+    }
+    if (earlier?.status === "created" && earlier.key) {
+      // Found created after its answer was lost: asking again is the same request, not a second task.
+      this.openSession(earlier.key);
+      return earlier.key;
+    }
+    if (earlier?.status === "unknown" && !options.retryUnknown) {
+      // It may exist: only the user's own retry (`retryCreation`), warned, asks again.
+      throw new Error(CREATION_UNKNOWN_WARNING);
+    }
+    if (!earlier && this.creations.size >= MAX_CREATIONS) {
+      throw new Error("Too many task creations are still unsettled; dismiss some first.");
+    }
+    // The new task's slot is held before anything is asked of the gateway, and given back on failure.
+    if (this.openSessions.size + this.retained.size + this.reservedTasks >= this.trackedLimit) {
+      throw new Error(`At most ${this.trackedLimit} tasks can be open at once.`);
+    }
+    // Owned before anything is awaited: its key, its task slot and its place in the count are
+    // taken now, so the same request asked meanwhile joins it rather than sending a second key.
+    this.reservedTasks += 1;
+    let reserved = true;
+    const release = () => {
+      if (reserved) this.reservedTasks -= 1;
+      reserved = false;
+    };
+    // Kept from before it is sent: the request and its key survive a timeout.
+    const creation: TaskCreation =
+      earlier && (earlier.status === "failed" || earlier.status === "unknown")
+        ? // The same key: a refusal freed it, and a gateway that still has it answers the original.
+          { ...earlier, status: "creating", error: null, createdAt: this.now() }
+        : {
+            id: this.randomId(),
+            botId,
+            text: body,
+            label,
+            status: "creating",
+            createdAt: this.now(),
+            error: null,
+            key: null,
+            gatewayBootId: null,
+          };
+    this.putCreation(creation);
+    let sent = false;
+    try {
+      // A viewer that goes away while access is approved takes its request with it (`withdraw`).
+      await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
+      // The viewer went away while access settled: nothing is asked of the gateway.
+      this.checkNotWithdrawn(options.owner);
+      // Switching gateways while access settled dropped it: it is never asked of another gateway.
+      if (this.creations.get(creation.id)?.status !== "creating")
+        throw new Error("Switched to another gateway.");
+      creation.gatewayBootId = this.gatewayBootId;
+      this.putCreation(creation);
+      sent = true;
+      const result = asRecord(await this.request("sessions.create", creationParams(creation)));
+      release();
+      return this.completeCreation(creation, result, true);
+    } catch (error) {
+      if (!sent) {
+        // Nothing was asked of the gateway: an earlier refused attempt goes back to how it was,
+        // a new one is dropped, and whoever joined it learns why.
+        if (this.creations.has(creation.id)) {
+          if (earlier) this.putCreation(earlier, error as Error);
+          else this.dropCreation(creation.id, error as Error);
+        }
+        throw error;
+      }
+      // Settled as unknown already (an answer that names no task).
+      if (error instanceof OutcomeUnknownError) throw error;
+      if (error instanceof GatewayProtocolRequestError || error instanceof NotSentError) {
+        // The gateway refused it, or it never left: it did not happen. It can be asked again with its key.
+        this.putCreation({ ...creation, status: "failed", error: errorMessage(error) });
+        throw error;
+      }
+      // No answer: the outcome is unknown. Ask again with the same key, which the gateway
+      // answers with the original outcome; nothing is created twice. The task's slot stays
+      // held until it settles, so the task it may bring has room.
+      if (reserved) {
+        reserved = false;
+        this.checkingSlots.add(creation.id);
+      }
+      this.putCreation({ ...creation, status: "checking", error: errorMessage(error) });
+      this.scheduleCreationCheck(creation.id);
+      throw new OutcomeUnknownError(
+        "The gateway did not answer in time; whether the task was created is being checked.",
+      );
+    } finally {
+      release();
+    }
+  }
+
+  /** The new task from a `sessions.create` answer: opened, its first message in its outbox. */
+  private completeCreation(
+    creation: TaskCreation,
+    result: RawRecord | null,
+    byCaller: boolean,
+  ): string {
+    const key = typeof result?.key === "string" ? result.key : null;
+    if (!key) {
+      // The gateway answered, so something may exist; without its key it cannot be found.
+      this.putCreation({ ...creation, status: "unknown", error: CREATION_UNKNOWN_WARNING });
+      throw new OutcomeUnknownError(CREATION_UNKNOWN_WARNING);
+    }
+    const id = creation.id;
+    const runId = typeof result?.runId === "string" ? result.runId : null;
+    const runError = asRecord(result?.runError);
+    const now = this.now();
+    const message: OutgoingMessage = {
+      id,
+      text: creation.text,
+      mode: "new",
+      status: runError ? "failed" : "sent",
+      runId,
+      messageSeq: typeof result?.messageSeq === "number" ? result.messageSeq : null,
+      createdAt: now,
+      error: runError ? String(runError.message ?? "The run did not start.") : null,
+      attachments: [],
+    };
+    // A caller holds one interest in the new task; one settled later is kept for its message.
+    this.openSession(key, true);
+    this.updateActivity(key, (activity, ctx) => {
+      if (activity.outbox.some((each) => each.id === id)) return activity;
+      let next = startLocalRun(
+        { ...activity, outbox: [...activity.outbox, message] },
+        message,
+        now,
+      );
+      if (runId) next = bindRun(next, id, runId);
+      if (runError) {
+        next = failRunStart(
+          next,
+          runId ?? id,
+          {
+            message: message.error!,
+            kind: typeof runError.code === "string" ? runError.code : "not-started",
+          },
+          ctx,
+        );
+      } else if (!runId) {
+        next = dropUnboundRun(next, id);
+      }
+      return next;
+    });
+    if (byCaller) {
+      this.creations.delete(id);
+      this.releaseCheckingSlot(id);
+      this.publishCreations();
+      this.settleCreationWaiters(id, key);
+    } else {
+      this.closeSession(key);
+      this.putCreation({ ...creation, status: "created", error: null, key });
+    }
+    return key;
+  }
+
+  /** Keep a creation as it now is; once it is settled, callers waiting on it learn how (or `reason`). */
+  private putCreation(asked: TaskCreation, reason?: Error): void {
+    // The bounded record is the one kept; the state publishes the same object.
+    const creation = enforce(CREATION, asked);
+    this.creations.delete(creation.id);
+    this.creations.set(creation.id, creation);
+    this.publishCreations();
+    // Callers waiting on its outcome learn it once it is settled one way or the other.
+    if (creation.status === "creating" || creation.status === "checking") return;
+    this.releaseCheckingSlot(creation.id);
+    if (creation.status === "created" && creation.key)
+      this.settleCreationWaiters(creation.id, creation.key);
+    else
+      this.settleCreationWaiters(
+        creation.id,
+        reason ?? new Error(creation.error ?? "The task was not created."),
+      );
+  }
+
+  /** Forget a creation that was never asked of the gateway; whoever joined it learns why. */
+  private dropCreation(id: string, reason: Error): void {
+    this.creations.delete(id);
+    this.publishCreations();
+    this.settleCreationWaiters(id, reason);
+  }
+
+  private settleCreationWaiters(id: string, outcome: string | Error): void {
+    const waiting = this.creationWaiters.get(id) ?? [];
+    this.creationWaiters.delete(id);
+    for (const waiter of waiting) {
+      if (typeof outcome === "string") waiter.resolve(outcome);
+      else waiter.reject(outcome);
+    }
+  }
+
+  private releaseCheckingSlot(id: string): void {
+    if (this.checkingSlots.delete(id)) this.reservedTasks -= 1;
+  }
+
+  /** The outcome of a creation already under way, once known. */
+  private awaitCreation(id: string): Promise<string> {
+    if ((this.creationWaiters.get(id)?.length ?? 0) >= MAX_ACCESS_WAITERS)
+      return Promise.reject(new Error("Too many requests are waiting for this task; try again."));
+    return new Promise((resolve, reject) => {
+      // Like any caller of `createTask`, one that joins holds an interest in the new task.
+      const settle = (key: string) => {
+        this.openSession(key, true);
+        resolve(key);
+      };
+      this.creationWaiters.set(id, [
+        ...(this.creationWaiters.get(id) ?? []),
+        { resolve: settle, reject },
+      ]);
+    });
+  }
+
+  private publishCreations(): void {
+    this.store.update((state) => ({ ...state, creations: [...this.creations.values()] }));
+  }
+
+  private scheduleCreationCheck(id: string, attempt = 0): void {
+    const earlier = this.creationTimers.get(id);
+    if (earlier) clearTimeout(earlier);
+    const timer = setTimeout(
+      () => {
+        this.creationTimers.delete(id);
+        void this.checkCreation(id, attempt);
+      },
+      Math.min(
+        CREATION_CHECK_MAX_MS,
+        (this.options.creationCheckMs ?? CREATION_CHECK_MS) * 2 ** attempt,
+      ),
+    );
+    this.creationTimers.set(id, timer);
+  }
+
+  /**
+   * Find out how a creation whose answer did not come ended. It is asked
+   * again, with the same key and parameters, only of the gateway start that
+   * holds that key: the hello's `server.bootId` names it, and the gateway
+   * keeps a key for 300 s (OpenClaw 2026.10.6), so within
+   * `CREATION_KEY_WINDOW_MS` it answers with the original outcome or waits
+   * for work still in flight. Without that identity nothing establishes what
+   * happened: the creation is `unknown`, and only the user's own retry, with
+   * its warning, asks again.
+   */
+  private async checkCreation(id: string, attempt: number): Promise<void> {
+    const creation = this.creations.get(id);
+    if (!creation || creation.status !== "checking") return;
+    if (this.state.connection.status !== "connected" || !this.holds(WRITE_SCOPE)) {
+      if (this.now() - creation.createdAt <= CREATION_KEY_WINDOW_MS) return; // After the next hello.
+    }
+    if (
+      this.now() - creation.createdAt > CREATION_KEY_WINDOW_MS ||
+      creation.gatewayBootId === null ||
+      creation.gatewayBootId !== this.gatewayBootId
+    ) {
+      this.putCreation({ ...creation, status: "unknown", error: CREATION_UNKNOWN_WARNING });
+      return;
+    }
+    try {
+      const result = asRecord(await this.request("sessions.create", creationParams(creation)));
+      if (this.creations.get(id)?.status !== "checking") return;
+      this.completeCreation(creation, result, false);
+    } catch (error) {
+      if (this.creations.get(id)?.status !== "checking") return;
+      if (error instanceof GatewayProtocolRequestError) {
+        this.putCreation({ ...creation, status: "failed", error: errorMessage(error) });
+        return;
+      }
+      this.scheduleCreationCheck(id, attempt + 1);
+    }
+  }
+
+  /** Check every creation still waiting for its outcome, at once; after a hello. */
+  private checkCreations(): void {
+    for (const creation of this.creations.values()) {
+      if (creation.status !== "checking") continue;
+      const timer = this.creationTimers.get(creation.id);
+      if (timer) clearTimeout(timer);
+      this.creationTimers.delete(creation.id);
+      void this.checkCreation(creation.id, 0);
+    }
+  }
+
+  /**
+   * The user's retry of a creation the gateway refused, or whose outcome could
+   * not be established (`CREATION_UNKNOWN_WARNING`: it may create a second
+   * task), with its own key.
+   */
+  async retryCreation(id: string, options: { owner?: object } = {}): Promise<string> {
+    const creation = this.creations.get(id);
+    if (!creation || (creation.status !== "failed" && creation.status !== "unknown"))
+      throw new Error("That creation cannot be retried.");
+    return this.createTask(creation.botId, creation.text, {
+      ...(creation.label ? { label: creation.label } : {}),
+      ...(options.owner ? { owner: options.owner } : {}),
+      retryUnknown: true,
+    });
+  }
+
+  /** Forget a creation that failed, settled or cannot be established. */
+  dismissCreation(id: string): void {
+    const creation = this.creations.get(id);
+    if (!creation || creation.status === "creating" || creation.status === "checking") return;
+    this.creations.delete(id);
+    this.publishCreations();
+  }
+
+  private outgoing(key: string, messageId: string): OutgoingMessage | undefined {
+    return this.state.transcripts[key]?.outbox.find((message) => message.id === messageId);
+  }
+
+  /** Deliver one outgoing message with `chat.send`, once write access is held. */
+  private async deliver(key: string, messageId: string): Promise<void> {
+    if (!this.state.connection.canWrite) {
+      this.updateActivity(key, (activity) =>
+        updateMessage(activity, messageId, { status: "awaiting-access" }),
+      );
+    }
+    try {
+      await this.ensureScope(WRITE_SCOPE);
+    } catch (error) {
+      this.failDelivery(key, messageId, error, true);
+      return;
+    }
+    let message = this.outgoing(key, messageId);
+    if (!message || (message.status !== "sending" && message.status !== "awaiting-access")) return;
+
+    // The active run may have changed while access was pending.
+    if (message.mode === "steer") {
+      const active = activeRun(this.state.transcripts[key]!);
+      if (!active) {
+        this.updateActivity(key, (activity) => {
+          const next = updateMessage(activity, messageId, { mode: "new", runId: null });
+          return startLocalRun(
+            next,
+            next.outbox.find((each) => each.id === messageId)!,
+            this.now(),
+          );
+        });
+      } else if (active.state === "stopping") {
+        this.updateActivity(key, (activity) => {
+          const next = updateMessage(activity, messageId, {
+            mode: "queue",
+            status: "queued",
+            runId: null,
+          });
+          return queueLocalRun(
+            next,
+            next.outbox.find((each) => each.id === messageId)!,
+            this.now(),
+          );
+        });
+        return;
+      } else if (questionPending(this.state.transcripts[key]!, active)) {
+        // A plain message would answer the question and break the run; hold it.
+        this.updateActivity(key, (activity) =>
+          updateMessage(activity, messageId, { status: "held", runId: active.id }),
+        );
+        return;
+      } else if (active.id !== message.runId) {
+        this.updateActivity(key, (activity) =>
+          updateMessage(activity, messageId, { runId: active.id }),
+        );
+      }
+    }
+    this.updateActivity(key, (activity) =>
+      updateMessage(activity, messageId, { status: "sending" }),
+    );
+    message = this.outgoing(key, messageId)!;
+
+    let result: RawRecord | null;
+    try {
+      const params = this.sendParams(
+        key,
+        message.text,
+        message.id,
+        message.mode === "steer" ? "steer" : "followup",
+        this.attachmentContent.get(messageId)?.files ?? [],
+      );
+      this.checkSize(params);
+      result = asRecord(await this.request("chat.send", params));
+    } catch (error) {
+      this.noteMissingScope(error);
+      if (
+        error instanceof GatewayProtocolRequestError ||
+        error instanceof SendTooLargeError ||
+        error instanceof NotSentError
+      ) {
+        // Refused by the gateway, or never sent: it did not happen.
+        this.failDelivery(key, messageId, error, !(error instanceof NotSentError));
+        return;
+      }
+      // No answer: whether it was delivered is unknown. History is read to find
+      // it by its key; it becomes unconfirmed, with retry and delete, only if
+      // history does not hold it. Nothing is sent again on an assumption.
+      this.updateActivity(key, (activity) =>
+        dropUnboundRun(
+          updateMessage(activity, messageId, {
+            status: "checking",
+            runId: null,
+            error: errorMessage(error),
+          }),
+          messageId,
+        ),
+      );
+      this.scheduleHistory(key);
+      return;
+    }
+    const runId = typeof result?.runId === "string" ? result.runId : null;
+    const messageSeq = typeof result?.messageSeq === "number" ? result.messageSeq : null;
+    const steeredInto = message.mode === "steer" ? message.runId : null;
+    // A stop command (`/stop`) is answered `{ok, aborted, runIds}` before any
+    // run or turn is recorded: the gateway handled it, and no run or history
+    // row will follow.
+    const command = runId === null && typeof result?.aborted === "boolean";
+    this.updateActivity(key, (activity) => {
+      if (command) {
+        return dropUnboundRun(
+          updateMessage(activity, messageId, {
+            status: "handled",
+            messageSeq: null,
+            runId: null,
+            error: null,
+          }),
+          messageId,
+        );
+      }
+      if (runId === null && message.mode !== "steer") {
+        // Accepted, but no run named: none is assumed. History confirms the
+        // message, or the next read finds it unconfirmed, to retry or delete.
+        return dropUnboundRun(
+          updateMessage(activity, messageId, { status: "sent", messageSeq, runId: null }),
+          messageId,
+        );
+      }
+      let next = updateMessage(activity, messageId, {
+        status: "sent",
+        messageSeq,
+        runId: steeredInto ?? runId ?? messageId,
+      });
+      if (message.mode === "steer") {
+        // The steer's own run id settles at once; the reply streams under the run it joined.
+        if (steeredInto && runId) next = registerSteerAlias(next, runId, steeredInto);
+      } else if (runId) {
+        next = bindRun(next, messageId, runId);
+      }
+      return next;
+    });
+    // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
+    if (command) this.dropAttachments(messageId);
+    this.scheduleHistory(key);
+  }
+
+  /**
+   * A send failed. A gateway refusal is definitive: the run "Couldn't start".
+   * Anything else leaves the outcome unknown, so the optimistic run is dropped;
+   * the message can be retried with the same idempotency key either way.
+   */
+  private failDelivery(key: string, messageId: string, error: unknown, definitive: boolean): void {
+    const message = this.outgoing(key, messageId);
+    if (!message) return;
+    this.updateActivity(key, (activity, ctx) => {
+      let next = updateMessage(activity, messageId, {
+        status: "failed",
+        error: errorMessage(error),
+      });
+      if (message.mode !== "steer" && findRun(next, messageId)) {
+        next = definitive
+          ? failRunStart(
+              next,
+              messageId,
+              { message: errorMessage(error), kind: "not-started" },
+              ctx,
+            )
+          : dropUnboundRun(next, messageId);
+      }
+      return next;
+    });
+  }
+
+  // Stopping --------------------------------------------------------------------
+
+  /**
+   * Stop a running or waiting run with `chat.abort`. The run is `stopping`
+   * until the gateway reports how it ended: `stopped` when the abort took,
+   * `completed` with `finishedBeforeStop` when the run finished first.
+   */
+  async stopRun(key: string, runId: string, options: { owner?: object } = {}): Promise<void> {
+    const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
+    if (!run || (run.state !== "running" && run.state !== "waiting")) return;
+    this.updateActivity(key, (activity) => requestStop(activity, runId, this.now()));
+    try {
+      await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
+      this.checkNotWithdrawn(options.owner);
+      const current = findRun(this.state.transcripts[key] ?? emptyActivity, runId);
+      if (!current || current.state !== "stopping") return;
+      const result = asRecord(
+        await this.request("chat.abort", {
+          sessionKey: key,
+          ...(current.bound ? { runId: current.id } : {}),
+        }),
+      );
+      // Nothing was aborted: the run ended already. Its terminal event or history settles it.
+      if (result?.aborted === false) this.scheduleHistory(key);
+    } catch (error) {
+      this.noteMissingScope(error);
+      this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(error)));
+    }
+  }
+
+  // Approvals -------------------------------------------------------------------
+
+  /**
+   * Resolve an approval with the method for its kind: allow once, deny, or a
+   * standing allow (`allow-always`), optionally limited to `expiresInDays`
+   * days where the gateway takes a duration (exec and the generic kind). Deny
+   * is always possible. The gateway offers no field for which bots a standing
+   * allow covers. The generic method answers with the approval's actual
+   * outcome, which is what the card then shows, even when another reviewer
+   * settled it first.
+   */
+  async resolveApproval(
+    key: string,
+    approvalId: string,
+    decision: ApprovalDecision,
+    options: { expiresInDays?: number | null; owner?: object; shownDigest?: string | null } = {},
+  ): Promise<void> {
+    const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
+    if (!approval || approval.status !== "pending")
+      throw new Error("That approval is no longer open.");
+    if (approval.submitting) throw new Error("An answer to that approval is already on its way.");
+    // Text cut to its bound is allowed only by a viewer this host gave the whole text to, naming
+    // the digest of what it was given. A digest the state already carries proves nothing.
+    const owner = options.owner ?? DIRECT_CALLER;
+    if (
+      decision !== "deny" &&
+      approval.decisionCut &&
+      !this.readWhole(key, approval, owner, options)
+    ) {
+      throw new Error(
+        "This approval's command is too long to show in full; read it whole (readApprovalText) before allowing it, or deny it.",
+      );
+    }
+    if (decision !== "deny" && !approval.allowedDecisions.includes(decision)) {
+      throw new Error(`The gateway does not offer ${decision} for this approval.`);
+    }
+    const days = options.expiresInDays ?? null;
+    if (days !== null) {
+      if (decision !== "allow-always") throw new Error("Only a standing allow takes a duration.");
+      if (approval.kind === "plugin") throw new Error("Plugin approvals take no duration.");
+      if (!Number.isInteger(days) || days < 1 || days > MAX_GRANT_DAYS) {
+        throw new Error(`A standing allow lasts 1 to ${MAX_GRANT_DAYS} days.`);
+      }
+    }
+    const { method, params } = resolveRequest(approval, decision, days);
+    this.updateActivity(key, (activity) =>
+      markApproval(activity, approvalId, { submitting: true, error: null }),
+    );
+    try {
+      await this.ensureScope(APPROVALS_SCOPE, options.owner ?? null);
+      this.checkNotWithdrawn(options.owner);
+      // Access may have taken a while: what is decided must still be the approval that was checked.
+      const now = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
+      if (
+        !now ||
+        now.status !== "pending" ||
+        now.decisionDigest !== approval.decisionDigest ||
+        (decision !== "deny" && now.decisionCut && !this.readWhole(key, now, owner, options))
+      ) {
+        throw new Error("The approval changed or was settled while access was being approved.");
+      }
+      const result = asRecord(await this.request(method, params));
+      let resolution: ApprovalResolution | null;
+      let applied = true;
+      if (method === "approval.resolve") {
+        // `{applied, approval}`: the approval as it actually ended.
+        resolution = resolutionFromSnapshot(result?.approval);
+        applied = result?.applied === true;
+        if (!resolution) throw new Error("The gateway did not say how the approval ended.");
+      } else {
+        // The legacy methods answer `{ok: true}` once the decision is applied.
+        resolution = {
+          id: approvalId,
+          status: decision === "deny" ? "denied" : "allowed",
+          decision,
+          reason: "user",
+          resolvedAt: this.now(),
+          resolvedBy: this.host.client.displayName,
+          resolver: null,
+          applicationStatus: null,
+          authoritative: true,
+          lossy: false,
+          sessionKey: approval.sessionKey,
+          runId: approval.runId,
+        };
+      }
+      this.noteApprovalOutcome(resolution);
+      if (!applied) {
+        this.updateActivity(key, (activity) =>
+          markApproval(activity, approvalId, {
+            submitting: false,
+            error: "It had already been settled; this is how it ended.",
+          }),
+        );
+      }
+    } catch (error) {
+      this.updateActivity(key, (activity) =>
+        markApproval(activity, approvalId, { submitting: false, error: errorMessage(error) }),
+      );
+      this.noteMissingScope(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Remember what the gateway reported about an approval and apply it to every
+   * task showing it. Kept apart from the cards, so a request or list entry that
+   * arrives later can never make it actionable again.
+   */
+  private noteApprovalOutcome(resolution: ApprovalResolution): void {
+    // Kept, and keyed, as bounded: the id under its cap, like the cards' ids.
+    const known = enforce(
+      APPROVAL_OUTCOME,
+      mergeResolution(this.approvalOutcomes.get(capId(resolution.id, MAX_ID_CHARS)), resolution),
+    );
+    if (known.lossy) void this.lookUpOutcome(known.id);
+    this.approvalOutcomes.delete(known.id);
+    this.approvalOutcomes.set(known.id, known);
+    while (this.approvalOutcomes.size > MAX_APPROVAL_OUTCOMES) {
+      this.approvalOutcomes.delete(this.approvalOutcomes.keys().next().value as string);
+    }
+    if (this.unrouted.delete(known.id)) this.publishUnrouted();
+    for (const transcript of Object.values(this.state.transcripts)) {
+      if (transcript.approvals.some((approval) => approval.id === known.id)) {
+        this.updateActivity(transcript.sessionKey, (activity) =>
+          applyApprovalResolved(activity, known),
+        );
+      }
+    }
+    // A settled approval makes room for one that was waiting.
+    this.routeUnrouted();
+  }
+
+  /** Whether this viewer was given this approval's whole text, and names the digest of what it was given. */
+  private readWhole(
+    key: string,
+    approval: ApprovalCard,
+    owner: object,
+    options: { shownDigest?: string | null },
+  ): boolean {
+    const read = this.approvalReads.get(`${key}\u0000${approval.id}`)?.get(owner);
+    return read !== undefined && read === approval.decisionDigest && options.shownDigest === read;
+  }
+
+  /** Remember that a viewer was given an approval's whole text, keeping only reads of pending approvals. */
+  private noteApprovalRead(key: string, approvalId: string, owner: object, digest: string): void {
+    for (const readKey of [...this.approvalReads.keys()]) {
+      const [task, id] = readKey.split("\u0000") as [string, string];
+      const pending = this.state.transcripts[task]?.approvals.some(
+        (each) => each.id === id && each.status === "pending",
+      );
+      if (!pending || !this.tracked(task)) this.approvalReads.delete(readKey);
+    }
+    const readKey = `${key}\u0000${approvalId}`;
+    const readers = this.approvalReads.get(readKey) ?? new Map<object, string>();
+    readers.delete(owner);
+    readers.set(owner, digest);
+    while (readers.size > MAX_APPROVAL_READERS)
+      readers.delete(readers.keys().next().value as object);
+    this.approvalReads.set(readKey, readers);
+  }
+
+  /**
+   * A legacy exec or plugin resolution said `deny`, which the gateway also
+   * sends when it cancelled the approval or it expired: read the approval's
+   * own snapshot (`approval.get`, under the `operator.approvals` the client
+   * already holds) for how it ended. Until it answers, or if it cannot, the
+   * approval shows closed with its cause unknown, never as a denial.
+   */
+  private async lookUpOutcome(id: string): Promise<void> {
+    if (this.lookingUp.has(id) || this.lookingUp.size >= MAX_OUTCOME_LOOKUPS) return;
+    if (!this.holds(APPROVALS_SCOPE)) return;
+    const generation = this.generation;
+    this.lookingUp.add(id);
+    try {
+      const result = asRecord(await this.request("approval.get", { id }));
+      if (generation !== this.generation) return;
+      const resolution = resolutionFromSnapshot(result?.approval);
+      if (resolution && resolution.id === id) this.noteApprovalOutcome(resolution);
+    } catch (error) {
+      if (generation === this.generation) this.noteMissingScope(error);
+      this.log("warn", `approval.get failed: ${errorMessage(error)}`);
+    } finally {
+      this.lookingUp.delete(id);
+    }
+  }
+
+  /**
+   * The followed task an approval belongs in, and how it got there: where it
+   * already is; its own session; the task holding its run; the task that
+   * spawned its session (a helper); or the task whose `sessions_send` result
+   * named its run, or, for an approval naming no run, its session (a messaged
+   * bot). Null when no followed task is known to be its origin.
+   */
+  private approvalTarget(
+    card: ApprovalCard,
+  ): { key: string; parent: string | null; relation: ApprovalCard["relation"] } | null {
+    const transcripts = Object.values(this.state.transcripts).filter((each) =>
+      this.tracked(each.sessionKey),
+    );
+    for (const transcript of transcripts) {
+      const existing = transcript.approvals.find((approval) => approval.id === card.id);
+      if (existing) {
+        return {
+          key: transcript.sessionKey,
+          parent: existing.parentSessionKey,
+          relation: existing.relation,
+        };
+      }
+    }
+    if (card.sessionKey && this.tracked(card.sessionKey)) {
+      return { key: card.sessionKey, parent: null, relation: null };
+    }
+    if (card.runId) {
+      const holder = transcripts.find((each) => findRun(each, card.runId!) !== undefined);
+      if (holder) return { key: holder.sessionKey, parent: null, relation: null };
+    }
+    const spawner = card.sessionKey ? this.spawnedBy.get(card.sessionKey) : undefined;
+    if (spawner && this.tracked(spawner)) {
+      return { key: spawner, parent: spawner, relation: "helper" };
+    }
+    for (const [key, links] of this.recipients) {
+      if (!this.tracked(key)) continue;
+      if (
+        (card.runId !== null && links.runs.has(card.runId)) ||
+        (card.runId === null && card.sessionKey !== null && links.sessions.has(card.sessionKey))
+      ) {
+        return { key, parent: key, relation: "messaged" };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Put a pending approval in the one task it belongs to, with where it came
+   * from. One no followed task can show yet is kept in `unroutedApprovals`
+   * until its origin is known. What the gateway already reported about it is
+   * applied at once, so it never shows as actionable after its resolution.
+   */
+  private routeApproval(card: ApprovalCard): void {
+    const outcome = this.approvalOutcomes.get(card.id);
+    const target = this.approvalTarget(card);
+    if (!target) {
+      if (!outcome && card.status === "pending") this.keepUnrouted(card);
+      return;
+    }
+    const shown = this.state.transcripts[target.key]?.approvals.some((each) => each.id === card.id);
+    if (!shown && !outcome && !this.hasPendingRoom(target.key)) {
+      // The task shows as many pending approvals as it may: this one waits, kept and visible.
+      this.keepUnrouted({ ...card, parentSessionKey: target.parent, relation: target.relation });
+      return;
+    }
+    if (this.unrouted.delete(card.id)) this.publishUnrouted();
+    this.updateActivity(target.key, (activity) => {
+      let next = applyApprovalRequested(activity, {
+        ...card,
+        parentSessionKey: target.parent,
+        relation: target.relation,
+      });
+      if (outcome) next = applyApprovalResolved(next, outcome);
+      return next;
+    });
+  }
+
+  /** Keep an approval no task shows yet; past the bound it is not kept and is counted instead. */
+  private keepUnrouted(received: ApprovalCard): void {
+    // Only the bounded card is kept, never the one received beside it.
+    const card = admitApproval(received);
+    if (!this.unrouted.has(card.id) && this.unrouted.size >= MAX_UNROUTED_APPROVALS) {
+      this.unroutedOmitted += 1;
+      this.publishUnrouted();
+      return;
+    }
+    this.unrouted.set(card.id, card);
+    this.publishUnrouted();
+  }
+
+  private publishUnrouted(): void {
+    this.store.update((state) => ({
+      ...state,
+      unroutedApprovals: [...this.unrouted.values()],
+      unroutedApprovalsOmitted: this.unroutedOmitted,
+    }));
+  }
+
+  /** Whether a task can show one more pending approval. */
+  private hasPendingRoom(key: string, extra = 0): boolean {
+    const pending = (this.state.transcripts[key]?.approvals ?? []).filter(
+      (approval) => approval.status === "pending",
+    ).length;
+    return pending + extra < MAX_PENDING_APPROVALS_PER_TASK;
+  }
+
+  /** Approvals kept without a task: route the ones whose origin is now known. */
+  private routeUnrouted(): void {
+    if (this.unrouted.size === 0) return;
+    for (const card of [...this.unrouted.values()]) {
+      if (this.approvalTarget(card)) this.routeApproval(card);
+    }
+  }
+
+  /**
+   * Pending approvals for one task, from `exec.approval.list`,
+   * `plugin.approval.list` and `openclaw.approval.list`, when it opens and
+   * after every reconnect. Each list is read against a revision and the
+   * task's opening: a response older than one already applied, or from an
+   * earlier opening or connection, changes nothing. Each kind's access is kept
+   * apart, and a list refused for a missing scope drops that scope. On a
+   * connection without `operator.approvals` the task says approvals are
+   * unavailable.
+   */
+  private async backfillApprovals(key: string, generation: number): Promise<void> {
+    if (!this.holds(APPROVALS_SCOPE)) {
+      for (const kind of APPROVAL_KINDS) this.setApprovalSource(key, kind, "unavailable");
+      return;
+    }
+    await Promise.all(
+      APPROVAL_SOURCES.map((source) => this.backfillApprovalKind(key, source, generation)),
+    );
+  }
+
+  private async backfillApprovalKind(
+    key: string,
+    source: (typeof APPROVAL_SOURCES)[number],
+    generation: number,
+  ): Promise<void> {
+    const incarnation = this.incarnations.get(key);
+    const listKey = `${key}\u0000${source.kind}`;
+    const revision = (this.listRequested.get(listKey) ?? 0) + 1;
+    this.listRequested.set(listKey, revision);
+    const stale = () =>
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation ||
+      (this.listApplied.get(listKey) ?? 0) > revision;
+    if (this.state.transcripts[key]?.approvalSources[source.kind] !== "ready")
+      this.setApprovalSource(key, source.kind, "loading");
+    // Only approvals pending now can be found settled by this list; later arrivals are newer than it.
+    const pendingBefore = new Set(
+      (this.state.transcripts[key]?.approvals ?? [])
+        .filter((approval) => approval.status === "pending" && approval.kind === source.kind)
+        .map((approval) => approval.id),
+    );
+    let value: unknown;
+    try {
+      value = await this.request(source.method, {});
+    } catch (error) {
+      if (stale()) return;
+      // A failure is this revision's answer too: an older list arriving later changes nothing.
+      this.listApplied.set(listKey, revision);
+      this.noteMissingScope(error);
+      this.setApprovalSource(key, source.kind, isMissingScope(error) ? "unavailable" : "error");
+      this.log("warn", `${source.method} failed: ${errorMessage(error)}`);
+      return;
+    }
+    if (stale()) return;
+    this.listApplied.set(listKey, revision);
+    const record = asRecord(value);
+    const items = Array.isArray(value)
+      ? value
+      : Array.isArray(record?.approvals)
+        ? record.approvals
+        : Array.isArray(record?.items)
+          ? record.items
+          : [];
+    const mine: ApprovalCard[] = [];
+    const shownIds = new Set((this.state.transcripts[key]?.approvals ?? []).map((each) => each.id));
+    let added = 0;
+    for (const card of items
+      .map((item) => source.parse(item))
+      .filter((each): each is ApprovalCard => each !== null && each.status === "pending")
+      .map(admitApproval)) {
+      const target = this.approvalTarget(card);
+      if (target?.key !== key) {
+        if (!target && !this.approvalOutcomes.has(card.id)) this.keepUnrouted(card);
+        continue;
+      }
+      const placed = { ...card, parentSessionKey: target.parent, relation: target.relation };
+      const settled = this.approvalOutcomes.has(card.id);
+      if (shownIds.has(card.id) || settled || this.hasPendingRoom(key, added)) {
+        if (!shownIds.has(card.id) && !settled) added += 1;
+        mine.push(placed);
+        if (this.unrouted.delete(card.id)) this.publishUnrouted();
+      } else {
+        // The task shows as many pending approvals as it may: this one waits, kept and visible.
+        this.keepUnrouted(placed);
+      }
+    }
+    this.updateActivity(key, (activity) => {
+      let next = activity;
+      for (const card of mine) {
+        next = applyApprovalRequested(next, card);
+        const outcome = this.approvalOutcomes.get(card.id);
+        if (outcome) next = applyApprovalResolved(next, outcome);
+      }
+      return settleUnlistedApprovals(
+        next,
+        [source.kind],
+        new Set(mine.map((card) => card.id)),
+        pendingBefore,
+      );
+    });
+    // Another list may have been refused for the scope meanwhile: this one cannot be kept current then.
+    this.setApprovalSource(key, source.kind, this.holds(APPROVALS_SCOPE) ? "ready" : "unavailable");
+  }
+
+  private setApprovalSource(key: string, kind: ApprovalKind, access: ApprovalSourceAccess): void {
+    const transcript = this.state.transcripts[key];
+    if (!transcript || transcript.approvalSources[kind] === access) return;
+    const approvalSources = { ...transcript.approvalSources, [kind]: access };
+    this.setTranscript(key, () => ({
+      ...transcript,
+      approvalSources,
+      approvalAccess: approvalAccessOf(approvalSources),
+    }));
+  }
+
+  /** Expire pending approvals at their `expiresAt`, then re-read the lists to confirm. */
+  private scheduleApprovalExpiry(key: string): void {
+    const transcript = this.state.transcripts[key];
+    const existing = this.expiryTimers.get(key);
+    if (existing) clearTimeout(existing);
+    this.expiryTimers.delete(key);
+    const next = Math.min(
+      ...(transcript?.approvals ?? [])
+        .filter((approval) => approval.status === "pending" && approval.expiresAt !== null)
+        .map((approval) => approval.expiresAt!),
+    );
+    if (!Number.isFinite(next)) return;
+    this.expiryTimers.set(
+      key,
+      setTimeout(
+        () => {
+          this.expiryTimers.delete(key);
+          this.updateActivity(key, (activity) => expireApprovals(activity, this.now()));
+          void this.backfillApprovals(key, this.generation);
+        },
+        // setTimeout fires at once past 2^31-1 ms; re-check at that horizon instead.
+        Math.min(MAX_TIMER_MS, Math.max(0, next - this.now())),
+      ),
+    );
+  }
+
+  // Linked runs -------------------------------------------------------------------
+
+  /** Apply an event to a session nobody has open, keeping a few recent runs of a few sessions. */
+  private updateForeign(
+    rawKey: string,
+    fn: (activity: TaskActivity, ctx: EngineContext) => TaskActivity,
+  ): void {
+    // Kept under the id cap, as the state keeps ids.
+    const sessionKey = capId(rawKey, MAX_ID_CHARS);
+    const before = this.foreign.get(sessionKey) ?? emptyActivity;
+    let next = fn(before, { sessionKey, now: this.now(), raw: this.foreignRaw });
+    if (next === before) return;
+    if (next.runs.length > FOREIGN_RUNS_PER_SESSION) {
+      next = { ...next, runs: next.runs.slice(-FOREIGN_RUNS_PER_SESSION) };
+    }
+    // Steps of foreign runs are not shown; keep only the run states, within the run bound.
+    next = {
+      ...next,
+      runs: next.runs.map((run) => enforce(RUN, run.steps.length ? { ...run, steps: [] } : run)),
+    };
+    this.foreign.delete(sessionKey);
+    this.foreign.set(sessionKey, next);
+    while (this.foreign.size > FOREIGN_SESSIONS) {
+      const oldest = this.foreign.keys().next().value as string;
+      this.foreign.delete(oldest);
+    }
+    const changed = next.runs.some((run) => findRun(before, run.id)?.state !== run.state);
+    if (!changed) return;
+    for (const key of Object.keys(this.state.transcripts)) {
+      this.refreshLinkedRuns(key);
+      // An approval from a helper or a messaged bot follows that run's end.
+      if (this.state.transcripts[key]?.approvals.some((approval) => approval.relation !== null))
+        this.updateActivity(key, (activity) => activity);
+    }
+  }
+
+  /** A run this task does not hold: a followed foreign session's, or another task's. */
+  private otherRun(runId: string): Run | undefined {
+    for (const activity of this.foreign.values()) {
+      const run = findRun(activity, runId);
+      if (run) return run;
+    }
+    for (const transcript of Object.values(this.state.transcripts)) {
+      const run = findRun(transcript, runId);
+      if (run) return run;
+    }
+    return undefined;
+  }
+
+  /** Copy the state of every recipient run a task's `sessions_send` results name, where it is known. */
+  private refreshLinkedRuns(key: string): void {
+    const transcript = this.state.transcripts[key];
+    if (!transcript) return;
+    const rawOf = (step: Run["steps"][number]) => step.raw ?? this.raw.get(key, step.id);
+    const links = recipientLinks(transcript.runs, rawOf);
+    const known = this.recipients.get(key);
+    const cap = (value: string) => capId(value, MAX_ID_CHARS);
+    const runs = new Set(links.flatMap((link) => (link.runId ? [cap(link.runId)] : [])));
+    const sessions = new Set(
+      links.flatMap((link) => (link.sessionKey ? [cap(link.sessionKey)] : [])),
+    );
+    const grew =
+      [...runs].some((id) => !known?.runs.has(id)) ||
+      [...sessions].some((id) => !known?.sessions.has(id));
+    this.recipients.set(key, { runs, sessions });
+    // A send result naming a recipient can place an approval that arrived before it.
+    if (grew) this.routeUnrouted();
+    // The newest `MAX_LINKED_RUNS` recipients a task's sends name.
+    const ids = recipientRunIds(transcript.runs, rawOf).slice(-MAX_LINKED_RUNS);
+    const linked: Record<string, LinkedRun> = {};
+    for (const id of ids) {
+      for (const [sessionKey, activity] of [
+        ...this.foreign.entries(),
+        ...Object.entries(this.state.transcripts),
+      ] as Array<[string, TaskActivity]>) {
+        const run = findRun(activity, id);
+        if (run) linked[id] = linkedRunOf(run, sessionKey);
+      }
+    }
+    const current = transcript.linkedRuns;
+    const same =
+      Object.keys(current).length === Object.keys(linked).length &&
+      Object.entries(linked).every(
+        ([id, run]) =>
+          current[id]?.state === run.state &&
+          current[id]?.endedAt === run.endedAt &&
+          current[id]?.outcomeKnown === run.outcomeKnown,
+      );
+    if (!same)
+      this.setTranscript(key, () => ({ ...this.state.transcripts[key]!, linkedRuns: linked }));
+  }
+
+  // Questions -------------------------------------------------------------------
+
+  /**
+   * Answer a pending question card with `question.resolve`. `answers` maps
+   * each question id to its answers: text as typed, sent as it is, or a shown
+   * option named by its original place (`{option: index}`). An option is sent
+   * by its identity, the gateway's value for it or else its label, read whole
+   * from `question.list` at that place, never matched by the text shown.
+   */
+  async answerQuestion(
+    key: string,
+    questionId: string,
+    answers: Record<string, QuestionAnswer[]>,
+    options: { owner?: object } = {},
+  ): Promise<void> {
+    const question = this.pendingQuestion(key, questionId);
+    const entries = Object.entries(answers);
+    if (entries.length === 0) throw new Error("Choose or type an answer.");
+    const chosen: Record<string, Array<string | QuestionOption>> = {};
+    for (const [id, values] of entries) {
+      const item = question.questions.find((each) => each.id === id);
+      if (!item) throw new Error(`The card has no question ${id}.`);
+      if (!Array.isArray(values) || values.length === 0) {
+        throw new Error(`The answer to ${id} is empty.`);
+      }
+      chosen[id] = values.map((value) => {
+        if (typeof value === "string") return value;
+        const option = item.options.find((each) => each.index === value?.option);
+        if (!option) throw new Error(`The card shows no such option for ${id}.`);
+        return option;
+      });
+    }
+    await this.resolveQuestion(key, questionId, options.owner ?? null, async () => ({
+      id: questionId,
+      answers: { answers: await this.optionAnswers(question, chosen) },
+    }));
+  }
+
+  /**
+   * The strings sent for the chosen answers. Each chosen option is read from
+   * `question.list` at its original place and sent as `value ?? label`, as
+   * the gateway identifies options; the option there must still be the one
+   * shown, or nothing is sent.
+   */
+  private async optionAnswers(
+    question: QuestionCard,
+    chosen: Record<string, Array<string | QuestionOption>>,
+  ): Promise<Record<string, string[]>> {
+    const named = Object.values(chosen).some((values) =>
+      values.some((each) => typeof each !== "string"),
+    );
+    let items: unknown[] = [];
+    if (named) {
+      const listed = asRecord(await this.request("question.list", {}));
+      const record = (Array.isArray(listed?.questions) ? listed.questions : [])
+        .map((entry) => asRecord(entry))
+        .find(
+          (entry) => typeof entry?.id === "string" && capId(entry.id, MAX_ID_CHARS) === question.id,
+        );
+      if (!record) throw new Error("That question is no longer open.");
+      items = Array.isArray(record.questions) ? record.questions : [];
+    }
+    const out: Record<string, string[]> = {};
+    for (const [id, values] of Object.entries(chosen)) {
+      out[id] = values.map((each) => {
+        if (typeof each === "string") return each;
+        const item = asRecord(items.find((entry) => asRecord(entry)?.questionId === id));
+        const listed = asRecord((Array.isArray(item?.options) ? item.options : [])[each.index]);
+        const label = listed?.label;
+        const value = typeof listed?.value === "string" && listed.value ? listed.value : null;
+        // The option at that place must still be the one shown, its kept text a prefix of its whole text.
+        if (
+          typeof label !== "string" ||
+          !label.startsWith(each.label) ||
+          (value === null) !== (each.value === null) ||
+          (value !== null && !value.startsWith(each.value!))
+        ) {
+          throw new Error("The question changed since it was shown.");
+        }
+        return value ?? label;
+      });
+    }
+    return out;
+  }
+
+  /** Close a question card with its X: the bot is told there is no answer and carries on. */
+  async dismissQuestion(
+    key: string,
+    questionId: string,
+    options: { owner?: object } = {},
+  ): Promise<void> {
+    this.pendingQuestion(key, questionId);
+    await this.resolveQuestion(key, questionId, options.owner ?? null, () => ({
+      id: questionId,
+      cancel: true,
+    }));
+  }
+
+  private pendingQuestion(key: string, questionId: string) {
+    const question = this.state.transcripts[key]?.questions.find((each) => each.id === questionId);
+    if (!question || question.status !== "pending")
+      throw new Error("That question is no longer open.");
+    if (question.submitting) throw new Error("An answer to that question is already on its way.");
+    return question;
+  }
+
+  /**
+   * Send an answer or dismissal. The card is marked as being answered before
+   * anything is awaited, so a second answer is refused at once; what is sent
+   * is built after access is held, and the card is checked again just before.
+   */
+  private async resolveQuestion(
+    key: string,
+    questionId: string,
+    owner: object | null,
+    build: () => RawRecord | Promise<RawRecord>,
+  ): Promise<void> {
+    this.updateActivity(key, (activity) =>
+      markQuestion(activity, questionId, { submitting: true, error: null }),
+    );
+    try {
+      await this.ensureScope(QUESTIONS_SCOPE, owner);
+      const params = await build();
+      this.checkNotWithdrawn(owner);
+      const now = this.state.transcripts[key]?.questions.find((each) => each.id === questionId);
+      if (!now || now.status !== "pending") throw new Error("That question is no longer open.");
+      const result = asRecord(await this.request("question.resolve", params));
+      // Apply the answer at once; `question.resolved` repeats it.
+      this.updateActivity(key, (activity) =>
+        applyQuestionResolved(activity, {
+          id: questionId,
+          status: result?.status ?? ("cancel" in params ? "cancelled" : "answered"),
+          ...(result?.answers ? { answers: result.answers } : {}),
+        }),
+      );
+    } catch (error) {
+      this.updateActivity(key, (activity) =>
+        markQuestion(activity, questionId, { submitting: false, error: errorMessage(error) }),
+      );
+      this.noteMissingScope(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Pending questions for one task, from `question.list`, after it reloads.
+   * Fenced like the approval lists: a response older than one applied, or
+   * from an earlier opening or connection, changes nothing.
+   */
+  private async backfillQuestions(key: string, generation: number): Promise<void> {
+    if (!this.holds(QUESTIONS_SCOPE)) return;
+    const incarnation = this.incarnations.get(key);
+    const listKey = `${key}\u0000question`;
+    const revision = (this.listRequested.get(listKey) ?? 0) + 1;
+    this.listRequested.set(listKey, revision);
+    const stale = () =>
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation ||
+      (this.listApplied.get(listKey) ?? 0) > revision;
+    const pendingBefore = new Set(
+      (this.state.transcripts[key]?.questions ?? [])
+        .filter((question) => question.status === "pending")
+        .map((question) => question.id),
+    );
+    try {
+      const result = asRecord(await this.request("question.list", {}));
+      if (stale()) return;
+      this.listApplied.set(listKey, revision);
+      const records = (Array.isArray(result?.questions) ? result.questions : [])
+        .map((entry) => asRecord(entry))
+        .filter(
+          (record): record is RawRecord =>
+            record?.sessionKey === key && record.status === "pending",
+        );
+      this.updateActivity(key, (activity, ctx) => {
+        let next = activity;
+        for (const record of records) next = applyQuestionRequested(next, record, ctx);
+        return settleMissingQuestions(
+          next,
+          new Set(records.map((record) => String(record.id))),
+          pendingBefore,
+        );
+      });
+    } catch (error) {
+      if (!stale()) {
+        this.listApplied.set(listKey, revision);
+        this.noteMissingScope(error);
+      }
+      this.log("warn", `question.list failed: ${errorMessage(error)}`);
+    }
+  }
+
+  /**
+   * The whole text an approval asks the reviewer to decide on, read again from
+   * the gateway's list and returned without being kept, with the digest an
+   * allow of a cut approval must name (`resolveApproval`'s `shownDigest`).
+   */
+  async readApprovalText(
+    key: string,
+    approvalId: string,
+    options: { owner?: object; maxChars?: number } = {},
+  ): Promise<{ text: Record<string, string | string[] | null>; digest: string }> {
+    const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
+    if (!approval) throw new Error("That approval is not in this task.");
+    const source = APPROVAL_SOURCES.find((each) => each.kind === approval.kind)!;
+    // A whole read like the others: it shares their gate, so viewers cannot hold many lists at once.
+    const value = await this.wholeRead(() => this.request(source.method, {}));
+    const record = asRecord(value);
+    const items = Array.isArray(value)
+      ? value
+      : Array.isArray(record?.approvals)
+        ? record.approvals
+        : Array.isArray(record?.items)
+          ? record.items
+          : [];
+    const whole = items
+      .map((item) => source.parse(item))
+      .find((card) => card !== null && capId(card.id, MAX_ID_CHARS) === approvalId);
+    if (!whole) throw new Error("The gateway no longer lists that approval.");
+    const shown = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
+    if (!shown || whole.decisionDigest !== shown.decisionDigest) {
+      throw new Error("The approval changed since it was shown; reopen the task.");
+    }
+    const read = { text: decisionText(whole), digest: whole.decisionDigest };
+    // Recorded only once it can be given to the viewer whole: a read its channel cannot carry
+    // leaves the approval deny-only for that viewer.
+    if (options.maxChars !== undefined && jsonLength(read) > options.maxChars) {
+      throw new Error(
+        "This approval's whole text is too long to show here; deny it, or read it in the desktop app.",
+      );
+    }
+    this.noteApprovalRead(key, approvalId, options.owner ?? DIRECT_CALLER, read.digest);
+    return read;
+  }
+
+  /**
+   * A history item whole, as the gateway has it now, returned without being
+   * kept: the way to read text cut to its bound (`TranscriptItem.cut`).
+   */
+  async readHistoryItem(key: string, itemId: string): Promise<TranscriptItem | null> {
+    if (!this.state.transcripts[key]) return null;
+    // The length needed is not known here: the most the gateway gives. An item it still cut says so.
+    const history = await this.readHistoryWhole(key, MAX_HISTORY_READ_CHARS);
+    return mapHistory(history?.messages).find((item) => item.id === itemId) ?? null;
+  }
+
+  /**
+   * A history page read for a whole value, at most `MAX_FULL_READS` at once,
+   * asking the gateway for text up to `maxChars` (it cuts to 8,000 otherwise).
+   */
+  private async readHistoryWhole(key: string, maxChars: number): Promise<RawRecord | null> {
+    return asRecord(
+      await this.wholeRead(() =>
+        this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT, maxChars }),
+      ),
+    );
+  }
+
+  /** One whole read (history or an approval list), at most `MAX_FULL_READS` at once; past it, refused. */
+  private async wholeRead<T>(read: () => Promise<T>): Promise<T> {
+    if (this.fullReads >= MAX_FULL_READS)
+      throw new Error("Other whole texts are being read; try again in a moment.");
+    this.fullReads += 1;
+    try {
+      return await read();
+    } finally {
+      this.fullReads -= 1;
+    }
+  }
+
+  /** The raw call and result of a step as the raw table keeps it now; null when it is not kept. */
+  stepRaw(key: string, stepId: string): StepRaw | null {
+    if (!this.state.transcripts[key]) return null;
+    return this.raw.get(key, stepId);
+  }
+
+  /**
+   * A step's whole raw call and result, returned without being kept: from the
+   * raw table while it fits there, otherwise from the gateway's history once
+   * that step is in history. Until then the answer is `not-available-yet`.
+   * Null only when the task has no such step.
+   */
+  async readStepRaw(key: string, stepId: string): Promise<StepRead | null> {
+    const find = () =>
+      this.state.transcripts[key]?.runs
+        .flatMap((run) => run.steps)
+        .find((step) => step.id === stepId);
+    const step = find();
+    if (!step) return null;
+    // What the raw table keeps is whole unless a history row it came from was cut.
+    const kept = this.raw.get(key, stepId);
+    if (kept && !step.truncated) return { status: "available", raw: kept };
+    // Ask for the length the step needs; one the gateway cut gives no length, so the most it gives.
+    const known = Math.max(
+      ...[step.argsText, step.output, step.result].map((text) => text?.totalChars ?? 0),
+    );
+    const maxChars = step.truncated
+      ? MAX_HISTORY_READ_CHARS
+      : Math.min(MAX_HISTORY_READ_CHARS, Math.max(GATEWAY_HISTORY_TEXT_CHARS, known + 64));
+    const history = await this.readHistoryWhole(key, maxChars);
+    const current = this.state.transcripts[key];
+    const shown = find();
+    const run = current?.runs.find((each) => each.steps.some((one) => one.id === stepId));
+    if (!current || !shown || !run) return null;
+    // Rebuilt aside, as a resync would, into a table dropped after this read.
+    const scratch = new RawTable(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+    const ctx = { ...this.context(key), raw: scratch };
+    const windowCut = history?.hasMore === true;
+    const fromHistory = runsFromHistory(history?.messages, asRecord(history?.inFlightRun), ctx, {
+      windowCut,
+    });
+    const whole = scratch.get(key, stepId);
+    const read = fromHistory.flatMap((each) => each.steps).find((each) => each.id === stepId);
+    // A step's id is its place, which history can give another block: what was fetched is
+    // this step only when it shows so. This check only ever withholds `available`.
+    const same = whole !== null && read !== undefined && sameStep(shown, read, whole);
+    // Its message replaced by the gateway's placeholder: not a cut text, and asking again does not help.
+    if ((!same || read.truncated) && oversizedWhere(history?.messages, run.id, shown, windowCut)) {
+      return {
+        status: "too-large-for-gateway",
+        reason:
+          "The gateway replaces a message this large with a placeholder in its history and will not return its text in full.",
+      };
+    }
+    if (!same) {
+      if (whole && read) {
+        return {
+          status: "not-established",
+          reason:
+            "What the gateway's history returned at this step's place could not be shown to be this step, so it is not offered as its text.",
+        };
+      }
+      return {
+        status: "not-available-yet",
+        reason:
+          "This step's whole text was too long to keep here, and the gateway's history did not return it: it may not hold it yet, or its page was too large to include it. Trying again later may help.",
+      };
+    }
+    if (read.truncated) {
+      return {
+        status: "cut-by-gateway",
+        raw: whole,
+        receivedChars: Math.max(
+          ...[read.argsText, read.output, read.result].map((text) => text?.totalChars ?? 0),
+        ),
+        reason: "The gateway's history holds this step's text only cut to a shorter length.",
+      };
+    }
+    return { status: "available", raw: whole };
+  }
+
+  // Activity ------------------------------------------------------------------------
+
+  private context(key: string): EngineContext {
+    return { sessionKey: key, now: this.now(), raw: this.raw };
+  }
+
+  private updateActivity(
+    key: string,
+    fn: (activity: TaskActivity, ctx: EngineContext) => TaskActivity,
+  ): void {
+    const current = this.state.transcripts[key];
+    if (!current) return;
+    const next = retainActivity(
+      settleQuestionsOfEndedRuns(
+        normalizeApprovals(fn(current, this.context(key)), (runId) => this.otherRun(runId)),
+      ),
+    );
+    if (next === current) return;
+    this.dropRawOfRemovedSteps(key, current, next);
+    this.setTranscript(key, () => withLive({ ...current, ...next }));
+    this.afterActivity(key);
+  }
+
+  /**
+   * After any change: keep turn timers, release held messages once their
+   * question is settled, start the oldest queued run once nothing is active,
+   * and let go of a closed task whose work is done. Not re-entrant: a change
+   * made while it runs makes it run once more instead of nesting, so no
+   * message is claimed twice.
+   */
+  private afterActivity(key: string): void {
+    if (this.afterRunning.has(key)) {
+      this.afterAgain.add(key);
+      return;
+    }
+    this.afterRunning.add(key);
+    try {
+      do {
+        this.afterAgain.delete(key);
+        this.afterActivityOnce(key);
+      } while (this.afterAgain.has(key));
+    } finally {
+      this.afterRunning.delete(key);
+    }
+  }
+
+  private afterActivityOnce(key: string): void {
+    const transcript = this.state.transcripts[key];
+    if (!transcript) return;
+    // A run that ended or left the transcript keeps no stream baseline.
+    this.streams.retire(key, (runId) => {
+      const run = findRun(transcript, runId);
+      return run !== undefined && !isTerminal(run.state);
+    });
+    this.refreshLinkedRuns(key);
+    this.scheduleApprovalExpiry(key);
+    for (const run of transcript.runs) {
+      const timerKey = `${key}\u0000${run.id}`;
+      const timer = this.turnTimers.get(timerKey);
+      if (isTerminal(run.state)) {
+        if (timer) clearTimeout(timer);
+        this.turnTimers.delete(timerKey);
+      } else if (!timer && run.origin === "local" && run.bound && isActive(run.state)) {
+        const limit = this.options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS;
+        const elapsed = this.now() - (run.startedAt ?? this.now());
+        this.turnTimers.set(
+          timerKey,
+          setTimeout(
+            () => this.turnLimitReached(key, run.id),
+            Math.min(MAX_TIMER_MS, Math.max(0, limit - elapsed)),
+          ),
+        );
+      }
+    }
+    const active = activeRun(transcript);
+    const held = transcript.outbox
+      .filter((message) => message.status === "held")
+      .map((message) => message.id);
+    if (held.length > 0 && !(active && questionPending(transcript, active))) {
+      // The question is settled: claim every held message at once, then deliver them in order.
+      this.updateActivity(key, (activity) =>
+        held.reduce((next, id) => updateMessage(next, id, { status: "sending" }), activity),
+      );
+      for (const id of held) this.enqueueDelivery(key, id);
+    }
+    const current = this.state.transcripts[key];
+    if (!current) return;
+    const next = activeRun(current)
+      ? undefined
+      : current.runs.find((run) => run.state === "queued");
+    if (next) {
+      this.updateActivity(key, (activity) =>
+        updateMessage(startQueuedRun(activity, next.id, this.now()), next.id, {
+          status: "sending",
+          mode: "new",
+        }),
+      );
+      this.enqueueDelivery(key, next.id);
+    }
+    if (this.retained.has(key) && !hasUnsettledWork(this.state.transcripts[key] ?? emptyActivity)) {
+      this.releaseTask(key);
+    }
+  }
+
+  /**
+   * Deliveries for one task run one at a time, in the order they were made,
+   * so messages reach the gateway in the order the user sent them.
+   */
+  private enqueueDelivery(key: string, messageId: string): void {
+    if (!this.state.connection.canWrite && this.outgoing(key, messageId)?.status === "sending") {
+      this.updateActivity(key, (activity) =>
+        updateMessage(activity, messageId, { status: "awaiting-access" }),
+      );
+    }
+    const previous = this.deliveries.get(key) ?? Promise.resolve();
+    const next = previous
+      .then(() => this.deliver(key, messageId))
+      .catch((error: unknown) => this.log("error", `delivery failed: ${errorMessage(error)}`));
+    this.deliveries.set(key, next);
+    void next.then(() => {
+      if (this.deliveries.get(key) === next) this.deliveries.delete(key);
+    });
+  }
+
+  private turnLimitReached(key: string, runId: string): void {
+    this.turnTimers.delete(`${key}\u0000${runId}`);
+    const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
+    if (!run || !isActive(run.state)) return;
+    const limit = this.options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS;
+    if (this.now() - (run.startedAt ?? this.now()) < limit) {
+      // Woken early by the timer ceiling: arm again.
+      this.afterActivity(key);
+      return;
+    }
+    const minutes = Math.round((this.options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS) / 60_000);
+    this.updateActivity(key, (activity, ctx) =>
+      failRun(
+        activity,
+        runId,
+        { message: `Stopped at the ${minutes}-minute turn limit.`, kind: "turn-limit" },
+        ctx,
+      ),
+    );
+    if (this.state.connection.canWrite) {
+      this.request("chat.abort", { sessionKey: key, runId }).catch(() => {});
+    }
+  }
+
+  private clearTurnTimers(key: string): void {
+    const prefix = `${key}\u0000`;
+    for (const [timerKey, timer] of this.turnTimers) {
+      if (!timerKey.startsWith(prefix)) continue;
+      clearTimeout(timer);
+      this.turnTimers.delete(timerKey);
+    }
+  }
+
+  /** The task was archived or deleted: its queued messages never run (F-420). */
+  private cancelAllQueued(key: string): void {
+    this.updateActivity(key, (activity) => {
+      let next = activity;
+      for (const run of activity.runs) {
+        if (run.state !== "queued") continue;
+        this.dropAttachments(run.id);
+        next = updateMessage(cancelQueuedRun(next, run.id, this.now()), run.id, {
+          status: "cancelled",
+        });
+      }
+      return next;
+    });
   }
 
   // Connection lifecycle -------------------------------------------------------
@@ -329,12 +2999,19 @@ export class ClawtrateClient {
       return;
     }
 
-    const paired = (await this.loadToken(identity.deviceId, "operator")) !== null;
+    const stored = await this.loadToken(settings.url, identity.deviceId, "operator");
     if (generation !== this.generation) return;
+    const paired = stored !== null;
     // Reopening the same gateway keeps what is on screen until fresh data arrives.
     const sameGateway = this.state.connection.gatewayUrl === settings.url;
     const hasData = sameGateway && this.state.bots.length > 0;
-    if (!sameGateway) this.rows = new Map();
+    if (!sameGateway) {
+      this.rows = new Map();
+      this.raw.clear();
+      // Work kept for another gateway's tasks is never carried to this one.
+      this.retained.clear();
+      this.forgetGatewayState();
+    }
     this.everConnected = hasData;
     this.store.update((state) => ({
       ...(sameGateway ? state : initialState),
@@ -344,6 +3021,8 @@ export class ClawtrateClient {
         gatewayUrl: settings.url,
         deviceId: identity.deviceId,
         paired,
+        requestedScopes: stored ? [...stored.heldScopes] : [...READ_SCOPES],
+        upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
         serverVersion: sameGateway ? state.connection.serverVersion : null,
         gatewayId: sameGateway ? state.connection.gatewayId : null,
       },
@@ -353,6 +3032,17 @@ export class ClawtrateClient {
             [...this.openSessions.keys()].map((key) => [key, this.emptyTranscript(key)]),
           ),
     }));
+
+    const tokenStore = this.connectionTokenStore(settings.url, generation);
+    const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
+      loadIdentity: async () => {
+        const loaded = await this.loadIdentity();
+        return { ...loaded, sign: (payload) => this.host.signer.sign(payload) };
+      },
+      tokenStore,
+      nowMs: () => this.now(),
+    });
+    this.auth = { url: settings.url, generation, tokenStore, lifecycle };
 
     const client = {
       id: CLIENT_ID,
@@ -398,21 +3088,24 @@ export class ClawtrateClient {
       },
       createRequestId: () => this.randomId(),
       buildConnectPlan: async ({ nonce, challengeTs }) => {
-        const stored = await this.loadToken(identity.deviceId, "operator");
+        const token = await this.loadToken(settings.url, identity.deviceId, "operator");
         // Once paired, the device token is the credential; the bootstrap token is no longer sent.
-        const bootstrap = stored ? null : settings.token;
-        const plan = await this.lifecycle.buildPlan({
+        const bootstrap = token ? null : settings.token;
+        // Exactly the scopes this client means to hold, never what the token happens to allow.
+        const requested = token ? token.heldScopes : [...READ_SCOPES];
+        const plan = await lifecycle.buildPlan({
           client,
           role: "operator",
-          defaultScopes: REQUESTED_SCOPES,
+          defaultScopes: requested,
           ...(bootstrap ? { token: bootstrap } : {}),
           nonce,
           challengeTs: challengeTs ?? null,
         });
         // The signed payload covers these scopes, so check them before sending.
-        if (plan.scopes.join(",") !== REQUESTED_SCOPES.join(",")) {
+        if (plan.scopes.join(",") !== requested.join(",")) {
           throw new Error(`refusing to request scopes ${plan.scopes.join(", ")}`);
         }
+        if (generation === this.generation) this.setConnection({ requestedScopes: [...requested] });
         return plan;
       },
       buildConnectParams: (plan) => ({
@@ -421,14 +3114,16 @@ export class ClawtrateClient {
         client,
         role: plan.role,
         scopes: plan.scopes,
-        caps: [...CLIENT_CAPS],
+        caps: capsFor(plan.scopes),
         ...(plan.auth ? { auth: plan.auth } : {}),
         ...(plan.device ? { device: plan.device } : {}),
         locale: "en-US",
         userAgent: `clawtrate/${this.host.client.version}`,
       }),
       onConnectHello: async (hello, context) => {
-        await this.lifecycle.acceptHello(hello, context.plan);
+        await lifecycle.acceptHello(hello, context.plan);
+        // Only this connection may drop this gateway's bootstrap secret.
+        if (generation !== this.generation || this.settings?.url !== settings.url) return;
         if (hello.auth.deviceToken && this.settings?.token) {
           // Paired: drop the bootstrap secret, the device token replaces it.
           this.settings = { ...this.settings, token: null };
@@ -459,7 +3154,7 @@ export class ClawtrateClient {
         this.handleHello(hello, generation);
       },
       onConnectFailure: async (error) =>
-        this.handleConnectFailure(error, identity.deviceId, settings.url),
+        this.handleConnectFailure(error, identity.deviceId, settings.url, tokenStore),
       resolveClose: (context) => ({
         retry: true,
         notify: true,
@@ -487,9 +3182,12 @@ export class ClawtrateClient {
           this.setConnection({
             status: this.everConnected ? "reconnecting" : "connecting",
             ...unanswered,
+            // No connection, no effective access; the next hello says what is granted.
+            canWrite: false,
+            canAnswer: false,
+            canApprove: false,
           });
         }
-        this.clearLiveText();
       },
       onReconnectScheduled: (delayMs) => {
         if (generation !== this.generation) return;
@@ -497,6 +3195,7 @@ export class ClawtrateClient {
       },
       onReconnectStopped: (error) => {
         if (generation !== this.generation) return;
+        this.rejectAccessWaiters(new Error(`The connection stopped: ${error.message}`));
         if (this.state.connection.status !== "error") {
           this.setConnection({
             status: "error",
@@ -509,14 +3208,44 @@ export class ClawtrateClient {
         if (generation !== this.generation || !isRetryableNetworkFailure(error)) return;
         this.log("warn", `connection attempt failed: ${error.message}`);
       },
+      // The protocol client closes the socket after a gap; the reconnect reloads open tasks.
+      onGap: ({ expected, received }) => {
+        if (generation !== this.generation) return;
+        this.log("warn", `event gap: expected ${expected}, received ${received}`);
+        this.pendingResync = "gap";
+      },
       onEvent: (event) => {
         if (generation === this.generation) this.handleEvent(event, generation);
       },
       onCallbackError: (label, error) => this.log("error", `${label}: ${String(error)}`),
       handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
+      requestTimeoutMs: this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS,
       reconnect: { initialMs: reconnect.initialMs, multiplier: 2, maxMs: reconnect.maxMs },
     });
     this.protocol.start();
+  }
+
+  /** What one gateway reported that must never be read against another. */
+  private forgetGatewayState(): void {
+    // A creation belongs to the gateway it was asked of; it is never asked of another.
+    for (const timer of this.creationTimers.values()) clearTimeout(timer);
+    this.creationTimers.clear();
+    for (const id of [...this.checkingSlots]) this.releaseCheckingSlot(id);
+    this.creations.clear();
+    for (const waiters of this.creationWaiters.values()) {
+      for (const waiter of waiters) waiter.reject(new Error("Switched to another gateway."));
+    }
+    this.creationWaiters.clear();
+    this.approvalOutcomes.clear();
+    this.unrouted.clear();
+    this.recipients.clear();
+    this.spawnedBy.clear();
+    this.foreign.clear();
+    this.listRequested.clear();
+    this.listApplied.clear();
+    this.approvalReads.clear();
+    for (const { bytes } of this.attachmentContent.values()) this.attachmentBytes -= bytes;
+    this.attachmentContent.clear();
   }
 
   private close(): void {
@@ -528,9 +3257,21 @@ export class ClawtrateClient {
     this.refreshTimer = null;
     for (const timer of this.historyTimers.values()) clearTimeout(timer);
     this.historyTimers.clear();
+    for (const timer of this.turnTimers.values()) clearTimeout(timer);
+    this.turnTimers.clear();
+    for (const timer of this.expiryTimers.values()) clearTimeout(timer);
+    this.expiryTimers.clear();
+    // Creations being checked are kept, and checked again after the next hello.
+    for (const timer of this.creationTimers.values()) clearTimeout(timer);
+    this.creationTimers.clear();
   }
 
-  private handleConnectFailure(error: GatewayProtocolRequestError, deviceId: string, url: string) {
+  private handleConnectFailure(
+    error: GatewayProtocolRequestError,
+    deviceId: string,
+    url: string,
+    tokenStore: GatewayBrowserDeviceTokenStore,
+  ) {
     const details = asRecord(error.details) ?? {};
     const code = typeof details.code === "string" ? details.code : error.gatewayCode;
     const hint = typeof details.remediationHint === "string" ? details.remediationHint : null;
@@ -600,7 +3341,7 @@ export class ClawtrateClient {
     if (code === "AUTH_TOKEN_MISMATCH" || code === "AUTH_DEVICE_TOKEN_MISMATCH") {
       // A stored device token was revoked or rotated elsewhere. Forget it so the
       // next attempt can pair again with a bootstrap token.
-      void this.tokenStore.clear(this.tokenParams(deviceId));
+      void tokenStore.clear(this.tokenParams(deviceId));
     }
 
     const pause = shouldPauseGatewayReconnect({ details: error.details });
@@ -609,6 +3350,9 @@ export class ClawtrateClient {
       pairing: null,
       error: { code, message: error.message, hint },
     });
+    // The gateway stopped accepting this device: work waiting for access will not get it on this connection.
+    if (pause)
+      this.rejectAccessWaiters(new Error(`The gateway refused this device: ${error.message}`));
     return {
       closeCode: 1000,
       closeReason: "connect rejected",
@@ -617,20 +3361,48 @@ export class ClawtrateClient {
   }
 
   private handleHello(hello: HelloOk, generation: number): void {
+    const wasConnected = this.everConnected;
     this.everConnected = true;
     this.pairingSeen = null;
+    // The protocol gives a boot id at most 96 characters; anything else names no start.
+    const bootId = asRecord(hello.server)?.bootId;
+    this.gatewayBootId =
+      typeof bootId === "string" && bootId.length > 0 && bootId.length <= 96 ? bootId : null;
+    const scopes = [...(hello.auth.scopes ?? [])];
+    const canWrite = scopeSatisfied(scopes, WRITE_SCOPE);
+    const policy = asRecord(hello.policy);
+    const number = (value: unknown) =>
+      typeof value === "number" && Number.isFinite(value) ? value : null;
+    this.payloadLimits = {
+      maxPayload: number(policy?.maxPayload),
+      maxImageBytes: number(asRecord(policy?.attachments)?.maxImageBytes),
+    };
     this.setConnection({
       status: "connected",
       serverVersion: hello.server.version,
       protocol: hello.protocol,
-      scopes: [...(hello.auth.scopes ?? [])],
+      scopes,
+      canWrite,
+      canAnswer: scopeSatisfied(scopes, QUESTIONS_SCOPE),
+      canApprove: scopeSatisfied(scopes, APPROVALS_SCOPE),
       pairing: null,
       error: null,
       retryAt: null,
-      connectedAt: Date.now(),
+      connectedAt: this.now(),
       paired: true,
     });
-    void this.bootstrap(generation);
+    if (INTERACTIVE_SCOPES.every((scope) => scopeSatisfied(scopes, scope))) {
+      this.upgradeWanted = false;
+    } else if (this.upgradeWanted) {
+      this.startUpgrade();
+    }
+    this.settleAccessWaiters();
+    this.checkCreations();
+    const reason =
+      this.pendingResync ?? (wasConnected && !this.quietReconnect ? "reconnect" : null);
+    this.pendingResync = null;
+    this.quietReconnect = false;
+    void this.bootstrap(generation, reason);
   }
 
   private setDiscovery(patch: Partial<DiscoveryState>): void {
@@ -642,7 +3414,7 @@ export class ClawtrateClient {
    * open transcripts. Bots and tasks load independently, so one failing read
    * keeps the other's result and any data shown before it.
    */
-  private async bootstrap(generation: number): Promise<void> {
+  private async bootstrap(generation: number, resync: CaughtUp["reason"] | null): Promise<void> {
     this.bootstrapping = true;
     this.changedDuringBootstrap = false;
     this.setDiscovery({ status: "loading", error: null });
@@ -685,7 +3457,9 @@ export class ClawtrateClient {
       failures.push(`tasks: ${errorMessage(sessions.reason)}`);
     }
     if (generation !== this.generation) return;
-    for (const key of this.openSessions.keys()) void this.loadTranscript(key, true);
+    for (const key of Object.keys(this.state.transcripts)) {
+      if (this.tracked(key)) void this.loadTranscript(key, true, resync);
+    }
 
     if (failures.length > 0) {
       this.log("error", `discovery failed: ${failures.join("; ")}`);
@@ -708,28 +3482,36 @@ export class ClawtrateClient {
   private async loadAllSessions(
     generation: number,
     firstMethod: "sessions.subscribe" | "sessions.list",
-  ): Promise<{ rows: RawRecord[]; partial: boolean }> {
+  ): Promise<{ rows: Map<string, RawRecord>; partial: boolean }> {
     const first = asRecord(await this.request(firstMethod, SESSION_LIST_PARAMS));
     let page = firstMethod === "sessions.subscribe" ? asRecord(first?.list) : first;
+    // Each page is bounded as it arrives: only task rows, only the fields read, the newest
+    // `MAX_LISTED_TASKS` of them, so nothing accumulates across pages. The rows so far are
+    // kept where the retention registry sees them (`listings`) until the read ends.
     const rows = new Map<string, RawRecord>();
-    for (let pages = 1; ; pages += 1) {
-      for (const row of sessionRowsFromList(page)) rows.set(sessionRowKey(row)!, row);
-      const nextOffset = page?.nextOffset;
-      const more = page?.hasMore === true && typeof nextOffset === "number";
-      if (!more) return { rows: [...rows.values()], partial: false };
-      if (pages >= MAX_SESSION_PAGES || generation !== this.generation) {
-        return { rows: [...rows.values()], partial: true };
+    this.listings.add(rows);
+    try {
+      for (let pages = 1; ; pages += 1) {
+        const next = newestRows([...rows.values(), ...sessionRowsFromList(page)]);
+        rows.clear();
+        for (const [key, row] of next) rows.set(key, row);
+        const nextOffset = page?.nextOffset;
+        const more = page?.hasMore === true && typeof nextOffset === "number";
+        if (!more) return { rows, partial: false };
+        if (pages >= MAX_SESSION_PAGES || generation !== this.generation) {
+          return { rows, partial: true };
+        }
+        page = asRecord(
+          await this.request("sessions.list", { ...SESSION_LIST_PARAMS, offset: nextOffset }),
+        );
       }
-      page = asRecord(
-        await this.request("sessions.list", { ...SESSION_LIST_PARAMS, offset: nextOffset }),
-      );
+    } finally {
+      this.listings.delete(rows);
     }
   }
 
-  private replaceRows(rows: RawRecord[]): void {
-    this.rows = new Map(
-      rows.filter((row) => isTaskSession(row)).map((row) => [sessionRowKey(row)!, row]),
-    );
+  private replaceRows(rows: Map<string, RawRecord>): void {
+    this.rows = rows;
     this.publishTasks();
   }
 
@@ -738,14 +3520,27 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, tasksByBot }));
   }
 
+  /** One refresh at a time; one asked for meanwhile runs once after it. */
   private async refreshSessions(generation: number): Promise<void> {
+    if (this.refreshing) {
+      this.refreshAgain = true;
+      return;
+    }
+    this.refreshing = true;
     try {
-      const { rows, partial } = await this.loadAllSessions(generation, "sessions.list");
-      if (generation !== this.generation) return;
-      this.replaceRows(rows);
-      this.setDiscovery({ partial });
-    } catch (error) {
-      this.log("warn", `sessions.list failed: ${String(error)}`);
+      do {
+        this.refreshAgain = false;
+        try {
+          const { rows, partial } = await this.loadAllSessions(generation, "sessions.list");
+          if (generation !== this.generation) return;
+          this.replaceRows(rows);
+          this.setDiscovery({ partial });
+        } catch (error) {
+          this.log("warn", `sessions.list failed: ${String(error)}`);
+        }
+      } while (this.refreshAgain && generation === this.generation);
+    } finally {
+      this.refreshing = false;
     }
   }
 
@@ -766,22 +3561,26 @@ export class ClawtrateClient {
   private handleSessionsChanged(payload: unknown, generation: number): void {
     if (this.bootstrapping) this.changedDuringBootstrap = true;
     const row = sessionChangeRow(payload);
-    const key = row ? sessionRowKey(row) : null;
+    const rowKey = row ? sessionRowKey(row) : null;
+    // Rows are kept under the id cap.
+    const key = rowKey === null ? null : capId(rowKey, MAX_ID_CHARS);
     if (!row || !key) {
       this.scheduleRefresh(generation);
       return;
     }
     if (isSessionRemoval(payload)) {
+      this.cancelAllQueued(key);
       if (this.rows.delete(key)) this.publishTasks();
       return;
     }
+    if (row.archived === true) this.cancelAllQueued(key);
     const cached = this.rows.get(key);
     if (!cached) {
       if (!isExcludedSessionKey(key)) this.scheduleRefresh(generation);
       return;
     }
     const merged = mergeSessionRow(cached, row);
-    if (isTaskSession(merged)) this.rows.set(key, merged);
+    if (isTaskSession(merged)) this.rows.set(key, SESSION_ROW(merged));
     else this.rows.delete(key);
     this.publishTasks();
   }
@@ -790,12 +3589,15 @@ export class ClawtrateClient {
 
   private emptyTranscript(key: string): Transcript {
     return {
+      ...emptyActivity,
       sessionKey: key,
       status: "loading",
       items: [],
       error: null,
       hasMore: false,
       live: null,
+      linkedRuns: {},
+      interSession: [],
       loadedAt: null,
     };
   }
@@ -807,8 +3609,75 @@ export class ClawtrateClient {
     }));
   }
 
-  private async loadTranscript(key: string, subscribe: boolean): Promise<void> {
+  /**
+   * Read a task's history and rebuild its runs from it. Runs already on screen
+   * are merged by id and steps by id, and outgoing messages leave the outbox
+   * once history holds them, so a reload never duplicates anything.
+   */
+  /**
+   * Reads of one task run one at a time: a read asked for while one is in
+   * flight runs once after it, with the strongest resync reason asked for.
+   * A response is applied only to the same connection and the same opening of
+   * the task, so a slow read never overwrites newer state.
+   */
+  private loadTranscript(
+    key: string,
+    subscribe: boolean,
+    resync: CaughtUp["reason"] | null,
+  ): Promise<void> {
+    const load = this.loads.get(key);
+    if (load) {
+      load.again = {
+        subscribe: (load.again?.subscribe ?? false) || subscribe,
+        resync: strongerResync(load.again?.resync ?? null, resync),
+      };
+      return load.done;
+    }
+    const entry: {
+      done: Promise<void>;
+      again: { subscribe: boolean; resync: CaughtUp["reason"] | null } | null;
+    } = {
+      done: Promise.resolve(),
+      again: null,
+    };
+    this.loads.set(key, entry);
+    entry.done = (async () => {
+      let next: { subscribe: boolean; resync: CaughtUp["reason"] | null } | null = {
+        subscribe,
+        resync,
+      };
+      while (next) {
+        await this.readTranscript(key, next.subscribe, next.resync);
+        next = entry.again;
+        entry.again = null;
+      }
+      if (this.loads.get(key) === entry) this.loads.delete(key);
+    })();
+    return entry.done;
+  }
+
+  /**
+   * Read a task's history and rebuild its runs from it. Runs already on screen
+   * are merged by id and steps by id, and outgoing messages leave the outbox
+   * once history holds them, so a reload never duplicates anything.
+   */
+  private async readTranscript(
+    key: string,
+    subscribe: boolean,
+    resync: CaughtUp["reason"] | null,
+  ): Promise<void> {
     const generation = this.generation;
+    const incarnation = this.incarnations.get(key);
+    const stale = () =>
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation;
+    // Runs active when the read starts; one the gateway then no longer has has ended.
+    const activeBefore = new Set(
+      (this.state.transcripts[key]?.runs ?? [])
+        .filter((run) => run.bound && !isTerminal(run.state) && run.state !== "queued")
+        .map((run) => run.id),
+    );
     try {
       if (subscribe) {
         await this.request("sessions.messages.subscribe", { key }).catch((error: unknown) => {
@@ -818,25 +3687,62 @@ export class ClawtrateClient {
       const history = asRecord(
         await this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
       );
-      if (generation !== this.generation || !this.openSessions.has(key)) return;
+      if (stale()) return;
+      // A resync starts every stream of this task again from what the gateway sends next.
+      if (resync) this.streams.retire(key);
       const inFlight = asRecord(history?.inFlightRun);
-      this.setTranscript(key, () => ({
+      const inFlightId = typeof inFlight?.runId === "string" ? inFlight.runId : null;
+      const messages = history?.messages;
+      const ctx = this.context(key);
+      // History is built aside; only the steps the merge takes from it bring their raw payloads.
+      const scratch = new RawTable();
+      const fromHistory = runsFromHistory(
+        messages,
+        inFlight,
+        { ...ctx, raw: scratch },
+        { windowCut: history?.hasMore === true },
+      );
+      const current = this.state.transcripts[key] ?? this.emptyTranscript(key);
+      const merge = mergeHistoryRuns(current.runs, fromHistory, ctx);
+      for (const stepId of merge.fromHistory) {
+        const payload = scratch.get(key, stepId);
+        if (payload) this.raw.set(key, stepId, payload);
+      }
+      const runs = settleVanishedRuns(
+        merge.runs,
+        activeBefore,
+        new Set(fromHistory.map((run) => run.id)),
+        inFlightId,
+        ctx,
+      );
+      const reconciled = reconcileOutbox({ ...current, runs }, messages);
+      // History holds these now: their files are no longer needed.
+      for (const message of current.outbox) {
+        if (!reconciled.outbox.some((each) => each.id === message.id))
+          this.dropAttachments(message.id);
+      }
+      const activity = markUnconfirmed(reconciled);
+      const rebuilt: Transcript = {
+        ...current,
+        ...retainActivity(
+          settleQuestionsOfEndedRuns(normalizeApprovals(activity, (runId) => this.otherRun(runId))),
+        ),
         sessionKey: key,
         status: "ready",
-        items: mapHistory(history?.messages),
+        items: mapHistory(messages),
+        interSession: interSessionMessages(messages),
         error: null,
         hasMore: history?.hasMore === true,
-        live:
-          inFlight && typeof inFlight.runId === "string"
-            ? {
-                runId: inFlight.runId,
-                text: typeof inFlight.text === "string" ? inFlight.text : "",
-              }
-            : null,
-        loadedAt: Date.now(),
-      }));
+        caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
+        loadedAt: this.now(),
+      };
+      this.dropRawOfRemovedSteps(key, current, rebuilt);
+      this.setTranscript(key, () => withLive(rebuilt));
+      this.afterActivity(key);
+      void this.backfillQuestions(key, generation);
+      void this.backfillApprovals(key, generation);
     } catch (error) {
-      if (generation !== this.generation || !this.openSessions.has(key)) return;
+      if (stale()) return;
       this.setTranscript(key, (current) => ({
         ...(current ?? this.emptyTranscript(key)),
         status: "error",
@@ -845,29 +3751,18 @@ export class ClawtrateClient {
     }
   }
 
-  private scheduleHistory(key: string): void {
+  private scheduleHistory(key: string, resync: CaughtUp["reason"] | null = null): void {
+    if (resync) this.resyncReasons.set(key, resync);
     if (this.historyTimers.has(key)) return;
     this.historyTimers.set(
       key,
       setTimeout(() => {
         this.historyTimers.delete(key);
-        void this.loadTranscript(key, false);
+        const reason = this.resyncReasons.get(key) ?? null;
+        this.resyncReasons.delete(key);
+        void this.loadTranscript(key, false, reason);
       }, 150),
     );
-  }
-
-  private clearLiveText(): void {
-    this.store.update((state) => {
-      let changed = false;
-      const transcripts = { ...state.transcripts };
-      for (const [key, transcript] of Object.entries(transcripts)) {
-        if (transcript.live) {
-          transcripts[key] = { ...transcript, live: null };
-          changed = true;
-        }
-      }
-      return changed ? { ...state, transcripts } : state;
-    });
   }
 
   private handleChat(event: EventFrame): void {
@@ -875,22 +3770,56 @@ export class ClawtrateClient {
     const key = typeof payload?.sessionKey === "string" ? payload.sessionKey : null;
     const runId = typeof payload?.runId === "string" ? payload.runId : null;
     if (!payload || !key || !runId) return;
-    const { event: projected } = this.streams.project(event);
-    if (!this.openSessions.has(key)) return;
-    if (payload.state === "delta") {
-      const text = liveTextFromChatMessage(asRecord(projected.payload)?.message);
-      this.setTranscript(key, (current) => ({
-        ...(current ?? this.emptyTranscript(key)),
-        live: { runId, text },
-      }));
+    this.noteSpawnedBy(payload);
+    if (!this.tracked(key)) {
+      this.updateForeign(key, (activity, ctx) => applyChatEvent(activity, payload, null, ctx));
       return;
     }
+    // Only tasks this client follows keep a stream baseline: the text, never the message.
+    const projected = this.streams.project(payload);
+    const text = payload.state === "delta" ? projected : null;
+    this.updateActivity(key, (activity, ctx) => applyChatEvent(activity, payload, text, ctx));
     // final, aborted or error: the durable transcript now owns the text.
-    this.setTranscript(key, (current) => ({
-      ...(current ?? this.emptyTranscript(key)),
-      live: null,
-    }));
-    this.scheduleHistory(key);
+    if (payload.state !== "delta" && payload.state !== "status") this.scheduleHistory(key);
+  }
+
+  /** Agent events carry the session key on the wire; fall back to the open task that knows the run. */
+  /** Remember which session spawned which, so a helper's approval reaches its parent task. */
+  private noteSpawnedBy(payload: RawRecord): void {
+    if (typeof payload.sessionKey !== "string" || typeof payload.spawnedBy !== "string") return;
+    const child = capId(payload.sessionKey, MAX_ID_CHARS);
+    const parent = capId(payload.spawnedBy, MAX_ID_CHARS);
+    if (child === parent) return;
+    const known = this.spawnedBy.get(child) === parent;
+    this.spawnedBy.delete(child);
+    this.spawnedBy.set(child, parent);
+    while (this.spawnedBy.size > MAX_SPAWN_LINKS)
+      this.spawnedBy.delete(this.spawnedBy.keys().next().value as string);
+    // A helper's approval that arrived before its spawn was known can be placed now.
+    if (!known) this.routeUnrouted();
+  }
+
+  private handleAgent(event: EventFrame): void {
+    const payload = asRecord(event.payload);
+    if (!payload || typeof payload.runId !== "string") return;
+    this.noteSpawnedBy(payload);
+    let key = typeof payload.sessionKey === "string" ? payload.sessionKey : null;
+    if (!key) {
+      const runId = payload.runId;
+      key =
+        Object.values(this.state.transcripts).find((transcript) => findRun(transcript, runId))
+          ?.sessionKey ?? null;
+    }
+    if (!key) return;
+    if (!this.tracked(key)) {
+      this.updateForeign(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
+      return;
+    }
+    this.updateActivity(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
+    const phase = asRecord(payload.data)?.phase;
+    if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
+      this.scheduleHistory(key);
+    }
   }
 
   private handleEvent(event: EventFrame, generation: number): void {
@@ -900,12 +3829,64 @@ export class ClawtrateClient {
         return;
       case "session.message": {
         const key = asRecord(event.payload)?.sessionKey;
-        if (typeof key === "string" && this.openSessions.has(key)) this.scheduleHistory(key);
+        if (typeof key === "string" && this.tracked(key)) this.scheduleHistory(key);
         return;
       }
       case "chat":
         this.handleChat(event);
         return;
+      case "agent":
+        this.handleAgent(event);
+        return;
+      case "question.requested": {
+        const record = asRecord(event.payload);
+        const key = typeof record?.sessionKey === "string" ? record.sessionKey : null;
+        if (record && key && this.tracked(key)) {
+          this.updateActivity(key, (activity, ctx) =>
+            applyQuestionRequested(activity, record, ctx),
+          );
+        }
+        return;
+      }
+      case "exec.approval.requested":
+      case "plugin.approval.requested":
+      case "openclaw.approval.requested": {
+        const card =
+          event.event === "exec.approval.requested"
+            ? parseExecApproval(event.payload)
+            : event.event === "plugin.approval.requested"
+              ? parsePluginApproval(event.payload)
+              : parseSystemAgentApproval(event.payload);
+        if (card) this.routeApproval(admitApproval(card));
+        return;
+      }
+      case "exec.approval.resolved":
+      case "plugin.approval.resolved":
+      case "openclaw.approval.resolved": {
+        const kind: ApprovalKind =
+          event.event === "exec.approval.resolved"
+            ? "exec"
+            : event.event === "plugin.approval.resolved"
+              ? "plugin"
+              : "system-agent";
+        const resolution = parseApprovalResolved(event.payload, kind);
+        // Kept even when no card has arrived yet: its request or list entry may come later.
+        if (resolution) this.noteApprovalOutcome(resolution);
+        return;
+      }
+      case "question.resolved": {
+        const payload = asRecord(event.payload);
+        const id = payload?.id;
+        if (!payload || typeof id !== "string") return;
+        for (const transcript of Object.values(this.state.transcripts)) {
+          if (transcript.questions.some((question) => question.id === id)) {
+            this.updateActivity(transcript.sessionKey, (activity) =>
+              applyQuestionResolved(activity, payload),
+            );
+          }
+        }
+        return;
+      }
       default:
         return;
     }
@@ -914,7 +3895,7 @@ export class ClawtrateClient {
   // Helpers --------------------------------------------------------------------
 
   private request(method: string, params: unknown): Promise<unknown> {
-    if (!this.protocol) return Promise.reject(new Error("not connected"));
+    if (!this.protocol) return Promise.reject(new NotSentError());
     return this.protocol.request(method, params);
   }
 
@@ -927,13 +3908,31 @@ export class ClawtrateClient {
     return this.identity;
   }
 
-  private async loadToken(deviceId: string, role: string): Promise<StoredDeviceToken | null> {
-    const raw = await this.host.storage.get(this.tokenKey(deviceId, role));
+  private async loadToken(
+    url: string,
+    deviceId: string,
+    role: string,
+  ): Promise<StoredDeviceToken | null> {
+    const raw = await this.host.storage.get(this.tokenKey(url, deviceId, role));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredDeviceToken> & { scopes?: string[] };
     if (typeof parsed.token !== "string") return null;
-    // Earlier builds stored the grant as `scopes`.
-    return { token: parsed.token, grantedScopes: parsed.grantedScopes ?? parsed.scopes ?? [] };
+    return {
+      token: parsed.token,
+      // Earlier builds stored the grant as `scopes`.
+      grantedScopes: parsed.grantedScopes ?? parsed.scopes ?? [],
+      // Records from before the write step-up mean read only.
+      heldScopes: normalizeHeldScopes(parsed.heldScopes),
+    };
+  }
+
+  private async writeToken(
+    url: string,
+    deviceId: string,
+    role: string,
+    record: StoredDeviceToken,
+  ): Promise<void> {
+    await this.host.storage.set(this.tokenKey(url, deviceId, role), JSON.stringify(record));
   }
 
   private tokenParams(deviceId: string) {
@@ -941,9 +3940,39 @@ export class ClawtrateClient {
   }
 
   /** Device tokens are scoped to one gateway, so a token is never offered to another. */
-  private tokenKey(deviceId: string, role: string): string {
-    const url = this.settings?.url ?? "";
+  private tokenKey(url: string, deviceId: string, role: string): string {
     return `deviceToken:${encodeURIComponent(url)}:${deviceId}:${role}`;
+  }
+
+  /**
+   * A token store for one connection. Every operation names its gateway URL,
+   * and a write is dropped once that connection is no longer current, checked
+   * after every wait, so a late write can never land after a switch.
+   */
+  private connectionTokenStore(url: string, generation: number): GatewayBrowserDeviceTokenStore {
+    const current = () => generation === this.generation && this.settings?.url === url;
+    return {
+      // The lifecycle uses the record's scopes for reconnects. Report the
+      // scopes this client means to hold, so a broader grant is never asked for.
+      load: async ({ deviceId, role }) => {
+        const record = await this.loadToken(url, deviceId, role);
+        return record ? { token: record.token, scopes: [...record.heldScopes] } : null;
+      },
+      store: async ({ deviceId, role, token, scopes }) => {
+        if (!current()) return;
+        const existing = await this.loadToken(url, deviceId, role);
+        if (!current()) return;
+        await this.writeToken(url, deviceId, role, {
+          token,
+          grantedScopes: scopes,
+          heldScopes: existing?.heldScopes ?? [...READ_SCOPES],
+        });
+      },
+      clear: async ({ deviceId, role }) => {
+        if (!current()) return;
+        await this.host.storage.delete(this.tokenKey(url, deviceId, role));
+      },
+    };
   }
 
   private now(): number {
@@ -968,6 +3997,101 @@ function hostOf(url: string): string {
   } catch {
     return url;
   }
+}
+
+const RESYNC_STRENGTH: Record<CaughtUp["reason"], number> = { reconnect: 1, gap: 2 };
+
+function strongerResync(
+  a: CaughtUp["reason"] | null,
+  b: CaughtUp["reason"] | null,
+): CaughtUp["reason"] | null {
+  if (!a) return b;
+  if (!b) return a;
+  return RESYNC_STRENGTH[b] > RESYNC_STRENGTH[a] ? b : a;
+}
+
+/**
+ * Whether a step rebuilt from history is the step shown: for a tool, the
+ * gateway's own call id; for reasoning, the fetched text begins with the text
+ * the shown step holds (which keeps the beginning of its text).
+ */
+function sameStep(
+  shown: Run["steps"][number],
+  read: Run["steps"][number],
+  whole: StepRaw,
+): boolean {
+  if (shown.kind === "tool")
+    return (
+      read.kind === "tool" && shown.toolCallId !== null && read.toolCallId === shown.toolCallId
+    );
+  const thinking = asRecord(whole.call)?.thinking;
+  return (
+    read.kind === "reasoning" &&
+    typeof thinking === "string" &&
+    thinking.startsWith(shown.output?.text ?? "")
+  );
+}
+
+/**
+ * Whether the history the gateway returned replaced the message that holds a
+ * step with its oversized placeholder (`__openclaw.truncated` with reason
+ * `oversized`, for a message above its 131,072-byte limit, whatever
+ * `maxChars` asked): a tool result naming the step's call, or an assistant
+ * message of the step's run where the step's reasoning anchor is in effect.
+ */
+function oversizedWhere(
+  messages: unknown,
+  runId: string,
+  step: Run["steps"][number],
+  windowCut: boolean,
+): boolean {
+  const rows = Array.isArray(messages) ? messages : [];
+  const oversized = (row: RawRecord) => {
+    const meta = asRecord(row.__openclaw);
+    return meta?.truncated === true && meta.reason === "oversized";
+  };
+  if (step.kind === "tool") {
+    return rows.some((entry) => {
+      const row = asRecord(entry);
+      return (
+        row !== null &&
+        oversized(row) &&
+        (row.toolCallId ?? row.tool_call_id ?? row.toolUseId ?? row.tool_use_id) === step.toolCallId
+      );
+    });
+  }
+  // The step's anchor, from its id: `reasoning:<runId>:<anchor>:<n>`.
+  const prefix = `reasoning:${runId}:`;
+  if (!step.id.startsWith(prefix)) return false;
+  const rest = step.id.slice(prefix.length);
+  const anchor = rest.slice(0, rest.lastIndexOf(":"));
+  const first = asRecord(rows[0]);
+  let current =
+    windowCut && first && first.role !== "user" && asRecord(first.__openclaw)?.runId === runId
+      ? "c"
+      : "s";
+  for (const entry of rows) {
+    const row = asRecord(entry);
+    if (!row || asRecord(row.__openclaw)?.runId !== runId || row.role !== "assistant") continue;
+    if (oversized(row) && current === anchor) return true;
+    for (const part of Array.isArray(row.content) ? row.content : []) {
+      const block = asRecord(part);
+      if (
+        (block?.type === "toolCall" || block?.type === "tool_use") &&
+        typeof block.id === "string"
+      )
+        current = `t.${block.id}`;
+    }
+  }
+  return false;
+}
+
+/** A count a host sets: the default when it sets none, and never above it. */
+export function hostLimit(value: number | undefined, max: number, name: string): number {
+  if (value === undefined) return max;
+  if (!Number.isInteger(value) || value < 1 || value > max)
+    throw new RangeError(`${name} must be a whole number from 1 to ${max}.`);
+  return value;
 }
 
 function errorMessage(error: unknown): string {

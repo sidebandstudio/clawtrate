@@ -17,13 +17,18 @@ export class GatewayError extends Error {
   }
 }
 
+/** When this fake gateway "process" started; its hellos report their uptime from it. */
+const fakeStartedAt = Date.now();
+/** This fake gateway start's `server.bootId`, as a real gateway reports a random one per start. */
+export const FAKE_BOOT_ID = "fake-boot-1";
+
 export function helloOk(scopes: string[] = ["operator.read"], deviceToken?: string) {
   return {
     type: "hello-ok",
     protocol: 4,
-    server: { version: "test", connId: "conn-1" },
+    server: { version: "test", connId: "conn-1", bootId: FAKE_BOOT_ID },
     features: { methods: [], events: [] },
-    snapshot: {},
+    snapshot: { uptimeMs: Date.now() - fakeStartedAt },
     auth: { role: "operator", scopes, ...(deviceToken ? { deviceToken } : {}) },
     policy: { maxPayload: 26_214_400, maxBufferedBytes: 52_428_800, tickIntervalMs: 15_000 },
   };
@@ -69,7 +74,7 @@ class FakeSocket implements WebSocketLike {
     const method = frame.method;
     if (method === "connect") {
       this.gateway.connects.push(frame.params);
-      const reply = this.gateway.connectReply(frame.params);
+      const reply = this.gateway.connectReply(frame.params, this.url);
       setTimeout(() => this.reply(id, reply), 0);
       return;
     }
@@ -120,7 +125,7 @@ export class FakeGateway {
     "sessions.messages.unsubscribe": () => ({ ok: true }),
     "chat.history": () => ({ messages: [], hasMore: false }),
   };
-  connectReply: (params: unknown) => Reply = () => ({ ok: true, payload: helloOk() });
+  connectReply: (params: unknown, url: string) => Reply = () => ({ ok: true, payload: helloOk() });
 
   readonly createWebSocket = (url: string): WebSocketLike => {
     const socket = new FakeSocket(this, url);
@@ -129,8 +134,15 @@ export class FakeGateway {
   };
 
   /** Deliver an event to every open socket. */
-  emit(event: string, payload: unknown): void {
-    for (const socket of this.sockets) socket.push({ type: "event", event, payload });
+  emit(event: string, payload: unknown, frameSeq?: number): void {
+    for (const socket of this.sockets) {
+      socket.push({
+        type: "event",
+        event,
+        payload,
+        ...(frameSeq !== undefined ? { seq: frameSeq } : {}),
+      });
+    }
   }
 
   /** Drop every open connection, as a gateway restart would. */
@@ -184,4 +196,46 @@ export const tokenKey = (url: string) => `deviceToken:${encodeURIComponent(url)}
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(() => resolve(), ms));
+}
+
+/** A promise a test settles by hand, for gateway calls that wait. */
+export function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/**
+ * Memory storage whose reads of chosen keys can be held, to interleave a
+ * credential write with a gateway switch.
+ */
+export function gatedStorage(initial: Record<string, string> = {}) {
+  const base = memoryStorage(initial);
+  const gates = new Map<string, Array<() => void>>();
+  const held = new Set<string>();
+  return {
+    ...base,
+    hold(key: string) {
+      held.add(key);
+    },
+    /** Let every held read of the key go, and stop holding new ones. */
+    release(key: string) {
+      held.delete(key);
+      for (const resume of gates.get(key) ?? []) resume();
+      gates.delete(key);
+    },
+    waiting(key: string) {
+      return gates.get(key)?.length ?? 0;
+    },
+    get: async (key: string) => {
+      if (held.has(key)) {
+        await new Promise<void>((resume) => gates.set(key, [...(gates.get(key) ?? []), resume]));
+      }
+      return base.data.get(key) ?? null;
+    },
+  };
 }

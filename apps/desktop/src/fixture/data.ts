@@ -1,7 +1,14 @@
 // Invented content for the fixture mode: bots, tasks and transcripts that cover
 // what the interface has to handle. Nothing here comes from a real gateway.
 
-import type { Bot, Task, Transcript, TranscriptBlock, TranscriptItem } from "@clawtrate/core";
+import {
+  emptyActivity,
+  type Bot,
+  type Task,
+  type Transcript,
+  type TranscriptBlock,
+  type TranscriptItem,
+} from "@clawtrate/core";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -560,6 +567,9 @@ export function fixtureTranscripts(now: number, bots: Bot[]): Record<string, Tra
               ? ebookTranscript(spec, now - spec.ago * MINUTE)
               : shortTranscript(spec, now - spec.ago * MINUTE);
       transcripts[key] = {
+        ...emptyActivity,
+        linkedRuns: {},
+        interSession: [],
         sessionKey: key,
         status: "ready",
         items,
