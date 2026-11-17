@@ -202,10 +202,7 @@ for (const size of [WIDE, PHONE]) {
           await (shot.prepare ?? open)(page, card);
           await settle(page);
           await page.mouse.move(0, 0);
-          // The card alone: the controls that float over the transcript's top are not part of it.
-          await expect(card).toHaveScreenshot(`card-${shot.name}-${theme}-${size.name}.png`, {
-            style: ".conversation-header, .status-strip { visibility: hidden !important; }",
-          });
+          await expect(card).toHaveScreenshot(`card-${shot.name}-${theme}-${size.name}.png`);
         });
       }
     });

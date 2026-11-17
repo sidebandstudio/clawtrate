@@ -90,8 +90,8 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | Step             | `STEP`, its texts, error, ids, digest, inline raw          |          16,272 |
   | Run              | `RUN`, without its steps: 49,754; with a full task's steps |       2,132,698 |
   | Outgoing message | `OUTGOING`, text and 20 file names                         |          63,584 |
-  | Question card    | `QUESTION`, 3 questions × 8 options                        |          72,171 |
-  | Approval card    | `APPROVAL`, command, 16 arguments, record                  |          71,376 |
+  | Question card    | `QUESTION`, 3 questions × 8 options                        |          72,188 |
+  | Approval card    | `APPROVAL`, command, 16 arguments, record                  |          71,443 |
 
 - **Per task**, count × cap:
 
@@ -99,32 +99,32 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | --------------------------------------- | ------------------------------------------------------------------- | --------------: |
   | Runs                                    | 32 runs × 49,754, plus 128 steps × 16,272 shared by the task's runs |       3,675,106 |
   | Outbox                                  | 16 × 63,584                                                         |       1,017,362 |
-  | Questions                               | (4 pending + 4 settled) × 72,171                                    |         577,378 |
-  | Approvals                               | (16 pending + 8 settled) × 71,376                                   |       1,713,050 |
+  | Questions                               | (4 pending + 4 settled) × 72,188                                    |         577,514 |
+  | Approvals                               | (16 pending + 8 settled) × 71,443                                   |       1,714,658 |
   | History page                            | 200 items × 2,171, plus 300 blocks × 3,441 shared by the page       |       1,467,002 |
   | Inter-session messages                  | 64 × 5,772                                                          |         369,474 |
   | Linked runs                             | 32 × (key 1,024 + 2,204)                                            |         103,362 |
   | Steer aliases                           | 16 × (key 1,024 + 1,024)                                            |          32,802 |
   | Streaming text, ids, error and the rest | streaming text 16,384, plus field names                             |          21,900 |
-  | Per task                                |                                                                     |       8,977,436 |
+  | Per task                                |                                                                     |       8,979,180 |
 
 - **The state**, and what one viewer is sent:
 
   | Part                               | Count × cap                                                             | JSON characters |
   | ---------------------------------- | ----------------------------------------------------------------------- | --------------: |
-  | Transcripts                        | 8 followed tasks × 8,977,436, with their keys                           |      71,827,698 |
+  | Transcripts                        | 8 followed tasks × 8,979,180, with their keys                           |      71,841,650 |
   | Bots                               | 32 × 35,675                                                             |       1,141,634 |
-  | Unrouted approvals                 | 16 × 71,376                                                             |       1,142,034 |
+  | Unrouted approvals                 | 16 × 71,443                                                             |       1,143,106 |
   | Task creations                     | 8 × 40,546                                                              |         324,378 |
   | Task list, connection and the rest | 500 listed tasks × 6,050 across 32 bots, connection 40,050, field names |       3,101,603 |
-  | State                              |                                                                         |      77,537,347 |
-  | One viewer's snapshot              | the state with only its 4 open tasks                                    |      41,623,499 |
+  | State                              |                                                                         |      77,552,371 |
+  | One viewer's snapshot              | the state with only its 4 open tasks                                    |      41,631,547 |
 
 - **The host:** the state, and everything else the host process keeps or has in flight for it. Files count in base64 characters, as they are kept.
 
   | Part               | What                                                                                                                                                                                                                                                             | JSON characters |
   | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------: |
-  | `state`            | The state, as above                                                                                                                                                                                                                                              |      77,537,347 |
+  | `state`            | The state, as above                                                                                                                                                                                                                                              |      77,552,371 |
   | `rawPayloads`      | Raw payloads across tasks, `MAX_RAW_BYTES` (32 Mi), plus one entry of at most `MAX_RAW_ENTRY_CHARS` (262,144) before the oldest give way (a larger one is not kept), and the table's keys: a key and task id for each followed task's `MAX_STEPS_PER_TASK` steps |      36,996,288 |
   | `outboxFiles`      | Files of outgoing messages: base64 of `MAX_RETAINED_ATTACHMENT_BYTES` (32 MiB), and their names and types (`attachmentContent`)                                                                                                                                  |      49,609,388 |
   | `uploads`          | Files waiting or arriving: base64 of `MAX_PENDING_ATTACHMENT_BYTES` (32 MiB), plus one file of `MAX_FILE_BYTES` (20 MiB) while it is encoded, and the store's entries and reservations                                                                           |      72,949,080 |
@@ -138,10 +138,10 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | `approvalReads`    | Whole reads of a cut approval's text: per pending approval of a followed task, `MAX_APPROVAL_READERS` (8) viewers' digests                                                                                                                                       |         297,345 |
   | `viewers`          | `MAX_WEB_VIEWERS` (8) bridge sessions × `MAX_VIEWER_OPEN_TASKS` open task keys                                                                                                                                                                                   |          32,768 |
   | `historyReads`     | `chat.history` pages being read, at most the gateway's 524,288 bytes each: one per followed task, `MAX_FULL_READS` (4) whole reads, and one page's payloads rebuilt                                                                                              |       6,815,744 |
-  | `snapshotsQueued`  | `MAX_SNAPSHOTS_IN_FLIGHT` (2) snapshots written and not yet accepted × one viewer's snapshot                                                                                                                                                                     |      83,246,998 |
+  | `snapshotsQueued`  | `MAX_SNAPSHOTS_IN_FLIGHT` (2) snapshots written and not yet accepted × one viewer's snapshot                                                                                                                                                                     |      83,263,094 |
   | `resultsQueued`    | `MAX_WEB_VIEWERS` (8) × `MAX_UNACCEPTED_RESULTS` (16) × `MAX_RESULT_CHARS` (262,144)                                                                                                                                                                             |      33,554,432 |
-  | `serializing`      | One snapshot being encoded                                                                                                                                                                                                                                       |      41,623,499 |
-  | Host               |                                                                                                                                                                                                                                                                  |     422,455,121 |
+  | `serializing`      | One snapshot being encoded                                                                                                                                                                                                                                       |      41,631,547 |
+  | Host               |                                                                                                                                                                                                                                                                  |     422,494,289 |
 
   In memory a JSON character is one or two bytes (a string is Latin-1 or UTF-16), and on a socket at most three (UTF-8). The table bounds string data, not the process: objects, map entries, encoding copies and garbage come on top of it, so it is not a memory ceiling; ordinary use is far below it. A history page is read whole, at most the gateway's `chat.history` ceiling (524,288 bytes in OpenClaw 2026.10.6), and mapped and bounded before it is kept. A socket error ends only that viewer, and releasing a viewer never throws into the socket's callbacks. Chat stream baselines are kept only for tasks the client follows: the reply text alone, for at most `MAX_STREAMS_PER_TASK` (2) runs per task, retired when the run ends (on the `chat` or the `agent` stream), leaves the transcript, or its task is resynced or released.
 
@@ -214,7 +214,7 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
 - **Housekeeping.** `list` finds instances from their state folders under the home (`~/.openclaw-dev` and `~/.openclaw-clawtrate-dev-*` with the tool's marker) and shows each folder, its ports, whether its gateway is running and which checkout started it. `prune` is deliberate machine-wide maintenance: it removes every named instance, whichever checkout created it, that the deletion rule proves idle, each under its lifecycle lock with the marker read again after the lock is taken, plus this checkout's run folder for it. It never removes the default instance. `list` and `prune` refuse `--instance` and `CLAWTRATE_DEV_INSTANCE` rather than ignore them, and every command validates the selector before it does anything.
 - **End-to-end runs use their own instances.** `pnpm e2e` names one instance `e2e-<run id>` and a sentinel `e2e-<run id>-other`, and gives each a dev-gateway run id of its own (`start --run-id`). It starts the sentinel unseeded (`start --no-seed`), so another instance's gateway is always listening, then its own seeded instance, builds the web renderer into a temporary folder and starts a preview host on a system-chosen port. It checks it never uses 19001, 19091, 5310 or 5311, and that the default instance, non-e2e instances and its sentinel are still running with the same PIDs and ports. It keeps a run record in `tools/dev-gateway/.run/e2e/`: the runner's identity, each instance with its run id (written before that instance's `start`), each temporary folder (written as it is created) and the preview host, which is written as pending before it is spawned behind a gate and completed with its PID and start time before the gate opens (`e2e/run-record.ts`). Cleanup removes exactly those, resetting each instance with `--run-id`, and never runs `prune`. The host's folders are removed only once the host is proven to have exited. Cleanup runs from the teardown, from a setup failure, on SIGINT and SIGTERM and at process exit, synchronously, after letting an interrupted dev-gateway command exit. A run killed outright leaves its record, and the next run in the same checkout cleans it up once that run's runner has exited. If the runner or the host is alive or unknown, the record and the folders stay and the reason is printed. Each run also has its own Playwright output folder, so runs in one checkout do not delete each other's traces.
 - **What the tool trusts.** It trusts its own local records, written by the same user account: the state folder's marker, this checkout's run file and connection file, and the e2e run records. A recorded start time protects against a PID the system has given to another process since. It does not prove which program started a process: someone who can rewrite the marker can point it at any process of theirs whose PID and start time they read from `ps`, and `stop` would signal it. The tool does not defend against that, since such a writer could signal the process directly. It does defend against stale and mismatched records: a run file alone, or a run file and a connection file that agree, never authorise a signal, a deletion or a token-free connection. The state folder, its marker, the run file and the lock folder are never read through a link, and neither is the connection file when an endpoint is proven.
-- **Ports.** Default instance: gateway 19001, scripted model 19091. Named instances: 19200 to 19999, chosen at start. Web previews 5310 and 5311. The e2e preview host uses a port the system picks (loopback only). The fixture mode serves on 5341 (loopback only).
+- **Ports.** Default instance: gateway 19001, scripted model 19091. Named instances: 19200 to 19999, chosen at start. Web previews 5310 and 5311. The e2e preview host uses a port the system picks (loopback only). The fixture mode serves on 5341 (loopback only), or on `CLAWTRATE_FIXTURE_PORT` when another checkout's visual run holds 5341.
 
 ### Checked against the gateway research notes
 
