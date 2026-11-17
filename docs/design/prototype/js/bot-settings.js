@@ -61,6 +61,11 @@
     if (e.state === "stale") return "stale";
     return "bound";
   };
+  function clearNotice(id) {
+    delete binding[id].served;
+    const bot = app.bots.find((x) => x.id === id);
+    if (bot?.notice?.tone === "warn") delete bot.notice;
+  }
   function readOrder(id, reason) {
     const b = binding[id];
     if (!b?.account) return;
@@ -84,7 +89,10 @@
       else b.evidence = { state: "nomatch", at, lastMatch: e.lastMatch };
     }
     const after = lockState(id);
-    if (after === "locked") b.watching = false;
+    if (after === "locked") {
+      b.watching = false;
+      clearNotice(id); // a confirmed lock clears the row's "tried another account"
+    }
     if (before !== after) {
       if (after === "locked") announce("Locked. The gateway confirmed it.");
       if (before === "locked" && after === "bound") announce(`${botName(id)} is no longer locked`);
@@ -175,7 +183,7 @@
         ? `<div class="b-pair" style="margin-top:8px">${D.select("model", "Model", b.model || D.DEFAULT_MODEL.model)}${D.select("effort", "Effort", b.effort)}</div>` +
           `<p class="b-hint">${esc(providerName(provider || D.DEFAULT_MODEL.provider))}'s models, as the gateway lists them. Which ones ${a ? "this account" : "an account"} may use is ${esc(providerName(provider || D.DEFAULT_MODEL.provider))}'s decision.</p>`
         : "") +
-      (b.served ? note(`<p>${name}'s last run was finished on another ${esc(providerName(provider))} account. See Account.</p>`, "warn") : "") +
+      (b.served ? note(`<p>The gateway tried another ${esc(providerName(provider))} account in ${name}'s last run with a notice. See Account.</p>`, "warn") : "") +
       (b.failed ? note(`<p>${b.failed}</p>`, "danger") : "") +
       `<h3 class="b-tabgroup">Tools</h3><dl class="facts">` +
       row("Permissions", "Ask before running commands") +
@@ -282,7 +290,10 @@
         "warn",
       );
     if (b.served)
-      html += note(`<p><b>Last run:</b> ${esc(acctName(a))} failed (${b.served.reason}) and the gateway finished the run on another ${who} account, at ${b.served.at}.</p>`, "", icon("clock"));
+      html += note(`<p><b>${b.served.at}:</b> ${esc(acctName(a))} failed (${b.served.reason}) and the gateway tried another ${who} account.</p>`, "", icon("clock"));
+    // What this cannot see, when the gateway's log cannot be read or was missed.
+    if (b.log === "none") html += `<p class="b-hint">Clawtrate can't read the gateway's log, so it can't tell you when the gateway tries another account.</p>`;
+    if (b.log === "gap") html += `<p class="b-hint">Clawtrate missed part of the gateway's log, between 4:10 and 4:30 PM; a switch then would not show here.</p>`;
     if (isAdmin()) html += `<div class="b-actions" style="margin-top:18px">${button("Change account", 'data-bs="change" data-size="sm"')}</div>`;
     return html;
   }
@@ -333,14 +344,14 @@
     binding.marlow.served = { reason: "rate limited", at: "4:58 PM" };
     const m = app.bots.find((b) => b.id === "marlow");
     // The row's warning stays until the person has seen the line in its task.
-    if (app.model.selectedBot !== "marlow") m.notice = { text: "Used another account", tone: "warn", spoken: "used another account" };
+    if (app.model.selectedBot !== "marlow") m.notice = { text: "Tried another account", tone: "warn", spoken: "the gateway tried another account" };
     const raw = JSON.stringify({ event: "embedded_run_failover_decision", runId: "run_8c41f2", decision: "rotate_profile", failoverReason: "rate_limit", provider: "openai", model: "gpt-5.5", profileId: "sha256:4f1c0e9a2b7d" }, null, 2);
     m.tasks[0].html =
       `<div class="stamp">Today 4:57 PM</div>` +
       `<div class="turn" data-role="user" data-testid="transcript-turn"><div class="msg" data-role="user"><div class="bubble">Can you tighten the intro of the newsletter draft?</div></div></div>` +
-      `<details class="event-details" data-testid="served-line"><summary class="event-line">OpenAI · Work failed (rate limited). The gateway finished this run on another OpenAI account, likely Home.${icon("chevron", "icon chevron")}</summary>` +
-      `<div class="card event-body"><p class="b-p">The gateway's log for this run says it moved the run off OpenAI · Work after a rate limit. It doesn't say which account served the run.</p>` +
-      `<p class="b-p"><b>Inferred:</b> OpenAI · Home is the only other OpenAI account, so it is likely. Clawtrate can't confirm it.</p>` +
+      `<details class="event-details" data-testid="served-line"><summary class="event-line">OpenAI · Work failed (rate limited), and the gateway tried another OpenAI account, likely Home.${icon("chevron", "icon chevron")}</summary>` +
+      `<div class="card event-body"><p class="b-p">The gateway's log for this run says OpenAI · Work failed after a rate limit and the gateway moved on to another OpenAI account. It doesn't say which account served the run.</p>` +
+      `<p class="b-p"><b>Inferred:</b> OpenAI · Home was the only other OpenAI account Marlow could use, so it is likely. The gateway doesn't confirm it.</p>` +
       `<p class="b-p b-faint">Lock Marlow to OpenAI · Work, in its settings, to have a failure stop the run instead.</p>` +
       `<div class="b-actions">${button("Open Marlow's settings", 'data-bs="open-settings" data-bot="marlow" data-size="sm"')}<span class="spacer"></span>` +
       `<button type="button" class="button" data-variant="quiet" data-size="sm" data-bs="raw" aria-expanded="false">Raw</button></div>` +
@@ -351,13 +362,13 @@
   // Otto's last run failed on its account: Otto is locked, so the gateway did not move it.
   const FAIL = {
     quota: {
-      preview: "Couldn't finish: OpenAI · Work is out of quota",
-      reason: "Otto's account, OpenAI · Work, is out of credit or quota: OpenAI refused the run. Otto is locked to it, so the gateway didn't use another account. The gateway pauses an account after a billing error, for 10 minutes at first.",
+      preview: "Couldn't finish: OpenAI refused for quota",
+      reason: "OpenAI refused the run for credit or quota. Otto is bound to OpenAI · Work; the gateway's log names it as the account that failed. Otto is locked to it, so the gateway didn't try another account. The gateway pauses an account after a billing error, for 10 minutes at first.",
       actions: [["Change account", "change-account", "primary"], ["Try again", "retry-turn", ""]],
     },
     signedout: {
-      preview: "Couldn't finish: sign in to OpenAI · Work again",
-      reason: "Otto's account, OpenAI · Work, is signed out: OpenAI didn't accept its sign-in. Otto is locked to it, so the gateway didn't use another account.",
+      preview: "Couldn't finish: OpenAI sign-in refused",
+      reason: "OpenAI didn't accept the sign-in. Otto is bound to OpenAI · Work; the gateway's log names it as the account that failed. Otto is locked to it, so the gateway didn't try another account.",
       actions: [["Sign in again", "sign-in-again", "primary"], ["Change account", "change-account", ""]],
     },
   };
@@ -374,9 +385,10 @@
       fail.actions.map(([label, action, variant]) => button(label, `data-bs="${action}" data-bot="otto" data-size="sm"`, variant)).join("") +
       `<span class="spacer"></span><button type="button" class="button" data-variant="quiet" data-size="sm" data-bs="copy-id">Copy request ID</button></div></div>`;
     o.notice = { text: fail.preview, tone: "danger", spoken: "a run failed on its account" };
-    binding.otto.failed = (p("fail") === "quota" ? "Otto's last run failed: OpenAI · Work is out of quota. Change the account, or try again once the provider allows it." : "Otto's last run failed: OpenAI · Work is signed out. Sign in again, or change the account.");
+    binding.otto.failed = p("fail") === "quota" ? "Otto's last run failed: OpenAI refused it for quota, on OpenAI · Work. Change the account, or try again once OpenAI allows it." : "Otto's last run failed: OpenAI didn't accept the sign-in of OpenAI · Work. Sign in again, or change the account.";
     if (!p("bot")) app.openTask("otto", "o0");
   }
+  if (p("log") && binding[app.model.selectedBot]) binding[app.model.selectedBot].log = p("log");
   if (p("served") || fail) app.selectBot(app.model.selectedBot);
 
   // Wiring ------------------------------------------------------------------------------------------
@@ -480,8 +492,8 @@
       b.account = pick.id;
       b.removed = false;
       b.inherits = false;
-      delete b.served;
       delete b.failed;
+      clearNotice(id);
       eventLine(id, `${botName(id)} now runs on ${acctName(pick)}${b.running && was ? `. The run in progress finishes on ${acctName(was)}.` : ", from the next run."}`);
       S.view = "account";
       S.pick = null;

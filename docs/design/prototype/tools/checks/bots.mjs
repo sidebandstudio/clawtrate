@@ -270,21 +270,34 @@ for (const [lock, words, word] of [
 
 // Served by another account.
 p = await open("bot=otto&served=1");
-check("P2 the bot's row warns that another account was used", await p.evaluate(() => { const r = document.querySelector('.bot[data-bot="marlow"]'); const pv = r.querySelector(".bot-preview"); return pv.dataset.tone === "warn" && pv.textContent === "Used another account" && r.getAttribute("aria-label").includes("used another account"); }));
+check("P2 the bot's row warns that another account was used", await p.evaluate(() => { const r = document.querySelector('.bot[data-bot="marlow"]'); const pv = r.querySelector(".bot-preview"); return pv.dataset.tone === "warn" && pv.textContent === "Tried another account" && r.getAttribute("aria-label").includes("the gateway tried another account"); }));
 await p.click('.bot[data-bot="marlow"]');
-check("P2 the task has the grey line, naming the other account only as likely", (await text(p, '[data-testid="served-line"] summary')).includes("OpenAI · Work failed (rate limited). The gateway finished this run on another OpenAI account, likely Home."));
+check("FM-04 the task's line says only what the log shows: the bound account failed and the gateway tried another", (await text(p, '[data-testid="served-line"] summary')).includes("OpenAI · Work failed (rate limited), and the gateway tried another OpenAI account, likely Home.") && !(await text(p, "#transcript")).includes("finished this run on"));
 check("P2 opening the task clears the row's warning", await p.evaluate(() => !document.querySelector('.bot[data-bot="marlow"] .bot-preview[data-tone]')));
 await p.click('[data-testid="served-line"] summary');
 check("P2 opened, the line says what is inferred and what the gateway does not say", (await text(p, '[data-testid="served-line"]')).includes("It doesn't say which account served the run") && (await text(p, '[data-testid="served-line"]')).includes("Inferred:"));
 await p.click('[data-testid="served-line"] [data-bs="raw"]');
 check("P2 Raw shows the gateway's log record", (await text(p, '[data-testid="served-line"] .b-raw')).includes('"decision": "rotate_profile"'));
 await p.click('[data-testid="served-line"] [data-bs="open-settings"]');
-check("P2 the line leads to the bot's account", (await pane(p)).includes("Last run:") && (await pane(p)).includes("Lock to this account"));
+check("P2 the line leads to the bot's account", (await pane(p)).includes("4:58 PM: OpenAI · Work failed (rate limited) and the gateway tried another OpenAI account.") && (await pane(p)).includes("Lock to this account"));
+await p.close();
+
+// FM-04: the row's warning clears on a confirmed lock, and what the settings cannot see.
+p = await open("bot=otto&served=1");
+await p.evaluate(() => { window.botSettings.GW.order.marlow = ["openai:work"]; window.botSettings.readOrder("marlow"); });
+await p.click('.bot[data-bot="juniper"]');
+check("FM-04 a confirmed lock clears the row's warning", await p.evaluate(() => !document.querySelector('.bot[data-bot="marlow"] .bot-preview[data-tone]')));
+await p.close();
+p = await open("bot=marlow&panel=open&tab=settings&bview=account&log=none");
+check("FM-04 when the gateway's log can't be read, the account page says what it cannot see", (await pane(p)).includes("Clawtrate can't read the gateway's log, so it can't tell you when the gateway tries another account."));
+await p.close();
+p = await open("bot=marlow&panel=open&tab=settings&bview=account&log=gap");
+check("FM-04 when part of the log was missed, it says when", (await pane(p)).includes("Clawtrate missed part of the gateway's log, between 4:10 and 4:30 PM"));
 await p.close();
 
 // An account that fails.
 p = await open("fail=quota");
-check("P2 out of quota: the turn error names the bound account and why", (await text(p, '[data-testid="account-error"]')).includes("Otto's account, OpenAI · Work, is out of credit or quota") && (await text(p, '[data-testid="account-error"]')).includes("locked to it, so the gateway didn't use another account"));
+check("FM-04 out of quota: the bound account named as bound, and as failed only from the log", (await text(p, '[data-testid="account-error"]')).includes("OpenAI refused the run for credit or quota. Otto is bound to OpenAI · Work; the gateway's log names it as the account that failed.") && !(await text(p, '[data-testid="account-error"]')).includes("Otto's account, OpenAI · Work, is out of"));
 check("P2 out of quota: Change account and Try again", await p.evaluate(() => [...document.querySelectorAll('[data-testid="account-error"] .button')].map((b) => b.textContent).join("|").startsWith("Change account|Try again")));
 check("P2 the bot's row shows the failure", await p.evaluate(() => document.querySelector('.bot[data-bot="otto"] .bot-preview').dataset.tone === "danger"));
 await p.click('[data-testid="account-error"] [data-bs="change-account"]');
