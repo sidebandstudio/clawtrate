@@ -500,8 +500,16 @@ export function Rail({
   /** New task (F-054): an empty task under the bot, selected, with focus in its composer. */
   const newTask = (bot: Bot) => {
     setMenu(null);
+    // One create per activation: a second press while one is on its way does nothing.
+    if (creating.has(bot.id)) return;
+    creating.add(bot.id);
     void runner.run(`start a task for ${bot.name}`, async () => {
-      const { key } = await bridge.invoke({ type: "newTask", botId: bot.id, label: null });
+      let key: string;
+      try {
+        ({ key } = await bridge.invoke({ type: "newTask", botId: bot.id, label: null }));
+      } finally {
+        creating.delete(bot.id);
+      }
       selection.selectTask(bot.id, key);
       selection.unfold(bot.id);
       setFocusTask({ key, bot: bot.id, composer: true });

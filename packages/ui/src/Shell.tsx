@@ -219,14 +219,23 @@ export function Shell({
     },
     [send],
   );
+  // One effect, so opening a task makes one read however its row changes meanwhile: the
+  // opening reads it once; later, a new reply while it is open reads it again; leaving does too.
+  const openedKey = useRef<string | null>(null);
   useEffect(() => {
     if (!taskKey || !connectedNow) return;
-    readTask(taskKey, true);
-    return () => readTask(taskKey, false);
-  }, [taskKey, connectedNow, readTask]);
-  useEffect(() => {
-    if (taskKey && taskUnread && marker === null && connectedNow) readTask(taskKey, false);
+    if (openedKey.current !== taskKey) {
+      openedKey.current = taskKey;
+      readTask(taskKey, true);
+    } else if (taskUnread && marker === null) readTask(taskKey, false);
   }, [taskKey, taskUnread, marker, connectedNow, readTask]);
+  useEffect(() => {
+    if (!taskKey) return;
+    return () => {
+      openedKey.current = null;
+      readTask(taskKey, false);
+    };
+  }, [taskKey, readTask]);
 
   // The one place that moves focus for Work. As a drawer it takes focus, unless
   // focus is already inside it. When the pane closes, focus that was inside it

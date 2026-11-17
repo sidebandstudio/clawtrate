@@ -86,6 +86,95 @@ test("F-054: New task from the bot's menu, from the last row of its tasks and wi
   await expect(page.locator(".composer-input")).toBeFocused();
 });
 
+test("F-054: one create per activation, however fast the presses; one read per open of an unread task", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  // Two clicks dispatched in the same moment, before any answer.
+  await page
+    .getByTestId("new-task-row")
+    .first()
+    .evaluate((row: HTMLElement) => {
+      row.click();
+      row.click();
+    });
+  await expect(page.locator(".composer-input")).toBeFocused();
+  await expect(tasksOf(page, "Otto").filter({ hasText: "New task" })).toHaveCount(1);
+  expect(await sent(page, "newTask")).toHaveLength(1);
+  // A double-click once that one is made: one more.
+  await page.getByTestId("new-task-row").first().dblclick();
+  await expect.poll(async () => (await sent(page, "newTask")).length).toBe(2);
+  await expect(page.locator(".composer-input")).toBeFocused();
+  await expect(tasksOf(page, "Otto").filter({ hasText: "New task" })).toHaveCount(2);
+  // Opening an unread task: one read, though the row changes as it is read.
+  await taskRow(page, "Weekly backup check").click();
+  await expect(taskRow(page, "Weekly backup check").locator(".unread-dot")).toHaveCount(0);
+  await expect
+    .poll(
+      async () =>
+        (await sent(page, "markTask")).filter(
+          (command) => "key" in command && command.key === "agent:otto:backup-check",
+        ).length,
+    )
+    .toBe(1);
+  await page.waitForFunction(() => document.querySelector(".composer-input") !== null);
+  expect(
+    (await sent(page, "markTask")).filter(
+      (command) => "key" in command && command.key === "agent:otto:backup-check",
+    ),
+  ).toEqual([{ type: "markTask", key: "agent:otto:backup-check", unread: false, opened: true }]);
+});
+
+test("F-022: a refused unread change leaves the rail and the badge as the gateway reports them", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  const badge = () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { clawtrateFixture: { badge: number | null } }).clawtrateFixture
+          .badge,
+    );
+  await expect.poll(badge).not.toBeNull();
+  const before = await badge();
+  await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateFixture: { refuse(type: string): void } }
+    ).clawtrateFixture.refuse("markTask"),
+  );
+  await taskMenu(page, "Certificate renewal");
+  await page.getByRole("menuitem", { name: "Mark as unread" }).click();
+  await expect(page.getByTestId("rail-notice")).toContainText(
+    "Couldn't mark it unread. The gateway refused the change.",
+  );
+  await expect(taskRow(page, "Certificate renewal")).toHaveAccessibleName(
+    "Certificate renewal warning",
+  );
+  expect(await badge()).toBe(before);
+  await taskMenu(page, "Weekly backup check");
+  await page.getByRole("menuitem", { name: "Mark as read" }).click();
+  await expect(page.getByTestId("rail-notice")).toContainText("Couldn't mark it read.");
+  await expect(taskRow(page, "Weekly backup check").locator(".unread-dot")).toHaveCount(1);
+  expect(await badge()).toBe(before);
+});
+
+test("F-278: a confirmed delete of an archived task removes its row and its menu at once", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  await page.getByRole("button", { name: "Archived" }).click();
+  const archived = page.getByRole("list", { name: "Otto's archived tasks" });
+  await expect(archived.getByTestId("archived-task")).toHaveCount(2);
+  await archived.getByTestId("archived-task").filter({ hasText: "Old printer driver" }).click();
+  await page.getByRole("menuitem", { name: "Delete…" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect(
+    archived.getByTestId("archived-task").filter({ hasText: "Old printer driver" }),
+  ).toHaveCount(0);
+  await expect(archived.getByTestId("archived-task")).toHaveCount(1);
+  await expect(page.getByRole("menu")).toHaveCount(0);
+});
+
 test("F-056: double-click or F2 renames in place; Enter renames, Escape keeps the name, and focus returns to the row", async ({
   page,
 }) => {
