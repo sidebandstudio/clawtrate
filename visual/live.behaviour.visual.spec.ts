@@ -391,6 +391,12 @@ test.describe("the status line", () => {
     expect(
       await page.locator(".stream-caret").evaluate((el) => getComputedStyle(el).animationName),
     ).toBe("none");
+    expect(
+      await page
+        .locator("[data-testid=live-turn] .md > p")
+        .last()
+        .evaluate((p) => getComputedStyle(p, "::after").animationName),
+    ).toBe("none");
   });
 
   test("F-292: a pending card reads Waiting for you, and the running phrase returns when it settles", async ({
@@ -457,6 +463,61 @@ test.describe("the status line", () => {
     await setRun(page, { textComplete: true });
     await expect(bubble).toHaveAttribute("aria-busy", "false");
     await expect(bubble.locator(".stream-caret")).toHaveCount(0);
+  });
+
+  test("F-433: the streaming marker lasts until the gateway says the reply is complete, through Stopping…", async ({
+    page,
+  }) => {
+    await open(page, "run-streaming");
+    const bubble = page.getByTestId("live-turn").locator(".bubble");
+    await setRun(page, { state: "stopping", stopRequestedAt: Date.now() });
+    await expect(page.getByTestId("status-phrase")).toHaveText("Stopping…");
+    await expect(bubble).toHaveAttribute("aria-busy", "true");
+    await expect(bubble).toHaveAttribute("data-streaming", "true");
+    await setRun(page, { state: "stopped", endedAt: Date.now() });
+    await expect(bubble).toHaveAttribute("aria-busy", "false");
+    await expect(page.getByTestId("incomplete")).toHaveText("Incomplete");
+  });
+
+  test("F-433: a reply the gateway reported complete is never called Incomplete when the run then fails", async ({
+    page,
+  }) => {
+    await open(page, "run-streaming");
+    await setRun(page, { textComplete: true });
+    await setRun(page, {
+      state: "failed",
+      endedAt: Date.now(),
+      error: { message: "The provider went away.", kind: "provider" },
+    });
+    await expect(page.getByTestId("turn-error")).toBeVisible();
+    await expect(page.getByTestId("incomplete")).toHaveCount(0);
+  });
+
+  test("F-433: the caret follows the last character when the reply ends with a list", async ({
+    page,
+  }) => {
+    await open(page, "run-streaming");
+    await setRun(page, { text: "Two folders were skipped:\n\n- photos\n- videos" });
+    const bubble = page.getByTestId("live-turn").locator(".bubble");
+    await expect(bubble.locator("li").last()).toHaveText("videos");
+    const caret = await bubble
+      .locator("li")
+      .last()
+      .evaluate((li) => {
+        const after = getComputedStyle(li, "::after");
+        return { content: after.content, width: after.width, display: after.display };
+      });
+    expect(caret).toEqual({ content: '""', width: "2px", display: "inline-block" });
+    // The stand-in caret after the block is not drawn.
+    await expect(bubble.locator(".stream-caret")).toBeHidden();
+    // A paragraph ending carries it the same way.
+    await setRun(page, { text: "The backup finished at 02:14." });
+    expect(
+      await bubble
+        .locator(".md > p")
+        .last()
+        .evaluate((p) => getComputedStyle(p, "::after").width),
+    ).toBe("2px");
   });
 
   test("F-433: a reply cut off by a stop or a failure keeps its text, captioned Incomplete", async ({

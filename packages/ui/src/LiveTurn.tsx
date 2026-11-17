@@ -4,7 +4,13 @@
 // approvals, questions and messages between bots each have a place here held
 // by a one-line placeholder; their cards are built separately.
 
-import type { Bot, OutgoingMessage, Run, Transcript } from "@clawtrate/core";
+import {
+  isTerminal,
+  type Bot,
+  type OutgoingMessage,
+  type Run,
+  type Transcript,
+} from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "./bridge.tsx";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
@@ -176,12 +182,20 @@ export function RunCards({ run, transcript }: { run: Run; transcript: Transcript
  */
 export function RunReply({ run }: { run: Run }) {
   if (!run.text) return null;
-  const streaming = !run.textComplete && (run.state === "running" || run.state === "waiting");
-  const cut = run.state === "stopped" || run.state === "failed";
+  // Streaming until the gateway reports the reply complete or the run is over:
+  // pressing Stop does not end the reply; the confirmation does.
+  const streaming = !run.textComplete && !isTerminal(run.state);
+  // Cut off only if the reply was not complete when the run stopped or failed.
+  const cut = !run.textComplete && (run.state === "stopped" || run.state === "failed");
   return (
     <div className="turn" data-role="assistant" data-testid="live-turn">
       <div className="msg" data-role="assistant">
-        <div className="bubble" data-live="true" aria-busy={streaming}>
+        <div
+          className="bubble"
+          data-live="true"
+          data-streaming={streaming || undefined}
+          aria-busy={streaming}
+        >
           <Markdown text={run.text} />
           {streaming && <span className="stream-caret" aria-hidden="true" />}
         </div>

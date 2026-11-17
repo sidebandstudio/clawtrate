@@ -518,7 +518,8 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
             item.role === "assistant" &&
             item.blocks.some((block) => block.kind === "text" && block.text.trim()),
         );
-      if (last && (run.text || run.state === "stopped")) incomplete.add(last.id);
+      // Only a reply the gateway had not reported complete was cut off.
+      if (last && !run.textComplete) incomplete.add(last.id);
     }
   }
 

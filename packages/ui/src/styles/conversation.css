@@ -313,10 +313,44 @@
   animation: breathe var(--loop-caret) var(--ease-in-out) infinite;
 }
 
-/* The caret follows the last character: the reply's last paragraph runs inline with it. */
-.bubble:has(> .stream-caret) > .md,
-.bubble:has(> .stream-caret) > .md > p:last-child {
-  display: inline;
+/* The caret follows the last character, whatever block the reply ends with:
+   it is drawn after the text of the reply's last paragraph, heading, list
+   item, quote or code. The element itself stands in only after anything
+   else, such as a table. */
+.bubble[data-streaming] .md > :is(p, h1, h2, h3, h4, h5, h6):last-child::after,
+.bubble[data-streaming]
+  .md
+  > :is(ul, ol):last-child
+  > li:last-child:not(:has(> :is(p, ul, ol)))::after,
+.bubble[data-streaming] .md > :is(ul, ol):last-child > li:last-child > p:last-child::after,
+.bubble[data-streaming]
+  .md
+  > :is(ul, ol):last-child
+  > li:last-child
+  > :is(ul, ol):last-child
+  > li:last-child::after,
+.bubble[data-streaming] .md > blockquote:last-child > p:last-child::after,
+.bubble[data-streaming] .md > pre:last-child > code::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 2px;
+  border-radius: 1px;
+  background: var(--accent-line);
+  vertical-align: -0.16em;
+  animation: breathe var(--loop-caret) var(--ease-in-out) infinite;
+}
+
+.bubble[data-streaming]:has(
+    > .md > :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre):last-child
+  )
+  > .stream-caret {
+  display: none;
+}
+
+[data-connection="lost"] .bubble[data-streaming] .md *::after {
+  animation: none !important;
 }
 
 .msg-caption {
