@@ -28,5 +28,6 @@ export async function createDesktopBridge(api: DesktopHostApi): Promise<Clawtrat
     },
     invoke: (command) => api.send(command) as Promise<BridgeResultFor<typeof command>>,
     attach: (file) => api.attach(file),
+    save: (file) => api.save(file),
   };
 }

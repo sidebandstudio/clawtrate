@@ -8,11 +8,22 @@ import {
   type ClawtrateState,
   type HostInfo,
 } from "@clawtrate/core";
-import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, session, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeImage,
+  nativeTheme,
+  session,
+  shell,
+} from "electron";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
+import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
 import {
   readDevConnection,
   selectInstance,
@@ -205,6 +216,29 @@ async function main(): Promise<void> {
     const meta = { fileName: file?.name, mimeType: file?.type };
     store.check(meta, data.byteLength);
     return store.add(meta, data.byteLength, () => Buffer.from(data).toString("base64"));
+  });
+  // Saving a file the Work pane holds: its bytes arrive, never a path; the person picks
+  // where in the system's save dialog, starting in Downloads, and only that file is written.
+  ipcMain.handle("clawtrate:save", async (event, raw: unknown): Promise<SaveResult> => {
+    const file = raw as { name?: unknown; data?: unknown } | null;
+    const data = file?.data;
+    if (!(data instanceof ArrayBuffer)) throw new Error("invalid file");
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const options = {
+      defaultPath: join(app.getPath("downloads"), safeFileName(file?.name)),
+      properties: ["createDirectory", "showOverwriteConfirmation"] as Array<
+        "createDirectory" | "showOverwriteConfirmation"
+      >,
+    };
+    const chosen = owner
+      ? await dialog.showSaveDialog(owner, options)
+      : await dialog.showSaveDialog(options);
+    if (chosen.canceled || !chosen.filePath) return { status: "cancelled" };
+    return writeExactly(
+      { readFile, writeFile, rename, rm, stat },
+      chosen.filePath,
+      new Uint8Array(data),
+    );
   });
   // Unread activity on the dock (macOS, Linux) or the taskbar button (Windows).
   const dot = nativeImage.createFromBitmap(Buffer.from(dotBitmap(16, [10, 110, 92])), {
