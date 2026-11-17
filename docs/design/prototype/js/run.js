@@ -687,7 +687,7 @@
     },
     {
       label: "approval",
-      caption: "The review asks you. The run waits; the rail, the status line and the composer all say so. Answer the card.",
+      caption: "The review did not approve the command, so the gateway asks you. The run waits; the rail, the status line and the composer all say so. Answer the card.",
       wait: 700,
       sim: 1,
       gate: "approval",

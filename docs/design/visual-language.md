@@ -298,7 +298,7 @@ A bot with one task shows no task rows, so its routes are the last three. When i
 
 **Pinned bots** are tiles and have no room for rows. Their tasks show in one block directly under the pin grid; "Pinned bots", below, says which bot's.
 
-**One pane (the phone).** The list is the same. Tapping a bot with one task opens it. Tapping a bot with several tasks unfolds them in place; tapping it again folds them; tapping a task opens it. There is no separate task-list screen, and Back from a conversation ("Back to bots") returns to this list.
+**One pane (a narrow window).** This is the desktop app in a window too narrow for two panes; the iPhone app has its own route, in section 12. The list is the same. Tapping a bot with one task opens it. Tapping a bot with several tasks unfolds them in place; tapping it again folds them; tapping a task opens it. There is no separate task-list screen, and Back from a conversation ("Back to bots") returns to this list.
 
 **Semantics.** The bot is a `button` with `aria-expanded` when it has several tasks. Its name includes the number of tasks and what the summary shows: "Otto, 14 tasks, working, unread". The task list is a `ul` labelled "Otto's tasks". The current task has `aria-current="true"`. A single-task bot has `aria-current` itself.
 
