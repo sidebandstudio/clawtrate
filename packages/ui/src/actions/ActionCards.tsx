@@ -3,6 +3,7 @@
 // says is the engine's reading (`@clawtrate/core`, `actions.ts`); these
 // components only draw it and keep what the reader opened (`view-state.ts`).
 
+import { StepFileLinks } from "../work/links.tsx";
 import {
   actionWords,
   foldLineOf,
@@ -428,9 +429,9 @@ function ActionDetail({ call }: { call: ActionCall }) {
         data-view="readable"
         hidden={view !== "readable"}
       >
+        {/* The files this action named, linked to the Work pane's Files tab, and back to them. */}
+        <StepFileLinks callId={call.id} />
         <Readable call={call} env={env} />
-        {/* The files this action made link here from the Work pane's Files tab, and back: their
-            links go in this slot (the card's or row's element carries the call's id, `data-call`). */}
       </div>
       <div
         role="tabpanel"

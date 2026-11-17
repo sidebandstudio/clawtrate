@@ -809,7 +809,11 @@ const step = (
   raw: null,
   rawSize: null,
   ...(paths.length
-    ? { files: { paths, changed: status === "done" ? true : null, created: null } }
+    ? {
+        files: { paths, changed: status === "done" ? true : null, created: null },
+        // The result's details as the engine keeps them: the change they report.
+        ...(status === "done" ? { details: { changed: true } } : {}),
+      }
     : {}),
   ...extra,
 });
@@ -845,6 +849,21 @@ describe("the run markers and the step behind a file", () => {
       step("d", "exec", [], "done", 13),
     ];
     expect([...fileMarks({ runs: [run("r1", "running", steps)] })]).toEqual([]);
+  });
+
+  it("F-321: a write the gateway refused, or whose result establishes no change, marks nothing", () => {
+    const refused = step("a", "write", ["a.md"], "done", 10, {
+      details: { status: "forbidden", error: "Outside the workspace" },
+    });
+    const unsaid = step("b", "write", ["b.md"], "done", 11, { details: null });
+    expect([...fileMarks({ runs: [run("r1", "running", [refused, unsaid])] })]).toEqual([]);
+  });
+
+  it("F-448: a call the gateway marked as a command counts as one, whatever its name", () => {
+    const runs = [
+      run("r1", "running", [step("a", "process", [], "done", 700, { commandBearing: true })]),
+    ];
+    expect(commandsSince({ runs }, 600)).toBe(true);
   });
 
   it("F-448: commands since the list was checked are noticed; file results are counted for the refetch", () => {

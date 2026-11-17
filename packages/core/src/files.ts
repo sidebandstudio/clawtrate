@@ -5,6 +5,8 @@
 // in the state. Content crosses to the viewer in chunks (`FileTransfers`) and
 // is dropped as soon as the last chunk has been read.
 
+import { callFromStep } from "./action-feed.ts";
+import { outcomeOf } from "./actions.ts";
 import { fromBase64, sha256Hex, toBase64, utf8Bytes } from "./bytes.ts";
 import { isChangeTool, isCommandTool } from "./file-paths.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
@@ -1231,7 +1233,12 @@ export function fileMarks(transcript: Pick<Transcript, "runs">): Map<string, Fil
     for (const path of step.files.paths) {
       if (step.status === "running" || step.status === "waiting") {
         if (active) marks.set(path, "writing");
-      } else if (step.status === "done" && step.files.changed !== false) {
+      } else if (
+        step.status === "done" &&
+        step.files.changed !== false &&
+        // The same reading as the call's card: a refusal, no change or no established outcome marks nothing.
+        outcomeOf(callFromStep(step, run)).outcome === "done"
+      ) {
         if (marks.get(path) !== "writing") marks.set(path, active ? "this-run" : "last-run");
       }
     }
@@ -1244,7 +1251,9 @@ export function lastCommandAt(transcript: Pick<Transcript, "runs">): number | nu
   let latest: number | null = null;
   for (const run of transcript.runs) {
     for (const step of run.steps) {
-      if (step.kind !== "tool" || !isCommandTool(step.toolName)) continue;
+      // The gateway's mark on a command, as the cards read it; history keeps no mark, so the name too.
+      if (step.kind !== "tool" || !(step.commandBearing === true || isCommandTool(step.toolName)))
+        continue;
       const at = step.startedAt ?? step.endedAt;
       if (at !== null && (latest === null || at > latest)) latest = at;
     }
