@@ -1,13 +1,17 @@
-// pnpm preview:web [--dev-gateway] [--no-access-token] [--port 5310] [--host 0.0.0.0] [--data-dir <dir>]
+// pnpm preview:web [--dev-gateway] [--no-access-token] [--instance <name>]
+//                  [--port 5310] [--host 0.0.0.0] [--data-dir <dir>]
 //
 // Serves the Clawtrate renderer to a browser on another machine. The gateway
 // connection, the device key and pairing all stay in this process.
+// `--instance` (or CLAWTRATE_DEV_INSTANCE) selects the development instance
+// whose gateway the development-only modes accept; the default instance otherwise.
 
+import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { readDevConnection, startHostRuntime } from "../host/runtime.ts";
+import { readDevConnection, selectInstance, startHostRuntime } from "../host/runtime.ts";
 import { createAccessToken, startWebHost } from "./server.ts";
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -21,6 +25,7 @@ const { values } = parseArgs({
     "static-dir": { type: "string", default: join(APP_ROOT, "out/web") },
     "dev-gateway": { type: "boolean", default: false },
     "no-access-token": { type: "boolean", default: false },
+    instance: { type: "string" },
   },
   allowPositionals: false,
 });
@@ -38,11 +43,13 @@ function networkUrls(port: number, query: string): string[] {
 }
 
 async function main(): Promise<void> {
-  const devGateway = readDevConnection(REPO_ROOT);
+  const instance = selectInstance(values.instance, process.env);
+  const devGateway = readDevConnection(REPO_ROOT, { instance });
   const tokenDisabled = values["no-access-token"];
   if (tokenDisabled && !devGateway) {
+    const flag = instance === null ? "" : ` --instance ${instance}`;
     throw new Error(
-      "--no-access-token is only allowed with the development gateway. Run `pnpm dev-gateway up` first.",
+      `--no-access-token is only allowed with the development gateway. Run \`pnpm dev-gateway up${flag}\` first.`,
     );
   }
   const port = Number(values.port);
@@ -67,16 +74,21 @@ async function main(): Promise<void> {
   });
 
   host.server.once("listening", () => {
+    // With --port 0 the system chooses; print the port actually bound.
+    const bound = (host.server.address() as AddressInfo).port;
     const query = accessToken ? `?token=${accessToken}` : "";
     console.log("\nClawtrate web preview");
-    console.log(`  Local    http://localhost:${port}/${query}`);
-    for (const url of networkUrls(port, query)) console.log(`  Network  ${url}`);
+    console.log(`  Local    http://localhost:${bound}/${query}`);
+    for (const url of networkUrls(bound, query)) console.log(`  Network  ${url}`);
     console.log(
       accessToken
         ? "\nThe access token is shown once. Anyone with this link can read the connected gateway's sessions."
         : "\nAccess token disabled: this host only connects to the development gateway.",
     );
-    if (devGateway) console.log(`Development gateway: ${devGateway.url}`);
+    if (devGateway) {
+      const which = devGateway.instance === null ? "default" : `instance ${devGateway.instance}`;
+      console.log(`Development gateway: ${devGateway.url} (${which})`);
+    }
   });
 
   const shutdown = () => {

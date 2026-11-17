@@ -11,34 +11,67 @@ import {
 } from "@clawtrate/core";
 import { createNodeHost } from "@clawtrate/core/node";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import {
+  DEFAULT_GATEWAY_URL,
+  namedGatewayUrl,
+  runDirFor,
+  validateInstanceName,
+} from "../../../../tools/dev-gateway/src/instance.ts";
+
+export { selectInstance } from "../../../../tools/dev-gateway/src/instance.ts";
 
 export const APP_VERSION = "0.1.0";
 
-/** The only endpoint the development gateway ever uses (`openclaw --dev`, loopback). */
-export const DEV_GATEWAY_URL = "ws://127.0.0.1:19001";
+/** The default development instance's endpoint (`openclaw --dev`, loopback). */
+export const DEV_GATEWAY_URL = DEFAULT_GATEWAY_URL;
 
-export type DevGatewayConnection = { url: string; token: string };
+export type DevGatewayConnection = {
+  url: string;
+  token: string;
+  /** The dev-gateway instance; null is the default instance. */
+  instance: string | null;
+};
 
-/** Where `pnpm dev-gateway start` writes the local gateway's bootstrap token. */
-export function devConnectionPath(repoRoot: string): string {
-  return join(repoRoot, "tools/dev-gateway/.run/connection.json");
+/** Where `pnpm dev-gateway start` writes an instance's bootstrap token in this checkout. */
+export function devConnectionPath(repoRoot: string, instance: string | null = null): string {
+  return join(runDirFor(instance, join(repoRoot, "tools/dev-gateway/.run")), "connection.json");
+}
+
+function readJson(path: string): Record<string, unknown> | null {
+  if (!existsSync(path)) return null;
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
 }
 
 /**
- * The development gateway's connection, if the dev tooling wrote one. The file
- * supplies only the token: any URL other than the fixed loopback endpoint is
- * rejected, so editing the file cannot relabel another gateway as development.
+ * The selected development instance's connection, if this checkout's dev
+ * tooling wrote one. The file supplies only the token. The default instance's
+ * endpoint is fixed. A named instance's endpoint must be a loopback address on
+ * a port from the tool's named-instance range, equal to the gateway port the
+ * tool recorded for that instance in its run file next to it. Anything else is
+ * rejected, so editing the files cannot relabel another gateway as development.
  */
-export function readDevConnection(repoRoot: string, path = devConnectionPath(repoRoot)) {
-  if (!existsSync(path)) return null;
+export function readDevConnection(
+  repoRoot: string,
+  options: { instance?: string | null; path?: string } = {},
+): DevGatewayConnection | null {
+  const instance = options.instance == null ? null : validateInstanceName(options.instance);
+  const path = options.path ?? devConnectionPath(repoRoot, instance);
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<DevGatewayConnection>;
-    if (typeof parsed.url !== "string" || typeof parsed.token !== "string" || !parsed.token) {
-      return null;
+    const parsed = readJson(path);
+    if (!parsed || typeof parsed.url !== "string") return null;
+    if (typeof parsed.token !== "string" || !parsed.token) return null;
+    if ((parsed.instance ?? null) !== instance) return null;
+    let expected: string | null;
+    if (instance === null) {
+      expected = DEV_GATEWAY_URL;
+    } else {
+      const record = readJson(join(dirname(path), "state.json"));
+      expected = namedGatewayUrl(record?.gatewayPort);
     }
-    if (validateGatewayUrl(parsed.url) !== DEV_GATEWAY_URL) return null;
-    return { url: DEV_GATEWAY_URL, token: parsed.token } satisfies DevGatewayConnection;
+    if (expected === null || validateGatewayUrl(parsed.url) !== expected) return null;
+    return { url: expected, token: parsed.token, instance } satisfies DevGatewayConnection;
   } catch {
     return null;
   }
@@ -49,8 +82,14 @@ export function approvalInstructionsFor(
   devGateway: DevGatewayConnection | null,
 ): (gatewayUrl: string, requestId: string) => ApprovalInstructions {
   return (gatewayUrl, requestId) =>
-    devGateway && gatewayUrl === DEV_GATEWAY_URL
-      ? { command: "pnpm dev-gateway approve", note: null }
+    devGateway && gatewayUrl === devGateway.url
+      ? {
+          command:
+            devGateway.instance === null
+              ? "pnpm dev-gateway approve"
+              : `pnpm dev-gateway approve --instance ${devGateway.instance}`,
+          note: null,
+        }
       : defaultApprovalInstructions(gatewayUrl, requestId);
 }
 
@@ -89,6 +128,11 @@ export async function startHostRuntime(options: {
       "Development-only mode needs the development gateway. Run `pnpm dev-gateway up`.",
     );
   }
+  // The one gateway a development-only host may open: the selected instance's.
+  const devOnly = options.devOnly ? options.devGateway : null;
+  const devGateway = options.devGateway
+    ? { url: options.devGateway.url, token: options.devGateway.token }
+    : null;
   const client = new ClawtrateClient(
     createNodeHost({
       dataDir: options.dataDir,
@@ -102,23 +146,23 @@ export async function startHostRuntime(options: {
         if (level !== "debug") console[level === "info" ? "log" : level](`[core] ${message}`);
       },
     }),
-    options.devOnly ? { allowGatewayUrl: (url) => url === DEV_GATEWAY_URL } : {},
+    devOnly ? { allowGatewayUrl: (url) => url === devOnly.url } : {},
   );
-  if (options.devOnly) {
+  if (devOnly) {
     const saved = await client.savedSettings();
-    if (saved && saved.url !== DEV_GATEWAY_URL) throw new SavedGatewayRefusedError(saved.url);
+    if (saved && saved.url !== devOnly.url) throw new SavedGatewayRefusedError(saved.url);
   }
   await client.start();
-  if (options.autoConnectDev && options.devGateway && client.state.connection.status === "idle") {
-    await client.connect(options.devGateway);
+  if (options.autoConnectDev && devGateway && client.state.connection.status === "idle") {
+    await client.connect(devGateway);
   }
   return {
     client,
     info: {
       kind: options.kind,
       version: APP_VERSION,
-      devGateway: options.devGateway ? { url: options.devGateway.url } : null,
+      devGateway: devGateway ? { url: devGateway.url } : null,
     },
-    policy: { devGateway: options.devGateway },
+    policy: { devGateway },
   };
 }

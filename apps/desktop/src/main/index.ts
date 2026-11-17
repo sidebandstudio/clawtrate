@@ -11,7 +11,12 @@ import {
 import { app, BrowserWindow, ipcMain, nativeTheme, shell } from "electron";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { readDevConnection, startHostRuntime, type HostRuntime } from "../host/runtime.ts";
+import {
+  readDevConnection,
+  selectInstance,
+  startHostRuntime,
+  type HostRuntime,
+} from "../host/runtime.ts";
 
 app.setName("Clawtrate");
 
@@ -86,7 +91,10 @@ async function main(): Promise<void> {
     displayName: "Clawtrate Desktop",
     dataDir: process.env.CLAWTRATE_DATA_DIR ?? join(app.getPath("userData"), "gateway"),
     // Only development builds look for the local development gateway.
-    devGateway: app.isPackaged ? null : readDevConnection(REPO_ROOT),
+    // CLAWTRATE_DEV_INSTANCE selects a named development instance.
+    devGateway: app.isPackaged
+      ? null
+      : readDevConnection(REPO_ROOT, { instance: selectInstance(undefined, process.env) }),
     autoConnectDev: process.env.CLAWTRATE_AUTOCONNECT_DEV === "1",
   });
   const { client, info, policy } = runtime;
