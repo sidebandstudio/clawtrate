@@ -13,6 +13,7 @@ import { AttachmentStore } from "../src/attachments.ts";
 import { createBridgeSession } from "../src/bridge.ts";
 import { worstCase } from "../src/bounds.ts";
 import { ClawtrateClient, MAX_FULL_READS } from "../src/client.ts";
+import { MAX_PENDING_SAVES, MAX_SAVE_BYTES, PendingSaves } from "../src/files.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import {
   ATTACHMENT_NOT_WALKED,
@@ -20,6 +21,7 @@ import {
   CLIENT_NOT_WALKED,
   CLIENT_OWNERS,
   CLIENT_PARTS,
+  SAVE_OWNERS,
   VIEWER_NOT_WALKED,
   VIEWER_OWNERS,
   type Owner,
@@ -39,6 +41,8 @@ const WALKED = new Set([
   "RawTable",
   "ChatTextBaselines",
   "ObservableStore",
+  "FileTransfers",
+  "PendingSaves",
 ]);
 /** Classes whose instances hold no collection of their own: handles. */
 const HANDLES = new Set(["Promise", "Timeout", "Immediate"]);
@@ -211,6 +215,15 @@ describe("the registry of what the host keeps", () => {
   it("names the waiting files' collections", () => {
     const store = new AttachmentStore({ newId: () => "a" });
     expectRegistered(store, ATTACHMENT_OWNERS, ATTACHMENT_NOT_WALKED);
+  });
+
+  it("names the files waiting for a save dialog, full, and refuses one more", () => {
+    const saves = new PendingSaves();
+    for (let window = 1; window <= MAX_PENDING_SAVES; window += 1)
+      saves.hold(window, new ArrayBuffer(MAX_SAVE_BYTES));
+    expectRegistered(saves, SAVE_OWNERS, {});
+    expect(() => saves.hold(MAX_PENDING_SAVES + 1, new ArrayBuffer(1))).toThrow(/waiting/);
+    expect(saves.size).toBe(MAX_PENDING_SAVES);
   });
 
   it("fails for a collection added without a bound, as a field or inside a map's values", async () => {

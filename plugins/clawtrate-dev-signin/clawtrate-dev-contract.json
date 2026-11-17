@@ -1,0 +1,7 @@
+{
+  "plugin": "clawtrate-dev-signin",
+  "settings": {
+    "signinUrl": { "kind": "scripted-model-url", "value": "/scripted/signin" }
+  },
+  "tools": []
+}

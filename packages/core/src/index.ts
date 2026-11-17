@@ -10,6 +10,9 @@ export * from "./actions.ts";
 export * from "./action-feed.ts";
 export * as actionWords from "./action-words.ts";
 export * from "./attachments.ts";
+export * from "./files.ts";
+export * from "./file-paths.ts";
+export { fromBase64, sha256Hex, toBase64, utf8Bytes } from "./bytes.ts";
 export { worstCase, type Bound, type Digest } from "./bounds.ts";
 export * from "./state-bounds.ts";
 export * from "./worst-case.ts";
@@ -32,6 +35,7 @@ export {
   DEFAULT_TURN_LIMIT_MS,
   defaultApprovalInstructions,
   GatewayNotAllowedError,
+  MAX_FILE_READS,
   MAX_MESSAGE_CHARS,
   MAX_SESSION_PAGES,
   REQUESTED_SCOPES,
@@ -41,6 +45,7 @@ export {
   type ClientOptions,
   type ConnectOptions,
   type ConnectionSettings,
+  type FileReadOptions,
   type OutgoingAttachment,
   type SendMode,
   type SendOptions,

@@ -48,8 +48,10 @@ import type {
   RunEnding,
   RunError,
   Step,
+  StepFiles,
   StepText,
 } from "./runs.ts";
+import { MAX_STEP_PATH_CHARS, MAX_STEP_PATHS } from "./file-paths.ts";
 import type { Digest } from "./bounds.ts";
 import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
 import type {
@@ -211,6 +213,12 @@ export const STEP: Bound = flagged<Step>()({
   args: json(MAX_ACTION_FACTS_CHARS),
   details: json(MAX_ACTION_FACTS_CHARS),
   commandBearing: FLAG,
+  // A path is an id: never cut, since a cut path would name another file.
+  files: object<StepFiles>()({
+    paths: list(MAX_STEP_PATHS, id(MAX_STEP_PATH_CHARS)),
+    changed: FLAG,
+    created: FLAG,
+  }),
 });
 const pendingCard = object<PendingCard>()({ id: ID, kind: ENUM, since: NUMBER });
 const closedCard = object<ClosedCard>()({ id: ID, kind: ENUM, since: NUMBER, reason: ENUM });
