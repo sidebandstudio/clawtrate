@@ -19,6 +19,7 @@ describe("packaging configuration", () => {
       "out/main/**",
       "out/preload/**",
       "out/renderer/**",
+      "resources/icon.png",
       "!**/node_modules/**",
     ]);
     expect(JSON.stringify(config)).not.toMatch(/fixture|out\/web/);
@@ -29,6 +30,17 @@ describe("packaging configuration", () => {
     expect(config.directories?.output).toBe("dist");
     expect(readFileSync(join(APP, "../../.gitignore"), "utf8")).toMatch(/^dist\/$/m);
     expect(config.publish).toBeNull();
+  });
+
+  it("ships the window icon the main process loads on Windows and Linux", () => {
+    const main = readFileSync(join(APP, "src/main/index.ts"), "utf8");
+    expect(main).toContain('icon: join(RESOURCES, "icon.png")');
+    expect(main).toContain('const RESOURCES = join(APP_ROOT, "resources");');
+    expect(builderConfig({}, "45.3.2").files).toContain("resources/icon.png");
+    const manifest = JSON.parse(
+      readFileSync(join(APP, "../../assets/brand/generated.json"), "utf8"),
+    ) as { outputs: string[] };
+    expect(manifest.outputs).toContain("apps/desktop/resources/icon.png");
   });
 
   it("uses the icons generated from the logo", () => {

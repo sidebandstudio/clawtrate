@@ -69,12 +69,15 @@ export function builderConfig(env: Env, electronVersion: string): Configuration 
     directories: { output: "dist", buildResources: "resources" },
     // The main process, preload and renderer are bundled by electron-vite and
     // need no node_modules. Nothing else is shipped: not the web preview's or
-    // the fixture mode's builds, and no source.
+    // the fixture mode's builds, and no source. resources/icon.png, generated
+    // from the logo, is the window icon on Windows and Linux (the main process
+    // reads it from the archive); macOS takes its icon from the bundle.
     files: [
       "package.json",
       "out/main/**",
       "out/preload/**",
       "out/renderer/**",
+      "resources/icon.png",
       "!**/node_modules/**",
     ],
     asar: true,
