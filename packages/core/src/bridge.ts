@@ -155,6 +155,9 @@ export const MAX_VIEWER_PENDING_COMMANDS = 16;
 const BOT_ID_PATTERN = /^[\w.-]{1,128}$/;
 const QUESTION_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const MAX_LABEL_CHARS = 512;
+/** Why a held or queued message cannot be taken back to edit: its files would not fit. */
+export const TAKE_BACK_NO_ROOM =
+  "Its files don't fit with the files already waiting to be sent. The message stays as it is; send or remove some waiting files, then edit it.";
 const MAX_ANSWER_CHARS = 4000;
 
 function sessionKey(value: unknown): string {
@@ -539,11 +542,10 @@ class ViewerSession implements BridgeSession {
           if (back.attachments.length > 0) throw new Error("This host does not take files.");
           return { text: back.text, attachments: [] };
         }
-        // Checked for room before the message is taken back, so a refusal changes nothing.
-        const held = client.state.transcripts[key]?.outbox.find((m) => m.id === command.messageId);
-        const bytes = (held?.attachments ?? []).reduce((sum, each) => sum + each.sizeBytes, 0);
-        if (bytes > policy.attachments.available())
-          throw new Error("Too many files are waiting to be sent.");
+        // All or nothing: the whole batch is checked, bytes and count, before the message
+        // is taken back; when it cannot fit, the message stays exactly as it was.
+        const files = client.peekTakeBack(key, command.messageId).attachments;
+        if (!policy.attachments.fits(files)) throw new Error(TAKE_BACK_NO_ROOM);
         const back = client.takeBack(key, command.messageId);
         return { text: back.text, attachments: policy.attachments.restore(back.attachments) };
       }

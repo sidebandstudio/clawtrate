@@ -2,7 +2,7 @@
 // edited, or sent again after its turn failed, they are one record.
 
 import { describe, expect, it } from "vitest";
-import { AttachmentStore } from "../src/attachments.ts";
+import { AttachmentStore, MAX_PENDING_ATTACHMENTS } from "../src/attachments.ts";
 import { createBridgeSession } from "../src/bridge.ts";
 import { agentEvent, KEY, openTask, questionRecord, sentTexts } from "./client-harness.ts";
 import { sleep, until } from "./fake-gateway.ts";
@@ -79,6 +79,75 @@ describe("taking a message back to edit it (F-468)", () => {
     );
     expect(transcript().outbox[0]!.status).toBe("sent");
     expect(sentTexts(gateway)).toEqual(["Already on its way"]);
+    viewer.dispose();
+    client.stop();
+  });
+});
+
+describe("taking a message back is all or nothing (F-468)", () => {
+  /** A task whose run asks a question, with a held message carrying these files. */
+  async function heldWithFiles(names: string[]) {
+    const task = await openTask();
+    task.gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    const store = new AttachmentStore({ newId: randomUUID });
+    const viewer = createBridgeSession(task.client, { attachments: store });
+    await viewer.apply({ type: "openSession", key: KEY });
+    task.gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
+    task.gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
+    await until(() => task.transcript().runs[0]?.state === "waiting");
+    const infos = await Promise.all(names.map((name) => withFile(store, name)));
+    const { messageId } = await viewer.apply({
+      type: "sendMessage",
+      key: KEY,
+      text: "Keep the yearly ones too",
+      mode: "auto",
+      attachmentIds: infos.map((info) => info.id),
+    });
+    return { ...task, store, viewer, messageId };
+  }
+
+  /** Fill the waiting files up to `count`, one small file each. */
+  function fill(store: AttachmentStore, count: number) {
+    for (let i = 0; i < count; i += 1) {
+      store.add({ fileName: `waiting-${i}.txt`, mimeType: "text/plain" }, 1, () => "QQ==");
+    }
+  }
+
+  it("leaves the held message, its words and its files as they were when the waiting files are full", async () => {
+    const { client, transcript, store, viewer, messageId } = await heldWithFiles(["notes.txt"]);
+    fill(store, MAX_PENDING_ATTACHMENTS);
+    const bytes = client.retainedAttachmentBytes;
+    const refused = await viewer.apply({ type: "takeBackMessage", key: KEY, messageId }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(transcript().outbox[0]).toMatchObject({ id: messageId, status: "held" });
+    expect(client.retainedAttachmentBytes).toBe(bytes);
+    expect(bytes).toBeGreaterThan(0);
+    // Told why, in plain words.
+    expect(String(refused)).toMatch(/files already waiting to be sent/);
+    viewer.dispose();
+    client.stop();
+  });
+
+  it("never holds more than the most waiting files: a batch that only partly fits is refused whole", async () => {
+    const { client, transcript, store, viewer, messageId } = await heldWithFiles([
+      "notes.txt",
+      "log.txt",
+    ]);
+    // Room for one more file, not for both of the message's.
+    fill(store, MAX_PENDING_ATTACHMENTS - 1);
+    const refused = await viewer.apply({ type: "takeBackMessage", key: KEY, messageId }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(refused).toBeInstanceOf(Error);
+    expect(transcript().outbox[0]!.status).toBe("held");
+    // Nothing was put back: the one place left is still free, and then none is.
+    store.add({ fileName: "one-more.txt", mimeType: "text/plain" }, 1, () => "QQ==");
+    expect(() =>
+      store.add({ fileName: "too-many.txt", mimeType: "text/plain" }, 1, () => "QQ=="),
+    ).toThrow(/Too many files/);
     viewer.dispose();
     client.stop();
   });

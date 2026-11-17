@@ -212,18 +212,35 @@ export class AttachmentStore {
   }
 
   /**
-   * Hold files again that a message gave back (taken back to be edited), as
-   * new entries the composer names by their new ids. Checked like any added
-   * file; if one does not fit, none is kept.
+   * Whether these files, taken together, can be held again: each valid and
+   * within its type's ceiling, and the whole batch within the bytes and the
+   * number of files left, counting files still arriving.
    */
-  restore(attachments: readonly OutgoingAttachment[]): AttachmentInfo[] {
-    let room = this.available();
+  fits(attachments: readonly OutgoingAttachment[]): boolean {
+    this.sweep();
+    if (this.entries.size + this.reserved.size + attachments.length > MAX_PENDING_ATTACHMENTS)
+      return false;
+    let bytes = 0;
     for (const each of attachments) {
       const size = decodedSize(each.content);
-      this.check(each, size);
-      if (size > room) throw new Error("Too many files are waiting to be sent.");
-      room -= size;
+      try {
+        validateAttachmentMeta(each.fileName, each.mimeType);
+      } catch {
+        return false;
+      }
+      if (size > attachmentLimit(each.mimeType)) return false;
+      bytes += size;
     }
+    return bytes <= this.available();
+  }
+
+  /**
+   * Hold files again that a message gave back (taken back to be edited), as
+   * new entries the composer names by their new ids. The batch is checked
+   * whole, bytes and count (`fits`); if it does not fit, none is kept.
+   */
+  restore(attachments: readonly OutgoingAttachment[]): AttachmentInfo[] {
+    if (!this.fits(attachments)) throw new Error("Too many files are waiting to be sent.");
     return attachments.map((each) =>
       this.keep(each.fileName, each.mimeType, decodedSize(each.content), each.content),
     );

@@ -1399,20 +1399,32 @@ export class ClawtrateClient {
    * record, to go back into the composer. The files leave this client's
    * keeping at once.
    */
-  takeBack(key: string, messageId: string): { text: string; attachments: OutgoingAttachment[] } {
+  /**
+   * What `takeBack` would give back, changing nothing: a host checks there is
+   * room for the files before any of it happens. Throws as `takeBack` does.
+   */
+  peekTakeBack(
+    key: string,
+    messageId: string,
+  ): { text: string; attachments: OutgoingAttachment[] } {
     const message = this.outgoing(key, messageId);
     if (!message || (message.status !== "queued" && message.status !== "held"))
       throw new Error("That message can no longer be edited.");
     const files = this.attachmentContent.get(messageId)?.files ?? [];
     if (message.attachments.length > 0 && files.length === 0)
       throw new Error("Its files are no longer held; attach them again.");
+    return { text: message.text, attachments: [...files] };
+  }
+
+  takeBack(key: string, messageId: string): { text: string; attachments: OutgoingAttachment[] } {
+    const { text, attachments: files } = this.peekTakeBack(key, messageId);
     this.dropAttachments(messageId);
     this.updateActivity(key, (activity) =>
       updateMessage(cancelQueuedRun(activity, messageId, this.now()), messageId, {
         status: "cancelled",
       }),
     );
-    return { text: message.text, attachments: [...files] };
+    return { text, attachments: files };
   }
 
   /**
