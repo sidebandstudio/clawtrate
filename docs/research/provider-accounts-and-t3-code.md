@@ -869,8 +869,9 @@ Part C has the full answer. In short, after the corrections above:
 
 ### A.13 Probe: a bot pinned to one account when that account fails
 
-Script `docs/research/dev-gateway/provider-accounts/pin-probe.mjs`, run on a
-fresh named instance (gateway 2026.10.6, embedded runtime,
+Script `docs/research/dev-gateway/provider-accounts/pin-probe.mjs`, run twice
+on a fresh named instance with the same results, the second time with all
+39 checks passing (gateway 2026.10.6, embedded runtime,
 OpenAI-compatible scripted provider). Everything below is **[probe]**; each
 statement in the result table is one of the script's checks or is read from
 its recorded events.
@@ -984,7 +985,14 @@ clawtrate-dev-<name> configure`." then "… Provider ord402 is in cooldown
 before trying again." then "… Provider ord429 is in cooldown (rate_limit)"
 with `errorKind:"rate_limit"`. None of these names the account.
 
-**After the cooldown.** COOLDOWN_RESULT
+**After the cooldown.** Forty seconds after the 401 was cleared (a first auth
+failure cools a profile down for 30 seconds), `pin-401` and `ord-401` each
+sent their next run with their own `:one` key and ended `final`. So a
+pin-only bot drifts to the other account for as long as its own account
+cools down and then comes back by itself, with no event either way;
+`chat.metadata` still named `pin401:two` after the run that came back. The
+402 and 429 cooldowns (ten minutes and up, 30 seconds and up) were not
+waited out.
 
 **An explicit session selection overrides the stored order.** On `ord-401`,
 `sessions.patch {key, model:"ord401/dev-1@ord401:two"}` stored
@@ -1079,7 +1087,7 @@ machine**: a host command-line tool, `t3 thread list|start|send|show`
 the host with no sign-in (`<t3>` `apps/server/dist/binCli-BPs4eA-l.mjs` lines
 10070-10187; `outside-agents.md`, "Host scripts"). It has no stop command.
 
-### B.2 The six operations
+### B.2 The operations an outside client uses
 
 All are MCP tools; failures come back as a result, not a protocol error
 (`failureMode: "return"`), with `{code, message}` (`OrchestratorMcpFailure`).
@@ -1550,7 +1558,7 @@ With layers 1 to 3a in place:
 | Someone changes the bot's model or the order: `agents.update`, `config.patch`, `models auth order set/clear`, or `auth.order` in config | any | `agents.list` model and `config.get` change; `models.authStatus {agentId}` `profileOrder` and `profileOrderLocked` **[source, probe]** | A change to the stored order shows only in `models.authStatus` `profileOrder`, with no event; poll it |
 | A provider-entry binding appears (`models.authSetApiKey` on that provider writes `models.providers.<p>.apiKey`) | account | `config.get` shows the binding (redacted value, A.8); `models.authStatus` `profileOrderLocked:"provider-config"` | The binding outranks automatic order for runs without a user selection; whether the bot's configured pin counts as one at that point is read from source (`session-override-5SZAWDJR.mjs` returns it with source `user`, and a user selection skips the binding, `prepare-auth-DF3PBMSe.mjs` lines 158-166) **[source, inferred; not probed]** |
 | Pin only, without layer 3: the pinned account fails (auth, billing, rate limit after ten attempts, overload, timeout) | account | A `lifecycle` `finishing` event with `error` and `errorObservation`, then a second `start` and `model` for the same provider and model in the same run; for rate limits `chat` `status` `retry` events. `chat.metadata` `accountSelection` changes one run later. **[probe]** | That another account served the turn, and which. No `fallback_step`, notice, receipt field or history field **[probe]** |
-| Pin only: the pinned account is in cooldown at the start of a run (30 s, 60 s, 5 min for auth; 10 min doubling to 24 h for billing; 30 s and up for rate limits) | account | Nothing: the run simply succeeds on another account with no failure event **[probe]** | Everything |
+| Pin only: the pinned account is in cooldown at the start of a run (30 s, 60 s, 5 min for auth; 10 min doubling to 24 h for billing; 30 s and up for rate limits) | account | Nothing: the run simply succeeds on another account with no failure event, and once the cooldown ends the next run returns to the pinned account, again with no event **[probe]** | Everything |
 | A bot created later, by Clawtrate or elsewhere, without its own model | model or provider | `agents.list` shows no model; it inherits `agents.defaults.model` and its fallbacks **[source]** | — |
 | Codex harness cyber escalation, Codex upstream reroute | model | `agent` `notice` `phase:"provider_policy"` with `state` and model fields **[source]** | The account (same harness account) |
 | Anthropic server-side refusal fallback | model | `provider_fallback` diagnostic and `responseModel` on the assistant message **[source]** | — |
