@@ -138,8 +138,13 @@ test("runs its renderer in the operating system's sandbox", () => {
     // Room for PowerShell's first compile of the token reader (see integrityLevels).
     test.setTimeout(150_000);
     // Chromium starts a sandboxed renderer on Windows with a restricted token at
-    // untrusted integrity; an unsandboxed one (--no-sandbox) keeps the user's own
-    // token. The integrity level is read from each process's token, from outside.
+    // untrusted integrity, and the main process keeps the user's own level. The
+    // integrity level is read from each process's token, from outside.
+    // This assertion has never been seen to fail: the packaged Windows app,
+    // started with the sandbox turned off (--no-sandbox or
+    // ELECTRON_DISABLE_SANDBOX=1), crashes at once with an access violation
+    // (0xC0000005) before any renderer exists, so no unsandboxed renderer could
+    // be produced to read.
     const renderers = helpers().filter(({ command }) => /\s--type=renderer(\s|$)/.test(command));
     expect(renderers.length, "the app's renderer processes").toBeGreaterThan(0);
     const levels = integrityLevels([APP_PID, ...renderers.map(({ pid }) => pid)]);
