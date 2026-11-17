@@ -332,6 +332,68 @@ describe("F-163: decision attempts belong to the approval, not to the task showi
     }
   });
 
+  it("a reconnect keeps the attempts: an Allow on its way becomes unknown, no Allow leaves, and a read-back newer than the reconnect is sent", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["exec.approval.list"] = () => [item];
+    gateway.handlers["exec.approval.resolve"] = () => new Promise(() => undefined);
+    gateway.handlers["approval.get"] = busy;
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      await until(() => transcript().approvals.length === 1);
+      void client.resolveApproval(KEY, item.id, "allow-once").catch(() => undefined);
+      await until(() => decisions(gateway).length === 1);
+      const before = transcript().approvals[0]!.attempt;
+      const readsBefore = gateway.calls("approval.get").length;
+      gateway.dropAll();
+      await until(() => client.state.connection.status === "connected");
+      await until(() => gateway.calls("approval.get").length > readsBefore);
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(transcript().approvals[0]!.attempt).toBeGreaterThan(before);
+      expect(transcript().approvals[0]!.decisionError).toBe("unknown");
+      await expect(client.resolveApproval(KEY, item.id, "allow-once")).rejects.toThrow(
+        /not known yet/,
+      );
+      expect(decisions(gateway)).toEqual(["allow-once"]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a viewer that reloads, releasing the task, finds the guard when it opens the task again", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["exec.approval.list"] = () => [item];
+    gateway.handlers["exec.approval.resolve"] = () => new Promise(() => undefined);
+    gateway.handlers["approval.get"] = busy;
+    const { client, transcript } = await openTask({ gateway });
+    const first = createBridgeSession(client);
+    let second: ReturnType<typeof createBridgeSession> | null = null;
+    try {
+      await first.apply({ type: "openSession", key: KEY });
+      client.closeSession(KEY);
+      await until(() => transcript()?.approvals.length === 1);
+      const command = {
+        type: "resolveApproval",
+        key: KEY,
+        approvalId: item.id,
+        decision: "deny",
+        expiresInDays: null,
+      } as const;
+      void first.apply(command).catch(() => undefined);
+      await until(() => decisions(gateway).length === 1);
+      // The renderer reloads: its session goes, and with it the last interest in the task.
+      first.dispose();
+      expect(client.state.transcripts[KEY]).toBeUndefined();
+      second = createBridgeSession(client);
+      await second.apply({ type: "openSession", key: KEY });
+      await until(() => transcript()?.approvals.length === 1);
+      await expect(second.apply(command)).rejects.toThrow(/on its way/);
+      expect(decisions(gateway)).toEqual(["deny"]);
+    } finally {
+      second?.dispose();
+      client.stop();
+    }
+  });
+
   it("a second viewer keeps the task, and the guard, when the first closes it", async () => {
     const gateway = grantingGateway();
     gateway.handlers["exec.approval.list"] = () => [item];
