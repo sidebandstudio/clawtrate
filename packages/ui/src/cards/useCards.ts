@@ -10,6 +10,7 @@ import {
   type SelectedCards,
   type Step,
   type StepRaw,
+  type StepRead,
   type Transcript,
 } from "@clawtrate/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -17,16 +18,40 @@ import type { RawContent } from "./raw.ts";
 
 /** A call's raw payload, as far as this view knows it. */
 export type StepRawState =
-  | { state: "available"; raw: StepRaw | null; load: () => void }
+  | {
+      state: "available";
+      raw: StepRaw | null;
+      load: () => void;
+      /** The gateway's cut of the payload, with the engine's reason, when that is all there is. */
+      cut?: string;
+    }
   | { state: "pending"; content: RawContent; load: () => void };
 
 /** Whole reads this view keeps while it is mounted; older ones are read again when needed. */
 const MAX_READS = 24;
 
+/** What a whole read answered, kept for this view. Only `available` carries the step's whole payload. */
+function readOf(answer: StepRead | null, correction: number): Read {
+  if (!answer) return { status: "failed" };
+  switch (answer.status) {
+    case "available":
+      return { status: "available", raw: answer.raw, correction };
+    case "cut-by-gateway":
+      return { status: "cut", raw: answer.raw, reason: answer.reason };
+    case "not-available-yet":
+    case "not-established":
+    case "too-large-for-gateway":
+      return { status: "not-yet", reason: answer.reason };
+  }
+}
+
 type Read =
   | { status: "loading" }
   | { status: "available"; raw: StepRaw; correction: number }
+  /** Not readable now, with the engine's reason: not yet in history, not established, too large. */
   | { status: "not-yet"; reason: string }
+  /** History holds it cut by the gateway: shown in Raw as cut, never used to decide a card's state. */
+  | { status: "cut"; raw: StepRaw; reason: string }
   | { status: "failed" };
 
 /**
@@ -95,14 +120,7 @@ export function useCards(
         .then((answer) => {
           setReads((current) => {
             const next = new Map(current);
-            next.set(
-              step.id,
-              answer?.status === "available"
-                ? { status: "available", raw: answer.raw, correction: step.correction }
-                : answer?.status === "not-available-yet"
-                  ? { status: "not-yet", reason: answer.reason }
-                  : { status: "failed" },
-            );
+            next.set(step.id, readOf(answer, step.correction));
             while (next.size > MAX_READS) next.delete(next.keys().next().value as string);
             return next;
           });
@@ -120,6 +138,9 @@ export function useCards(
       if (step.status === "running" || step.status === "waiting") continue;
       if (!asked.current.has(`${step.id}#${step.correction}`)) read(step);
     }
+    // Forget attempts for steps the task no longer keeps, or for a corrected result.
+    const kept = new Set(steps.map((step) => `${step.id}#${step.correction}`));
+    for (const key of asked.current) if (!kept.has(key)) asked.current.delete(key);
   }, [steps, codingServers, read]);
 
   const rawOf = useCallback(
@@ -168,6 +189,9 @@ export function useCards(
       }
       if (known.status === "not-yet") {
         return { state: "pending", content: { state: "unavailable", reason: known.reason }, load };
+      }
+      if (known.status === "cut") {
+        return { state: "available", raw: known.raw, load, cut: known.reason };
       }
       if (known.status === "failed") {
         return { state: "pending", content: { state: "failed", retry: () => read(step) }, load };

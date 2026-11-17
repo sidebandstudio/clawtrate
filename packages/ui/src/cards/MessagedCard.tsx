@@ -109,12 +109,13 @@ function callRaw(
   const raw = read.raw;
   return {
     state: "loaded",
+    ...(read.cut ? { notes: [read.cut] } : {}),
     tool: step.toolName,
     args: callArgs(raw) ?? null,
     result: resultOf(raw),
     error,
     running,
-    truncated,
+    truncated: truncated || read.cut !== undefined,
     timing: [
       { label: "Started", value: timeOf(step.startedAt) },
       { label: "Ended", value: timeOf(running ? null : step.endedAt) },
