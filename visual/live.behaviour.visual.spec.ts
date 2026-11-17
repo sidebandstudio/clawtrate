@@ -1012,7 +1012,25 @@ test("F-467: Cmd/Ctrl+/ shows every keyboard shortcut; Escape closes the list an
   await page.keyboard.press("ControlOrMeta+/");
   const list = page.getByRole("dialog", { name: "Keyboard shortcuts" });
   await expect(list).toBeFocused();
-  for (const keys of ["↵", "⇧↵", "⌥↵", "⇧⌘↵", "⌘↵", "⌘.", "⌘J", "⌘I", "⌘L", "⌘\\", "⌘/"]) {
+  for (const keys of [
+    "↵",
+    "⇧↵",
+    "⌥↵",
+    "⇧⌘↵",
+    "⌘↵",
+    "⌘.",
+    "⌘J",
+    "⌘I",
+    "⌘L",
+    "⌘F",
+    "⇧⌘F",
+    "⌘1–9",
+    "⌥↑ ⌥↓",
+    "⌃Tab",
+    "⌘\\",
+    "⌘,",
+    "⌘/",
+  ]) {
     await expect(list.locator("kbd", { hasText: keys }).first()).toBeVisible();
   }
   await page.keyboard.press("Escape");
@@ -1408,6 +1426,21 @@ test.describe("the phone", () => {
     // Back on the conversation: the draft was not sent.
     await page.getByTestId("task").filter({ hasText: "Disk almost full" }).click();
     await expect(field(page)).toHaveValue("Not from the list");
+  });
+
+  test("F-072: under Settings the conversation does not answer Cmd/Ctrl+Enter", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await field(page).fill("Not while Settings is open");
+    await page.keyboard.press("ControlOrMeta+,");
+    await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await page.waitForTimeout(200);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
+    await expect(page.getByTestId("outgoing")).toHaveCount(0);
+    await expect(field(page)).toHaveValue("Not while Settings is open");
   });
 
   test("F-061 F-282: the Send menu opens as a sheet from the foot of the screen with 52 px rows, from the mode word or a long press on Send, and Escape returns focus", async ({

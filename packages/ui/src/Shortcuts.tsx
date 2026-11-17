@@ -11,7 +11,13 @@ export const SHORTCUTS: Array<[keys: string, does: string]> = [
   ["⌘J", "Go to what needs you"],
   ["⌘I", "Focus the message field"],
   ["⌘L", "Add the selected text to the message"],
+  ["⌘F", "Find in this conversation"],
+  ["⇧⌘F", "Search bots and tasks"],
+  ["⌘1–9", "Open the bot in that place"],
+  ["⌥↑ ⌥↓", "The bot above or below"],
+  ["⌃Tab", "The next bot; ⇧⌃Tab, the one before"],
   ["⌘\\", "Show or hide the work panel"],
+  ["⌘,", "Settings"],
   ["⌘/", "Show these shortcuts"],
 ];
 
