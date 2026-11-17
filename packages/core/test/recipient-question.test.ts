@@ -54,6 +54,12 @@ describe("a recipient's run that asks its own user", () => {
         answers: { answers: { color: ["Blue"] } },
       });
       await until(() => transcript().linkedRuns["run-r"]?.state === "running");
+
+      // The same question asked again, late or repeated: it settled, and stays settled.
+      gateway.emit("question.requested", questionRecord("q-peer", "run-r", PEER));
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(transcript().linkedRuns["run-r"]?.state).toBe("running");
+      expect(kept.get(PEER)?.questions).toEqual([]);
     } finally {
       client.stop();
     }

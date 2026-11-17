@@ -1171,8 +1171,11 @@ export function applyQuestionRequested(
   const runId = str(record.runId);
   const existing = activity.questions.find((question) => question.id === id);
   // A settled question stays settled, and an ended run takes no new question:
-  // a late or repeated event must never make either actionable again.
+  // a late or repeated event must never make either actionable again. A run
+  // remembers the questions it settled among its closed cards, also where the
+  // question itself is not kept (a recipient's run in a task nobody has open).
   if (existing && existing.status !== "pending") return activity;
+  if (!existing && questionSettled(activity, id)) return activity;
   const known = runId ? findRun(activity, runId) : undefined;
   if (known && isTerminal(known.state)) return activity;
   if (
@@ -1250,6 +1253,13 @@ export function foreignQuestionResolved(activity: TaskActivity, payload: RawReco
           ? "dismissed"
           : "closed";
   return { ...activity, runs: activity.runs.map((run) => closeCard(run, id, reason)) };
+}
+
+/** Whether a run of the task settled this question: it is among the run's closed cards. */
+export function questionSettled(activity: TaskActivity, id: string): boolean {
+  return activity.runs.some((run) =>
+    run.closedCards.some((card) => card.kind === "question" && card.id === id),
+  );
 }
 
 function closeCard(run: Run, cardId: string, reason: CardCloseReason): Run {
