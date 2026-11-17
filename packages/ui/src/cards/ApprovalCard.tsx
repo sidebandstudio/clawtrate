@@ -217,7 +217,9 @@ function PendingApproval({
     daysValue !== null && (!Number.isInteger(daysValue) || daysValue < 1 || daysValue > 3650);
 
   const decide = (decision: ApprovalDecision) => {
-    if (!sendable.has(decision)) return;
+    // A second decision while one is on its way is only ever Deny, which the gateway may still take.
+    if (!sendable.has(decision) || (card.submitting && decision !== "deny")) return;
+    if (card.submitting && chosen === "deny") return;
     setChosen(decision);
     void env
       .invoke({
@@ -283,7 +285,7 @@ function PendingApproval({
       className="button"
       data-variant="quiet"
       data-decision="deny"
-      disabled={sending && chosen === "deny"}
+      aria-disabled={(sending && chosen === "deny") || undefined}
       onClick={() => decide("deny")}
     >
       {sending && chosen === "deny" ? "Sending…" : "Deny"}
@@ -312,6 +314,10 @@ function PendingApproval({
       sentence
     );
 
+  // A refused decision this view sent can be tried again; one refused before this view
+  // was opened leaves the ordinary choices beside the refusal.
+  const retrying =
+    phase === "refused" && chosen !== null && chosen !== "deny" && sendable.has(chosen);
   /** The buttons for a decision that failed: try again, or check. */
   const afterFailure =
     phase === "unknown" ? (
@@ -324,7 +330,7 @@ function PendingApproval({
       >
         {checking ? "Checking…" : "Check again"}
       </button>
-    ) : phase === "refused" && chosen && chosen !== "deny" && sendable.has(chosen) ? (
+    ) : retrying && chosen ? (
       <>
         <button
           type="button"
@@ -348,7 +354,7 @@ function PendingApproval({
       className="button"
       data-variant="primary"
       data-decision="allow-once"
-      disabled={sending}
+      aria-disabled={sending || undefined}
       onClick={() => decide("allow-once")}
     >
       {sending && chosen === "allow-once" ? "Sending…" : allowLabel(view)}
@@ -360,14 +366,15 @@ function PendingApproval({
       type="button"
       className="button"
       aria-expanded={formOpen}
-      disabled={sending}
-      onClick={openForm}
+      aria-disabled={sending || undefined}
+      onClick={() => !sending && openForm()}
     >
       Always allow…
     </button>
   );
 
   const failureOrSending = phase !== "choose";
+  const failed = phase === "unknown" || retrying;
   const formShown = formOpen && view.always;
 
   return (
@@ -455,8 +462,8 @@ function PendingApproval({
             <>
               {failureOrSending && outcomeLine(null)}
               <div className="request-actions" data-row="main">
-                {failureOrSending && !sending ? afterFailure : allowOnce}
-                {!failureOrSending && alwaysAllow}
+                {failed ? afterFailure : allowOnce}
+                {!failed && alwaysAllow}
                 <span className="spacer" />
                 {denyButton}
               </div>
@@ -500,7 +507,7 @@ function PendingApproval({
                 </>
               )}
               <div className="request-actions">
-                {failureOrSending && !sending ? (
+                {failed ? (
                   afterFailure
                 ) : (
                   <button
@@ -508,7 +515,8 @@ function PendingApproval({
                     type="button"
                     className="button"
                     data-variant="primary"
-                    disabled={sending || daysInvalid}
+                    disabled={daysInvalid}
+                    aria-disabled={sending || undefined}
                     onClick={() => decide("allow-always")}
                   >
                     {sending && chosen === "allow-always" ? "Sending…" : "Allow and save"}
@@ -519,8 +527,8 @@ function PendingApproval({
                     type="button"
                     className="button"
                     data-variant="quiet"
-                    disabled={sending}
-                    onClick={closeForm}
+                    aria-disabled={sending || undefined}
+                    onClick={() => !sending && closeForm()}
                   >
                     Back
                   </button>

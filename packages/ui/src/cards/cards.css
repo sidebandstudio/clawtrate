@@ -65,8 +65,10 @@
   background: color-mix(in srgb, var(--bg-selected) 80%, var(--text));
 }
 
-/* A disabled button on a card keeps a fill that shows on it, and readable text. */
-.card .button:disabled {
+/* A disabled button on a card keeps a fill that shows on it, and readable text. A button
+   waiting on the gateway is aria-disabled, so it keeps focus. */
+.card .button:disabled,
+.card .button[aria-disabled="true"] {
   background: var(--bg-selected);
   color: var(--text-muted);
   opacity: 1;
