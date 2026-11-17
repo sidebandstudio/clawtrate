@@ -1,18 +1,22 @@
-/* Design tokens. The accent comes from the logo's mint (#3ee6c1); the light
-   theme uses darker shades of the same hue so text and controls keep contrast. */
+/* Design tokens. Neutral greys with no tint; the accent comes from the logo's
+   mint (#3ee6c1), with a deeper shade in light theme so text keeps contrast.
+   docs/design/visual-language.md, section 2, explains every value. */
 
 :root {
-  --font-ui: "Instrument Sans Variable", "Instrument Sans", ui-sans-serif, sans-serif;
-  --font-display: "Instrument Serif", ui-serif, Georgia, serif;
+  --font-ui: "Figtree Variable", "Figtree", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
 
-  /* 12px is the floor for anything read repeatedly: times, status, labels. */
+  /* 12px is the floor for any text. */
   --text-xs: 12px;
-  --text-sm: 12.5px;
-  --text-md: 13.5px;
-  --text-base: 14px;
-  --text-lg: 16px;
-  --text-title: 24px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-base: 15px;
+  --text-lg: 17px;
+  --text-title: 28px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-strong: 600;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -21,77 +25,109 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  --space-10: 40px;
 
-  --radius-sm: 5px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
 
-  --rail-width: 228px;
-  --list-width: 312px;
-  --panel-width: 320px;
-  --header-height: 52px;
+  --rail-width: 280px;
+  --panel-width: 360px;
+  --header-height: 56px;
+  --strip-band: 42px;
+  --transcript-max: 760px;
+  --conversation-min: 440px;
+  --tap-min: 44px;
+
+  --avatar-row: 40px;
+  --avatar-pin: 56px;
+  --avatar-hero: 64px;
+  --avatar-pill: 22px;
 
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.2, 1);
+  --dur-quick: 120ms;
+  --dur-base: 200ms;
+  --dur-settle: 420ms;
+  --loop-think: 2600ms;
+  --loop-work: 1200ms;
+  --loop-shimmer: 2000ms;
+  --loop-nudge: 2600ms;
+  --loop-blink: 5600ms;
+  --loop-caret: 1200ms;
 }
 
 /* Light theme */
 :root,
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f4f5f2;
-  --bg-rail: #eceee9;
-  --bg-list: #f8f9f6;
+  --bg: #ffffff;
+  --bg-rail: #f6f6f5;
   --bg-pane: #ffffff;
   --bg-raised: #ffffff;
-  --bg-hover: rgba(20, 28, 34, 0.045);
-  --bg-selected: #e6f5f0;
-  --bg-inset: #f3f5f2;
-  --bg-code: #f2f4f1;
-  --border: #dfe3dc;
-  --border-strong: #cfd5cc;
-  --text: #151a1f;
-  --text-muted: #474f55;
-  /* At least 4.5:1 on every light surface, including hover and selected fills. */
-  --text-faint: #5a6368;
+  --bg-bubble: #f0f0ee;
+  --bg-inset: #f0f0ee;
+  --bg-code: rgba(17, 18, 19, 0.06);
+  --bg-hover: rgba(17, 18, 19, 0.05);
+  --bg-selected: rgba(17, 18, 19, 0.08);
+  --bg-inverse: #111213;
+  --bg-scrim: rgba(17, 18, 19, 0.22);
+
+  --border: rgba(17, 18, 19, 0.09);
+  --border-strong: rgba(17, 18, 19, 0.16);
+
+  --text: #111213;
+  --text-muted: #55575b;
+  /* At least 4.5:1 on every light surface, including the selected task inside an open bot. */
+  --text-faint: #606266;
+  --text-inverse: #ffffff;
 
   --accent: #0a6e5c;
   --accent-strong: #06624f;
-  --accent-soft: #e6f5f0;
+  --accent-soft: rgba(10, 110, 92, 0.1);
   --accent-line: #0d8f77;
   --accent-on: #ffffff;
 
-  --warn: #9a5b00;
-  --warn-soft: #fbf1dc;
-  --danger: #b3261e;
-  --danger-soft: #fbe9e7;
+  --bubble-user: #0a6e5c;
+  --bubble-user-text: #ffffff;
 
-  --shadow-raised: 0 1px 2px rgba(15, 23, 28, 0.06), 0 8px 24px rgba(15, 23, 28, 0.06);
-  --stage-glow: radial-gradient(
-    1200px 600px at 15% 110%,
-    rgba(13, 143, 119, 0.09),
-    transparent 60%
-  );
+  --warn: #935600;
+  --warn-soft: rgba(147, 86, 0, 0.1);
+  --warn-line: rgba(147, 86, 0, 0.32);
+  --danger: #b3261e;
+  --danger-soft: rgba(179, 38, 30, 0.09);
+  --danger-line: rgba(179, 38, 30, 0.3);
+
+  --shadow-button: 0 0 0 1px rgba(17, 18, 19, 0.06), 0 1px 2px rgba(17, 18, 19, 0.06);
+  --shadow-raised: 0 0 0 1px rgba(17, 18, 19, 0.06), 0 2px 8px rgba(17, 18, 19, 0.08);
+  --shadow-pop: 0 0 0 1px rgba(17, 18, 19, 0.06), 0 12px 36px rgba(17, 18, 19, 0.16);
 }
 
-/* Dark theme: the near-black of the logo's field. */
+/* Dark theme */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --bg: #0b0e14;
-    --bg-rail: #080a0f;
-    --bg-list: #0d1118;
-    --bg-pane: #10141c;
-    --bg-raised: #151a23;
-    --bg-hover: rgba(214, 240, 232, 0.05);
-    --bg-selected: rgba(62, 230, 193, 0.1);
-    --bg-inset: #0c1017;
-    --bg-code: #0a0d13;
-    --border: #1d232d;
-    --border-strong: #2a313d;
-    --text: #e6ebe9;
-    --text-muted: #b0babd;
+    --bg: #101112;
+    --bg-rail: #0b0c0d;
+    --bg-pane: #101112;
+    --bg-raised: #1c1d1f;
+    --bg-bubble: #1f2022;
+    --bg-inset: #1a1b1d;
+    --bg-code: rgba(255, 255, 255, 0.08);
+    --bg-hover: rgba(255, 255, 255, 0.06);
+    --bg-selected: rgba(255, 255, 255, 0.1);
+    --bg-inverse: #f3f3f2;
+    --bg-scrim: rgba(0, 0, 0, 0.5);
+
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.16);
+
+    --text: #f3f3f2;
+    --text-muted: #b4b6b9;
     /* At least 4.5:1 on every dark surface, including hover and selected fills. */
-    --text-faint: #8b969b;
+    --text-faint: #9d9fa2;
+    --text-inverse: #111213;
 
     --accent: #3ee6c1;
     --accent-strong: #6cf0d3;
@@ -99,36 +135,44 @@
     --accent-line: #3ee6c1;
     --accent-on: #04261f;
 
+    --bubble-user: #3ee6c1;
+    --bubble-user-text: #04261f;
+
     --warn: #f0b45a;
     --warn-soft: rgba(240, 180, 90, 0.12);
+    --warn-line: rgba(240, 180, 90, 0.42);
     --danger: #ff8a80;
     --danger-soft: rgba(255, 138, 128, 0.12);
+    --danger-line: rgba(255, 138, 128, 0.42);
 
-    --shadow-raised: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 32px rgba(0, 0, 0, 0.35);
-    --stage-glow: radial-gradient(
-      1200px 600px at 15% 110%,
-      rgba(62, 230, 193, 0.08),
-      transparent 60%
-    );
+    --shadow-button: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+    --shadow-raised: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 4px 14px rgba(0, 0, 0, 0.4);
+    --shadow-pop: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 16px 44px rgba(0, 0, 0, 0.6);
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0b0e14;
-  --bg-rail: #080a0f;
-  --bg-list: #0d1118;
-  --bg-pane: #10141c;
-  --bg-raised: #151a23;
-  --bg-hover: rgba(214, 240, 232, 0.05);
-  --bg-selected: rgba(62, 230, 193, 0.1);
-  --bg-inset: #0c1017;
-  --bg-code: #0a0d13;
-  --border: #1d232d;
-  --border-strong: #2a313d;
-  --text: #e6ebe9;
-  --text-muted: #b0babd;
-  --text-faint: #8b969b;
+  --bg: #101112;
+  --bg-rail: #0b0c0d;
+  --bg-pane: #101112;
+  --bg-raised: #1c1d1f;
+  --bg-bubble: #1f2022;
+  --bg-inset: #1a1b1d;
+  --bg-code: rgba(255, 255, 255, 0.08);
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-selected: rgba(255, 255, 255, 0.1);
+  --bg-inverse: #f3f3f2;
+  --bg-scrim: rgba(0, 0, 0, 0.5);
+
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  --text: #f3f3f2;
+  --text-muted: #b4b6b9;
+  /* At least 4.5:1 on every dark surface, including hover and selected fills. */
+  --text-faint: #9d9fa2;
+  --text-inverse: #111213;
 
   --accent: #3ee6c1;
   --accent-strong: #6cf0d3;
@@ -136,15 +180,17 @@
   --accent-line: #3ee6c1;
   --accent-on: #04261f;
 
+  --bubble-user: #3ee6c1;
+  --bubble-user-text: #04261f;
+
   --warn: #f0b45a;
   --warn-soft: rgba(240, 180, 90, 0.12);
+  --warn-line: rgba(240, 180, 90, 0.42);
   --danger: #ff8a80;
   --danger-soft: rgba(255, 138, 128, 0.12);
+  --danger-line: rgba(255, 138, 128, 0.42);
 
-  --shadow-raised: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 32px rgba(0, 0, 0, 0.35);
-  --stage-glow: radial-gradient(
-    1200px 600px at 15% 110%,
-    rgba(62, 230, 193, 0.08),
-    transparent 60%
-  );
+  --shadow-button: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-raised: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 4px 14px rgba(0, 0, 0, 0.4);
+  --shadow-pop: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 16px 44px rgba(0, 0, 0, 0.6);
 }

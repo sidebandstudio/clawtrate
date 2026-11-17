@@ -4,5 +4,12 @@
     "types": ["node"],
     "lib": ["ES2024", "DOM"]
   },
-  "include": ["e2e/**/*.ts", "playwright.config.ts", "vitest.config.ts", "eslint.config.js"]
+  "include": [
+    "e2e/**/*.ts",
+    "visual/**/*.ts",
+    "playwright.config.ts",
+    "playwright.visual.config.ts",
+    "vitest.config.ts",
+    "eslint.config.js"
+  ]
 }
