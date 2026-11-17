@@ -921,6 +921,27 @@ test.describe("access", () => {
     await expect(announcer(page)).toHaveText("You can now send, stop and answer");
   });
 
+  test("F-456: while a bot waits on the read tier, a note says this device can't see what it waits for, with Request access", async ({
+    page,
+  }) => {
+    await open(page, "read-wait");
+    const note = page.getByTestId("read-only-wait");
+    await expect(note).toContainText(
+      "Otto is waiting for an approval or an answer. This device can't see it on a read-only connection.",
+    );
+    // Above the status line, which says what it can.
+    const order = await page.evaluate(() => {
+      const note = document.querySelector("[data-testid=read-only-wait]")!;
+      const line = document.querySelector("[data-testid=status-line]")!;
+      return note.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING;
+    });
+    expect(order).toBeTruthy();
+    await note.getByRole("button", { name: "Request access" }).click();
+    await expect(page.getByRole("region", { name: "Access" })).toContainText(
+      "Waiting for the gateway's owner.",
+    );
+  });
+
   test("a host pinned to the read tier never offers to ask for access", async ({ page }) => {
     await open(page, "access-pinned");
     await expect(page.getByRole("region", { name: "Access" })).toContainText("Read-only.");

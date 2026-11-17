@@ -468,6 +468,8 @@ function heldByEngine(run: Run, transcript: Transcript): boolean {
 type LiveOptions = {
   connected: boolean;
   interactive: boolean;
+  /** Ask for the interactive tier; null where the host never asks (pinned read-only). */
+  onRequestAccess: (() => void) | null;
   onOpenSteps: () => void;
   onReview: () => void;
   leaving: { key: string; run: Run } | null;
@@ -566,6 +568,23 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
   let status: StatusLineView | null = null;
   if (active) {
     status = statusLineFor(active, transcript, options);
+    // The gateway reports a wait this tier is not sent: say so, and how to see it.
+    if (active.state === "waiting" && !options.interactive) {
+      foot.push(
+        <div className="turn-note" data-testid="read-only-wait" key={`wait-${active.id}`}>
+          <span className="glyph" data-state="blocked" aria-hidden="true" />
+          <p>
+            {bot.name} is waiting for an approval or an answer. This device can't see it on a
+            read-only connection.{" "}
+            {options.onRequestAccess && (
+              <button type="button" className="link-button" onClick={options.onRequestAccess}>
+                Request access
+              </button>
+            )}
+          </p>
+        </div>,
+      );
+    }
     signature.push(status.phrase);
     foot.push(
       <StatusLine
@@ -869,6 +888,9 @@ export function Conversation({
         liveOptions={{
           connected: online,
           interactive,
+          onRequestAccess: info.readOnly
+            ? null
+            : () => void send({ type: "requestAccess" }).catch(() => {}),
           onOpenSteps: openSteps,
           onReview: review,
           leaving,
