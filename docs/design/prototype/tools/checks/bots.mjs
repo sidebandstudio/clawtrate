@@ -72,7 +72,7 @@ check("P1 starting: the gateway is asked", (await text(p, "#create-dialog .b-bod
 await p.waitForTimeout(900);
 check("P1 waiting: a link and a code the gateway polls for", await p.evaluate(() => document.querySelector("#create-dialog .b-code code")?.textContent === "QK4F-7PZD" && document.querySelector('#create-dialog [data-b="open-link"]') && document.querySelector("#create-dialog .b-wait")));
 await p.click('[data-b="cancel-signin"]');
-check("P1 cancelled: nothing was saved", (await text(p, "#create-dialog .b-result")).includes("Nothing was saved"));
+check("FM-05 cancelled: says so, and what the gateway's accounts now show", (await text(p, "#create-dialog .b-result")).includes("Sign-in cancelled") && (await text(p, "#create-dialog")).includes("Clawtrate checked the gateway's accounts"));
 await p.click('[data-b="restart-signin"]');
 await p.waitForTimeout(900);
 await p.evaluate(() => window.bots.connectTo("connected"));
@@ -103,11 +103,27 @@ await p.close();
 p = await open("open=create&step=connect&name=Viral&connect=openai/openai-token-sharing&stage=waiting");
 check("P1 the gateway's machine: the command to forward the port, ready to copy", await p.evaluate(() => document.querySelector("#create-dialog .command-line code")?.textContent.startsWith("ssh -N -L 8080") && document.querySelector('#create-dialog .copy[aria-label="Copy command"]')));
 await p.close();
-for (const [stage, words] of [["failed", "Couldn't connect"], ["expired", "The sign-in expired"], ["dropped", "a sign-in ends with its connection"], ["busy", "does one at a time"]]) {
+for (const [stage, words] of [["failed", "Couldn't connect"], ["expired", "The sign-in expired"], ["dropped", "a sign-in ends with its connection"], ["busy", "does one at a time"], ["unconfirmed", "Saved, not confirmed"], ["finishing", "Too late to cancel"], ["same", "No new xAI account appeared: if this was an account you already have, the gateway may have refreshed its sign-in."]]) {
   p = await open(`open=create&step=connect&name=Viral&connect=xai/xai-oauth&stage=${stage}`);
   check(`P1 ${stage}: says so`, (await text(p, "#create-dialog .b-body")).includes(words));
   await p.close();
 }
+p = await open("open=create&step=connect&name=Viral&connect=xai/xai-oauth&stage=failed");
+check("FM-05 an unclean ending never says nothing was saved; it reads the gateway's accounts again", !(await text(p, "#create-dialog")).includes("Nothing was saved") && (await text(p, "#create-dialog")).includes("Clawtrate checked the gateway's accounts: no new xAI account."));
+await p.close();
+p = await open("open=create&step=connect&name=Viral&connect=xai/xai-oauth&stage=cancelled&saved=1");
+check("FM-05 a cancelled sign-in that saved a credential shows the account the gateway now has", (await text(p, "#create-dialog")).includes("The gateway now has a xAI account it didn't have before") && (await p.evaluate(() => !!document.querySelector('[data-b="name-saved"]'))));
+await p.click('[data-b="name-saved"]');
+check("FM-05 and leads to naming it", await p.evaluate(() => !!document.querySelector("[data-b-label]")));
+await p.close();
+p = await open("open=settings&section=accounts");
+check("FM-10 Settings lists an account kept by one bot under its own heading", (await text(p, "#settings-dialog")).includes("Kept by one bot") && (await text(p, "#settings-dialog")).includes("Only Pip can use it"));
+await p.click('[data-b-account="anthropic:pip"]');
+check("FM-10 its page says only that bot can use it", (await text(p, "#settings-dialog")).includes("Kept in Pip's own store. Other bots can't use it."));
+await p.close();
+p = await open("open=settings&section=accounts&account=anthropic:manual");
+check("FM-05 an API key's page offers Replace key, not Sign in again", await p.evaluate(() => !!document.querySelector('[data-b="replace-key"]') && !document.querySelector('[data-b="resign"]')));
+await p.close();
 p = await open("open=create&step=connect&name=Viral&connect=github-copilot/github-copilot-enterprise");
 check("P1 Copilot Enterprise asks for the company's address first", (await p.evaluate(() => !!document.querySelector("[data-b-domain]"))));
 await p.close();

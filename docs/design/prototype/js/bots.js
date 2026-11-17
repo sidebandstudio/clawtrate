@@ -434,7 +434,7 @@
   // Connecting an account: the same component in New bot and in Settings -----------------------------
 
   function startConnect(from, optionId, stage) {
-    B.connect = { from, view: optionId ? "flow" : "providers", option: optionId || null, stage: stage || null, pasted: "", domain: "", label: "", error: "", apikey: { provider: "openai", key: "" } };
+    B.connect = { from, view: optionId ? "flow" : "providers", option: optionId || null, stage: stage || null, pasted: "", domain: "", label: "", error: "", apikey: { provider: "openai", key: "" }, saved: p("saved") ? `${OPTIONS.find((o) => o.id === optionId)?.provider || "openai"}:second` : null };
   }
 
   function option() {
@@ -527,19 +527,41 @@
     } else if (stage === "connected") {
       return labelView();
     } else if (stage === "failed") {
-      body = result("danger", "warning", "Couldn't connect", `${esc(who)} refused the sign-in: the code was not accepted. Nothing was saved.`);
+      body = result("danger", "warning", "Couldn't connect", `${esc(who)} refused the sign-in: the code was not accepted.`) + reread(who);
       foot = button("Try again", 'data-b="restart-signin" data-size="lg"', "primary") + choose;
     } else if (stage === "expired") {
-      body = result("warn", "clock", "The sign-in expired", "It wasn't finished in time. Nothing was saved. Start again for a new code.");
+      body = result("warn", "clock", "The sign-in expired", "It wasn't finished in time. Start again for a new code.") + reread(who);
       foot = button("Start again", 'data-b="restart-signin" data-size="lg"', "primary") + choose;
     } else if (stage === "cancelled") {
-      body = result("", "x", "Sign-in cancelled", "Nothing was saved.");
+      body = result("", "x", "Sign-in cancelled", "") + reread(who);
       foot = again + choose;
     } else if (stage === "dropped") {
-      body = result("warn", "warning", "The sign-in ended", "The connection to the gateway dropped, and a sign-in ends with its connection. Nothing was saved.");
+      body = result("warn", "warning", "The sign-in ended", "The connection to the gateway dropped, and a sign-in ends with its connection.") + reread(who);
       foot = button("Start again", 'data-b="restart-signin" data-size="lg"', "primary") + choose;
+    } else if (stage === "unconfirmed") {
+      // The gateway's own message, as it sends it.
+      body = result("warn", "clock", "Saved, not confirmed", "Your sign-in was saved, but the connection update could not be confirmed. Send /login refresh in chat to try again.");
+      foot = button("Continue", 'data-b="name-saved" data-size="lg"', "primary");
+    } else if (stage === "finishing") {
+      body = wait(`Saving the sign-in with ${esc(who)}…`) + `<p class="b-hint">Too late to cancel: the gateway is saving the sign-in.</p>`;
+      foot = button("Saving…", 'data-size="lg" disabled', "quiet");
+    } else if (stage === "same") {
+      body = result("ok", "check", "Signed in", `No new ${esc(who)} account appeared: if this was an account you already have, the gateway may have refreshed its sign-in.`);
+      foot = button("Done", 'data-b="same-done" data-size="lg"', "primary");
     }
     return { title, backLabel: "Back to sign-in methods", body, foot };
+  }
+
+  // After a sign-in that did not end cleanly, the gateway's accounts are read
+  // again and the screen says what is there, and nothing else.
+  function reread(who) {
+    if (B.connect.saved)
+      return note(
+        `<p>The gateway now has a ${who} account it didn't have before, <span class="mono">${esc(B.connect.saved)}</span>. It may not be ready to use.</p>` +
+          `<div class="b-actions">${button("Name it", 'data-b="name-saved" data-size="sm"')}${button("Disconnect it…", 'data-b="drop-saved" data-size="sm" data-tone="danger"', "quiet")}</div>`,
+        "warn",
+      );
+    return `<p class="b-hint" style="text-align:center">Clawtrate checked the gateway's accounts: no new ${who} account.</p>`;
   }
 
   function labelView() {
@@ -666,9 +688,9 @@
       `<div><dt>State</dt><dd><span class="b-state"${tone ? ` data-tone="${tone}"` : ' data-tone="ok"'}>${tone ? icon("warning") : icon("check")}${word}${a.expiryDate ? `, ${a.expiryDate}` : ""}</span></dd></div>` +
       `<div><dt>Used by</dt><dd>${users.length ? esc(users.map((n) => (lockedBy.includes(n) ? `${n} (locked)` : n)).join(", ")) : "No bots"}</dd></div>` +
       `<div><dt>On the gateway</dt><dd class="mono">${esc(a.id)}</dd></div></dl>` +
-      `<p class="b-hint">${esc(a.how)}. The gateway keeps the sign-in; Clawtrate can't read it.</p>` +
+      `<p class="b-hint">${esc(a.how)}. The gateway keeps the sign-in; Clawtrate can't read it.${a.owner ? ` Kept in ${esc(app.bots.find((x) => x.id === a.owner)?.name || a.owner)}'s own store. Other bots can't use it.` : ""}</p>` +
       (isAdmin()
-        ? `<div class="b-actions" style="margin-top:18px">${a.kind !== "key" ? button("Sign in again", 'data-b="resign" data-size="sm"', tone ? "primary" : "") : ""}<span class="spacer"></span>` +
+        ? `<div class="b-actions" style="margin-top:18px">${a.kind === "subscription" ? button("Sign in again", 'data-b="resign" data-size="sm"', tone ? "primary" : "") : a.kind === "key" && !a.owner ? button("Replace key", 'data-b="replace-key" data-size="sm"') : `<span class="b-hint" style="margin:0">Signed in on the gateway. Sign it in again there.</span>`}<span class="spacer"></span>` +
           `${button("Disconnect…", 'data-b="disconnect" data-size="sm" data-tone="danger"', "quiet")}</div>`
         : "");
     return { title: acctName(a), back: back("Back to accounts", "to-accounts"), body, foot: isAdmin() ? "" : adminBar("Changing an account needs admin access.") };
@@ -1076,6 +1098,26 @@
         announce("Key saved");
         break;
       }
+      case "name-saved": {
+        const o = option();
+        const id = c.saved || `${o.provider}:second`;
+        if (!acct(id)) accounts.push({ id, provider: o.provider, label: "", kind: o.group === "token" ? "key" : "subscription", type: "oauth", how: `${o.label}: ${FLOW_WORDS[o.flow].toLowerCase()}`, status: "ok" });
+        c.newId = id;
+        c.view = "label";
+        rerender(true);
+        break;
+      }
+      case "drop-saved":
+        accounts = accounts.filter((a) => a.id !== c.saved);
+        c.saved = null;
+        rerender(true);
+        announce("Disconnected");
+        break;
+      case "same-done":
+        B.connect = null;
+        if (inDialog === createDialog) B.create.step = "account";
+        rerender(true);
+        break;
       case "label-done": {
         const a = acct(c.newId);
         a.label = c.label.trim();
@@ -1125,6 +1167,16 @@
         $('[data-b="relabel"]', settingsDialog)?.focus();
         announce("Label saved");
         CT.botsChanged?.();
+        break;
+      }
+      case "replace-key": {
+        const a = acct(B.settings.account);
+        startConnect("settings");
+        B.connect.apikey.provider = a.provider;
+        rerender(true);
+        const d = $(".b-disclosure", settingsDialog);
+        if (d) d.open = true;
+        $("[data-b-key]", settingsDialog)?.focus();
         break;
       }
       case "resign": {
