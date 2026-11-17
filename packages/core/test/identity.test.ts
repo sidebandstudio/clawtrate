@@ -704,6 +704,12 @@ describe("reasoning ids follow from the history sequence, however the live strea
       const once = resync(live, rows, null, table);
       const twice = resync(once, rows, null, table);
       const expected = expectedIds(items);
+      // The run says when its reasoning ids changed, and only then.
+      const reasoningIds = (activity: TaskActivity) =>
+        activity.runs[0]!.steps.filter((step) => step.kind === "reasoning").map((step) => step.id);
+      const changed = reasoningIds(live).join() !== reasoningIds(once).join();
+      expect(once.runs[0]!.reasoningRevision).toBe(changed ? 1 : 0);
+      expect(twice.runs[0]!.reasoningRevision).toBe(once.runs[0]!.reasoningRevision);
       stats.cases += 1;
       if (shown.some((each, i) => items[i]!.kind === "reasoning" && !each?.first))
         stats.unshown += 1;
@@ -770,5 +776,60 @@ describe("a run still in flight numbers its next reasoning from what history sho
       table,
     );
     expect(ids(next)).toEqual(["reasoning:r:s:0", "tool:c1", "reasoning:r:t.c1:1"]);
+  });
+});
+
+describe("a run says when a reconciliation changed its reasoning ids (R7-2)", () => {
+  const row = (content: unknown[]) => ({
+    role: "assistant",
+    content,
+    stopReason: "stop",
+    __openclaw: { id: "a1", seq: 1, runId: "r" },
+  });
+
+  it("a missed tool anchor changes the id of the reasoning after it, and the counter says so", () => {
+    const table = new RawTable();
+    // A gap hid tool c; the reasoning after it arrived before the history reply.
+    const live = feed(emptyActivity, [thinking(1, "after")], table);
+    expect(live.runs[0]!.reasoningRevision).toBe(0);
+    const rows = [
+      row([
+        { type: "toolCall", id: "c", name: "exec", arguments: {} },
+        { type: "thinking", thinking: "after" },
+      ]),
+    ];
+    const once = resync(live, rows, null, table);
+    expect(ids(once)).toEqual(["tool:c", "reasoning:r:t.c:0"]);
+    expect(once.runs[0]!.reasoningRevision).toBe(1);
+    // The same history again changes nothing more.
+    expect(resync(once, rows, null, table).runs[0]!.reasoningRevision).toBe(1);
+  });
+
+  it("does not increase when a reconciliation changes no reasoning id", () => {
+    const table = new RawTable();
+    const live = feed(
+      emptyActivity,
+      [
+        thinking(1, "first"),
+        agentEvent("r", 2, "tool", { phase: "start", name: "ls", toolCallId: "c1", args: {} }),
+        agentEvent("r", 3, "lifecycle", { phase: "model" }),
+        thinking(4, "second"),
+      ],
+      table,
+    );
+    const rows = [
+      row([
+        { type: "thinking", thinking: "first" },
+        { type: "toolCall", id: "c1", name: "ls", arguments: {} },
+        { type: "thinking", thinking: "second" },
+        { type: "text", text: "Done" },
+      ]),
+    ];
+    // In flight, and once the run has finished.
+    const inFlight = resync(live, rows, { runId: "r" }, table);
+    expect(inFlight.runs[0]!.reasoningRevision).toBe(0);
+    const finished = resync(inFlight, rows, null, table);
+    expect(ids(finished)).toEqual(ids(live));
+    expect(finished.runs[0]!.reasoningRevision).toBe(0);
   });
 });

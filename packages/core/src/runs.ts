@@ -251,6 +251,13 @@ export type Run = {
   reasoningAnchor: string | null;
   /** Reasoning blocks since `reasoningAnchor`: the next one's number. */
   nextReasoning: number;
+  /**
+   * Increases each time a reconciliation with history removes, adds or
+   * re-anchors any reasoning step id in this run. View state keyed by a
+   * reasoning step id of this run (an open card, a selected raw view) is
+   * valid only while this is unchanged; when it changes, clear it.
+   */
+  reasoningRevision: number;
   /** Paths of fields cut to their bound; a cut `text` is not extended by later deltas. */
   cut?: string[];
 };
@@ -692,6 +699,7 @@ export function newRun(
     omittedSteps: 0,
     reasoningAnchor: null,
     nextReasoning: 0,
+    reasoningRevision: 0,
     ...init,
   };
 }
@@ -2069,6 +2077,25 @@ export type HistoryMerge = {
 };
 
 /**
+ * Whether a merge removed, added or re-anchored a reasoning id of the run.
+ * Steps retention had dropped and history brings back, older than every step
+ * still shown, are not a change.
+ */
+function reasoningIdsChanged(live: Run, merged: Step[]): boolean {
+  const reasoning = (steps: Step[]) => steps.filter((step) => step.kind === "reasoning");
+  const liveIds = new Set(live.steps.map((step) => step.id));
+  const mergedIds = new Set(merged.map((step) => step.id));
+  if (reasoning(live.steps).some((step) => !mergedIds.has(step.id))) return true;
+  const firstKept = merged.findIndex((step) => liveIds.has(step.id));
+  return merged.some(
+    (step, index) =>
+      step.kind === "reasoning" &&
+      !liveIds.has(step.id) &&
+      !(live.omittedSteps > 0 && firstKept !== -1 && index < firstKept),
+  );
+}
+
+/**
  * Where a run's next reasoning block is numbered from after a merge: the
  * side whose anchor comes later in the merged steps (the run's start, or a
  * window's cut, before every step), and on the same anchor the larger count.
@@ -2118,6 +2145,7 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
       anchorItemId: fromRun.anchorItemId ?? current.anchorItemId,
       model: current.model ?? fromRun.model,
       ...mergedAnchor(current, fromRun, steps),
+      reasoningRevision: current.reasoningRevision + (reasoningIdsChanged(current, steps) ? 1 : 0),
     };
     if (!isTerminal(current.state) && isTerminal(fromRun.state)) {
       run = {

@@ -230,6 +230,7 @@ export const RUN: Bound = flagged<Run>()({
   omittedSteps: NUMBER,
   reasoningAnchor: ID,
   nextReasoning: NUMBER,
+  reasoningRevision: NUMBER,
 });
 const attachmentInfo = object<OutgoingAttachmentInfo>()({
   fileName: text(MAX_FILE_NAME_CHARS),
