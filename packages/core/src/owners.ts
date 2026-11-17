@@ -111,6 +111,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // One per task and list kind (three approval kinds and questions).
   listRequested: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
   listApplied: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
+  // A task's tool map read in flight, and whether another was asked for.
+  toolReads: { max: T, each: ID + N, row: "bookkeeping" },
   // A run's turn limit, for each run of a followed task.
   turnTimers: { max: T * MAX_RUN_LIST, each: 2 * ID + 1, row: "bookkeeping" },
   // Streaming `chat` text: run id, task, agent and the text only.

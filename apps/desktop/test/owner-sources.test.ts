@@ -31,6 +31,7 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/files.ts:SCRIPT_EXTENSIONS": "static, four extensions",
   "packages/core/src/files.ts:DOCUMENT_EXTENSIONS": "static, twenty-three extensions",
   "packages/core/src/approvals.ts:DECISIONS": "static, three decisions",
+  "packages/core/src/cards.ts:T3_CODE_TOOLS": "static, T3 Code's seven tool names",
   "packages/core/src/client.ts:REQUESTED_SCOPES": "static, one scope",
   "packages/core/src/client.ts:CLIENT_CAPS": "static, one cap",
   "packages/core/src/client.ts:APPROVAL_CAPS": "static, three caps",

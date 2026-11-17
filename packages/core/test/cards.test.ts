@@ -89,7 +89,7 @@ function sendResult(
   });
 }
 
-const OPTIONS: CardOptions = { codingServers: ["coder"] };
+const OPTIONS: CardOptions = {};
 const select = (activity: TaskActivity, extra: Partial<CardInput> = {}, options = OPTIONS) =>
   selectMessageCards({ runs: activity.runs, approvals: activity.approvals, ...extra }, options);
 const linked = (state: LinkedRun["state"]): Record<string, LinkedRun> => ({
@@ -267,6 +267,74 @@ describe("Messaged cards (F-119, F-122, F-123, F-309)", () => {
     expect(select({ ...emptyActivity, runs: history }).botMessages[0]!.state).toBe("unknown");
   });
 
+  it("an exchange read back from history is Replied: history keeps the send's status and reply only in the result's text (F-119)", () => {
+    // As chat.history returns it: the toolResult row keeps details.sessionKey alone.
+    const sent = {
+      runId: "1f3cfe7f-0000-4000-8000-000000000001",
+      sessionKey: "agent:atlas:main",
+      status: "ok",
+      delivery: { status: "skipped" },
+      reply: "Happy to help.",
+    };
+    const rows = (result: Record<string, unknown>) => [
+      { role: "user", content: "ask Atlas", __openclaw: { id: "u1", seq: 1 } },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "c9",
+            name: "sessions_send",
+            arguments: { agentId: "atlas", message: "Could you look?", timeoutSeconds: 30 },
+          },
+        ],
+        __openclaw: { id: "a1", seq: 2, runId: "run-h" },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c9",
+        toolName: "sessions_send",
+        isError: false,
+        ...result,
+        __openclaw: { id: "t1", seq: 3, runId: "run-h" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Atlas replied." }],
+        __openclaw: { id: "a2", seq: 4, runId: "run-h" },
+      },
+    ];
+    // What the engine keeps of each history row, as the client reads it for a card.
+    const card = (result: Record<string, unknown>) =>
+      select(
+        { ...emptyActivity, runs: runsFromHistory(rows(result), null, ctx()) },
+        {},
+        { ...OPTIONS, rawOf: (step) => step.raw ?? raw.get(KEY, step.id) },
+      ).botMessages[0]!;
+    const text = (value: unknown) => [{ type: "text", text: JSON.stringify(value, null, 2) }];
+    expect(
+      card({ details: { sessionKey: "agent:atlas:main" }, content: text(sent) }),
+    ).toMatchObject({
+      state: "replied",
+      reply: { text: "Happy to help." },
+      recipient: { sessionKey: "agent:atlas:main", agentId: "atlas" },
+    });
+    // The result's own details win over its text.
+    expect(
+      card({ details: { sessionKey: "agent:atlas:main", status: "queued" }, content: text(sent) })
+        .state,
+    ).toBe("sent");
+    // A text that is not exactly one JSON object with a status says nothing more.
+    for (const content of [
+      [{ type: "text", text: "Delivered." }],
+      [...text(sent), { type: "text", text: "and more" }],
+      text([sent]),
+      text({ reply: "no status" }),
+    ]) {
+      expect(card({ details: { sessionKey: "agent:atlas:main" }, content }).state).toBe("unknown");
+    }
+  });
+
   it("Waiting for approval, then Not sent when the approval is denied (F-312, F-436)", () => {
     let activity = startSend();
     activity = applyApprovalRequested(
@@ -414,7 +482,7 @@ function mcpResult(
 
 const coderDetails = {
   mcpServer: "coder",
-  mcpTool: "send_message",
+  mcpTool: "t3_thread_send",
   structuredContent: { threadId: "thread-1", reply: "On it." },
 };
 
@@ -424,16 +492,35 @@ describe("MCP and coding-agent cards (F-132, F-133, F-135, F-137, F-313, F-314)"
     expect(select(activity).mcpCalls).toEqual([]);
     const mapped = selectMessageCards(
       { runs: activity.runs },
-      {
-        codingServers: ["coder"],
-        mcpTools: { coder__send_message: { server: "coder", tool: "send_message" } },
-      },
+      { mcpTools: { coder__send_message: { server: "coder", tool: "t3_thread_send" } } },
     );
     expect(mapped.mcpCalls[0]).toMatchObject({
       state: "started",
       server: "coder",
-      tool: "send_message",
+      tool: "t3_thread_send",
       codingAgent: true,
+    });
+  });
+
+  it("decides the coding agent per call by its tool, never by its server", () => {
+    // Before the result, the map names one of T3 Code's tools on a server called "coder".
+    const mapped = { mcpTools: { coder__launch: { server: "coder", tool: "t3_thread_launch" } } };
+    const started = mcpStart(emptyActivity, "m1", "coder__launch");
+    expect(selectMessageCards({ runs: started.runs }, mapped).mcpCalls[0]).toMatchObject({
+      tool: "t3_thread_launch",
+      codingAgent: true,
+    });
+    // The result names an ordinary tool on that same server: it decides, and the call is not T3 Code's.
+    const ordinary = mcpResult(
+      started,
+      "m1",
+      { mcpServer: "coder", mcpTool: "read_file" },
+      { name: "coder__launch" },
+    );
+    expect(selectMessageCards({ runs: ordinary.runs }, mapped).mcpCalls[0]).toMatchObject({
+      server: "coder",
+      tool: "read_file",
+      codingAgent: false,
     });
   });
 
@@ -449,7 +536,7 @@ describe("MCP and coding-agent cards (F-132, F-133, F-135, F-137, F-313, F-314)"
     expect(select(activity).mcpCalls[0]).toMatchObject({
       state: "returned",
       server: "coder",
-      tool: "send_message",
+      tool: "t3_thread_send",
       codingAgent: true,
       text: "Fix the failing login test",
       args: { message: "Fix the failing login test" },
@@ -499,8 +586,7 @@ describe("MCP and coding-agent cards (F-132, F-133, F-135, F-137, F-313, F-314)"
 
   it("Unknown, with the returned error kept, when the result says the call was aborted; work may continue only after it returned (F-137, F-470)", () => {
     const known = {
-      codingServers: ["coder"],
-      mcpTools: { coder__send_message: { server: "coder", tool: "send_message" } },
+      mcpTools: { coder__send_message: { server: "coder", tool: "t3_thread_send" } },
     };
     let aborted = requestStop(mcpStart(emptyActivity, "m1"), "run-s", 2_000);
     aborted = mcpResult(

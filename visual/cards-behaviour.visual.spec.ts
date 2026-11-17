@@ -1,7 +1,7 @@
 // How the cards behave in the fixture mode (conversation.md sections 9 to 13):
 // decisions and answers go through the bridge to the engine's reducers, and
 // the cards show only what the engine's state establishes.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { contextFor, openFixture, settle, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
@@ -49,7 +49,7 @@ const questionCard = (page: Page) => page.getByTestId("question-card");
 test.describe("approval cards", () => {
   test.use(contextFor(WIDE, "light"));
 
-  test("F-163 F-170 F-171 F-329 F-155: a pending approval names the bot, says what runs where, shows its warnings, and offers only the request's decisions, with Deny", async ({
+  test("F-163 F-171 F-329 F-155: a pending approval names the bot, says what runs where, shows its warnings, and offers only the request's decisions, its refusal labelled Deny", async ({
     page,
   }) => {
     await openFixture(page, "scene=approval-pending", "light");
@@ -1023,7 +1023,15 @@ test.describe("Messaged cards", () => {
     for (const scene of ["messaged-sent", "messaged-replied", "messaged-no-reply"]) {
       expect(await verb(scene, "messaged-card"), scene).toBe("sent");
     }
-    expect(await verb("t3-failed", "t3-card")).toBe("asked to send");
+    for (const scene of [
+      "t3-started",
+      "t3-approval",
+      "t3-delivery-unknown",
+      "t3-failed",
+      "t3-not-sent",
+    ]) {
+      expect(await verb(scene, "t3-card"), scene).toBe("asked to send");
+    }
     expect(await verb("t3-call-made", "t3-card")).toBe("sent");
     await openFixture(page, "scene=received-completed", "light");
     const received = page.getByTestId("received-card");
@@ -1050,6 +1058,52 @@ test.describe("Messaged cards", () => {
     await expect(
       back.getByRole("button", { name: "Open this message in Marlow's task" }),
     ).toBeFocused();
+  });
+
+  test("F-124: Open in Marlow waits for its Message from Otto card when Marlow's task shows its runs before its history has loaded", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=messaged-working", "light");
+    type Fixture = {
+      clawtrateFixture: {
+        setState(
+          change: (s: { transcripts: Record<string, Record<string, unknown>> }) => unknown,
+        ): void;
+      };
+      heldHistory?: Record<string, unknown>;
+    };
+    // Marlow's task as it opens: its runs known, its history still loading.
+    await page.evaluate((key) => {
+      const w = window as unknown as Fixture;
+      w.clawtrateFixture.setState((s) => {
+        const t = s.transcripts[key]!;
+        w.heldHistory = t;
+        return {
+          ...s,
+          transcripts: {
+            ...s.transcripts,
+            [key]: { ...t, status: "loading", items: [], interSession: [] },
+          },
+        };
+      });
+    }, "agent:marlow:house-log");
+    const card = page.getByTestId("messaged-card");
+    await card.locator("summary").click();
+    await card.getByRole("button", { name: "Open this message in Marlow's task" }).click();
+    await expect(page.locator(".title-pill")).toContainText("House log");
+    await expect(page.getByTestId("received-card")).toHaveCount(0);
+    await settle(page);
+    // The history arrives, and with it the card the arrival was for.
+    await page.evaluate((key) => {
+      const w = window as unknown as Fixture;
+      w.clawtrateFixture.setState((s) => ({
+        ...s,
+        transcripts: { ...s.transcripts, [key]: w.heldHistory! },
+      }));
+    }, "agent:marlow:house-log");
+    const received = page.getByTestId("received-card");
+    await expect(received).toHaveAttribute("open", "");
+    await expect(received.locator("summary")).toBeFocused();
   });
 
   test("F-124: coming back from Marlow's task, by Open in Otto or ⌘[, restores the transcript's place, the open card and focus", async ({
@@ -1099,7 +1153,7 @@ test.describe("Messaged cards", () => {
     }
   });
 
-  test("F-308: Show full exchange shows every message between the two bots in this task, read-only, and returns to the card", async ({
+  test("with the task's whole history loaded, Show full exchange shows every message between the two bots in this task, read-only, and returns to the card", async ({
     page,
   }) => {
     await openFixture(page, "scene=messaged-replied", "light");
@@ -1124,6 +1178,55 @@ test.describe("Messaged cards", () => {
     await back.click();
     await expect(list).toBeHidden();
     await expect(card).toHaveAttribute("open", "");
+  });
+
+  test("with only part of the task's history loaded, the exchange is not called every message, and says what may be missing", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=messaged-replied", "light");
+    const key = "agent:otto:transcode-cache";
+    for (const partial of [{ hasMore: true }, { runsOmitted: 2 }]) {
+      await page.evaluate(
+        ({ key, partial }) => {
+          const fixture = (
+            window as unknown as {
+              clawtrateFixture: {
+                setState(change: (s: { transcripts: Record<string, object> }) => unknown): void;
+              };
+            }
+          ).clawtrateFixture;
+          fixture.setState((s) => ({
+            ...s,
+            transcripts: {
+              ...s.transcripts,
+              [key]: { ...s.transcripts[key], hasMore: false, runsOmitted: 0, ...partial },
+            },
+          }));
+        },
+        { key, partial },
+      );
+      const card = page.getByTestId("messaged-card").last();
+      if ((await card.getAttribute("open")) === null) await card.locator("summary").click();
+      const toggle = card.getByRole("button", {
+        name: "Show every message between Otto and Marlow in this task that is loaded here",
+        exact: true,
+      });
+      await expect(toggle).toHaveText("Show the loaded exchange");
+      await toggle.click();
+      await expect(
+        card.getByRole("list", { name: "Every message between Otto and Marlow in this task" }),
+      ).toHaveCount(0);
+      const list = card.getByRole("list", {
+        name: "Messages between Otto and Marlow in the part of this task loaded here",
+        exact: true,
+      });
+      await expect(list.locator(".exchange-text")).toHaveCount(4);
+      await expect(card.getByTestId("exchange-partial")).toHaveText(
+        "Only part of this task's history is loaded here, so earlier messages between Otto and Marlow may be missing.",
+      );
+      await card.getByRole("button", { name: "Show only this message" }).click();
+      await expect(card.getByTestId("exchange-partial")).toHaveCount(0);
+    }
   });
 
   test("F-434 F-469: a recipient's stop, wait and finish read on the sender's card as the recipient's run established them", async ({
@@ -1181,7 +1284,7 @@ test.describe("Messaged cards", () => {
     const state = page.getByTestId("messaged-card").locator("summary .state");
     await expect(state).toHaveText("Last seen working");
     await expect(state.locator(".glyph")).toHaveCSS("animation-name", "none");
-    for (const scene of ["messaged-working", "messaged-approval"]) {
+    for (const scene of ["messaged-working", "t3-started", "messaged-approval"]) {
       await page.goto(`/?scene=${scene}&theme=light&motion=reduce`);
       await page.locator(".app").waitFor();
       const glyph = page.locator(".card summary .state .glyph").first();
@@ -1201,20 +1304,20 @@ type FixtureStep = {
   raw: Record<string, unknown> | null;
 };
 type FixtureState = {
-  transcripts: Record<string, { items: unknown[]; runs: Array<{ steps: FixtureStep[] }> }>;
+  transcripts: Record<
+    string,
+    { items: unknown[]; runs: Array<{ steps: FixtureStep[] }>; mcpTools: unknown }
+  >;
 };
+const TASK = "agent:otto:transcode-cache";
 
-test.describe("Messaged T3 Code cards", () => {
-  test.use(contextFor(WIDE, "light"));
-
-  test("F-134: when a step becomes the T3 Code card, the reading line holds, and the card is open, with Raw, and focused as the step was", async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: 1440, height: 640 });
-    await openFixture(page, "scene=t3-approval", "light");
-    const key = "agent:otto:transcode-cache";
-    // The call as history holds it before its result: an ordinary tool step, with text after it.
-    await page.evaluate((key) => {
+/**
+ * The call as history holds it before its result: an ordinary tool step, with
+ * text after it. `map` keeps the gateway's map of tool names, or clears it.
+ */
+async function historyStep(page: Page, map: boolean): Promise<void> {
+  await page.evaluate(
+    ({ key, map }) => {
       const fixture = (
         window as unknown as {
           clawtrateFixture: { setState(change: (s: FixtureState) => unknown): void };
@@ -1230,6 +1333,7 @@ test.describe("Messaged T3 Code cards", () => {
             ...s.transcripts,
             [key]: {
               ...t,
+              mcpTools: map ? t.mcpTools : {},
               items: [
                 ...t.items,
                 {
@@ -1252,32 +1356,15 @@ test.describe("Messaged T3 Code cards", () => {
           },
         };
       });
-    }, key);
-    const step = page.getByTestId("tool-call");
-    await page.locator(".steps > summary").click();
-    await step.locator("summary").click();
-    await expect(step).toHaveAttribute("open", "");
-    // The card below, open; the reader at a marked line: the approval's title at the reading line.
-    const approval = page.getByTestId("approval-card");
-    await approval.getByText("Show full request").click();
-    const marked = approval.locator(".request-title");
-    await marked.evaluate((title) => {
-      const scroller = title.closest<HTMLElement>('[data-testid="transcript"]')!;
-      const band = Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
-      scroller.scrollTop +=
-        title.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
-      scroller.dispatchEvent(new Event("scroll"));
-    });
-    // Focus back in the step, as a reader reading it would leave it.
-    await step
-      .locator("summary")
-      .evaluate((summary: HTMLElement) => summary.focus({ preventScroll: true }));
-    await settle(page);
-    const before = (await marked.boundingBox())!.y;
-    await expect(page.getByTestId("t3-card")).toHaveCount(0);
+    },
+    { key: TASK, map },
+  );
+}
 
-    // The call's result names T3 Code's tool.
-    await page.evaluate((key) => {
+/** The call's result arrives, naming `tool` as its own. */
+async function resultNaming(page: Page, tool: string): Promise<void> {
+  await page.evaluate(
+    ({ key, tool }) => {
       const fixture = (
         window as unknown as {
           clawtrateFixture: { setState(change: (s: FixtureState) => unknown): void };
@@ -1285,7 +1372,7 @@ test.describe("Messaged T3 Code cards", () => {
       ).clawtrateFixture;
       fixture.setState((s) => {
         const t = s.transcripts[key]!;
-        const details = { mcpServer: "t3code", mcpTool: "t3_thread_launch" };
+        const details = { mcpServer: "t3code", mcpTool: tool };
         return {
           ...s,
           transcripts: {
@@ -1315,7 +1402,50 @@ test.describe("Messaged T3 Code cards", () => {
           },
         };
       });
-    }, key);
+    },
+    { key: TASK, tool },
+  );
+}
+
+/** Put a line at the reading line, just under the protected band at the top. */
+async function toReadingLine(line: Locator): Promise<void> {
+  await line.evaluate((element) => {
+    const scroller = element.closest<HTMLElement>('[data-testid="transcript"]')!;
+    const band = Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
+    scroller.scrollTop +=
+      element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
+    scroller.dispatchEvent(new Event("scroll"));
+  });
+}
+
+test.describe("Messaged T3 Code cards", () => {
+  test.use(contextFor(WIDE, "light"));
+
+  test("F-134: when a step becomes the T3 Code card, the reading line holds, and the card is open, with Raw, and focused as the step was", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 640 });
+    await openFixture(page, "scene=t3-approval", "light");
+    // No map from the gateway: the call is an ordinary step until its result names it.
+    await historyStep(page, false);
+    const step = page.getByTestId("tool-call");
+    await page.locator(".steps > summary").click();
+    await step.locator("summary").click();
+    await expect(step).toHaveAttribute("open", "");
+    // The card below, open; the reader at a marked line: the approval's title at the reading line.
+    const approval = page.getByTestId("approval-card");
+    await approval.getByText("Show full request").click();
+    const marked = approval.locator(".request-title");
+    await toReadingLine(marked);
+    // Focus back in the step, as a reader reading it would leave it.
+    await step
+      .locator("summary")
+      .evaluate((summary: HTMLElement) => summary.focus({ preventScroll: true }));
+    await settle(page);
+    const before = (await marked.boundingBox())!.y;
+    await expect(page.getByTestId("t3-card")).toHaveCount(0);
+
+    await resultNaming(page, "t3_thread_launch");
     const card = page.getByTestId("t3-card");
     await expect(card).toHaveCount(1);
     await settle(page);
@@ -1329,12 +1459,83 @@ test.describe("Messaged T3 Code cards", () => {
     await expect(card.locator("summary")).toBeFocused();
   });
 
-  test("F-132: before its result names it, a call is an ordinary tool step and no T3 Code card is drawn", async ({
+  test("F-132 F-134: a card the gateway's map made, whose result names another tool, becomes the ordinary step again: the reading line holds, open and focused as the card was", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 640 });
+    await openFixture(page, "scene=t3-approval", "light");
+    // The gateway's map names T3 Code's tool: the card from the call's start, the step not drawn.
+    await historyStep(page, true);
+    const card = page.getByTestId("t3-card");
+    await expect(card).toHaveCount(1);
+    await expect(card.locator("summary .state")).toHaveText("Waiting for approval");
+    await expect(page.getByTestId("tool-call")).toHaveCount(0);
+    await card.locator("summary").click();
+    await expect(card).toHaveAttribute("open", "");
+    const approval = page.getByTestId("approval-card");
+    await approval.getByText("Show full request").click();
+    const marked = approval.locator(".request-title");
+    await toReadingLine(marked);
+    await card
+      .locator("summary")
+      .evaluate((summary: HTMLElement) => summary.focus({ preventScroll: true }));
+    await settle(page);
+    const before = (await marked.boundingBox())!.y;
+
+    // The result names another tool: the map named the wrong one.
+    await resultNaming(page, "t3_project_list_v2");
+    await expect(card).toHaveCount(0);
+    await settle(page);
+    expect(Math.abs((await marked.boundingBox())!.y - before)).toBeLessThanOrEqual(1);
+    await expect(approval.locator(".request-full")).toHaveAttribute("open", "");
+    // The ordinary step again, in its group, open and focused as the card was.
+    const step = page.getByTestId("tool-call");
+    await expect(step).toHaveCount(1);
+    await expect(page.locator("details.steps").first()).toHaveAttribute("open", "");
+    await expect(step).toHaveAttribute("open", "");
+    await expect(step.locator("summary")).toBeFocused();
+  });
+
+  test("a closed step or card that has focus hands focus over as it is replaced, and stays closed", async ({
+    page,
+  }) => {
+    // Step to card: the step closed in its open group, focus on its line.
+    await openFixture(page, "scene=t3-approval", "light");
+    await historyStep(page, false);
+    await page.locator(".steps > summary").click();
+    const step = page.getByTestId("tool-call");
+    await step
+      .locator("summary")
+      .evaluate((summary: HTMLElement) => summary.focus({ preventScroll: true }));
+    await expect(step).not.toHaveAttribute("open", "");
+    await resultNaming(page, "t3_thread_launch");
+    const card = page.getByTestId("t3-card");
+    await expect(card).toHaveCount(1);
+    await expect(card).not.toHaveAttribute("open", "");
+    await expect(card.locator("summary")).toBeFocused();
+
+    // Card to step: the card the map made, closed, focus on its line.
+    await openFixture(page, "scene=t3-approval", "light");
+    await historyStep(page, true);
+    await expect(card).toHaveCount(1);
+    await card
+      .locator("summary")
+      .evaluate((summary: HTMLElement) => summary.focus({ preventScroll: true }));
+    await expect(card).not.toHaveAttribute("open", "");
+    await resultNaming(page, "t3_project_list_v2");
+    await expect(card).toHaveCount(0);
+    await expect(step).toHaveCount(1);
+    await expect(step).not.toHaveAttribute("open", "");
+    await expect(step.locator("summary")).toBeFocused();
+  });
+
+  test("F-132: without the gateway's map a call is an ordinary step until its result names it; with it, the card from its start", async ({
     page,
   }) => {
     for (const scene of ["t3-started", "t3-approval", "t3-delivery-unknown", "t3-not-sent"]) {
       await openFixture(page, `scene=${scene}`, "light");
-      await expect(page.getByTestId("transcript-turn").first(), scene).toBeVisible();
+      await expect(page.getByTestId("t3-card"), scene).toHaveCount(1);
+      await historyStep(page, false);
       await expect(page.getByTestId("t3-card"), scene).toHaveCount(0);
     }
     await openFixture(page, "scene=t3-call-made", "light");
@@ -1386,10 +1587,14 @@ test.describe("Messaged T3 Code cards", () => {
     await expect(page.getByTestId("t3-card").getByRole("link")).toHaveCount(0);
   });
 
-  test("F-134 F-314: each state a call's result establishes is what the card says", async ({
+  test("F-134 F-314 F-470: each state is what the call's events establish, before its result by the gateway's map", async ({
     page,
   }) => {
     const states: Record<string, string> = {
+      "t3-started": "Call started",
+      "t3-approval": "Waiting for approval",
+      "t3-delivery-unknown": "Delivery unknown",
+      "t3-not-sent": "Not sent",
       "t3-call-made": "Call made",
       "t3-failed": "Failed",
     };

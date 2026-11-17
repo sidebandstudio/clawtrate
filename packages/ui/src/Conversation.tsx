@@ -69,9 +69,24 @@ function ToolStep({ call }: { call: ToolCall }) {
   // Kept for the card this call may become once its result names it.
   const handover = useStepHandover();
   const note = (element: HTMLDetailsElement, focused: boolean) =>
-    call.callId && handover?.note(call.callId, { open: element.open, focused });
+    call.callId && handover?.note(call.callId, { open: element.open, focused, from: "step" });
+  // Drawn again after its T3 Code card, when the result named another tool: as the card was.
+  const element = useRef<HTMLDetailsElement>(null);
+  useLayoutEffect(() => {
+    const state = call.callId ? handover?.stateOf(call.callId) : undefined;
+    const details = element.current;
+    if (state?.from !== "card" || !(state.open || state.focused) || !details) return;
+    // Its group opens so the step can be read or hold focus; the step opens only if the card was.
+    const group = details.closest<HTMLDetailsElement>("details.steps");
+    if (group) group.open = true;
+    if (state.open) details.open = true;
+    if (state.focused) details.querySelector("summary")?.focus({ preventScroll: true });
+    // Once, as it is drawn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <details
+      ref={element}
       className="step"
       data-testid="tool-call"
       data-call-id={call.callId ?? undefined}
