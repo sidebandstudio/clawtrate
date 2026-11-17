@@ -284,6 +284,7 @@ export function RenameField({
 export function ArchivedGroup({
   bot,
   tasks,
+  gone,
   open,
   onToggle,
   onMenu,
@@ -292,6 +293,8 @@ export function ArchivedGroup({
   bot: Bot;
   /** The bot's listed tasks, so an archive or a restore reads the group again. */
   tasks: Task[];
+  /** Tasks this viewer deleted or restored from the group: gone at once, before it reads again. */
+  gone: ReadonlySet<string>;
   open: boolean;
   onToggle: () => void;
   onMenu: (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => void;
@@ -301,6 +304,7 @@ export function ArchivedGroup({
   const [list, setList] = useState<ArchivedList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const keys = tasks.map((task) => task.key).join("\n");
+  const goneKeys = [...gone].join("\n");
 
   useEffect(() => {
     if (!open) return;
@@ -317,7 +321,8 @@ export function ArchivedGroup({
     return () => {
       live = false;
     };
-  }, [open, bridge, bot.id, keys]);
+  }, [open, bridge, bot.id, keys, goneKeys]);
+  const shown = list && { ...list, tasks: list.tasks.filter((task) => !gone.has(task.key)) };
 
   const menuAt = (task: ArchivedTask) => (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -348,14 +353,14 @@ export function ArchivedGroup({
             <li className="archived-note" role="alert">
               Couldn't read the archived tasks. {error}
             </li>
-          ) : list === null ? (
+          ) : shown === null ? (
             <li className="archived-note" aria-busy="true">
               Loading archived tasks…
             </li>
-          ) : list.tasks.length === 0 ? (
+          ) : shown.tasks.length === 0 ? (
             <li className="archived-note">No archived tasks.</li>
           ) : (
-            list.tasks.map((task) => (
+            shown.tasks.map((task) => (
               <li key={task.key}>
                 <button
                   type="button"
@@ -383,7 +388,7 @@ export function ArchivedGroup({
               </li>
             ))
           )}
-          {list?.more && <li className="archived-note">Showing the 50 most recent.</li>}
+          {shown?.more && <li className="archived-note">Showing the 50 most recent.</li>}
         </ul>
       )}
     </li>

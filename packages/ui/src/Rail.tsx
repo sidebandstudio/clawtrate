@@ -171,6 +171,7 @@ function TaskRows({
   onTaskMenu: (task: Task, trigger: HTMLElement, x: number, y: number) => void;
   actions: TaskActions | null;
   archived: {
+    gone: ReadonlySet<string>;
     open: boolean;
     onToggle: () => void;
     onMenu: (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => void;
@@ -289,6 +290,7 @@ function TaskRows({
         <ArchivedGroup
           bot={bot}
           tasks={tasks}
+          gone={archived.gone}
           open={archived.open}
           onToggle={archived.onToggle}
           onMenu={archived.onMenu}
@@ -476,6 +478,11 @@ export function Rail({
   const [renaming, setRenaming] = useState<string | null>(null);
   /** Bots whose Archived group is open. */
   const [archivedOpen, setArchivedOpen] = useState<Set<string>>(() => new Set());
+  /** Bots whose New task is on its way; held across renders, read and written by events only. */
+  const [creating] = useState(() => new Set<string>());
+  /** Archived tasks this viewer deleted or restored: gone from the open group at once. */
+  const [archivedGone, setArchivedGone] = useState<ReadonlySet<string>>(() => new Set());
+  const goneFromArchive = (key: string) => setArchivedGone((current) => new Set(current).add(key));
   /** Where focus goes once the rail has rendered after an action: a task's row, or the composer. */
   const [focusTask, setFocusTask] = useState<{
     key: string | null;
@@ -562,7 +569,10 @@ export function Rail({
         await bridge.invoke({ type: "deleteTask", key: task.key });
         setAnnouncement(`Deleted ${task.title}.`);
         if (listed) await afterRemoval(bot, task as Task, remaining, next);
-        else setFocusTask({ key: null, bot: bot.id });
+        else {
+          goneFromArchive(task.key);
+          setFocusTask({ key: null, bot: bot.id });
+        }
       },
       returnTo: trigger,
     });
@@ -571,6 +581,7 @@ export function Rail({
   const restore = (task: ArchivedTask) => {
     void runner.run(`restore ${task.title}`, async () => {
       await bridge.invoke({ type: "restoreTask", key: task.key });
+      goneFromArchive(task.key);
       setAnnouncement(`Restored ${task.title}.`);
       setFocusTask({ key: task.key, bot: task.botId });
     });
@@ -616,6 +627,7 @@ export function Rail({
   };
 
   const archivedProps = (bot: Bot) => ({
+    gone: archivedGone,
     open: archivedOpen.has(bot.id),
     onToggle: () => toggleArchived(bot.id),
     onMenu: openArchivedMenu,
