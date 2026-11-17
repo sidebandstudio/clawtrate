@@ -708,6 +708,8 @@ export class ClawtrateClient {
   /** Per task and list (`<key>\0<kind>`): the last list requested, and the newest applied. */
   private readonly listRequested = new Map<string, number>();
   private readonly listApplied = new Map<string, number>();
+  /** Per task: its `tools.effective` read in flight, and whether another was asked for meanwhile. */
+  private readonly toolReads = new Map<string, { again: boolean }>();
   /** Whole reads from history in flight (`MAX_FULL_READS`). */
   private fullReads = 0;
   /**
@@ -901,6 +903,7 @@ export class ClawtrateClient {
       for (const listKey of [...map.keys()])
         if (listKey.startsWith(`${key}\u0000`)) map.delete(listKey);
     }
+    this.toolReads.delete(key);
     if (this.state.connection.status === "connected") {
       this.request("sessions.messages.unsubscribe", { key }).catch(() => {});
     }
@@ -2718,31 +2721,45 @@ export class ClawtrateClient {
    * their servers and tools for a task (`tools.effective`, `operator.read`),
    * after its history loads and whenever the gateway reports its plugins
    * changed. Evidence for a call before its result only; a failed read keeps
-   * the map there was. Reads of one task are numbered like its lists: an
-   * answer to an older read that arrives after a newer one's is dropped.
+   * the map there was. One read of a task at a time: one asked for while it
+   * is in flight is made once it has answered, so a newer answer is always the
+   * one applied last.
    */
   private async readToolMap(key: string, generation: number): Promise<void> {
+    const running = this.toolReads.get(key);
+    if (running) {
+      running.again = true;
+      return;
+    }
+    const read = { again: false };
+    this.toolReads.set(key, read);
+    try {
+      do {
+        read.again = false;
+        await this.readToolMapOnce(key, generation);
+      } while (read.again && generation === this.generation && this.tracked(key));
+    } finally {
+      if (this.toolReads.get(key) === read) this.toolReads.delete(key);
+    }
+  }
+
+  private async readToolMapOnce(key: string, generation: number): Promise<void> {
     const incarnation = this.incarnations.get(key);
-    const listKey = `${key}\u0000tools`;
-    const revision = (this.listRequested.get(listKey) ?? 0) + 1;
-    this.listRequested.set(listKey, revision);
-    const stale = () =>
-      generation !== this.generation ||
-      !this.tracked(key) ||
-      this.incarnations.get(key) !== incarnation ||
-      (this.listApplied.get(listKey) ?? 0) > revision;
     let answer: unknown;
     try {
       answer = await this.request("tools.effective", { sessionKey: key });
     } catch (error) {
       if (generation === this.generation)
         this.log("warn", `tools.effective failed: ${errorMessage(error)}`);
-      // A failure is this read's answer too: an older map arriving later changes nothing.
-      if (!stale()) this.listApplied.set(listKey, revision);
       return;
     }
-    if (stale()) return;
-    this.listApplied.set(listKey, revision);
+    if (
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation
+    ) {
+      return;
+    }
     const map = mcpToolMap(answer, MAX_MCP_TOOLS);
     const current = this.state.transcripts[key];
     if (!current || JSON.stringify(current.mcpTools) === JSON.stringify(map)) return;
@@ -3642,6 +3659,7 @@ export class ClawtrateClient {
     this.foreign.clear();
     this.listRequested.clear();
     this.listApplied.clear();
+    this.toolReads.clear();
     this.approvalReads.clear();
     for (const { bytes } of this.attachmentContent.values()) this.attachmentBytes -= bytes;
     this.attachmentContent.clear();
