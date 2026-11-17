@@ -133,6 +133,7 @@ export function Shell({
     if (onePane) navigatedTo.current = "detail";
     setView("detail");
   }, [onePane]);
+  const showList = useCallback(() => setView("list"), []);
   const backToList = useCallback(() => {
     navigatedTo.current = "list";
     setView("list");
@@ -184,6 +185,7 @@ export function Shell({
         selection={selection}
         onePane={onePane}
         onOpen={openDetail}
+        onShowList={showList}
         theme={theme}
         onTheme={onTheme}
         inert={drawerOpen}

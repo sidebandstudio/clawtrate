@@ -114,7 +114,8 @@ test.describe("the rail", () => {
   test("shows nothing that would do nothing on a read-only connection", async ({ page }) => {
     await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
     await expect(page.getByRole("button", { name: /^New/ })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: /Search/ })).toHaveCount(0);
+    // Search exists, so it is shown; nothing that creates is.
+    await expect(page.getByRole("button", { name: /Search/ })).toHaveCount(1);
     await expect(page.getByRole("textbox")).toHaveCount(0);
     await expect(page.locator(".composer")).toContainText("Read-only connection.");
   });

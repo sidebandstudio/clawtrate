@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "re
 import { Avatar } from "./Avatar.tsx";
 import { useCommand } from "./bridge.tsx";
 import { gatewayLabel, rowTime } from "./format.ts";
-import { ChevronIcon, SettingsIcon } from "./icons.tsx";
+import { ChevronIcon, CloseIcon, SearchIcon, SettingsIcon } from "./icons.tsx";
 import { Menu, type MenuEntry } from "./Menu.tsx";
 import type { ThemeChoice } from "./preferences.ts";
 import {
@@ -166,6 +166,7 @@ export function Rail({
   selection,
   onePane,
   onOpen,
+  onShowList,
   theme,
   onTheme,
   inert,
@@ -181,6 +182,8 @@ export function Rail({
   onePane: boolean;
   /** A task, or a bot with one task or none, was opened. */
   onOpen: () => void;
+  /** One pane: show the list, for a search started from a conversation. */
+  onShowList: () => void;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
   inert: boolean;
@@ -194,6 +197,13 @@ export function Rail({
   const words = presenceWords(connection, catchingUp);
   const dot = presenceDot(connection, catchingUp);
   const onScreenKey = selection.task?.key ?? null;
+  // Bot search: null while closed, the query while open.
+  const [query, setQuery] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const searchButtonRef = useRef<HTMLButtonElement>(null);
+  const focusAfter = useRef<"search" | "search-button" | "selected" | null>(null);
+  const needle = query?.trim().toLowerCase() ?? "";
+  const shown = needle ? bots.filter((bot) => bot.name.toLowerCase().includes(needle)) : bots;
 
   const closeMenu = useCallback(
     (refocus: boolean) => {
@@ -218,6 +228,96 @@ export function Rail({
       selection.toggleFold(bot.id);
     } else {
       selection.selectBot(bot.id);
+    }
+  };
+
+  const openSearch = useCallback(() => {
+    focusAfter.current = "search";
+    setQuery((current) => current ?? "");
+    onShowList();
+  }, [onShowList]);
+
+  const closeSearch = (refocus: boolean) => {
+    if (refocus) focusAfter.current = "search-button";
+    setQuery(null);
+  };
+
+  // Focus moves only after the element it goes to has rendered.
+  useEffect(() => {
+    const target = focusAfter.current;
+    if (!target) return;
+    focusAfter.current = null;
+    if (target === "search") searchRef.current?.focus();
+    else if (target === "search-button") searchButtonRef.current?.focus();
+    else {
+      listRef.current
+        ?.querySelector<HTMLElement>(`.bot[data-bot="${CSS.escape(selection.bot?.id ?? "")}"]`)
+        ?.focus();
+    }
+  });
+
+  // Shortcuts that work anywhere in the shell: ⌘⇧F searches bots, ⌘1 to ⌘9
+  // open a bot, Alt+Up and Alt+Down or Control+Tab and Control+Shift+Tab
+  // move to the previous or next bot. The drawer, while open, keeps them out.
+  useEffect(() => {
+    const open = (bot: Bot) => {
+      if (bot.id === selection.bot?.id) return;
+      const inList = listRef.current?.contains(document.activeElement) ?? false;
+      selection.selectBot(bot.id);
+      onOpen();
+      if (inList) focusAfter.current = "selected";
+    };
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (inert) return;
+      const command = event.metaKey || event.ctrlKey;
+      const typing = (event.target as HTMLElement | null)?.closest?.("input, textarea") != null;
+      if (command && event.shiftKey && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        openSearch();
+        return;
+      }
+      let target: Bot | undefined;
+      if (command && !event.shiftKey && !event.altKey && /^[1-9]$/.test(event.key)) {
+        target = shown[Number(event.key) - 1];
+      } else {
+        const step =
+          event.altKey && !command && !typing && event.key === "ArrowDown"
+            ? 1
+            : event.altKey && !command && !typing && event.key === "ArrowUp"
+              ? -1
+              : event.ctrlKey && event.key === "Tab"
+                ? event.shiftKey
+                  ? -1
+                  : 1
+                : 0;
+        if (step === 0) return;
+        const index = shown.findIndex((bot) => bot.id === selection.bot?.id);
+        target = shown[Math.max(0, Math.min(shown.length - 1, index + step))];
+      }
+      if (!target) return;
+      event.preventDefault();
+      open(target);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [inert, openSearch, onOpen, selection, shown]);
+
+  const onSearchKey = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeSearch(true);
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      listRef.current?.querySelector<HTMLElement>(".bot")?.focus();
+    } else if (event.key === "Enter") {
+      const first = shown[0];
+      if (!first) return;
+      event.preventDefault();
+      closeSearch(false);
+      selection.selectBot(first.id);
+      onOpen();
+      focusAfter.current = "selected";
     }
   };
 
@@ -329,6 +429,43 @@ export function Rail({
           <SettingsIcon />
           <span className="status-dot" data-status={dot} />
         </button>
+        {query === null ? (
+          <button
+            type="button"
+            ref={searchButtonRef}
+            className="icon-button"
+            aria-label="Search bots"
+            title="Search bots (⌘⇧F)"
+            onClick={openSearch}
+          >
+            <SearchIcon />
+          </button>
+        ) : (
+          <div className="rail-search" role="search">
+            <SearchIcon />
+            <input
+              ref={searchRef}
+              type="text"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={onSearchKey}
+              placeholder="Search bots"
+              aria-label="Search bots"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="icon-button"
+              data-variant="quiet"
+              aria-label="Close search"
+              title="Close search (Esc)"
+              onClick={() => closeSearch(true)}
+            >
+              <CloseIcon />
+            </button>
+          </div>
+        )}
       </div>
       <ul
         className="bot-list"
@@ -348,7 +485,12 @@ export function Rail({
               <strong>No bots</strong>Bots appear here once the gateway has one.
             </li>
           ))}
-        {bots.map((bot) => {
+        {bots.length > 0 && shown.length === 0 && (
+          <li className="rail-empty" role="status">
+            <strong>No bots match</strong>No bot's name contains "{query?.trim()}".
+          </li>
+        )}
+        {shown.map((bot) => {
           const tasks = tasksByBot[bot.id] ?? [];
           const summary = summarize(tasks, selection.seen, onScreenKey);
           const open = selection.isOpen(bot.id);

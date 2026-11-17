@@ -2196,3 +2196,52 @@ textarea {
 [data-host="desktop"][data-platform="darwin"] .rail-top {
   padding-left: 84px;
 }
+
+/* Bot search: a floating pill that takes the rail's top band while it is open.
+   Search, then the field, then a quiet close. */
+.rail-search {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 36px;
+  padding: 0 2px 0 12px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-button);
+  color: var(--text-muted);
+  -webkit-app-region: no-drag;
+}
+
+.rail-search:focus-within {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
+.rail-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: var(--text-md);
+  color: var(--text);
+}
+
+.rail-search input:focus {
+  outline: none;
+}
+
+.rail-search input::placeholder {
+  color: var(--text-faint);
+}
+
+[data-input="touch"] .rail-search {
+  height: 40px;
+}
+
+[data-input="touch"] .rail-search input {
+  font-size: var(--text-lg);
+}
