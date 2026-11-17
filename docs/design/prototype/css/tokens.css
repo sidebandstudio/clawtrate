@@ -45,14 +45,15 @@
   --rail-width: 280px;
   --list-width: 0px; /* retired: tasks moved into the rail */
   --panel-width: 360px;
-  --header-height: 56px; /* the band the floating controls sit in */
+  --header-height: 56px; /* the band the title pill and round buttons float in */
+  --strip-band: 40px; /* the band under it, kept clear for the status strip */
   --transcript-max: 760px;
   --conversation-min: 440px;
   --tap-min: 44px;
 
   --avatar-row: 40px;
   --avatar-pin: 56px;
-  --avatar-hero: 88px;
+  --avatar-hero: 64px;
   --avatar-pill: 22px;
 
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);

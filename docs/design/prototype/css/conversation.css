@@ -10,12 +10,6 @@
    Reduced motion is [data-motion="reduce"] on the root, set by the host from
    the system setting. Touch sizing is [data-input="touch"] on the root. */
 
-@property --orbit {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-
 /* Shared parts ------------------------------------------------------------- */
 
 .mono {
@@ -156,40 +150,6 @@ details > summary::-webkit-details-marker {
   background: var(--bg-raised);
   box-shadow: var(--shadow-button);
   color: var(--text);
-}
-
-.menu {
-  min-width: 232px;
-  margin: 0;
-  padding: 5px;
-  border-radius: var(--radius-md);
-  background: var(--bg-raised);
-  box-shadow: var(--shadow-pop);
-  list-style: none;
-}
-
-.menu-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 34px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font-size: var(--text-md);
-  text-align: left;
-  cursor: pointer;
-}
-
-.menu-item:hover,
-.menu-item[data-active="true"] {
-  background: var(--bg-hover);
-}
-
-.menu-item .icon {
-  color: var(--text-muted);
 }
 
 .menu-item kbd {
@@ -351,136 +311,6 @@ details > summary::-webkit-details-marker {
 .presence[data-size="sm"] > .glyph {
   top: -4px;
   right: -5px;
-}
-
-/* Glyph: a 12px state mark for rows, tags and the presence badge ----------- */
-
-.glyph {
-  --ring: var(--accent-line);
-  --glyph-ink: var(--presence-surface, var(--bg));
-  position: relative;
-  display: inline-block;
-  flex: none;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-}
-
-.glyph::before,
-.glyph::after {
-  content: "";
-  position: absolute;
-}
-
-/* Working, sending: the same orbit as the avatar ring. */
-.glyph[data-state="working"]::before,
-.glyph[data-state="sending"]::before {
-  inset: 0;
-  padding: 1.5px;
-  border-radius: 50%;
-  background: conic-gradient(
-    from var(--orbit),
-    color-mix(in srgb, var(--ring) 20%, transparent) 0 45%,
-    var(--ring) 100%
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#000 0 0) content-box exclude,
-    linear-gradient(#000 0 0);
-  animation: orbit var(--loop-work) linear infinite;
-}
-
-.glyph[data-state="sending"] {
-  --ring: var(--text-muted);
-}
-
-/* Waiting on the user: a solid dot that pings. */
-.glyph[data-state="waiting"] {
-  --ring: var(--warn);
-  background: var(--ring);
-}
-
-.glyph[data-state="waiting"]::before {
-  inset: 0;
-  border-radius: 50%;
-  animation: ping var(--loop-nudge) var(--ease-out) infinite;
-}
-
-/* Blocked: a bar. */
-.glyph[data-state="blocked"] {
-  --ring: var(--warn);
-  background: var(--ring);
-}
-
-.glyph[data-state="blocked"]::after {
-  top: 5.25px;
-  right: 3px;
-  left: 3px;
-  height: 1.5px;
-  border-radius: 1px;
-  background: var(--glyph-ink);
-}
-
-/* Done: a check on a disc. Check: the quiet form, a stroke alone. */
-.glyph[data-state="done"] {
-  background: var(--ring);
-}
-
-.glyph[data-state="done"]::after,
-.glyph[data-state="check"]::after {
-  top: 2.4px;
-  left: 4.1px;
-  width: 3.2px;
-  height: 5.6px;
-  border: solid var(--glyph-ink);
-  border-width: 0 1.5px 1.5px 0;
-  transform: rotate(40deg);
-}
-
-.glyph[data-state="check"]::after {
-  border-color: currentColor;
-}
-
-/* Failed: an exclamation mark. */
-.glyph[data-state="failed"] {
-  --ring: var(--danger);
-  background: var(--ring);
-}
-
-.glyph[data-state="failed"]::after {
-  top: 2.5px;
-  bottom: 2.5px;
-  left: 5.25px;
-  width: 1.5px;
-  background: linear-gradient(var(--glyph-ink) 0 4px, transparent 4px 5.5px, var(--glyph-ink) 5.5px);
-}
-
-/* Stopped: a square. */
-.glyph[data-state="stopped"] {
-  --ring: var(--text-faint);
-  background: var(--ring);
-}
-
-.glyph[data-state="stopped"]::after {
-  inset: 3.75px;
-  border-radius: 1px;
-  background: var(--glyph-ink);
-}
-
-.glyph[data-state="unread"]::after {
-  inset: 2px;
-  border-radius: 50%;
-  background: var(--accent-line);
-}
-
-.glyph[data-state="queued"]::after,
-.glyph[data-state="idle"]::after {
-  inset: 1.5px;
-  border: 1.5px solid var(--text-faint);
-  border-radius: 50%;
 }
 
 /* The running turn ----------------------------------------------------------- */
@@ -1905,12 +1735,6 @@ li + li > .option {
 
 /* Motion ------------------------------------------------------------------------------ */
 
-@keyframes orbit {
-  to {
-    --orbit: 360deg;
-  }
-}
-
 @keyframes breathe {
   0%,
   100% {
@@ -1970,16 +1794,6 @@ li + li > .option {
   }
   100% {
     transform: none;
-  }
-}
-
-@keyframes ping {
-  0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ring) 55%, transparent);
-  }
-  45%,
-  100% {
-    box-shadow: 0 0 0 6px transparent;
   }
 }
 
