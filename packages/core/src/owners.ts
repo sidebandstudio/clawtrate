@@ -39,7 +39,14 @@ import {
 } from "./files.ts";
 import { emptyActivity } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
-import { MAX_WAITING_ID_CHARS, MAX_WAITING_MARKERS, MAX_WAITING_SESSIONS } from "./waiting.ts";
+import {
+  MAX_WAITING_ID_CHARS,
+  MAX_WAITING_MARKERS,
+  MAX_WAITING_SESSIONS,
+  WAITING_HELD_CHARS,
+  WAITING_MARKER_CHARS,
+  WAITING_RUN_CHARS,
+} from "./waiting.ts";
 import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,

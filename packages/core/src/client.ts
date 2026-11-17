@@ -207,7 +207,7 @@ import {
   type CreatedTask,
   type TaskActionContext,
 } from "./task-actions.ts";
-import { WaitingIndex } from "./waiting.ts";
+import { fromActivity, WaitingIndex } from "./waiting.ts";
 import {
   initialConnectionState,
   initialScopeUpgrade,
@@ -965,6 +965,7 @@ export class ClawtrateClient {
       delete transcripts[key];
       return { ...state, transcripts };
     });
+    if (this.waiting.unhold(key)) this.publishTasks();
   }
 
   /** How many viewers hold a transcript open. */
@@ -4085,28 +4086,27 @@ export class ClawtrateClient {
 
   private publishTasks(): void {
     const tasksByBot = groupTasks(this.rows.values());
-    // What waits for the person, from the events of every task; a task the gateway lists
-    // with no active run waits for nothing, whatever was kept.
+    // What waits for the person, and whose latest run was stopped (`waiting.ts`): a task the
+    // engine follows by its runs, any other by the gateway's events.
     for (const tasks of Object.values(tasksByBot)) {
       for (const [index, task] of tasks.entries()) {
-        if (task.status !== "running") {
-          this.waiting.settle(task.key);
-          // A run stopped with `chat.abort` leaves the row no status: the lifecycle said so.
-          if (
-            (task.status === "idle" || task.status === "done") &&
-            this.waiting.stoppedAt(task.key)
-          )
-            tasks[index] = { ...task, status: "stopped" };
-          continue;
-        }
+        // A row with no active run ends what waited before it; a newer marker stays.
+        if (task.status !== "running") this.waiting.settle(task.key, task.updatedAt);
         const waiting = this.waiting.waitingFor(task.key);
-        if (waiting)
+        if (waiting) {
           tasks[index] = {
             ...task,
             status: "waiting",
             waitingFor: waiting.kind,
             waitingSince: waiting.since,
           };
+        } else if (
+          (task.status === "idle" || task.status === "done") &&
+          this.waiting.stoppedAt(task.key) !== null
+        ) {
+          // A run stopped with `chat.abort` leaves the row no status: its runs or its end said so.
+          tasks[index] = { ...task, status: "stopped" };
+        }
       }
     }
     this.store.update((state) => ({ ...state, tasksByBot }));
@@ -4219,6 +4219,9 @@ export class ClawtrateClient {
       ...state,
       transcripts: { ...state.transcripts, [key]: fn(state.transcripts[key]) },
     }));
+    // The rail describes a task the engine follows by the same runs the conversation shows.
+    const transcript = this.state.transcripts[key];
+    if (transcript && this.waiting.hold(key, fromActivity(transcript))) this.publishTasks();
   }
 
   /**
@@ -4509,6 +4512,7 @@ export class ClawtrateClient {
               ? "plugin"
               : "system-agent";
         const resolution = parseApprovalResolved(event.payload, kind);
+        if (resolution && this.waiting.onApprovalResolved(resolution.id)) this.publishTasks();
         // Kept even when no card has arrived yet: its request or list entry may come later.
         if (resolution) this.noteApprovalOutcome(resolution);
         return;

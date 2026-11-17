@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { groupTasks } from "../src/mapping.ts";
-import { MAX_WAITING_MARKERS, MAX_WAITING_SESSIONS, WaitingIndex } from "../src/waiting.ts";
+import { jsonLength } from "../src/bounds.ts";
+import {
+  fromActivity,
+  MAX_WAITING_ID_CHARS,
+  MAX_WAITING_MARKERS,
+  MAX_WAITING_SESSIONS,
+  WAITING_MARKER_CHARS,
+  WAITING_RUN_CHARS,
+  WaitingIndex,
+} from "../src/waiting.ts";
 
 const KEY = "agent:otto:disk";
 const lifecycle = (phase: string, extra: Record<string, unknown> = {}, runId = "r1") => ({
@@ -31,16 +40,145 @@ describe("which tasks wait for the person", () => {
 
   it("F-057: a run the lifecycle ends as aborted marks its task stopped until its next run starts", () => {
     const index = new WaitingIndex();
-    index.onAgent(lifecycle("end", { aborted: true }), 100);
+    index.onAgent(lifecycle("start", {}, "r1"), 50);
+    index.onAgent(lifecycle("end", { aborted: true }, "r1"), 100);
     expect(index.stoppedAt(KEY)).toBe(100);
     index.onAgent(lifecycle("start", {}, "r2"), 200);
     expect(index.stoppedAt(KEY)).toBeNull();
     index.onAgent(lifecycle("end", {}, "r2"), 300);
     expect(index.stoppedAt(KEY)).toBeNull();
+    index.onAgent(lifecycle("start", {}, "r3"), 350);
     index.onAgent(lifecycle("end", { status: "cancelled" }, "r3"), 400);
     expect(index.stoppedAt(KEY)).toBe(400);
     index.clear();
     expect(index.stoppedAt(KEY)).toBeNull();
+  });
+
+  it("F-057: an older run's abort arriving after a newer run started leaves the task as the newer run says", () => {
+    const index = new WaitingIndex();
+    index.onAgent(lifecycle("start", {}, "old"), 10);
+    index.onAgent(lifecycle("start", {}, "new"), 20);
+    expect(index.onAgent(lifecycle("end", { aborted: true }, "old"), 30)).toBe(false);
+    expect(index.stoppedAt(KEY)).toBeNull();
+    index.onAgent(lifecycle("end", {}, "new"), 40);
+    expect(index.stoppedAt(KEY)).toBeNull();
+  });
+
+  it("F-021 F-057: a task the engine follows is described by its runs, not by the events", () => {
+    const index = new WaitingIndex();
+    index.onAgent(lifecycle("start", {}, "r1"), 10);
+    index.onAgent(lifecycle("end", { aborted: true }, "r1"), 20);
+    index.onAgent(lifecycle("waiting-approval", {}, "r2"), 30);
+    const run = (state: string, extra: Record<string, unknown> = {}) =>
+      ({
+        state,
+        pendingCards: [],
+        startedAt: 0,
+        reportedStartAt: 0,
+        endedAt: null,
+        ...extra,
+      }) as never;
+    // Its runs say a newer run finished: no waiting, no stopped, whatever the events kept.
+    expect(
+      index.hold(
+        KEY,
+        fromActivity({
+          runs: [
+            run("stopped", { endedAt: 20 }),
+            run("completed", { startedAt: 25, reportedStartAt: 25 }),
+          ],
+        }),
+      ),
+    ).toBe(true);
+    expect(index.waitingFor(KEY)).toBeNull();
+    expect(index.stoppedAt(KEY)).toBeNull();
+    expect(
+      index.hold(
+        KEY,
+        fromActivity({
+          runs: [
+            run("stopped", { endedAt: 20 }),
+            run("completed", { startedAt: 25, reportedStartAt: 25 }),
+          ],
+        }),
+      ),
+    ).toBe(false);
+    // A run waiting on a question card waits, since the card.
+    index.hold(
+      KEY,
+      fromActivity({
+        runs: [run("waiting", { pendingCards: [{ id: "q", kind: "question", since: 44 }] })],
+      }),
+    );
+    expect(index.waitingFor(KEY)).toEqual({ kind: "question", since: 44 });
+    // Let go: the events describe it again.
+    index.unhold(KEY);
+    expect(index.waitingFor(KEY)).toEqual({ kind: "approval", since: 30 });
+  });
+
+  it("F-021: a row the gateway lists as idle clears only what waited before it; a newer marker stays", () => {
+    const index = new WaitingIndex();
+    index.onAgent({ ...lifecycle("waiting-approval"), ts: 500 }, 1);
+    expect(index.settle(KEY, 400)).toBe(false);
+    expect(index.waitingFor(KEY)).toEqual({ kind: "approval", since: 500 });
+    expect(index.settle(KEY, 600)).toBe(true);
+    expect(index.waitingFor(KEY)).toBeNull();
+  });
+
+  it("F-021: an approval's own resolved event clears it", () => {
+    const index = new WaitingIndex();
+    index.onAgent(lifecycle("waiting-approval", { approvalId: "a1" }), 10);
+    expect(index.onApprovalResolved("a1")).toBe(true);
+    expect(index.waitingFor(KEY)).toBeNull();
+  });
+
+  it("keeps every entry within the budget the registry counts, however its ids are escaped", () => {
+    const index = new WaitingIndex();
+    // The longest id kept: 1,024 JSON characters, nearly all of them escapes.
+    const longest = (seed: string) =>
+      `${seed}${'"'.repeat((MAX_WAITING_ID_CHARS - 2 - seed.length) / 2)}`;
+    const key = longest("agent:o:");
+    expect(
+      index.onAgent(
+        { sessionKey: key, runId: "x".repeat(2000), stream: "lifecycle", data: { phase: "start" } },
+        1,
+      ),
+    ).toBe(false);
+    for (let marker = 0; marker < MAX_WAITING_MARKERS; marker += 1) {
+      const run = longest(`r${marker}:`);
+      index.onAgent(
+        {
+          sessionKey: key,
+          runId: run,
+          stream: "lifecycle",
+          data: { phase: "waiting-approval" },
+          ts: Number.MAX_SAFE_INTEGER,
+        },
+        1,
+      );
+    }
+    index.onAgent(
+      {
+        sessionKey: key,
+        runId: longest("s"),
+        stream: "lifecycle",
+        data: { phase: "start" },
+        ts: Number.MAX_SAFE_INTEGER,
+      },
+      1,
+    );
+    const kept = index as unknown as {
+      sessions: Map<string, Map<string, unknown>>;
+      runs: Map<string, unknown>;
+    };
+    for (const [entryKey, markers] of kept.sessions) {
+      expect(jsonLength(entryKey)).toBeLessThanOrEqual(MAX_WAITING_ID_CHARS);
+      for (const entry of markers)
+        expect(jsonLength(entry)).toBeLessThanOrEqual(WAITING_MARKER_CHARS);
+    }
+    expect(kept.sessions.get(key)?.size).toBe(MAX_WAITING_MARKERS);
+    for (const entry of kept.runs) expect(jsonLength(entry)).toBeLessThanOrEqual(WAITING_RUN_CHARS);
+    expect(kept.runs.size).toBe(1);
   });
 
   it("F-021: a question waits until question.resolved, found by its id alone", () => {
