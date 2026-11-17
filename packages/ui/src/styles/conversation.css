@@ -1,0 +1,1037 @@
+/* The live conversation (docs/design/conversation.md): the state avatar, the
+   status line, streaming text and captions, the composer during a run, the
+   shelf, the access bar, and how a run ends. Taken from the prototype's
+   conversation.css; the cards for steps, approvals, questions and messages
+   between bots are built separately and only hold their place here. */
+
+/* Shared parts ------------------------------------------------------------- */
+
+.card {
+  width: 100%;
+  max-width: 640px;
+  margin-top: 4px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  --presence-surface: var(--bg-bubble);
+}
+
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+/* A one-line stand-in for a card built separately. */
+.card-placeholder {
+  margin: 6px 0 0;
+  padding: 0 14px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.card-placeholder[data-pending="true"] {
+  color: var(--warn);
+}
+
+/* State marks: the rest of the set ----------------------------------------- */
+
+.glyph[data-state="sending"]::before {
+  inset: 0;
+  padding: 1.5px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from var(--orbit),
+    color-mix(in srgb, var(--ring) 20%, transparent) 0 45%,
+    var(--ring) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  animation: orbit var(--loop-work) linear infinite;
+}
+
+.glyph[data-state="sending"] {
+  --ring: var(--text-muted);
+}
+
+.glyph[data-state="waiting"] {
+  --ring: var(--warn);
+  background: var(--ring);
+}
+
+.glyph[data-state="waiting"]::before {
+  inset: 0;
+  border-radius: 50%;
+  animation: ping var(--loop-nudge) var(--ease-out) infinite;
+}
+
+.glyph[data-state="blocked"] {
+  --ring: var(--warn);
+  background: var(--ring);
+}
+
+.glyph[data-state="blocked"]::after {
+  top: 5.25px;
+  right: 3px;
+  left: 3px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: var(--glyph-ink);
+}
+
+.glyph[data-state="done"] {
+  background: var(--ring);
+}
+
+.glyph[data-state="done"]::after {
+  top: 2.4px;
+  left: 4.1px;
+  width: 3.2px;
+  height: 5.6px;
+  border: solid var(--glyph-ink);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(40deg);
+}
+
+.glyph[data-state="stopped"] {
+  --ring: var(--text-faint);
+  background: var(--ring);
+}
+
+.glyph[data-state="stopped"]::after {
+  inset: 3.75px;
+  border-radius: 1px;
+  background: var(--glyph-ink);
+}
+
+.glyph[data-state="queued"]::after {
+  inset: 1.5px;
+  border: 1.5px solid var(--text-faint);
+  border-radius: 50%;
+}
+
+/* Presence: the avatar with its state -------------------------------------- */
+
+.presence {
+  --size: var(--avatar-row);
+  --ring: var(--accent-line);
+  position: relative;
+  display: inline-grid;
+  flex: none;
+  width: var(--size);
+  height: var(--size);
+}
+
+.presence > .avatar {
+  width: 100%;
+  height: 100%;
+}
+
+.presence > .avatar svg {
+  transform-origin: 50% 85%;
+}
+
+.presence .eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.presence[data-state="idle"] .eyes {
+  animation: blink var(--loop-blink) linear infinite;
+}
+
+.presence[data-state="thinking"] > .avatar svg {
+  animation: sway var(--loop-think) var(--ease-in-out) infinite;
+}
+
+.presence[data-state="working"] > .avatar svg {
+  animation: bob calc(var(--loop-work) / 2) var(--ease-in-out) infinite alternate;
+}
+
+.presence[data-state="waiting"] > .avatar svg {
+  transform-origin: 50% 50%;
+  animation: lean var(--loop-nudge) var(--ease-in-out) infinite;
+}
+
+.presence[data-state="blocked"] > .avatar svg,
+.presence[data-state="failed"] > .avatar svg {
+  transform: translateY(5%) rotate(5deg);
+}
+
+.presence[data-state="done"] > .avatar svg {
+  animation: nod var(--dur-settle) var(--ease-out) both;
+}
+
+/* The ring: an arc 4 px outside the avatar that travels while a tool runs. */
+.presence::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  padding: 1.5px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from var(--orbit),
+    color-mix(in srgb, var(--ring) 16%, transparent) 0 55%,
+    var(--ring) 100%
+  );
+  opacity: 0;
+  pointer-events: none;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+}
+
+.presence[data-state="working"]::before {
+  opacity: 1;
+  animation: orbit var(--loop-work) linear infinite;
+}
+
+/* A bot with its own picture has no face to move: the ring also says thinking. */
+.presence[data-kind="image"][data-state="thinking"]::before {
+  background: var(--ring);
+  opacity: 1;
+  animation: breathe var(--loop-think) var(--ease-in-out) infinite;
+}
+
+.presence > .glyph {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  box-shadow: 0 0 0 2px var(--presence-surface, var(--bg));
+}
+
+/* The status line ----------------------------------------------------------- */
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 40px;
+  margin: 10px 0 0 -6px;
+  padding: 6px 14px 6px 10px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.status-line:hover {
+  background: var(--bg-hover);
+}
+
+.status-line .presence {
+  --size: 28px;
+}
+
+.status-phrase {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-md);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  animation: phrase-in var(--dur-base) var(--ease-out) both;
+}
+
+/* A light crosses the phrase while the bot thinks or works. */
+.status-line[data-state="thinking"][data-tone="live"] .status-phrase,
+.status-line[data-state="working"] .status-phrase {
+  background: linear-gradient(
+      100deg,
+      var(--text-muted) 0 40%,
+      var(--text) 50%,
+      var(--text-muted) 60% 100%
+    )
+    0 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation:
+    phrase-in var(--dur-base) var(--ease-out) both,
+    shimmer var(--loop-shimmer) linear infinite;
+}
+
+.status-line[data-tone="warn"] .status-phrase {
+  color: var(--warn);
+}
+
+.status-elapsed {
+  flex: none;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.status-line[data-leaving="true"] {
+  cursor: default;
+  animation: fold-out var(--dur-base) var(--ease-out) both;
+}
+
+/* Streaming text and captions ---------------------------------------------- */
+
+.stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 2px;
+  border-radius: 1px;
+  background: var(--accent-line);
+  vertical-align: -0.16em;
+  animation: breathe var(--loop-caret) var(--ease-in-out) infinite;
+}
+
+.bubble .md + .stream-caret {
+  margin-left: 0;
+}
+
+.msg-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 4px;
+  padding: 0 6px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.turn[data-role="user"] > .msg-caption {
+  justify-content: flex-end;
+}
+
+.msg-caption[data-tone="danger"] > span:first-child {
+  color: var(--danger);
+}
+
+/* A message not yet accepted is not yet in your colour, and never dimmed. */
+.msg[data-pending="held"] .bubble {
+  background: var(--bg-bubble);
+  color: var(--text);
+}
+
+.bubble-files {
+  margin: 6px 0 0;
+  font-size: var(--text-sm);
+}
+
+/* How a run ended ------------------------------------------------------------ */
+
+.turn-note {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 10px;
+  max-width: 600px;
+  margin-top: 8px;
+  padding: 0 14px;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.turn-note > .glyph {
+  margin-top: 4px;
+}
+
+.turn-note p {
+  margin: 0;
+}
+
+.turn-note b {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.turn-error {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 2px 10px;
+  margin-top: 8px;
+  padding: 14px 10px 14px 14px;
+  background: var(--danger-soft);
+}
+
+.turn-error > .icon {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--danger);
+}
+
+.turn-error-title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-strong);
+}
+
+.turn-error-reason {
+  grid-column: 2;
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+.turn-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  grid-column: 2;
+  margin-top: 10px;
+}
+
+.turn-error .button {
+  background: var(--bg-selected);
+}
+
+.turn-error .icon-button {
+  width: 26px;
+  height: 26px;
+  margin-top: -4px;
+}
+
+.turn-error-line {
+  display: block;
+  margin-top: 8px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* The composer during a run -------------------------------------------------- */
+
+.composer-box:has(> .composer-row) {
+  display: block;
+  position: relative;
+}
+
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.composer-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  max-height: 220px;
+  padding: 6px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  line-height: 22px;
+  resize: none;
+  field-sizing: content;
+}
+
+.composer-input::placeholder {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.composer-box .send-button {
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+}
+
+.composer-box .send-button:disabled {
+  background: var(--bg-bubble);
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+.stop-button::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 2.5px;
+  background: currentColor;
+}
+
+.composer-box .stop-button:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.send-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 8px 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.send-mode:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.send-mode .icon {
+  width: 11px;
+  height: 11px;
+  transform: rotate(-90deg);
+}
+
+.composer-box .menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  min-width: 240px;
+}
+
+.menu-hint {
+  margin-left: auto;
+  padding-left: 16px;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.composer-status {
+  align-self: center;
+  padding: 0 8px;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+/* The shelf above the pill. */
+.composer-shelf {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.composer-shelf:empty {
+  display: none;
+}
+
+.shelf-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 4px 6px 4px 14px;
+  border-radius: 20px;
+  background: var(--bg-bubble);
+  font-size: var(--text-md);
+  --presence-surface: var(--bg-bubble);
+  animation: rise var(--dur-base) var(--ease-out) both;
+}
+
+.shelf-row[data-tone="warn"] {
+  background: var(--warn-soft);
+  --presence-surface: var(--warn-soft);
+}
+
+.shelf-row[data-tone="danger"] {
+  background: var(--danger-soft);
+}
+
+.shelf-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.shelf-text b {
+  font-weight: var(--weight-medium);
+}
+
+.shelf-text span {
+  color: var(--text-muted);
+}
+
+.shelf-row[data-tone="danger"] .shelf-text span {
+  color: var(--text);
+}
+
+.shelf-row .button {
+  background: var(--bg-selected);
+}
+
+.shelf-row .button[data-variant="quiet"] {
+  background: transparent;
+}
+
+.shelf-row .icon-button {
+  width: 28px;
+  height: 28px;
+}
+
+.shelf-clear {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 10px;
+}
+
+/* Attachments, inside the pill above the text. */
+.attachments {
+  padding: 3px 4px 8px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-selected);
+  font-size: var(--text-sm);
+}
+
+.chip b {
+  overflow: hidden;
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chip span {
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.chip[data-tone="danger"] {
+  background: var(--danger-soft);
+}
+
+.chip[data-tone="danger"] span {
+  color: var(--text);
+}
+
+.chip-remove {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.chip-remove:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chip-remove .icon {
+  width: 11px;
+  height: 11px;
+}
+
+.attachments-note {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  font-size: var(--text-sm);
+}
+
+/* The access bar: the composer's place on the read tier. */
+.access-bar {
+  padding: 6px 8px 6px 14px;
+  border-radius: 20px;
+  background: var(--bg-bubble);
+  font-size: var(--text-md);
+}
+
+.access-bar[data-tone="danger"] {
+  background: var(--danger-soft);
+}
+
+.access-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-height: 36px;
+}
+
+.access-row > .icon {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.access-bar .shelf-text {
+  flex: 1 1 240px;
+  white-space: normal;
+  line-height: 1.45;
+}
+
+.access-bar .shelf-text b {
+  font-weight: var(--weight-medium);
+}
+
+.access-bar .command {
+  margin: 4px 0;
+  background: var(--bg-pane);
+}
+
+.access-bar .copy-status:empty {
+  display: none;
+}
+
+.access-id {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding-bottom: 4px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.access-bar .button:not([data-variant]) {
+  background: var(--bg-selected);
+}
+
+.icon-button.copy {
+  width: 24px;
+  height: 24px;
+}
+
+/* Jump to latest, with the states a run needs. */
+.jump-latest {
+  max-width: min(380px, calc(100% - 32px));
+  color: var(--text);
+  --presence-surface: var(--bg-raised);
+}
+
+.jump-latest[data-state="live"] {
+  padding-left: 9px;
+}
+
+.jump-latest .presence {
+  --size: 20px;
+}
+
+.jump-latest .presence::before {
+  inset: -3px;
+}
+
+.jump-latest > span:not(.presence, .glyph) {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.jump-latest[data-state="needs-you"] {
+  color: var(--warn);
+}
+
+.jump-latest[data-state="needs-you"] .icon {
+  color: inherit;
+}
+
+/* Touch ------------------------------------------------------------------------ */
+
+[data-input="touch"] .status-line {
+  min-height: var(--tap-min);
+}
+
+[data-input="touch"] .status-phrase,
+[data-input="touch"] .shelf-row {
+  font-size: var(--text-base);
+}
+
+[data-input="touch"] .jump-latest {
+  height: 44px;
+}
+
+[data-input="touch"] .icon-button.copy {
+  width: 32px;
+  height: 32px;
+}
+
+[data-input="touch"] .link-button,
+[data-input="touch"] .chip-remove {
+  position: relative;
+  z-index: 1;
+}
+
+[data-input="touch"] .link-button::after,
+[data-input="touch"] .chip-remove::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 44px);
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+
+/* On a narrow column the composer's row stays one row. */
+@container conversation (max-width: 560px) {
+  .send-mode {
+    padding: 0 4px 0 8px;
+  }
+
+  .composer-status {
+    padding: 0 2px;
+  }
+
+  .access-row .button {
+    flex: 1 1 auto;
+  }
+}
+
+/* Motion ------------------------------------------------------------------------ */
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes blink {
+  0%,
+  96%,
+  100% {
+    transform: none;
+  }
+  98% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes sway {
+  0%,
+  100% {
+    transform: rotate(-4deg);
+  }
+  50% {
+    transform: rotate(4deg);
+  }
+}
+
+@keyframes bob {
+  from {
+    transform: translateY(3%);
+  }
+  to {
+    transform: translateY(-6%);
+  }
+}
+
+@keyframes lean {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+@keyframes nod {
+  0% {
+    transform: none;
+  }
+  40% {
+    transform: translateY(7%) rotate(4deg);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+@keyframes ping {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ring) 45%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+@keyframes phrase-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fold-out {
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Reduced motion: every state keeps a still form that says the same thing.
+   The shell's own rule already stops every animation and transition; these
+   are the still forms. */
+@media (prefers-reduced-motion: reduce) {
+  .presence[data-state="working"]::before {
+    --orbit: 300deg;
+  }
+
+  .presence[data-kind="image"][data-state="thinking"]::before {
+    opacity: 0.5;
+  }
+
+  .status-line .status-phrase {
+    background: none;
+    color: var(--text-muted);
+    -webkit-text-fill-color: currentColor;
+  }
+
+  .status-line[data-tone="warn"] .status-phrase {
+    color: var(--warn);
+  }
+
+  .glyph[data-state="waiting"]::before {
+    box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--ring) 30%, transparent);
+  }
+
+  .glyph[data-state="working"]::before,
+  .glyph[data-state="sending"]::before {
+    --orbit: 300deg;
+  }
+}
+
+[data-motion="reduce"] .presence[data-state="working"]::before,
+[data-connection="lost"] .presence[data-state="working"]::before {
+  --orbit: 300deg;
+}
+
+[data-motion="reduce"] .presence[data-kind="image"][data-state="thinking"]::before,
+[data-connection="lost"] .presence[data-kind="image"][data-state="thinking"]::before {
+  opacity: 0.5;
+}
+
+[data-motion="reduce"] .status-line .status-phrase,
+[data-connection="lost"] .status-line .status-phrase {
+  background: none;
+  color: var(--text-muted);
+  -webkit-text-fill-color: currentColor;
+}
+
+[data-motion="reduce"] .status-line[data-tone="warn"] .status-phrase {
+  color: var(--warn);
+}
+
+[data-motion="reduce"] .glyph[data-state="waiting"]::before,
+[data-connection="lost"] .glyph[data-state="waiting"]::before {
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--ring) 30%, transparent);
+}
+
+[data-motion="reduce"] .glyph[data-state="working"]::before,
+[data-motion="reduce"] .glyph[data-state="sending"]::before,
+[data-connection="lost"] .glyph[data-state="working"]::before,
+[data-connection="lost"] .glyph[data-state="sending"]::before {
+  --orbit: 300deg;
+}
+
+/* A lost connection: nothing that stands for work on the gateway moves,
+   whatever the motion setting. The strip's and the footer's dots are not
+   among these; they show the connection attempt. */
+[data-connection="lost"] .presence,
+[data-connection="lost"] .presence *,
+[data-connection="lost"] .presence::before,
+[data-connection="lost"] .glyph,
+[data-connection="lost"] .glyph::before,
+[data-connection="lost"] .glyph::after,
+[data-connection="lost"] .status-phrase,
+[data-connection="lost"] .stream-caret {
+  animation: none !important;
+}
+
+.access-id .mono {
+  font-size: var(--text-sm);
+}

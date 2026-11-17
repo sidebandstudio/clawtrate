@@ -1,6 +1,9 @@
 import type {
   Bot,
+  ConnectionState,
   DiscoveryState,
+  HostInfo,
+  Run,
   Task,
   Transcript,
   TranscriptBlock,
@@ -8,15 +11,22 @@ import type {
 } from "@clawtrate/core";
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
   type RefObject,
 } from "react";
-import { Avatar } from "./Avatar.tsx";
+import { AccessBar } from "./AccessBar.tsx";
+import { useCommand } from "./bridge.tsx";
+import { Avatar, Presence } from "./Avatar.tsx";
+import { Composer, type NeedsYou, type Notice } from "./Composer.tsx";
+import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
+import { IncompleteCaption, OutgoingBubble, RunCards, RunEnding, RunReply } from "./LiveTurn.tsx";
+import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { daysAgo, fullDate, stampTime, summarizeArguments } from "./format.ts";
-import { ArrowDownIcon, BackIcon, ChevronIcon, EyeIcon, PanelIcon } from "./icons.tsx";
+import { ArrowDownIcon, BackIcon, ChevronIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 type ToolCall = Extract<TranscriptBlock, { kind: "tool-call" }>;
@@ -95,7 +105,7 @@ function Steps({ blocks }: { blocks: TranscriptBlock[] }) {
 }
 
 /** One transcript item: its bubbles and its folded work, in their order. */
-function Turn({ item }: { item: TranscriptItem }) {
+function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?: boolean }) {
   const role = item.role === "user" ? "user" : "assistant";
   const groups: Array<{ kind: "steps" | "text"; blocks: TranscriptBlock[] }> = [];
   for (const block of item.blocks) {
@@ -122,6 +132,7 @@ function Turn({ item }: { item: TranscriptItem }) {
           )
         ),
       )}
+      {incomplete && <IncompleteCaption />}
     </div>
   );
 }
@@ -133,7 +144,7 @@ const NEAR_BOTTOM_PX = 96;
 
 /** Blocks of readable text in a transcript; the place is held in the finest one. */
 const TEXT_BLOCKS =
-  ".task-line, .stamp, .event-line, .steps > summary, .step > summary, .thinking, " +
+  ".task-line, .stamp, .event-line, .steps > summary, .step > summary, .status-phrase, " +
   ".bubble :is(p, li, h1, h2, h3, h4, h5, h6, pre, td, th, blockquote)";
 
 type Caret = { node: Node; offset: number };
@@ -243,17 +254,21 @@ function useHoldPlace(
  */
 function TranscriptView({
   task,
+  bot,
   transcript,
   note,
+  liveOptions,
 }: {
   task: Task;
+  bot: Bot;
   transcript: Transcript;
   note: ReactNode;
+  liveOptions: LiveOptions;
 }) {
+  const live = buildLive(bot, task, transcript, liveOptions);
   const scroller = useRef<HTMLDivElement>(null);
   const itemCount = transcript.items.length;
-  const liveLength = transcript.live?.text.length ?? 0;
-  const contentSize = `${itemCount}:${liveLength}`;
+  const contentSize = `${itemCount}:${live.signature}`;
   const [atEnd, setAtEnd] = useState(true);
   const [seenSize, setSeenSize] = useState(contentSize);
   const [now] = useState(() => Date.now());
@@ -303,6 +318,7 @@ function TranscriptView({
   // minutes pass or the day changes.
   const rows: ReactNode[] = [];
   let previous: number | null = null;
+  const endingsBefore = live.endingsBefore;
   for (const item of transcript.items) {
     const at = item.timestamp;
     if (
@@ -316,16 +332,23 @@ function TranscriptView({
       );
     }
     if (at !== null) previous = at;
+    if (item.role === "user") {
+      // What ended the turn before this message sits under that turn.
+      const before = endingsBefore.get(item.id);
+      if (before) rows.push(...before);
+    }
     rows.push(
       item.role === "system" ? (
         <p className="event-line" data-side="center" key={item.id}>
           {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
         </p>
       ) : (
-        <Turn key={item.id} item={item} />
+        <Turn key={item.id} item={item} incomplete={live.incomplete.has(item.id)} />
       ),
     );
   }
+  const trailing = endingsBefore.get(null);
+  if (trailing) rows.push(...trailing);
 
   return (
     <div className="transcript-wrap">
@@ -344,31 +367,46 @@ function TranscriptView({
           </h1>
           {note}
           {rows}
-          {transcript.live && (
-            <div className="turn" data-role="assistant" data-testid="live-turn">
-              <div className="msg" data-role="assistant">
-                <div className="bubble" data-live="true">
-                  {transcript.live.text ? (
-                    <Markdown text={transcript.live.text} />
-                  ) : (
-                    <span className="thinking">Thinking</span>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
+          {live.foot}
         </div>
       </div>
-      {newActivity && (
+      {live.needsYou && !atEnd ? (
         <button
           type="button"
           className="jump-latest"
-          onClick={jumpToLatest}
+          data-state="needs-you"
+          onClick={() => live.onReview()}
           data-testid="jump-latest"
         >
-          Jump to latest
+          <span className="glyph" data-state="waiting" aria-hidden="true" />
+          <span>Needs you</span>
           <ArrowDownIcon />
         </button>
+      ) : live.status && !atEnd ? (
+        <button
+          type="button"
+          className="jump-latest"
+          data-state="live"
+          onClick={jumpToLatest}
+          data-testid="jump-latest"
+          aria-label={`Jump to latest: ${live.status.phrase}`}
+        >
+          <Presence bot={live.bot} state={live.status.state} badge={live.status.badge} hidden />
+          <span>{live.status.phrase}</span>
+          <ArrowDownIcon />
+        </button>
+      ) : (
+        newActivity && (
+          <button
+            type="button"
+            className="jump-latest"
+            onClick={jumpToLatest}
+            data-testid="jump-latest"
+          >
+            Jump to latest
+            <ArrowDownIcon />
+          </button>
+        )
       )}
     </div>
   );
@@ -404,6 +442,202 @@ function EmptyState({
   );
 }
 
+/** What the engine holds beyond history, laid out for the transcript. */
+type LiveParts = {
+  bot: Bot;
+  /** Everything after the last history item: your messages, the live run, the status line. */
+  foot: ReactNode;
+  /** Run endings, placed before the next message of yours, or at the end (`null`). */
+  endingsBefore: Map<string | null, ReactNode[]>;
+  /** History items that end a reply cut off by a stop or a failure. */
+  incomplete: Set<string>;
+  /** Changes whenever the foot's content does, for following the end. */
+  signature: string;
+  status: StatusLineView | null;
+  needsYou: boolean;
+  onReview: () => void;
+};
+
+/** A terminal run's reply is shown from the engine only until history holds its message. */
+function heldByEngine(run: Run, transcript: Transcript): boolean {
+  return (
+    run.messageId !== null && transcript.outbox.some((message) => message.id === run.messageId)
+  );
+}
+
+type LiveOptions = {
+  connected: boolean;
+  interactive: boolean;
+  onOpenSteps: () => void;
+  onReview: () => void;
+  leaving: { key: string; run: Run } | null;
+};
+
+function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOptions): LiveParts {
+  const active = currentRun(transcript);
+  const foot: ReactNode[] = [];
+  const placed = new Set<string>();
+  const endingsBefore = new Map<string | null, ReactNode[]>();
+  const incomplete = new Set<string>();
+  const signature: string[] = [];
+
+  // Which user message comes after each one, to place an ending under its turn.
+  const users = transcript.items.filter((item) => item.role === "user").map((item) => item.id);
+  const nextUser = (anchor: string): string | null => users[users.indexOf(anchor) + 1] ?? null;
+
+  const footRuns = transcript.runs.filter(
+    (run) =>
+      run.state !== "queued" &&
+      run.state !== "cancelled" &&
+      (run === active || heldByEngine(run, transcript) || run.anchorItemId === null),
+  );
+  for (const run of transcript.runs) {
+    if (footRuns.includes(run) || run.anchorItemId === null) continue;
+    // A finished run that history holds: its ending sits under its turn.
+    const at = nextUser(run.anchorItemId);
+    const list = endingsBefore.get(at) ?? [];
+    list.push(
+      <RunEnding
+        key={`end-${run.id}`}
+        run={run}
+        bot={bot}
+        transcript={transcript}
+        taskKey={task.key}
+      />,
+    );
+    endingsBefore.set(at, list);
+    if (run.state === "stopped" || run.state === "failed") {
+      const group = transcript.items.slice(
+        transcript.items.findIndex((item) => item.id === run.anchorItemId) + 1,
+        at === null ? undefined : transcript.items.findIndex((item) => item.id === at),
+      );
+      const last = [...group]
+        .reverse()
+        .find(
+          (item) =>
+            item.role === "assistant" &&
+            item.blocks.some((block) => block.kind === "text" && block.text.trim()),
+        );
+      if (last && (run.text || run.state === "stopped")) incomplete.add(last.id);
+    }
+  }
+
+  const bubble = (id: string) => {
+    const message = transcript.outbox.find((each) => each.id === id);
+    if (!message || placed.has(id)) return;
+    if (!outgoingBubbles(transcript).includes(message)) return;
+    placed.add(id);
+    signature.push(`${id}:${message.status}`);
+    foot.push(
+      <OutgoingBubble
+        key={`out-${id}`}
+        message={message}
+        taskKey={task.key}
+        connected={options.connected}
+      />,
+    );
+  };
+
+  for (const run of footRuns) {
+    if (run.messageId) bubble(run.messageId);
+    if (run === active || heldByEngine(run, transcript)) {
+      foot.push(<RunCards key={`cards-${run.id}`} run={run} transcript={transcript} />);
+      foot.push(<RunReply key={`reply-${run.id}`} run={run} />);
+    }
+    signature.push(`${run.id}:${run.state}:${run.text.length}:${run.steps.length}`);
+    for (const message of transcript.outbox) {
+      if (message.mode === "steer" && message.runId === run.id) bubble(message.id);
+    }
+    if (run !== active) {
+      foot.push(
+        <RunEnding
+          key={`end-${run.id}`}
+          run={run}
+          bot={bot}
+          transcript={transcript}
+          taskKey={task.key}
+        />,
+      );
+    }
+  }
+  for (const message of outgoingBubbles(transcript)) bubble(message.id);
+
+  let status: StatusLineView | null = null;
+  if (active) {
+    status = statusLineFor(active, transcript, options);
+    signature.push(status.phrase);
+    foot.push(
+      <StatusLine
+        key={`status-${active.id}`}
+        bot={bot}
+        view={status}
+        hasSteps={active.steps.length > 0}
+        onOpenSteps={options.onOpenSteps}
+      />,
+    );
+  } else if (options.leaving) {
+    foot.push(
+      <LeavingStatusLine
+        key={options.leaving.key}
+        bot={bot}
+        run={options.leaving.run}
+        view={statusLineFor(options.leaving.run, transcript, options)}
+      />,
+    );
+  }
+
+  const needsYou =
+    options.interactive &&
+    (transcript.approvals.some((card) => card.status === "pending") ||
+      transcript.questions.some((card) => card.status === "pending"));
+  return {
+    bot,
+    foot,
+    endingsBefore,
+    incomplete,
+    signature: signature.join("|"),
+    status,
+    needsYou,
+    onReview: options.onReview,
+  };
+}
+
+/** The oldest card that needs the person, for "Review" and ⌘J. */
+function needsYouOf(bot: Bot, transcript: Transcript | undefined, interactive: boolean): NeedsYou {
+  if (!transcript || !interactive) return null;
+  const question = transcript.questions.find((card) => card.status === "pending");
+  const approval = transcript.approvals.find((card) => card.status === "pending");
+  const questionAt = question?.createdAt ?? Number.POSITIVE_INFINITY;
+  const approvalAt = approval?.createdAt ?? Number.POSITIVE_INFINITY;
+  if (approval && (!question || approvalAt <= questionAt))
+    return { kind: "approval", text: `${bot.name} needs your approval to run a command` };
+  if (question) return { kind: "question", text: `${bot.name} asked you a question` };
+  return null;
+}
+
+/** Move to the oldest card that needs the person, and focus it. */
+function reviewOldest(root: HTMLElement | null) {
+  const card = root?.querySelector<HTMLElement>('[data-pending="true"]');
+  if (!card) return;
+  card.scrollIntoView({ block: "nearest" });
+  card.focus();
+}
+
+/** The lifecycle words the announcer speaks for a run (section 2). */
+function lifecycleWords(bot: Bot, run: Run | undefined, last: Run | undefined): string | null {
+  if (run) {
+    if (run.state === "stopping") return "Stopping";
+    if (run.state === "waiting" || run.pendingCards.length > 0)
+      return `${bot.name} is waiting for you`;
+    return `${bot.name} is working`;
+  }
+  if (!last) return null;
+  if (last.state === "stopped") return "Stopped";
+  if (last.state === "completed") return `${bot.name} finished`;
+  if (last.state === "failed") return `${bot.name} couldn't finish`;
+  return null;
+}
+
 export function Conversation({
   task,
   bot,
@@ -418,9 +652,12 @@ export function Conversation({
   toggleRef,
   strip,
   refreshNote,
-  readOnly,
+  interactive,
+  connection,
+  info,
   online,
   inert = false,
+  granted,
 }: {
   task: Task | null;
   bot: Bot | undefined;
@@ -438,18 +675,113 @@ export function Conversation({
   strip: ReactNode;
   /** The open task failed to refresh, and that is the conversation's news, not the strip's. */
   refreshNote: boolean;
-  readOnly: boolean;
+  /** This connection may send, stop and answer (`canWrite`). */
+  interactive: boolean;
+  connection: ConnectionState;
+  info: HostInfo;
   /** The gateway is connected, so a task without a transcript can load. */
   online: boolean;
   /** Set while the Work drawer covers the conversation, so focus cannot land behind it. */
   inert?: boolean;
+  /** Access arrived a moment ago. */
+  granted: boolean;
 }) {
   const itemCount = transcript?.items.length ?? 0;
+  const send = useCommand();
+  const sectionRef = useRef<HTMLElement>(null);
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const [notices, setNotices] = useState<Notice[]>([]);
+  const [dismissedStops, setDismissedStops] = useState<Set<string>>(() => new Set());
   const pillName = bot
     ? task
       ? `${bot.name}, ${task.title}. Show details.`
       : `${bot.name}, no task selected. Show details.`
     : "";
+
+  const active = currentRun(transcript);
+  const review = useCallback(() => reviewOldest(sectionRef.current), []);
+  const openSteps = useCallback(() => {
+    const activity = sectionRef.current?.querySelectorAll<HTMLElement>(
+      '[data-placeholder="activity"]',
+    );
+    activity?.[activity.length - 1]?.scrollIntoView({ block: "nearest" });
+  }, []);
+
+  // The status line leaves with a short fade when its run ends.
+  const ended = !active
+    ? transcript?.runs.filter((run) => run.state !== "queued").at(-1)
+    : undefined;
+  const leaving =
+    ended &&
+    bot &&
+    transcript &&
+    (ended.state === "completed" || ended.state === "stopped" || ended.state === "failed")
+      ? { key: `leaving-${ended.id}`, run: ended }
+      : null;
+
+  // The conversation's one polite live region. It speaks a run's lifecycle,
+  // the connection and access, and the result of what the person did; not
+  // each phrase. A repeated message is spoken again.
+  const [announcement, setAnnouncement] = useState("");
+  const onAnnounce = (text: string) =>
+    setAnnouncement((current) => (current === text ? `${text}\u00a0` : text));
+  const lastRun = transcript?.runs.filter((run) => run.state !== "queued").at(-1);
+  const heard = [
+    bot ? lifecycleWords(bot, active, lastRun) : null,
+    connection.status === "reconnecting"
+      ? "Reconnecting"
+      : connection.status === "connected"
+        ? "Connected"
+        : null,
+    granted
+      ? "You can now send, stop and answer"
+      : connection.upgrade.status === "pending"
+        ? "Access requested"
+        : null,
+  ];
+  const [spoken, setSpoken] = useState(heard);
+  if (heard.some((words, index) => words !== spoken[index])) {
+    setSpoken(heard);
+    const changed = heard.filter((words, index) => words && words !== spoken[index]);
+    // A first hello is not news; a return after a drop is.
+    const news = changed.filter((words) => words !== "Connected" || spoken[1] === "Reconnecting");
+    if (news.length > 0) setAnnouncement(news.at(-1)!);
+  }
+
+  // ⌘J goes to what needs you.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
+        event.preventDefault();
+        review();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [review]);
+
+  const addNotice = useCallback((notice: Omit<Notice, "id">) => {
+    setNotices((current) => [...current, { ...notice, id: `${Date.now()}:${Math.random()}` }]);
+  }, []);
+  const stopNotices: Notice[] =
+    transcript && bot
+      ? transcript.runs.flatMap((run) =>
+          run.stopError && !dismissedStops.has(`${run.id}:${run.stopError}`)
+            ? [
+                {
+                  id: `${run.id}:${run.stopError}`,
+                  title: `Couldn't stop ${bot.name}.`,
+                  reason: run.stopError,
+                },
+              ]
+            : [],
+        )
+      : [];
+
+  const hasLive =
+    !!transcript &&
+    (transcript.outbox.length > 0 ||
+      transcript.runs.some((run) => run.state !== "queued" && run.state !== "cancelled"));
 
   let body: ReactNode;
   if (!bot) {
@@ -479,7 +811,7 @@ export function Conversation({
         </button>
       </EmptyState>
     );
-  } else if (!online && (!transcript || itemCount === 0) && !transcript?.live) {
+  } else if (!online && (!transcript || itemCount === 0) && !hasLive) {
     // Nothing was saved for this task, and nothing can load until the gateway is back.
     body = (
       <EmptyState
@@ -488,7 +820,7 @@ export function Conversation({
         body="This conversation loads when the connection returns."
       />
     );
-  } else if (!transcript || (transcript.status === "loading" && itemCount === 0)) {
+  } else if (!transcript || (transcript.status === "loading" && itemCount === 0 && !hasLive)) {
     body = (
       <div className="transcript-wrap">
         <div className="transcript" data-testid="transcript">
@@ -503,7 +835,7 @@ export function Conversation({
         </div>
       </div>
     );
-  } else if (transcript.status === "error" && itemCount === 0) {
+  } else if (transcript.status === "error" && itemCount === 0 && !hasLive) {
     body = (
       <EmptyState bot={bot} title="Could not load this conversation" body={transcript.error}>
         <button type="button" className="button" onClick={onReload}>
@@ -511,7 +843,7 @@ export function Conversation({
         </button>
       </EmptyState>
     );
-  } else if (itemCount === 0 && !transcript.live) {
+  } else if (itemCount === 0 && !hasLive) {
     body = (
       <EmptyState
         bot={bot}
@@ -524,7 +856,15 @@ export function Conversation({
       <TranscriptView
         key={task.key}
         task={task}
+        bot={bot}
         transcript={transcript}
+        liveOptions={{
+          connected: online,
+          interactive,
+          onOpenSteps: openSteps,
+          onReview: review,
+          leaving,
+        }}
         note={
           refreshNote && (
             <p className="load-note" role="alert">
@@ -544,6 +884,7 @@ export function Conversation({
       className="conversation"
       aria-label="Conversation"
       inert={inert}
+      ref={sectionRef}
       data-strip={strip ? "true" : undefined}
     >
       {strip}
@@ -591,16 +932,48 @@ export function Conversation({
         </div>
       </header>
       {body}
-      {task && readOnly && (
-        <footer className="composer" data-readonly="true">
-          <div className="composer-inner">
-            <div className="composer-box">
-              <EyeIcon />
-              <span>Read-only connection. You can view conversations.</span>
-            </div>
-          </div>
-        </footer>
+      {task && bot && interactive && (
+        <Composer
+          key={`composer:${task.key}`}
+          bot={bot}
+          taskKey={task.key}
+          transcript={transcript}
+          connected={online}
+          notices={[
+            ...stopNotices.map((notice) => ({
+              ...notice,
+              retry: () => {
+                const run = transcript?.runs.find((each) => notice.id.startsWith(`${each.id}:`));
+                if (run && task) void send({ type: "stopRun", key: task.key, runId: run.id });
+              },
+            })),
+            ...notices,
+          ]}
+          needsYou={needsYouOf(bot, transcript, interactive)}
+          onReview={review}
+          onNotice={addNotice}
+          onDismissNotice={(id) => {
+            setNotices((current) => current.filter((notice) => notice.id !== id));
+            setDismissedStops((current) => new Set(current).add(id));
+          }}
+          onClearNotices={() => {
+            setNotices([]);
+            setDismissedStops((current) => {
+              const next = new Set(current);
+              for (const notice of stopNotices) next.add(notice.id);
+              return next;
+            });
+          }}
+          onAnnounce={onAnnounce}
+          focusRef={fieldRef}
+        />
       )}
+      {task && bot && !interactive && (
+        <AccessBar bot={bot.name} connection={connection} info={info} />
+      )}
+      <p className="visually-hidden" role="status" aria-live="polite" data-testid="announcer">
+        {announcement}
+      </p>
     </section>
   );
 }

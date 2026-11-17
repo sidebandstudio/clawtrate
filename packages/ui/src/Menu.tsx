@@ -1,8 +1,8 @@
 import { useEffect, useRef, type CSSProperties, type KeyboardEvent } from "react";
 
 export type MenuEntry =
-  | { kind: "item"; label: string; onSelect: () => void; tone?: "danger" }
-  | { kind: "radio"; label: string; checked: boolean; onSelect: () => void }
+  | { kind: "item"; label: string; onSelect: () => void; tone?: "danger"; hint?: string }
+  | { kind: "radio"; label: string; checked: boolean; onSelect: () => void; hint?: string }
   | { kind: "head"; title: string; lines: string[] }
   | { kind: "label"; text: string }
   | { kind: "rule" };
@@ -111,6 +111,11 @@ export function Menu({
                   onClick={entry.onSelect}
                 >
                   {entry.label}
+                  {entry.hint && (
+                    <kbd className="menu-hint" aria-hidden="true">
+                      {entry.hint}
+                    </kbd>
+                  )}
                   <span className="glyph" data-state="check" aria-hidden="true" />
                 </button>
               </li>
@@ -127,6 +132,11 @@ export function Menu({
                   onClick={entry.onSelect}
                 >
                   {entry.label}
+                  {entry.hint && (
+                    <kbd className="menu-hint" aria-hidden="true">
+                      {entry.hint}
+                    </kbd>
+                  )}
                 </button>
               </li>
             );

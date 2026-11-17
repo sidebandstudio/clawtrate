@@ -1,4 +1,4 @@
-import type { ClawtrateState } from "@clawtrate/core";
+import type { ClawtrateState, HostInfo } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
@@ -21,16 +21,47 @@ function canFocus(element: HTMLElement | null): element is HTMLElement {
   );
 }
 
+/** How long "Access granted" stays on the strip. */
+export const GRANTED_FOR_MS = 4000;
+
 export function Shell({
   state,
+  info,
   theme,
   onTheme,
 }: {
   state: ClawtrateState;
+  info: HostInfo;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
 }) {
   const send = useCommand();
+  const interactive = canWrite(state.connection, info);
+
+  // When access arrives, the strip says so for four seconds; the conversation announces it.
+  const connectedNow = state.connection.status === "connected";
+  const [tier, setTier] = useState(interactive);
+  const [granted, setGranted] = useState(false);
+  if (connectedNow && interactive !== tier) {
+    setTier(interactive);
+    if (interactive && state.connection.upgrade.status === "approved") setGranted(true);
+  }
+  useEffect(() => {
+    if (!granted) return;
+    // Focus that was in the access bar moves to the composer's field.
+    if (accessHadFocus.current) document.querySelector<HTMLElement>(".composer-input")?.focus();
+    const timer = setTimeout(() => setGranted(false), GRANTED_FOR_MS);
+    return () => clearTimeout(timer);
+  }, [granted]);
+  const accessHadFocus = useRef(false);
+  useEffect(() => {
+    const onFocus = () => {
+      accessHadFocus.current = !!document.activeElement?.closest(".access-bar");
+    };
+    document.addEventListener("focusin", onFocus);
+    return () => document.removeEventListener("focusin", onFocus);
+  }, []);
+
   const selection = useSelection(state);
   const { bot, task } = selection;
   const [panelOpen, setPanelOpen] = useState(() => readPreference("panel") === "open");
@@ -158,7 +189,17 @@ export function Shell({
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
   const phase = useSyncPhase(state, taskKey);
-  const strip = stripFor(state, phase, taskKey);
+  const strip =
+    stripFor(state, phase, taskKey) ??
+    (granted
+      ? {
+          tone: "ok" as const,
+          text: "Access granted",
+          more: "you can send, stop and answer",
+          action: null,
+          countdown: false,
+        }
+      : null);
   const catchingUp =
     phase === "dropped" && state.connection.status === "connected" && strip?.tone === "warn";
   const reload = useCallback(() => {
@@ -211,7 +252,10 @@ export function Shell({
             )
           }
           refreshNote={phase !== "dropped" && refreshFailed(transcript)}
-          readOnly={!canWrite(state.connection)}
+          interactive={interactive}
+          connection={state.connection}
+          info={info}
+          granted={granted}
           online={state.connection.status === "connected"}
           toggleRef={toggleRef}
           inert={drawerOpen}

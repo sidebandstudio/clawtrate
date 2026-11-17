@@ -112,3 +112,11 @@ export const ScreenIcon = (props: IconProps) => (
     <path d="M6 13.5h4M8 11v2.5" />
   </Icon>
 );
+
+export const WarnIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M8 2.5 14 13H2L8 2.5Z" />
+    <path d="M8 6.5v3" />
+    <path d="M8 11.4v.1" />
+  </Icon>
+);

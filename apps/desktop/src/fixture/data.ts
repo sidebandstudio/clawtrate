@@ -3,6 +3,7 @@
 
 import {
   emptyActivity,
+  newRun,
   type Bot,
   type Task,
   type Transcript,
@@ -473,8 +474,20 @@ export function fixtureTranscripts(now: number, bots: Bot[]): Record<string, Tra
       const key = `agent:${bot.id}:${spec.slug}`;
       const items =
         key === OPEN_TASK ? diskTranscript(now) : shortTranscript(spec, now - spec.ago * MINUTE);
+      const running = spec.status === "running";
+      const text = "Rack-1 is done. Rotating logs on rack-2 now.";
       transcripts[key] = {
         ...emptyActivity,
+        // A task the gateway reports running has its run, as the engine keeps it.
+        runs: running
+          ? [
+              newRun(
+                "fixture-run",
+                { state: "running", origin: "gateway", bound: true, text },
+                now - 3 * MINUTE,
+              ),
+            ]
+          : [],
         linkedRuns: {},
         interSession: [],
         sessionKey: key,
@@ -482,10 +495,7 @@ export function fixtureTranscripts(now: number, bots: Bot[]): Record<string, Tra
         items,
         error: null,
         hasMore: false,
-        live:
-          spec.status === "running"
-            ? { runId: "fixture-run", text: "Rack-1 is done. Rotating logs on rack-2 now." }
-            : null,
+        live: running ? { runId: "fixture-run", text } : null,
         loadedAt: now,
       };
     }

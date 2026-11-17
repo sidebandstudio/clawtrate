@@ -11,6 +11,7 @@ import {
   type HostInfo,
 } from "@clawtrate/core";
 import { FAILING_TASK, OPEN_TASK, fixtureBots, fixtureTasks, fixtureTranscripts } from "./data.ts";
+import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -44,6 +45,7 @@ export const SCENES = [
   "empty",
   "partial",
   "zero-tasks",
+  ...LIVE_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number];
@@ -285,6 +287,8 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: { ...base, discovery: { ...base.discovery, partial: true } }, steps: [] };
     case "zero-tasks":
       return { initial: { ...base, tasksByBot: { ...base.tasksByBot, marlow: [] } }, steps: [] };
+    default:
+      return liveScene(name as LiveScene, base, now);
   }
 }
 
@@ -306,7 +310,13 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
   for (const step of steps) setTimeout(() => set(step.change(state)), step.after);
   let pairingChecks = 0;
 
-  async function apply(command: BridgeCommand): Promise<void> {
+  async function apply(command: BridgeCommand): Promise<unknown> {
+    const live = liveCommand(
+      command,
+      () => state,
+      (next) => set(next),
+    );
+    if (live) return live;
     switch (command.type) {
       case "connect":
       case "connectDevGateway":
@@ -338,17 +348,30 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
     }
   }
 
+  let files = 0;
   return {
-    info: FIXTURE_INFO,
+    info: name === "access-pinned" ? { ...FIXTURE_INFO, readOnly: true } : FIXTURE_INFO,
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    send: apply,
-    // The shell only sends; no command here has an answer, and no file is held.
-    invoke: (command) => Promise.reject(new Error(`the fixture does not answer ${command.type}`)),
-    attach: () => Promise.reject(new Error("the fixture does not hold files")),
+    send: async (command) => {
+      await apply(command);
+    },
+    invoke: async (command) => {
+      const answer = await apply(command);
+      if (answer === undefined && command.type !== "openSession" && command.type !== "closeSession")
+        throw new Error(`the fixture does not answer ${command.type}`);
+      return answer as never;
+    },
+    // Files are named and counted, never kept.
+    attach: async (file) => ({
+      id: `file-${(files += 1)}`,
+      fileName: file.name,
+      mimeType: file.type,
+      sizeBytes: file.data.byteLength,
+    }),
     setState: (change) => set(change(state)),
   };
 }

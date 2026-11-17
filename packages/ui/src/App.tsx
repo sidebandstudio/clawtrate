@@ -37,10 +37,13 @@ export function App({ info }: { info: HostInfo }) {
   useInputAndMotion();
   // The theme applies on every screen; the gateway menu in the shell changes it.
   const [theme, setTheme] = useTheme();
+  // One flag for the whole window: while the connection is anything but
+  // connected, nothing that stands for the gateway's work moves.
+  const lost = state.connection.status !== "connected";
   return (
-    <div className="app">
+    <div className="app" data-connection={lost ? "lost" : undefined}>
       {screenFor(state) === "shell" ? (
-        <Shell state={state} theme={theme} onTheme={setTheme} />
+        <Shell state={state} info={info} theme={theme} onTheme={setTheme} />
       ) : (
         <ConnectScreen connection={state.connection} info={info} />
       )}
