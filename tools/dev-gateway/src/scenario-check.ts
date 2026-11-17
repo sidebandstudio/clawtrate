@@ -26,6 +26,7 @@ import { CODING_AGENT_SERVER, THREAD_URL_BASE } from "./coding-agent-mcp.ts";
 import { TERMINAL_CHAT_STATES, type GatewayEvent, type OperatorSession } from "./operator.ts";
 import { SHELL_COMMANDS } from "./scenarios.ts";
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
+import { DENIED_TOOLS } from "./cli.ts";
 
 type JsonRecord = Record<string, unknown>;
 const rec = (value: unknown): JsonRecord =>
@@ -226,7 +227,88 @@ export type Harness = {
   wait(view: RunView, timeoutMs?: number): Promise<RunView>;
   /** Note an observation for the report. */
   observe(line: string): void;
+  /**
+   * Run a message as the gateway's owner, through `openclaw agent`, and
+   * return the run as the plain client saw it. Owner-only tools such as
+   * `automations` are offered only in such runs.
+   */
+  ownerRun(botId: string, key: string, message: string): Promise<RunView>;
 };
+
+/** What one kind of tool call looks like on the wire, for "What the scenario check observed". */
+export type FamilyRow = {
+  family: string;
+  directive: string;
+  tool: string;
+  args: string;
+  result: string;
+  historyDetails: boolean;
+  kindHints: string;
+};
+
+export const FAMILY_ROWS: FamilyRow[] = [];
+
+/** A compact type shape of a JSON value, two levels deep. */
+export function shapeOf(value: unknown, depth = 2): string {
+  if (Array.isArray(value)) return value.length === 0 ? "[]" : `[${shapeOf(value[0], depth - 1)}…]`;
+  if (value !== null && typeof value === "object") {
+    if (depth <= 0) return "{…}";
+    const entries = Object.entries(value as JsonRecord).map(
+      ([k, v]) => `${k}: ${shapeOf(v, depth - 1)}`,
+    );
+    return `{${entries.join(", ")}}`;
+  }
+  return value === null ? "null" : typeof value;
+}
+
+/** Record the first call of a tool in a run, with what names its kind besides its name. */
+async function recordFamily(
+  h: Harness,
+  family: string,
+  directive: string,
+  view: RunView,
+  tool: string,
+): Promise<void> {
+  const history = await h
+    .op("plain")
+    .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: view.sessionKey });
+  const start = view.tool("start", tool)[0];
+  const end = view.tool("result", tool)[0];
+  // A client that did not start the run gets item events but no tool events,
+  // so for such a run the call and its result come from history.
+  const item = view
+    .agent("item")
+    .find((e) => view.data(e).phase === "start" && view.data(e).name === tool);
+  expect(item, `no ${tool} item to record for ${family}`);
+  const toolCallId = view.data(item).toolCallId;
+  const call = history.messages
+    .flatMap((m) => (Array.isArray(m.content) ? (m.content as JsonRecord[]) : []))
+    .find((part) => part.type === "toolCall" && part.id === toolCallId);
+  const row = history.messages.find((m) => m.role === "toolResult" && m.toolCallId === toolCallId);
+  const data = end ? view.data(end) : {};
+  const result = end ? rec(data.result) : { content: row?.content, details: row?.details };
+  const content = Array.isArray(result.content) ? (result.content as JsonRecord[]) : [];
+  const details = rec(result.details);
+  const hints = [
+    `item.kind "${String(view.data(item).kind)}"`,
+    `item.title "${String(view.data(item).title)}"`,
+    ...(data.commandBearing === true ? ["commandBearing true"] : []),
+    ...(typeof details.mcpServer === "string"
+      ? [`details.mcpServer "${details.mcpServer}", mcpTool "${String(details.mcpTool)}"`]
+      : []),
+  ];
+  FAMILY_ROWS.push({
+    family,
+    directive,
+    tool,
+    args: shapeOf(start ? view.data(start).args : call?.arguments),
+    result:
+      `content ${content.map((p) => String(p.type)).join("+") || "none"}; details ${shapeOf(details, 1)}` +
+      (end ? "" : " (from history: no tool events reached this client)"),
+    historyDetails: row !== undefined && row.details !== undefined,
+    kindHints: hints.join("; "),
+  });
+}
 
 export type ScenarioCheck = {
   name: string;
@@ -356,6 +438,7 @@ async function questionCheck(
     `Thanks. You answered:\n\n${lines.join("\n")}`,
     "the reply after the answer",
   );
+  if (directive === "#ask") await recordFamily(h, "questions", "#ask", view, "ask_user");
   // A connection without operator.questions is not sent question events.
   expect(
     !h.op("plain").events.some((e) => e.seq > seenBefore && e.event.startsWith("question.")),
@@ -658,6 +741,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         [false, "completed", 0],
         "exec result",
       );
+      await recordFamily(h, "shell", "#approve", view, "exec");
       // The rule is reused: the same command in the same folder runs without asking.
       const again = await h.run("approvals", key, "#approve");
       same(again.result("exec").details.exitCode, 0, "the second run's exec");
@@ -873,6 +957,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       recipient.validate();
       same(result.details.reply, recipient.finalText(), "the reply is the recipient's final text");
       same(view.finalText(), `Marlow replied:\n\n> ${recipient.finalText()}`, "the sender's reply");
+      await recordFamily(h, "messaging between bots", "#message", view, "sessions_send");
       // The recipient's run ends before the sender's tool result arrives.
       expect(
         recipient.events.find(isChat("final"))!.seq < view.tool("result", "sessions_send")[0]!.seq,
@@ -1035,6 +1120,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         `The coding agent picked it up: ${String(structured.url)}`,
         "the reply",
       );
+      await recordFamily(h, "tool servers (MCP)", "#mcp", view, name);
     },
   },
   {
@@ -1117,6 +1203,194 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
+    name: "one file read",
+    covers: ["#read"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "read"), "#read");
+      same(view.result("read").isError, false, "read isError");
+      await recordFamily(h, "files: read", "#read", view, "read");
+    },
+  },
+  {
+    name: "six file reads in a row",
+    covers: ["#read-six"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "read-six"), "#read-six");
+      const starts = view.agent("tool").filter((e) => view.data(e).phase === "start");
+      same(
+        starts.map((e) => view.data(e).name),
+        Array(6).fill("read"),
+        "the tool calls",
+      );
+      const first = starts[0]!.seq;
+      const last = view.tool("result", "read").at(-1)!.seq;
+      same(
+        view.agent("assistant").filter((e) => e.seq > first && e.seq < last).length,
+        0,
+        "text between the reads",
+      );
+      same(
+        view.tool("result", "read").map((e) => view.data(e).isError),
+        Array(6).fill(false),
+        "the reads' isError",
+      );
+      same(view.finalText(), "I read six files in my workspace.", "the reply");
+    },
+  },
+  {
+    name: "a folder listing",
+    covers: ["#list"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "list"), "#list");
+      expect(view.result("ls").text.includes("AGENTS.md"), "the listing names AGENTS.md");
+      await recordFamily(h, "files: list", "#list", view, "ls");
+    },
+  },
+  {
+    name: "a file write",
+    covers: ["#write"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "write"), "#write");
+      const result = view.result("write");
+      same([result.isError, result.details.created], [false, true], "write result");
+      await recordFamily(h, "files: write", "#write", view, "write");
+    },
+  },
+  {
+    name: "a file edit",
+    covers: ["#edit"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "edit"), "#edit");
+      const result = view.result("edit");
+      same(
+        [result.isError, result.details.diff],
+        [false, "-1 Leave at 9:00.\n+1 Leave at 8:30."],
+        "edit result",
+      );
+      await recordFamily(h, "files: edit", "#edit", view, "edit");
+    },
+  },
+  {
+    name: "a note saved to memory",
+    covers: ["#remember"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "remember"), "#remember");
+      same(view.result("write").isError, false, "write isError");
+      same(
+        view.data(view.tool("start", "write")[0]!).args,
+        { path: "memory/2026-11-17.md", content: "- Prefers the lake loop on relaxed weekends.\n" },
+        "the memory write",
+      );
+      await recordFamily(h, "memory", "#remember", view, "write");
+    },
+  },
+  {
+    name: "a web search answered on loopback",
+    covers: ["#search"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "search"), "#search");
+      const result = view.result("web_search");
+      same(result.isError, false, "web_search isError");
+      const parsed = rec(JSON.parse(result.text) as unknown);
+      same([parsed.provider, parsed.count], ["ollama", 3], "the search provider and count");
+      const urls = (parsed.results as JsonRecord[]).map((r) => String(r.url));
+      same(
+        urls,
+        [1, 2, 3].map((n) => `https://search.example/results/${n}`),
+        "results come from the scripted server",
+      );
+      await recordFamily(h, "web search", "#search", view, "web_search");
+    },
+  },
+  {
+    name: "a look at the bot's sessions",
+    covers: ["#sessions"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "sessions"), "#sessions");
+      same(view.result("sessions_list").isError, false, "sessions_list isError");
+      await recordFamily(h, "sessions", "#sessions", view, "sessions_list");
+    },
+  },
+  {
+    name: "a routine created and removed by the owner",
+    covers: ["#schedule"],
+    run: async (h) => {
+      const key = `agent:main:check-schedule-${Date.now().toString(36)}`;
+      const view = await h.ownerRun("main", key, "#schedule");
+      // The run was started by the CLI: this client gets its items, not its tool events.
+      same(
+        view.tool("start", "automations").length,
+        0,
+        "tool events from a run another client started",
+      );
+      const ends = view
+        .agent("item")
+        .filter((e) => view.data(e).phase === "end" && view.data(e).name === "automations");
+      same(
+        ends.map((e) => view.data(e).status),
+        ["completed", "completed"],
+        "the two automations items",
+      );
+      same(view.finalText(), "I created the routine and removed it again.", "the reply");
+      await recordFamily(h, "scheduling", "#schedule", view, "automations");
+      // The same message from a paired client: the gateway does not offer the tool.
+      const asUser = await h.run("plain", await h.session("main", "schedule-user"), "#schedule");
+      const calls = asUser.tool("result", "automations");
+      expect(
+        calls.length > 0 && calls.every((e) => asUser.data(e).isError === true),
+        "automations ran for a non-owner",
+      );
+      h.observe(
+        `automations from a paired client: ${asUser.result("automations").text.slice(0, 160)}`,
+      );
+    },
+  },
+  {
+    name: "a tool with no kind of its own",
+    covers: ["#plan"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "plan"), "#plan");
+      same(view.result("progress_card").isError, false, "progress_card isError");
+      same(view.finalText(), "The plan is on the card above.", "the reply");
+      await recordFamily(h, "other (progress card)", "#plan", view, "progress_card");
+    },
+  },
+  {
+    name: "network, browser and device tools are not offered",
+    covers: [],
+    run: async (h) => {
+      const effective = await h
+        .op("plain")
+        .request<{ toolAccess?: { tools?: JsonRecord[] } }>("tools.effective", {
+          sessionKey: RECIPIENT_SESSION,
+        });
+      const tools = effective.toolAccess?.tools ?? [];
+      const offered = tools.filter((t) => t.status === "available").map((t) => String(t.id));
+      same(
+        DENIED_TOOLS.filter((tool) => offered.includes(tool)),
+        [],
+        "denied tools offered to a bot",
+      );
+      h.observe(`tools offered to Marlow: ${offered.sort().join(", ")}`);
+    },
+  },
+  {
+    name: "a client that did not start the run gets items but no tool events",
+    covers: ["#read"],
+    run: async (h) => {
+      const key = await h.session("main", "watcher");
+      const view = await h.run("plain", key, "#read");
+      const watched = new RunView(h.op("questions"), view.runId, key, 0);
+      same(view.agent("tool").length, 2, "tool events for the client that sent the message");
+      same(
+        watched.agent("tool").length,
+        0,
+        "tool events for another subscribed client with tool-events",
+      );
+      same(watched.agent("item").length, view.agent("item").length, "item events reach both");
+    },
+  },
+  {
     name: "directives compose",
     covers: ["#think", "#mcp", "#ask"],
     run: async (h) => {
@@ -1159,10 +1433,14 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
 /** Run the checks on open clients. Returns one line per check, and whether all passed. */
 export async function runScenarioChecks(
   clients: Record<ClientName, OperatorSession>,
-  options: { log?: (line: string) => void; only?: (check: ScenarioCheck) => boolean } = {},
+  options: {
+    log?: (line: string) => void;
+    only?: (check: ScenarioCheck) => boolean;
+    ownerAgent?: (botId: string, key: string, message: string) => Promise<void>;
+  } = {},
 ): Promise<{ passed: number; failed: number; notes: string[] }> {
   const log = options.log ?? console.log;
-  const harness = createHarness(clients);
+  const harness = createHarness(clients, options.ownerAgent);
   await prepareRecipient(harness);
   let passed = 0;
   let failed = 0;
@@ -1189,6 +1467,7 @@ export async function prepareRecipient(h: Harness): Promise<void> {
 
 export function createHarness(
   clients: Record<ClientName, OperatorSession>,
+  ownerAgent?: (botId: string, key: string, message: string) => Promise<void>,
 ): Harness & { notes: string[] } {
   let counter = 0;
   const notes: string[] = [];
@@ -1229,6 +1508,20 @@ export function createHarness(
       return harness.wait(await harness.start(client, key, message, extra));
     },
     observe: (line: string) => notes.push(line),
+    async ownerRun(botId: string, key: string, message: string) {
+      expect(ownerAgent, "this harness cannot start a run as the owner");
+      const op = clients.plain;
+      const from = op.lastSeq;
+      const done = ownerAgent(botId, key, message);
+      const first = await op.waitFor(
+        `the owner's run in ${key}`,
+        (e) => e.event === "chat" && rec(e.payload).sessionKey === key,
+        60_000,
+        from,
+      );
+      await done;
+      return harness.wait(new RunView(op, String(rec(first.payload).runId), key, from));
+    },
   };
   return harness;
 }
@@ -1246,4 +1539,26 @@ export async function openCheckClients(
     );
   }
   return clients as Record<ClientName, OperatorSession>;
+}
+
+/** Run one message as the gateway's owner, with `openclaw agent` through the guarded runner. */
+export async function ownerAgent(
+  inst: { runner: { run(args: string[]): Promise<{ status: number | null; stderr: string }> } },
+  botId: string,
+  key: string,
+  message: string,
+): Promise<void> {
+  const out = await inst.runner.run([
+    "agent",
+    "--agent",
+    botId,
+    "--session-key",
+    key,
+    "--message",
+    message,
+    "--thinking",
+    "low",
+    "--json",
+  ]);
+  expect(out.status === 0, `openclaw agent failed: ${out.stderr.slice(0, 300)}`);
 }

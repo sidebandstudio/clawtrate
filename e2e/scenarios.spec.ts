@@ -6,6 +6,8 @@ import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import {
   createHarness,
+  FAMILY_ROWS,
+  ownerAgent,
   openCheckClients,
   prepareRecipient,
   SCENARIO_CHECKS,
@@ -27,12 +29,15 @@ test.describe.serial("scenario check", () => {
     clients = await openCheckClients((name, scopes, caps) =>
       openOperator(inst, name, scopes, caps),
     );
-    harness = createHarness(clients);
+    harness = createHarness(clients, (botId, key, message) =>
+      ownerAgent(inst, botId, key, message),
+    );
     await prepareRecipient(harness);
   });
 
   test.afterAll(async () => {
     for (const note of harness?.notes ?? []) console.log(`note  ${note}`);
+    for (const row of FAMILY_ROWS) console.log(`family ${JSON.stringify(row)}`);
     for (const [kind, fields] of UNDECLARED_FIELDS) {
       console.log(`note  ${kind} carries undeclared fields: ${[...fields].sort().join(", ")}`);
     }

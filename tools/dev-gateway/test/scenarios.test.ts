@@ -63,6 +63,17 @@ describe("scenario selection", () => {
     ]);
   });
 
+  it("makes six reads in a row, one per model call, with nothing between them", () => {
+    const rounds = scenarioRounds(selectScenarios("read six files")).map((round) =>
+      resolveRound(round, ctx("main"), "x"),
+    );
+    const tools = rounds.map((round) =>
+      round.filter((s) => s.kind === "tool").map((s) => (s as { name: string }).name),
+    );
+    expect(tools).toEqual([["read"], ["read"], ["read"], ["read"], ["read"], ["read"], []]);
+    expect(rounds.slice(1, 6).every((round) => round.length === 1)).toBe(true);
+  });
+
   it("gives tool calls ids that differ between rounds and sessions", () => {
     const [round] = scenarioRounds(selectScenarios("#steps"));
     const id = (seed: string) =>

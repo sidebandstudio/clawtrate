@@ -64,7 +64,7 @@ export function checkExampleHistory(rows: HistoryRow[], example: ScenarioExample
   if (errors !== example.toolErrors) {
     problems.push(`expected ${example.toolErrors} failed tool results, found ${errors}`);
   }
-  // History rows keep the result's text but not its `details`, so the text is checked.
+  // History rows keep the result's text but not always its `details`, so the text is checked.
   if (example.interaction?.kind === "question") {
     const answered = results.find((row) => row.toolName === "ask_user");
     if (!answered || answered.isError || !/"status": "answered"/.test(textOf(answered))) {

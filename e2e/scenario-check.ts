@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import {
   openCheckClients,
+  FAMILY_ROWS,
+  ownerAgent,
   runScenarioChecks,
   UNDECLARED_FIELDS,
 } from "../tools/dev-gateway/src/scenario-check.ts";
@@ -78,7 +80,10 @@ async function main(): Promise<number> {
       openOperator(inst, label, scopes, caps),
     );
     try {
-      const { passed, failed, notes } = await runScenarioChecks(clients);
+      const { passed, failed, notes } = await runScenarioChecks(clients, {
+        ownerAgent: (botId, key, message) => ownerAgent(inst, botId, key, message),
+      });
+      for (const row of FAMILY_ROWS) console.log(`family ${JSON.stringify(row)}`);
       for (const note of notes) console.log(`note  ${note}`);
       for (const [kind, fields] of [...UNDECLARED_FIELDS].sort()) {
         console.log(

@@ -88,6 +88,19 @@ function lastResult(ctx: PlanContext, name: string): Record<string, unknown> | n
   return null;
 }
 
+const rec = (value: unknown): Record<string, unknown> =>
+  value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+/** Every bot's workspace starts with these five files, so six reads need one twice. */
+const SIX_READS = [
+  { path: "AGENTS.md" },
+  { path: "SOUL.md" },
+  { path: "IDENTITY.md" },
+  { path: "USER.md" },
+  { path: "BOOTSTRAP.md" },
+  { path: "AGENTS.md", offset: 3 },
+];
+
 /** The only shell commands any scenario emits. All are harmless and stay in the bot's workspace. */
 export const SHELL_COMMANDS = {
   list: "ls",
@@ -293,6 +306,132 @@ export const SCENARIOS: Scenario[] = [
       think("This tool prints a lot. The gateway will shorten what it keeps."),
       mcp("long_output", { lines: 20_000 }),
       say("The tool printed 20,000 lines. Only part of them was kept."),
+    ],
+  },
+  {
+    name: "read",
+    phrase: "read your instructions",
+    summary: "One file read: the bot's own AGENTS.md.",
+    steps: () => [
+      think("I will read my instructions."),
+      tool("read", { path: "AGENTS.md" }),
+      say("I read my instructions file."),
+    ],
+  },
+  {
+    name: "read-six",
+    phrase: "read six files",
+    summary: "Six file reads in a row, with nothing between them.",
+    steps: () => [
+      think("I will read through my workspace files one after another."),
+      ...SIX_READS.map((args) => tool("read", args)),
+      say("I read six files in my workspace."),
+    ],
+  },
+  {
+    name: "list",
+    phrase: "list your files",
+    summary: "One folder listing of the bot's workspace.",
+    steps: () => [tool("ls", { path: "." }), say("Those are the files in my workspace.")],
+  },
+  {
+    name: "write",
+    phrase: "write a note",
+    summary: "One file write in the bot's workspace (notes/scratch.md).",
+    steps: () => [
+      tool("write", { path: "notes/scratch.md", content: "# Scratch\n\n- Check the trail map.\n" }),
+      say("I wrote notes/scratch.md."),
+    ],
+  },
+  {
+    name: "edit",
+    phrase: "edit a note",
+    summary: "A file write, then an edit of the same file (notes/edit-me.md).",
+    steps: () => [
+      tool("write", { path: "notes/edit-me.md", content: "Leave at 9:00.\n" }),
+      tool("edit", {
+        path: "notes/edit-me.md",
+        edits: [{ oldText: "Leave at 9:00.", newText: "Leave at 8:30." }],
+      }),
+      say("I changed the departure time in notes/edit-me.md."),
+    ],
+  },
+  {
+    name: "remember",
+    phrase: "save this to memory",
+    summary: "A memory note: a write to the bot's daily memory file (memory/2026-11-17.md).",
+    steps: () => [
+      think("This is worth remembering. I will add it to today's memory notes."),
+      tool("write", {
+        path: "memory/2026-11-17.md",
+        content: "- Prefers the lake loop on relaxed weekends.\n",
+      }),
+      say("Saved to memory: you prefer the lake loop on relaxed weekends."),
+    ],
+  },
+  {
+    name: "search",
+    phrase: "search the web",
+    summary: "A web search, answered by the scripted server (no network).",
+    steps: () => [
+      think("I will search the web for this."),
+      tool("web_search", { query: "cold climate heat pump performance", count: 3 }),
+      say("I found three results; they are shown above."),
+    ],
+  },
+  {
+    name: "sessions",
+    phrase: "list your tasks",
+    summary: "A look at the bot's sessions (sessions_list).",
+    steps: () => [tool("sessions_list", { limit: 5 }), say("Those are my recent tasks.")],
+  },
+  {
+    name: "schedule",
+    phrase: "schedule a reminder",
+    summary:
+      'Creates a routine, then removes it (automations). The gateway offers this tool only in runs started as its owner, as the scenario check does through the CLI; a paired client\'s run gets "Tool automations not found".',
+    steps: () => [
+      think("I will set up a routine, then remove it again."),
+      tool("automations", {
+        action: "add",
+        job: {
+          name: "Scripted reminder",
+          schedule: { kind: "at", at: "2035-01-01T09:00:00Z" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "Reminder: check the trail conditions." },
+        },
+      }),
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          const added = lastResult(ctx, "automations");
+          const id = added?.id ?? rec(added?.job).id ?? added?.jobId ?? "unknown";
+          return tool("automations", { action: "remove", jobId: String(id) });
+        },
+      },
+      (ctx) => [
+        say(
+          lastResult(ctx, "automations")?.removed === true
+            ? "I created the routine and removed it again."
+            : "The routine could not be set up here; the gateway offers routines only to its owner.",
+        ),
+      ],
+    ],
+  },
+  {
+    name: "plan",
+    phrase: "show a plan",
+    summary: "A tool with no kind of its own: a progress card with a finished three-step plan.",
+    steps: () => [
+      tool("progress_card", {
+        plan: [
+          { step: "Check the weather", status: "completed" },
+          { step: "Book the cabin", status: "completed" },
+          { step: "Pack", status: "completed" },
+        ],
+      }),
+      say("The plan is on the card above."),
     ],
   },
   {
