@@ -1060,6 +1060,52 @@ test.describe("Messaged cards", () => {
     ).toBeFocused();
   });
 
+  test("F-124: Open in Marlow waits for its Message from Otto card when Marlow's task shows its runs before its history has loaded", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=messaged-working", "light");
+    type Fixture = {
+      clawtrateFixture: {
+        setState(
+          change: (s: { transcripts: Record<string, Record<string, unknown>> }) => unknown,
+        ): void;
+      };
+      heldHistory?: Record<string, unknown>;
+    };
+    // Marlow's task as it opens: its runs known, its history still loading.
+    await page.evaluate((key) => {
+      const w = window as unknown as Fixture;
+      w.clawtrateFixture.setState((s) => {
+        const t = s.transcripts[key]!;
+        w.heldHistory = t;
+        return {
+          ...s,
+          transcripts: {
+            ...s.transcripts,
+            [key]: { ...t, status: "loading", items: [], interSession: [] },
+          },
+        };
+      });
+    }, "agent:marlow:house-log");
+    const card = page.getByTestId("messaged-card");
+    await card.locator("summary").click();
+    await card.getByRole("button", { name: "Open this message in Marlow's task" }).click();
+    await expect(page.locator(".title-pill")).toContainText("House log");
+    await expect(page.getByTestId("received-card")).toHaveCount(0);
+    await settle(page);
+    // The history arrives, and with it the card the arrival was for.
+    await page.evaluate((key) => {
+      const w = window as unknown as Fixture;
+      w.clawtrateFixture.setState((s) => ({
+        ...s,
+        transcripts: { ...s.transcripts, [key]: w.heldHistory! },
+      }));
+    }, "agent:marlow:house-log");
+    const received = page.getByTestId("received-card");
+    await expect(received).toHaveAttribute("open", "");
+    await expect(received.locator("summary")).toBeFocused();
+  });
+
   test("F-124: coming back from Marlow's task, by Open in Otto or ⌘[, restores the transcript's place, the open card and focus", async ({
     page,
   }) => {

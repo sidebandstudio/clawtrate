@@ -148,12 +148,19 @@ export function CardScope({
   // and only while the conversation is on screen.
 
   // Arriving from "Open in <bot>": the receiving card of that run, open, in view and focused.
+  // The task can show its runs before its history has loaded, so the card may come later:
+  // the arrival waits for it until the history has loaded without it.
+  const arriving = useRef<{ taskKey: string; runId: string } | null>(null);
   useLayoutEffect(() => {
     const runId = takeArrival(taskKey);
-    if (runId === null) return;
+    arriving.current = runId === null ? null : { taskKey, runId };
+  }, [taskKey]);
+  useLayoutEffect(() => {
+    const pending = arriving.current;
+    if (!pending || pending.taskKey !== taskKey) return;
     const open = () => {
       const element = document.querySelector<HTMLDetailsElement>(
-        `details[data-target="from"][data-run-id="${CSS.escape(runId)}"]`,
+        `details[data-target="from"][data-run-id="${CSS.escape(pending.runId)}"]`,
       );
       if (!element) return false;
       element.open = true;
@@ -161,8 +168,13 @@ export function CardScope({
       element.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
       return true;
     };
-    if (!open()) requestAnimationFrame(() => void open());
-  }, [taskKey]);
+    if (open()) arriving.current = null;
+    else if (transcript.status !== "loading") {
+      // Loaded without it as this frame is drawn: one more frame, then the arrival is over.
+      arriving.current = null;
+      requestAnimationFrame(() => void open());
+    }
+  });
 
   // Coming back from "Open in <bot>": the transcript where the reader left it, the card
   // open, focus on that control. It runs after the transcript has settled at its end, and
