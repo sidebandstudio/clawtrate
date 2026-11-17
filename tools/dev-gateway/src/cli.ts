@@ -330,7 +330,10 @@ function assertNotInUse(inst: DevInstance): void {
  * foreign state, and state whose gateway another checkout runs, is refused
  * untouched. Ends with a seeded, verified gateway.
  */
-export async function start(inst: DevInstance): Promise<void> {
+export async function start(
+  inst: DevInstance,
+  options: { seed?: boolean } = {},
+): Promise<void> {
   assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
   if (ownership(inst.stateDir) === "foreign") throw new ForeignStateError(inst.stateDir);
   assertNotInUse(inst);
@@ -410,7 +413,8 @@ export async function start(inst: DevInstance): Promise<void> {
     `  scripted model  http://127.0.0.1:${ports.providerPort}/v1 (pid ${record?.providerPid})`,
   );
   console.log(`  gateway         pid ${record?.gatewayPid}, logs in ${inst.runDir}`);
-  await seed(inst);
+  // Unseeded starts are for checks that need a running gateway, not its data.
+  if (options.seed !== false) await seed(inst);
 }
 
 /** Direct children of a process we started, so none outlive it. */
@@ -784,12 +788,16 @@ export function prune(
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|approve [requestId]|status|stop|reset|list|prune> [--instance <name>] [--json]";
+  "usage: pnpm dev-gateway <start|up|seed|approve [requestId]|status|stop|reset|list|prune> [--instance <name>] [--json] [--no-seed]";
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const { values, positionals } = parseArgs({
     args: argv,
-    options: { instance: { type: "string" }, json: { type: "boolean", default: false } },
+    options: {
+      instance: { type: "string" },
+      json: { type: "boolean", default: false },
+      "no-seed": { type: "boolean", default: false },
+    },
     allowPositionals: true,
     strict: true,
   });
@@ -813,7 +821,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   switch (command) {
     case "start":
     case "up":
-      return start(inst);
+      return start(inst, { seed: !values["no-seed"] });
     case "stop":
       return stop(inst);
     case "seed":
