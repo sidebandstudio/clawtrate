@@ -1011,9 +1011,10 @@ describe("question cards", () => {
             header: "Color",
             question: "Which color?",
             options: [
-              { label: "Blue", description: null },
-              { label: "Green", description: "Like grass" },
+              { index: 0, label: "Blue", description: null, value: null },
+              { index: 1, label: "Green", description: "Like grass", value: null },
             ],
+            optionsOmitted: 0,
             multiSelect: false,
             allowsOther: true,
           },

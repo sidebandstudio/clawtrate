@@ -124,7 +124,7 @@ describe("an approval whose command was cut", () => {
 });
 
 describe("a question option cut to its bound", () => {
-  it("is answered with its whole label", async () => {
+  it("is answered by its original place with its whole label", async () => {
     const gateway = grantingGateway();
     const long = `Blue ${"b".repeat(MAX_OPTION_CHARS * 2)}`;
     const record = questionRecord("ask-long", "run-q");
@@ -136,14 +136,74 @@ describe("a question option cut to its bound", () => {
       gateway.emit("agent", agentEvent("run-q", 1, "lifecycle", { phase: "start" }));
       gateway.emit("question.requested", record);
       await until(() => transcript().questions.length === 1);
-      const shown = transcript().questions[0]!.questions[0]!.options[0]!.label;
-      expect(shown.length).toBeLessThan(long.length);
-      expect(long.startsWith(shown)).toBe(true);
-      await client.answerQuestion(KEY, "ask-long", { color: [shown] });
+      const option = transcript().questions[0]!.questions[0]!.options[0]!;
+      expect(option.label.length).toBeLessThan(long.length);
+      expect(option.index).toBe(0);
+      await client.answerQuestion(KEY, "ask-long", { color: [{ option: 0 }] });
       const [params] = gateway.calls("question.resolve") as Array<{
         answers: { answers: Record<string, string[]> };
       }>;
       expect(params!.answers.answers.color).toEqual([long]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("sends the option the user chose when options were dropped and their labels share a cut prefix (D4)", async () => {
+    const gateway = grantingGateway();
+    const record = questionRecord("opts", "r");
+    const prefix = "same".repeat(140);
+    record.questions[0]!.options = Array.from({ length: 9 }, (_, i) => ({
+      label: `${prefix}-${i}`,
+    }));
+    gateway.handlers["question.list"] = () => ({ questions: [record] });
+    gateway.handlers["question.resolve"] = () => ({ status: "answered" });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      gateway.emit("agent", agentEvent("r", 1, "lifecycle", { phase: "start" }));
+      gateway.emit("question.requested", record);
+      await until(() => transcript().questions.length === 1);
+      const item = transcript().questions[0]!.questions[0]!;
+      // Each option keeps its original place; the card says how many were not shown.
+      expect(item.options.map((each) => each.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+      expect(item.optionsOmitted).toBe(1);
+      // Every shown label is the same cut prefix.
+      expect(new Set(item.options.map((each) => each.label)).size).toBe(1);
+      await expect(client.answerQuestion(KEY, "opts", { color: [{ option: 8 }] })).rejects.toThrow(
+        /no such option/,
+      );
+      await client.answerQuestion(KEY, "opts", { color: [{ option: 1 }] });
+      const answer = (
+        gateway.calls("question.resolve")[0] as { answers: { answers: Record<string, string[]> } }
+      ).answers.answers.color;
+      expect(answer).toEqual([record.questions[0]!.options[1]!.label]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is sent as the gateway's own value when the option has one", async () => {
+    const gateway = grantingGateway();
+    const record = questionRecord("valued", "r");
+    record.questions[0]!.options = [
+      { label: "Blue", value: "colour-blue" },
+      { label: "Blue", value: "colour-navy" },
+    ] as never;
+    gateway.handlers["question.list"] = () => ({ questions: [record] });
+    gateway.handlers["question.resolve"] = () => ({ status: "answered" });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      gateway.emit("agent", agentEvent("r", 1, "lifecycle", { phase: "start" }));
+      gateway.emit("question.requested", record);
+      await until(() => transcript().questions.length === 1);
+      const lists = gateway.calls("question.list").length;
+      await client.answerQuestion(KEY, "valued", { color: [{ option: 1 }] });
+      // The option is read at its place, and sent by the gateway's own identity for it.
+      expect(gateway.calls("question.list")).toHaveLength(lists + 1);
+      const answer = (
+        gateway.calls("question.resolve")[0] as { answers: { answers: Record<string, string[]> } }
+      ).answers.answers.color;
+      expect(answer).toEqual(["colour-navy"]);
     } finally {
       client.stop();
     }

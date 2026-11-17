@@ -243,14 +243,17 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   attachments: list(MAX_FILES_PER_MESSAGE, attachmentInfo),
 });
 const questionOption = object<QuestionOption>()({
+  index: NUMBER,
   label: text(MAX_OPTION_CHARS),
   description: text(MAX_OPTION_CHARS),
+  value: text(MAX_OPTION_CHARS),
 });
 const questionItem = object<QuestionItem>()({
   id: ID,
   header: text(MAX_OPTION_CHARS),
   question: text(MAX_QUESTION_CHARS),
   options: list(MAX_QUESTION_OPTIONS, questionOption),
+  optionsOmitted: NUMBER,
   multiSelect: FLAG,
   allowsOther: FLAG,
 });

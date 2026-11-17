@@ -102,7 +102,9 @@ import {
   type CaughtUp,
   type EngineContext,
   type OutgoingMessage,
+  type QuestionAnswer,
   type QuestionCard,
+  type QuestionOption,
   type Run,
   type StepRaw,
   type StepRead,
@@ -1828,7 +1830,11 @@ export class ClawtrateClient {
     // Text cut to its bound is allowed only by a viewer this host gave the whole text to, naming
     // the digest of what it was given. A digest the state already carries proves nothing.
     const owner = options.owner ?? DIRECT_CALLER;
-    if (decision !== "deny" && approval.decisionCut && !this.readWhole(key, approval, owner, options)) {
+    if (
+      decision !== "deny" &&
+      approval.decisionCut &&
+      !this.readWhole(key, approval, owner, options)
+    ) {
       throw new Error(
         "This approval's command is too long to show in full; read it whole (readApprovalText) before allowing it, or deny it.",
       );
@@ -1940,9 +1946,7 @@ export class ClawtrateClient {
     options: { shownDigest?: string | null },
   ): boolean {
     const read = this.approvalReads.get(`${key}\u0000${approval.id}`)?.get(owner);
-    return (
-      read !== undefined && read === approval.decisionDigest && options.shownDigest === read
-    );
+    return read !== undefined && read === approval.decisionDigest && options.shownDigest === read;
   }
 
   /** Remember that a viewer was given an approval's whole text, keeping only reads of pending approvals. */
@@ -2334,63 +2338,82 @@ export class ClawtrateClient {
 
   /**
    * Answer a pending question card with `question.resolve`. `answers` maps
-   * each question id to the chosen labels; typed text is just another string.
+   * each question id to its answers: text as typed, sent as it is, or a shown
+   * option named by its original place (`{option: index}`). An option is sent
+   * by its identity, the gateway's value for it or else its label, read whole
+   * from `question.list` at that place, never matched by the text shown.
    */
   async answerQuestion(
     key: string,
     questionId: string,
-    answers: Record<string, string[]>,
+    answers: Record<string, QuestionAnswer[]>,
     options: { owner?: object } = {},
   ): Promise<void> {
     const question = this.pendingQuestion(key, questionId);
-    const known = new Set(question.questions.map((item) => item.id));
     const entries = Object.entries(answers);
     if (entries.length === 0) throw new Error("Choose or type an answer.");
+    const chosen: Record<string, Array<string | QuestionOption>> = {};
     for (const [id, values] of entries) {
-      if (!known.has(id)) throw new Error(`The card has no question ${id}.`);
-      if (
-        !Array.isArray(values) ||
-        values.length === 0 ||
-        values.some((v) => typeof v !== "string")
-      ) {
+      const item = question.questions.find((each) => each.id === id);
+      if (!item) throw new Error(`The card has no question ${id}.`);
+      if (!Array.isArray(values) || values.length === 0) {
         throw new Error(`The answer to ${id} is empty.`);
       }
+      chosen[id] = values.map((value) => {
+        if (typeof value === "string") return value;
+        const option = item.options.find((each) => each.index === value?.option);
+        if (!option) throw new Error(`The card shows no such option for ${id}.`);
+        return option;
+      });
     }
-    // An option shown cut to its bound is answered with its whole label, read again from the gateway.
-    const full = question.cut?.some((path) => /options\[\d+\]\.label/.test(path))
-      ? await this.fullAnswers(question, answers)
-      : answers;
-    await this.resolveQuestion(
-      key,
-      questionId,
-      { id: questionId, answers: { answers: full } },
-      options.owner ?? null,
-    );
+    await this.resolveQuestion(key, questionId, options.owner ?? null, async () => ({
+      id: questionId,
+      answers: { answers: await this.optionAnswers(question, chosen) },
+    }));
   }
 
-  /** Replace answers that name a cut option label with that option's whole label from `question.list`. */
-  private async fullAnswers(
+  /**
+   * The strings sent for the chosen answers. Each chosen option is read from
+   * `question.list` at its original place and sent as `value ?? label`, as
+   * the gateway identifies options; the option there must still be the one
+   * shown, or nothing is sent.
+   */
+  private async optionAnswers(
     question: QuestionCard,
-    answers: Record<string, string[]>,
+    chosen: Record<string, Array<string | QuestionOption>>,
   ): Promise<Record<string, string[]>> {
-    const listed = asRecord(await this.request("question.list", {}));
-    const record = (Array.isArray(listed?.questions) ? listed.questions : [])
-      .map((entry) => asRecord(entry))
-      .find((entry) => entry?.id === question.id);
-    if (!record) throw new Error("That question is no longer open.");
-    const items = Array.isArray(record.questions) ? record.questions : [];
+    const named = Object.values(chosen).some((values) =>
+      values.some((each) => typeof each !== "string"),
+    );
+    let items: unknown[] = [];
+    if (named) {
+      const listed = asRecord(await this.request("question.list", {}));
+      const record = (Array.isArray(listed?.questions) ? listed.questions : [])
+        .map((entry) => asRecord(entry))
+        .find(
+          (entry) => typeof entry?.id === "string" && capId(entry.id, MAX_ID_CHARS) === question.id,
+        );
+      if (!record) throw new Error("That question is no longer open.");
+      items = Array.isArray(record.questions) ? record.questions : [];
+    }
     const out: Record<string, string[]> = {};
-    for (const [id, values] of Object.entries(answers)) {
-      const shown = question.questions.find((item) => item.id === id);
-      const whole = asRecord(items.find((item) => asRecord(item)?.questionId === id));
-      const options = Array.isArray(whole?.options) ? whole.options : [];
-      out[id] = values.map((value) => {
-        const index = shown?.options.findIndex((option) => option.label === value) ?? -1;
-        const label = index === -1 ? undefined : asRecord(options[index])?.label;
-        if (typeof label !== "string") return value;
-        // The option at that place must still be the one shown.
-        if (!label.startsWith(value)) throw new Error("The question changed since it was shown.");
-        return label;
+    for (const [id, values] of Object.entries(chosen)) {
+      out[id] = values.map((each) => {
+        if (typeof each === "string") return each;
+        const item = asRecord(items.find((entry) => asRecord(entry)?.questionId === id));
+        const listed = asRecord((Array.isArray(item?.options) ? item.options : [])[each.index]);
+        const label = listed?.label;
+        const value = typeof listed?.value === "string" && listed.value ? listed.value : null;
+        // The option at that place must still be the one shown, its kept text a prefix of its whole text.
+        if (
+          typeof label !== "string" ||
+          !label.startsWith(each.label) ||
+          (value === null) !== (each.value === null) ||
+          (value !== null && !value.startsWith(each.value!))
+        ) {
+          throw new Error("The question changed since it was shown.");
+        }
+        return value ?? label;
       });
     }
     return out;
@@ -2403,12 +2426,10 @@ export class ClawtrateClient {
     options: { owner?: object } = {},
   ): Promise<void> {
     this.pendingQuestion(key, questionId);
-    await this.resolveQuestion(
-      key,
-      questionId,
-      { id: questionId, cancel: true },
-      options.owner ?? null,
-    );
+    await this.resolveQuestion(key, questionId, options.owner ?? null, () => ({
+      id: questionId,
+      cancel: true,
+    }));
   }
 
   private pendingQuestion(key: string, questionId: string) {
@@ -2419,18 +2440,26 @@ export class ClawtrateClient {
     return question;
   }
 
+  /**
+   * Send an answer or dismissal. The card is marked as being answered before
+   * anything is awaited, so a second answer is refused at once; what is sent
+   * is built after access is held, and the card is checked again just before.
+   */
   private async resolveQuestion(
     key: string,
     questionId: string,
-    params: RawRecord,
     owner: object | null,
+    build: () => RawRecord | Promise<RawRecord>,
   ): Promise<void> {
     this.updateActivity(key, (activity) =>
       markQuestion(activity, questionId, { submitting: true, error: null }),
     );
     try {
       await this.ensureScope(QUESTIONS_SCOPE, owner);
+      const params = await build();
       this.checkNotWithdrawn(owner);
+      const now = this.state.transcripts[key]?.questions.find((each) => each.id === questionId);
+      if (!now || now.status !== "pending") throw new Error("That question is no longer open.");
       const result = asRecord(await this.request("question.resolve", params));
       // Apply the answer at once; `question.resolved` repeats it.
       this.updateActivity(key, (activity) =>

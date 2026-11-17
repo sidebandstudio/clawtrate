@@ -8,7 +8,7 @@ import {
   type AttachmentStore,
 } from "./attachments.ts";
 import { MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
-import type { StepRead } from "./runs.ts";
+import type { QuestionAnswer, StepRead } from "./runs.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 
 export type BridgeCommand =
@@ -39,7 +39,13 @@ export type BridgeCommand =
   /** A new task under a bot with its first message. The viewer then has it open. */
   | { type: "createTask"; botId: string; text: string; label: string | null }
   | { type: "stopRun"; key: string; runId: string }
-  | { type: "answerQuestion"; key: string; questionId: string; answers: Record<string, string[]> }
+  /** Each answer is text as typed, or a shown option named by its original place (`{option}`). */
+  | {
+      type: "answerQuestion";
+      key: string;
+      questionId: string;
+      answers: Record<string, QuestionAnswer[]>;
+    }
   | { type: "dismissQuestion"; key: string; questionId: string }
   /**
    * Allow once, deny, or a standing allow; `expiresInDays` only with
@@ -157,14 +163,34 @@ function messageText(value: unknown): string {
   return value;
 }
 
-/** Answers for one card: up to three questions, a handful of strings each. */
-function answers(value: unknown): Record<string, string[]> {
+/** The most options a question can have (the protocol's `maxItems`). */
+const MAX_PROTOCOL_OPTIONS = 64;
+
+function answer(item: unknown): QuestionAnswer {
+  if (typeof item === "string" && item.length <= MAX_ANSWER_CHARS) return item;
+  if (item !== null && typeof item === "object" && !Array.isArray(item)) {
+    const entries = Object.entries(item as Record<string, unknown>);
+    const option = (item as { option?: unknown }).option;
+    if (
+      entries.length === 1 &&
+      typeof option === "number" &&
+      Number.isInteger(option) &&
+      option >= 0 &&
+      option < MAX_PROTOCOL_OPTIONS
+    )
+      return { option };
+  }
+  throw new Error("invalid answers");
+}
+
+/** Answers for one card: up to three questions, a handful of answers each. */
+function answers(value: unknown): Record<string, QuestionAnswer[]> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("invalid answers");
   }
   const entries = Object.entries(value as Record<string, unknown>);
   if (entries.length === 0 || entries.length > 3) throw new Error("invalid answers");
-  const out: Record<string, string[]> = {};
+  const out: Record<string, QuestionAnswer[]> = {};
   for (const [key, list] of entries) {
     if (
       !QUESTION_ID_PATTERN.test(key) ||
@@ -174,10 +200,7 @@ function answers(value: unknown): Record<string, string[]> {
     ) {
       throw new Error("invalid answers");
     }
-    if (list.some((item) => typeof item !== "string" || item.length > MAX_ANSWER_CHARS)) {
-      throw new Error("invalid answers");
-    }
-    out[key] = list as string[];
+    out[key] = list.map(answer);
   }
   return out;
 }

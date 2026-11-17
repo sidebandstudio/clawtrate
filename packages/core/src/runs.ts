@@ -17,6 +17,7 @@ import {
   MAX_ID_CHARS,
   MAX_INLINE_RAW_CHARS,
   MAX_PENDING_QUESTIONS_PER_TASK,
+  MAX_QUESTION_OPTIONS,
   MAX_RUN_LIST,
   MAX_SETTLED_APPROVAL_COUNT,
   MAX_SETTLED_QUESTION_COUNT,
@@ -297,14 +298,31 @@ export type OutgoingMessage = {
 
 export type OutgoingAttachmentInfo = { fileName: string; mimeType: string; sizeBytes: number };
 
-export type QuestionOption = { label: string; description: string | null };
+/**
+ * One option of a question. `index` is its place in the gateway's list and
+ * `value` the gateway's own value for it, when it gives one; they identify
+ * the option however its label or the list was cut, and an answer names the
+ * option by `index`, never by its shown label.
+ */
+export type QuestionOption = {
+  index: number;
+  label: string;
+  description: string | null;
+  value: string | null;
+};
+
+/** One answer to a question: text as typed, or a shown option named by its original place. */
+export type QuestionAnswer = string | { option: number };
 
 export type QuestionItem = {
   /** `questionId`, the key its answer is sent under. */
   id: string;
   header: string;
   question: string;
+  /** The first `MAX_QUESTION_OPTIONS` options, each with its original place. */
   options: QuestionOption[];
+  /** Options the gateway sent past `MAX_QUESTION_OPTIONS`, not shown. */
+  optionsOmitted: number;
   multiSelect: boolean;
   /** Free text is allowed; `ask_user` sets this on every question. */
   allowsOther: boolean;
@@ -421,8 +439,7 @@ export { MAX_STEPS_PER_TASK };
  * `not-available-yet`, never presented as recoverable.
  */
 export type StepRead =
-  | { status: "available"; raw: StepRaw }
-  | { status: "not-available-yet"; reason: string };
+  { status: "available"; raw: StepRaw } | { status: "not-available-yet"; reason: string };
 
 /** Full raw payloads, keyed by task and step id. Owned by the client, never snapshotted. */
 export class RawTable {
@@ -948,17 +965,21 @@ function mapQuestionItems(value: unknown): QuestionItem[] {
     const item = asRecord(entry);
     const id = str(item?.questionId);
     if (!item || !id) return [];
-    const options = (Array.isArray(item.options) ? item.options : []).flatMap((option) => {
+    const options = (Array.isArray(item.options) ? item.options : []).flatMap((option, index) => {
       const record = asRecord(option);
       const label = str(record?.label);
-      return label ? [{ label, description: str(record?.description) }] : [];
+      return label
+        ? [{ index, label, description: str(record?.description), value: str(record?.value) }]
+        : [];
     });
     return [
       {
         id,
         header: typeof item.header === "string" ? item.header : "",
         question: typeof item.question === "string" ? item.question : "",
-        options,
+        // The first options, by their place; the rest are counted, never renumbered.
+        options: options.slice(0, MAX_QUESTION_OPTIONS),
+        optionsOmitted: Math.max(0, options.length - MAX_QUESTION_OPTIONS),
         multiSelect: item.multiSelect === true,
         allowsOther: item.isOther === true,
       },
