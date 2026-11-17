@@ -1,7 +1,7 @@
 import type { ClawtrateState, HostInfo } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
@@ -16,7 +16,8 @@ import { useSelection } from "./selection.ts";
 import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
 import { ShortcutList } from "./Shortcuts.tsx";
-import { WorkPanel } from "./WorkPanel.tsx";
+import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
+import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
 
 /** A control that can take focus now: in the page, shown, and not behind the drawer. */
 function canFocus(element: HTMLElement | null): element is HTMLElement {
@@ -114,6 +115,25 @@ export function Shell({
   }, []);
   const togglePanel = useCallback(() => setPanel(!panelOpen), [panelOpen, setPanel]);
 
+  // The chosen tab belongs to the pane: kept across tasks and bots, and across opening it.
+  const [workTab, setWorkTabState] = useState<WorkTab>(() => {
+    const stored = readPreference("workTab");
+    return isWorkTab(stored) ? stored : "details";
+  });
+  const setWorkTab = useCallback((next: WorkTab) => {
+    setWorkTabState(next);
+    writePreference("workTab", next);
+  }, []);
+  // "Open file" on a step, the file the reader shows, and the way back after "Show in chat".
+  const [fileRequest, setFileRequest] = useState<FileRequest | null>(null);
+  const [openFilePath, setOpenFilePath] = useState<string | null>(null);
+  const [backTo, setBackTo] = useState<{ path: string; stepId: string } | null>(null);
+  const [chatNote, setChatNote] = useState("");
+  /** Set while "Show in chat" closes the drawer: focus goes to the step, not back to the opener. */
+  const keepFocus = useRef(false);
+  /** "Back to <file>" while a step offers it, for ⌘[ in the conversation. */
+  const backLinkRef = useRef<(() => void) | null>(null);
+
   const [shortcuts, setShortcuts] = useState(false);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -123,6 +143,15 @@ export function Shell({
       } else if ((event.metaKey || event.ctrlKey) && event.key === "\\") {
         event.preventDefault();
         togglePanel();
+      } else if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key === "[" &&
+        backLinkRef.current &&
+        !panelRef.current?.contains(document.activeElement)
+      ) {
+        // ⌘[ in the conversation goes back to the file while "Back to <file>" is offered.
+        event.preventDefault();
+        backLinkRef.current();
       } else if (event.key === "Escape" && drawerOpen) {
         setPanel(false);
       } else if (event.key === "Tab" && drawerOpen && panelRef.current) {
@@ -178,6 +207,8 @@ export function Shell({
     const drawerNow = panelOpen && (main ? main.clientWidth < DOCK_FROM : drawerOpen);
     if (drawerNow) {
       if (!panelRef.current?.contains(document.activeElement)) closeRef.current?.focus();
+    } else if (!panelOpen && panelWasOpen.current && keepFocus.current) {
+      keepFocus.current = false;
     } else if (!panelOpen && panelWasOpen.current) {
       const active = document.activeElement;
       if (drawerWasOpen.current || !active || active === document.body) {
@@ -222,6 +253,67 @@ export function Shell({
 
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
+
+  // The way between a step and its file (work-pane.md, section 10).
+  const runs = transcript?.runs;
+  const showInChat = useCallback(
+    (stepId: string, from: { path: string }) => {
+      const callId = stepId.startsWith("tool:") ? stepId.slice(5) : stepId;
+      const reveal = () => {
+        const found = revealStep(callId);
+        setChatNote("");
+        requestAnimationFrame(() =>
+          setChatNote(
+            found
+              ? "Showing the step in the chat"
+              : "The chat shows this step on its own once its run has finished.",
+          ),
+        );
+        if (found) setBackTo({ path: from.path, stepId });
+      };
+      if (drawerOpen) {
+        // As a drawer the pane closes so the step can be seen; it keeps its place.
+        keepFocus.current = true;
+        setPanel(false);
+        requestAnimationFrame(() => requestAnimationFrame(reveal));
+      } else reveal();
+    },
+    [drawerOpen, setPanel],
+  );
+  const goBackToFile = useCallback(() => {
+    setPanel(true);
+    setWorkTab("files");
+  }, [setPanel, setWorkTab]);
+  const backShown =
+    backTo && !(panelOpen && workTab === "files" && openFilePath === backTo.path) ? backTo : null;
+  useEffect(() => {
+    backLinkRef.current = backShown ? goBackToFile : null;
+  }, [backShown, goBackToFile]);
+  const workLinks = useMemo<WorkLinks>(
+    () => ({
+      pathsOf: (callId) => {
+        for (const run of runs ?? []) {
+          const step = run.steps.find((each) => each.toolCallId === callId);
+          if (step?.files)
+            return { paths: step.files.paths, change: step.toolName?.toLowerCase() !== "read" };
+        }
+        return { paths: [], change: false };
+      },
+      openFile: (path, from) => {
+        setFileRequest((previous) => ({
+          path,
+          stepId: from.stepId,
+          view: from.change ? "changes" : "source",
+          nonce: (previous?.nonce ?? 0) + 1,
+        }));
+        setWorkTab("files");
+        setPanel(true);
+      },
+      back: backShown,
+      goBack: goBackToFile,
+    }),
+    [runs, backShown, goBackToFile, setPanel, setWorkTab],
+  );
   const phase = useSyncPhase(state, taskKey);
   // Connected is not caught up: until bots, tasks and the open task have
   // loaded again after a drop, what is on screen is last seen.
@@ -278,37 +370,39 @@ export function Shell({
       />
       <div className="main-pane" ref={mainRef}>
         <OpenTaskContext.Provider value={selection.selectTask}>
-          <Conversation
-            task={task}
-            bot={bot}
-            taskCount={selection.tasks.length}
-            discovery={state.discovery}
-            transcript={transcript}
-            panelOpen={panelOpen}
-            onTogglePanel={togglePanel}
-            onOpenPanel={() => setPanel(true)}
-            onBack={backToList}
-            onReload={reload}
-            strip={
-              strip && (
-                <StatusStrip
-                  strip={strip}
-                  retryAt={state.connection.retryAt}
-                  onRetry={() => void send({ type: "retry" })}
-                  onReload={reload}
-                />
-              )
-            }
-            refreshNote={phase !== "dropped" && refreshFailed(transcript)}
-            interactive={interactive}
-            connection={state.connection}
-            info={info}
-            granted={granted}
-            online={state.connection.status === "connected"}
-            caughtUp={caughtUp}
-            toggleRef={toggleRef}
-            inert={drawerOpen || inert}
-          />
+          <WorkLinksContext.Provider value={workLinks}>
+            <Conversation
+              task={task}
+              bot={bot}
+              taskCount={selection.tasks.length}
+              discovery={state.discovery}
+              transcript={transcript}
+              panelOpen={panelOpen}
+              onTogglePanel={togglePanel}
+              onOpenPanel={() => setPanel(true)}
+              onBack={backToList}
+              onReload={reload}
+              strip={
+                strip && (
+                  <StatusStrip
+                    strip={strip}
+                    retryAt={state.connection.retryAt}
+                    onRetry={() => void send({ type: "retry" })}
+                    onReload={reload}
+                  />
+                )
+              }
+              refreshNote={phase !== "dropped" && refreshFailed(transcript)}
+              interactive={interactive}
+              connection={state.connection}
+              info={info}
+              granted={granted}
+              online={state.connection.status === "connected"}
+              caughtUp={caughtUp}
+              toggleRef={toggleRef}
+              inert={drawerOpen || inert}
+            />
+          </WorkLinksContext.Provider>
         </OpenTaskContext.Provider>
         <button
           type="button"
@@ -321,6 +415,14 @@ export function Shell({
           <WorkPanel
             bot={bot}
             task={task}
+            transcript={transcript}
+            tab={workTab}
+            onTab={setWorkTab}
+            online={state.connection.status === "connected"}
+            connectedAt={state.connection.connectedAt}
+            fileRequest={fileRequest}
+            onShowInChat={showInChat}
+            onFilePath={setOpenFilePath}
             drawer={drawerOpen}
             onClose={() => setPanel(false)}
             closeRef={closeRef}
@@ -329,6 +431,14 @@ export function Shell({
         )}
       </div>
       {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
+      <p
+        className="visually-hidden"
+        role="status"
+        aria-live="polite"
+        data-testid="chat-link-announcer"
+      >
+        {chatNote}
+      </p>
     </div>
   );
 }

@@ -19,6 +19,17 @@ const SCANNED = ["packages/core/src", "apps/desktop/src/web-host", "apps/desktop
 const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
+  "packages/core/src/file-paths.ts:FILE_TOOLS": "static, four tool names",
+  "packages/core/src/file-paths.ts:CHANGE_TOOLS": "static, three tool names",
+  "packages/core/src/file-paths.ts:COMMAND_TOOLS": "static, one tool name",
+  "packages/core/src/file-paths.ts:filePathsOf>paths":
+    "one call's paths, at most `MAX_STEP_PATHS`, returned to the caller",
+  "packages/core/src/files.ts:TASK_PICTURE_TYPES": "static, five media types",
+  "packages/core/src/files.ts:PICTURE_EXTENSIONS": "static, nine extensions",
+  "packages/core/src/files.ts:AUDIO_EXTENSIONS": "static, nine extensions",
+  "packages/core/src/files.ts:VIDEO_EXTENSIONS": "static, six extensions",
+  "packages/core/src/files.ts:SCRIPT_EXTENSIONS": "static, four extensions",
+  "packages/core/src/files.ts:DOCUMENT_EXTENSIONS": "static, twenty-three extensions",
   "packages/core/src/approvals.ts:DECISIONS": "static, three decisions",
   "packages/core/src/cards.ts:T3_CODE_TOOLS": "static, T3 Code's seven tool names",
   "packages/core/src/client.ts:REQUESTED_SCOPES": "static, one scope",

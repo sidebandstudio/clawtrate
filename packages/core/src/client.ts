@@ -63,9 +63,23 @@ import {
 import { MAX_FILE_BYTES, MAX_IMAGE_BYTES, validateAttachmentMeta } from "./attachments.ts";
 import { ChatTextBaselines } from "./chat-text.ts";
 import { utf8Length } from "./encoding.ts";
+import {
+  FileTransfers,
+  listTaskFiles,
+  listWorkspace,
+  readCheckoutDiff,
+  readTaskFile,
+  readWorkspaceFile,
+  type CheckoutDiff,
+  type FileRead,
+  type FileReaderContext,
+  type TaskFileList,
+  type WorkspacePage,
+} from "./files.ts";
 import type { ApprovalInstructions, ClawtrateHost } from "./host.ts";
 import {
   asRecord,
+  botIdFromSessionKey,
   groupTasks,
   isExcludedSessionKey,
   isSessionRemoval,
@@ -303,6 +317,10 @@ export const FOREIGN_RUNS_PER_SESSION = 4;
 const MAX_TIMER_MS = 2_147_483_647;
 /** Whole reads (`readStepRaw`, `readHistoryItem`, `readApprovalText`) in flight at once; past it one is refused. */
 export const MAX_FULL_READS = 4;
+/** File lists and reads in flight at once, across viewers; past it, refused. */
+export const MAX_FILE_READS = 4;
+/** Who reads a file, and how long an answer the reader's channel takes. */
+export type FileReadOptions = { owner?: object; maxChars?: number };
 /** The text length `chat.history` gives when not asked for more (OpenClaw 2026.10.6). */
 export const GATEWAY_HISTORY_TEXT_CHARS = 8_000;
 /** The most text per row a whole read asks `chat.history` for: the protocol's `maxChars` maximum. */
@@ -712,6 +730,10 @@ export class ClawtrateClient {
   private readonly toolReads = new Map<string, { again: boolean }>();
   /** Whole reads from history in flight (`MAX_FULL_READS`). */
   private fullReads = 0;
+  /** File content on its way to viewers, in chunks (`files.ts`): nothing else of a file is kept. */
+  private readonly fileTransfers = new FileTransfers(() => this.now());
+  /** File lists and reads in flight (`MAX_FILE_READS`). */
+  private fileReads = 0;
   /**
    * Task lists being read, each its rows so far, already bounded: at most two,
    * a hello's and one refresh (refreshes run one at a time; a changed
@@ -1112,6 +1134,7 @@ export class ClawtrateClient {
    */
   withdraw(owner: object): void {
     this.withdrawnOwners.add(owner);
+    this.fileTransfers.release(owner);
     for (const readers of this.approvalReads.values()) readers.delete(owner);
     const withdrawn = this.accessWaiters.filter((waiter) => waiter.owner === owner);
     if (withdrawn.length === 0) return;
@@ -3092,6 +3115,83 @@ export class ClawtrateClient {
     } finally {
       this.fullReads -= 1;
     }
+  }
+
+  // The Work pane's files (`files.ts`). All `operator.read`; nothing is kept in the state.
+
+  /** One file list or read, at most `MAX_FILE_READS` at once; past it, refused. */
+  private async fileRead<T>(
+    read: (ctx: FileReaderContext) => Promise<T>,
+    options: FileReadOptions,
+  ): Promise<T> {
+    if (this.state.connection.status !== "connected")
+      throw new Error("Not connected to the gateway.");
+    if (this.fileReads >= MAX_FILE_READS)
+      throw new Error("Other files are being read; try again in a moment.");
+    this.fileReads += 1;
+    try {
+      return await read({
+        request: (method, params) => this.request(method, params),
+        transfers: this.fileTransfers,
+        owner: options.owner ?? DIRECT_CALLER,
+        ...(options.maxChars !== undefined ? { maxChars: options.maxChars } : {}),
+        now: () => this.now(),
+      });
+    } finally {
+      this.fileReads -= 1;
+    }
+  }
+
+  /** A task's files and the folder it works in, read now (`sessions.files.list`, `sessions.describe`). */
+  listTaskFiles(key: string, options: FileReadOptions = {}): Promise<TaskFileList> {
+    return this.fileRead((ctx) => listTaskFiles(ctx, key), options);
+  }
+
+  /** One of a task's files, from the reader its place allows (work-pane.md, section 8). */
+  readTaskFile(key: string, path: string, options: FileReadOptions = {}): Promise<FileRead> {
+    const botId = botIdFromSessionKey(key);
+    if (!botId) return Promise.reject(new Error("This task's bot is not known."));
+    return this.fileRead((ctx) => readTaskFile(ctx, key, botId, path), options);
+  }
+
+  /** One page of a folder of a bot's workspace (`agents.workspace.list`). */
+  listWorkspace(
+    botId: string,
+    path: string,
+    offset: number,
+    options: FileReadOptions = {},
+  ): Promise<WorkspacePage> {
+    return this.fileRead((ctx) => listWorkspace(ctx, botId, path, offset), options);
+  }
+
+  /** A file of a bot's workspace; `key` names the open task whose asset reader may send media. */
+  readWorkspaceFile(
+    botId: string,
+    path: string,
+    size: number | null,
+    key: string | null,
+    options: FileReadOptions = {},
+  ): Promise<FileRead> {
+    return this.fileRead((ctx) => readWorkspaceFile(ctx, botId, path, size, key), options);
+  }
+
+  /** The checkout's patch for one of a task's files (`sessions.diff`). */
+  readCheckoutDiff(
+    key: string,
+    path: string,
+    options: FileReadOptions = {},
+  ): Promise<CheckoutDiff> {
+    return this.fileRead((ctx) => readCheckoutDiff(ctx, key, path), options);
+  }
+
+  /** The next part of a file on its way to this viewer. */
+  readFileChunk(id: string, index: number, owner: object = DIRECT_CALLER): { data: string } {
+    return this.fileTransfers.chunk(owner, id, index);
+  }
+
+  /** Drop a file's transfer before its last part was read. */
+  releaseFile(id: string, owner: object = DIRECT_CALLER): void {
+    this.fileTransfers.release(owner, id);
   }
 
   /** The raw call and result of a step as the raw table keeps it now; null when it is not kept. */

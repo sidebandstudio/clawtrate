@@ -141,7 +141,7 @@ async function streamSteps(
           },
         ],
       });
-      for (const piece of chunkText(args, 32)) {
+      for (const piece of chunkText(args, step.argumentPiece ?? 32)) {
         send({ tool_calls: [{ index: toolIndex, function: { arguments: piece } }] });
         await sleep(delayMs);
       }

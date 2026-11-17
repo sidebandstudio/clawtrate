@@ -23,6 +23,7 @@
 // State is never reused: OpenClaw keeps credentials in SQLite stores that a
 // clean profile also has, so only a folder created empty by this start is safe.
 
+import { FILES_BOT, seedWorkspaceFiles } from "./seed-files.ts";
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -919,6 +920,11 @@ export async function start(
       `  scripted model  http://127.0.0.1:${ports.providerPort}/v1 (pid ${marker?.providerPid})`,
     );
     console.log(`  gateway         pid ${marker?.gatewayPid}, logs in ${inst.runDir}`);
+    // Pip's workspace holds a picture and a git checkout for the Work pane's Files tab,
+    // seeded or not: the scenario check reads the picture on an unseeded instance.
+    const filesWorkspace = join(inst.stateDir, "workspaces", FILES_BOT);
+    assertInside(filesWorkspace, inst.stateDir);
+    seedWorkspaceFiles(filesWorkspace);
     // Unseeded starts are for checks that need a running gateway, not its data.
     if (options.seed !== false) await seed(inst);
   });

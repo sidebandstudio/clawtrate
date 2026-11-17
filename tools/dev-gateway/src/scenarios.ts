@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import type { ReplyStep } from "./scripts.ts";
 import { MESSAGING_PAIR, messagingPartner, SEED_BOTS } from "./seed-data.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
+import { PICTURE_PATH } from "./seed-files.ts";
 
 /** What a scenario may look at: who is answering, and what its tools returned so far. */
 export type PlanContext = {
@@ -115,6 +116,33 @@ export const SHELL_COMMANDS = {
   missing: "ls missing-folder",
   sleep: (seconds: number) => `sleep ${seconds}`,
 } as const;
+
+/** The large write's file and size: over the 262,144-byte preview limit of the gateway's readers. */
+export const LARGE_LOG_PATH = "logs/transcode.log";
+export const LARGE_LOG_BYTES = 300_000;
+/** The large write's content: numbered transcode lines, exactly `LARGE_LOG_BYTES` long. */
+export function largeLog(): string {
+  const lines: string[] = [];
+  let length = 0;
+  for (let i = 1; length < LARGE_LOG_BYTES; i += 1) {
+    const line = `${String(i).padStart(6, "0")} transcode job finished: episode ${i % 97}, 1080p, kept in cache\n`;
+    lines.push(line);
+    length += line.length;
+  }
+  return lines.join("").slice(0, LARGE_LOG_BYTES);
+}
+
+/**
+ * The large log in two calls: the lines up to about half of it (ending with a
+ * whole line, its last one unique), then the rest, appended after that line.
+ */
+export function largeLogParts(): { first: string; lastLine: string; rest: string } {
+  const log = largeLog();
+  const cut = log.indexOf("\n", LARGE_LOG_BYTES / 2) + 1;
+  const first = log.slice(0, cut);
+  const lastLine = first.slice(first.lastIndexOf("\n", first.length - 2) + 1);
+  return { first, lastLine, rest: log.slice(cut) };
+}
 
 const exec = (command: string, extra: Record<string, unknown> = {}) =>
   tool("exec", { command, workdir: ".", ...extra });
@@ -370,6 +398,36 @@ export const SCENARIOS: Scenario[] = [
         edits: [{ oldText: "Leave at 9:00.", newText: "Leave at 8:30." }],
       }),
       say("I changed the departure time in notes/edit-me.md."),
+    ],
+  },
+  {
+    name: "write-large",
+    phrase: "write a long log",
+    summary: `A file write, then an edit that appends to it, leaving it over the gateway's 256 KiB preview limit (logs/transcode.log, ${LARGE_LOG_BYTES.toLocaleString("en-US")} bytes): the Work pane says it is too large to show, with the limit. Two calls, because the gateway takes at most 256,000 bytes of arguments in one.`,
+    steps: () => {
+      const { first, lastLine, rest } = largeLogParts();
+      return [
+        // Streamed in 16 KB pieces: at the usual 32 characters it would take minutes.
+        { ...tool("write", { path: LARGE_LOG_PATH, content: first }), argumentPiece: 16_384 },
+        {
+          ...tool("edit", {
+            path: LARGE_LOG_PATH,
+            edits: [{ oldText: lastLine, newText: lastLine + rest }],
+          }),
+          argumentPiece: 16_384,
+        },
+        say("I wrote the transcode log to logs/transcode.log."),
+      ];
+    },
+  },
+  {
+    name: "picture",
+    phrase: "look at the trail map",
+    summary: `One file read of the picture seeded in Pip's workspace (${PICTURE_PATH}).`,
+    bots: "Pip",
+    steps: () => [
+      tool("read", { path: PICTURE_PATH }),
+      say("That is the trail map in my workspace."),
     ],
   },
   {
