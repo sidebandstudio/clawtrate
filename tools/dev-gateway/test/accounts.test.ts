@@ -488,6 +488,37 @@ describe("the scripted side", () => {
     ).toBe(400);
   });
 
+  it("answers a failure with the message it was given, so the gateway's reason can be tried", async () => {
+    const base = await listen();
+    const work = credentialFor("api_key", "acme", "work");
+    const message = "The request was not accepted (scripted)";
+    await post(base, "/scripted/accounts/fail", { account: "acme:work", status: 402, message });
+    const response = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${work}` },
+      body: JSON.stringify({
+        model: "dev-1",
+        stream: false,
+        messages: [{ role: "user", content: "#text" }],
+      }),
+    });
+    expect(response.status).toBe(402);
+    expect(((await response.json()) as { error: { message: string } }).error.message).toBe(message);
+    for (const bad of [
+      { message: "two\nlines" },
+      { message: ["x"] },
+      { message: "" },
+      { status: "402" },
+      { times: "1" },
+    ]) {
+      expect(
+        (await post(base, "/scripted/accounts/fail", { account: "acme:work", status: 402, ...bad }))
+          .status,
+        JSON.stringify(bad),
+      ).toBe(400);
+    }
+  });
+
   it("plays a device sign-in: pending until the person answers, then the account or the refusal", async () => {
     const base = await listen();
     const started = await post(base, "/scripted/signin/device/start", { provider: "acme" });
@@ -565,13 +596,15 @@ describe("the scripted side", () => {
       model: null,
       session: null,
     };
-    expect([accounts.observe(work), accounts.observe(work), accounts.observe(work)]).toEqual([
-      401,
-      401,
-      null,
-    ]);
+    expect(
+      [accounts.observe(work), accounts.observe(work), accounts.observe(work)].map(
+        (f) => f?.status ?? null,
+      ),
+    ).toEqual([401, 401, null]);
     now += 5;
-    expect(accounts.observe({ authorization: undefined, model: null, session: null })).toBe(401);
+    expect(accounts.observe({ authorization: undefined, model: null, session: null })).toEqual({
+      status: 401,
+    });
     expect(accounts.requests(3).map((r) => [r.seq, r.at])).toEqual([[4, 1_005]]);
     expect(accounts.failing()).toEqual({});
     accounts.fail("acme:home", 429);

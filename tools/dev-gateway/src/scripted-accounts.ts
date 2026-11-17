@@ -13,9 +13,11 @@
 //
 // Failures, per account, while the others stay healthy:
 //
-//   POST /scripted/accounts/fail   {account, status: 401|402|429, times?}
+//   POST /scripted/accounts/fail   {account, status: 401|402|429, times?, message?}
 //        `times` answers that many requests with the status, then heals;
-//        without it the account fails until it is cleared
+//        without it the account fails until it is cleared. `message` replaces
+//        the error's message (one line, at most 200 characters): the gateway
+//        decides a failure's reason from its status and its message together
 //   POST /scripted/accounts/clear  {account?}   one account, or every one
 //   GET  /scripted/accounts/failures
 //
@@ -45,6 +47,9 @@ import { accountOfCredential, credentialFor, NAME_PART, type CredentialKind } fr
 
 export type FailureStatus = 401 | 402 | 429;
 export const FAILURE_STATUSES: readonly FailureStatus[] = [401, 402, 429];
+
+/** How a request is to fail: the status, and the error message when it is not the default one. */
+export type ScriptedFailure = { status: FailureStatus; message?: string };
 
 export type RequestRecord = {
   seq: number;
@@ -144,7 +149,10 @@ export class ScriptedAccounts {
   private readonly records: RequestRecord[] = [];
   private seq = 0;
   /** Per account: the status, and how many more requests get it (Infinity: until cleared). */
-  private readonly failures = new Map<string, { status: FailureStatus; remaining: number }>();
+  private readonly failures = new Map<
+    string,
+    { status: FailureStatus; remaining: number; message?: string }
+  >();
   private readonly signIns = new Map<string, SignIn>();
   private readonly keyOutcomes = new Map<string, Outcome>();
   private serial = 0;
@@ -165,15 +173,19 @@ export class ScriptedAccounts {
     authorization: string | undefined;
     model: string | null;
     session: string | null;
-  }): FailureStatus | null {
+  }): ScriptedFailure | null {
     const owner = accountOfCredential(request.authorization);
     const failure = owner ? this.failures.get(owner.account) : undefined;
-    let status: FailureStatus | null = request.authorization ? null : 401;
+    let answer: ScriptedFailure | null = request.authorization ? null : { status: 401 };
     if (owner && failure) {
-      status = failure.status;
+      answer = {
+        status: failure.status,
+        ...(failure.message === undefined ? {} : { message: failure.message }),
+      };
       failure.remaining -= 1;
       if (failure.remaining <= 0) this.failures.delete(owner.account);
     }
+    const status = answer?.status ?? null;
     this.seq += 1;
     this.records.push({
       seq: this.seq,
@@ -184,20 +196,33 @@ export class ScriptedAccounts {
       session: request.session,
       status: status ?? 200,
     });
-    return status;
+    return answer;
   }
 
   requests(since = 0): RequestRecord[] {
     return this.records.filter((r) => r.seq > since);
   }
 
-  fail(account: string, status: FailureStatus, times?: number): void {
+  fail(account: string, status: FailureStatus, times?: number, message?: string): void {
     if (!PROFILE.test(account)) throw new Error(`not an account id: ${JSON.stringify(account)}`);
     if (!FAILURE_STATUSES.includes(status)) throw new Error("status must be 401, 402 or 429");
     if (times !== undefined && (!Number.isSafeInteger(times) || times < 1)) {
       throw new Error("times must be a whole number from 1");
     }
-    this.failures.set(account, { status, remaining: times ?? Infinity });
+    if (
+      message !== undefined &&
+      (typeof message !== "string" ||
+        !message.trim() ||
+        message.length > 200 ||
+        /[\r\n]/.test(message))
+    ) {
+      throw new Error("message must be one line of at most 200 characters");
+    }
+    this.failures.set(account, {
+      status,
+      remaining: times ?? Infinity,
+      ...(message === undefined ? {} : { message }),
+    });
   }
 
   clear(account?: string): void {
@@ -362,10 +387,18 @@ export class ScriptedAccounts {
         }
         case "POST /scripted/accounts/fail": {
           const f = await readFields(req);
+          if (typeof f.status !== "number") throw new Error("status must be 401, 402 or 429");
+          if (f.times !== undefined && typeof f.times !== "number") {
+            throw new Error("times must be a whole number from 1");
+          }
+          if (f.message !== undefined && typeof f.message !== "string") {
+            throw new Error("message must be one line of at most 200 characters");
+          }
           this.fail(
             String(f.account),
-            Number(f.status) as FailureStatus,
-            f.times === undefined ? undefined : Number(f.times),
+            f.status as FailureStatus,
+            f.times as number | undefined,
+            f.message as string | undefined,
           );
           sendJson(res, 200, { failures: this.failing() });
           return true;

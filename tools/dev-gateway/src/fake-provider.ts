@@ -5,7 +5,7 @@
 import { writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { MODEL_ID } from "./env.ts";
-import { ScriptedAccounts, type FailureStatus } from "./scripted-accounts.ts";
+import { ScriptedAccounts, type FailureStatus, type ScriptedFailure } from "./scripted-accounts.ts";
 import {
   messageText,
   gatewayTurnPrompt,
@@ -205,7 +205,12 @@ export const OFFERED_TOOLS_PATH = "/scripted/offered-tools";
 export const QUIET_TURNS_PATH = "/scripted/quiet-turns";
 
 /** A scripted account failure, in the shape the providers' APIs answer it. */
-function failureBody(status: FailureStatus) {
+function failureBody({ status, message }: ScriptedFailure) {
+  const fixed = defaultFailure(status);
+  return message === undefined ? fixed : { ...fixed, message };
+}
+
+function defaultFailure(status: FailureStatus) {
   if (status === 401) {
     return {
       message: "Invalid API key (scripted)",
@@ -301,9 +306,11 @@ export function startFakeProvider(options: FakeProviderOptions) {
           session: session ?? null,
         });
         if (accountFailure) {
-          log(`completion failing with ${accountFailure} for its account (or no credential)`);
-          if (accountFailure === 429) res.setHeader("retry-after", "1");
-          sendJson(res, accountFailure, { error: failureBody(accountFailure) });
+          log(
+            `completion failing with ${accountFailure.status} for its account (or no credential)`,
+          );
+          if (accountFailure.status === 429) res.setHeader("retry-after", "1");
+          sendJson(res, accountFailure.status, { error: failureBody(accountFailure) });
           return;
         }
         if (session) offered.set(session, [...toolNames].sort());

@@ -103,8 +103,19 @@ async function requestsFor(h: AccountHarness, session: string): Promise<RequestR
 
 const accountsOf = (requests: RequestRecord[]) => requests.map((r) => `${r.account}:${r.status}`);
 
-async function fail(h: AccountHarness, account: string, status: FailureStatus, times?: number) {
-  await scripted(h, "/scripted/accounts/fail", { account, status, ...(times ? { times } : {}) });
+async function fail(
+  h: AccountHarness,
+  account: string,
+  status: FailureStatus,
+  times?: number,
+  message?: string,
+) {
+  await scripted(h, "/scripted/accounts/fail", {
+    account,
+    status,
+    ...(times ? { times } : {}),
+    ...(message === undefined ? {} : { message }),
+  });
 }
 
 async function heal(h: AccountHarness, account: string) {
@@ -943,6 +954,45 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
       );
     },
   },
+  // The gateway decides a failure's reason from its status and its message
+  // together: a client reads the reason from the gateway, never from the status.
+  ...(
+    [
+      ["a plain 402", "plain", "The request was not accepted (scripted)", "billing"],
+      [
+        "a 402 worded as a quota",
+        "quota",
+        "You exceeded your current quota (scripted)",
+        "rate_limit",
+      ],
+    ] as const
+  ).map(([what, tag, message, reason]): AccountCheck => ({
+    name: `the gateway's reason for ${what} is ${reason}`,
+    rows: [18],
+    run: async (h) => {
+      const bot = await createBot(h, `acct-402-${tag}`, "acme/dev-1");
+      const account = await signInKey(h, bot, `pay${tag}`);
+      await setModel(h, bot, `acme/dev-1@${account}`);
+      same(await h.lock(bot, "acme", account), [account], "the lock, so the failure surfaces");
+      await fail(h, account, 402, undefined, message);
+      try {
+        const key = session(bot, `402-${tag}`);
+        const end = await runOnce(h, key, "#text");
+        same(end.state, "error", "the run's end");
+        const requests = await requestsFor(h, key);
+        expect(
+          requests.length >= 1 && requests.every((r) => r.account === account && r.status === 402),
+          `every request was the account's, answered 402: ${accountsOf(requests).join(", ")}`,
+        );
+        same(end.errorDetail?.failoverReason, reason, `the reason the gateway reports for ${what}`);
+        h.observe(
+          `402 "${message}": failoverReason ${String(end.errorDetail?.failoverReason)}, ${requests.length} request(s), error "${end.errorMessage}"`,
+        );
+      } finally {
+        await heal(h, account);
+      }
+    },
+  })),
 ];
 
 /** A device-code sign-in for a bot, answered on the scripted side. */
