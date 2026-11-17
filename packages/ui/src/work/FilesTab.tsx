@@ -382,7 +382,7 @@ function TaskLevel({
   const total = all.length + writingNew.length;
   const commands =
     list && transcript && commandsSince(transcript, list.checkedAt)
-      ? `${bot} ran commands since then. Files they changed show after a refresh.`
+      ? `${bot} ran commands since then. A refresh shows what they changed in the files listed here; a file only a command created isn't listed here, but is in ${bot}'s workspace.`
       : null;
 
   const workspaceRow = (

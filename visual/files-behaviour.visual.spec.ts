@@ -224,12 +224,10 @@ test.describe("the Files tab", () => {
     await openFixture(page, `${FILES}&files=commands`, "light");
     const fresh = page.getByTestId("files-fresh");
     await expect(fresh).toContainText(
-      "Otto ran commands since then. Files they changed show after a refresh.",
+      "Otto ran commands since then. A refresh shows what they changed in the files listed here; a file only a command created isn't listed here, but is in Otto's workspace.",
     );
-    await expect(row(page, "after-cleanup.md")).toHaveCount(0);
     await page.getByRole("button", { name: "Refresh the file list" }).click();
-    // What the command made, and what it removed, once the list is fetched again.
-    await expect(row(page, "after-cleanup.md")).toBeVisible();
+    // What the command did to a listed file, once the list is fetched again.
     await expect(row(page, "media-box.md")).toHaveAccessibleName(/, missing$/);
     await expect(row(page, "media-box.md").locator("em")).toHaveText(" · Missing");
     // The notice goes when the list is fetched.

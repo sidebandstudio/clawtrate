@@ -516,27 +516,17 @@ export function fileAnswers(now: number, params: FileParams) {
         : { kind: "workspace", sameAsWorkspace: true },
     gitCheckout: params.checkout,
     // Scenes that are not about files show a task that has touched none. In the commands
-    // scene, a refresh finds what the command did: a new file, and one it removed.
+    // scene, a refresh finds what the command did to a listed file: it removed it. As on the
+    // gateway, a file only the command created does not join the task's list.
     files:
       params.state === "empty" || params.state === null
         ? []
         : params.state === "commands" && lists > 1
-          ? [
-              {
-                path: "notes/after-cleanup.md",
-                workspacePath: "notes/after-cleanup.md",
-                name: "after-cleanup.md",
-                kind: "modified",
-                missing: false,
-                size: 96,
-                updatedAt: now - 10_000,
-              },
-              ...files.map((file) =>
-                file.path === "notes/media-box.md"
-                  ? { ...toTaskFile(file, now), missing: true }
-                  : toTaskFile(file, now),
-              ),
-            ]
+          ? files.map((file) =>
+              file.path === "notes/media-box.md"
+                ? { ...toTaskFile(file, now), missing: true }
+                : toTaskFile(file, now),
+            )
           : files.map((file) => toTaskFile(file, now)),
     // A list longer than the viewer's channel: the gateway listed more than this answer carries.
     omitted: params.state === "many" ? 7 : 0,
