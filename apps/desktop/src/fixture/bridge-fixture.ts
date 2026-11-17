@@ -69,6 +69,10 @@ function loaded(now: number): ClawtrateState {
     bots,
     tasksByBot: fixtureTasks(now, bots),
     transcripts: fixtureTranscripts(now, bots),
+    unroutedApprovals: [],
+    unroutedApprovalsOmitted: 0,
+    creations: [],
+    retention: initialState.retention,
   };
 }
 
@@ -342,6 +346,9 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
       return () => listeners.delete(listener);
     },
     send: apply,
+    // The shell only sends; no command here has an answer, and no file is held.
+    invoke: (command) => Promise.reject(new Error(`the fixture does not answer ${command.type}`)),
+    attach: () => Promise.reject(new Error("the fixture does not hold files")),
     setState: (change) => set(change(state)),
   };
 }
