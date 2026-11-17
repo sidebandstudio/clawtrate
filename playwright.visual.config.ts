@@ -5,7 +5,9 @@
 // systems, so the baselines are only valid on the platform in their path.
 import { defineConfig, devices } from "@playwright/test";
 
-const PORT = 5341;
+// The fixture's port: 5341, or CLAWTRATE_FIXTURE_PORT, which the fixture's
+// own server reads too, so runs in two checkouts can go at once.
+const PORT = Number(process.env.CLAWTRATE_FIXTURE_PORT ?? 5341);
 
 export default defineConfig({
   testDir: "visual",

@@ -4,7 +4,8 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-export const FIXTURE_PORT = 5341;
+/** 5341, or `CLAWTRATE_FIXTURE_PORT` when another checkout's visual run holds it. */
+export const FIXTURE_PORT = Number(process.env.CLAWTRATE_FIXTURE_PORT ?? 5341);
 
 export default defineConfig({
   root: "src/fixture",

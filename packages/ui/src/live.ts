@@ -278,9 +278,10 @@ export function composerFor(
         ? `Answer above, or message ${options.bot}`
         : `Steer ${options.bot}`,
     mode,
-    stoppable: isActive(run.state) ? run : null,
+    // Offline the composer is its offline form: Send alone.
+    stoppable: isActive(run.state) && !offline ? run : null,
     stopping: false,
-    modeWord: mode === "hold" ? "Hold" : mode === "queue" ? "Queue" : "Steer",
+    modeWord: offline ? null : mode === "hold" ? "Hold" : mode === "queue" ? "Queue" : "Steer",
     menu: held ? "hold" : "run",
     offline,
   };

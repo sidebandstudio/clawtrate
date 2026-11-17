@@ -4,6 +4,7 @@
 // drawer's scrim is inert and deliberately concealed, so it is not measured.
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { LIVE_VIEWS } from "./live-scenes.ts";
 
 type Finding = { text: string; size: number; ratio: number; color: string; background: string };
 
@@ -161,6 +162,25 @@ const SCENES: Scene[] = [
   },
 ];
 
+// Every state of the live conversation, its menus and its shelf included.
+for (const view of LIVE_VIEWS) {
+  if (view.scene === "main") continue;
+  SCENES.push({
+    name: `${view.rows ? `${view.rows}: ` : ""}live ${view.scene}`,
+    query: `scene=${view.scene}&${OTTO_DISK}&panel=closed`,
+    prepare: view.ready,
+  });
+}
+SCENES.push({
+  name: "F-061 F-096: live send menu during a run",
+  query: `scene=run-working&${OTTO_DISK}&panel=closed`,
+  prepare: async (page) => {
+    await page.getByTestId("composer-input").fill("Also check the photos folder");
+    await page.getByRole("button", { name: "How to send: Steer" }).click();
+    await expect(page.getByRole("menu", { name: "How to send" })).toBeVisible();
+  },
+});
+
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
 
@@ -213,7 +233,8 @@ test("the fixture mode makes no request beyond its own files", async ({ page }) 
   const foreign: string[] = [];
   page.on("request", (request) => {
     const url = request.url();
-    if (!url.startsWith("http://127.0.0.1:5341/") && !url.startsWith("data:")) foreign.push(url);
+    const own = `http://127.0.0.1:${process.env.CLAWTRATE_FIXTURE_PORT ?? 5341}/`;
+    if (!url.startsWith(own) && !url.startsWith("data:")) foreign.push(url);
   });
   page.on("websocket", (socket) => foreign.push(socket.url()));
   for (const query of ["scene=connect", "scene=pairing", `scene=synced&${OTTO_DISK}&panel=open`]) {

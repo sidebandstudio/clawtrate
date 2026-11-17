@@ -116,7 +116,9 @@ test.describe("the rail", () => {
     await expect(page.getByRole("button", { name: /^New/ })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Search/ })).toHaveCount(0);
     await expect(page.getByRole("textbox")).toHaveCount(0);
-    await expect(page.locator(".composer")).toContainText("Read-only connection.");
+    // The access bar stands in the composer's place, and asking for access is its one action.
+    await expect(page.getByRole("region", { name: "Access" })).toContainText("Read-only.");
+    await expect(page.getByRole("button", { name: "Request access" })).toBeVisible();
   });
 });
 
