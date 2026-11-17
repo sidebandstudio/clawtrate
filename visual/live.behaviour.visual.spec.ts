@@ -1097,7 +1097,7 @@ test.describe("errors and resync", () => {
     const card = page.getByRole("alert").filter({ hasText: "Otto couldn't finish this turn" });
     await expect(card).toContainText("The model provider is overloaded.");
     // A warning triangle, a bold title, the reason on its own line, and a round close button.
-    await expect(card.locator("svg.icon").first()).toBeVisible();
+    await expect(card.locator(":scope > svg.icon")).toBeVisible();
     expect(
       Number(
         await card.locator(".turn-error-title").evaluate((el) => getComputedStyle(el).fontWeight),
