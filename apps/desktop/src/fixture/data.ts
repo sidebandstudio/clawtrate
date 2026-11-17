@@ -570,6 +570,7 @@ export function fixtureTranscripts(now: number, bots: Bot[]): Record<string, Tra
         ...emptyActivity,
         linkedRuns: {},
         interSession: [],
+        mcpTools: {},
         sessionKey: key,
         status: "ready",
         items,

@@ -1146,6 +1146,7 @@ export function cardScene(name: CardSceneName, now: number): CardScene {
   const transcript: Transcript = {
     ...activity,
     linkedRuns: extra?.linkedRuns ?? {},
+    mcpTools: extra?.mcpTools ?? {},
     interSession,
     sessionKey: task,
     status: "ready",

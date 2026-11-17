@@ -33,7 +33,7 @@ import {
   worstCase,
   type Bound,
 } from "./bounds.ts";
-import type { InterSessionMessage, LinkedRun } from "./cards.ts";
+import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type {
   CaughtUp,
   ClosedCard,
@@ -155,6 +155,10 @@ export const MAX_SETTLED_APPROVAL_COUNT = 8;
 export const MAX_COMMAND_ARGS = 16;
 /** Recipient runs a task's sends name. */
 export const MAX_LINKED_RUNS = 32;
+/** Tool-server tools a task keeps from `tools.effective`, by effective name. */
+export const MAX_MCP_TOOLS = 128;
+/** A tool's effective name: the gateway cuts it to 64 characters (`buildSafeToolName`). */
+export const MAX_TOOL_NAME_CHARS = 128;
 /** Steer aliases per task (also `MAX_STEER_ALIASES`). */
 export const MAX_STEER_ALIAS_COUNT = 16;
 /** Bots listed, and tasks listed across bots. */
@@ -432,6 +436,11 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   live: object<NonNullable<Transcript["live"]>>()({ runId: ID, text: text(MAX_RUN_TEXT_CHARS) }),
   linkedRuns: map(MAX_LINKED_RUNS, MAX_ID_CHARS, linkedRun),
   interSession: list(MAX_INTER_SESSION, interSession),
+  mcpTools: map(
+    MAX_MCP_TOOLS,
+    MAX_TOOL_NAME_CHARS,
+    object<McpToolIdentity>()({ server: NAME, tool: NAME }),
+  ),
   loadedAt: NUMBER,
 });
 

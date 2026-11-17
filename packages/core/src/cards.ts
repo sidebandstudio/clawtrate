@@ -184,6 +184,36 @@ export type CardInput = {
   interSession?: InterSessionMessage[];
 };
 
+/** A tool-server tool, by its server and its own name. */
+export type McpToolIdentity = { server: string; tool: string };
+
+/**
+ * The tool-server tools of a `tools.effective` answer, by effective name:
+ * `{groups: [{tools: [{id, source: "mcp", mcpServer, mcpToolName}]}]}`
+ * (`ToolsEffectiveEntrySchema` in OpenClaw 2026.10.6). A tool the session is
+ * denied is left out; past `max`, the rest are not kept.
+ */
+export function mcpToolMap(value: unknown, max: number): Record<string, McpToolIdentity> {
+  const out: Record<string, McpToolIdentity> = {};
+  let count = 0;
+  const groups = asRecord(value)?.groups;
+  for (const group of Array.isArray(groups) ? groups : []) {
+    const tools = asRecord(group)?.tools;
+    for (const entry of Array.isArray(tools) ? tools : []) {
+      const tool = asRecord(entry);
+      if (tool?.source !== "mcp" || tool.deniedBySession === true) continue;
+      const name = str(tool.id);
+      const server = str(tool.mcpServer);
+      const own = str(tool.mcpToolName);
+      if (!name || !server || !own || name in out) continue;
+      if (count >= max) return out;
+      out[name] = { server, tool: own };
+      count += 1;
+    }
+  }
+  return out;
+}
+
 export type CardOptions = {
   /**
    * MCP server names (`details.mcpServer`) to treat as the coding agent. No
@@ -196,7 +226,7 @@ export type CardOptions = {
    * shortened and de-duplicated by the gateway, so they are never parsed; a
    * call is recognized before its result only through this map.
    */
-  mcpTools?: Readonly<Record<string, { server: string; tool: string }>>;
+  mcpTools?: Readonly<Record<string, McpToolIdentity>>;
   /** Cards returned last time, so states only move forward. */
   previous?: SelectedCards;
   /** Full raw payloads for steps too large to carry theirs inline (the client's `stepRaw`). */
