@@ -3,8 +3,10 @@
 // it uses, the scripted pages, and the confinement of the development browser
 // to those pages (with a real Chromium, against addresses nothing answers).
 
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -20,13 +22,16 @@ import { chromium } from "@playwright/test";
 import {
   browserConfig,
   browserPortOffsets,
+  browserProcesses,
   browserPorts,
   confinementArgs,
   devConfig,
   developmentChromium,
   loadPlugins,
   PLUGIN_RULE,
+  reset,
   sandboxProblems,
+  settleBrowserProcesses,
 } from "../src/cli.ts";
 import {
   additionProblems,
@@ -35,10 +40,12 @@ import {
   loadDevPlugin,
 } from "../src/dev-plugins.ts";
 import { CHECKOUT_DIR, OpenclawRunner } from "../src/env.ts";
+import { processIdentity } from "../src/state-guard.ts";
 import { CHECKOUT as FIXTURE_CHECKOUT, seedInstance, testInstance } from "./fixtures.ts";
 import { choosePorts } from "../src/registry.ts";
 import { PAGES_RECORD_PATH, REFUSED_TITLE, startScriptedPages } from "../src/scripted-pages.ts";
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const PORTS = { gatewayPort: 19400, providerPort: 19410 };
 /** A private-range address, built here so no such literal sits in the repository. */
 const PRIVATE_ADDRESS = [10, 0, 0, 1].join(".");
@@ -418,4 +425,88 @@ describe("the development browser is confined to the scripted pages", () => {
       }
     },
   );
+});
+
+describe("stopping and resetting wait for the browser's processes", () => {
+  const helpers: ChildProcess[] = [];
+  afterEach(() => {
+    for (const child of helpers.splice(0)) if (child.exitCode === null) child.kill("SIGKILL");
+  });
+  /** A stand-in for a browser helper of the instance: a process of the test's own with such an argument. */
+  const helper = (arg: string, script = "setTimeout(() => {}, 30000)") => {
+    const child = spawn(process.execPath, ["-e", script, "--", arg], { stdio: "ignore" });
+    helpers.push(child);
+    return child;
+  };
+  const gone = (child: ChildProcess) =>
+    new Promise<void>((resolve) =>
+      child.exitCode !== null || child.signalCode !== null
+        ? resolve()
+        : child.once("exit", () => resolve()),
+    );
+  const started = (child: ChildProcess) =>
+    new Promise<void>((resolve) => (child.pid ? resolve() : child.once("spawn", () => resolve())));
+
+  it("finds the instance's browser processes by an argument naming its browser folder, and nothing else", () => {
+    const state = "/home/x/.openclaw-clawtrate-dev-alpha";
+    const rows = [
+      {
+        pid: 11,
+        command: `/pw/Chromium --user-data-dir=${state}/browser/bot-pip/user-data --headless`,
+      },
+      {
+        pid: 12,
+        command: `/pw/Chromium Helper --type=utility --user-data-dir=${state}/browser/bot-pip/user-data`,
+      },
+      {
+        pid: 13,
+        command: `/pw/chrome_crashpad_handler --database=${state}/browser/bot-pip/user-data/Crashpad`,
+      },
+      { pid: 21, command: `tail -f ${state}/browser/bot-pip/user-data/chrome_debug.log` },
+      { pid: 22, command: `/pw/Chromium --user-data-dir=${state}-other/browser/bot-pip/user-data` },
+      {
+        pid: 23,
+        command: `/pw/Chromium --user-data-dir=/home/x/.openclaw-clawtrate-dev-beta/browser/b/user-data`,
+      },
+      { pid: process.pid, command: `node --user-data-dir=${state}/browser/x` },
+    ];
+    expect(browserProcesses(state, rows)).toEqual([11, 12, 13]);
+  });
+
+  it("waits for those still exiting, stops those that stay, and leaves other processes alone", async () => {
+    const state = temp();
+    const folder = `--user-data-dir=${state}/browser/bot-pip/user-data`;
+    const lingering = helper(folder, "setTimeout(() => {}, 600)");
+    const stubborn = helper(folder, "process.on('SIGTERM', () => {}); setTimeout(() => {}, 30000)");
+    const unrelated = helper(`${state}/browser/bot-pip/notes.txt`);
+    await Promise.all([lingering, stubborn, unrelated].map(started));
+    await sleep(300); // the stubborn one has its SIGTERM handler in place
+    const settled = await settleBrowserProcesses(
+      { stateDir: state, name: "alpha", identify: processIdentity },
+      { own: 1500, term: 500, kill: 3000 },
+    );
+    expect(settled).toBe(true);
+    expect(lingering.exitCode).toBe(0);
+    expect(stubborn.signalCode).toBe("SIGKILL");
+    expect(unrelated.exitCode).toBeNull();
+  });
+
+  it("reset says the instance is reset only once its browser's processes are gone", async () => {
+    const home = temp();
+    const runRoot = temp();
+    const { stateDir } = seedInstance(home, "alpha", { runRoot });
+    const lingering = helper(
+      `--user-data-dir=${stateDir}/browser/bot-pip/user-data`,
+      "setTimeout(() => {}, 1500)",
+    );
+    await started(lingering);
+    const before = Date.now();
+    await reset(testInstance(home, runRoot, "alpha"));
+    // Gone by the time reset returns, which waited for it rather than stopping it.
+    expect(processIdentity(lingering.pid!).state).not.toBe("alive");
+    expect(Date.now() - before).toBeGreaterThanOrEqual(1000);
+    expect(existsSync(stateDir)).toBe(false);
+    await gone(lingering);
+    expect(lingering.exitCode).toBe(0);
+  });
 });

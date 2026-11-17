@@ -1135,6 +1135,102 @@ function childProcesses(pid: number, identify: Identify): { pid: number; identit
 type StopTarget = { role: string; pid: number; identity: string };
 
 /**
+ * The development browser's processes on an instance: Chromium and its
+ * helpers, found by an argument naming the instance's own browser folder
+ * (`--user-data-dir=<state>/browser/…`, a helper's `--database=…`). A helper
+ * can outlive the browser and leave the gateway's process tree, so it is
+ * found by its arguments, not by its parent. A process that merely mentions
+ * the folder otherwise is not one of them.
+ */
+export function browserProcesses(
+  stateDir: string,
+  rows: { pid: number; command: string }[],
+): number[] {
+  const folder = `${stateDir}/browser/`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const argument = new RegExp(`(?:^|\\s)--[a-z][a-z0-9-]*=${folder}`);
+  return rows
+    .filter((row) => row.pid !== process.pid && argument.test(row.command))
+    .map((row) => row.pid);
+}
+
+function listProcesses(): { pid: number; command: string }[] | null {
+  const result = spawnSync("ps", ["-axww", "-o", "pid=,command="], {
+    encoding: "utf8",
+    timeout: 5000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.error || result.status !== 0) return null;
+  return result.stdout.split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+    return match ? [{ pid: Number(match[1]), command: match[2]! }] : [];
+  });
+}
+
+/** How long the browser's processes get to exit by themselves, then after each signal. */
+export const BROWSER_EXIT_WAITS = { own: 10_000, term: 5_000, kill: 3_000 };
+
+/**
+ * Wait until none of the instance's browser processes is left: first for
+ * them to exit with their browser, then stopping those still there, each by
+ * PID and only while it is still the process that was listed. True once none
+ * is left; false when that could not be confirmed.
+ */
+export async function settleBrowserProcesses(
+  inst: { stateDir: string; name: string | null; identify: Identify },
+  waits = BROWSER_EXIT_WAITS,
+): Promise<boolean> {
+  const find = () => {
+    const rows = listProcesses();
+    if (!rows) return null;
+    return browserProcesses(inst.stateDir, rows).flatMap((pid) => {
+      const found = inst.identify(pid);
+      return found.state === "alive" ? [{ pid, identity: found.identity }] : [];
+    });
+  };
+  let left = find();
+  if (left === null) {
+    console.log(`Could not list processes to find the browser of ${label(inst)}`);
+    return false;
+  }
+  if (left.length === 0) return true;
+  const waitGone = async (ms: number) => {
+    const deadline = Date.now() + ms;
+    while (left!.length > 0 && Date.now() < deadline) {
+      await sleep(200);
+      left = find() ?? left;
+    }
+  };
+  const count = left.length;
+  await waitGone(waits.own);
+  let stopped = 0;
+  for (const [signal, ms] of [
+    ["SIGTERM", waits.term],
+    ["SIGKILL", waits.kill],
+  ] as const) {
+    if (left.length === 0) break;
+    for (const proc of left) {
+      if (processState(proc.pid, proc.identity, inst.identify) === "alive") {
+        process.kill(proc.pid, signal);
+        stopped += 1;
+      }
+    }
+    await waitGone(ms);
+  }
+  if (left.length > 0) {
+    console.log(
+      `Could not confirm that the browser processes of ${label(inst)} stopped (pids ${left.map((p) => p.pid).join(", ")})`,
+    );
+    return false;
+  }
+  console.log(
+    stopped > 0
+      ? `Stopped the browser's leftover processes of ${label(inst)} (${stopped} signals)`
+      : `Waited for the browser's ${count} processes of ${label(inst)} to exit`,
+  );
+  return true;
+}
+
+/**
  * Stop one proven process: its identity is checked again right before every
  * signal, so a PID the system reused is never signalled. Its direct children
  * are listed while it is still the proven parent, and each is signalled only
@@ -1243,6 +1339,8 @@ async function stopLocked(inst: DevInstance): Promise<void> {
   }
   let confirmed = true;
   for (const target of targets) confirmed = (await stopProcess(target, inst.identify)) && confirmed;
+  // The gateway's browser and its helpers go with it, but not always at once.
+  if (confirmed) confirmed = await settleBrowserProcesses(inst);
   if (!confirmed) {
     throw new StateInUseError(
       `${label(inst)}: could not confirm that every process stopped; its records are kept.`,
@@ -1289,6 +1387,12 @@ export async function reset(inst: DevInstance, options: { runId?: string } = {})
     assertNotInUse(inst);
     await stopLocked(inst);
     if (ownership(inst.stateDir) === "owned") {
+      // Also a browser left by a gateway that is gone: nothing of it may outlive its folder.
+      if (!(await settleBrowserProcesses(inst))) {
+        throw new StateInUseError(
+          `${label(inst)} (${inst.stateDir}): its browser's processes are still running. Nothing was deleted.`,
+        );
+      }
       const blocked = await deletionRefusal(inst);
       if (blocked) throw new StateInUseError(blocked);
       rmSync(inst.stateDir, { recursive: true });
