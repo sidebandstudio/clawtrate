@@ -639,7 +639,8 @@
     const kind = TABLE[c.name];
     if (!kind) return { kind: "tool", key: c.builtin ? `tool:${c.name}` : `once:${c.id}` }; // an unknown name folds only when the inventory lists it as built-in
     if (["message", "helper", "question", "channel"].includes(kind)) return { kind, key: `once:${c.id}` };
-    if (kind === "routine") return { kind, key: ["status", "list", "get", "runs"].includes(c.args.action) ? `routine:${c.args.action}` : `once:${c.id}` };
+    // Keyed by tool and action: automations list and cron list never fold together (7.4).
+    if (kind === "routine") return { kind, key: ["status", "list", "get", "runs"].includes(c.args.action) ? `routine:${c.name}:${c.args.action}` : `once:${c.id}` };
     if (["terminal", "media"].includes(kind)) return { kind, key: `${c.name}:${c.args.action || "generate"}` };
     if (["recall", "tasks", "plan", "look"].includes(kind)) return { kind, key: c.name };
     if (kind === "edit" || kind === "read") return { kind, key: kind === "read" ? "read" : "files" };
@@ -1048,23 +1049,29 @@
     calls = calls.map((c) => ({ status: "done", ...c }));
     const { kind } = CT.kindOf(calls[0]);
     const k = K[kind];
+    // Every member's state comes from CT.outcomeOf, the function a single card uses (7.4):
+    // a call that returned approval-pending waits, here as on its own card.
+    const stateOf = (c) => CT.outcomeOf(c).outcome;
+    const openNow = (c) => OPEN.includes(stateOf(c));
     // The plural is never more complete than the least-established member (7.4).
-    const settled = calls.filter((c) => !isOpen(c));
-    const outcomes = settled.map((c) => CT.outcomeOf(c).outcome);
-    const allDone = outcomes.every((o) => o === "done" || o === "partial");
-    const allStarted = outcomes.length && outcomes.every((o) => o === "started");
+    const settled = calls.filter((c) => !openNow(c));
+    const outcomes = settled.map(stateOf);
+    // A member waiting for approval has done nothing yet: no done or started plural then.
+    const asks = calls.some((c) => stateOf(c) === "waiting");
+    const allDone = !asks && outcomes.every((o) => o === "done" || o === "partial");
+    const allStarted = !asks && outcomes.length && outcomes.every((o) => o === "started");
     const problemsAny = settled.some((c) => CT.problemOf(c));
     const neutral = () => [(k.neutral ? k.neutral(calls) : CT.nameWords(kind).replace(/^./, (x) => x.toUpperCase())), `· ${plural(calls.length, "call", "calls")}`];
     // Done (or Partial, whose past verb is true) beside problems keeps the done plural, with
     // the problems counted; Started alone has its own plural; any other mix is neutral.
-    const doneOrProblem = outcomes.every((o) => o === "done" || o === "partial" || PROBLEMS[o]);
+    const doneOrProblem = !asks && outcomes.every((o) => o === "done" || o === "partial" || PROBLEMS[o]);
     const [verb, object] = allDone || (problemsAny && doneOrProblem) ? k.plural(calls.length, calls) : allStarted && k.startedPlural ? k.startedPlural(calls.length, calls) : neutral();
-    const live = [...calls].reverse().find(isOpen); // the latest to start
-    const waiting = calls.find((c) => c.status === "waiting");
+    const live = [...calls].reverse().find(openNow); // the latest to start
+    const waiting = calls.find((c) => stateOf(c) === "waiting");
     const problems = calls.filter((c) => CT.problemOf(c));
     const counts = PROBLEM_ORDER.map((p) => [p, calls.filter((c) => CT.problemOf(c) === p).length]).filter(([, n]) => n);
     const countWords = counts.map(([p, n]) => `${n} ${p}`).join(" · ");
-    const shortCounts = SHORT_ORDER.map((w) => [w, settled.filter((c) => SHORT[CT.outcomeOf(c).outcome] === w).length]).filter(([, n]) => n);
+    const shortCounts = SHORT_ORDER.map((w) => [w, settled.filter((c) => SHORT[stateOf(c)] === w).length]).filter(([, n]) => n);
     const allWords = [...counts, ...shortCounts].map(([p, n]) => `${n} ${p}`).join(" · ");
     const danger = counts.some(([p]) => p === "failed" || p === "not run");
     const words = (c) => {

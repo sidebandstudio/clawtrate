@@ -392,6 +392,7 @@ Every state may fold: running, waiting, done and every outcome of 7.3. A failure
 
 **The plural is never more complete than its least-established member.** The kind's done plural ("Made images", "Searched memory") is used only when every settled member is Done or Partial, whose past verb is true (a partial search did search). Otherwise:
 
+- while a member waits for approval, the line uses the neutral plural below, whatever the others did, because the waiting call has done nothing yet: "Commands · 2 calls";
 - when every settled member was **Started**, the line uses the started plural: "Started making images · 2 times";
 - in every other mix (any member Queued, Call made, Not confirmed, No change, or members with different outcomes), the line uses the kind's **neutral plural**, a noun with the number of calls, which claims nothing: "Image generation · 3 calls", "Memory search · 2 calls", "Tool server linear · 2 calls". The noun names the operation, not its outcome ("Image generation", "Memory search", "Routine run", "Message on Telegram", "Tool server linear"); each kind's noun is part of the mapping (section 22), and the prototype's `neutral` for each kind in `js/kinds.js` is the reference list.
 
