@@ -1460,7 +1460,10 @@ Live, Pixel to Atlas, each in a new task:
 - **Who may message whom** (source:
   `<openclaw>/docs/concepts/session-tool.md`, "Sending cross-session
   messages"):
-  - a global agent-to-agent allowlist that applies in both directions;
+  - the global `tools.agentToAgent` policy: `enabled: false` blocks
+    ordinary cross-agent access, and `allow` restricts the permitted agent
+    pairs. With the default session visibility `all`, cross-agent sends are
+    open;
   - per bot, an outbound list `agents.entries.<id>.tools.agentToAgent.send`
     (admin; `[]` denies, omission keeps the global policy; live with
     `["atlas"]`);
