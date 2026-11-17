@@ -3,7 +3,7 @@ import { PROTOCOL_VERSION } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import { ClawtrateClient } from "../src/client.ts";
-import { PAIRING_PENDING_TTL_MS, pairingOutcome, protocolMismatch } from "../src/connect-errors.ts";
+import { pairingEnded, protocolMismatch } from "../src/connect-errors.ts";
 import { FakeGateway, helloOk, memoryStorage, sleep, testHost, until } from "./fake-gateway.ts";
 
 const URL = "ws://127.0.0.1:19001";
@@ -42,15 +42,18 @@ describe("pairing", () => {
     client.stop();
   });
 
-  it("F-009: a request that disappears while this client keeps it fresh was rejected; retrying asks again", async () => {
+  it("F-009: a request that is no longer pending says it was rejected or expired, without guessing which; retrying asks again", async () => {
     const gateway = pairingGateway(["req-1", "req-2", "req-3"]);
     const client = new ClawtrateClient(testHost(gateway), FAST);
     await client.connect({ url: URL, token: "t" });
     await until(() => client.state.connection.pairing?.requestId === "req-1");
-    // "Check now": the gateway answers with a new request, so the old one was rejected.
+    // "Check now": the gateway answers with a new request, so the old one is gone.
     await client.retryNow();
     await until(() => client.state.connection.status === "error");
-    expect(client.state.connection.error).toMatchObject({ code: "PAIRING_REJECTED" });
+    expect(client.state.connection.error).toMatchObject({ code: "PAIRING_ENDED" });
+    expect(client.state.connection.error?.message).toMatch(
+      /^It was rejected, or it expired before anyone approved it; the gateway does not say which\. Try again to send a new request/,
+    );
     expect(client.state.connection.pairing).toBe(null);
     const attempts = gateway.connects.length;
     await sleep(100);
@@ -63,26 +66,26 @@ describe("pairing", () => {
     client.stop();
   });
 
-  it("F-009: a request that disappears after nothing refreshed it for the pending lifetime expired", async () => {
+  it("F-009: however long the request waited, the outcome is the same", async () => {
     let clock = 1_000_000;
     const gateway = pairingGateway(["req-1", "req-2"]);
     const client = new ClawtrateClient({ ...testHost(gateway), now: () => clock }, FAST);
     await client.connect({ url: URL, token: "t" });
     await until(() => client.state.connection.pairing?.requestId === "req-1");
-    clock += PAIRING_PENDING_TTL_MS + 1;
+    // Well past OpenClaw's pending lifetime of five minutes: a rejection then
+    // looks the same as an expiry, so the client still does not choose one.
+    clock += 600_000;
     await client.retryNow();
     await until(() => client.state.connection.status === "error");
-    expect(client.state.connection.error).toMatchObject({ code: "PAIRING_EXPIRED" });
+    expect(client.state.connection.error).toMatchObject({ code: "PAIRING_ENDED" });
     client.stop();
   });
 
-  it("F-009: tells rejected from expired by the pending lifetime of OpenClaw 2026.10.6", () => {
-    const seen = { requestId: "a", at: 0 };
-    expect(PAIRING_PENDING_TTL_MS).toBe(300_000);
-    expect(pairingOutcome(null, "a", 10)).toBe("pending");
-    expect(pairingOutcome(seen, "a", 10_000_000)).toBe("pending");
-    expect(pairingOutcome(seen, "b", 299_999)).toBe("rejected");
-    expect(pairingOutcome(seen, "b", 300_001)).toBe("expired");
+  it("F-009: a request has ended only when a different one replaces it", () => {
+    expect(pairingEnded(null, "a")).toBe(false);
+    expect(pairingEnded("a", "a")).toBe(false);
+    expect(pairingEnded("a", "")).toBe(false);
+    expect(pairingEnded("a", "b")).toBe(true);
   });
 });
 

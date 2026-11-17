@@ -111,7 +111,7 @@ export const STATE_SCENES: StateScene[] = [
   },
   { name: "setup-connecting", query: "scene=connect-unreachable" },
   { name: "setup-loading-bots", query: "scene=discovering" },
-  { name: "pairing-rejected", query: "scene=pairing-rejected" },
+  { name: "pairing-ended", query: "scene=pairing-ended" },
   { name: "protocol-mismatch", query: `scene=protocol-mismatch&${OTTO_DISK}` },
   { name: "disconnected", query: `scene=disconnected&${OTTO_DISK}` },
   {

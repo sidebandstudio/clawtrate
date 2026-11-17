@@ -94,14 +94,19 @@ test("F-003: the app opens, read-only, as soon as the bots have loaded, before t
   await expect(page.getByTestId("bot")).toContainText("Loading tasks");
 });
 
-test("F-009: unreachable, rejected and expired each show a titled message with a retry", async ({
+test("F-009: unreachable, and a pairing request that was rejected or expired, each show a titled message with a retry", async ({
   page,
 }) => {
   const cases: Array<[string, string, RegExp]> = [
     ["connect-unreachable", "Could not connect", /Nothing answered at 127\.0\.0\.1:18789/],
     ["connect-error", "Could not connect", /Nothing answered at 127\.0\.0\.1:18789/],
-    ["pairing-rejected", "Pairing was rejected", /rejected this device's pairing request/],
-    ["pairing-expired", "The pairing request expired", /Nobody approved/],
+    // The gateway does not tell this client whether its request was rejected or
+    // expired, so both read the same, and say what to do.
+    [
+      "pairing-ended",
+      "The pairing request is no longer pending",
+      /It was rejected, or it expired before anyone approved it; the gateway does not say which\. Try again to send a new request/,
+    ],
   ];
   for (const [scene, title, message] of cases) {
     await openFixture(page, `scene=${scene}`, "light");
@@ -110,8 +115,8 @@ test("F-009: unreachable, rejected and expired each show a titled message with a
     await expect(alert).toContainText(message);
     await expect(alert.getByRole("button", { name: "Try again" })).toBeVisible();
   }
-  // Try again after a rejection asks for pairing again.
-  await openFixture(page, "scene=pairing-rejected", "light");
+  // Try again asks for pairing again.
+  await openFixture(page, "scene=pairing-ended", "light");
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible();
   expect(await sent(page)).toContain("retry");
@@ -175,7 +180,7 @@ test("F-227: the Gateway pane shows Pairing pending, Connecting and Offline, and
     ["connecting", "Connecting", null],
     [`offline-unreachable&${OTTO_DISK}`, "Offline", "Can't reach the gateway"],
     [`offline&${OTTO_DISK}`, "Offline", "Can't reach the gateway"],
-    ["pairing-rejected", "Offline", "Pairing was rejected"],
+    ["pairing-ended", "Offline", "The pairing request is no longer pending"],
     [`protocol-mismatch&${OTTO_DISK}`, "Offline", "This gateway speaks another protocol"],
   ];
   for (const [scene, state, problem] of cases) {

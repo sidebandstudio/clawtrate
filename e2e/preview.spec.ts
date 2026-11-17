@@ -105,7 +105,7 @@ test("runs on its own instance while another instance's gateway is listening", (
   }
 });
 
-test("F-002 F-003 F-009: pairs with the development gateway in steps, says when pairing was rejected, and shows bots, tasks and a transcript", async ({
+test("F-002 F-003 F-009: pairs with the development gateway in steps, says when the pairing request is no longer pending, and shows bots, tasks and a transcript", async ({
   page,
 }) => {
   expect(process.env.CLAWTRATE_E2E_URL, "global setup provides the preview URL").toBeTruthy();
@@ -152,10 +152,15 @@ test("F-002 F-003 F-009: pairs with the development gateway in steps, says when 
   expect(request.scopes).toEqual(["operator.read"]);
   await expect(page.locator(".connect-foot")).toContainText(request.requestId.slice(0, 8));
 
-  // F-009: the gateway's owner rejects the request; the app says so and offers to try again.
+  // F-009: the gateway's owner rejects the request. The gateway tells this
+  // client only that its request is gone, so the app says it was rejected or
+  // expired, and offers to try again.
   await openclaw(["devices", "reject", request.requestId]);
   const alert = page.getByRole("alert");
-  await expect(alert.locator("strong")).toHaveText("Pairing was rejected", { timeout: 15_000 });
+  await expect(alert.locator("strong")).toHaveText("The pairing request is no longer pending", {
+    timeout: 15_000,
+  });
+  await expect(alert).toContainText("It was rejected, or it expired before anyone approved it");
   await alert.getByRole("button", { name: "Try again" }).click();
   await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible();
   await expect(page.locator(".connect-foot")).not.toContainText(request.requestId.slice(0, 8));

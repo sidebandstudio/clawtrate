@@ -37,7 +37,7 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   if (error.code === "PROTOCOL_MISMATCH") {
     return { title: "This gateway speaks another protocol", message: error.message };
   }
-  if (error.code === "PAIRING_REJECTED" || error.code === "PAIRING_EXPIRED") {
+  if (error.code === "PAIRING_ENDED") {
     return { title: failureTitle(error.code), message: error.message };
   }
   if (connection.status === "connected") return null;

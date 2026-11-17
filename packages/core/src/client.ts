@@ -32,7 +32,7 @@ import {
 } from "./mapping.ts";
 import {
   PAIRING_ENDED,
-  pairingOutcome,
+  pairingEnded,
   protocolMessage,
   protocolMismatch,
 } from "./connect-errors.ts";
@@ -141,7 +141,7 @@ export class ClawtrateClient {
   private bootstrapping = false;
   private changedDuringBootstrap = false;
   /** The pairing request this client last saw pending, and when. */
-  private pairingSeen: { requestId: string; at: number } | null = null;
+  private pairingSeen: string | null = null;
   /** The current attempt reached hello. */
   private attemptGreeted = false;
 
@@ -537,18 +537,17 @@ export class ClawtrateClient {
       const requestId = typeof details.requestId === "string" ? details.requestId : "";
       // The request this client was waiting on is gone: the gateway's owner
       // rejected it, or it expired. Stop, and let the user ask again.
-      const outcome = pairingOutcome(this.pairingSeen, requestId, this.now());
-      if (outcome !== "pending") {
+      if (pairingEnded(this.pairingSeen, requestId)) {
         this.pairingSeen = null;
         this.setConnection({
           status: "error",
           pairing: null,
           retryAt: null,
-          error: { ...PAIRING_ENDED[outcome], hint: null },
+          error: { ...PAIRING_ENDED, hint: null },
         });
-        return { closeCode: 1000, closeReason: `pairing ${outcome}`, stop: true };
+        return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
       }
-      if (requestId) this.pairingSeen = { requestId, at: this.now() };
+      if (requestId) this.pairingSeen = requestId;
       const scopes = Array.isArray(details.requestedScopes)
         ? details.requestedScopes.filter((s): s is string => typeof s === "string")
         : [...REQUESTED_SCOPES];

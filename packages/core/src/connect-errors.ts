@@ -4,15 +4,6 @@
 import { PROTOCOL_VERSION } from "@openclaw/gateway-client/browser";
 import { asRecord } from "./mapping.ts";
 
-/**
- * How long OpenClaw 2026.10.6 keeps a pending pairing request after its last
- * refresh (`DEVICE_PAIRING_PENDING_TTL_MS`). Every connect attempt refreshes
- * it, so while this client retries a request cannot expire; it disappears
- * only when the gateway's owner rejects it, or when no attempt reached the
- * gateway for this long.
- */
-export const PAIRING_PENDING_TTL_MS = 300_000;
-
 export type ProtocolMismatch = { gateway: number | null; client: number };
 
 /**
@@ -35,33 +26,22 @@ export function protocolMessage(mismatch: ProtocolMismatch): string {
     : `This gateway speaks protocol ${mismatch.gateway}. This version of Clawtrate speaks protocol ${mismatch.client}.`;
 }
 
-export type PairingOutcome = "pending" | "rejected" | "expired";
-
 /**
  * A pairing request this client was waiting on, followed by a pairing error
- * for a different request: the gateway gives a non-Control-UI client no
- * result for its request, so the outcome is told apart by time. Gone within
- * the pending lifetime of its last refresh, it was rejected; gone after it,
- * it expired.
+ * for a different request: the first request is no longer pending. The
+ * gateway's owner rejected it, or it expired after no attempt refreshed it.
+ * OpenClaw sends a client that is not its Control UI no result for its
+ * request, and a new connect gets a new request either way, so the client
+ * cannot tell which happened (the capability map, "Rejected or expired
+ * pairing"). It says only what it knows.
  */
-export function pairingOutcome(
-  previous: { requestId: string; at: number } | null,
-  requestId: string,
-  now: number,
-): PairingOutcome {
-  if (!previous || !previous.requestId || !requestId || previous.requestId === requestId) {
-    return "pending";
-  }
-  return now - previous.at > PAIRING_PENDING_TTL_MS ? "expired" : "rejected";
+export function pairingEnded(previous: string | null, requestId: string): boolean {
+  return previous !== null && previous !== "" && requestId !== "" && previous !== requestId;
 }
 
+/** The error for a pairing request that is no longer pending. A code of the client's own. */
 export const PAIRING_ENDED = {
-  rejected: {
-    code: "PAIRING_REJECTED",
-    message: "The gateway's owner rejected this device's pairing request.",
-  },
-  expired: {
-    code: "PAIRING_EXPIRED",
-    message: "Nobody approved this device's pairing request in time.",
-  },
+  code: "PAIRING_ENDED",
+  message:
+    "It was rejected, or it expired before anyone approved it; the gateway does not say which. Try again to send a new request, then approve it on the gateway.",
 } as const;

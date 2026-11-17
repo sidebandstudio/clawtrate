@@ -131,10 +131,8 @@ function SetupSteps({
 /** A connection failure's title. */
 export function failureTitle(code: string | null | undefined): string {
   switch (code) {
-    case "PAIRING_REJECTED":
-      return "Pairing was rejected";
-    case "PAIRING_EXPIRED":
-      return "The pairing request expired";
+    case "PAIRING_ENDED":
+      return "The pairing request is no longer pending";
     default:
       return "Could not connect";
   }

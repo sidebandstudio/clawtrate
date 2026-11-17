@@ -4,6 +4,7 @@
 
 import {
   initialState,
+  PAIRING_ENDED,
   type BridgeCommand,
   type ClawtrateBridge,
   type ClawtrateState,
@@ -54,8 +55,7 @@ export const SCENES = [
   "zero-tasks",
   "task-states",
   "protocol-mismatch",
-  "pairing-rejected",
-  "pairing-expired",
+  "pairing-ended",
   "connect-unreachable",
   "disconnected",
   "offline-unreachable",
@@ -318,24 +318,12 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
         }),
         steps: [],
       };
-    case "pairing-rejected":
-    case "pairing-expired":
+    case "pairing-ended":
       return {
         initial: withConnection(idle(), {
           status: "error",
           gatewayUrl: GATEWAY_URL,
-          error:
-            name === "pairing-rejected"
-              ? {
-                  code: "PAIRING_REJECTED",
-                  message: "The gateway's owner rejected this device's pairing request.",
-                  hint: null,
-                }
-              : {
-                  code: "PAIRING_EXPIRED",
-                  message: "Nobody approved this device's pairing request in time.",
-                  hint: null,
-                },
+          error: { ...PAIRING_ENDED, hint: null },
         }),
         steps: [],
       };
