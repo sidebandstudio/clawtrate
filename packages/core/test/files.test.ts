@@ -320,7 +320,7 @@ describe("reading through the gateway", () => {
       ...listing([
         entry("pictures/summit.png", bytes.length, { workspacePath: "pictures/summit.png" }),
       ]),
-      "agents.workspace.get": (p) => ({
+      "agents.workspace.get": (p: Record<string, unknown>) => ({
         agentId: p.agentId,
         file: {
           path: p.path,
@@ -549,16 +549,23 @@ describe("content on its way to a viewer", () => {
     expect(transfers.size).toBe(0);
   });
 
-  it("base64 and SHA-256 agree with the platform's", async () => {
+  it("base64, UTF-8 and SHA-256 give the standard answers", () => {
     const bytes = Uint8Array.from({ length: 1000 }, (_, i) => (i * 13) & 255);
-    expect(toBase64(bytes)).toBe(Buffer.from(bytes).toString("base64"));
-    expect(fromBase64(Buffer.from(bytes).toString("base64"))).toEqual(bytes);
-    const { createHash } = await import("node:crypto");
-    expect(sha256Hex(bytes)).toBe(createHash("sha256").update(bytes).digest("hex"));
-    expect(sha256Hex(new Uint8Array())).toBe(
-      createHash("sha256").update(new Uint8Array()).digest("hex"),
+    expect(fromBase64(toBase64(bytes))).toEqual(bytes);
+    expect(toBase64(utf8Bytes("Man"))).toBe("TWFu");
+    expect(toBase64(utf8Bytes("Ma"))).toBe("TWE=");
+    expect(toBase64(utf8Bytes("M"))).toBe("TQ==");
+    expect(fromBase64("not base64!")).toBeNull();
+    expect(sha256Hex(utf8Bytes("abc"))).toBe(
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     );
-    expect(utf8Bytes("Café ☕ 𝄞")).toEqual(Uint8Array.from(Buffer.from("Café ☕ 𝄞", "utf8")));
+    expect(sha256Hex(new Uint8Array())).toBe(
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    );
+    expect(sha256Hex(utf8Bytes("a".repeat(1000)))).toBe(
+      "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3",
+    );
+    expect([...utf8Bytes("é☕𝄞")]).toEqual([0xc3, 0xa9, 0xe2, 0x98, 0x95, 0xf0, 0x9d, 0x84, 0x9e]);
   });
 });
 
@@ -597,7 +604,7 @@ const step = (
   ...extra,
 });
 const run = (id: string, state: Run["state"], steps: Step[]): Run =>
-  ({ ...emptyRunFields, id, state, steps }) as Run;
+  ({ ...emptyRunFields, id, state, steps }) as unknown as Run;
 const emptyRunFields = {
   bound: true,
   origin: "gateway",

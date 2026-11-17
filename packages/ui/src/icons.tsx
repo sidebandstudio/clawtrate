@@ -146,3 +146,42 @@ export const StarIcon = (props: IconProps) => (
     <path d="m8 1.9 1.8 3.8 4.1.5-3 2.9.8 4.1L8 11.2l-3.7 2 .8-4.1-3-2.9 4.1-.5L8 1.9Z" />
   </Icon>
 );
+
+export const DownloadIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M8 2.75v7.5M4.75 7 8 10.25 11.25 7M3 13.25h10" />
+  </Icon>
+);
+
+export const RefreshIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M13 8a5 5 0 1 1-1.46-3.54M13 2.75v2.5h-2.5" />
+  </Icon>
+);
+
+export const FolderIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M2.25 4.25c0-.55.45-1 1-1h3l1.5 1.5h5c.55 0 1 .45 1 1v6c0 .55-.45 1-1 1h-9.5c-.55 0-1-.45-1-1v-7.5Z" />
+  </Icon>
+);
+
+export const PictureIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="2.25" y="3" width="11.5" height="10" rx="1.75" />
+    <circle cx="6" cy="6.5" r="1" />
+    <path d="m2.75 11.5 3.5-3 2.5 2 1.75-1.5 2.75 2.5" />
+  </Icon>
+);
+
+export const DocumentIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M4 2.75h5.25L12 5.5v7.75H4V2.75ZM9 2.75V5.5h3M6 8.25h4M6 10.75h4" />
+  </Icon>
+);
+
+export const MediaIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="2.25" y="3" width="11.5" height="10" rx="1.75" />
+    <path d="m6.75 6 3.25 2-3.25 2V6Z" />
+  </Icon>
+);

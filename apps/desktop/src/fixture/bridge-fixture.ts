@@ -44,6 +44,7 @@ import {
   fixtureTranscripts,
   withTaskStates,
 } from "./data.ts";
+import { FILE_COMMANDS, fileAnswers, withFileRuns, type FileParams } from "./files.ts";
 import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 
 export const FIXTURE_INFO: HostInfo = {
@@ -440,7 +441,10 @@ function answerStrings(
   );
 }
 
-export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
+export function createFixtureBridge(
+  name: SceneName,
+  options: { files?: FileParams } = {},
+): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   /** Every command the interface sent, for tests that check what was asked of the host. */
   sent: BridgeCommand[];
@@ -449,7 +453,13 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
 } {
   const now = Date.now();
   const { initial, steps } = scene(name, now);
-  let state = initial;
+  // The Work pane's Files scenes add the disk task's file runs, and answer the file commands.
+  const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
+  const fileAnswer = fileAnswers(now, fileParams);
+  let state =
+    fileParams.state === null
+      ? initial
+      : { ...initial, transcripts: withFileRuns(initial.transcripts, now, fileParams) };
   const listeners = new Set<(state: ClawtrateState) => void>();
   const set = (next: ClawtrateState) => {
     state = next;
@@ -476,6 +486,7 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
     );
     sent.push(command);
     if (live) return live;
+    if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
     switch (command.type) {
       case "connect":
       case "connectDevGateway":

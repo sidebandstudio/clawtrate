@@ -1,16 +1,27 @@
-import type { Bot, Task } from "@clawtrate/core";
-import { useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import type { Bot, Task, Transcript } from "@clawtrate/core";
+import { useCallback, useState, type ReactNode, type RefObject } from "react";
 import { Avatar } from "./Avatar.tsx";
+import { useBridge } from "./bridge.tsx";
 import { stampTime } from "./format.ts";
-import { CloseIcon, FileIcon, ScreenIcon } from "./icons.tsx";
+import { CloseIcon, ScreenIcon } from "./icons.tsx";
+import { FilesTab } from "./work/FilesTab.tsx";
+import type { FileRequest } from "./work/links.tsx";
+import { TabBar } from "./work/TabBar.tsx";
+import "./work/files.css";
 
-const TABS = [
+/** The pane's tabs, in the order the designs give (work-pane.md §1, bots.md §8). */
+export const WORK_TABS = [
   { id: "details", label: "Details" },
   { id: "files", label: "Files" },
   { id: "computer", label: "Computer" },
+  { id: "settings", label: "Settings" },
 ] as const;
 
-type TabId = (typeof TABS)[number]["id"];
+export type WorkTab = (typeof WORK_TABS)[number]["id"];
+
+export function isWorkTab(value: string | null): value is WorkTab {
+  return WORK_TABS.some((tab) => tab.id === value);
+}
 
 function EmptyTab({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
   return (
@@ -23,43 +34,52 @@ function EmptyTab({ icon, title, body }: { icon: ReactNode; title: string; body:
 }
 
 /**
- * The bot's work beside the conversation: who, then three tabs. A drawer and
+ * The bot's work beside the conversation: who, then four tabs. A drawer and
  * modal below the docking width, an ordinary part of the page above it.
  */
 export function WorkPanel({
   bot,
   task,
+  transcript,
   drawer,
   onClose,
   closeRef,
   panelRef,
+  tab,
+  onTab,
+  online,
+  connectedAt,
+  fileRequest,
+  onShowInChat,
+  onFilePath,
 }: {
   bot: Bot | undefined;
   task: Task | null;
+  transcript: Transcript | undefined;
   /** True while it is a drawer: a modal dialog over the rest. */
   drawer: boolean;
   onClose: () => void;
   closeRef: RefObject<HTMLButtonElement | null>;
   panelRef: RefObject<HTMLElement | null>;
+  /** The chosen tab belongs to the pane: the shell keeps it across tasks and bots. */
+  tab: WorkTab;
+  onTab: (tab: WorkTab) => void;
+  online: boolean;
+  connectedAt: number | null;
+  fileRequest: FileRequest | null;
+  onShowInChat: (stepId: string, from: { path: string }) => void;
+  onFilePath: (path: string | null) => void;
 }) {
-  const [tab, setTab] = useState<TabId>("details");
-
-  // One tab stop; Left and Right move and select, wrapping; Home and End go to the ends.
-  const onTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    const index = TABS.findIndex((t) => t.id === tab);
-    let next: number | null = null;
-    if (event.key === "ArrowRight") next = (index + 1) % TABS.length;
-    else if (event.key === "ArrowLeft") next = (index - 1 + TABS.length) % TABS.length;
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = TABS.length - 1;
-    if (next === null) return;
-    event.preventDefault();
-    const id = TABS[next]!.id;
-    setTab(id);
-    event.currentTarget.querySelector<HTMLElement>(`#work-tab-${id}`)?.focus();
-  };
-
+  const bridge = useBridge();
+  // Row times are relative to when the pane opened.
+  const [now] = useState(() => Date.now());
   const name = bot?.name ?? "This bot";
+  // The pane's announcements, polite, as the conversation's live region speaks.
+  const [announcement, setAnnouncement] = useState("");
+  const announce = useCallback((text: string) => {
+    setAnnouncement("");
+    requestAnimationFrame(() => setAnnouncement(text));
+  }, []);
 
   return (
     <aside
@@ -87,23 +107,7 @@ export function WorkPanel({
           {bot.theme && <p>{bot.theme}</p>}
         </div>
       )}
-      <div className="tabs" role="tablist" aria-label="Work" onKeyDown={onTabKey}>
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className="tab"
-            role="tab"
-            id={`work-tab-${t.id}`}
-            aria-controls={`work-tabpanel-${t.id}`}
-            aria-selected={tab === t.id}
-            tabIndex={tab === t.id ? 0 : -1}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <TabBar tabs={WORK_TABS} selected={tab} onSelect={onTab} idPrefix="work-tab" label="Work" />
       <div className="work-sections">
         <div
           role="tabpanel"
@@ -138,14 +142,30 @@ export function WorkPanel({
           role="tabpanel"
           id="work-tabpanel-files"
           aria-labelledby="work-tab-files"
-          tabIndex={0}
+          tabIndex={-1}
           hidden={tab !== "files"}
         >
-          <EmptyTab
-            icon={<FileIcon />}
-            title="No files yet"
-            body={`Files ${name} reads or writes in this task appear here.`}
-          />
+          {task && bot ? (
+            <FilesTab
+              key={task.key}
+              bridge={bridge}
+              botId={bot.id}
+              bot={name}
+              taskKey={task.key}
+              transcript={transcript}
+              visible={tab === "files"}
+              online={online}
+              connectedAt={connectedAt}
+              request={fileRequest}
+              drawer={drawer}
+              now={now}
+              announce={announce}
+              onShowInChat={onShowInChat}
+              onPathChange={onFilePath}
+            />
+          ) : (
+            <p className="work-note">Pick one of {name}'s tasks to see its files.</p>
+          )}
         </div>
         <div
           role="tabpanel"
@@ -154,13 +174,29 @@ export function WorkPanel({
           tabIndex={0}
           hidden={tab !== "computer"}
         >
-          <EmptyTab
-            icon={<ScreenIcon />}
-            title="No screen to show"
-            body={`When ${name} uses a browser or a desktop, you can watch it here.`}
-          />
+          {task ? (
+            <EmptyTab
+              icon={<ScreenIcon />}
+              title="No screen to show"
+              body={`When ${name} uses a browser or a desktop, you can watch it here.`}
+            />
+          ) : (
+            <p className="work-note">Pick one of {name}'s tasks to see its computer.</p>
+          )}
+        </div>
+        <div
+          role="tabpanel"
+          id="work-tabpanel-settings"
+          aria-labelledby="work-tab-settings"
+          tabIndex={0}
+          hidden={tab !== "settings"}
+        >
+          <p className="work-note">{name}'s settings arrive in a later version of Clawtrate.</p>
         </div>
       </div>
+      <p className="visually-hidden" role="status" aria-live="polite" data-testid="work-announcer">
+        {announcement}
+      </p>
     </aside>
   );
 }

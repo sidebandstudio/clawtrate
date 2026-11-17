@@ -335,6 +335,8 @@ export type WorkspacePage = {
   /** Where the next page starts: `offset` plus the entries this answer carries. */
   nextOffset: number;
   checkedAt: number;
+  /** The gateway says the folder does not exist (`workspace_path_not_found`). */
+  missing: boolean;
 };
 
 /** The facts block: what is known of a file whether or not it can be shown. */
@@ -628,14 +630,29 @@ export async function listWorkspace(
   path: string,
   offset: number,
 ): Promise<WorkspacePage> {
-  const answer = asRecord(
-    await ctx.request("agents.workspace.list", {
+  let raw: unknown;
+  try {
+    raw = await ctx.request("agents.workspace.list", {
       agentId: botId,
       ...(path ? { path } : {}),
       offset,
       limit: WORKSPACE_PAGE,
-    }),
-  );
+    });
+  } catch (error) {
+    if (refusalOf(error).type !== "workspace_path_not_found") throw error;
+    return {
+      botId,
+      path,
+      entries: [],
+      totalEntries: 0,
+      offset,
+      nextOffset: offset,
+      checkedAt: ctx.now(),
+      missing: true,
+    };
+  }
+  const answer = asRecord(raw);
+
   const entries = (Array.isArray(answer?.entries) ? answer.entries : [])
     .map(mapWorkspaceEntry)
     .filter((entry): entry is WorkspaceEntry => entry !== null);
@@ -649,6 +666,7 @@ export async function listWorkspace(
     offset: start,
     nextOffset: start + kept.length,
     checkedAt: ctx.now(),
+    missing: false,
   };
 }
 

@@ -44,6 +44,7 @@ import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime, summarizeArguments } from "./format.ts";
 import { ArrowDownIcon, BackIcon, ChevronIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { StepFileLinks } from "./work/links.tsx";
 
 type ToolCall = Extract<TranscriptBlock, { kind: "tool-call" }>;
 
@@ -73,6 +74,7 @@ function ToolStep({ call }: { call: ToolCall }) {
     <details
       className="step"
       data-testid="tool-call"
+      data-call-id={call.callId ?? undefined}
       onToggle={(event) =>
         note(event.currentTarget, event.currentTarget.contains(document.activeElement))
       }
@@ -90,6 +92,7 @@ function ToolStep({ call }: { call: ToolCall }) {
         </span>
       </summary>
       <div className="step-body">
+        <StepFileLinks callId={call.callId} />
         <p className="code-label">Arguments</p>
         <pre className="code-block">{call.argumentsText}</pre>
         {call.result && (

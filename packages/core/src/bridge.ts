@@ -163,7 +163,27 @@ export type ClawtrateBridge = {
    * gateway's per-image and per-file ceilings before it is kept.
    */
   attach(file: { name: string; type: string; data: ArrayBuffer }): Promise<AttachmentInfo>;
+  /**
+   * Save bytes the viewer holds to a file the person chooses (the desktop app's
+   * save dialog). Absent where the host has none: a browser downloads instead.
+   */
+  save?(file: { name: string; data: ArrayBuffer }): Promise<SaveResult>;
 };
+
+/**
+ * How a save ended. A failed write is read back before anything is said about
+ * the file that was there: `unchanged` only when it still holds exactly its
+ * earlier bytes, `absent` when nothing is there, `saved-anyway` when it holds
+ * exactly the new bytes, and `unknown` otherwise.
+ */
+export type SaveResult =
+  | { status: "saved"; name: string }
+  | { status: "cancelled" }
+  | {
+      status: "failed";
+      message: string;
+      target: "unchanged" | "absent" | "saved-anyway" | "unknown";
+    };
 
 /** Messages a web host sends over its bridge socket. */
 export type BridgeServerMessage =
