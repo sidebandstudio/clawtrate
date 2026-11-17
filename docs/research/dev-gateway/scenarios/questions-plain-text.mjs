@@ -1,0 +1,16 @@
+import { connect, sleep, brief } from "./probe-lib.mjs";
+import crypto from "node:crypto";
+const A = await connect({ name: "A", scopes: ["operator.read", "operator.write"] });
+const B = await connect({ name: "B", scopes: ["operator.read", "operator.write", "operator.questions"] });
+const key = "agent:atlas:main";
+for (const c of [A, B]) await c.call("sessions.messages.subscribe", { key });
+const single = [{ id: "color", header: "Colour", question: "Which colour?", options: [{ label: "Red" }, { label: "Blue" }] }];
+const t0 = Date.now();
+const r = await A.send(key, `#tool ask_user ${JSON.stringify({ questions: single })}`, {}, 120000);
+await B.waitFor((e) => e.event === "question.requested" && e.payload?.runId === r.runId, 30000);
+const s = await A.call("chat.send", { sessionKey: key, message: "Blue please", idempotencyKey: crypto.randomUUID() });
+console.log("answer send:", JSON.stringify(s));
+const fin = await r.done; await sleep(2000);
+console.log("asking run terminal:", JSON.stringify({ state: fin.state, errorMessage: fin.errorMessage, errorKind: fin.errorKind, stopReason: fin.stopReason }));
+for (const e of A.events.filter((e) => e.t >= t0 && (e.event === "chat" && ["final","error","aborted"].includes(e.payload?.state) || (e.event === "agent" && e.payload?.stream === "lifecycle" && ["end","error"].includes(e.payload?.data?.phase))))) console.log(" ", brief(e, 300));
+await A.close(); await B.close();
