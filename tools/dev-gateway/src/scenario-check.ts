@@ -22,11 +22,24 @@ import {
 } from "@openclaw/gateway-protocol/schema";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
-import { CODING_AGENT_SERVER, THREAD_URL_BASE } from "./coding-agent-mcp.ts";
+import {
+  CODING_AGENT_SERVER,
+  SEND_MESSAGE_TEXT,
+  THREAD_URL_BASE,
+  TOOLS as CODING_AGENT_TOOLS,
+} from "./coding-agent-mcp.ts";
 import { TERMINAL_CHAT_STATES, type GatewayEvent, type OperatorSession } from "./operator.ts";
-import { SHELL_COMMANDS } from "./scenarios.ts";
+import {
+  resolveRound,
+  scenarioRounds,
+  SCENARIOS,
+  selectScenarios,
+  SHELL_COMMANDS,
+  type PlanContext,
+} from "./scenarios.ts";
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
 import { DENIED_TOOLS } from "./cli.ts";
+import { OFFERED_TOOLS_PATH } from "./fake-provider.ts";
 
 type JsonRecord = Record<string, unknown>;
 const rec = (value: unknown): JsonRecord =>
@@ -83,6 +96,18 @@ export class RunView {
     );
   }
 
+  /** The run's tool payloads that reached this client as `session.tool` (sessions.subscribe). */
+  sessionTool(phase?: string, name?: string): GatewayEvent[] {
+    return this.op.events.filter(
+      (e) =>
+        e.seq > this.from &&
+        e.event === "session.tool" &&
+        rec(e.payload).runId === this.runId &&
+        (!phase || this.data(e).phase === phase) &&
+        (!name || this.data(e).name === name),
+    );
+  }
+
   agent(stream?: string): GatewayEvent[] {
     return this.events.filter(
       (e) => e.event === "agent" && (!stream || rec(e.payload).stream === stream),
@@ -97,10 +122,12 @@ export class RunView {
     return this.agent("lifecycle").filter((e) => this.data(e).phase === phase);
   }
 
+  /** Tool payloads of the run, from `agent` tool events or, for a run another client started, `session.tool`. */
   tool(phase: string, name?: string): GatewayEvent[] {
-    return this.agent("tool").filter(
+    const own = this.agent("tool").filter(
       (e) => this.data(e).phase === phase && (!name || this.data(e).name === name),
     );
+    return own.length > 0 ? own : this.sessionTool(phase, name);
   }
 
   get terminal(): JsonRecord {
@@ -233,6 +260,8 @@ export type Harness = {
    * `automations` are offered only in such runs.
    */
   ownerRun(botId: string, key: string, message: string): Promise<RunView>;
+  /** The tool names the scripted model received in the session's latest request. */
+  offeredTools(key: string): Promise<string[] | null>;
 };
 
 /** What one kind of tool call looks like on the wire, for "What the scenario check observed". */
@@ -261,37 +290,64 @@ export function shapeOf(value: unknown, depth = 2): string {
   return value === null ? "null" : typeof value;
 }
 
-/** Record the first call of a tool in a run, with what names its kind besides its name. */
+/** What a family's first call must look like on the wire. */
+export type FamilyExpectation = {
+  args: unknown;
+  title: string;
+  /** shapeOf(args), as documented in docs/decisions.md. */
+  argsShape: string;
+  /** "content <types>; details <shapeOf(details, 1)>", as documented. */
+  resultShape: string;
+  historyDetails: boolean;
+};
+
+/**
+ * Assert the first call of a tool in a run against its expectation, and
+ * record it for the documented table: the exact arguments, the item's kind,
+ * title and completion, the result's shape and whether history keeps its
+ * details. A client that did not start the run gets the payloads through
+ * `session.tool`.
+ */
 async function recordFamily(
   h: Harness,
   family: string,
   directive: string,
   view: RunView,
   tool: string,
+  expected: FamilyExpectation,
 ): Promise<void> {
+  const start = view.tool("start", tool)[0];
+  const end = view.tool("result", tool)[0];
+  expect(start && end, `no ${tool} call with its result for ${family}`);
+  same(view.data(start).args, expected.args, `${tool} arguments`);
+  const toolCallId = view.data(start).toolCallId;
+  const items = view.agent("item").filter((e) => view.data(e).toolCallId === toolCallId);
+  const itemStart = items.find((e) => view.data(e).phase === "start");
+  const itemEnd = items.find((e) => view.data(e).phase === "end");
+  expect(itemStart && itemEnd, `${tool} item start and end`);
+  same(
+    [view.data(itemStart).kind, view.data(itemStart).title, view.data(itemEnd).status],
+    ["tool", expected.title, "completed"],
+    `${tool} item kind, title and status`,
+  );
+  const data = view.data(end);
+  same(data.isError, false, `${tool} isError`);
+  const result = rec(data.result);
+  const content = Array.isArray(result.content) ? (result.content as JsonRecord[]) : [];
+  const details = rec(result.details);
+  const argsShape = shapeOf(view.data(start).args);
+  const resultShape = `content ${content.map((p) => String(p.type)).join("+") || "none"}; details ${shapeOf(details, 1)}`;
+  same(argsShape, expected.argsShape, `${tool} argument shape`);
+  same(resultShape, expected.resultShape, `${tool} result shape`);
   const history = await h
     .op("plain")
     .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: view.sessionKey });
-  const start = view.tool("start", tool)[0];
-  const end = view.tool("result", tool)[0];
-  // A client that did not start the run gets item events but no tool events,
-  // so for such a run the call and its result come from history.
-  const item = view
-    .agent("item")
-    .find((e) => view.data(e).phase === "start" && view.data(e).name === tool);
-  expect(item, `no ${tool} item to record for ${family}`);
-  const toolCallId = view.data(item).toolCallId;
-  const call = history.messages
-    .flatMap((m) => (Array.isArray(m.content) ? (m.content as JsonRecord[]) : []))
-    .find((part) => part.type === "toolCall" && part.id === toolCallId);
   const row = history.messages.find((m) => m.role === "toolResult" && m.toolCallId === toolCallId);
-  const data = end ? view.data(end) : {};
-  const result = end ? rec(data.result) : { content: row?.content, details: row?.details };
-  const content = Array.isArray(result.content) ? (result.content as JsonRecord[]) : [];
-  const details = rec(result.details);
+  expect(row, `${tool} result in history`);
+  same(row.details !== undefined, expected.historyDetails, `${tool} history keeps details`);
   const hints = [
-    `item.kind "${String(view.data(item).kind)}"`,
-    `item.title "${String(view.data(item).title)}"`,
+    `item.kind "tool"`,
+    `item.title "${expected.title}"`,
     ...(data.commandBearing === true ? ["commandBearing true"] : []),
     ...(typeof details.mcpServer === "string"
       ? [`details.mcpServer "${details.mcpServer}", mcpTool "${String(details.mcpTool)}"`]
@@ -301,14 +357,91 @@ async function recordFamily(
     family,
     directive,
     tool,
-    args: shapeOf(start ? view.data(start).args : call?.arguments),
-    result:
-      `content ${content.map((p) => String(p.type)).join("+") || "none"}; details ${shapeOf(details, 1)}` +
-      (end ? "" : " (from history: no tool events reached this client)"),
-    historyDetails: row !== undefined && row.details !== undefined,
+    args: argsShape,
+    result: resultShape,
+    historyDetails: expected.historyDetails,
     kindHints: hints.join("; "),
   });
 }
+
+/** A file in a bot's workspace, as the gateway reads it (`agents.workspace.get`). */
+async function workspaceFile(h: Harness, agentId: string, path: string): Promise<string> {
+  const out = await h
+    .op("plain")
+    .request<{ file?: { content?: unknown } }>("agents.workspace.get", { agentId, path });
+  expect(typeof out.file?.content === "string", `${agentId}:${path} could not be read back`);
+  return out.file.content;
+}
+
+/** A bot's workspace listing as `ls` prints it: one visible entry per line, in name order. */
+async function listing(h: Harness, agentId: string): Promise<string> {
+  const out = await h
+    .op("plain")
+    .request<{ entries: { name: string; kind: string }[] }>("agents.workspace.list", { agentId });
+  return out.entries
+    .filter((e) => !e.name.startsWith("."))
+    .map((e) => e.name)
+    .sort()
+    .join("\n");
+}
+
+/** An object with its keys in sorted order, as the gateway renders structured content. */
+function sortedKeys(value: JsonRecord): JsonRecord {
+  return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/** The tool calls a directive's scenario makes, as the scripted model builds them. */
+export function scriptedCalls(directive: string, agentId = "main") {
+  const ctx: PlanContext = { agentId, sessionKey: null, results: [] };
+  return scenarioRounds(selectScenarios(directive)).flatMap((round) =>
+    resolveRound(round, ctx, "check").flatMap((step) =>
+      step.kind === "tool" ? [{ name: step.name, arguments: step.arguments }] : [],
+    ),
+  );
+}
+
+/** The arguments of a directive's first call of a tool. */
+export function scriptedArgs(directive: string, tool: string, agentId = "main"): unknown {
+  const call = scriptedCalls(directive, agentId).find((c) => c.name === tool);
+  expect(call, `${directive} makes no ${tool} call`);
+  return call.arguments;
+}
+
+/** The tools a bot's model is offered in a paired client's run: the allowlist, expanded. */
+export const EXPECTED_OFFERED_TOOLS = [
+  "apply_patch",
+  "ask_user",
+  ...CODING_AGENT_TOOLS.map((tool) => `${CODING_AGENT_SERVER}__${tool.name}`),
+  "edit",
+  "exec",
+  "ls",
+  "progress_card",
+  "read",
+  "sessions_list",
+  "sessions_send",
+  "web_search",
+  "write",
+].sort();
+
+/** What `tools.effective` reports available; it lists owner-only tools whoever asks. */
+export const EXPECTED_EFFECTIVE_TOOLS = [
+  "apply_patch",
+  "ask_user",
+  "automations",
+  "edit",
+  "exec",
+  "ls",
+  "progress_card",
+  "read",
+  "sessions_list",
+  "sessions_send",
+  "web_search",
+  "write",
+].sort();
+
+const SCHEDULE_RESULT_SHAPE =
+  "content text; details {id: string, owner: {…}, agentId: string, sessionKey: string, name: string, enabled: boolean, deleteAfterRun: boolean, createdAtMs: number, schedule: {…}, sessionTarget: string, wakeMode: string, payload: {…}, state: {…}, updatedAtMs: number, configRevision: string, nextRunAtMs: number, deliveryPreview: {…}}";
+const SCHEDULE_HISTORY_DETAILS = true;
 
 export type ScenarioCheck = {
   name: string;
@@ -438,7 +571,15 @@ async function questionCheck(
     `Thanks. You answered:\n\n${lines.join("\n")}`,
     "the reply after the answer",
   );
-  if (directive === "#ask") await recordFamily(h, "questions", "#ask", view, "ask_user");
+  if (directive === "#ask") {
+    await recordFamily(h, "questions", "#ask", view, "ask_user", {
+      args: scriptedArgs("#ask", "ask_user", "pip"),
+      title: "Ask User Which route should I plan for Saturday?",
+      argsShape: "{questions: [{…}…], timeoutSeconds: number}",
+      resultShape: "content text; details {status: string, answers: {…}}",
+      historyDetails: false,
+    });
+  }
   // A connection without operator.questions is not sent question events.
   expect(
     !h.op("plain").events.some((e) => e.seq > seenBefore && e.event.startsWith("question.")),
@@ -474,12 +615,15 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       same(view.finalText(), text, "text");
       const pieces = view.agent("assistant").map((e) => view.data(e));
       same(pieces.map((d) => d.delta).join(""), text, "the assistant deltas add up to the text");
-      // Observed: only the first assistant event carries the cumulative text.
-      same(pieces[0]!.text, pieces[0]!.delta, "the first assistant event's text");
-      expect(
-        pieces.length > 1 && pieces.slice(1).some((d) => d.text === undefined),
-        "later assistant events carry only delta",
-      );
+      // A client rebuilds the text as the gateway sends it: an event with
+      // `text` is a snapshot (the first one, a replacement, an empty delta or
+      // media), any other appends its `delta`. Here, an append-only stream,
+      // only the first event carried a snapshot; the rule does not rely on it.
+      let rebuilt = "";
+      for (const d of pieces)
+        rebuilt = typeof d.text === "string" ? d.text : rebuilt + String(d.delta ?? "");
+      same(rebuilt, text, "the text rebuilt from snapshots and deltas");
+      same(pieces[0]!.text, pieces[0]!.delta, "the first assistant event is a snapshot");
     },
   },
   {
@@ -507,6 +651,11 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         (row?.content as JsonRecord[]).map((part) => part.type),
         ["thinking", "text"],
         "the history row's blocks",
+      );
+      same(
+        [view.terminal.state, view.finalText()],
+        ["final", "I thought it over first. This is the answer that follows the reasoning."],
+        "the visible answer",
       );
     },
   },
@@ -629,10 +778,19 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       // tool finishes and the steered message is answered inside the first run.
       same(steer.terminal.state, "final", "the steer run's end");
       same(steer.terminal.message, undefined, "the steer run's final message");
+      const slow = first.result(`${CODING_AGENT_SERVER}__slow_task`);
+      same(slow.isError, false, "the slow tool still finished");
+      // A server text that only repeats the structured content is dropped:
+      // one block, the rendering of the structured content.
       same(
-        first.result(`${CODING_AGENT_SERVER}__slow_task`).isError,
-        false,
-        "the slow tool still finished",
+        slow.content.map((p) => p.text),
+        [`structuredContent:\n${JSON.stringify({ seconds: 3, status: "done" }, null, 2)}`],
+        "a duplicate server text is dropped",
+      );
+      same(
+        slow.details.structuredContent,
+        { status: "done", seconds: 3 },
+        "the slow tool's structured result",
       );
       same(
         first.finalText(),
@@ -741,7 +899,19 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         [false, "completed", 0],
         "exec result",
       );
-      await recordFamily(h, "shell", "#approve", view, "exec");
+      await recordFamily(h, "shell", "#approve", view, "exec", {
+        args: scriptedArgs("#approve", "exec", SHELL_BOT),
+        title: "Exec list files (in .)",
+        argsShape: "{command: string, workdir: string}",
+        resultShape:
+          "content text; details {status: string, exitCode: number, exitSignal: null, exitReason: string, durationMs: number, aggregated: string, noOutputTimedOut: boolean, cwd: string}",
+        historyDetails: true,
+      });
+      same(
+        [result.text, result.details.aggregated],
+        [await listing(h, SHELL_BOT), await listing(h, SHELL_BOT)],
+        "the command's output is the workspace listing",
+      );
       // The rule is reused: the same command in the same folder runs without asking.
       const again = await h.run("approvals", key, "#approve");
       same(again.result("exec").details.exitCode, 0, "the second run's exec");
@@ -754,6 +924,23 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
               rec(rec(e.payload).request).runId === again.runId,
           ),
         "the reusable rule was not applied: the same command asked again",
+      );
+      // The rule is the bot's, not the session's: a new task reuses it too.
+      const elsewhere = await h.run(
+        "approvals",
+        await h.session(SHELL_BOT, "approve-reuse"),
+        "#approve",
+      );
+      same(elsewhere.result("exec").details.exitCode, 0, "the exec in a new task");
+      expect(
+        !h
+          .op("approvals")
+          .events.some(
+            (e) =>
+              e.event === "exec.approval.requested" &&
+              rec(rec(e.payload).request).runId === elsewhere.runId,
+          ),
+        "the reusable rule was not applied in a new task",
       );
     },
   },
@@ -930,7 +1117,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
   },
   {
     name: "a message to another bot, answered in the same call",
-    covers: ["#message"],
+    covers: ["#message", "#reply"],
     run: async (h) => {
       const { view } = await messageCheck(h, "#message");
       await h.wait(view, 60_000);
@@ -957,7 +1144,14 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       recipient.validate();
       same(result.details.reply, recipient.finalText(), "the reply is the recipient's final text");
       same(view.finalText(), `Marlow replied:\n\n> ${recipient.finalText()}`, "the sender's reply");
-      await recordFamily(h, "messaging between bots", "#message", view, "sessions_send");
+      await recordFamily(h, "messaging between bots", "#message", view, "sessions_send", {
+        args: scriptedArgs("#message", "sessions_send", "pip"),
+        title: "Session Send agent marlow, timeout 30",
+        argsShape: "{agentId: string, message: string, timeoutSeconds: number}",
+        resultShape:
+          "content text; details {runId: string, sessionKey: string, status: string, delivery: {…}, reply: string}",
+        historyDetails: true,
+      });
       // The recipient's run ends before the sender's tool result arrives.
       expect(
         recipient.events.find(isChat("final"))!.seq < view.tool("result", "sessions_send")[0]!.seq,
@@ -1120,7 +1314,36 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         `The coding agent picked it up: ${String(structured.url)}`,
         "the reply",
       );
-      await recordFamily(h, "tool servers (MCP)", "#mcp", view, name);
+      await recordFamily(h, "tool servers (MCP)", "#mcp", view, name, {
+        args: scriptedArgs("#mcp", name),
+        title: "Coder Send Message",
+        argsShape: "{message: string}",
+        resultShape:
+          "content text+text; details {mcpServer: string, mcpTool: string, structuredContent: {…}}",
+        historyDetails: false,
+      });
+      // The server's own text is kept beside the rendering of its structured
+      // content, which comes first.
+      same(
+        result.content.map((p) => p.type),
+        ["text", "text"],
+        "the MCP result's content blocks",
+      );
+      same(
+        result.content[0]!.text,
+        `structuredContent:\n${JSON.stringify(sortedKeys(structured), null, 2)}`,
+        "the structured content rendered as text",
+      );
+      same(result.content[1]!.text, SEND_MESSAGE_TEXT, "the server's own text");
+      expect(/^thread-\d+$/.test(String(structured.threadId)), "the thread id");
+      same(
+        [structured.reply, structured.url],
+        [
+          "Opened a branch and drafted the change for: Add a dark mode toggle to the settings page.",
+          `${THREAD_URL_BASE}${String(structured.threadId)}`,
+        ],
+        "the structured reply",
+      );
     },
   },
   {
@@ -1134,7 +1357,20 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       expect(end.at - start.at >= 2_500, "the call took its delay");
       // No progress is forwarded between the start and the result.
       same(view.tool("update", name).length, 0, "tool update events");
-      same(view.result(name).isError, false, "MCP isError");
+      const result = view.result(name);
+      same(result.isError, false, "MCP isError");
+      same(view.data(start).args, scriptedArgs("#mcp-slow 3", name), "the slow call's arguments");
+      const structured = rec(result.details.structuredContent);
+      same(
+        [structured.reply, structured.url, result.content.map((p) => p.text)[1]],
+        [
+          "Opened a branch and drafted the change for: Refactor the settings page into sections.",
+          `${THREAD_URL_BASE}${String(structured.threadId)}`,
+          SEND_MESSAGE_TEXT,
+        ],
+        "the slow call's result",
+      );
+      same(view.finalText(), `The coding agent finished: ${String(structured.url)}`, "the reply");
     },
   },
   {
@@ -1207,8 +1443,25 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#read"],
     run: async (h) => {
       const view = await h.run("plain", await h.session("main", "read"), "#read");
-      same(view.result("read").isError, false, "read isError");
-      await recordFamily(h, "files: read", "#read", view, "read");
+      await recordFamily(h, "files: read", "#read", view, "read", {
+        args: scriptedArgs("#read", "read"),
+        title: "Read from AGENTS.md",
+        argsShape: "{path: string}",
+        resultShape: "content text; details {kind: string, content: string}",
+        historyDetails: false,
+      });
+      const file = await workspaceFile(h, "main", "AGENTS.md");
+      const result = view.result("read");
+      same(
+        [result.text, result.details.kind, result.details.content],
+        [file, "text", file],
+        "the file read",
+      );
+      same(
+        [view.terminal.state, view.finalText()],
+        ["final", "I read my instructions file."],
+        "the run's end",
+      );
     },
   },
   {
@@ -1216,11 +1469,11 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#read-six"],
     run: async (h) => {
       const view = await h.run("plain", await h.session("main", "read-six"), "#read-six");
-      const starts = view.agent("tool").filter((e) => view.data(e).phase === "start");
+      const starts = view.tool("start");
       same(
-        starts.map((e) => view.data(e).name),
-        Array(6).fill("read"),
-        "the tool calls",
+        starts.map((e) => [view.data(e).name, view.data(e).args]),
+        scriptedCalls("#read-six").map((call) => [call.name, call.arguments]),
+        "the six calls and their arguments",
       );
       const first = starts[0]!.seq;
       const last = view.tool("result", "read").at(-1)!.seq;
@@ -1229,12 +1482,28 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         0,
         "text between the reads",
       );
+      const results = view.tool("result", "read").map((e) => rec(view.data(e).result));
+      for (const [i, call] of scriptedCalls("#read-six").entries()) {
+        const args = call.arguments as { path: string; offset?: number };
+        const file = await workspaceFile(h, "main", args.path);
+        const expected = args.offset
+          ? file
+              .split("\n")
+              .slice(args.offset - 1)
+              .join("\n")
+          : file;
+        const text = (results[i]!.content as JsonRecord[]).map((p) => String(p.text)).join("");
+        same(
+          text,
+          expected,
+          `read ${i + 1} (${args.path}${args.offset ? ` from line ${args.offset}` : ""})`,
+        );
+      }
       same(
-        view.tool("result", "read").map((e) => view.data(e).isError),
-        Array(6).fill(false),
-        "the reads' isError",
+        [view.terminal.state, view.finalText()],
+        ["final", "I read six files in my workspace."],
+        "the run's end",
       );
-      same(view.finalText(), "I read six files in my workspace.", "the reply");
     },
   },
   {
@@ -1242,8 +1511,34 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#list"],
     run: async (h) => {
       const view = await h.run("plain", await h.session("main", "list"), "#list");
-      expect(view.result("ls").text.includes("AGENTS.md"), "the listing names AGENTS.md");
-      await recordFamily(h, "files: list", "#list", view, "ls");
+      await recordFamily(h, "files: list", "#list", view, "ls", {
+        args: scriptedArgs("#list", "ls"),
+        title: "Ls .",
+        argsShape: "{path: string}",
+        resultShape: "content text; details {content: string}",
+        historyDetails: false,
+      });
+      const result = view.result("ls");
+      same(result.details.content, result.text, "the listing in details");
+      const listed = result.text.split("\n").map((line) => JSON.parse(line) as string);
+      const workspace = await h
+        .op("plain")
+        .request<{ entries: { name: string; kind: string }[] }>("agents.workspace.list", {
+          agentId: "main",
+        });
+      same(
+        listed.filter((name) => !name.endsWith("/")).sort(),
+        workspace.entries
+          .filter((e) => e.kind === "file")
+          .map((e) => e.name)
+          .sort(),
+        "the listed files are the workspace's",
+      );
+      same(
+        [view.terminal.state, view.finalText()],
+        ["final", "Those are the files in my workspace."],
+        "the run's end",
+      );
     },
   },
   {
@@ -1251,9 +1546,31 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#write"],
     run: async (h) => {
       const view = await h.run("plain", await h.session("main", "write"), "#write");
+      const args = scriptedArgs("#write", "write") as { path: string; content: string };
+      await recordFamily(h, "files: write", "#write", view, "write", {
+        args,
+        title: "Write to notes/scratch.md (34 chars)",
+        argsShape: "{path: string, content: string}",
+        resultShape:
+          "content text; details {changed: boolean, created: boolean, diff: string, firstChangedLine: number, patch: string}",
+        historyDetails: true,
+      });
       const result = view.result("write");
-      same([result.isError, result.details.created], [false, true], "write result");
-      await recordFamily(h, "files: write", "#write", view, "write");
+      expect(
+        /^Successfully wrote 34 bytes to \S+\/notes\/scratch\.md$/.test(result.text),
+        `write text: ${result.text}`,
+      );
+      same(
+        [result.details.changed, result.details.created, result.details.diff],
+        [true, true, "+1 # Scratch\n+2 \n+3 - Check the trail map."],
+        "write details",
+      );
+      same(await workspaceFile(h, "main", args.path), args.content, "the file on disk");
+      same(
+        [view.terminal.state, view.finalText()],
+        ["final", "I wrote notes/scratch.md."],
+        "the run's end",
+      );
     },
   },
   {
@@ -1261,13 +1578,34 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#edit"],
     run: async (h) => {
       const view = await h.run("plain", await h.session("main", "edit"), "#edit");
+      await recordFamily(h, "files: edit", "#edit", view, "edit", {
+        args: scriptedArgs("#edit", "edit"),
+        title: "Edit in notes/edit-me.md",
+        argsShape: "{path: string, edits: [{…}…]}",
+        resultShape:
+          "content text; details {changed: boolean, diff: string, firstChangedLine: number, patch: string}",
+        historyDetails: true,
+      });
       const result = view.result("edit");
-      same(
-        [result.isError, result.details.diff],
-        [false, "-1 Leave at 9:00.\n+1 Leave at 8:30."],
-        "edit result",
+      expect(
+        /^Successfully replaced 1 block\(s\) in \S+\/notes\/edit-me\.md\.$/.test(result.text),
+        `edit text: ${result.text}`,
       );
-      await recordFamily(h, "files: edit", "#edit", view, "edit");
+      same(
+        [result.details.changed, result.details.diff],
+        [true, "-1 Leave at 9:00.\n+1 Leave at 8:30."],
+        "edit details",
+      );
+      same(
+        await workspaceFile(h, "main", "notes/edit-me.md"),
+        "Leave at 8:30.\n",
+        "the file on disk",
+      );
+      same(
+        [view.terminal.state, view.finalText()],
+        ["final", "I changed the departure time in notes/edit-me.md."],
+        "the run's end",
+      );
     },
   },
   {
@@ -1275,13 +1613,31 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#remember"],
     run: async (h) => {
       const view = await h.run("plain", await h.session("main", "remember"), "#remember");
-      same(view.result("write").isError, false, "write isError");
+      const args = scriptedArgs("#remember", "write") as { path: string; content: string };
       same(
-        view.data(view.tool("start", "write")[0]!).args,
+        args,
         { path: "memory/2026-11-17.md", content: "- Prefers the lake loop on relaxed weekends.\n" },
-        "the memory write",
+        "the scripted note",
       );
-      await recordFamily(h, "memory", "#remember", view, "write");
+      await recordFamily(h, "memory", "#remember", view, "write", {
+        args,
+        title: "Write to memory/2026-11-17.md (45 chars)",
+        argsShape: "{path: string, content: string}",
+        resultShape:
+          "content text; details {changed: boolean, created: boolean, diff: string, firstChangedLine: number, patch: string}",
+        historyDetails: true,
+      });
+      same(
+        view.result("write").details.diff,
+        "+1 - Prefers the lake loop on relaxed weekends.",
+        "the note's diff",
+      );
+      same(await workspaceFile(h, "main", args.path), args.content, "the note on disk");
+      same(
+        [view.terminal.state, view.finalText()],
+        ["final", "Saved to memory: you prefer the lake loop on relaxed weekends."],
+        "the run's end",
+      );
     },
   },
   {
@@ -1289,17 +1645,34 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#search"],
     run: async (h) => {
       const view = await h.run("plain", await h.session("main", "search"), "#search");
+      const args = scriptedArgs("#search", "web_search") as { query: string; count: number };
+      await recordFamily(h, "web search", "#search", view, "web_search", {
+        args,
+        title: `Web Search for "${args.query}" (top 3)`,
+        argsShape: "{query: string, count: number}",
+        resultShape:
+          "content text; details {kind: string, provider: string, query: string, count: number, tookMs: number, results: [{…}…], externalContent: {…}}",
+        historyDetails: false,
+      });
       const result = view.result("web_search");
-      same(result.isError, false, "web_search isError");
       const parsed = rec(JSON.parse(result.text) as unknown);
-      same([parsed.provider, parsed.count], ["ollama", 3], "the search provider and count");
-      const urls = (parsed.results as JsonRecord[]).map((r) => String(r.url));
+      for (const source of [parsed, result.details]) {
+        same(
+          [source.kind, source.provider, source.query, source.count],
+          ["results", "ollama", args.query, 3],
+          "the search result",
+        );
+        same(
+          (source.results as JsonRecord[]).map((r) => r.url),
+          [1, 2, 3].map((n) => `https://search.example/results/${n}`),
+          "results come from the scripted server",
+        );
+      }
       same(
-        urls,
-        [1, 2, 3].map((n) => `https://search.example/results/${n}`),
-        "results come from the scripted server",
+        [view.terminal.state, view.finalText()],
+        ["final", "I found three results; they are shown above."],
+        "the run's end",
       );
-      await recordFamily(h, "web search", "#search", view, "web_search");
     },
   },
   {
@@ -1307,8 +1680,42 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#sessions"],
     run: async (h) => {
       const view = await h.run("plain", await h.session("main", "sessions"), "#sessions");
-      same(view.result("sessions_list").isError, false, "sessions_list isError");
-      await recordFamily(h, "sessions", "#sessions", view, "sessions_list");
+      await recordFamily(h, "sessions", "#sessions", view, "sessions_list", {
+        args: scriptedArgs("#sessions", "sessions_list"),
+        title: "Sessions 5",
+        argsShape: "{limit: number}",
+        resultShape:
+          "content text; details {count: number, sessions: [{…}…], hasMore: boolean, nextOffset: number, limitApplied: number}",
+        historyDetails: false,
+      });
+      const result = view.result("sessions_list");
+      const sessions = (result.details.sessions ?? []) as JsonRecord[];
+      same(
+        [
+          result.details.count,
+          sessions.length,
+          result.details.limitApplied,
+          result.details.hasMore,
+        ],
+        [5, 5, 5, true],
+        "the page",
+      );
+      expect(
+        sessions.every((row) => row.agentId === "main"),
+        "every session is the bot's own",
+      );
+      // The details shorten each key for display; the text keeps it whole.
+      const listed = (rec(JSON.parse(result.text) as unknown).sessions ?? []) as JsonRecord[];
+      expect(
+        listed.length === 5 && listed.every((row) => String(row.key).startsWith("agent:main:")),
+        "every key is one of the bot's tasks",
+      );
+      same(rec(JSON.parse(result.text) as unknown).count, 5, "the text carries the same list");
+      same(
+        [view.terminal.state, view.finalText()],
+        ["final", "Those are my recent tasks."],
+        "the run's end",
+      );
     },
   },
   {
@@ -1317,32 +1724,53 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     run: async (h) => {
       const key = `agent:main:check-schedule-${Date.now().toString(36)}`;
       const view = await h.ownerRun("main", key, "#schedule");
-      // The run was started by the CLI: this client gets its items, not its tool events.
-      same(
-        view.tool("start", "automations").length,
-        0,
-        "tool events from a run another client started",
+      // A run the CLI started reaches this client through session.tool (sessions.subscribe).
+      same(view.agent("tool").length, 0, "agent tool events for a run another client started");
+      const calls = view
+        .sessionTool("start", "automations")
+        .map((e) => view.data(e).args as JsonRecord);
+      const results = view.sessionTool("result", "automations").map((e) => view.data(e));
+      same(calls.length, 2, "the two automations calls");
+      same(calls[0], scriptedArgs("#schedule", "automations"), "the add call");
+      const added = rec(
+        JSON.parse((rec(results[0]!.result).content as JsonRecord[])[0]!.text as string) as unknown,
       );
-      const ends = view
-        .agent("item")
-        .filter((e) => view.data(e).phase === "end" && view.data(e).name === "automations");
       same(
-        ends.map((e) => view.data(e).status),
-        ["completed", "completed"],
-        "the two automations items",
+        [added.name, rec(added.schedule).at, rec(added.payload).kind, added.enabled],
+        ["Scripted reminder", "2035-01-01T09:00:00.000Z", "systemEvent", true],
+        "the routine created",
       );
-      same(view.finalText(), "I created the routine and removed it again.", "the reply");
-      await recordFamily(h, "scheduling", "#schedule", view, "automations");
+      same(
+        calls[1],
+        { action: "remove", jobId: added.id },
+        "the remove call names the created routine",
+      );
+      same(rec(results[1]!.result).details, { ok: true, removed: true }, "the remove result");
+      same(
+        results.map((r) => r.isError),
+        [false, false],
+        "the calls' isError",
+      );
+      await recordFamily(h, "scheduling", "#schedule", view, "automations", {
+        args: calls[0],
+        title: "Automations",
+        argsShape:
+          "{action: string, job: {name: string, schedule: {…}, sessionTarget: string, wakeMode: string, payload: {…}}}",
+        resultShape: SCHEDULE_RESULT_SHAPE,
+        historyDetails: SCHEDULE_HISTORY_DETAILS,
+      });
+      same(
+        [view.terminal.state, view.finalText()],
+        ["final", "I created the routine and removed it again."],
+        "the run's end",
+      );
       // The same message from a paired client: the gateway does not offer the tool.
       const asUser = await h.run("plain", await h.session("main", "schedule-user"), "#schedule");
-      const calls = asUser.tool("result", "automations");
-      expect(
-        calls.length > 0 && calls.every((e) => asUser.data(e).isError === true),
-        "automations ran for a non-owner",
-      );
-      h.observe(
-        `automations from a paired client: ${asUser.result("automations").text.slice(0, 160)}`,
-      );
+      const refused = asUser.tool("result", "automations").map((e) => rec(asUser.data(e).result));
+      expect(refused.length > 0, "the paired client's run called automations");
+      for (const r of refused) {
+        same((r.content as JsonRecord[])[0]?.text, "Tool automations not found", "the refusal");
+      }
     },
   },
   {
@@ -1350,44 +1778,167 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#plan"],
     run: async (h) => {
       const view = await h.run("plain", await h.session("main", "plan"), "#plan");
-      same(view.result("progress_card").isError, false, "progress_card isError");
-      same(view.finalText(), "The plan is on the card above.", "the reply");
-      await recordFamily(h, "other (progress card)", "#plan", view, "progress_card");
+      await recordFamily(h, "other (progress card)", "#plan", view, "progress_card", {
+        args: scriptedArgs("#plan", "progress_card"),
+        title: "Progress Card",
+        argsShape: "{plan: [{…}…]}",
+        resultShape: "content text+text; details {revision: number, steps: {…}}",
+        historyDetails: false,
+      });
+      const result = view.result("progress_card");
+      same(
+        result.content.map((p) => p.text),
+        [
+          "Progress card updated (rev 1, 3/3 done)",
+          JSON.stringify({ revision: 1, steps: { completed: 3, total: 3 } }, null, 2),
+        ],
+        "the progress card result",
+      );
+      same(result.details, { revision: 1, steps: { completed: 3, total: 3 } }, "the saved plan");
+      same(
+        [view.terminal.state, view.finalText()],
+        ["final", "The plan is on the card above."],
+        "the run's end",
+      );
     },
   },
   {
-    name: "network, browser and device tools are not offered",
+    name: "the tools in effect are exactly the allowed ones",
     covers: [],
     run: async (h) => {
+      // What the model was really offered, as the scripted server received it.
+      const paired = await h.session("main", "offered");
+      await h.run("plain", paired, "#text");
+      same(
+        await h.offeredTools(paired),
+        EXPECTED_OFFERED_TOOLS,
+        "tools offered in a paired client's run",
+      );
+      const ownerKey = `agent:main:check-offered-owner-${Date.now().toString(36)}`;
+      await h.ownerRun("main", ownerKey, "#text");
+      same(
+        await h.offeredTools(ownerKey),
+        [...EXPECTED_OFFERED_TOOLS, "automations"].sort(),
+        "tools offered in an owner's run",
+      );
+      // What the gateway reports as available, which does not know the sender.
       const effective = await h
         .op("plain")
         .request<{ toolAccess?: { tools?: JsonRecord[] } }>("tools.effective", {
-          sessionKey: RECIPIENT_SESSION,
+          sessionKey: paired,
         });
-      const tools = effective.toolAccess?.tools ?? [];
-      const offered = tools.filter((t) => t.status === "available").map((t) => String(t.id));
+      const tools = effective.toolAccess?.tools;
+      expect(Array.isArray(tools) && tools.length > 0, "tools.effective reported no tools");
       same(
-        DENIED_TOOLS.filter((tool) => offered.includes(tool)),
-        [],
-        "denied tools offered to a bot",
+        tools
+          .filter((t) => t.status === "available")
+          .map((t) => String(t.id))
+          .sort(),
+        EXPECTED_EFFECTIVE_TOOLS,
+        "tools.effective available tools",
       );
-      h.observe(`tools offered to Marlow: ${offered.sort().join(", ")}`);
+      for (const tool of DENIED_TOOLS) {
+        const row = tools.find((t) => t.id === tool);
+        expect(!row || row.status !== "available", `${tool} is denied but reported available`);
+      }
     },
   },
   {
-    name: "a client that did not start the run gets items but no tool events",
+    name: "who receives a run's tool payloads",
     covers: ["#read"],
     run: async (h) => {
       const key = await h.session("main", "watcher");
-      const view = await h.run("plain", key, "#read");
-      const watched = new RunView(h.op("questions"), view.runId, key, 0);
-      same(view.agent("tool").length, 2, "tool events for the client that sent the message");
+      const view = await h.run("approvals", key, "#read");
+      // The client that sent the message: agent tool events.
       same(
-        watched.agent("tool").length,
-        0,
-        "tool events for another subscribed client with tool-events",
+        view.agent("tool").map((e) => view.data(e).phase),
+        ["start", "result"],
+        "agent tool events for the sender",
       );
-      same(watched.agent("item").length, view.agent("item").length, "item events reach both");
+      same(view.sessionTool().length, 0, "session.tool for the sender");
+      // A client that called sessions.subscribe: the same payloads as session.tool.
+      const watcher = new RunView(h.op("plain"), view.runId, key, 0);
+      same(watcher.agent("tool").length, 0, "agent tool events for a session subscriber");
+      const viaSession = watcher.sessionTool();
+      same(
+        viaSession.map((e) => watcher.data(e).phase),
+        ["start", "result"],
+        "session.tool for a session subscriber",
+      );
+      same(
+        viaSession.map((e) => [watcher.data(e).args, watcher.data(e).result]),
+        view.agent("tool").map((e) => [view.data(e).args, view.data(e).result]),
+        "session.tool carries the same arguments and result",
+      );
+      // A client subscribed only to the session's messages: items, no tool payloads.
+      const messagesOnly = new RunView(h.op("questions"), view.runId, key, 0);
+      same(
+        [messagesOnly.agent("tool").length, messagesOnly.sessionTool().length],
+        [0, 0],
+        "tool payloads for a messages-only subscriber",
+      );
+      same(
+        messagesOnly.agent("item").length,
+        view.agent("item").length,
+        "item events reach every subscriber",
+      );
+    },
+  },
+  {
+    name: "a slow shell command, approved",
+    covers: ["#sleep"],
+    run: async (h) => {
+      const key = await h.session(SHELL_BOT, "sleep");
+      const view = await h.start("approvals", key, "#sleep 1");
+      const approval = await approvalFor(h, view);
+      checkApprovalRequest(approval, view, SHELL_COMMANDS.sleep(1), [
+        "allow-once",
+        "allow-always",
+        "deny",
+      ]);
+      await h
+        .op("approvals")
+        .request("exec.approval.resolve", { id: approval.id, decision: "allow-once" });
+      await h.wait(view);
+      same(
+        view.data(view.tool("start", "exec")[0]!).args,
+        { command: "sleep 1", workdir: "." },
+        "the exec arguments",
+      );
+      const result = view.result("exec");
+      same(
+        [result.isError, result.details.status, result.details.exitCode, result.details.exitReason],
+        [false, "completed", 0, "exit"],
+        "the exec result",
+      );
+      expect(
+        Number(result.details.durationMs) >= 900,
+        `the command slept (${String(result.details.durationMs)} ms)`,
+      );
+      const started = view.tool("start", "exec")[0]!.at;
+      const ended = view.tool("result", "exec")[0]!.at;
+      expect(ended - started >= 900, "the call took the command's time");
+      same(
+        [view.terminal.state, view.finalText()],
+        ["final", "The slow command finished."],
+        "the run's end",
+      );
+    },
+  },
+  {
+    name: "the list of scenarios",
+    covers: ["#help"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "help"), "#help");
+      same(view.terminal.state, "final", "the run's end");
+      const text = view.finalText();
+      for (const scenario of SCENARIOS.filter((s) => s.name !== "help")) {
+        expect(text.includes(`\`#${scenario.name}`), `#help does not list #${scenario.name}`);
+        expect(
+          text.includes(`"${scenario.phrase}"`),
+          `#help does not give the phrase for #${scenario.name}`,
+        );
+      }
     },
   },
   {
@@ -1428,7 +1979,21 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       same(view.finalText(), "Thanks. You answered:\n\n- route: Lake loop", "the reply");
     },
   },
+  {
+    name: "every directive has a check",
+    covers: [],
+    run: () => {
+      same(uncoveredDirectives(), [], "directives no check sends");
+      return Promise.resolve();
+    },
+  },
 ];
+
+/** Directives of the scripted model that no scenario check claims to send. */
+export function uncoveredDirectives(): string[] {
+  const covered = new Set(SCENARIO_CHECKS.flatMap((check) => check.covers));
+  return SCENARIOS.map((s) => `#${s.name}`).filter((directive) => !covered.has(directive));
+}
 
 /** Run the checks on open clients. Returns one line per check, and whether all passed. */
 export async function runScenarioChecks(
@@ -1437,10 +2002,11 @@ export async function runScenarioChecks(
     log?: (line: string) => void;
     only?: (check: ScenarioCheck) => boolean;
     ownerAgent?: (botId: string, key: string, message: string) => Promise<void>;
+    providerUrl?: string;
   } = {},
 ): Promise<{ passed: number; failed: number; notes: string[] }> {
   const log = options.log ?? console.log;
-  const harness = createHarness(clients, options.ownerAgent);
+  const harness = createHarness(clients, options.ownerAgent, options.providerUrl);
   await prepareRecipient(harness);
   let passed = 0;
   let failed = 0;
@@ -1462,12 +2028,16 @@ export async function runScenarioChecks(
  * recipient's main session is opened with a message from a person first.
  */
 export async function prepareRecipient(h: Harness): Promise<void> {
+  // The plain client also follows every session, so it receives session.tool
+  // for runs it did not start; the questions client deliberately does not.
+  await h.op("plain").request("sessions.subscribe", {});
   await h.run("plain", RECIPIENT_SESSION, "#reply");
 }
 
 export function createHarness(
   clients: Record<ClientName, OperatorSession>,
   ownerAgent?: (botId: string, key: string, message: string) => Promise<void>,
+  providerUrl?: string,
 ): Harness & { notes: string[] } {
   let counter = 0;
   const notes: string[] = [];
@@ -1508,6 +2078,13 @@ export function createHarness(
       return harness.wait(await harness.start(client, key, message, extra));
     },
     observe: (line: string) => notes.push(line),
+    async offeredTools(key: string) {
+      expect(providerUrl, "this harness does not know the scripted server");
+      const response = await fetch(
+        `${providerUrl}${OFFERED_TOOLS_PATH}?session=${encodeURIComponent(key)}`,
+      );
+      return ((await response.json()) as { tools: string[] | null }).tools;
+    },
     async ownerRun(botId: string, key: string, message: string) {
       expect(ownerAgent, "this harness cannot start a run as the owner");
       const op = clients.plain;

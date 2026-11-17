@@ -9,7 +9,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
+import { instancePorts, openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import {
   openCheckClients,
   FAMILY_ROWS,
@@ -82,6 +82,7 @@ async function main(): Promise<number> {
     try {
       const { passed, failed, notes } = await runScenarioChecks(clients, {
         ownerAgent: (botId, key, message) => ownerAgent(inst, botId, key, message),
+        providerUrl: `http://127.0.0.1:${instancePorts(inst).providerPort}`,
       });
       for (const row of FAMILY_ROWS) console.log(`family ${JSON.stringify(row)}`);
       for (const note of notes) console.log(`note  ${note}`);
