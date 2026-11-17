@@ -218,6 +218,7 @@ export const RUN: Bound = flagged<Run>()({
   suspendedCards: list(MAX_PENDING_CARDS, pendingCard),
   closedCards: list(MAX_CLOSED_CARDS_PER_RUN, closedCard),
   startedAt: NUMBER,
+  reportedStartAt: NUMBER,
   endedAt: NUMBER,
   error: runError,
   stopRequestedAt: NUMBER,

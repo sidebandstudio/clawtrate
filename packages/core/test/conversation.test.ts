@@ -342,6 +342,25 @@ describe("sending (F-075, F-081, F-106)", () => {
   });
 });
 
+describe("a run's start as the gateway reports it (F-081)", () => {
+  it("is unknown for a run this client started until the gateway's lifecycle start, then that start", async () => {
+    const { client, gateway, transcript } = await openTask();
+    client.sendMessage(KEY, "Count the files");
+    await until(() => transcript().runs[0]?.bound === true);
+    const run = transcript().runs[0]!;
+    // The client's own send time is not the gateway's word.
+    expect(run.startedAt).not.toBeNull();
+    expect(run.reportedStartAt).toBeNull();
+    gateway.emit(
+      "agent",
+      agentEvent(run.id, 1, "lifecycle", { phase: "start", startedAt: 1_700_000_000_000 }),
+    );
+    await until(() => transcript().runs[0]?.reportedStartAt !== null);
+    expect(transcript().runs[0]!.reportedStartAt).toBe(1_700_000_000_000);
+    client.stop();
+  });
+});
+
 describe("steering and questions (F-096, F-292, F-468)", () => {
   it("steers into the active run and hides the steer's own settled run", async () => {
     const { client, gateway, transcript } = await openTask();

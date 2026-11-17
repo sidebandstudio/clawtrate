@@ -88,7 +88,7 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | Item             | Bound                                                      | JSON characters |
   | ---------------- | ---------------------------------------------------------- | --------------: |
   | Step             | `STEP`, its texts, error, ids, digest, inline raw          |          16,272 |
-  | Run              | `RUN`, without its steps: 49,754; with a full task's steps |       2,132,698 |
+  | Run              | `RUN`, without its steps: 49,797; with a full task's steps |       2,132,741 |
   | Outgoing message | `OUTGOING`, text and 20 file names                         |          63,584 |
   | Question card    | `QUESTION`, 3 questions × 8 options                        |          72,171 |
   | Approval card    | `APPROVAL`, command, 16 arguments, record                  |          71,376 |
@@ -97,7 +97,7 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
 
   | Part                                    | Count × cap                                                         | JSON characters |
   | --------------------------------------- | ------------------------------------------------------------------- | --------------: |
-  | Runs                                    | 32 runs × 49,754, plus 128 steps × 16,272 shared by the task's runs |       3,675,106 |
+  | Runs                                    | 32 runs × 49,797, plus 128 steps × 16,272 shared by the task's runs |       3,676,482 |
   | Outbox                                  | 16 × 63,584                                                         |       1,017,362 |
   | Questions                               | (4 pending + 4 settled) × 72,171                                    |         577,378 |
   | Approvals                               | (16 pending + 8 settled) × 71,376                                   |       1,713,050 |
@@ -106,7 +106,7 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | Linked runs                             | 32 × (key 1,024 + 2,204)                                            |         103,362 |
   | Steer aliases                           | 16 × (key 1,024 + 1,024)                                            |          32,802 |
   | Streaming text, ids, error and the rest | streaming text 16,384, plus field names                             |          21,900 |
-  | Per task                                |                                                                     |       8,977,436 |
+  | Per task                                |                                                                     |       8,978,812 |
 
 - **The state**, and what one viewer is sent:
 
@@ -117,31 +117,31 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   | Unrouted approvals                 | 16 × 71,376                                                             |       1,142,034 |
   | Task creations                     | 8 × 40,546                                                              |         324,378 |
   | Task list, connection and the rest | 500 listed tasks × 6,050 across 32 bots, connection 40,050, field names |       3,101,603 |
-  | State                              |                                                                         |      77,537,347 |
-  | One viewer's snapshot              | the state with only its 4 open tasks                                    |      41,623,499 |
+  | State                              |                                                                         |      77,548,355 |
+  | One viewer's snapshot              | the state with only its 4 open tasks                                    |      41,629,003 |
 
 - **The host:** the state, and everything else the host process keeps or has in flight for it. Files count in base64 characters, as they are kept.
 
   | Part               | What                                                                                                                                                                                                                                                             | JSON characters |
   | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------: |
-  | `state`            | The state, as above                                                                                                                                                                                                                                              |      77,537,347 |
+  | `state`            | The state, as above                                                                                                                                                                                                                                              |      77,548,355 |
   | `rawPayloads`      | Raw payloads across tasks, `MAX_RAW_BYTES` (32 Mi), plus one entry of at most `MAX_RAW_ENTRY_CHARS` (262,144) before the oldest give way (a larger one is not kept), and the table's keys: a key and task id for each followed task's `MAX_STEPS_PER_TASK` steps |      36,996,288 |
   | `outboxFiles`      | Files of outgoing messages: base64 of `MAX_RETAINED_ATTACHMENT_BYTES` (32 MiB), and their names and types (`attachmentContent`)                                                                                                                                  |      49,609,388 |
   | `uploads`          | Files waiting or arriving: base64 of `MAX_PENDING_ATTACHMENT_BYTES` (32 MiB), plus one file of `MAX_FILE_BYTES` (20 MiB) while it is encoded, and the store's entries and reservations                                                                           |      72,949,080 |
   | `sessionRows`      | `MAX_LISTED_TASKS` session rows, only the fields read, each with its key; each page is cut to these as it arrives                                                                                                                                                |       9,849,000 |
   | `bookkeeping`      | Keys and small values of the client's own maps: each followed task's open count, opening, reads, timers, list revisions and run timers; creations, their timers, waiters and slots; unrouted approvals' keys; lookups; operations waiting for access             |         746,112 |
   | `streamBaselines`  | `MAX_STREAMS_PER_TASK` (2) streaming runs per followed task: run id, task, agent and text of at most `MAX_RUN_TEXT_CHARS`, never the message                                                                                                                     |         311,296 |
-  | `foreignRuns`      | `FOREIGN_SESSIONS` (16) sessions no viewer has open × `FOREIGN_RUNS_PER_SESSION` (4) runs without their steps; their payloads are not kept                                                                                                                       |       3,204,672 |
+  | `foreignRuns`      | `FOREIGN_SESSIONS` (16) sessions no viewer has open × `FOREIGN_RUNS_PER_SESSION` (4) runs without their steps; their payloads are not kept                                                                                                                       |       3,207,424 |
   | `spawnLinks`       | `MAX_SPAWN_LINKS` (200) × two ids                                                                                                                                                                                                                                |         409,600 |
   | `recipientLinks`   | Each followed task's `MAX_STEPS_PER_TASK` steps × a recipient run and session id                                                                                                                                                                                 |       2,105,344 |
   | `approvalOutcomes` | `MAX_APPROVAL_OUTCOMES` (512) outcomes with their keys                                                                                                                                                                                                           |       3,166,208 |
   | `approvalReads`    | Whole reads of a cut approval's text: per pending approval of a followed task, `MAX_APPROVAL_READERS` (8) viewers' digests                                                                                                                                       |         297,345 |
   | `viewers`          | `MAX_WEB_VIEWERS` (8) bridge sessions × `MAX_VIEWER_OPEN_TASKS` open task keys                                                                                                                                                                                   |          32,768 |
   | `historyReads`     | `chat.history` pages being read, at most the gateway's 524,288 bytes each: one per followed task, `MAX_FULL_READS` (4) whole reads, and one page's payloads rebuilt                                                                                              |       6,815,744 |
-  | `snapshotsQueued`  | `MAX_SNAPSHOTS_IN_FLIGHT` (2) snapshots written and not yet accepted × one viewer's snapshot                                                                                                                                                                     |      83,246,998 |
+  | `snapshotsQueued`  | `MAX_SNAPSHOTS_IN_FLIGHT` (2) snapshots written and not yet accepted × one viewer's snapshot                                                                                                                                                                     |      83,258,006 |
   | `resultsQueued`    | `MAX_WEB_VIEWERS` (8) × `MAX_UNACCEPTED_RESULTS` (16) × `MAX_RESULT_CHARS` (262,144)                                                                                                                                                                             |      33,554,432 |
-  | `serializing`      | One snapshot being encoded                                                                                                                                                                                                                                       |      41,623,499 |
-  | Host               |                                                                                                                                                                                                                                                                  |     422,455,121 |
+  | `serializing`      | One snapshot being encoded                                                                                                                                                                                                                                       |      41,629,003 |
+  | Host               |                                                                                                                                                                                                                                                                  |     422,485,393 |
 
   In memory a JSON character is one or two bytes (a string is Latin-1 or UTF-16), and on a socket at most three (UTF-8). The table bounds string data, not the process: objects, map entries, encoding copies and garbage come on top of it, so it is not a memory ceiling; ordinary use is far below it. A history page is read whole, at most the gateway's `chat.history` ceiling (524,288 bytes in OpenClaw 2026.10.6), and mapped and bounded before it is kept. A socket error ends only that viewer, and releasing a viewer never throws into the socket's callbacks. Chat stream baselines are kept only for tasks the client follows: the reply text alone, for at most `MAX_STREAMS_PER_TASK` (2) runs per task, retired when the run ends (on the `chat` or the `agent` stream), leaves the transcript, or its task is resynced or released.
 

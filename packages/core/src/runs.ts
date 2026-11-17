@@ -210,6 +210,12 @@ export type Run = {
   suspendedCards: PendingCard[];
   closedCards: ClosedCard[];
   startedAt: number | null;
+  /**
+   * When the gateway says the run started: its lifecycle start's `startedAt`,
+   * else that event's own time, or the history snapshot's. Null until the
+   * gateway has reported it; `startedAt` may be this client's own time.
+   */
+  reportedStartAt: number | null;
   endedAt: number | null;
   error: RunError | null;
   /** When the user pressed Stop. */
@@ -668,6 +674,7 @@ export function newRun(
     suspendedCards: [],
     closedCards: [],
     startedAt: now,
+    reportedStartAt: null,
     endedAt: null,
     error: null,
     stopRequestedAt: null,
@@ -1311,7 +1318,11 @@ export function applyAgentEvent(
 function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContext): Run {
   switch (data.phase) {
     case "start":
-      return { ...run, startedAt: num(data.startedAt) ?? run.startedAt ?? ts };
+      return {
+        ...run,
+        startedAt: num(data.startedAt) ?? run.startedAt ?? ts,
+        reportedStartAt: num(data.startedAt) ?? ts,
+      };
     case "model":
       // Each model call starts a new reasoning segment.
       return closeReasoning({ ...run, model: str(data.model) ?? run.model }, ctx, ts);
@@ -1890,7 +1901,13 @@ export function runsFromHistory(
         runs.get(inFlightRunId) ??
           newRun(
             inFlightRunId,
-            { state: "running", origin: "history", bound: true, anchorItemId: anchor },
+            {
+              state: "running",
+              origin: "history",
+              bound: true,
+              anchorItemId: anchor,
+              reportedStartAt: num(snapshot?.startedAt),
+            },
             num(snapshot?.startedAt),
           ),
       ],
