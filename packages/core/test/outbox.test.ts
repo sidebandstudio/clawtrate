@@ -39,6 +39,27 @@ describe("held messages (F-096, F-106)", () => {
   });
 });
 
+describe("a message written while the connection is down (F-287)", () => {
+  it("waits, marked, and is sent exactly once when the connection returns", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    const id = client.sendMessage(KEY, "Written offline");
+    await sleep(60);
+    expect(transcript().outbox[0]).toMatchObject({ id, status: "awaiting-access" });
+    expect(gateway.calls("chat.send")).toEqual([]);
+    gateway.refuseConnections = false;
+    await until(() => gateway.calls("chat.send").length === 1, 4_000);
+    await sleep(200);
+    // The gateway answered it: accepted (its run is not followed here, so it may read unconfirmed).
+    expect(["sent", "unconfirmed"]).toContain(transcript().outbox[0]?.status);
+    expect(sentTexts(gateway)).toEqual(["Written offline"]);
+    expect(gateway.calls("chat.send")[0]).toMatchObject({ idempotencyKey: id });
+    client.stop();
+  });
+});
+
 describe("a pending question holds every outgoing message (F-468)", () => {
   it("holds a message queued with the modifier or the menu, and releases it into the queue", async () => {
     const { client, gateway, transcript } = await openTask();

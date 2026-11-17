@@ -785,6 +785,22 @@ test("F-282: Start as new task runs the message in a new task under the same bot
   await expect(composer(page)).toHaveValue("");
   await expect(page.getByRole("heading", { level: 1, name: "Weekly backup check" })).toBeVisible();
   await expect(tasks).toHaveCount(before + 1, { timeout: 20_000 });
+  // The new task holds the message, and the bot ran it there.
+  const titles = await tasks.allTextContents();
+  const known = ["Weekly backup check", "Certificate renewal warning", "Disk almost full"];
+  const fresh = titles.findIndex((title) => !known.some((each) => title.includes(each)));
+  expect(fresh).toBeGreaterThan(-1);
+  await tasks.nth(fresh).click();
+  const turns = page.getByTestId("transcript-turn");
+  await expect(turns.filter({ hasText: "Plan the next restore test." }).first()).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.locator(".transcript")).toContainText(
+    "This is the scripted development model",
+    {
+      timeout: 20_000,
+    },
+  );
 });
 
 test("leaves every other instance's gateway as it found it", () => {

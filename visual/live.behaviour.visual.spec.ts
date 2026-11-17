@@ -277,6 +277,33 @@ test.describe("sending", () => {
     );
     // Offline the composer is Send alone.
     await expect(page.getByTestId("stop")).toHaveCount(0);
+    // When the connection returns and the gateway takes it, it takes your colour and loses the mark.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        return {
+          ...state,
+          connection: { ...state.connection, status: "connected", retryAt: null },
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              outbox: transcript.outbox.map((each) =>
+                each.status === "awaiting-access" ? { ...each, status: "sent" } : each,
+              ),
+            },
+          },
+        };
+      });
+    });
+    await expect(held).not.toContainText("Sends when reconnected");
+    await expect(held.locator(".msg")).not.toHaveAttribute("data-pending", "held");
   });
 
   test("F-074 F-285: files attach as chips; one over the limit is refused before sending and can be removed", async ({
@@ -635,6 +662,77 @@ test.describe("Stop", () => {
     await open(page, "run-stopped-elsewhere");
     await expect(page.getByTestId("stop-note")).toContainText(
       "from another device or session. Completed steps are not undone.",
+    );
+  });
+
+  test("F-299: after a stop, completed steps and their results stay in the transcript, under the note", async ({
+    page,
+  }) => {
+    await open(page, "run-stopped");
+    // History now holds the stopped turn: its message, and a tool call that completed with its result.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        const at = Date.now();
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              outbox: [],
+              items: [
+                ...transcript.items,
+                {
+                  id: "h-ask",
+                  role: "user",
+                  timestamp: at - 40_000,
+                  blocks: [
+                    { kind: "text", text: "Can you check the backup log from last night too?" },
+                  ],
+                  model: null,
+                },
+                {
+                  id: "h-work",
+                  role: "assistant",
+                  timestamp: at - 30_000,
+                  blocks: [
+                    {
+                      kind: "tool-call",
+                      callId: "call-read-1",
+                      name: "read",
+                      argumentsText: '{\n  "path": "/var/log/backup/backup-2026-11-15.log"\n}',
+                      result: { isError: false, text: "02:14 backup finished, 41 GB written" },
+                    },
+                    { kind: "text", text: "The backup finished at 02:14 and wrote 41 GB." },
+                  ],
+                  model: null,
+                },
+              ],
+              runs: transcript.runs.map((run) => ({
+                ...run,
+                messageId: null,
+                anchorItemId: "h-ask",
+              })),
+            },
+          },
+        };
+      });
+    });
+    await expect(page.getByTestId("stop-note")).toContainText("Completed steps are not undone.");
+    const turn = page.getByTestId("transcript-turn").filter({ hasText: "wrote 41 GB" }).last();
+    await turn.locator("details.steps > summary").click();
+    const call = turn.getByTestId("tool-call");
+    await call.locator("summary").click();
+    await expect(call).toContainText("02:14 backup finished, 41 GB written");
+    await expect(page.locator(".transcript")).toContainText(
+      "The backup finished at 02:14 and wrote 41 GB.",
     );
   });
 
@@ -998,6 +1096,20 @@ test.describe("errors and resync", () => {
     await open(page, "run-failed");
     const card = page.getByRole("alert").filter({ hasText: "Otto couldn't finish this turn" });
     await expect(card).toContainText("The model provider is overloaded.");
+    // A warning triangle, a bold title, the reason on its own line, and a round close button.
+    await expect(card.locator("svg.icon").first()).toBeVisible();
+    expect(
+      Number(
+        await card.locator(".turn-error-title").evaluate((el) => getComputedStyle(el).fontWeight),
+      ),
+    ).toBeGreaterThanOrEqual(600);
+    await expect(card.locator(".turn-error-reason")).toHaveText(/overloaded/);
+    const close = card.getByRole("button", { name: "Dismiss this error" });
+    const round = await close.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      return Number.parseFloat(getComputedStyle(el).borderTopLeftRadius) >= rect.width / 2 - 0.5;
+    });
+    expect(round).toBe(true);
     await card.getByRole("button", { name: "Dismiss this error" }).click();
     await expect(card).toHaveCount(0);
     await page.getByTestId("turn-error-line").click();
