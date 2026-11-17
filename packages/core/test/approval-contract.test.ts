@@ -159,10 +159,12 @@ describe("system-agent resolutions (C2)", () => {
       status: "denied",
       decision: "deny",
     });
-    // terminalStatus belongs to the system-agent kind only.
-    expect(parseApprovalResolved(resolved({ terminalStatus: "cancelled" }), "exec")!.status).toBe(
-      "denied",
-    );
+    // terminalStatus belongs to the system-agent kind only; an exec deny says only that it is settled.
+    expect(parseApprovalResolved(resolved({ terminalStatus: "cancelled" }), "exec")).toMatchObject({
+      status: "closed",
+      decision: null,
+      lossy: true,
+    });
   });
 
   it("keeps the application result apart from the permission outcome, for both emissions", async () => {
@@ -415,8 +417,9 @@ describe("a resolution that arrives before its request or list entry (B3)", () =
       await sleep(20);
       slow.resolve([source.item("ap")]);
       await until(() => transcript().approvalSources[source.kind] === "ready");
+      // Settled, never actionable; an exec or plugin deny is closed until its snapshot says how.
       expect(transcript().approvals.map((each) => [each.id, each.status])).toEqual([
-        ["ap", "denied"],
+        ["ap", source.kind === "system-agent" ? "denied" : "closed"],
       ]);
       client.stop();
     });
@@ -440,13 +443,13 @@ describe("a resolution that arrives before its request or list entry (B3)", () =
     await until(() => transcript().approvalAccess === "ready");
     for (let i = 0; i <= MAX_SETTLED_APPROVALS; i += 1) {
       gateway.emit("exec.approval.requested", execItem(`ap-${i}`));
-      gateway.emit("exec.approval.resolved", { id: `ap-${i}`, decision: "deny", ts: i });
+      gateway.emit("exec.approval.resolved", { id: `ap-${i}`, decision: "allow-once", ts: i });
     }
     await until(() => !transcript().approvals.some((each) => each.id === "ap-0"));
     expect(transcript().approvals).toHaveLength(MAX_SETTLED_APPROVALS);
     gateway.emit("exec.approval.requested", execItem("ap-0"));
     await until(() => transcript().approvals.some((each) => each.id === "ap-0"));
-    expect(transcript().approvals.find((each) => each.id === "ap-0")!.status).toBe("denied");
+    expect(transcript().approvals.find((each) => each.id === "ap-0")!.status).toBe("allowed");
     client.stop();
   });
 
@@ -455,7 +458,7 @@ describe("a resolution that arrives before its request or list entry (B3)", () =
     await until(() => transcript().approvalAccess === "ready");
     // Resolutions with no card yet: kept apart from the cards.
     for (let i = 0; i <= MAX_APPROVAL_OUTCOMES; i += 1) {
-      gateway.emit("exec.approval.resolved", { id: `gone-${i}`, decision: "deny", ts: i });
+      gateway.emit("exec.approval.resolved", { id: `gone-${i}`, decision: "allow-once", ts: i });
     }
     await sleep(50);
     // The newest MAX_APPROVAL_OUTCOMES are known: the first of them stays settled on replay.
@@ -464,7 +467,7 @@ describe("a resolution that arrives before its request or list entry (B3)", () =
     gateway.emit("exec.approval.requested", execItem("gone-0"));
     await until(() => transcript().approvals.length === 2);
     expect(transcript().approvals.map((each) => [each.id, each.status])).toEqual([
-      ["gone-1", "denied"],
+      ["gone-1", "allowed"],
       ["gone-0", "pending"],
     ]);
     client.stop();
@@ -479,13 +482,13 @@ describe("a resolution that arrives before its request or list entry (B3)", () =
         execItem(`far-${i}`, { sessionKey: "agent:atlas:elsewhere", runId: `run-far-${i}` }),
       );
     }
-    await until(
-      () => client.state.unroutedApprovals.at(-1)?.id === `far-${MAX_UNROUTED_APPROVALS}`,
-    );
+    // At the bound all are kept; one past it is not kept, and is counted, so nothing vanishes silently.
+    await until(() => client.state.unroutedApprovalsOmitted === 1);
     expect(client.state.unroutedApprovals).toHaveLength(MAX_UNROUTED_APPROVALS);
-    expect(client.state.unroutedApprovals[0]!.id).toBe("far-1");
+    expect(client.state.unroutedApprovals[0]!.id).toBe("far-0");
+    expect(client.state.unroutedApprovals.at(-1)!.id).toBe(`far-${MAX_UNROUTED_APPROVALS - 1}`);
     // Settled by the gateway: it is no longer kept.
-    gateway.emit("exec.approval.resolved", { id: "far-1", decision: "deny", ts: 1 });
+    gateway.emit("exec.approval.resolved", { id: "far-1", decision: "allow-once", ts: 1 });
     await until(() => client.state.unroutedApprovals.length === MAX_UNROUTED_APPROVALS - 1);
     // Opening its own task shows it there.
     client.openSession("agent:atlas:elsewhere");
@@ -515,7 +518,7 @@ describe("the gateway's outcome corrects a closure the client inferred (B5)", ()
 
   it.each([
     ["allow once", { decision: "allow-once", ts: 4_000, resolvedBy: "Ops" }, "allowed"],
-    ["deny", { decision: "deny", ts: 4_000 }, "denied"],
+    ["allow always", { decision: "allow-always", ts: 4_000 }, "allowed"],
   ])(
     "a local expiry followed by a delayed %s takes the gateway's outcome",
     (_name, event, status) => {
@@ -528,6 +531,31 @@ describe("the gateway's outcome corrects a closure the client inferred (B5)", ()
       expect(after.approvals[0]).toMatchObject({ status, inferred: false, reason: null });
     },
   );
+
+  it("a local expiry followed by a legacy deny is settled with its cause unknown, then exact from the snapshot", () => {
+    const lossy = applyApprovalResolved(
+      expired(),
+      parseApprovalResolved({ id: "ap", decision: "deny", ts: 4_000 }, "exec")!,
+    );
+    expect(lossy.approvals[0]).toMatchObject({
+      status: "closed",
+      inferred: false,
+      outcomeUnknown: true,
+      decision: null,
+    });
+    const exact = applyApprovalResolved(
+      lossy,
+      resolutionFromSnapshot({
+        ...terminalSnapshot("ap", { status: "denied", decision: "deny", reason: "user" }),
+        presentation: { kind: "exec", commandText: "uname -s", allowedDecisions: ["deny"] },
+      })!,
+    );
+    expect(exact.approvals[0]).toMatchObject({
+      status: "denied",
+      decision: "deny",
+      outcomeUnknown: false,
+    });
+  });
 
   it("an inferred closure followed by a gateway cancellation or allow takes the gateway's outcome", () => {
     const cancelled = applyApprovalResolved(
@@ -548,7 +576,10 @@ describe("the gateway's outcome corrects a closure the client inferred (B5)", ()
   it("a settled approval is never reopened by a replayed request, and a gateway outcome is final", () => {
     const denied = applyApprovalResolved(
       pending(),
-      parseApprovalResolved({ id: "ap", decision: "deny" }, "exec")!,
+      resolutionFromSnapshot({
+        ...terminalSnapshot("ap", { status: "denied", decision: "deny", reason: "user" }),
+        presentation: { kind: "exec", commandText: "uname -s", allowedDecisions: ["deny"] },
+      })!,
     );
     expect(applyApprovalRequested(denied, parseExecApproval(execItem("ap"))!)).toBe(denied);
     const again = applyApprovalResolved(

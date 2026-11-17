@@ -64,6 +64,7 @@ import {
 } from "./mapping.ts";
 import {
   activeRun,
+  activitySize,
   applyAgentEvent,
   applyChatEvent,
   applyQuestionRequested,
@@ -76,10 +77,13 @@ import {
   failRunStart,
   findRun,
   isActive,
+  cachedSize,
+  fitClosed,
+  fitLive,
+  isOpenStep,
   isTerminal,
+  jsonLength,
   markUnconfirmed,
-  MAX_ACTIVITY_CHARS,
-  MAX_TASK_ACTIVITY_CHARS,
   markQuestion,
   mergeHistoryRuns,
   queueLocalRun,
@@ -114,6 +118,7 @@ import {
   scopeSatisfied,
   WRITE_SCOPE,
 } from "./scopes.ts";
+import { emptyRetention, HostLedger, MAX_TASK_RETAINED, type TaskRetention } from "./retention.ts";
 import { createStore, type Store } from "./store.ts";
 import {
   initialConnectionState,
@@ -186,8 +191,25 @@ export const MAX_ACCESS_WAITERS = 512;
  * make it actionable again. The oldest give way; switching gateways clears them.
  */
 export const MAX_APPROVAL_OUTCOMES = 4096;
-/** Pending approvals kept while no followed task can show them (`unroutedApprovals`). */
+/**
+ * Pending approvals kept while no followed task can show them, or while the
+ * task they belong to already shows `MAX_PENDING_APPROVALS_PER_TASK`
+ * (`unroutedApprovals`). Past it a new one is not kept and is counted in
+ * `unroutedApprovalsOmitted`; the next list read brings it back.
+ */
 export const MAX_UNROUTED_APPROVALS = 64;
+/** `approval.get` lookups of ambiguous legacy outcomes in flight at once; past it the outcome stays unknown. */
+export const MAX_OUTCOME_LOOKUPS = 16;
+/** Pending approvals one task shows; more wait in `unroutedApprovals` until one settles. */
+export const MAX_PENDING_APPROVALS_PER_TASK = 64;
+
+/**
+ * How long a request may go unanswered on a live connection before it fails
+ * locally. Nothing the client sent waits for ever: a send that times out is
+ * failed with its outcome unknown, to retry with the same idempotency key.
+ * Waits the gateway answers late by design (`device.scopes.waitUpgrade`) opt out.
+ */
+export const REQUEST_TIMEOUT_MS = 60_000;
 
 /** Longest message text the client sends. */
 export const MAX_MESSAGE_CHARS = 32_000;
@@ -234,6 +256,14 @@ export type ClientOptions = {
   reconnect?: { initialMs: number; maxMs: number };
   /** Turn limit for runs this client starts. */
   turnLimitMs?: number;
+  /** `REQUEST_TIMEOUT_MS` unless a test shortens it. */
+  requestTimeoutMs?: number;
+  /**
+   * The host's retention budget, shared with the upload store and the web
+   * host's viewers. A client made without one keeps its own, with the
+   * default limit.
+   */
+  ledger?: HostLedger;
 };
 
 /** A file sent with a message, as `chat.send` takes it: base64 content. */
@@ -382,8 +412,9 @@ function questionPending(activity: TaskActivity, run: Run): boolean {
  */
 function hasUnsettledWork(activity: TaskActivity): boolean {
   return (
-    activity.outbox.some((message) => message.status !== "cancelled") ||
-    activity.runs.some((run) => run.origin === "local" && !isTerminal(run.state))
+    activity.outbox.some(
+      (message) => message.status !== "cancelled" && message.status !== "handled",
+    ) || activity.runs.some((run) => run.origin === "local" && !isTerminal(run.state))
   );
 }
 
@@ -466,18 +497,29 @@ export class ClawtrateClient {
   private accessWaiters: Waiter[] = [];
   /** `hello-ok.policy`, for the frame and attachment ceilings. */
   private policy: RawRecord | null = null;
-  /** Attachment content for outgoing messages, kept off the state snapshots, with its decoded size. */
+  /** Attachment content for outgoing messages, kept off the state snapshots, with its decoded size and the characters it holds. */
   private readonly attachmentContent = new Map<
     string,
-    { files: OutgoingAttachment[]; bytes: number }
+    { task: string; files: OutgoingAttachment[]; bytes: number; chars: number }
   >();
   private attachmentBytes = 0;
+  /** Characters of file content held per task, charged to its budget. */
+  private readonly attachmentChars = new Map<string, number>();
+  /** Tasks in the order they last changed, oldest first: closed material of the oldest goes first. */
+  private readonly touched = new Map<string, true>();
+  /** The host's budget. Everything this client keeps for its tasks is counted in it. */
+  readonly ledger: HostLedger;
+  /** Viewers that went away: anything they asked for is checked against this just before the gateway is asked. */
+  private readonly withdrawnOwners = new WeakSet<object>();
   /** Task slots held for tasks being created, so a creation never exceeds `MAX_TRACKED_TASKS`. */
   private reservedTasks = 0;
   /** What the gateway reported about approvals, by id, newest last (`MAX_APPROVAL_OUTCOMES`). */
   private readonly approvalOutcomes = new Map<string, ApprovalResolution>();
   /** Pending approvals no followed task can show yet, oldest first (`MAX_UNROUTED_APPROVALS`). */
   private readonly unrouted = new Map<string, ApprovalCard>();
+  private unroutedOmitted = 0;
+  /** Approvals whose outcome is being looked up (`approval.get`). */
+  private readonly lookingUp = new Set<string>();
   /** Recipient runs and sessions each task's `sessions_send` results name. */
   private readonly recipients = new Map<string, { runs: Set<string>; sessions: Set<string> }>();
   /** Per task and list (`<key>\0<kind>`): the last list requested, and the newest applied. */
@@ -487,6 +529,8 @@ export class ClawtrateClient {
   constructor(host: ClawtrateHost, options: ClientOptions = {}) {
     this.host = host;
     this.options = options;
+    this.ledger = options.ledger ?? new HostLedger();
+    this.ledger.track("tasks", () => this.retainedTotal());
   }
 
   get state(): ClawtrateState {
@@ -566,26 +610,218 @@ export class ClawtrateClient {
     if (!kept || !this.incarnations.has(key))
       this.incarnations.set(key, (this.nextIncarnation += 1));
     this.setTranscript(key, (current) => current ?? this.emptyTranscript(key));
-    // More tasks share the activity budget: bring every task within its share.
-    this.retainAll();
     // An approval waiting for a task that can show it may belong here now.
     this.routeUnrouted();
     if (this.state.connection.status === "connected") void this.loadTranscript(key, !kept, null);
   }
 
-  /** The characters of activity each followed task may keep: its own bound, or its share of the client's. */
-  private activityBudget(): number {
-    const tasks = Math.max(1, this.openSessions.size + this.retained.size);
-    return Math.min(MAX_TASK_ACTIVITY_CHARS, Math.floor(MAX_ACTIVITY_CHARS / tasks));
+  // Retention ------------------------------------------------------------------
+
+  /** What a transcript itself puts on the snapshot: activity, history page and inter-session messages. */
+  private transcriptSize(transcript: Transcript): number {
+    return cachedSize(
+      transcript,
+      (each) =>
+        activitySize(each) +
+        cachedSize(each.items, jsonLength) +
+        cachedSize(each.interSession, jsonLength),
+    );
   }
 
-  private retainAll(): void {
-    const budget = this.activityBudget();
-    for (const key of Object.keys(this.state.transcripts)) {
-      const current = this.state.transcripts[key]!;
-      const next = retainActivity(current, budget);
-      if (next !== current) this.setTranscript(key, () => ({ ...current, ...next }));
+  /** Everything charged to one task: its transcript, its raw payloads and its outgoing files. */
+  private taskRetained(key: string, transcript = this.state.transcripts[key]): number {
+    return (
+      (transcript ? this.transcriptSize(transcript) : 0) +
+      this.raw.usage(key) +
+      (this.attachmentChars.get(key) ?? 0)
+    );
+  }
+
+  /** Everything this client keeps for its tasks, as the host's ledger counts it. */
+  private retainedTotal(): number {
+    let total = this.raw.total + this.foreignRaw.total;
+    for (const transcript of Object.values(this.state.transcripts))
+      total += this.transcriptSize(transcript);
+    for (const chars of this.attachmentChars.values()) total += chars;
+    return total;
+  }
+
+  /**
+   * Free at least `over` of what a task keeps. Closed material goes first,
+   * oldest first: raw payloads of finished steps, finished steps, finished
+   * runs' text, settled cards, then the oldest items of the history page.
+   * With `live`, open work is then reduced, each item saying so (`fitLive`).
+   * Outgoing messages and their files are never dropped.
+   */
+  private fitTask(
+    key: string,
+    transcript: Transcript,
+    over: number,
+    live: boolean,
+  ): { transcript: Transcript; freed: number; reducedLive: boolean } {
+    let freed = 0;
+    let next = transcript;
+    let retention = next.retention;
+    const open = new Set(
+      next.runs.flatMap((run) => run.steps.filter(isOpenStep).map((step) => step.id)),
+    );
+    const raw = this.raw.evict(key, over, open);
+    freed += raw.freed;
+    if (raw.count > 0) retention = { ...retention, rawOmitted: retention.rawOmitted + raw.count };
+    if (freed < over) {
+      const closed = fitClosed(next, over - freed);
+      if (closed.freed > 0) next = { ...next, ...closed.activity };
+      freed += closed.freed;
     }
+    if (freed < over && next.items.length > 0) {
+      let drop = 0;
+      while (drop < next.items.length && freed < over) {
+        freed += jsonLength(next.items[drop]);
+        drop += 1;
+      }
+      next = { ...next, items: next.items.slice(drop), hasMore: true };
+      retention = { ...retention, itemsOmitted: retention.itemsOmitted + drop };
+    }
+    let reducedLive = false;
+    if (live && freed < over) {
+      // An open step's raw payload goes with its body: what is not shown is not kept either.
+      const before = this.raw.usage(key);
+      this.raw.dropSteps(key, open);
+      freed += before - this.raw.usage(key);
+      if (freed < over) {
+        const reduced = fitLive(next, over - freed);
+        next = { ...next, ...reduced.activity };
+        freed += reduced.freed;
+      }
+      next = {
+        ...next,
+        runs: next.runs.map((run) =>
+          run.steps.some((step) => open.has(step.id) && !step.bodyOmitted)
+            ? {
+                ...run,
+                steps: run.steps.map((step) =>
+                  open.has(step.id) && !step.bodyOmitted
+                    ? {
+                        ...step,
+                        raw: null,
+                        rawSize: null,
+                        bodyOmitted: true,
+                        argsText: null,
+                        output: null,
+                      }
+                    : step,
+                ),
+              }
+            : run,
+        ),
+      };
+      reducedLive = true;
+    }
+    if (retention !== next.retention) next = { ...next, retention };
+    return { transcript: next, freed, reducedLive };
+  }
+
+  /**
+   * Admit a task's next state within its budget and the host's. Over the
+   * task's budget, its own closed material goes, then its live work is
+   * reduced. Over the host's, closed material of the tasks that changed
+   * longest ago goes first, then this task's live work is reduced. The task's
+   * `retention` says what it keeps and whether anything had to be reduced.
+   */
+  private admit(key: string, before: Transcript | undefined, next: Transcript): Transcript {
+    let candidate = next;
+    let full = false;
+    const taskOver = this.taskRetained(key, candidate) - MAX_TASK_RETAINED;
+    if (taskOver > 0) {
+      const fitted = this.fitTask(key, candidate, taskOver, true);
+      candidate = fitted.transcript;
+      full = fitted.reducedLive || fitted.freed < taskOver;
+    }
+    const others = this.ledger.used() - (before ? this.taskRetained(key, before) : 0);
+    let hostOver = others + this.taskRetained(key, candidate) - this.ledger.limit;
+    if (hostOver > 0) {
+      for (const other of this.touched.keys()) {
+        if (hostOver <= 0) break;
+        const transcript = other === key ? undefined : this.state.transcripts[other];
+        if (!transcript) continue;
+        const fitted = this.fitTask(other, transcript, hostOver, false);
+        if (fitted.freed > 0) {
+          this.replaceQuietly(other, fitted.transcript);
+          this.dropRawOfRemovedSteps(other, transcript, fitted.transcript);
+          hostOver -= fitted.freed;
+        }
+      }
+      if (hostOver > 0) {
+        const fitted = this.fitTask(key, candidate, hostOver, true);
+        candidate = fitted.transcript;
+        full = true;
+      }
+      this.setHostFull(hostOver > 0);
+    } else if (this.state.retention.full) {
+      this.setHostFull(false);
+    }
+    const used = this.taskRetained(key, candidate);
+    const retention: TaskRetention = { ...candidate.retention, used, full };
+    return { ...candidate, retention };
+  }
+
+  private setHostFull(full: boolean): void {
+    this.store.update((state) => ({
+      ...state,
+      retention: { used: this.ledger.used(), limit: this.ledger.limit, full },
+    }));
+  }
+
+  /**
+   * Make room for `amount` more in a task before keeping it: closed material
+   * of the task, then of the tasks that changed longest ago. Throws when the
+   * room is not there; nothing is kept then.
+   */
+  private reserveRoom(key: string, amount: number, what: string): void {
+    const transcript = this.state.transcripts[key];
+    if (!transcript) return;
+    const taskOver = this.taskRetained(key) + amount - MAX_TASK_RETAINED;
+    if (taskOver > 0) {
+      const fitted = this.fitTask(key, transcript, taskOver, false);
+      this.replaceQuietly(key, fitted.transcript);
+      this.dropRawOfRemovedSteps(key, transcript, fitted.transcript);
+      if (fitted.freed < taskOver) {
+        throw new Error(`This task is holding as much as it can; ${what}`);
+      }
+    }
+    let hostOver = this.ledger.used() + amount - this.ledger.limit;
+    for (const other of this.touched.keys()) {
+      if (hostOver <= 0) break;
+      const current = this.state.transcripts[other];
+      if (!current) continue;
+      const fitted = this.fitTask(other, current, hostOver, false);
+      if (fitted.freed === 0) continue;
+      this.replaceQuietly(other, fitted.transcript);
+      this.dropRawOfRemovedSteps(other, current, fitted.transcript);
+      hostOver -= fitted.freed;
+    }
+    if (hostOver > 0) {
+      this.setHostFull(true);
+      throw new Error(`The host is holding as much as it can; ${what}`);
+    }
+  }
+
+  /** Replace a transcript for retention's sake, without counting it as the task's latest change. */
+  private replaceQuietly(key: string, transcript: Transcript): void {
+    this.store.update((state) => ({
+      ...state,
+      transcripts: { ...state.transcripts, [key]: transcript },
+    }));
+  }
+
+  /** Raw payloads of steps a reduction took out of view go too. */
+  private dropRawOfRemovedSteps(key: string, before: TaskActivity, after: TaskActivity): void {
+    if (before.runs === after.runs) return;
+    const kept = new Set(after.runs.flatMap((run) => run.steps.map((step) => step.id)));
+    const gone = before.runs.flatMap((run) =>
+      run.steps.filter((step) => !kept.has(step.id)).map((step) => step.id),
+    );
+    if (gone.length > 0) this.raw.dropSteps(key, gone);
   }
 
   /**
@@ -634,6 +870,7 @@ export class ClawtrateClient {
       this.dropAttachments(message.id);
     }
     this.recipients.delete(key);
+    this.touched.delete(key);
     for (const map of [this.listRequested, this.listApplied]) {
       for (const listKey of [...map.keys()])
         if (listKey.startsWith(`${key}\u0000`)) map.delete(listKey);
@@ -843,10 +1080,20 @@ export class ClawtrateClient {
    * kept. Work the client owns (outgoing messages) is not a viewer's.
    */
   withdraw(owner: object): void {
+    this.withdrawnOwners.add(owner);
     const withdrawn = this.accessWaiters.filter((waiter) => waiter.owner === owner);
     if (withdrawn.length === 0) return;
     this.accessWaiters = this.accessWaiters.filter((waiter) => waiter.owner !== owner);
     for (const waiter of withdrawn) waiter.reject(new WithdrawnError());
+  }
+
+  /**
+   * The last check before an operation asks the gateway: its viewer has not
+   * gone away. Waiter withdrawal covers an operation still waiting for access;
+   * this covers one whose access was already held or just settled.
+   */
+  private checkNotWithdrawn(owner: object | null | undefined): void {
+    if (owner && this.withdrawnOwners.has(owner)) throw new WithdrawnError();
   }
 
   /** Operations waiting for access, for tests and diagnostics. */
@@ -918,6 +1165,13 @@ export class ClawtrateClient {
         "Files of earlier messages are still waiting to go out; send or delete some of them first.",
       );
     }
+    // The message and its files are charged to the task and the host before anything is kept.
+    const chars = attachments.reduce((sum, each) => sum + each.content.length, 0);
+    this.reserveRoom(
+      key,
+      chars + 256 + body.length,
+      "send or delete some messages, or close other tasks, first.",
+    );
     const active = activeRun(transcript);
     const resolved = !active
       ? "new"
@@ -941,8 +1195,9 @@ export class ClawtrateClient {
       })),
     };
     if (attachments.length > 0) {
-      this.attachmentContent.set(message.id, { files: attachments, bytes });
+      this.attachmentContent.set(message.id, { task: key, files: attachments, bytes, chars });
       this.attachmentBytes += bytes;
+      this.attachmentChars.set(key, (this.attachmentChars.get(key) ?? 0) + chars);
     }
     this.updateActivity(key, (activity) => {
       const withMessage = { ...activity, outbox: [...activity.outbox, message] };
@@ -988,6 +1243,9 @@ export class ClawtrateClient {
     if (!kept) return;
     this.attachmentContent.delete(messageId);
     this.attachmentBytes -= kept.bytes;
+    const left = (this.attachmentChars.get(kept.task) ?? 0) - kept.chars;
+    if (left > 0) this.attachmentChars.set(kept.task, left);
+    else this.attachmentChars.delete(kept.task);
   }
 
   /** Decoded bytes of files held for outgoing messages, for tests and diagnostics. */
@@ -1081,7 +1339,8 @@ export class ClawtrateClient {
       !message ||
       (message.status !== "failed" &&
         message.status !== "cancelled" &&
-        message.status !== "unconfirmed")
+        message.status !== "unconfirmed" &&
+        message.status !== "handled")
     )
       return;
     this.dropAttachments(messageId);
@@ -1162,6 +1421,8 @@ export class ClawtrateClient {
     try {
       // A viewer that goes away while access is approved takes its request with it (`withdraw`).
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
+      // The viewer went away while access settled: nothing is asked of the gateway.
+      this.checkNotWithdrawn(options.owner);
       const id = this.randomId();
       const label = options.label?.trim();
       const result = asRecord(
@@ -1305,7 +1566,30 @@ export class ClawtrateClient {
     const runId = typeof result?.runId === "string" ? result.runId : null;
     const messageSeq = typeof result?.messageSeq === "number" ? result.messageSeq : null;
     const steeredInto = message.mode === "steer" ? message.runId : null;
+    // A stop command (`/stop`) is answered `{ok, aborted, runIds}` before any
+    // run or turn is recorded: the gateway handled it, and no run or history
+    // row will follow.
+    const command = runId === null && typeof result?.aborted === "boolean";
     this.updateActivity(key, (activity) => {
+      if (command) {
+        return dropUnboundRun(
+          updateMessage(activity, messageId, {
+            status: "handled",
+            messageSeq: null,
+            runId: null,
+            error: null,
+          }),
+          messageId,
+        );
+      }
+      if (runId === null && message.mode !== "steer") {
+        // Accepted, but no run named: none is assumed. History confirms the
+        // message, or the next read finds it unconfirmed, to retry or delete.
+        return dropUnboundRun(
+          updateMessage(activity, messageId, { status: "sent", messageSeq, runId: null }),
+          messageId,
+        );
+      }
       let next = updateMessage(activity, messageId, {
         status: "sent",
         messageSeq,
@@ -1320,6 +1604,7 @@ export class ClawtrateClient {
       return next;
     });
     // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
+    if (command) this.dropAttachments(messageId);
     this.scheduleHistory(key);
   }
 
@@ -1363,6 +1648,7 @@ export class ClawtrateClient {
     this.updateActivity(key, (activity) => requestStop(activity, runId, this.now()));
     try {
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
+      this.checkNotWithdrawn(options.owner);
       const current = findRun(this.state.transcripts[key] ?? emptyActivity, runId);
       if (!current || current.state !== "stopping") return;
       const result = asRecord(
@@ -1400,6 +1686,11 @@ export class ClawtrateClient {
     if (!approval || approval.status !== "pending")
       throw new Error("That approval is no longer open.");
     if (approval.submitting) throw new Error("An answer to that approval is already on its way.");
+    if (approval.detailOmitted && decision !== "deny") {
+      throw new Error(
+        "This approval's details were not kept; deny it, or reopen the task to read them before allowing it.",
+      );
+    }
     if (decision !== "deny" && !approval.allowedDecisions.includes(decision)) {
       throw new Error(`The gateway does not offer ${decision} for this approval.`);
     }
@@ -1417,6 +1708,7 @@ export class ClawtrateClient {
     );
     try {
       await this.ensureScope(APPROVALS_SCOPE, options.owner ?? null);
+      this.checkNotWithdrawn(options.owner);
       const result = asRecord(await this.request(method, params));
       let resolution: ApprovalResolution | null;
       let applied = true;
@@ -1437,6 +1729,7 @@ export class ClawtrateClient {
           resolver: null,
           applicationStatus: null,
           authoritative: true,
+          lossy: false,
           sessionKey: approval.sessionKey,
           runId: approval.runId,
         };
@@ -1466,6 +1759,7 @@ export class ClawtrateClient {
    */
   private noteApprovalOutcome(resolution: ApprovalResolution): void {
     const known = mergeResolution(this.approvalOutcomes.get(resolution.id), resolution);
+    if (known.lossy) void this.lookUpOutcome(resolution.id);
     this.approvalOutcomes.delete(resolution.id);
     this.approvalOutcomes.set(resolution.id, known);
     while (this.approvalOutcomes.size > MAX_APPROVAL_OUTCOMES) {
@@ -1478,6 +1772,33 @@ export class ClawtrateClient {
           applyApprovalResolved(activity, known),
         );
       }
+    }
+    // A settled approval makes room for one that was waiting.
+    this.routeUnrouted();
+  }
+
+  /**
+   * A legacy exec or plugin resolution said `deny`, which the gateway also
+   * sends when it cancelled the approval or it expired: read the approval's
+   * own snapshot (`approval.get`, under the `operator.approvals` the client
+   * already holds) for how it ended. Until it answers, or if it cannot, the
+   * approval shows closed with its cause unknown, never as a denial.
+   */
+  private async lookUpOutcome(id: string): Promise<void> {
+    if (this.lookingUp.has(id) || this.lookingUp.size >= MAX_OUTCOME_LOOKUPS) return;
+    if (!this.holds(APPROVALS_SCOPE)) return;
+    const generation = this.generation;
+    this.lookingUp.add(id);
+    try {
+      const result = asRecord(await this.request("approval.get", { id }));
+      if (generation !== this.generation) return;
+      const resolution = resolutionFromSnapshot(result?.approval);
+      if (resolution && resolution.id === id) this.noteApprovalOutcome(resolution);
+    } catch (error) {
+      if (generation === this.generation) this.noteMissingScope(error);
+      this.log("warn", `approval.get failed: ${errorMessage(error)}`);
+    } finally {
+      this.lookingUp.delete(id);
     }
   }
 
@@ -1540,6 +1861,12 @@ export class ClawtrateClient {
       if (!outcome && card.status === "pending") this.keepUnrouted(card);
       return;
     }
+    const shown = this.state.transcripts[target.key]?.approvals.some((each) => each.id === card.id);
+    if (!shown && !outcome && !this.hasPendingRoom(target.key)) {
+      // The task shows as many pending approvals as it may: this one waits, kept and visible.
+      this.keepUnrouted({ ...card, parentSessionKey: target.parent, relation: target.relation });
+      return;
+    }
     if (this.unrouted.delete(card.id)) this.publishUnrouted();
     this.updateActivity(target.key, (activity) => {
       let next = applyApprovalRequested(activity, {
@@ -1552,17 +1879,31 @@ export class ClawtrateClient {
     });
   }
 
+  /** Keep an approval no task shows yet; past the bound it is not kept and is counted instead. */
   private keepUnrouted(card: ApprovalCard): void {
-    this.unrouted.delete(card.id);
-    this.unrouted.set(card.id, card);
-    while (this.unrouted.size > MAX_UNROUTED_APPROVALS) {
-      this.unrouted.delete(this.unrouted.keys().next().value as string);
+    if (!this.unrouted.has(card.id) && this.unrouted.size >= MAX_UNROUTED_APPROVALS) {
+      this.unroutedOmitted += 1;
+      this.publishUnrouted();
+      return;
     }
+    this.unrouted.set(card.id, card);
     this.publishUnrouted();
   }
 
   private publishUnrouted(): void {
-    this.store.update((state) => ({ ...state, unroutedApprovals: [...this.unrouted.values()] }));
+    this.store.update((state) => ({
+      ...state,
+      unroutedApprovals: [...this.unrouted.values()],
+      unroutedApprovalsOmitted: this.unroutedOmitted,
+    }));
+  }
+
+  /** Whether a task can show one more pending approval. */
+  private hasPendingRoom(key: string, extra = 0): boolean {
+    const pending = (this.state.transcripts[key]?.approvals ?? []).filter(
+      (approval) => approval.status === "pending",
+    ).length;
+    return pending + extra < MAX_PENDING_APPROVALS_PER_TASK;
   }
 
   /** Approvals kept without a task: route the ones whose origin is now known. */
@@ -1620,6 +1961,8 @@ export class ClawtrateClient {
       value = await this.request(source.method, {});
     } catch (error) {
       if (stale()) return;
+      // A failure is this revision's answer too: an older list arriving later changes nothing.
+      this.listApplied.set(listKey, revision);
       this.noteMissingScope(error);
       this.setApprovalSource(key, source.kind, isMissingScope(error) ? "unavailable" : "error");
       this.log("warn", `${source.method} failed: ${errorMessage(error)}`);
@@ -1636,14 +1979,25 @@ export class ClawtrateClient {
           ? record.items
           : [];
     const mine: ApprovalCard[] = [];
+    const shownIds = new Set((this.state.transcripts[key]?.approvals ?? []).map((each) => each.id));
+    let added = 0;
     for (const card of items
       .map((item) => source.parse(item))
       .filter((each): each is ApprovalCard => each !== null && each.status === "pending")) {
       const target = this.approvalTarget(card);
-      if (target?.key === key) {
-        mine.push({ ...card, parentSessionKey: target.parent, relation: target.relation });
-      } else if (!target && !this.approvalOutcomes.has(card.id)) {
-        this.keepUnrouted(card);
+      if (target?.key !== key) {
+        if (!target && !this.approvalOutcomes.has(card.id)) this.keepUnrouted(card);
+        continue;
+      }
+      const placed = { ...card, parentSessionKey: target.parent, relation: target.relation };
+      const settled = this.approvalOutcomes.has(card.id);
+      if (shownIds.has(card.id) || settled || this.hasPendingRoom(key, added)) {
+        if (!shownIds.has(card.id) && !settled) added += 1;
+        mine.push(placed);
+        if (this.unrouted.delete(card.id)) this.publishUnrouted();
+      } else {
+        // The task shows as many pending approvals as it may: this one waits, kept and visible.
+        this.keepUnrouted(placed);
       }
     }
     this.updateActivity(key, (activity) => {
@@ -1856,6 +2210,7 @@ export class ClawtrateClient {
     );
     try {
       await this.ensureScope(QUESTIONS_SCOPE, owner);
+      this.checkNotWithdrawn(owner);
       const result = asRecord(await this.request("question.resolve", params));
       // Apply the answer at once; `question.resolved` repeats it.
       this.updateActivity(key, (activity) =>
@@ -1915,7 +2270,10 @@ export class ClawtrateClient {
         );
       });
     } catch (error) {
-      if (!stale()) this.noteMissingScope(error);
+      if (!stale()) {
+        this.listApplied.set(listKey, revision);
+        this.noteMissingScope(error);
+      }
       this.log("warn", `question.list failed: ${errorMessage(error)}`);
     }
   }
@@ -1942,10 +2300,12 @@ export class ClawtrateClient {
       settleQuestionsOfEndedRuns(
         normalizeApprovals(fn(current, this.context(key)), (runId) => this.otherRun(runId)),
       ),
-      this.activityBudget(),
+      Number.POSITIVE_INFINITY,
     );
     if (next === current) return;
-    this.setTranscript(key, () => withLive({ ...current, ...next }));
+    const admitted = this.admit(key, current, { ...current, ...next });
+    this.dropRawOfRemovedSteps(key, current, admitted);
+    this.setTranscript(key, () => withLive(admitted));
     this.afterActivity(key);
   }
 
@@ -2294,6 +2654,7 @@ export class ClawtrateClient {
       },
       onCallbackError: (label, error) => this.log("error", `${label}: ${String(error)}`),
       handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
+      requestTimeoutMs: this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS,
       reconnect: { initialMs: reconnect.initialMs, multiplier: 2, maxMs: reconnect.maxMs },
     });
     this.protocol.start();
@@ -2311,6 +2672,7 @@ export class ClawtrateClient {
     this.listApplied.clear();
     for (const { bytes } of this.attachmentContent.values()) this.attachmentBytes -= bytes;
     this.attachmentContent.clear();
+    this.attachmentChars.clear();
   }
 
   private close(): void {
@@ -2576,10 +2938,13 @@ export class ClawtrateClient {
       live: null,
       linkedRuns: {},
       interSession: [],
+      retention: emptyRetention,
     };
   }
 
   private setTranscript(key: string, fn: (current: Transcript | undefined) => Transcript): void {
+    this.touched.delete(key);
+    this.touched.set(key, true);
     this.store.update((state) => ({
       ...state,
       transcripts: { ...state.transcripts, [key]: fn(state.transcripts[key]) },
@@ -2671,7 +3036,12 @@ export class ClawtrateClient {
       const ctx = this.context(key);
       // History is built aside; only the steps the merge takes from it bring their raw payloads.
       const scratch = new RawTable();
-      const fromHistory = runsFromHistory(messages, inFlight, { ...ctx, raw: scratch });
+      const fromHistory = runsFromHistory(
+        messages,
+        inFlight,
+        { ...ctx, raw: scratch },
+        { startCut: history?.hasMore === true },
+      );
       const current = this.state.transcripts[key] ?? this.emptyTranscript(key);
       const merge = mergeHistoryRuns(current.runs, fromHistory, ctx);
       for (const stepId of merge.fromHistory) {
@@ -2692,24 +3062,25 @@ export class ClawtrateClient {
           this.dropAttachments(message.id);
       }
       const activity = markUnconfirmed(reconciled);
-      this.setTranscript(key, () =>
-        withLive({
-          ...current,
-          ...retainActivity(
-            settleQuestionsOfEndedRuns(
-              normalizeApprovals(activity, (runId) => this.otherRun(runId)),
-            ),
-            this.activityBudget(),
-          ),
-          sessionKey: key,
-          status: "ready",
-          items: mapHistory(messages),
-          interSession: interSessionMessages(messages),
-          error: null,
-          hasMore: history?.hasMore === true,
-          caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
-        }),
-      );
+      const rebuilt: Transcript = {
+        ...current,
+        ...retainActivity(
+          settleQuestionsOfEndedRuns(normalizeApprovals(activity, (runId) => this.otherRun(runId))),
+          Number.POSITIVE_INFINITY,
+        ),
+        sessionKey: key,
+        status: "ready",
+        items: mapHistory(messages),
+        interSession: interSessionMessages(messages),
+        error: null,
+        hasMore: history?.hasMore === true,
+        caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
+        // A new page: nothing of it was dropped yet.
+        retention: { ...current.retention, itemsOmitted: 0 },
+      };
+      const admitted = this.admit(key, current, rebuilt);
+      this.dropRawOfRemovedSteps(key, current, admitted);
+      this.setTranscript(key, () => withLive(admitted));
       this.afterActivity(key);
       void this.backfillQuestions(key, generation);
       void this.backfillApprovals(key, generation);

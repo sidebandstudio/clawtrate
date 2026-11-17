@@ -320,11 +320,31 @@ describe("resolving (F-165, F-166, F-167)", () => {
   });
 
   it("deny ends the approval; the tool's error result fails the step", () => {
+    // A legacy exec deny says only that it is settled; the snapshot says it was denied.
     let activity = applyApprovalResolved(
       waitingOnExec(),
       parseApprovalResolved({ id: "ap-1", decision: "deny", ts: 3_000 }, "exec")!,
     );
-    expect(approval(activity)).toMatchObject({ status: "denied", decision: "deny" });
+    expect(approval(activity)).toMatchObject({ status: "closed", outcomeUnknown: true });
+    activity = applyApprovalResolved(
+      activity,
+      resolutionFromSnapshot({
+        id: "ap-1",
+        urlPath: "/a",
+        createdAtMs: 1,
+        expiresAtMs: 2,
+        resolvedAtMs: 3_000,
+        status: "denied",
+        decision: "deny",
+        reason: "user",
+        presentation: { kind: "exec", commandText: "uname -s", allowedDecisions: ["deny"] },
+      })!,
+    );
+    expect(approval(activity)).toMatchObject({
+      status: "denied",
+      decision: "deny",
+      outcomeUnknown: false,
+    });
     activity = feed(
       activity,
       agent("run-1", 3, "tool", {
@@ -570,6 +590,26 @@ describe("approvals through the client (F-163, F-165, F-166, F-168)", () => {
       resolvedBy: "someone",
       ts: 4,
     });
+    // A plugin deny is read through the approval's own snapshot before it is shown as a denial.
+    gateway.handlers["approval.get"] = () => ({
+      approval: {
+        id: "pl-1",
+        urlPath: "/a",
+        createdAtMs: 1,
+        expiresAtMs: 9_999_999_999_999,
+        resolvedAtMs: 5,
+        status: "denied",
+        decision: "deny",
+        reason: "user",
+        presentation: {
+          kind: "plugin",
+          title: "Post",
+          description: "Post publicly",
+          severity: "critical",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      },
+    });
     gateway.emit("plugin.approval.resolved", { id: "pl-1", decision: "deny", ts: 5 });
     gateway.emit("openclaw.approval.resolved", {
       id: "sa-1",
@@ -579,12 +619,13 @@ describe("approvals through the client (F-163, F-165, F-166, F-168)", () => {
       request: systemAgentRequest("sa-1").request,
       terminalStatus: "expired",
     });
-    await until(() => transcript().approvals.every((each) => each.status !== "pending"));
+    await until(() => transcript().approvals[1]?.status === "denied");
     expect(transcript().approvals.map((each) => each.status)).toEqual([
       "allowed",
       "denied",
       "expired",
     ]);
+    expect(gateway.calls("approval.get")).toEqual([{ id: "pl-1" }]);
     client.stop();
   });
 
@@ -709,7 +750,12 @@ describe("approvals raised by a helper run (F-098)", () => {
     });
     gateway.emit("exec.approval.resolved", { id: "ap-h", decision: "deny", ts: 2 });
     await until(() => transcript().approvals[0]!.status !== "pending");
-    expect(transcript().approvals[0]).toMatchObject({ status: "denied", relation: "helper" });
+    // Without a snapshot to say how, a legacy deny is closed with its cause unknown.
+    expect(transcript().approvals[0]).toMatchObject({
+      status: "closed",
+      outcomeUnknown: true,
+      relation: "helper",
+    });
     client.stop();
   });
 });

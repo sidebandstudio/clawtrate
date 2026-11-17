@@ -5,6 +5,8 @@
 import {
   AttachmentTooLargeError,
   batchSnapshots,
+  HostFullError,
+  type HostLedger,
   type AttachmentReservation,
   MAX_BRIDGE_FRAME_BYTES,
   type ClawtrateState,
@@ -52,9 +54,11 @@ type ViewerSocket = {
  * out; state snapshots wait while the socket is backed up, and only the latest
  * is kept. A viewer that backs up past the hard bound is closed.
  */
-export function createViewerChannel(ws: ViewerSocket) {
+export function createViewerChannel(ws: ViewerSocket, ledger?: HostLedger) {
   let latest: ClawtrateState | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  // What this viewer's socket buffers is part of what the host keeps.
+  const untrack = ledger?.track("viewer", () => ws.bufferedAmount) ?? (() => {});
   const tooSlow = () => {
     if (ws.bufferedAmount <= SNAPSHOT_HARD_BUFFER_BYTES) return false;
     ws.close(1013, "viewer too slow");
@@ -67,7 +71,8 @@ export function createViewerChannel(ws: ViewerSocket) {
   const flush = () => {
     timer = null;
     if (!latest || ws.readyState !== ws.OPEN || tooSlow()) return;
-    if (ws.bufferedAmount > SNAPSHOT_SOFT_BUFFER_BYTES) {
+    // Held back while the socket is backed up, or while the host is at its budget.
+    if (ws.bufferedAmount > SNAPSHOT_SOFT_BUFFER_BYTES || (ledger && !ledger.admits(0))) {
       timer = setTimeout(flush, SNAPSHOT_RETRY_MS);
       return;
     }
@@ -85,6 +90,7 @@ export function createViewerChannel(ws: ViewerSocket) {
       if (timer) clearTimeout(timer);
       timer = null;
       latest = null;
+      untrack();
     },
   };
 }
@@ -292,7 +298,8 @@ export function startWebHost(options: WebHostOptions) {
     try {
       reservation = store.reserve(meta, declared);
     } catch (error) {
-      const status = error instanceof AttachmentTooLargeError ? 413 : 400;
+      const status =
+        error instanceof AttachmentTooLargeError ? 413 : error instanceof HostFullError ? 507 : 400;
       return refuse(status, error instanceof Error ? error.message : String(error));
     }
     let chunks: Buffer[] = [];
@@ -380,20 +387,44 @@ export function startWebHost(options: WebHostOptions) {
       ws.close(1013, "too many viewers");
       return;
     }
-    const channel = createViewerChannel(ws);
-    channel.send({ type: "hello", info: runtime.info, state: runtime.client.state });
+    const ledger = runtime.client.ledger as HostLedger | undefined;
+    const hello = JSON.stringify({
+      type: "hello",
+      info: runtime.info,
+      state: runtime.client.state,
+    });
+    // A new viewer's first snapshot is retention too: refused, visibly, when the host has no room for it.
+    if (ledger && !ledger.admits(hello.length)) {
+      ws.close(1013, "host is holding as much as it can");
+      return;
+    }
+    const channel = createViewerChannel(ws, ledger);
+    ws.send(hello);
     const stop = batchSnapshots(runtime.client.store.subscribe, (state) =>
       channel.sendState(state),
     );
     // Each tab is its own viewer: its open transcripts are released when it goes away.
     const session = createBridgeSession(runtime.client, runtime.policy);
     let ended = false;
+    /**
+     * Release everything this viewer held. Each step runs even if another
+     * throws, and a failure is logged, never thrown: the socket's close or
+     * error callback must not take the host down.
+     */
     const end = () => {
       if (ended) return;
       ended = true;
-      stop();
-      channel.stop();
-      session.dispose();
+      for (const [name, step] of [
+        ["snapshots", stop],
+        ["channel", () => channel.stop()],
+        ["session", () => session.dispose()],
+      ] as const) {
+        try {
+          step();
+        } catch (error) {
+          console.error(`[web-host] releasing a viewer's ${name} failed: ${String(error)}`);
+        }
+      }
     };
     ws.on("message", (data) => {
       let id = "";
@@ -438,8 +469,11 @@ export function startWebHost(options: WebHostOptions) {
     });
     // An oversized or malformed frame surfaces here; the viewer goes, the host stays.
     ws.on("error", () => {
-      end();
-      ws.terminate();
+      try {
+        end();
+      } finally {
+        ws.terminate();
+      }
     });
     ws.on("close", end);
   });

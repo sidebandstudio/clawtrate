@@ -100,6 +100,13 @@ export type ApprovalCard = {
    */
   inferred: boolean;
   /**
+   * The gateway said the approval is settled but not how: a legacy exec or
+   * plugin resolution reads `deny` whether a reviewer denied it or the gateway
+   * cancelled it when its run was stopped. It shows as `closed` until the
+   * approval's own snapshot (`approval.get`) says how it ended.
+   */
+  outcomeUnknown: boolean;
+  /**
    * For a system-agent change that was allowed: whether the gateway then
    * applied it (`applicationStatus`, `applied` or `not-applied`), kept apart
    * from the permission outcome.
@@ -129,6 +136,12 @@ export type ApprovalCard = {
   systemAgent: SystemAgentApprovalDetail | null;
   /** The approval's `scope` (message send, payment, external post, standing grant), as sent. */
   scope: unknown;
+  /**
+   * The approval's record and analysis were not kept because its task or the
+   * host reached its retention budget. What identifies it is kept, and it can
+   * be denied; allowing it waits until it is read again in full.
+   */
+  detailOmitted: boolean;
   /** A resolution from this client is on its way, or the last one failed. */
   submitting: boolean;
   error: string | null;
@@ -216,6 +229,7 @@ function blank(id: string, kind: ApprovalKind, raw: unknown): ApprovalCard {
     resolvedBy: null,
     resolver: null,
     inferred: false,
+    outcomeUnknown: false,
     applicationStatus: null,
     allowedDecisions: decisions(kind, undefined),
     unavailableDecisions: [],
@@ -225,6 +239,7 @@ function blank(id: string, kind: ApprovalKind, raw: unknown): ApprovalCard {
     plugin: null,
     systemAgent: null,
     scope: null,
+    detailOmitted: false,
     submitting: false,
     error: null,
     raw,
@@ -437,6 +452,8 @@ export type ApprovalResolution = {
   applicationStatus: string | null;
   /** False for this client's own inference (local expiry, no longer listed). */
   authoritative: boolean;
+  /** The gateway's word that it is settled, without how (a legacy `deny`); exact outcomes replace it. */
+  lossy: boolean;
   /** The session the request named (`request.sessionKey`, or a terminal snapshot's `source.sessionKey`). */
   sessionKey: string | null;
   runId: string | null;
@@ -460,24 +477,33 @@ export function parseApprovalResolved(
   if (!record || !id || !chosen) return null;
   const request = asRecord(record.request);
   const terminal = kind === "system-agent" ? record.terminalStatus : undefined;
+  // Exec and plugin publications project a cancellation or expiry as `deny`
+  // (`publishAppliedApprovalResolution` in OpenClaw 2026.10.6): their deny
+  // says the approval is settled, not that anyone denied it.
+  const lossy = kind !== "system-agent" && chosen === "deny";
   const status: ApprovalResolution["status"] =
     terminal === "cancelled"
       ? "cancelled"
       : terminal === "expired"
         ? "expired"
-        : chosen === "deny"
-          ? "denied"
-          : "allowed";
+        : lossy
+          ? "closed"
+          : chosen === "deny"
+            ? "denied"
+            : "allowed";
   return {
     id,
     status,
     decision: status === "allowed" || status === "denied" ? chosen : null,
-    reason: str(record.reason) ?? (status === "expired" ? "timeout" : null),
+    reason:
+      str(record.reason) ??
+      (status === "expired" ? "timeout" : lossy ? "settled-cause-unknown" : null),
     resolvedAt: num(record.ts),
     resolvedBy: str(record.resolvedBy),
     resolver: null,
     applicationStatus: kind === "system-agent" ? str(record.applicationStatus) : null,
     authoritative: true,
+    lossy,
     sessionKey: str(request?.sessionKey),
     runId: str(request?.runId),
   };
@@ -497,9 +523,19 @@ export function resolutionFromSnapshot(value: unknown): ApprovalResolution | nul
     resolver: card.resolver,
     applicationStatus: null,
     authoritative: true,
+    lossy: false,
     sessionKey: card.sessionKey,
     runId: null,
   };
+}
+
+/** How much a report establishes: this client's inference, the gateway's lossy word, or its exact outcome. */
+function rank(resolution: Pick<ApprovalResolution, "authoritative" | "lossy">): number {
+  return !resolution.authoritative ? 0 : resolution.lossy ? 1 : 2;
+}
+
+function cardRank(card: ApprovalCard): number {
+  return card.status === "pending" ? -1 : card.inferred ? 0 : card.outcomeUnknown ? 1 : 2;
 }
 
 /** Fold a later report about the same approval into what is known: an application result adds to the outcome. */
@@ -507,8 +543,8 @@ export function mergeResolution(
   known: ApprovalResolution | undefined,
   next: ApprovalResolution,
 ): ApprovalResolution {
-  if (!known || (!known.authoritative && next.authoritative)) return next;
-  if (!next.authoritative) return known;
+  if (!known || rank(next) > rank(known)) return next;
+  if (rank(next) < rank(known)) return known;
   return {
     ...known,
     applicationStatus: next.applicationStatus ?? known.applicationStatus,
@@ -566,7 +602,7 @@ export function applyApprovalResolved(
   const existing = activity.approvals.find((each) => each.id === resolution.id);
   if (!existing) return activity;
   let patch: Partial<ApprovalCard> | null = null;
-  if (existing.status === "pending" || (existing.inferred && resolution.authoritative)) {
+  if (rank(resolution) > cardRank(existing)) {
     patch = {
       status: resolution.status,
       decision: resolution.decision,
@@ -576,12 +612,13 @@ export function applyApprovalResolved(
       resolver: resolution.resolver ?? existing.resolver,
       applicationStatus: resolution.applicationStatus ?? existing.applicationStatus,
       inferred: !resolution.authoritative,
+      outcomeUnknown: resolution.lossy,
       submitting: false,
       error: null,
     };
   } else if (
-    !existing.inferred &&
-    resolution.authoritative &&
+    cardRank(existing) === 2 &&
+    rank(resolution) === 2 &&
     ((resolution.applicationStatus !== null &&
       resolution.applicationStatus !== existing.applicationStatus) ||
       (existing.resolver === null && resolution.resolver !== null))
@@ -624,6 +661,7 @@ function inferredResolution(
     resolver: null,
     applicationStatus: null,
     authoritative: false,
+    lossy: false,
     sessionKey: null,
     runId: null,
   };

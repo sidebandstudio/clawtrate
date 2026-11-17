@@ -350,3 +350,84 @@ describe("Stop does not hide a returned MCP error (D8)", () => {
     expect(select(activity).mcpCalls[0]).toMatchObject({ state: "unknown", error: null });
   });
 });
+
+describe("Stop does not hide a returned Messaged-card error (C6)", () => {
+  const sendStart = (activity: TaskActivity) =>
+    event(activity, "tool", {
+      phase: "start",
+      name: "sessions_send",
+      toolCallId: "s1",
+      args: { sessionKey: PEER, message: "hi" },
+    });
+  const sendError = (activity: TaskActivity, details: Record<string, unknown> = {}) =>
+    event(activity, "tool", {
+      phase: "result",
+      name: "sessions_send",
+      toolCallId: "s1",
+      isError: true,
+      result: { content: [{ type: "text", text: "thread not found" }], details },
+    });
+  const stopNow = (activity: TaskActivity, at: number) =>
+    event(requestStop(activity, "run-s", at), "lifecycle", { phase: "end", aborted: true });
+
+  it("an error returned during Stop stays failed with its text", () => {
+    let activity = requestStop(sendStart(started()), "run-s", 1_500);
+    activity = sendError(activity);
+    activity = event(activity, "lifecycle", { phase: "end", aborted: true });
+    expect(select(activity).botMessages[0]).toMatchObject({
+      state: "failed",
+      error: "thread not found",
+      deliveryUncertain: true,
+    });
+  });
+
+  it("an error returned before Stop stays failed", () => {
+    const activity = stopNow(sendError(sendStart(started())), 2_000);
+    expect(select(activity).botMessages[0]).toMatchObject({
+      state: "failed",
+      error: "thread not found",
+    });
+  });
+
+  it("an error returned after Stop was asked but before it took stays failed", () => {
+    let activity = requestStop(sendStart(started()), "run-s", 1_500);
+    activity = sendError(activity);
+    expect(activity.runs[0]!.state).toBe("stopping");
+    expect(select(activity).botMessages[0]).toMatchObject({
+      state: "failed",
+      error: "thread not found",
+    });
+  });
+
+  it("only a result that says it was aborted leaves delivery unknown, still with its error", () => {
+    let activity = requestStop(sendStart(started()), "run-s", 1_500);
+    activity = sendError(activity, { aborted: true });
+    activity = event(activity, "lifecycle", { phase: "end", aborted: true });
+    expect(select(activity).botMessages[0]).toMatchObject({
+      state: "unknown",
+      error: "thread not found",
+      deliveryUncertain: true,
+    });
+  });
+
+  it("an unreturned call closed by Stop is unknown with no error invented", () => {
+    const activity = stopNow(sendStart(started()), 1_500);
+    expect(select(activity).botMessages[0]).toMatchObject({ state: "unknown", error: null });
+  });
+
+  it("an established send (sentBeforeError) is still sent, not unknown", () => {
+    let activity = requestStop(sendStart(started()), "run-s", 1_500);
+    activity = event(activity, "tool", {
+      phase: "result",
+      name: "sessions_send",
+      toolCallId: "s1",
+      isError: true,
+      result: {
+        content: [{ type: "text", text: "timed out" }],
+        details: { status: "timeout", sentBeforeError: true, sessionKey: PEER },
+      },
+    });
+    activity = event(activity, "lifecycle", { phase: "end", aborted: true });
+    expect(select(activity).botMessages[0]!.state).toBe("sent");
+  });
+});

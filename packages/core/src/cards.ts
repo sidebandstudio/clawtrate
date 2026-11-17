@@ -97,7 +97,14 @@ export type BotMessageCard = {
   recipientRunState: RunState | null;
   /** `result.details.status` exactly as sent. */
   resultStatus: string | null;
+  /** The error the call returned or its result states, whenever it has one, including after Stop. */
   error: string | null;
+  /**
+   * Whether the message reached the recipient is not established: the call
+   * closed without a result, or its result says it was aborted, or it failed
+   * while the sender was stopped without a delivery status.
+   */
+  deliveryUncertain: boolean;
   state: BotMessageState;
   approvalId: string | null;
   /**
@@ -361,9 +368,11 @@ function botMessageCard(
   } else if (approval?.status === "denied") {
     state = "not-sent";
   } else if (!status) {
-    // No delivery status: a closed call with no result, or an error while the
-    // sender was stopped, does not say whether the message went out.
-    if (!hasResult || (step.status === "failed" && stopped)) state = "unknown";
+    // No delivery status. A closed call with no result, or a result that says
+    // it was aborted, does not say whether the message went out. A returned
+    // error stays an error: Stop winning the sender's run does not undo it.
+    const aborted = details?.aborted === true;
+    if (!hasResult || (step.status === "failed" && aborted)) state = "unknown";
     else state = step.status === "failed" ? "failed" : "unknown";
   } else {
     switch (status) {
@@ -416,7 +425,11 @@ function botMessageCard(
     recipientRunId,
     recipientRunState: linked?.state ?? null,
     resultStatus: status,
-    error: state === "failed" || state === "blocked-by-policy" ? error : null,
+    error:
+      state === "failed" || state === "blocked-by-policy" || (hasResult && step.status === "failed")
+        ? error
+        : null,
+    deliveryUncertain: state === "unknown" || (!status && stopped && step.status === "failed"),
     state,
     approvalId: approval?.id ?? null,
     requestedAt: step.startedAt,

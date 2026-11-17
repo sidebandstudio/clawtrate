@@ -351,13 +351,22 @@ export function createBridgeSession(
         if (command.attachmentIds.length > 0 && !policy.attachments) {
           throw new Error("This host does not take files.");
         }
-        const attachments = policy.attachments?.get(command.attachmentIds) ?? [];
-        const messageId = client.sendMessage(key, command.text, {
-          mode: command.mode,
-          attachments,
-        });
-        policy.attachments?.release(command.attachmentIds);
-        return { messageId };
+        // The files leave the store as the message takes them, so they are never counted twice;
+        // a refused message puts them back.
+        const taken = policy.attachments?.take(command.attachmentIds) ?? {
+          attachments: [],
+          restore: () => {},
+        };
+        try {
+          const messageId = client.sendMessage(key, command.text, {
+            mode: command.mode,
+            attachments: taken.attachments,
+          });
+          return { messageId };
+        } catch (error) {
+          taken.restore();
+          throw error;
+        }
       }
       case "retryMessage":
         return client.retryMessage(mine(command.key), command.messageId);

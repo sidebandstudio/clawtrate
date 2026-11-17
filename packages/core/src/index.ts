@@ -6,6 +6,7 @@ export * from "./runs.ts";
 export * from "./approvals.ts";
 export * from "./cards.ts";
 export * from "./attachments.ts";
+export * from "./retention.ts";
 export * from "./remote-bridge.ts";
 export { utf8Length } from "./encoding.ts";
 export * from "./scopes.ts";

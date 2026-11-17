@@ -6,8 +6,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyApprovalRequested,
   applyApprovalResolved,
-  parseApprovalResolved,
   parsePluginApproval,
+  resolutionFromSnapshot,
 } from "../src/approvals.ts";
 import {
   advanceBotMessageState,
@@ -242,10 +242,14 @@ describe("Messaged cards (F-119, F-122, F-123, F-309)", () => {
       name: "sessions_send",
       toolCallId: "c1",
       isError: true,
-      result: { content: [{ type: "text", text: "Aborted" }], details: {} },
+      result: { content: [{ type: "text", text: "Aborted" }], details: { aborted: true } },
     });
     stopped = lifecycle(stopped, { phase: "end", aborted: true });
-    expect(select(stopped).botMessages[0]!.state).toBe("unknown");
+    expect(select(stopped).botMessages[0]).toMatchObject({
+      state: "unknown",
+      error: "Aborted",
+      deliveryUncertain: true,
+    });
 
     // A toolCall in history is the model's request; with no result it proves nothing was sent.
     const history = runsFromHistory(
@@ -287,7 +291,23 @@ describe("Messaged cards (F-119, F-122, F-123, F-309)", () => {
     });
     activity = applyApprovalResolved(
       activity,
-      parseApprovalResolved({ id: "pl-1", decision: "deny", ts: 2 }, "plugin")!,
+      resolutionFromSnapshot({
+        id: "pl-1",
+        urlPath: "/a",
+        createdAtMs: 1,
+        expiresAtMs: 9_000_000_000_000,
+        resolvedAtMs: 2,
+        status: "denied",
+        decision: "deny",
+        reason: "user",
+        presentation: {
+          kind: "plugin",
+          title: "Message another bot",
+          description: "d",
+          severity: "warning",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      })!,
     );
     activity = tool(activity, {
       phase: "result",

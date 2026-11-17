@@ -393,3 +393,132 @@ describe("approvals raised by a messaged bot or a helper (D1)", () => {
     client.stop();
   });
 });
+
+describe("a failed list leaves state as it was (A10, ruling 4)", () => {
+  const unavailable = () =>
+    new GatewayError({ code: "UNAVAILABLE", message: "no current approvals view" });
+  const kindOf = {
+    "exec.approval.list": "exec",
+    "plugin.approval.list": "plugin",
+    "openclaw.approval.list": "system-agent",
+  } as const;
+
+  for (const list of LISTS) {
+    const kind = kindOf[list.method];
+
+    it(`${list.method}: a newer list fails, then an older one returns: nothing old is added`, async () => {
+      const { client, gateway, transcript } = await openTask();
+      await until(() => transcript().approvalAccess === "ready");
+      const held = holdCalls(gateway, list.method);
+      gateway.emit("session.message", { sessionKey: KEY });
+      await until(() => held.length === 1);
+      gateway.emit("session.message", { sessionKey: KEY });
+      await until(() => held.length === 2);
+      held[1]!.reject(unavailable());
+      await until(() => transcript().approvalSources[kind] === "error");
+      held[0]!.resolve([list.item("old")]);
+      await sleep(40);
+      expect(transcript().approvalSources[kind]).toBe("error");
+      expect(transcript().approvals).toEqual([]);
+      client.stop();
+    });
+
+    it(`${list.method}: an older list fails after a newer one succeeded: the newer stands`, async () => {
+      const { client, gateway, transcript } = await openTask();
+      await until(() => transcript().approvalAccess === "ready");
+      const held = holdCalls(gateway, list.method);
+      gateway.emit("session.message", { sessionKey: KEY });
+      await until(() => held.length === 1);
+      gateway.emit("session.message", { sessionKey: KEY });
+      await until(() => held.length === 2);
+      held[1]!.resolve([list.item("new")]);
+      await until(() => transcript().approvals.length === 1);
+      held[0]!.reject(unavailable());
+      await sleep(40);
+      expect(transcript().approvalSources[kind]).toBe("ready");
+      expect(transcript().approvals.map((each) => [each.id, each.status])).toEqual([
+        ["new", "pending"],
+      ]);
+      client.stop();
+    });
+
+    it(`${list.method}: a newer refusal for the scope, then an older success: unavailable, nothing added, and back after a new grant`, async () => {
+      const gateway = grantingGateway();
+      const wait = deferred<unknown>();
+      gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+      gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
+      const { client, transcript } = await openTask({ gateway });
+      await until(() => transcript().approvalAccess === "ready");
+      const held = holdCalls(gateway, list.method);
+      gateway.emit("session.message", { sessionKey: KEY });
+      await until(() => held.length === 1);
+      gateway.emit("session.message", { sessionKey: KEY });
+      await until(() => held.length === 2);
+      held[1]!.reject(
+        new GatewayError({
+          code: "FORBIDDEN",
+          message: "missing scope: operator.approvals",
+          details: { code: "MISSING_SCOPE", missingScope: "operator.approvals" },
+        }),
+      );
+      await until(() => !client.state.connection.canApprove);
+      held[0]!.resolve([list.item("old")]);
+      await sleep(40);
+      expect(transcript().approvals).toEqual([]);
+      expect(transcript().approvalSources[kind]).toBe("unavailable");
+      // A new grant reads the lists again.
+      gateway.handlers[list.method] = () => [list.item("fresh")];
+      void client.requestAccess();
+      await until(() => gateway.calls("device.scopes.requestUpgrade").length === 1);
+      wait.resolve({
+        status: "approved",
+        requestId: "up-1",
+        deviceToken: "rotated",
+        scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
+      });
+      await until(() => transcript().approvals.some((each) => each.id === "fresh"));
+      expect(transcript().approvalSources[kind]).toBe("ready");
+      client.stop();
+    });
+  }
+
+  it("question.list: a newer list fails, then an older one returns: nothing old is added", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: "run-1" } });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().approvalAccess === "ready");
+    gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
+    const held = holdCalls(gateway, "question.list");
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => held.length === 1);
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => held.length === 2);
+    held[1]!.reject(unavailable());
+    await sleep(20);
+    held[0]!.resolve({ questions: [questionRecord("ask_old", "run-1")] });
+    await sleep(40);
+    expect(transcript().questions).toEqual([]);
+    client.stop();
+  });
+
+  it("question.list: an older list fails after a newer one succeeded: the newer stands", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: "run-1" } });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().approvalAccess === "ready");
+    gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
+    const held = holdCalls(gateway, "question.list");
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => held.length === 1);
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => held.length === 2);
+    held[1]!.resolve({ questions: [questionRecord("ask_new", "run-1")] });
+    await until(() => transcript().questions.length === 1);
+    held[0]!.reject(unavailable());
+    await sleep(40);
+    expect(transcript().questions.map((each) => [each.id, each.status])).toEqual([
+      ["ask_new", "pending"],
+    ]);
+    client.stop();
+  });
+});

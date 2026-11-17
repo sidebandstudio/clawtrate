@@ -11,6 +11,7 @@ import type {
   ApprovalSourceAccess,
 } from "./approvals.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
+import { MAX_TASK_RETAINED } from "./retention.ts";
 
 export type RunState =
   "queued" | "running" | "waiting" | "stopping" | "completed" | "stopped" | "failed" | "cancelled";
@@ -88,7 +89,13 @@ export type StepRaw = {
 };
 
 export type Step = {
-  /** `tool:<toolCallId>`, or `reasoning:<runId>:<n>`. Unique within a task. */
+  /**
+   * `tool:<toolCallId>`, or `reasoning:<runId>:<n>` where `n` is the
+   * segment's position in its run, counted from the run's start and never
+   * renumbered by retention (`Run.nextReasoning`). A run whose start a history
+   * page cut off names its segments by row instead,
+   * `reasoning:<runId>:@<seq>.<block>`. Unique within a task.
+   */
   id: string;
   kind: StepKind;
   /** Short title derived from the tool name, the same live and from history. */
@@ -121,6 +128,12 @@ export type Step = {
    * from the facts when it changes.
    */
   correction: number;
+  /**
+   * The step's text and raw payload were not kept because its task or the
+   * host reached its retention budget while the step was open. Its identity
+   * and status are kept; the transcript holds the rest.
+   */
+  bodyOmitted: boolean;
   /**
    * The raw call and result as known so far, inline when its JSON form is at
    * most `RAW_INLINE_LIMIT` characters (set at the tool's start and again when
@@ -204,6 +217,10 @@ export type Run = {
   omittedSteps: number;
   /** The finished run's reply text was dropped for the same reason; the transcript holds it. */
   textOmitted: boolean;
+  /** The active run's streaming text was cut to fit the budget; the transcript will hold it all. */
+  textTruncated: boolean;
+  /** The position the run's next reasoning segment takes. Only ever grows. */
+  nextReasoning: number;
 };
 
 export type OutgoingStatus =
@@ -226,6 +243,12 @@ export type OutgoingStatus =
    * idempotency key, so the gateway delivers it at most once, or deleted.
    */
   | "unconfirmed"
+  /**
+   * The gateway handled it as a command without starting a run (a `/stop`
+   * answered `{ok, aborted, runIds}`): nothing more comes of it, and no
+   * history row is expected. It can be dismissed.
+   */
+  | "handled"
   | "failed"
   | "cancelled";
 
@@ -341,21 +364,12 @@ export const MAX_SETTLED_QUESTIONS = 20;
 export const MAX_SETTLED_APPROVALS = 20;
 /** Steps one run keeps; older finished ones give way, counted in `omittedSteps`. Open steps are always kept. */
 export const MAX_STEPS_PER_RUN = 256;
-/**
- * Characters of activity one task keeps on its snapshot: step text, inline
- * raw payloads, run text, outbox text and approval and question records,
- * counted by `activitySize`. Past it the oldest finished steps give way, then
- * finished runs' reply text. The client lowers it when many tasks are followed,
- * so all of them together stay within `MAX_ACTIVITY_CHARS`.
- */
-export const MAX_TASK_ACTIVITY_CHARS = 4_000_000;
-/** Characters of activity the client keeps across every task it follows. */
-export const MAX_ACTIVITY_CHARS = 64_000_000;
 
 /** Full raw payloads, keyed by task and step id. Owned by the client, never snapshotted. */
 export class RawTable {
-  private readonly entries = new Map<string, { raw: StepRaw; size: number }>();
-  private total = 0;
+  private readonly entries = new Map<string, { task: string; raw: StepRaw; size: number }>();
+  private readonly perTask = new Map<string, number>();
+  private sum = 0;
   private readonly budget: number;
 
   /** `budget` is the most JSON characters kept; the oldest entries give way first. */
@@ -376,20 +390,27 @@ export class RawTable {
     this.drop(key);
     const size = rawSize(raw);
     if (size > this.budget) return;
-    this.entries.set(key, { raw, size });
-    this.total += size;
-    for (const [oldest, entry] of this.entries) {
-      if (this.total <= this.budget) break;
-      this.entries.delete(oldest);
-      this.total -= entry.size;
+    this.entries.set(key, { task: sessionKey, raw, size });
+    this.charge(sessionKey, size);
+    for (const [oldest] of this.entries) {
+      if (this.sum <= this.budget) break;
+      this.drop(oldest);
     }
   }
 
-  private drop(key: string): void {
+  private charge(task: string, size: number): void {
+    this.sum += size;
+    const next = (this.perTask.get(task) ?? 0) + size;
+    if (next === 0) this.perTask.delete(task);
+    else this.perTask.set(task, next);
+  }
+
+  private drop(key: string): number {
     const entry = this.entries.get(key);
-    if (!entry) return;
+    if (!entry) return 0;
     this.entries.delete(key);
-    this.total -= entry.size;
+    this.charge(entry.task, -entry.size);
+    return entry.size;
   }
 
   patch(sessionKey: string, stepId: string, patch: Partial<StepRaw>): StepRaw | null {
@@ -400,14 +421,49 @@ export class RawTable {
     return next;
   }
 
+  /** JSON characters held, in all and for one task. */
+  get total(): number {
+    return this.sum;
+  }
+
+  usage(sessionKey: string): number {
+    return this.perTask.get(sessionKey) ?? 0;
+  }
+
+  /** Drop the payloads of these steps of a task. */
+  dropSteps(sessionKey: string, stepIds: Iterable<string>): void {
+    for (const stepId of stepIds) this.drop(this.key(sessionKey, stepId));
+  }
+
+  /**
+   * Free at least `amount` characters of one task's payloads, oldest first,
+   * keeping those of `keep` (open steps). Returns what was freed and how many.
+   */
+  evict(
+    sessionKey: string,
+    amount: number,
+    keep: ReadonlySet<string>,
+  ): { freed: number; count: number } {
+    let freed = 0;
+    let count = 0;
+    for (const [key, entry] of [...this.entries]) {
+      if (freed >= amount) break;
+      if (entry.task !== sessionKey) continue;
+      if (keep.has(key.slice(sessionKey.length + 1))) continue;
+      freed += this.drop(key);
+      count += 1;
+    }
+    return { freed, count };
+  }
+
   clearTask(sessionKey: string): void {
-    const prefix = `${sessionKey}\u0000`;
-    for (const key of [...this.entries.keys()]) if (key.startsWith(prefix)) this.drop(key);
+    for (const [key, entry] of [...this.entries]) if (entry.task === sessionKey) this.drop(key);
   }
 
   clear(): void {
     this.entries.clear();
-    this.total = 0;
+    this.perTask.clear();
+    this.sum = 0;
   }
 }
 
@@ -535,6 +591,8 @@ export function newRun(
     attemptErrors: [],
     omittedSteps: 0,
     textOmitted: false,
+    textTruncated: false,
+    nextReasoning: 0,
     ...init,
   };
 }
@@ -1336,10 +1394,14 @@ function applyThinking(
   const delta = typeof data.delta === "string" ? data.delta : "";
   const cumulative = typeof data.text === "string" ? data.text : null;
   if (last && last.kind === "reasoning" && last.status === "running") {
-    const previous = asRecord(asRecord(ctx.raw.get(ctx.sessionKey, last.id)?.call)?.data)?.text;
-    const extends_ =
-      cumulative === null || typeof previous !== "string" || cumulative.startsWith(previous);
+    // The baseline is the segment's own text, whether it came live or from a
+    // persisted thinking block. Without one, a cumulative frame is not assumed
+    // to extend it.
+    const previous = last.bodyOmitted ? null : (last.output?.text ?? null);
+    const extends_ = cumulative === null || (previous !== null && cumulative.startsWith(previous));
     if (extends_) {
+      // A segment whose text was not kept stays so; the transcript will hold it.
+      if (last.bodyOmitted) return run;
       const output = cumulative !== null ? capText(cumulative) : appendText(last.output, delta);
       ctx.raw.patch(ctx.sessionKey, last.id, { call: payload });
       return upsertStep(run, { ...last, output });
@@ -1347,7 +1409,8 @@ function applyThinking(
     // The text restarted: a new segment.
     run = closeReasoning(run, ctx, ts);
   }
-  const index = run.steps.filter((step) => step.kind === "reasoning").length;
+  const index = run.nextReasoning;
+  run = { ...run, nextReasoning: index + 1 };
   const id = `reasoning:${run.id}:${index}`;
   ctx.raw.set(ctx.sessionKey, id, { source: "live", runId: run.id, call: payload, result: null });
   return upsertStep(run, {
@@ -1368,6 +1431,7 @@ function applyThinking(
     truncated: false,
     replaceable: false,
     correction: 0,
+    bodyOmitted: false,
     raw: null,
     rawSize: null,
   });
@@ -1380,6 +1444,8 @@ function applyAssistant(run: Run, data: RawRecord, ts: number, ctx: EngineContex
   const delta = typeof data.delta === "string" ? data.delta : "";
   const cumulative = typeof data.text === "string" ? data.text : null;
   const sameItem = itemId === null || itemId === closed.textItemId;
+  // Text cut to fit the budget is not extended by deltas: they would join non-adjacent text.
+  if (cumulative === null && sameItem && closed.textTruncated) return closed;
   const text = cumulative ?? (sameItem ? closed.text + delta : delta);
   return { ...closed, textSource: "agent", textItemId: itemId ?? closed.textItemId, text };
 }
@@ -1407,6 +1473,7 @@ function blankToolStep(toolCallId: string, name: string | null, ts: number | nul
     truncated: false,
     replaceable: false,
     correction: 0,
+    bodyOmitted: false,
     raw: null,
     rawSize: null,
   };
@@ -1446,6 +1513,7 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
       );
     }
     case "update": {
+      if (step.bodyOmitted) return current;
       const partial = asRecord(data.partialResult);
       const text = contentText(partial?.content);
       return upsertStep(current, { ...step, output: text ? capText(text) : step.output });
@@ -1522,7 +1590,7 @@ function applyCommandOutput(run: Run, data: RawRecord): Run {
     (itemId?.startsWith("command:") ? itemId.slice("command:".length) : null);
   if (!toolCallId) return run;
   const step = run.steps.find((each) => each.id === toolStepId(toolCallId));
-  if (!step || !isOpenStep(step) || typeof data.output !== "string") return run;
+  if (!step || !isOpenStep(step) || step.bodyOmitted || typeof data.output !== "string") return run;
   return upsertStep(run, { ...step, output: appendText(step.output, data.output) });
 }
 
@@ -1551,6 +1619,12 @@ export function runsFromHistory(
   messages: unknown,
   inFlight: string | RawRecord | null,
   ctx: EngineContext,
+  /**
+   * The page does not start at the task's beginning (`hasMore`): a run with no
+   * user row before it in the page may have started earlier, so its reasoning
+   * positions are unknown and its segments are named by row.
+   */
+  options: { startCut?: boolean } = {},
 ): Run[] {
   const snapshot = typeof inFlight === "string" ? { runId: inFlight } : inFlight;
   const inFlightRunId = str(snapshot?.runId);
@@ -1558,6 +1632,8 @@ export function runsFromHistory(
   const lastAssistant = new Map<string, RawRecord>();
   /** Runs whose last persisted content is a thinking block: that segment may still be streaming. */
   const trailingThinking = new Map<string, boolean>();
+  /** Runs whose start the page may have cut off. */
+  const cut = new Set<string>();
   let anchor: string | null = null;
   const rows = Array.isArray(messages) ? messages : [];
 
@@ -1572,6 +1648,7 @@ export function runsFromHistory(
     const runId = str(meta(message).runId) ?? str(asRecord(message.openclawAbort)?.runId);
     if (!runId) return;
     const at = rowTime(message);
+    if (!runs.has(runId) && anchor === null && options.startCut) cut.add(runId);
     let run =
       runs.get(runId) ??
       newRun(runId, { state: "running", origin: "history", bound: true, anchorItemId: anchor }, at);
@@ -1581,9 +1658,9 @@ export function runsFromHistory(
       const content = Array.isArray(message.content) ? message.content : [];
       if (typeof message.content === "string" && message.content.trim())
         trailingThinking.set(runId, false);
-      for (const part of content) {
+      content.forEach((part, blockIndex) => {
         const block = asRecord(part);
-        if (!block) continue;
+        if (!block) return;
         if (block.type === "text" && typeof block.text === "string" && block.text.trim())
           trailingThinking.set(runId, false);
         if (
@@ -1592,8 +1669,12 @@ export function runsFromHistory(
           block.thinking.trim()
         ) {
           trailingThinking.set(runId, true);
-          const index = run.steps.filter((step) => step.kind === "reasoning").length;
-          const id = `reasoning:${runId}:${index}`;
+          // The segment's position in its run, as the live view counts it.
+          const index = run.nextReasoning;
+          const id = cut.has(runId)
+            ? `reasoning:${runId}:@${num(meta(message).seq) ?? index}.${blockIndex}`
+            : `reasoning:${runId}:${index}`;
+          run = { ...run, nextReasoning: index + 1 };
           ctx.raw.set(ctx.sessionKey, id, { source: "history", runId, call: block, result: null });
           run = upsertStep(
             run,
@@ -1616,6 +1697,7 @@ export function runsFromHistory(
                 truncated: false,
                 replaceable: false,
                 correction: 0,
+                bodyOmitted: false,
                 raw: null,
                 rawSize: null,
               },
@@ -1624,7 +1706,7 @@ export function runsFromHistory(
           );
         } else if (block.type === "toolCall" || block.type === "tool_use") {
           const toolCallId = str(block.id);
-          if (!toolCallId) continue;
+          if (!toolCallId) return;
           trailingThinking.set(runId, false);
           const name = str(block.name);
           const id = toolStepId(toolCallId);
@@ -1634,7 +1716,7 @@ export function runsFromHistory(
             argsText: capText(prettyArgs(block.arguments ?? block.input)),
           });
         }
-      }
+      });
     } else if (message.role === "toolResult" || message.role === "tool") {
       trailingThinking.set(runId, false);
       const toolCallId = str(message.toolCallId) ?? str(message.tool_call_id);
@@ -1755,34 +1837,54 @@ function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "h
  * then history reasoning is not added. Either way no reasoning text is shown
  * twice, and none is dropped before the transcript has it.
  */
-function mergeSteps(live: Step[], history: Run, fromHistory: Set<string>): Step[] {
+function mergeSteps(
+  live: Run,
+  history: Run,
+  fromHistory: Set<string>,
+): { steps: Step[]; omittedSteps: number } {
   const pick = ({ step, source }: { step: Step; source: "live" | "history" }) => {
     if (source === "history") fromHistory.add(step.id);
     return step;
   };
   const historyIds = new Set(history.steps.map((step) => step.id));
-  const liveById = new Map(live.map((step) => [step.id, step]));
+  const liveById = new Map(live.steps.map((step) => [step.id, step]));
   const complete =
     isTerminal(history.state) &&
-    live.every((step) => step.kind !== "tool" || historyIds.has(step.id)) &&
+    live.steps.every((step) => step.kind !== "tool" || historyIds.has(step.id)) &&
     (history.steps.some((step) => step.kind === "reasoning") ||
-      !live.some((step) => step.kind === "reasoning"));
+      !live.steps.some((step) => step.kind === "reasoning"));
   if (complete) {
-    return history.steps.map((step) => {
-      const current = liveById.get(step.id);
-      return pick(
-        step.kind === "tool" && current ? mergeStep(current, step) : { step, source: "history" },
-      );
-    });
+    // The transcript holds the whole run: its steps, all of them, replace the
+    // live ones, and retention counts again from there.
+    return {
+      steps: history.steps.map((step) => {
+        const current = liveById.get(step.id);
+        return pick(
+          step.kind === "tool" && current ? mergeStep(current, step) : { step, source: "history" },
+        );
+      }),
+      omittedSteps: history.omittedSteps,
+    };
   }
-  const steps = [...live];
+  // History tool steps the live run lacks go in at their place in history's
+  // order, after the history step before them, so a step retention dropped
+  // comes back where it was and gives way again in the same order.
+  const steps = [...live.steps];
+  let cursor = 0;
+  let restored = 0;
   for (const step of history.steps) {
     if (step.kind === "reasoning") continue;
     const index = steps.findIndex((each) => each.id === step.id);
-    if (index === -1) steps.push(pick({ step, source: "history" }));
-    else steps[index] = pick(mergeStep(steps[index]!, step));
+    if (index === -1) {
+      steps.splice(cursor, 0, pick({ step, source: "history" }));
+      cursor += 1;
+      restored += 1;
+    } else {
+      steps[index] = pick(mergeStep(steps[index]!, step));
+      cursor = index + 1;
+    }
   }
-  return steps;
+  return { steps, omittedSteps: Math.max(0, live.omittedSteps - restored) };
 }
 
 export type HistoryMerge = {
@@ -1809,12 +1911,15 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
       for (const step of fromRun.steps) fromHistory.add(step.id);
       return fromRun;
     }
-    const steps = mergeSteps(current.steps, fromRun, fromHistory);
+    const { steps, omittedSteps } = mergeSteps(current, fromRun, fromHistory);
     let run: Run = {
       ...current,
       steps,
+      omittedSteps,
       anchorItemId: fromRun.anchorItemId ?? current.anchorItemId,
       model: current.model ?? fromRun.model,
+      // Positions only grow, whichever side counted further.
+      nextReasoning: Math.max(current.nextReasoning, fromRun.nextReasoning),
     };
     if (!isTerminal(current.state) && isTerminal(fromRun.state)) {
       run = {
@@ -1859,7 +1964,8 @@ export function settleVanishedRuns(
 
 const sizes = new WeakMap<object, number>();
 
-function jsonLength(value: unknown): number {
+/** The JSON length of a value, the unit the retention budgets count in. */
+export function jsonLength(value: unknown): number {
   try {
     return JSON.stringify(value ?? null)?.length ?? 0;
   } catch {
@@ -1867,7 +1973,8 @@ function jsonLength(value: unknown): number {
   }
 }
 
-function cached<T extends object>(value: T, measure: (value: T) => number): number {
+/** A size measured once per immutable object. */
+export function cachedSize<T extends object>(value: T, measure: (value: T) => number): number {
   let size = sizes.get(value);
   if (size === undefined) {
     size = measure(value);
@@ -1877,7 +1984,7 @@ function cached<T extends object>(value: T, measure: (value: T) => number): numb
 }
 
 function stepSize(step: Step): number {
-  return cached(
+  return cachedSize(
     step,
     (each) =>
       256 +
@@ -1891,7 +1998,7 @@ function stepSize(step: Step): number {
 }
 
 function runSize(run: Run): number {
-  return cached(run, (each) => {
+  return cachedSize(run, (each) => {
     let size = 512 + each.text.length + (each.error?.message.length ?? 0);
     for (const message of each.attemptErrors) size += message.length;
     for (const step of each.steps) size += stepSize(step);
@@ -1899,69 +2006,178 @@ function runSize(run: Run): number {
   });
 }
 
-/** The characters a task's activity puts on every snapshot, approximately. */
+const approvalSize = (approval: ApprovalCard) => cachedSize(approval, jsonLength);
+const questionSize = (question: QuestionCard) => cachedSize(question, jsonLength);
+
+/**
+ * The characters a task's activity puts on every snapshot: runs and their
+ * steps, open or finished, the streaming text, the outbox and the approval
+ * and question cards, as JSON.
+ */
 export function activitySize(activity: TaskActivity): number {
   let size = 0;
   for (const run of activity.runs) size += runSize(run);
   for (const message of activity.outbox) size += 256 + message.text.length;
-  for (const approval of activity.approvals)
-    size += cached(approval, (a) => 512 + jsonLength(a.raw));
-  for (const question of activity.questions)
-    size += cached(question, (q) => 256 + jsonLength(q.raw));
+  for (const approval of activity.approvals) size += approvalSize(approval);
+  for (const question of activity.questions) size += questionSize(question);
   return size;
 }
 
-/** Drop the oldest finished steps of a run beyond `keep`, counting them. */
-function dropOldSteps(run: Run, excess: number): Run {
+/** At most `MAX_STEPS_PER_RUN` steps: the oldest finished ones give way first, then the oldest open ones. */
+function capStepCount(run: Run): Run {
+  const excess = run.steps.length - MAX_STEPS_PER_RUN;
   if (excess <= 0) return run;
-  let dropped = 0;
-  const steps = run.steps.filter((step) => {
-    if (dropped >= excess || isOpenStep(step)) return true;
-    dropped += 1;
-    return false;
-  });
-  return dropped === 0 ? run : { ...run, steps, omittedSteps: run.omittedSteps + dropped };
+  const drop = new Set<Step>();
+  for (const step of run.steps) {
+    if (drop.size >= excess) break;
+    if (!isOpenStep(step)) drop.add(step);
+  }
+  for (const step of run.steps) {
+    if (drop.size >= excess) break;
+    drop.add(step);
+  }
+  return {
+    ...run,
+    steps: run.steps.filter((step) => !drop.has(step)),
+    omittedSteps: run.omittedSteps + drop.size,
+  };
 }
 
-/** Bring a task under its activity budget: oldest finished steps first, then finished runs' text. */
-function fitBudget(runs: Run[], over: number): Run[] {
-  let remaining = over;
-  const next = [...runs];
-  // Finished runs first, oldest first; then the finished steps of active runs.
+export type Fitted = { activity: TaskActivity; freed: number };
+
+/**
+ * Free at least `over` characters of closed material, oldest first: finished
+ * steps (of finished runs, then of active ones), then finished runs' reply
+ * text, then settled approvals and questions. What is dropped is counted on
+ * its run; the transcript still holds it.
+ */
+export function fitClosed(activity: TaskActivity, over: number): Fitted {
+  if (over <= 0) return { activity, freed: 0 };
+  let freed = 0;
+  const runs = [...activity.runs];
   const order = [
-    ...next.map((run, index) => ({ run, index })).filter(({ run }) => isTerminal(run.state)),
-    ...next.map((run, index) => ({ run, index })).filter(({ run }) => !isTerminal(run.state)),
+    ...runs.map((run, index) => ({ run, index })).filter(({ run }) => isTerminal(run.state)),
+    ...runs.map((run, index) => ({ run, index })).filter(({ run }) => !isTerminal(run.state)),
   ];
   for (const { index } of order) {
-    if (remaining <= 0) break;
-    let run = next[index]!;
+    if (freed >= over) break;
+    const run = runs[index]!;
     let dropped = 0;
     const steps = run.steps.filter((step) => {
-      if (remaining <= 0 || isOpenStep(step)) return true;
-      remaining -= stepSize(step);
+      if (freed >= over || isOpenStep(step)) return true;
+      freed += stepSize(step);
       dropped += 1;
       return false;
     });
-    if (dropped > 0) run = { ...run, steps, omittedSteps: run.omittedSteps + dropped };
-    if (remaining > 0 && isTerminal(run.state) && run.text) {
-      remaining -= run.text.length;
-      run = { ...run, text: "", textOmitted: true };
-    }
-    next[index] = run;
+    if (dropped > 0) runs[index] = { ...run, steps, omittedSteps: run.omittedSteps + dropped };
   }
-  return next;
+  for (const { index } of order) {
+    if (freed >= over) break;
+    const run = runs[index]!;
+    if (!isTerminal(run.state) || !run.text) continue;
+    freed += run.text.length;
+    runs[index] = { ...run, text: "", textOmitted: true };
+  }
+  let approvals = activity.approvals;
+  let questions = activity.questions;
+  if (freed < over) {
+    approvals = approvals.filter((approval) => {
+      if (freed >= over || approval.status === "pending") return true;
+      freed += approvalSize(approval);
+      return false;
+    });
+    questions = questions.filter((question) => {
+      if (freed >= over || question.status === "pending") return true;
+      freed += questionSize(question);
+      return false;
+    });
+  }
+  return freed === 0
+    ? { activity, freed }
+    : { activity: { ...activity, runs, approvals, questions }, freed };
+}
+
+/** What an open step keeps when its body cannot be: who and where it is, not what it said. */
+function stubStep(step: Step): Step {
+  return {
+    ...step,
+    argsText: null,
+    output: null,
+    result: null,
+    raw: null,
+    rawSize: null,
+    bodyOmitted: true,
+  };
 }
 
 /**
- * Bound what a task keeps while it stays open: the newest finished runs, the
- * newest closed cards per run, the newest steer aliases and settled questions,
- * at most `MAX_STEPS_PER_RUN` steps per run, and `budget` characters of
- * activity in all. Anything active, queued or pending is always kept, and
- * every step or text dropped is counted on its run. Idempotent.
+ * When closed material is not enough: reduce live work, saying so on each
+ * item, never dropping it. Open steps keep their id and status but not their
+ * text or raw payload (`bodyOmitted`); an active run's streaming text is cut
+ * (`textTruncated`); a pending approval keeps what identifies it but not its
+ * record and analysis (`detailOmitted`, and only deny is accepted until it is
+ * read again); a pending question keeps its questions but not its record.
+ * Outgoing messages are never touched.
+ */
+export function fitLive(activity: TaskActivity, over: number): Fitted {
+  if (over <= 0) return { activity, freed: 0 };
+  let freed = 0;
+  const runs = activity.runs.map((run) => {
+    if (freed >= over || isTerminal(run.state)) return run;
+    const steps = run.steps.map((step) => {
+      if (freed >= over || !isOpenStep(step) || step.bodyOmitted) return step;
+      const stub = stubStep(step);
+      freed += stepSize(step) - stepSize(stub);
+      return stub;
+    });
+    let next = steps.some((step, index) => step !== run.steps[index]) ? { ...run, steps } : run;
+    if (freed < over && next.text) {
+      const keep = Math.max(0, next.text.length - (over - freed));
+      freed += next.text.length - keep;
+      next = { ...next, text: next.text.slice(0, keep), textTruncated: true };
+    }
+    return next;
+  });
+  const approvals = activity.approvals.map((approval) => {
+    if (freed >= over || approval.status !== "pending" || approval.detailOmitted) return approval;
+    const reduced: ApprovalCard = {
+      ...approval,
+      raw: null,
+      detailOmitted: true,
+      exec: approval.exec
+        ? {
+            ...approval.exec,
+            command: approval.exec.command ? capText(approval.exec.command).text : null,
+            commandArgv: null,
+            commandAnalysis: null,
+            systemRunPlan: null,
+          }
+        : null,
+      plugin: approval.plugin ? { ...approval.plugin, detail: null } : null,
+    };
+    freed += approvalSize(approval) - approvalSize(reduced);
+    return reduced;
+  });
+  const questions = activity.questions.map((question) => {
+    if (freed >= over || question.status !== "pending" || question.raw === null) return question;
+    const reduced = { ...question, raw: null };
+    freed += questionSize(question) - questionSize(reduced);
+    return reduced;
+  });
+  return { activity: { ...activity, runs, approvals, questions }, freed };
+}
+
+/**
+ * Bound what a task keeps: the newest finished runs, the newest closed cards
+ * per run, the newest steer aliases and settled questions and approvals, at
+ * most `MAX_STEPS_PER_RUN` steps per run, and `budget` characters of activity
+ * (`activitySize`). Over the budget, closed material goes first
+ * (`fitClosed`), then live work is reduced (`fitLive`). Every reduction is
+ * marked on what it reduced. Idempotent.
  */
 export function retainActivity(
   activity: TaskActivity,
-  budget: number = MAX_TASK_ACTIVITY_CHARS,
+  budget: number = MAX_TASK_RETAINED,
 ): TaskActivity {
   let changed = false;
   const finished = activity.runs.filter((run) => isTerminal(run.state));
@@ -1980,11 +2196,8 @@ export function retainActivity(
     changed = true;
   }
   if (runs.some((run) => run.steps.length > MAX_STEPS_PER_RUN)) {
-    const capped = runs.map((run) => dropOldSteps(run, run.steps.length - MAX_STEPS_PER_RUN));
-    if (capped.some((run, index) => run !== runs[index])) {
-      runs = capped;
-      changed = true;
-    }
+    runs = runs.map(capStepCount);
+    changed = true;
   }
   let steerAliases = activity.steerAliases;
   const aliasKeys = Object.keys(steerAliases);
@@ -2010,15 +2223,16 @@ export function retainActivity(
     approvals = approvals.filter((approval) => !drop.has(approval));
     changed = true;
   }
-  const over = activitySize({ ...activity, runs, questions, approvals }) - budget;
+  let next: TaskActivity = changed
+    ? { ...activity, runs, steerAliases, questions, approvals }
+    : activity;
+  const over = activitySize(next) - budget;
   if (over > 0) {
-    const fitted = fitBudget(runs, over);
-    if (fitted.some((run, index) => run !== runs[index])) {
-      runs = fitted;
-      changed = true;
-    }
+    const closed = fitClosed(next, over);
+    next = closed.activity;
+    if (closed.freed < over) next = fitLive(next, over - closed.freed).activity;
   }
-  return changed ? { ...activity, runs, steerAliases, questions, approvals } : activity;
+  return next;
 }
 
 /** A user row's idempotency key: under `__openclaw`, or on the row itself. */

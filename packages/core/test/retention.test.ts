@@ -9,6 +9,7 @@ import { MAX_VIEWER_OPEN_TASKS, createBridgeSession } from "../src/bridge.ts";
 import {
   MAX_ACCESS_WAITERS,
   MAX_OUTBOX_PER_TASK,
+  MAX_PENDING_APPROVALS_PER_TASK,
   MAX_RETAINED_ATTACHMENT_BYTES,
   MAX_TASKS_WITH_OUTBOX,
   MAX_TRACKED_TASKS,
@@ -18,9 +19,7 @@ import {
   activitySize,
   applyAgentEvent,
   emptyActivity,
-  MAX_ACTIVITY_CHARS,
   MAX_STEPS_PER_RUN,
-  MAX_TASK_ACTIVITY_CHARS,
   RawTable,
   retainActivity,
   type EngineContext,
@@ -94,23 +93,26 @@ describe("every message an outbox holds counts (A5, B2)", () => {
 
 describe(`file bytes kept for outgoing messages, within MAX_RETAINED_ATTACHMENT_BYTES (A5, B2)`, () => {
   it("counts the files of failed messages, refuses one byte past the bound, and frees them on delete", async () => {
-    const { client, gateway, transcript } = await openTask();
+    const { client, gateway } = await openTask();
     gateway.handlers["chat.send"] = refuse;
     const size = 16 * 1024 * 1024;
     const count = MAX_RETAINED_ATTACHMENT_BYTES / size;
+    // One such file per task: each task's own budget holds one.
+    const keys = Array.from({ length: count + 1 }, (_, i) => `agent:otto:files${i}`);
+    for (const key of keys) client.openSession(key);
     for (let i = 0; i < count; i += 1) {
-      client.sendMessage(KEY, `f${i}`, { attachments: [file(size, `f${i}.bin`)] });
-      await until(() => transcript().outbox[i]?.status === "failed");
+      client.sendMessage(keys[i]!, `f${i}`, { attachments: [file(size, `f${i}.bin`)] });
+      await until(() => client.state.transcripts[keys[i]!]!.outbox[0]?.status === "failed");
     }
     expect(client.retainedAttachmentBytes).toBe(MAX_RETAINED_ATTACHMENT_BYTES);
-    expect(() => client.sendMessage(KEY, "past", { attachments: [file(1)] })).toThrow(
+    expect(() => client.sendMessage(keys[count]!, "past", { attachments: [file(1)] })).toThrow(
       /still waiting to go out/,
     );
     // A message without files is still accepted.
-    client.sendMessage(KEY, "text only");
-    client.deleteMessage(KEY, transcript().outbox[0]!.id);
+    client.sendMessage(keys[count]!, "text only");
+    client.deleteMessage(keys[0]!, client.state.transcripts[keys[0]!]!.outbox[0]!.id);
     expect(client.retainedAttachmentBytes).toBe(MAX_RETAINED_ATTACHMENT_BYTES - size);
-    client.sendMessage(KEY, "fits again", { attachments: [file(size)] });
+    client.sendMessage(keys[0]!, "fits again", { attachments: [file(size)] });
     client.stop();
   }, 30_000);
 
@@ -162,26 +164,33 @@ describe("operations a viewer leaves waiting for access (A5, B2)", () => {
   });
 
   it(`are at most MAX_ACCESS_WAITERS (${MAX_ACCESS_WAITERS}) at once`, async () => {
-    const { client, gateway, transcript } = await openTask({ held: READ_SCOPES });
+    const { client, gateway } = await openTask({ held: READ_SCOPES });
     gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
     gateway.handlers["device.scopes.waitUpgrade"] = () => new Promise(() => {});
+    // Spread over tasks: each shows at most MAX_PENDING_APPROVALS_PER_TASK.
+    const where = (i: number) => `agent:otto:w${Math.floor(i / MAX_PENDING_APPROVALS_PER_TASK)}`;
+    for (let i = 0; i <= MAX_ACCESS_WAITERS; i += 1) client.openSession(where(i));
     for (let i = 0; i <= MAX_ACCESS_WAITERS; i += 1) {
       gateway.emit("exec.approval.requested", {
         id: `ap-${i}`,
-        request: { command: "ls", sessionKey: KEY, allowedDecisions: ["allow-once", "deny"] },
+        request: { command: "ls", sessionKey: where(i), allowedDecisions: ["allow-once", "deny"] },
         createdAtMs: 1,
         expiresAtMs: 9_000_000_000_000,
       });
     }
-    await until(() => transcript().approvals.length === MAX_ACCESS_WAITERS + 1);
+    await until(() =>
+      client.state.transcripts[where(MAX_ACCESS_WAITERS)]!.approvals.some(
+        (each) => each.id === `ap-${MAX_ACCESS_WAITERS}`,
+      ),
+    );
     const waiting = Array.from({ length: MAX_ACCESS_WAITERS }, (_, i) =>
-      client.resolveApproval(KEY, `ap-${i}`, "deny").catch(() => {}),
+      client.resolveApproval(where(i), `ap-${i}`, "deny").catch(() => {}),
     );
     void waiting;
     await until(() => client.pendingAccessWaiters === MAX_ACCESS_WAITERS);
-    await expect(client.resolveApproval(KEY, `ap-${MAX_ACCESS_WAITERS}`, "deny")).rejects.toThrow(
-      /Too many operations/,
-    );
+    await expect(
+      client.resolveApproval(where(MAX_ACCESS_WAITERS), `ap-${MAX_ACCESS_WAITERS}`, "deny"),
+    ).rejects.toThrow(/Too many operations/);
     client.stop();
   });
 });
@@ -295,50 +304,5 @@ describe("steps and activity a task keeps (A6)", () => {
     expect(trimmed.runs[0]!.steps[0]!.id).toBe("tool:c2");
     expect(activitySize(trimmed)).toBeLessThanOrEqual(size - 1);
     expect(retainActivity(trimmed, size - 1)).toBe(trimmed);
-  });
-
-  it(`never lets one task's activity pass MAX_TASK_ACTIVITY_CHARS (${MAX_TASK_ACTIVITY_CHARS})`, () => {
-    // Steps of 16 000 characters of text plus their inline raw payloads.
-    const big = runWithTools(MAX_STEPS_PER_RUN, "y".repeat(16_000));
-    expect(activitySize(big)).toBeGreaterThan(MAX_TASK_ACTIVITY_CHARS);
-    const kept = retainActivity(big);
-    expect(activitySize(kept)).toBeLessThanOrEqual(MAX_TASK_ACTIVITY_CHARS);
-    expect(kept.runs[0]!.omittedSteps).toBeGreaterThan(0);
-    expect(kept.runs[0]!.steps.length + kept.runs[0]!.omittedSteps).toBe(MAX_STEPS_PER_RUN);
-  });
-
-  it(`shares MAX_ACTIVITY_CHARS (${MAX_ACTIVITY_CHARS}) across the tasks the client follows`, async () => {
-    const { client, gateway, transcript } = await openTask();
-    const tasks = 32;
-    for (let i = 1; i < tasks; i += 1) client.openSession(`agent:otto:s${i}`);
-    const share = Math.min(MAX_TASK_ACTIVITY_CHARS, Math.floor(MAX_ACTIVITY_CHARS / tasks));
-    let seq = 0;
-    gateway.emit("agent", agentEvent("run-1", (seq += 1), "lifecycle", { phase: "start" }));
-    const text = "z".repeat(16_000);
-    for (let i = 0; i < 200; i += 1) {
-      gateway.emit(
-        "agent",
-        agentEvent("run-1", (seq += 1), "tool", {
-          phase: "start",
-          name: "ls",
-          toolCallId: `c${i}`,
-          args: {},
-        }),
-      );
-      gateway.emit(
-        "agent",
-        agentEvent("run-1", (seq += 1), "tool", {
-          phase: "result",
-          name: "ls",
-          toolCallId: `c${i}`,
-          isError: false,
-          result: { content: [{ type: "text", text }], details: {} },
-        }),
-      );
-    }
-    await until(() => transcript().runs[0]?.steps.some((step) => step.id === "tool:c199") === true);
-    expect(transcript().runs[0]!.omittedSteps).toBeGreaterThan(0);
-    expect(activitySize(transcript())).toBeLessThanOrEqual(share);
-    client.stop();
   });
 });

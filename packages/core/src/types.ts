@@ -3,6 +3,8 @@
 
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun } from "./cards.ts";
+import type { HostRetention, TaskRetention } from "./retention.ts";
+import { MAX_HOST_RETAINED } from "./retention.ts";
 import type { TaskActivity } from "./runs.ts";
 
 export type ConnectionStatus =
@@ -143,6 +145,8 @@ export type Transcript = TaskActivity & {
   linkedRuns: Record<string, LinkedRun>;
   /** Messages from other sessions in this task's history (inter-session provenance). */
   interSession: InterSessionMessage[];
+  /** What this task keeps against its budget, and whether anything was refused or reduced. */
+  retention: TaskRetention;
 };
 
 /** Loading bots and tasks after each connect, separate from the socket's own state. */
@@ -167,6 +171,10 @@ export type ClawtrateState = {
    * them; at most `MAX_UNROUTED_APPROVALS`.
    */
   unroutedApprovals: ApprovalCard[];
+  /** Pending approvals not kept because `unroutedApprovals` was full; a list read brings them back. */
+  unroutedApprovalsOmitted: number;
+  /** What the host keeps against its budget. */
+  retention: HostRetention;
 };
 
 export const initialScopeUpgrade: ScopeUpgradeState = {
@@ -209,4 +217,6 @@ export const initialState: ClawtrateState = {
   tasksByBot: {},
   transcripts: {},
   unroutedApprovals: [],
+  unroutedApprovalsOmitted: 0,
+  retention: { used: 0, limit: MAX_HOST_RETAINED, full: false },
 };
