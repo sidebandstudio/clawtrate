@@ -29,8 +29,12 @@ function applyTheme(choice: ThemeChoice): void {
   else root.dataset.theme = choice;
 }
 
-/** Theme preference: follows the OS until the viewer picks one. `?theme=` overrides it. */
-export function useTheme(): [ThemeChoice, () => void] {
+/**
+ * Theme preference: follows the OS until the viewer picks one. `?theme=`
+ * overrides it. "system" stores nothing and removes `data-theme`, so the
+ * stylesheet's `prefers-color-scheme` rules apply.
+ */
+export function useTheme(): [ThemeChoice, (choice: ThemeChoice) => void] {
   const [choice, setChoice] = useState<ThemeChoice>(() => {
     const fromUrl = new URLSearchParams(globalThis.location?.search ?? "").get("theme");
     const stored = fromUrl ?? readPreference("theme");
@@ -39,15 +43,24 @@ export function useTheme(): [ThemeChoice, () => void] {
 
   useEffect(() => applyTheme(choice), [choice]);
 
-  const cycle = useCallback(() => {
-    setChoice((current) => {
-      const systemDark = globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
-      const effective = current === "system" ? (systemDark ? "dark" : "light") : current;
-      const next: ThemeChoice = effective === "dark" ? "light" : "dark";
-      writePreference("theme", next);
-      return next;
-    });
+  const choose = useCallback((next: ThemeChoice) => {
+    writePreference("theme", next === "system" ? null : next);
+    setChoice(next);
   }, []);
 
-  return [choice, cycle];
+  return [choice, choose];
+}
+
+/** A set of ids kept as a JSON array in a preference. */
+export function readIdSet(key: string): Set<string> {
+  try {
+    const parsed: unknown = JSON.parse(readPreference(key) ?? "[]");
+    return new Set(Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function writeIdSet(key: string, ids: Set<string>): void {
+  writePreference(key, JSON.stringify([...ids]));
 }

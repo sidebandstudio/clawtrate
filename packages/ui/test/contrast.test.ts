@@ -47,7 +47,6 @@ function contrast(a: Rgb, b: Rgb): number {
 const SURFACES = [
   "bg",
   "bg-rail",
-  "bg-list",
   "bg-pane",
   "bg-raised",
   "bg-inset",

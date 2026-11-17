@@ -33,8 +33,7 @@
   --radius-lg: 18px;
   --radius-pill: 999px;
 
-  --rail-width: 228px;
-  --list-width: 312px;
+  --rail-width: 280px;
   --panel-width: 320px;
   --header-height: 52px;
   --strip-band: 42px;
@@ -66,7 +65,6 @@
   color-scheme: light;
   --bg: #ffffff;
   --bg-rail: #f6f6f5;
-  --bg-list: #f6f6f5;
   --bg-pane: #ffffff;
   --bg-raised: #ffffff;
   --bg-bubble: #f0f0ee;
@@ -114,7 +112,6 @@
     color-scheme: dark;
     --bg: #101112;
     --bg-rail: #0b0c0d;
-    --bg-list: #0b0c0d;
     --bg-pane: #101112;
     --bg-raised: #1c1d1f;
     --bg-bubble: #1f2022;
@@ -161,7 +158,6 @@
   color-scheme: dark;
   --bg: #101112;
   --bg-rail: #0b0c0d;
-  --bg-list: #0b0c0d;
   --bg-pane: #101112;
   --bg-raised: #1c1d1f;
   --bg-bubble: #1f2022;

@@ -1,4 +1,11 @@
-import type { Bot, Task, Transcript, TranscriptBlock, TranscriptItem } from "@clawtrate/core";
+import type {
+  Bot,
+  DiscoveryState,
+  Task,
+  Transcript,
+  TranscriptBlock,
+  TranscriptItem,
+} from "@clawtrate/core";
 import { Fragment, useCallback, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Avatar } from "./Avatar.tsx";
 import { clockTime, fullDate, summarizeArguments } from "./format.ts";
@@ -207,6 +214,8 @@ function Placeholder({ title, body }: { title: string; body: string | null }) {
 export function Conversation({
   task,
   bot,
+  taskCount,
+  discovery,
   transcript,
   panelOpen,
   onTogglePanel,
@@ -216,6 +225,8 @@ export function Conversation({
 }: {
   task: Task | null;
   bot: Bot | undefined;
+  taskCount: number;
+  discovery: DiscoveryState;
   transcript: Transcript | undefined;
   panelOpen: boolean;
   onTogglePanel: () => void;
@@ -232,8 +243,8 @@ export function Conversation({
           type="button"
           className="icon-button back-button"
           onClick={onBack}
-          aria-label="Back to tasks"
-          title="Back to tasks"
+          aria-label="Back to bots"
+          title="Back to bots"
         >
           <BackIcon />
         </button>
@@ -259,10 +270,21 @@ export function Conversation({
           <PanelIcon />
         </button>
       </header>
-      {!task ? (
+      {!bot ? (
+        discovery.status === "loading" ? (
+          <Placeholder title="Loading" body="Loading this gateway's bots." />
+        ) : (
+          <Placeholder title="No bots to show" body="This gateway has no bots yet." />
+        )
+      ) : taskCount === 0 ? (
+        <Placeholder
+          title="No tasks yet"
+          body={`Conversations with ${bot.name} will be listed here.`}
+        />
+      ) : !task ? (
         <Placeholder
           title="Pick a task"
-          body="Choose one of this bot's tasks to read the conversation."
+          body={`Choose one of ${bot.name}'s tasks to read the conversation.`}
         />
       ) : !transcript || (transcript.status === "loading" && itemCount === 0) ? (
         <div className="transcript-wrap">
