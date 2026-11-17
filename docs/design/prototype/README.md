@@ -39,8 +39,9 @@ Every setting can be given in the address, which is how the screenshots are take
 | `folder` | A workspace folder to open: `/`, `notes`, `logs` (Work pane) |
 | `file`, `fileview` | A file to open in the reader, for example `file=notes/disk-2026-11-16.md&fileview=changes`; views are `preview`, `source`, `changes` (Work pane) |
 | `artifact`, `viewer` | An item the bot sent, opened in the pane or in the media viewer, for example `bot=juniper&task=j2&artifact=a-terms` or `viewer=a-usage` (Work pane) |
-| `artifactload`, `thumbs` | `failed`: the first opening of an item fails; the gateway's thumbnail for a large picture fails (Work pane) |
-| `computer` | `noplugin`, `unconfigured`, `unused`, `closed`, `watching`, `full`, `draining`, `control`, `busy`, `conflict`, `ended`, `offline`, `stuck`, `active`; with `firstwatch=1` for the one-time note (Work pane) |
+| `artifactload`, `thumbs` | `failed`: the first opening of an item fails; the gateway's thumbnail for a large picture fails. `thumbs=original`: the thumbnail comes back as the original, over 2 MB (Work pane) |
+| `computer` | `noplugin`, `unconfigured`, `unused`, `closed`, `watching`, `full`, `draining`, `control`, `busy`, `conflict`, `ended`, `offline`, `nodeunknown`, `stuck`, `active`, `elsewhere`, `releasefail`, `releaseunknown`, `complexquestion`; with `firstwatch=1` for the one-time note (Work pane) |
+| `checkout` | `1`: Changes adds the checkout's comparison (Work pane) |
 
 `work.html` takes every parameter `app.html` takes; `work-pane.md`, section 22, lists its own.
 
