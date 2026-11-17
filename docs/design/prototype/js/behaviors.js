@@ -563,4 +563,17 @@
       clearTimeout(holdTimer);
     }),
   );
+
+  // A later T3 Code call's line leads to its thread's card (conversation.md, section 11.4).
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest('[data-action="show-thread"]');
+    if (!button) return;
+    const scope = button.closest(".spec-box, #transcript-inner") || document;
+    const threads = [...scope.querySelectorAll('.messaged[data-target="t3code"]:not([data-line])')];
+    const card = threads.filter((c) => c.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).pop() || threads[0];
+    if (!card) return;
+    card.open = true;
+    card.scrollIntoView({ block: "nearest" });
+    card.querySelector("summary").focus({ preventScroll: true });
+  });
 })();
