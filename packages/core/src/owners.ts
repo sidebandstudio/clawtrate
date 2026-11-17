@@ -38,6 +38,7 @@ import {
 } from "./files.ts";
 import { emptyActivity } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
+import { MAX_WAITING_ID_CHARS, MAX_WAITING_MARKERS, MAX_WAITING_SESSIONS } from "./waiting.ts";
 import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
@@ -129,6 +130,17 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     opaque: "the raw table's budget, `MAX_RAW_BYTES`",
   },
   "raw.perTask": { max: T, each: ID + N, row: "rawPayloads" },
+  // Which tasks wait for the person (`waiting.ts`): a key, and its markers, each an id and a run.
+  "waiting.sessions": {
+    max: MAX_WAITING_SESSIONS,
+    each: MAX_WAITING_ID_CHARS + MAX_WAITING_MARKERS * (2 * MAX_WAITING_ID_CHARS + 64),
+    row: "bookkeeping",
+  },
+  "waiting.sessions.*": {
+    max: MAX_WAITING_MARKERS,
+    each: 2 * MAX_WAITING_ID_CHARS + 64,
+    row: null,
+  },
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
     max: FOREIGN_SESSIONS,
@@ -224,6 +236,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   streams: "ChatTextBaselines",
   store: "ObservableStore",
   fileTransfers: "FileTransfers",
+  waiting: "WaitingIndex",
 };
 
 /** One viewer's bridge session, per viewer (`MAX_WEB_VIEWERS` on the web host). */

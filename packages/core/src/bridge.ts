@@ -10,6 +10,14 @@ import {
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
 import type { QuestionAnswer, StepRead } from "./runs.ts";
+import {
+  MAX_SIDEBAR_BOTS,
+  parseSidebar,
+  sectionName,
+  type SidebarChange,
+  type SidebarPrefs,
+} from "./sidebar.ts";
+import { MAX_TASK_LABEL_CHARS, type ArchivedList } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 
 export type BridgeCommand =
@@ -105,7 +113,28 @@ export type BridgeCommand =
   /** The next part of a file on its way to this viewer (`FileTransferStart`). */
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
-  | { type: "releaseFile"; id: string };
+  | { type: "releaseFile"; id: string }
+  /**
+   * The rail's task actions (`task-actions.ts`). They act on any task the rail
+   * lists, open in this view or not, and each stays at `operator.write`.
+   * `newTask` answers the new task's key; the viewer opens it as it opens any task.
+   */
+  | { type: "newTask"; botId: string; label: string | null }
+  /** A bot's replacement first task, "Main" (F-424). */
+  | { type: "newMainTask"; botId: string }
+  | { type: "renameTask"; key: string; label: string }
+  | { type: "pinTask"; key: string; pinned: boolean }
+  /** Mark unread or read; `opened` is the read of opening a task, made only while the connection writes. */
+  | { type: "markTask"; key: string; unread: boolean; opened: boolean }
+  /** Archive; `stop` stops an active run first ("Stop and archive"). */
+  | { type: "archiveTask"; key: string; stop: boolean }
+  | { type: "restoreTask"; key: string }
+  /** Delete a task and its transcript, stopping an active run first. */
+  | { type: "deleteTask"; key: string }
+  /** A bot's archived tasks, read now. */
+  | { type: "listArchived"; botId: string }
+  /** Change the rail's arrangement on the gateway; `base` is this device's, used when the gateway holds none. */
+  | { type: "changeSidebar"; change: SidebarChange; base: SidebarPrefs | null };
 
 /** What each command answers with. */
 export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
@@ -134,7 +163,11 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                         ? CheckoutDiff
                         : C extends { type: "readFileChunk" }
                           ? { data: string }
-                          : void;
+                          : C extends { type: "newTask" | "newMainTask" }
+                            ? { key: string }
+                            : C extends { type: "listArchived" }
+                              ? ArchivedList
+                              : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -258,6 +291,39 @@ function count(value: unknown, max: number, what: string): number {
 function botId(value: unknown): string {
   if (typeof value !== "string" || !BOT_ID_PATTERN.test(value)) throw new Error("invalid bot id");
   return value;
+}
+
+function flag(value: unknown): boolean {
+  if (typeof value !== "boolean") throw new Error("invalid flag");
+  return value;
+}
+
+/** One change to the rail's arrangement, checked field by field. */
+function sidebarChange(value: unknown): SidebarChange {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error("invalid change");
+  const change = value as Record<string, unknown>;
+  switch (change.op) {
+    case "pin":
+      return { op: "pin", botId: botId(change.botId), pinned: flag(change.pinned) };
+    case "hide":
+      return { op: "hide", botId: botId(change.botId), hidden: flag(change.hidden) };
+    case "order":
+      if (!Array.isArray(change.order) || change.order.length > MAX_SIDEBAR_BOTS)
+        throw new Error("invalid order");
+      return { op: "order", order: change.order.map(botId) };
+    case "section": {
+      const section = change.section;
+      if (section !== null && typeof section !== "string") throw new Error("invalid section");
+      return {
+        op: "section",
+        botId: botId(change.botId),
+        section: section === null ? null : sectionName(section),
+      };
+    }
+    default:
+      throw new Error("invalid change");
+  }
 }
 
 function messageText(value: unknown): string {
@@ -492,6 +558,44 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "releaseFile":
       return { type: "releaseFile", id: id(command.id, "transfer id") };
+    case "newTask": {
+      const label = command.label;
+      if (
+        label !== null &&
+        label !== undefined &&
+        (typeof label !== "string" || label.length > MAX_TASK_LABEL_CHARS)
+      )
+        throw new Error("invalid label");
+      return { type: "newTask", botId: botId(command.botId), label: label ?? null };
+    }
+    case "newMainTask":
+    case "listArchived":
+      return { type: command.type, botId: botId(command.botId) };
+    case "renameTask":
+      if (typeof command.label !== "string" || command.label.length > MAX_TASK_LABEL_CHARS)
+        throw new Error("invalid label");
+      return { type: "renameTask", key: sessionKey(command.key), label: command.label };
+    case "pinTask":
+      return { type: "pinTask", key: sessionKey(command.key), pinned: flag(command.pinned) };
+    case "markTask":
+      return {
+        type: "markTask",
+        key: sessionKey(command.key),
+        unread: flag(command.unread),
+        opened: command.opened === undefined ? false : flag(command.opened),
+      };
+    case "archiveTask":
+      return { type: "archiveTask", key: sessionKey(command.key), stop: flag(command.stop) };
+    case "restoreTask":
+    case "deleteTask":
+      return { type: command.type, key: sessionKey(command.key) };
+    case "changeSidebar":
+      return {
+        type: "changeSidebar",
+        change: sidebarChange(command.change),
+        base:
+          command.base === null || command.base === undefined ? null : parseSidebar(command.base),
+      };
     default:
       throw new Error("unknown command");
   }
@@ -736,6 +840,26 @@ class ViewerSession implements BridgeSession {
         return client.readFileChunk(command.id, command.index, owner);
       case "releaseFile":
         return client.releaseFile(command.id, owner);
+      case "newTask":
+        return { key: await client.newTask(command.botId, { label: command.label, owner }) };
+      case "newMainTask":
+        return { key: await client.newMainTask(command.botId, { owner }) };
+      case "renameTask":
+        return client.renameTask(command.key, command.label, { owner });
+      case "pinTask":
+        return client.pinTask(command.key, command.pinned, { owner });
+      case "markTask":
+        return client.markTask(command.key, command.unread, { owner, opened: command.opened });
+      case "archiveTask":
+        return client.archiveTask(command.key, { stop: command.stop, owner });
+      case "restoreTask":
+        return client.restoreTask(command.key, { owner });
+      case "deleteTask":
+        return client.deleteTask(command.key, { owner });
+      case "listArchived":
+        return client.listArchived(command.botId);
+      case "changeSidebar":
+        return client.changeSidebar(command.change, command.base, { owner });
     }
   }
 

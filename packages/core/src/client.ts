@@ -184,6 +184,31 @@ import {
 } from "./state-bounds.ts";
 import { createStore, type Store } from "./store.ts";
 import {
+  changeSidebar,
+  initialSidebar,
+  readSidebar,
+  SIDEBAR_PREF_KEY,
+  type SidebarChange,
+  type SidebarContext,
+  type SidebarPrefs,
+  type SidebarState,
+} from "./sidebar.ts";
+import {
+  archiveTask,
+  deleteTask,
+  listArchived,
+  markTask,
+  newMainTask,
+  newTask,
+  pinTask,
+  renameTask,
+  restoreTask,
+  type ArchivedList,
+  type CreatedTask,
+  type TaskActionContext,
+} from "./task-actions.ts";
+import { WaitingIndex } from "./waiting.ts";
+import {
   initialConnectionState,
   initialScopeUpgrade,
   initialState,
@@ -629,6 +654,8 @@ export class ClawtrateClient {
    */
   private gatewayBootId: string | null = null;
   private rows = new Map<string, RawRecord>();
+  /** Which tasks wait for the person, across every bot (`waiting.ts`), for the rail. */
+  private readonly waiting = new WaitingIndex();
   /** Open transcripts, counted, so several viewers can share one. */
   private readonly openSessions = new Map<string, number>();
   /** The streaming reply text of each task's newest `MAX_STREAMS_PER_TASK` runs, only while they stream. */
@@ -3753,6 +3780,7 @@ export class ClawtrateClient {
     }
     this.creationWaiters.clear();
     this.approvalOutcomes.clear();
+    this.waiting.clear();
     this.unrouted.clear();
     this.recipients.clear();
     this.spawnedBy.clear();
@@ -3994,6 +4022,8 @@ export class ClawtrateClient {
     for (const key of Object.keys(this.state.transcripts)) {
       if (this.tracked(key)) void this.loadTranscript(key, true, resync);
     }
+    void this.loadSidebar(generation);
+    void this.loadWaitingQuestions(generation);
 
     if (failures.length > 0) {
       this.log("error", `discovery failed: ${failures.join("; ")}`);
@@ -4051,6 +4081,24 @@ export class ClawtrateClient {
 
   private publishTasks(): void {
     const tasksByBot = groupTasks(this.rows.values());
+    // What waits for the person, from the events of every task; a task the gateway lists
+    // with no active run waits for nothing, whatever was kept.
+    for (const tasks of Object.values(tasksByBot)) {
+      for (const [index, task] of tasks.entries()) {
+        if (task.status !== "running") {
+          this.waiting.settle(task.key);
+          continue;
+        }
+        const waiting = this.waiting.waitingFor(task.key);
+        if (waiting)
+          tasks[index] = {
+            ...task,
+            status: "waiting",
+            waitingFor: waiting.kind,
+            waitingSince: waiting.since,
+          };
+      }
+    }
     this.store.update((state) => ({ ...state, tasksByBot }));
   }
 
@@ -4396,11 +4444,21 @@ export class ClawtrateClient {
       case "chat":
         this.handleChat(event);
         return;
-      case "agent":
+      case "agent": {
+        const payload = asRecord(event.payload);
+        if (payload && this.waiting.onAgent(payload, this.now())) this.publishTasks();
         this.handleAgent(event);
         return;
+      }
+      case "users.prefs.changed": {
+        const keys = asRecord(event.payload)?.keys;
+        if (Array.isArray(keys) && keys.includes(SIDEBAR_PREF_KEY))
+          void this.loadSidebar(this.generation);
+        return;
+      }
       case "question.requested": {
         const record = asRecord(event.payload);
+        if (record && this.waiting.onQuestionRequested(record, this.now())) this.publishTasks();
         const key = typeof record?.sessionKey === "string" ? record.sessionKey : null;
         if (record && key && this.tracked(key)) {
           this.updateActivity(key, (activity, ctx) =>
@@ -4449,6 +4507,7 @@ export class ClawtrateClient {
         const payload = asRecord(event.payload);
         const id = payload?.id;
         if (!payload || typeof id !== "string") return;
+        if (this.waiting.onQuestionResolved(id)) this.publishTasks();
         for (const [key, activity] of [...this.foreign.entries()]) {
           if (activity.runs.some((run) => run.pendingCards.some((card) => card.id === id)))
             this.updateForeign(key, (each) => foreignQuestionResolved(each, payload));
@@ -4472,6 +4531,152 @@ export class ClawtrateClient {
       }
       default:
         return;
+    }
+  }
+
+  // Managing tasks and the rail's arrangement (`task-actions.ts`, `sidebar.ts`) --------
+
+  /**
+   * The context the rail's actions run in: the gateway, and the write tier,
+   * asked for through the same request as sending (`ensureScope`) only when an
+   * action needs it, by the viewer that started it.
+   */
+  private actionContext(owner: object | null): TaskActionContext & SidebarContext {
+    const generation = this.generation;
+    return {
+      request: async (method, params) => {
+        this.checkNotWithdrawn(owner);
+        if (generation !== this.generation) throw new Error("Switched to another gateway.");
+        try {
+          return await this.request(method, params);
+        } catch (error) {
+          this.noteMissingScope(error);
+          throw error;
+        }
+      },
+      ensureWrite: async () => {
+        if (this.options.readOnly)
+          throw new Error("This host only reads; it does not change tasks.");
+        await this.ensureScope(WRITE_SCOPE, owner);
+        this.checkNotWithdrawn(owner);
+      },
+      now: () => this.now(),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    };
+  }
+
+  /** A task the gateway just created, listed at once from its answer until `sessions.changed` brings its row. */
+  private listCreated(created: CreatedTask): string {
+    const key = capId(created.key, MAX_ID_CHARS);
+    if (!this.rows.has(key) && isTaskSession(created.row)) {
+      this.rows.set(key, SESSION_ROW(created.row));
+      this.publishTasks();
+    }
+    return created.key;
+  }
+
+  /** A new, empty task under a bot (F-054). Answers its key, already in the task list. */
+  async newTask(
+    botId: string,
+    options: { label?: string | null; owner?: object } = {},
+  ): Promise<string> {
+    const ctx = this.actionContext(options.owner ?? null);
+    return this.listCreated(await newTask(ctx, botId, options.label ?? null));
+  }
+
+  /** A bot's replacement first task, "Main", after its last unarchived task went (F-424). */
+  async newMainTask(botId: string, options: { owner?: object } = {}): Promise<string> {
+    return this.listCreated(await newMainTask(this.actionContext(options.owner ?? null), botId));
+  }
+
+  async renameTask(key: string, label: string, options: { owner?: object } = {}): Promise<void> {
+    await renameTask(this.actionContext(options.owner ?? null), key, label);
+  }
+
+  async pinTask(key: string, pinned: boolean, options: { owner?: object } = {}): Promise<void> {
+    await pinTask(this.actionContext(options.owner ?? null), key, pinned);
+  }
+
+  /**
+   * Mark a task unread or read. `opened` is a read the person did not ask for
+   * (opening the task): it names the unread marker it saw, and is made only
+   * while the connection already writes, never asking for access.
+   */
+  async markTask(
+    key: string,
+    unread: boolean,
+    options: { owner?: object; opened?: boolean } = {},
+  ): Promise<void> {
+    if (options.opened) {
+      if (!this.holds(WRITE_SCOPE) || this.options.readOnly) return;
+      const row = this.rows.get(capId(key, MAX_ID_CHARS));
+      if (!row || row.unread !== true) return;
+      const marker = typeof row.markedUnreadAt === "number" ? row.markedUnreadAt : null;
+      await markTask(this.actionContext(options.owner ?? null), key, false, marker);
+      return;
+    }
+    await markTask(this.actionContext(options.owner ?? null), key, unread);
+  }
+
+  async archiveTask(key: string, options: { stop?: boolean; owner?: object } = {}): Promise<void> {
+    await archiveTask(this.actionContext(options.owner ?? null), key, {
+      stop: options.stop === true,
+    });
+  }
+
+  async restoreTask(key: string, options: { owner?: object } = {}): Promise<void> {
+    await restoreTask(this.actionContext(options.owner ?? null), key);
+  }
+
+  async deleteTask(key: string, options: { owner?: object } = {}): Promise<void> {
+    await deleteTask(this.actionContext(options.owner ?? null), key);
+  }
+
+  /** A bot's archived tasks, read now and not kept (`operator.read`). */
+  async listArchived(botId: string): Promise<ArchivedList> {
+    if (this.state.connection.status !== "connected")
+      throw new Error("Not connected to the gateway.");
+    return listArchived(this.actionContext(null), botId);
+  }
+
+  /** Change the rail's arrangement on the gateway; `base` is this device's, for the first change. */
+  async changeSidebar(
+    change: SidebarChange,
+    base: SidebarPrefs | null,
+    options: { owner?: object } = {},
+  ): Promise<void> {
+    const generation = this.generation;
+    const next = await changeSidebar(this.actionContext(options.owner ?? null), change, base);
+    if (generation === this.generation) this.setSidebar(next);
+  }
+
+  private setSidebar(sidebar: SidebarState): void {
+    this.store.update((state) => ({ ...state, sidebar }));
+  }
+
+  /** Read the arrangement the gateway keeps; on any failure the rail keeps its own. */
+  private async loadSidebar(generation: number): Promise<void> {
+    try {
+      const sidebar = await readSidebar(this.actionContext(null));
+      if (generation === this.generation) this.setSidebar(sidebar);
+    } catch (error) {
+      this.log("warn", `users.prefs.get failed: ${errorMessage(error)}`);
+      if (generation === this.generation && this.state.sidebar?.status !== "ok")
+        this.setSidebar({ ...initialSidebar, status: "unavailable" });
+    }
+  }
+
+  /** The questions pending at a connect, for the rail's waiting state (needs `operator.questions`). */
+  private async loadWaitingQuestions(generation: number): Promise<void> {
+    if (!this.holds(QUESTIONS_SCOPE)) return;
+    try {
+      const listed = asRecord(await this.request("question.list", {}));
+      if (generation !== this.generation) return;
+      const questions = Array.isArray(listed?.questions) ? listed.questions : [];
+      this.waiting.replaceQuestions(questions, this.now());
+      this.publishTasks();
+    } catch (error) {
+      this.log("warn", `question.list failed: ${errorMessage(error)}`);
     }
   }
 
