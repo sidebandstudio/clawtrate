@@ -170,10 +170,8 @@ const SCENES: Scene[] = [
   ...STATE_SCENES,
 ];
 
-const WIDE = SIZES.find((size) => size.name === "1440")!;
-const PHONE = SIZES.find((size) => size.phone)!;
-
-for (const size of [WIDE, PHONE]) {
+// Every width the screenshots are taken at: 1440, 1100, 800 and the phone.
+for (const size of SIZES) {
   for (const theme of THEMES) {
     test.describe(`legibility ${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
