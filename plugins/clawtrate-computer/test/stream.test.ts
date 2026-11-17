@@ -136,16 +136,30 @@ describe("frames", () => {
 });
 
 describe("how a stream ends", () => {
-  it("delayed revocation of the session's access closes it with 4006, and no frame follows", async () => {
+  it("delayed revocation: a frame is withheld once access has gone stale, before any abort arrives", async () => {
+    const h = load();
+    const access = new Access();
+    const { socket, cdp } = await watching(h, { access });
+    frame(cdp);
+    await until(() => socket.frames().some((f) => f.opcode === 0x2));
+    // Stale, but its abort has not been delivered (and never is, here).
+    access.revoked = true;
+    expect(access.controller.signal.aborted).toBe(false);
+    frame(cdp);
+    expect(socket.frames().filter((f) => f.opcode === 0x2).length).toBe(1);
+    expect(socket.closeCode()).toEqual({ code: 4006, reason: "authority_revoked" });
+    expect(cdp.closed).toBe(true);
+  });
+
+  it("revocation that is signalled closes it with 4006 at once, and no frame follows", async () => {
     const h = load();
     const access = new Access();
     const { socket, cdp } = await watching(h, { access });
     frame(cdp);
     await until(() => socket.frames().some((f) => f.opcode === 0x2));
     access.revoke();
-    frame(cdp);
-    await until(() => socket.closeCode() !== null);
     expect(socket.closeCode()).toEqual({ code: 4006, reason: "authority_revoked" });
+    frame(cdp);
     expect(socket.frames().filter((f) => f.opcode === 0x2).length).toBe(1);
     expect(cdp.closed).toBe(true);
   });
