@@ -164,7 +164,8 @@ test.describe("action cards", () => {
       "Read 3 PDFs",
       "Message on Telegram",
       "Used linear",
-      "Used skills search",
+      // Its result has no field the design reads: the call is made, nothing more (7.3).
+      "Call to skills search",
     ]);
     // Nothing is open, and no reasoning text, argument or raw payload is on screen.
     await expect(page.locator(".transcript details[open]")).toHaveCount(0);
@@ -248,7 +249,8 @@ test.describe("action cards", () => {
     await expect(cards(page).first()).toHaveAttribute("data-fold", "6");
     await open(page, "actions-long");
     await expect(page.getByText("The floor plan and the bills give the heat demand.")).toBeHidden();
-    await expect(page.locator(".thought")).toHaveCount(1);
+    // Reasoning between actions is in the card it led to, drawn only when that card is opened.
+    await expect(page.locator(".thought")).toHaveCount(0);
   });
 
   test("F-090: each run with actions ends with one run line: worked, failed count; a run with no action has none", async ({
@@ -421,16 +423,13 @@ test.describe("action cards", () => {
     await expect(panel).toContainText("exec");
     await expect(panel).toContainText("tail -n 2 logs/backup-2026-11-15.log");
     await expect(panel).toContainText("03:25:03 backup: finished ok");
-    for (const what of [
-      "tool name",
-      "arguments",
-      "result",
-      "started time",
-      "tool call id",
-      "run id",
-      "session id",
-    ])
+    for (const what of ["tool name", "arguments", "result", "tool call id", "run id", "session id"])
       await expect(panel.getByRole("button", { name: `Copy ${what}` })).toBeVisible();
+    // History's rows give no time of the call's own: its timing is not reported, never a row's time.
+    await expect(panel.getByRole("button", { name: "Copy started time" })).toHaveCount(0);
+    await expect(panel.locator(".fields-row", { hasText: "Started" })).toContainText(
+      "not reported",
+    );
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     await panel.getByRole("button", { name: "Copy tool call id" }).click();
     await expect(page.getByTestId("card-announcer")).toHaveText("Copied tool call id");
@@ -468,10 +467,53 @@ test.describe("action cards", () => {
     await expect(read.locator(".action-what svg.icon")).toHaveCount(1);
     await expect(read.locator(".action-object")).toHaveText("backup-2026-11-15.log");
     await expect(read.locator(".action-detail")).toHaveText("6 lines");
-    await expect(read.locator(".action-state")).toHaveText("0.6s");
+    // Read from history: no duration the gateway did not report.
+    await expect(read.locator(".action-state")).toHaveText("");
     await expect(line(read)).toHaveAttribute("title", "Read backup-2026-11-15.log · 6 lines");
     const box = await line(read).boundingBox();
     expect(Math.round(box!.height)).toBe(40);
+    // Each part is visibly there: on screen, opaque, with a colour unlike the card's, and not cut.
+    for (const part of [
+      ".action-verb",
+      ".action-object",
+      ".action-detail",
+      ".action-what svg.icon",
+    ]) {
+      const seen = await read.locator(part).evaluate((element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        const card = getComputedStyle(element.closest(".card")!).backgroundColor;
+        const colour = element instanceof SVGElement ? style.stroke || style.color : style.color;
+        let opacity = 1;
+        for (let e: Element | null = element; e; e = e.parentElement)
+          opacity *= Number(getComputedStyle(e).opacity);
+        const hit = document.elementFromPoint(
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+        );
+        return {
+          size: rect.width > 4 && rect.height > 4,
+          shown: style.visibility === "visible" && style.display !== "none" && opacity > 0.9,
+          contrast: colour !== card && colour !== "rgba(0, 0, 0, 0)",
+          onTop:
+            hit !== null && (hit === element || element.contains(hit) || hit.contains(element)),
+          whole: element instanceof SVGElement || element.scrollWidth <= element.clientWidth + 1,
+        };
+      });
+      expect(seen, part).toEqual({
+        size: true,
+        shown: true,
+        contrast: true,
+        onTop: true,
+        whole: true,
+      });
+    }
+    // A live card reports the duration the gateway's events gave.
+    await open(page, "actions-running");
+    const live = cards(page).filter({
+      has: page.locator(':scope > summary[aria-label^="Read 2 files"]'),
+    });
+    await expect(live.locator(".action-state")).toHaveText("2.0s");
   });
 
   test("F-082 F-087: the status line says the running card's words, its tooltip is the whole phrase, and it brings that card into view and focuses its line without opening it", async ({
@@ -681,7 +723,7 @@ test.describe("action cards", () => {
     await page.setViewportSize({ width: 1440, height: 520 });
     await open(page, "actions-long");
     const reads = cards(page).filter({
-      has: page.locator(':scope > summary[aria-label^="Read 4 files"]'),
+      has: page.locator(':scope > summary[aria-label^="Read 3 files"]'),
     });
     await line(reads).click();
     await reads.locator(".fold-rows .step").nth(3).locator(":scope > summary").click();
@@ -714,8 +756,11 @@ test.describe("action cards", () => {
     await settle(page);
     expect(Math.abs((await marker.boundingBox())!.y - before)).toBeLessThanOrEqual(1);
     // The first part keeps the fold's key and its open state; the part after it opens too.
+    // The second part holds the failed read, which its plural does not count.
     const parts = cards(page).filter({
-      has: page.locator(':scope > summary[aria-label^="Read 2 files"]'),
+      has: page.locator(
+        ':scope > summary:is([aria-label^="Read 2 files"], [aria-label^="Read 1 file,"])',
+      ),
     });
     await expect(parts).toHaveCount(2);
     await expect(parts.nth(0)).toHaveAttribute("open", "");

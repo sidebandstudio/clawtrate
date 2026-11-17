@@ -536,12 +536,13 @@ function FoldRow({ member, revision }: { member: FeedMember; revision: number })
         </span>
         <ChevronIcon className="chevron" />
       </summary>
-      {member.thought && (
+      {/* Its readable view is drawn, and formatted, only once the row is opened. */}
+      {open && member.thought && (
         <div className="action-thought">
           <ThoughtLine thought={member.thought} place="card" revision={revision} />
         </div>
       )}
-      <ActionDetail call={call} />
+      {open && <ActionDetail call={call} />}
     </details>
   );
 }
@@ -695,7 +696,8 @@ export function ActionGroup({ members, revision }: { members: FeedMember[]; revi
           spoken={line.spoken}
           title={line.title}
         />
-        <ActionBody call={calls[0]!} thought={member.thought} revision={revision} />
+        {/* Its readable view is drawn, and formatted, only once the card is opened. */}
+        {open && <ActionBody call={calls[0]!} thought={member.thought} revision={revision} />}
       </details>
     );
   }
