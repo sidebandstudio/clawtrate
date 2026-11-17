@@ -128,15 +128,21 @@ function wrongShapes(bound: Bound, shape: Exclude<Shape, "maximal">): unknown {
 const size = (value: unknown) => JSON.stringify(value)?.length ?? 0;
 
 describe("no input exceeds the totals", () => {
-  it("a transcript past every bound is brought within the per-task total", () => {
-    const transcript = adversary(TRANSCRIPT, "maximal");
-    const enforced = enforce(TRANSCRIPT, transcript);
-    expect(size(enforced)).toBeLessThanOrEqual(WORST_TASK_CHARS);
-    // The fixture is near the bound, so the bound is the one that held.
-    expect(size(enforced)).toBeGreaterThan(WORST_TASK_CHARS / 4);
-  });
+  it(
+    "a transcript past every bound is brought within the per-task total",
+    { timeout: 120_000 },
+    () => {
+      const transcript = adversary(TRANSCRIPT, "maximal");
+      const enforced = enforce(TRANSCRIPT, transcript);
+      expect(size(enforced)).toBeLessThanOrEqual(WORST_TASK_CHARS);
+      // The fixture is near the bound, so the bound is the one that held.
+      expect(size(enforced)).toBeGreaterThan(WORST_TASK_CHARS / 4);
+    },
+  );
 
-  it("a state past every bound is brought within the state total", () => {
+  // These build and measure states near the documented maximum, about 100 million characters:
+  // seconds of work, more on a busy machine, so they are given the time it takes.
+  it("a state past every bound is brought within the state total", { timeout: 120_000 }, () => {
     const state = adversary(STATE, "maximal") as ClawtrateState;
     const enforced = enforceState(state);
     const transcripts = Object.values(enforced.transcripts);
@@ -158,12 +164,16 @@ describe("no input exceeds the totals", () => {
   });
 
   for (const shape of ["string", "object", "number"] as const) {
-    it(`a ${shape} where any field belongs is brought within its bound`, () => {
-      for (const bound of [STEP, RUN, OUTGOING, QUESTION, APPROVAL, TRANSCRIPT, STATE]) {
-        const enforced = enforce(bound, wrongShapes(bound, shape));
-        expect(size(enforced)).toBeLessThanOrEqual(worstCase(bound));
-      }
-    });
+    it(
+      `a ${shape} where any field belongs is brought within its bound`,
+      { timeout: 120_000 },
+      () => {
+        for (const bound of [STEP, RUN, OUTGOING, QUESTION, APPROVAL, TRANSCRIPT, STATE]) {
+          const enforced = enforce(bound, wrongShapes(bound, shape));
+          expect(size(enforced)).toBeLessThanOrEqual(worstCase(bound));
+        }
+      },
+    );
   }
 });
 
