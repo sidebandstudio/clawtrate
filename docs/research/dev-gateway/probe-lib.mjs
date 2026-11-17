@@ -158,7 +158,8 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Runs fn with agents.entries.<agentId>.tools.exec replaced by `execBlock`,
- * then restores the exact original block in finally and checks it. The
+ * then restores the exact original block in finally and checks it, even when
+ * the replacement write itself failed. The
  * restore clears the block first (null), then writes the original back, so no
  * key from `execBlock` survives a merge patch. Throws if the restored block
  * differs from the original. `adm` must hold operator.admin.
@@ -172,10 +173,13 @@ export async function withAgentExecPolicy(adm, agentId, execBlock, fn) {
     const { hash } = await read();
     await adm.call("config.patch", { raw: JSON.stringify({ agents: { entries: { [agentId]: { tools: { exec: value } } } } }), baseHash: hash });
   };
+  // Reading the original changes nothing. Every write, including the first,
+  // happens inside try, so a failed or ambiguous write is still followed by
+  // the restore and its check (fail closed).
   const original = (await read()).exec;
-  await patch(null);
-  await patch(execBlock);
   try {
+    await patch(null);
+    await patch(execBlock);
     return await fn();
   } finally {
     await patch(null);

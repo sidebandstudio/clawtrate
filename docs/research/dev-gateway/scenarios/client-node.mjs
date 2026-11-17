@@ -39,18 +39,25 @@ const ready = new Promise((resolve, reject) => {
   node.start();
 });
 const hello = await ready.catch((e) => ({ err: e.message }));
-console.log("node hello:", hello.err ?? JSON.stringify({ role: hello.auth?.role, scopes: hello.auth?.scopes }));
-const pl = await OP.call("node.pair.list", {});
-console.log("pending node pairings:", pl.pending.length, "| paired:", pl.paired.map((p) => ({ name: p.displayName, commands: p.commands })).filter((p) => p.name === "probe client node").map((p) => JSON.stringify(p)).join(","));
-// Approve only this script's own node (its node id is its device id).
-for (const p of pl.pending.filter((p) => p.nodeId === ident.deviceId)) console.log("approve:", await r(OP.call("node.pair.approve", { requestId: p.requestId }), 200));
-await sleep(1500);
-const me = (await OP.call("node.list", {})).nodes.find((n) => n.nodeId === ident.deviceId);
-if (!me) throw new Error("the script's own node is not listed");
-console.log("node.list entry:", JSON.stringify({ connected: me?.connected, commands: me?.commands, caps: me?.caps, platform: me?.platform }));
-console.log("invoke system.notify:", await r(OP.call("node.invoke", { nodeId: me.nodeId, command: "system.notify", params: { title: "Hi", body: "from probe" }, idempotencyKey: crypto.randomUUID(), timeoutMs: 5000 })));
-console.log("invoke custom clawtrate.app.open:", await r(OP.call("node.invoke", { nodeId: me.nodeId, command: "clawtrate.app.open", params: { app: "Notes" }, idempotencyKey: crypto.randomUUID(), timeoutMs: 5000 })));
-const t = Date.now();
-console.log("invoke device.info, never answered:", await r(OP.call("node.invoke", { nodeId: me.nodeId, command: "device.info", params: {}, idempotencyKey: crypto.randomUUID(), timeoutMs: 2000 }, 20000)), `after ${Date.now() - t} ms`);
-console.log("requests the node received:", JSON.stringify(received.map((x) => ({ command: x.command, timeoutMs: x.timeoutMs, hasParams: !!x.paramsJSON }))));
-await node.stopAndWait(); await OP.call("node.pair.remove", { nodeId: me.nodeId }).catch(() => {}); await OP.close();
+try {
+  console.log("node hello:", hello.err ?? JSON.stringify({ role: hello.auth?.role, scopes: hello.auth?.scopes }));
+  const pl = await OP.call("node.pair.list", {});
+  console.log("pending node pairings:", pl.pending.length, "| paired:", pl.paired.map((p) => ({ name: p.displayName, commands: p.commands })).filter((p) => p.name === "probe client node").map((p) => JSON.stringify(p)).join(","));
+  // Approve only this script's own node (its node id is its device id).
+  for (const p of pl.pending.filter((p) => p.nodeId === ident.deviceId)) console.log("approve:", await r(OP.call("node.pair.approve", { requestId: p.requestId }), 200));
+  await sleep(1500);
+  const me = (await OP.call("node.list", {})).nodes.find((n) => n.nodeId === ident.deviceId);
+  if (!me) throw new Error("the script's own node is not listed");
+  console.log("node.list entry:", JSON.stringify({ connected: me?.connected, commands: me?.commands, caps: me?.caps, platform: me?.platform }));
+  console.log("invoke system.notify:", await r(OP.call("node.invoke", { nodeId: me.nodeId, command: "system.notify", params: { title: "Hi", body: "from probe" }, idempotencyKey: crypto.randomUUID(), timeoutMs: 5000 })));
+  console.log("invoke custom clawtrate.app.open:", await r(OP.call("node.invoke", { nodeId: me.nodeId, command: "clawtrate.app.open", params: { app: "Notes" }, idempotencyKey: crypto.randomUUID(), timeoutMs: 5000 })));
+  const t = Date.now();
+  console.log("invoke device.info, never answered:", await r(OP.call("node.invoke", { nodeId: me.nodeId, command: "device.info", params: {}, idempotencyKey: crypto.randomUUID(), timeoutMs: 2000 }, 20000)), `after ${Date.now() - t} ms`);
+  console.log("requests the node received:", JSON.stringify(received.map((x) => ({ command: x.command, timeoutMs: x.timeoutMs, hasParams: !!x.paramsJSON }))));
+} finally {
+  // Remove only this script's own node pairing, whatever happened above.
+  await node.stopAndWait().catch(() => {});
+  await OP.call("node.pair.remove", { nodeId: ident.deviceId }).catch(() => {});
+  await OP.close();
+}
+

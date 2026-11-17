@@ -51,7 +51,7 @@ Row 20 scripts:
 | Script | Row 20 topic |
 | --- | --- |
 | `members-mcpcancel-settings.mjs` | `node … members`: agents as session members; `mcpcancel`: MCP `notifications/cancelled`; `settings [permissionMode,configFull,sessionsPatchExecAsk]`: settings changes during a pending approval |
-| `helper-and-recipient-approvals.mjs` | `helper` / `recipient`: whether a sub-agent or a `sessions_send` recipient raises an exec card; reports `CARD`, `FAILED` (quoting the child transcript) or `UNKNOWN`, never a bare "none" |
+| `helper-and-recipient-approvals.mjs` | `helper` / `recipient` [`admin`]: whether a sub-agent or a `sessions_send` recipient raises an exec card. Reports `CARD`, `FAILED` (the child's own exec result with `isError:true`, quoted), `RAN` (`isError:false`) or `UNKNOWN`, never a bare "none"; `admin` starts the parent from a device that also holds `operator.admin` |
 | `files-computer-presence.mjs` | workspace, session files, diff, artifacts, `computer.status`, nodes, presence |
 | `node-pairing-hoststats.mjs` | approves the fixture node named by `PROBE_NODE_NAME` and waits for its `node.hostStats`; refuses an ambiguous name and touches no other node |
 | `node-routed-exec.mjs` | routes one task's exec to the fixture node (`PROBE_NODE_NAME`) and runs `pwd`; resolves only its own task's approval |
@@ -64,12 +64,12 @@ Row 21 scripts:
 
 | Script | Row 21 topic |
 | --- | --- |
-| `routines.mjs` | create, run now, approval from the run and its standing grant, pause, refused runs, remove, `cron` events |
-| `routine-history.mjs` | a routine with delivery off: `finished` event, run log, `cron.history`, run session listing |
-| `web-push.mjs` | Web Push subscribe from a non-browser client (endpoint on a closed loopback port), preferences, presence fields |
-| `skills-library-and-workshop.mjs` | the bot's `skill_workshop` tool, library disable and remove |
+| `routines.mjs` | create, run now, approval from the run and its standing grant, pause, refused runs, `cron` events; waits on its own job's events and removes the job and its grants in `finally` |
+| `routine-history.mjs` | a routine with delivery off: its own `finished` event, run log, `cron.history`, run session listing; job removed in `finally` |
+| `web-push.mjs` | Web Push subscribe from a non-browser client (a fresh endpoint on a closed loopback port), preferences, a test send, presence fields; unsubscribes in `finally` |
+| `skills-library-and-workshop.mjs` | the bot's `skill_workshop` tool in its personal-library contract, and the rejected workshop-style arguments; library save, disable and remove of fixtures it created (fresh slugs), never of other entries |
 | `mcp-servers.mjs` | catalog, adding a command server without a restart, `mcp.authLogin` refusal |
-| `secrets-request.mjs` | the bot's `secrets` request and whether the value leaks |
-| `client-node.mjs` | a client acting as a node: allowed, custom and unanswered commands |
+| `secrets-request.mjs` | the bot's `secrets` request from an admin device: the masked question, the answer, whether the value leaks (checked only when one was submitted); unique entry name, deleted afterwards |
+| `client-node.mjs` | a client acting as a node: allowed, custom and unanswered commands; removes only its own pairing in `finally` |
 | `expired-approval.mjs` | "Always allow" on an expired exec approval |
 | `credentials-and-tools.mjs` | model auth status, secret store listing, `image_generate` in the bot's tools |

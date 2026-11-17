@@ -4,15 +4,22 @@ import { connect, sleep } from "./probe-lib.mjs";
 //
 //   node helper-and-recipient-approvals.mjs helper
 //   node helper-and-recipient-approvals.mjs recipient
+//   (append "admin" to either to start the parent from an admin device)
 //
 // The script never reports "no card" from a timed-out wait. For every case it
 // prints one of three outcomes, each backed by evidence:
 //   CARD     an exec.approval.requested event for the child session arrived;
-//   FAILED   the child's own transcript holds the exec tool error (quoted);
-//   UNKNOWN  neither arrived before the child's run ended or the deadline.
+//   FAILED   the child's own transcript holds an exec toolResult with
+//            isError:true, for the exec call the child itself made (quoted);
+//   RAN      that exec result has isError:false (it ran; a card may have been
+//            raised and resolved before observation, or none was needed);
+//   UNKNOWN  none of these before the deadline.
 // It resolves only approvals raised in the sessions it created.
 const caps = ["tool-events", "approvals", "exec-approvals", "plugin-approvals"];
-const A = await connect({ name: "A", scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"], caps });
+// Pass "admin" as a second argument to start the parent run from a device that
+// also holds operator.admin, to compare how run authority reaches the child.
+const withAdmin = process.argv[3] === "admin";
+const A = await connect({ name: withAdmin ? "A-admin" : "A", scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions", ...(withAdmin ? ["operator.admin"] : [])], caps });
 const which = process.argv[2];
 if (which !== "helper" && which !== "recipient") throw new Error("usage: helper | recipient");
 
@@ -21,10 +28,14 @@ const newSession = async (agentId, label) => {
   await A.call("sessions.messages.subscribe", { key: s.key, includeApprovals: true });
   return s.key;
 };
-const execError = async (sessionKey) => {
-  const h = await A.call("chat.history", { sessionKey, limit: 20 });
-  const row = h.messages.find((m) => m.role === "toolResult" && m.toolName === "exec");
-  return row ? JSON.stringify(row.content).slice(0, 300) : null;
+// The child's own exec call and its result, matched by toolCallId.
+const execOutcome = async (sessionKey) => {
+  const h = await A.call("chat.history", { sessionKey, limit: 30 });
+  const call = h.messages.flatMap((m) => (m.role === "assistant" && Array.isArray(m.content) ? m.content : [])).find((b) => b.type === "toolCall" && b.name === "exec");
+  if (!call) return null;
+  const row = h.messages.find((m) => m.role === "toolResult" && m.toolCallId === call.id);
+  if (!row) return null;
+  return { isError: row.isError === true, text: JSON.stringify(row.content).slice(0, 300) };
 };
 
 async function observe(childKeyOf, label, deadlineMs = 60_000) {
@@ -35,8 +46,8 @@ async function observe(childKeyOf, label, deadlineMs = 60_000) {
     if (childKey) {
       const card = A.events.find((e) => e.t >= t0 && e.event === "exec.approval.requested" && e.payload?.request?.sessionKey === childKey);
       if (card) return { outcome: "CARD", childKey, card };
-      const err = await execError(childKey);
-      if (err) return { outcome: "FAILED", childKey, error: err };
+      const done = await execOutcome(childKey);
+      if (done) return { outcome: done.isError ? "FAILED" : "RAN", childKey, error: done.isError ? done.text : undefined };
     }
     await sleep(1000);
   }
