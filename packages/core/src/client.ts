@@ -2716,7 +2716,7 @@ export class ClawtrateClient {
       return {
         status: "not-available-yet",
         reason:
-          "This step's whole text was too long to keep here; it can be read once the gateway's history holds it.",
+          "This step's whole text was too long to keep here, and the gateway's history did not return it: it may not hold it yet, or its page was too large to include it.",
       };
     }
     if (read.truncated) {

@@ -5,6 +5,7 @@
 import {
   AttachmentStore,
   createRemoteBridge,
+  MAX_VIEWER_OPEN_TASKS,
   createStore,
   initialState,
   type ClawtrateClient,
@@ -113,6 +114,40 @@ describe("browser reconnect (F-104)", () => {
       attachmentIds: [],
     });
     expect(sent).toEqual({ messageId: "m-1" });
+    sockets[1]!.close();
+  });
+});
+
+describe("the tasks a browser asks to have open again", () => {
+  it("are the ones the host accepted: a refused open is not asked again after a reconnect", async () => {
+    const { base, interest } = await host();
+    const sockets: WebSocket[] = [];
+    const bridge = await createRemoteBridge({
+      open: () => {
+        const socket = new WebSocket(`${base.replace("http", "ws")}/bridge`, {
+          headers: { cookie: `${ACCESS_COOKIE}=${TOKEN}`, origin: base },
+        });
+        sockets.push(socket);
+        return socket as unknown as WebSocketLike;
+      },
+      attach: async () => {
+        throw new Error("unused");
+      },
+    });
+    const keys = Array.from({ length: MAX_VIEWER_OPEN_TASKS + 1 }, (_, i) => `agent:otto:t${i}`);
+    for (const key of keys.slice(0, -1)) await bridge.send({ type: "openSession", key });
+    // One more than a viewer may hold: the host refuses it.
+    await expect(bridge.send({ type: "openSession", key: keys.at(-1)! })).rejects.toThrow(
+      "open at once",
+    );
+    // A slot frees up before the socket drops: the refused task must not take it on its own.
+    await bridge.send({ type: "closeSession", key: keys[0]! });
+    sockets[0]!.terminate();
+    await until(() => sockets.length === 2);
+    await until(() => keys.slice(1, -1).every((key) => interest.get(key) === 1));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The accepted ones are open again; the refused one was never asked for again.
+    expect(interest.get(keys.at(-1)!)).toBeUndefined();
     sockets[1]!.close();
   });
 });

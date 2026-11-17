@@ -38,7 +38,12 @@ export function encodeBridgeFrame(message: BridgeClientMessage): string {
   return text;
 }
 
-type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
+type Pending = {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  /** The host answered with a refusal (not a lost socket). */
+  refused?: () => void;
+};
 
 export type RemoteBridgeOptions = {
   /** Open a new socket to the host's bridge endpoint. */
@@ -98,7 +103,7 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
             for (const key of wanted)
               write(
                 { type: "openSession", key },
-                { resolve: () => {}, reject: () => wanted.delete(key) },
+                { resolve: () => {}, reject: () => {}, refused: () => wanted.delete(key) },
               );
           if (first) resolveBridge(bridge(message.info));
         } else if (message.type === "state") {
@@ -107,7 +112,10 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
           const waiter = pending.get(message.id);
           pending.delete(message.id);
           if (message.ok) waiter?.resolve(message.value);
-          else waiter?.reject(new Error(message.error));
+          else {
+            waiter?.refused?.();
+            waiter?.reject(new Error(message.error));
+          }
         }
       };
       current.onerror = () => {};
@@ -146,15 +154,16 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
           reject(new Error("Not connected to the preview host"));
           return;
         }
-        // An open the host refuses (a viewer holds at most `MAX_VIEWER_OPEN_TASKS`) is not restored later.
-        const refused = (error: Error) => {
+        // An open the host refuses (a viewer holds at most `MAX_VIEWER_OPEN_TASKS`) is not restored
+        // later; one whose socket was lost is.
+        const refused = () => {
           if (command.type === "openSession") wanted.delete(command.key);
-          reject(error);
         };
         try {
-          write(command, { resolve, reject: refused });
+          write(command, { resolve, reject, refused });
         } catch (error) {
-          refused(error instanceof Error ? error : new Error(String(error)));
+          refused();
+          reject(error instanceof Error ? error : new Error(String(error)));
         }
       });
 
