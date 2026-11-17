@@ -392,6 +392,59 @@ test("F-266: in Manual, a dragged bot keeps its place after a restart, and the c
   ]);
 });
 
+test("F-013 F-027 F-266: after a menu action moves a bot, keyboard focus is on the bot where it now is", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&sort=manual`, "light");
+  await settle(page);
+  const row = (id: string) => page.locator(`.bot-list .bot[data-bot="${id}"]`);
+  const tile = (id: string) => page.locator(`.bot-list .pin[data-bot="${id}"]`);
+  // Open the bot's menu from the keyboard and choose an item with Enter.
+  const choose = async (target: ReturnType<Page["locator"]>, item: string) => {
+    await target.focus();
+    await page.keyboard.press("Shift+F10");
+    await page.getByRole("menuitem", { name: item }).press("Enter");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+  };
+  const focusIsOnPage = () =>
+    page.evaluate(
+      () => document.activeElement !== null && document.activeElement !== document.body,
+    );
+
+  const before = await listOrder(page);
+  await choose(row("marlow"), "Move down");
+  expect((await listOrder(page)).indexOf("Marlow")).toBe(before.indexOf("Marlow") + 1);
+  await expect(row("marlow")).toBeFocused();
+  await choose(row("marlow"), "Move up");
+  expect(await listOrder(page)).toEqual(before);
+  await expect(row("marlow")).toBeFocused();
+
+  await choose(row("otto"), "Pin");
+  await expect(tile("otto")).toBeFocused();
+  await choose(tile("otto"), "Unpin");
+  await expect(row("otto")).toBeFocused();
+
+  // Hidden: focus goes to the folded section's toggle; shown again, to the row.
+  await choose(row("pip"), "Hide from sidebar");
+  await expect(page.locator(".hidden-toggle")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await choose(row("pip"), "Show in sidebar");
+  await expect(row("pip")).toBeFocused();
+  expect(await focusIsOnPage()).toBe(true);
+
+  // The section is still open, so a bot hidden now keeps focus on its row there.
+  await choose(row("marlow"), "Hide from sidebar");
+  await expect(page.getByRole("list", { name: "Hidden bots" }).locator(".bot")).toBeFocused();
+  // Opening a hidden bot from search with the section folded: focus goes to the toggle.
+  await page.locator(".hidden-toggle").press("Enter");
+  await expect(page.locator(".hidden-toggle")).toHaveAttribute("aria-expanded", "false");
+  await page.keyboard.press("ControlOrMeta+Shift+F");
+  await page.getByRole("textbox", { name: "Search bots" }).fill("marl");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.locator(".hidden-toggle")).toBeFocused();
+});
+
 test("F-426: a bot row shows the most urgent state of its tasks; opening a done-with-failures task clears it", async ({
   page,
 }) => {

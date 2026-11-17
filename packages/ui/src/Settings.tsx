@@ -72,6 +72,18 @@ export function Settings({
     dialogRef.current?.querySelector<HTMLElement>(".settings-close")?.focus();
   }, []);
 
+  // An action replaces its own button (Disconnect gives way to Reconnect, and
+  // back), which drops focus out of the dialog. Put it on the action that took
+  // its place, or on Close, so focus and Escape stay in the dialog.
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog || dialog.contains(document.activeElement)) return;
+    (
+      dialog.querySelector<HTMLElement>(".settings-actions .button") ??
+      dialog.querySelector<HTMLElement>(".settings-close")
+    )?.focus();
+  });
+
   // The dialog keeps focus inside itself; Escape closes it.
   const onKey = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape") {

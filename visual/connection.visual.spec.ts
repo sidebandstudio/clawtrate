@@ -216,6 +216,33 @@ test("F-457 F-387: Disconnect keeps the pairing and what is on screen until Reco
   await expect(dialog.getByRole("button", { name: "Disconnect" })).toBeVisible();
 });
 
+test("F-227 F-387 F-457: focus stays in Settings when Disconnect and Reconnect replace each other, and goes back to the gateway button", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+  // Opened from the gateway menu, from the keyboard.
+  const gatewayButton = page.getByRole("button", { name: /Open the gateway menu\.$/ }).last();
+  await gatewayButton.focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("menuitem", { name: "Settings" }).press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog.getByRole("button", { name: "Close settings" })).toBeFocused();
+  // Tab to Disconnect and press it: Reconnect takes its place, and focus.
+  await page.keyboard.press("Tab");
+  await expect(dialog.getByRole("button", { name: "Disconnect" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(dialog.getByTestId("gateway-state")).toHaveText("Disconnected");
+  await expect(dialog.getByRole("button", { name: "Reconnect" })).toBeFocused();
+  // And back: Disconnect takes Reconnect's place.
+  await page.keyboard.press("Enter");
+  await expect(dialog.getByTestId("gateway-state")).toHaveText("Connected");
+  await expect(dialog.getByRole("button", { name: "Disconnect" })).toBeFocused();
+  // Escape still reaches the dialog, and focus returns to the gateway button.
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(gatewayButton).toBeFocused();
+});
+
 test("F-387: Reconnect from Offline is offered, and the pane shows the error while offline", async ({
   page,
 }) => {

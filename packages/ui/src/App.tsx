@@ -28,6 +28,9 @@ function useInputAndMotion() {
   }, []);
 }
 
+/** The first control on the screen, for when focus has nowhere else to go. */
+const FIRST_CONTROL = ".app :is(input, button, [tabindex='0']):not([disabled], [tabindex='-1'])";
+
 /**
  * The connection screen is for connecting and pairing. Once a gateway has
  * delivered anything, the shell stays mounted through reconnects, keeping
@@ -59,6 +62,9 @@ export function App({
     const opener = settingsOpener.current;
     requestAnimationFrame(() => {
       if (opener?.isConnected && !opener.closest("[inert]")) opener.focus();
+      // The control that opened it is gone (another gateway was chosen): the
+      // first control on the screen now showing.
+      else document.querySelector<HTMLElement>(FIRST_CONTROL)?.focus();
     });
   }, []);
   useEffect(() => {
@@ -80,6 +86,15 @@ export function App({
     setMismatch(null);
   }
   const screen = mismatch ? "connect" : screenFor(state);
+  // When one screen replaces another and takes focus with it, focus the first
+  // control of the new one. Not on launch: nothing had focus to lose.
+  const shown = useRef(screen);
+  useEffect(() => {
+    if (shown.current === screen) return;
+    shown.current = screen;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    document.querySelector<HTMLElement>(FIRST_CONTROL)?.focus();
+  }, [screen]);
   return (
     <div className="app">
       {settingsOpen && (

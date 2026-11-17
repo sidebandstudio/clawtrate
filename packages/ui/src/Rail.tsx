@@ -286,7 +286,10 @@ export function Rail({
   const [query, setQuery] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const searchButtonRef = useRef<HTMLButtonElement>(null);
+  /** Where focus goes once the rail has rendered: a field or the open bot. */
   const focusAfter = useRef<"search" | "search-button" | "selected" | null>(null);
+  /** A bot whose row gets focus once the rail has rendered, after a menu action moved it. */
+  const [refocus, setRefocus] = useState<{ bot: string } | null>(null);
   const needle = query?.trim().toLowerCase() ?? "";
 
   const arranged = useMemo(
@@ -372,6 +375,21 @@ export function Rail({
     setQuery(null);
   };
 
+  /**
+   * Focus a bot's row or tile where it is now. A bot that is not shown, such as
+   * a hidden one in the folded section, leaves focus on that section's toggle,
+   * then on the first row, then on the search button.
+   */
+  const focusBot = (id: string) => {
+    const list = listRef.current;
+    const row =
+      list?.querySelector<HTMLElement>(`:is(.bot, .pin)[data-bot="${CSS.escape(id)}"]`) ??
+      list?.querySelector<HTMLElement>(".hidden-toggle") ??
+      list?.querySelector<HTMLElement>(".pin, .bot") ??
+      searchButtonRef.current;
+    row?.focus();
+  };
+
   // Focus moves only after the element it goes to has rendered.
   useEffect(() => {
     const target = focusAfter.current;
@@ -379,14 +397,11 @@ export function Rail({
     focusAfter.current = null;
     if (target === "search") searchRef.current?.focus();
     else if (target === "search-button") searchButtonRef.current?.focus();
-    else {
-      listRef.current
-        ?.querySelector<HTMLElement>(
-          `:is(.bot, .pin)[data-bot="${CSS.escape(selection.bot?.id ?? "")}"]`,
-        )
-        ?.focus();
-    }
+    else focusBot(selection.bot?.id ?? "");
   });
+  useEffect(() => {
+    if (refocus) focusBot(refocus.bot);
+  }, [refocus]);
 
   // Shortcuts that work anywhere in the shell: ⌘⇧F searches bots, ⌘1 to ⌘9
   // open a bot, Alt+Up and Alt+Down or Control+Tab and Control+Shift+Tab
@@ -592,8 +607,9 @@ export function Rail({
       kind: "item",
       label: "Settings",
       icon: <SettingsIcon />,
+      // Focus goes back to the gateway button first, so Settings returns it there.
       onSelect: () => {
-        setMenu(null);
+        closeMenu(true);
         onOpenSettings();
       },
     },
@@ -630,9 +646,12 @@ export function Rail({
     const pinned = pinnedIds.includes(bot.id);
     const listIndex = arranged.list.findIndex((other) => other.id === bot.id);
     const task = selection.taskFor(bot.id);
+    // The row may move (pinned, unpinned, reordered or shown again), so focus
+    // follows the bot to where it is once the rail has rendered.
     const after = (action: () => void) => () => {
       action();
-      closeMenu(true);
+      setMenu(null);
+      setRefocus({ bot: bot.id });
     };
     return tidy([
       ...(tasks.length > 1 && !hidden
@@ -714,16 +733,12 @@ export function Rail({
             kind: "item",
             label: "Hide from sidebar",
             icon: <HideIcon />,
-            onSelect: () => {
-              // The row goes away, so focus goes to the hidden section's toggle.
-              setMenu(null);
+            // The row goes into the folded section, so focus goes to its toggle.
+            onSelect: after(() => {
               selection.release([bot.id]);
               roster.setHidden(bot.id, true);
               setAnnouncement(`${bot.name} is hidden. Hidden bots keep working.`);
-              requestAnimationFrame(() =>
-                document.querySelector<HTMLElement>(".rail .hidden-toggle")?.focus(),
-              );
-            },
+            }),
           },
     ]);
   };
