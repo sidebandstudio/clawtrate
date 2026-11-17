@@ -1,0 +1,560 @@
+// Behaviour checks for the action cards (conversation.md, sections 7, 8 and 11):
+// the gallery's sections, the four scenes, and the scripted run.
+// Run from the repository root:  node docs/design/prototype/tools/checks/actions.mjs
+import { chromium, pageUrl } from "./browser.mjs";
+
+const gallery = (section, extra = "") => pageUrl(`gallery.html?chrome=0&theme=light&section=${section}${extra}`);
+const scene = (name, extra = "") => pageUrl(`conversation.html?chrome=0&theme=light&scene=${name}${extra}`);
+const run = pageUrl("conversation.html?chrome=0&theme=light");
+const b = await chromium.launch();
+const out = [];
+const check = (name, ok, extra = "") => out.push(`${ok ? "ok  " : "FAIL"} ${name} ${ok ? "" : extra}`);
+
+async function open(url, { w = 1440, h = 900, touch = false } = {}) {
+  const ctx = await b.newContext({ viewport: { width: w, height: h }, hasTouch: touch });
+  const p = await ctx.newPage();
+  p.on("pageerror", (e) => out.push("PAGEERROR " + String(e.stack || e).split("\n").slice(0, 2).join(" | ")));
+  await p.goto(url);
+  await p.evaluate(() => document.fonts.ready);
+  await p.evaluate(() => {
+    // A specimen's box, by the specimen's name.
+    window.box = (name) => [...document.querySelectorAll(".spec")].find((s) => s.querySelector("h3").textContent === name)?.querySelector(".spec-box");
+    window.S = CT.samples;
+    window.line = (el) => el.querySelector(":scope > summary").innerText.replace(/\s+/g, " ").trim();
+  });
+  await p.waitForTimeout(100);
+  return p;
+}
+const q = (p, fn, arg) => p.evaluate(fn, arg);
+const lines = (p, name, sel = ":scope > details.card") => q(p, ([n, s]) => [...box(n).querySelectorAll(s)].map(line), [name, sel]);
+const spec = (p, name) => p.locator(".spec", { has: p.locator("h3", { hasText: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }) }).locator(".spec-box");
+
+// Every kind, in order, with nothing opened (F-488) -------------------------------------------
+let p = await open(gallery("actions"));
+const first = await lines(p, "Every kind, done");
+const expected = [
+  "Read backup-2026-11-15.log",
+  "Looked in archive",
+  "Edited house-log.md",
+  "Saved to memory",
+  'Searched memory for "boiler service"',
+  "Ran du",
+  "Looked at shared terminals",
+  'Searched the web for "cold climate heat pump performance"',
+  'Searched posts on X for "heat pump rebate 2026 experiences"',
+  "Opened energy.example.org",
+  'Clicked "Add to basket"',
+  "Clicked on the screen",
+  "Looked at the phone",
+  "Changed the Control UI",
+  "Created routine Weekly cleanup",
+  "Messaged Marlow",
+  "Looked through tasks",
+  "Started a helper: Price check",
+  "Asked you a question",
+  "Made a plan",
+  "Made 2 images",
+  "Read 3 PDFs",
+  "Message on Telegram",
+  "Used linear",
+  "Messaged T3 Code",
+  "Used skills search",
+];
+check("F-488 every kind shows its label, in order", expected.length === first.length && expected.every((label, i) => first[i].startsWith(label)), JSON.stringify(first.map((f, i) => [expected[i], f])));
+check("F-488 nothing is opened and no Raw is on screen", await q(p, () => ![...box("Every kind, done").querySelectorAll("details")].some((d) => d.open) && [...box("Every kind, done").querySelectorAll("[role='tabpanel']")].every((t) => !t.checkVisibility())));
+check(
+  "F-430 a closed card has a verb, an icon, an object, a detail slot and a state",
+  await q(p, () => [...box("Every kind, done").querySelectorAll(".action")].every((c) => c.querySelector(".action-verb").textContent && c.querySelector(".action-what > .icon, .action-what > .agent-mark") && c.querySelector(".action-detail") && c.querySelector(".action-state"))),
+);
+check("one line, 40 px, at desktop width", await q(p, () => [...box("Every kind, done").querySelectorAll(".action > summary")].every((s) => Math.round(s.getBoundingClientRect().height) === 40)));
+check(
+  "cards in a row form a column: 2 px apart, 6 px touching corners",
+  await q(p, () => {
+    const [a, c] = box("Every kind, done").querySelectorAll(".action");
+    const gap = Math.round(c.getBoundingClientRect().top - a.getBoundingClientRect().bottom);
+    return gap === 2 && getComputedStyle(a).borderTopLeftRadius === "18px" && getComputedStyle(a).borderBottomLeftRadius === "6px" && getComputedStyle(c).borderTopLeftRadius === "6px";
+  }),
+);
+const running = await lines(p, "Every kind, while it runs");
+check(
+  "M1 running: the present tense where the action stays on the gateway, Call started where it leaves",
+  running[0].startsWith("Reading") && running.some((l) => l.startsWith("Helper") && l.endsWith("Call started")) && running.some((l) => l.startsWith("Image") && l.endsWith("Call started")) && running.some((l) => l.startsWith("Message on") && l.endsWith("Call started")) && !running.some((l) => /\bSending\b/.test(l)),
+  JSON.stringify(running),
+);
+check("a failed card says Couldn't and Failed", await q(p, () => [...box("Every kind, when it failed").querySelectorAll(".action")].every((c) => c.querySelector(".action-verb").textContent.startsWith("Couldn't") && c.querySelector(".state[data-tone='danger']"))));
+const notDone = await lines(p, "A result is not always completed work");
+check(
+  "M1 a result is read by the kind's adapter: admitted, queued, suppressed, unavailable work never reads as done",
+  [
+    ["Started making an image", "Started"],
+    ["Made 2 images", ""],
+    ["Started a helper: Price check", "Started"],
+    ["Asked routine Weekly cleanup to run", "Queued"],
+    ["Message on Telegram", "Queued"],
+    ["Message on Telegram", "Sent"],
+    ["Didn't send a message on Telegram", "Suppressed"],
+    ["Message on Telegram", "Call made"],
+    ["Clicked on the screen", "Not confirmed"],
+    ['Searched memory for "gutters"', "Partial"],
+    ['Couldn\'t search memory for "loft insulation"', "Unavailable"],
+    ['Couldn\'t search posts on X for', "Unavailable"],
+    ["Didn't tap on the phone", "Needs confirmation"],
+    ["Tap on the phone", "Performed"],
+    ["Didn't tap on the phone", "Target stale"],
+    ["Couldn't read from memory: missing.md", "Failed"],
+    ["Found no note 2026-01-01.md in memory", "Not found"],
+    ["Left backup-exclude.md unchanged", "No change"],
+    ["Wants to run mv", "Waiting for you"],
+    ["Didn't start a helper: Price check", "Not run"],
+    ["Found no routine Old reminder to remove", "Not found"],
+    ["Message on Telegram", "Replied"],
+  ].every(([start, end], i) => notDone[i]?.startsWith(start) && notDone[i].endsWith(end)) && !notDone.some((l) => /^Made an image|^Ran routine|Sent$/.test(l) && !/^Made 2/.test(l) && !l.endsWith("Sent")),
+  JSON.stringify(notDone),
+);
+const states = await lines(p, "One card in every state");
+check(
+  "one card in every state, in words the gateway can establish",
+  ["Running mv", "Reviewing mv", "Wants to run mv", "Ran du", "Ran grep", "Couldn't run mv", "Timed out: rsync", "Didn't run mv", "Blocked by policy", "Blocked by review", "Stopped running mv", "Message on Telegram", "Message on Telegram"].every((label, i) => states[i]?.startsWith(label)) &&
+    states[4].includes("exit 1") && states[7].endsWith("Denied") && states[11].endsWith("Unknown") && states[12].endsWith("Call started"),
+  JSON.stringify(states),
+);
+check("a non-zero exit code is plain text, not a failure", await q(p, () => { const c = box("One card in every state").querySelectorAll(".action")[4]; return c.dataset.status === "done" && getComputedStyle(c.querySelector(".action-exit")).color === getComputedStyle(document.body).color; }));
+const ops = await lines(p, "Real operations, with their own words");
+check(
+  "M2 real operations: terminal, screen, phone, documents, a patch's files, goals, routines, speech",
+  ["Looked at shared terminals", "Typed into a terminal", "Changed the Control UI", "Looked at the phone", "Didn't tap on the phone", "Read 3 PDFs", "Looked at 2 images", "Edited 3 files", "Checked the goal", "Marked the goal complete", "Removed routine Old reminder", "Proposed the next check in 30m", "Made a voice clip"].every((label, i) => ops[i]?.startsWith(label)) && !ops.some((l) => l.startsWith("Ran ")),
+  JSON.stringify(ops),
+);
+check("M1 no line says a phone act happened unless the device's code is shown; nothing says Tapped", !(await q(p, () => document.body.innerText.includes("Tapped on the phone"))));
+check(
+  "M1 a phone act awaiting confirmation did nothing: Not run, with the target and the proposed effect in its readable view",
+  await q(p, () => { const c = [...box("Kinds opened").querySelectorAll(".action")].find((a) => a.dataset.kind === "phone"); const t = c.innerText; return c.dataset.status === "refused" && t.includes("Needs confirmation") && t.includes("make a purchase, payment, or subscription change") && t.includes("Pay now") && t.includes("Nothing was done."); }),
+);
+check(
+  "M1 the general rule: a payload's own status or code decides, for a tool the table does not list",
+  await q(p, () => {
+    const o = (details) => CT.outcomeOf({ id: "g", name: "someTool", args: {}, status: "done", text: "{}", details }).outcome;
+    return o(undefined) === "done" && o({ ok: true }) === "done" && o({ status: "completed" }) === "done" && o({ ok: false }) === "failed" && o({ error: "x" }) === "failed" && o({ status: "forbidden" }) === "refused" && o({ status: "not_found" }) === "notfound" && o({ status: "queued_later" }) === "made" && o({ code: "confirmation_required" }) === "refused";
+  }),
+);
+check(
+  "M2 the computer's effect is read from details.result, and its readable view has an Effect row",
+  await q(p, () => {
+    const o = (d) => CT.outcomeOf({ id: "c", name: "computer", args: { action: "left_click" }, status: "done", text: "", details: d }).outcome;
+    const opened = [...box("Kinds opened").querySelectorAll(".action")].find((a) => a.dataset.kind === "computer").innerText;
+    return o({ result: { ok: true, effect: "confirmed" } }) === "done" && o({ result: { ok: true, effect: "suspected_noop" }, followUpObservation: {} }) === "unconfirmed" && o({ result: { ok: true } }) === "made" && o({ result: { ok: false } }) === "failed" && o({ effect: "confirmed" }) === "made" && opened.includes("Effect") && opened.includes("no change was seen");
+  }),
+);
+check(
+  "M2 conversations_turn takes timeoutSeconds; view_image takes path and paths only; a routine's removal and next check are read from their own results",
+  await q(p, () => {
+    const turn = S.calls.turn.args;
+    const img = CT.filesOf({ name: "view_image", args: { url: "https://x.example/a.png", urls: ["u"] } });
+    const key = (action) => CT.kindOf({ id: "r" + action, name: "automations", args: { action }, status: "done" }).key;
+    return turn.timeoutSeconds === 120 && !("timeoutMs" in turn) && img.length === 0 && CT.filesOf(S.calls.images).length === 2 && CT.outcomeOf(S.calls.routineRemoveNone).outcome === "notfound" && CT.outcomeOf(S.calls.routineRemove).outcome === "done" && key("next_check").startsWith("once:") && key("list") !== key("runs") && key("list") === key("list");
+  }),
+);
+check("M2 a plan's steps are completed, in progress or pending", await q(p, () => { const items = [...box("Kinds opened").querySelectorAll(".action-plan li")]; return items.map((i) => i.dataset.status).join(",") === "completed,completed,in_progress,pending" && items[0].querySelector(".glyph[data-state='check']") && items[2].querySelector(".glyph[data-state='working']"); }));
+check("M2 a routine's schedule names its time zone", (await lines(p, "Every kind, done")).find((l) => l.startsWith("Created routine")).includes("Mondays at 9:00 AM, Europe/London"));
+check("last seen: nothing that stands for work moves", await q(p, () => document.getAnimations().filter((a) => a.playState === "running" && a.effect?.target?.closest("[data-connection='lost']")).length === 0 && document.querySelectorAll("[data-connection='lost'] .state").length === 2));
+check("text beside a tool call is a bubble that ends the column", await q(p, () => [...box("Text beside a tool call").children].map((c) => c.className.split(" ")[0]).join(",") === "msg,card,card,msg,card"));
+
+// Levels: open a card, Raw is one step further ----------------------------------------------------
+check("level 1: an opened card shows its readable view", await q(p, () => { const c = box("Opened: the readable view").querySelector(".action"); return c.open && c.querySelector("[role=tab][aria-selected=true]").textContent === "Readable" && !!c.querySelector("[data-view='readable'] .code-block"); }));
+check("level 2: Raw holds the tool, arguments, result, timing and ids", await q(p, () => { const raw = box("Opened: Raw, one step further").querySelector("[data-view='raw']"); const t = raw.textContent; return !raw.hidden && ["Tool", "Arguments", "Result", "Timing", "Identifiers"].every((w) => t.includes(w)) && raw.querySelector(".tool-name").textContent === "read"; }));
+check("level 2: the reasoning that led to an action is inside its card, under a Thought line", await q(p, () => { const t = box("Opened: the reasoning that led to it").querySelector(".action-thought .thought"); return !!t && t.querySelector("summary").textContent.startsWith("Thought for 4s") && t.textContent.includes("71 minutes"); }));
+await spec(p, "Opened: the readable view").locator("[data-view-button='raw']").first().click();
+check("the Raw tab switches the view in place", await q(p, () => !box("Opened: the readable view").querySelector("[data-view='raw']").hidden));
+check("read-only: a call waiting for approval says so, and the question is a card", await q(p, () => { const t = box("On a read-only connection").innerText.replace(/\s+/g, " "); return t.includes("Waiting for approval") && t.includes("Asking you a question") && t.includes("Request access"); }));
+await p.close();
+
+// M6: the phone keeps the object readable in every state ----------------------------------------------
+p = await open(gallery("actions", "&width=phone"), { w: 390, h: 844, touch: true });
+const phone = await q(p, () =>
+  ["Every kind, when it failed", "Every kind, while it runs", "A result is not always completed work", "One card in every state"].flatMap((n) =>
+    [...box(n).querySelectorAll(".action")].map((c) => {
+      const o = c.querySelector(".action-object");
+      const s = c.querySelector(".action-sentence");
+      const lineH = parseFloat(getComputedStyle(s).lineHeight);
+      return { n, line: line(c), objectWidth: o ? o.getBoundingClientRect().width : -1, objectChars: o ? o.textContent.length : 0, sentenceLines: Math.round(s.getBoundingClientRect().height / lineH), right: c.getBoundingClientRect().right <= c.parentElement.getBoundingClientRect().right + 0.5 };
+    }),
+  ),
+);
+const cramped = phone.filter((r) => r.objectWidth !== -1 && r.objectChars > 0 && (r.objectWidth < Math.min(r.objectChars * 6, 60) || r.sentenceLines > 2 || !r.right));
+check("M6 phone: in every state, what an action acted on is readable, in at most two lines", phone.length > 40 && cramped.length === 0, JSON.stringify(cramped.slice(0, 4)));
+check("M6 phone: the long failed X search keeps its query on screen", phone.some((r) => r.line.startsWith('Couldn\'t search posts on X for "heat pump rebate') && r.objectWidth > 100));
+check("phone: the state word is never shortened", await q(p, () => [...document.querySelectorAll(".action .action-state .state")].every((s) => s.scrollWidth <= s.clientWidth + 1)));
+await p.close();
+
+// Folds (M3) -----------------------------------------------------------------------------------------
+p = await open(gallery("folds"));
+const folds = await lines(p, "Done", ":scope > .action");
+check("F-488 a run of six reads is one card", folds[0].startsWith("Read 6 files"), folds[0]);
+check(
+  "folds read as one line with a count, true of every member",
+  ["Searched the web 3 times", "Edited 5 files", "Used the browser 4 actions", "Searched memory 2 times", "Saved the plan 3 times", "Looked through T3 Code 2 times"].every((label, i) => folds[i + 1].replace(" · ", " ").startsWith(label)),
+  JSON.stringify(folds),
+);
+const counting = await lines(p, "Counting files and actions", ":scope > .action");
+check("M3 files are counted once, and the actions too when there are more", counting[0].startsWith("Read 2 files · 3 reads") && counting[1].startsWith("Edited 2 files · 3 edits"), JSON.stringify(counting));
+const short = await lines(p, "Outcomes short of Done in a fold", ":scope > .action");
+const shortSpoken = await q(p, () => [...box("Outcomes short of Done in a fold").querySelectorAll(":scope > .action")].map((c) => c.querySelector(":scope > summary").getAttribute("aria-label")));
+check(
+  "M3 two background admissions fold as Started, never Made; their accessible state says started",
+  short[0].startsWith("Started making images · 2 times") && short[0].endsWith("2 started") && !/^Made/.test(short[0]) && shortSpoken[0].endsWith("2 started") && !shortSpoken[0].endsWith("done"),
+  JSON.stringify([short[0], shortSpoken[0]]),
+);
+check("M3 two partial searches keep Partial and no duration", short[1].startsWith("Searched memory 2 times") && short[1].endsWith("2 partial") && !/\d+(\.\d)?s$/.test(short[1]), short[1]);
+check("M3 a mix of outcomes is neutral, with the counts of what is short of Done", short[2].startsWith("Image generation · 2 calls") && short[2].endsWith("1 started") && short[3].startsWith("Computer actions · 2 calls") && short[3].endsWith("1 not confirmed"), JSON.stringify(short.slice(2)));
+const ops2 = await lines(p, "Each operation folds under its own key and plural", ":scope > .action");
+check("M3 listing image models folds as a look-up, never as Made", ops2[0].startsWith("Looked at image models · 2 times") && !ops2[0].startsWith("Made"), ops2[0]);
+const distinct = await lines(p, "Counting distinct documents and notes", ":scope > .action");
+check("M3 counts name distinct objects, and more calls are said as times", distinct[0].startsWith("Read 3 PDFs · 2 times") && distinct[1].startsWith("Saved 1 note to memory · 2 times"), JSON.stringify(distinct));
+check(
+  "M3 routine look-ups fold by tool and action, and next_check never folds",
+  await q(p, () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const feed = CT.feed({ insert: (html) => (host.insertAdjacentHTML("beforeend", html), host.lastElementChild), instant: () => true });
+    feed.start({ ...S.calls.routineList, id: "l1" });
+    feed.start({ ...S.calls.routineList, id: "l2" });
+    feed.start({ ...S.calls.routineRuns, id: "r1" });
+    feed.start({ ...S.calls.nextCheck, id: "n1" });
+    feed.start({ ...S.calls.nextCheck, id: "n2" });
+    const shape = [...host.children].map((c) => c.dataset.fold || "1").join(",");
+    host.remove();
+    return shape === "2,1,1,1";
+  }),
+);
+check("a fold with an action running names it", (await lines(p, "One action running", ":scope > .action"))[0].includes("reading"));
+const failed = await q(p, () => { const c = box("A failure inside a fold").querySelector(".action"); return [c.open, c.querySelector(".action-detail").textContent, c.querySelector(".action-state").textContent, c.querySelector(".action-detail").dataset.tone]; });
+check("F-092 a failure inside a closed fold is named on its line", !failed[0] && failed[1].includes("couldn't read backup-2026-11-08.log") && failed[2].includes("1 failed") && failed[3] === "danger", JSON.stringify(failed));
+const mixed = await lines(p, "Mixed states: an earlier failure and a later approval", ":scope > .action");
+check(
+  "M3 mixed states: the failure in the detail, what is happening now at the right",
+  mixed[0].includes("1 failed: couldn't run mv") && mixed[0].endsWith("Waiting for you") && mixed[1].includes("1 failed: couldn't read backup-2026-11-08.log") && (await q(p, () => box("Mixed states: an earlier failure and a later approval").querySelectorAll(".action")[1].querySelector(".action-elapsed")?.textContent === "0:04")),
+  JSON.stringify(mixed),
+);
+const other = await lines(p, "Stopped, unavailable, and a missing time", ":scope > .action");
+check("M3 stopped and unavailable members are named; a missing time gives no partial sum", other[0].endsWith("2 stopped") && other[0].includes("stopped reading") && other[1].endsWith("1 unavailable") && !/\d+(\.\d)?s$/.test(other[2]), JSON.stringify(other));
+check("level 1 of a fold: one row per action, in the singular", await q(p, () => { const rows = [...box("Opened").querySelectorAll(".fold-rows .step")]; return rows.length === 3 && rows[1].dataset.status === "failed" && rows[0].querySelector(".step-title").textContent.startsWith("Read ") && rows.every((r) => r.querySelector("[role=tab]")); }));
+check("a row in a fold opens to its own Raw (level 2 of the fold)", await q(p, () => { const r = box("Opened, with one row opened on Raw").querySelector(".fold-rows .step[open]"); return !!r && !r.querySelector("[data-view='raw']").hidden; }));
+check("becoming a fold keeps the open card's view as its first row", await q(p, () => { const f = box("Becoming a fold").querySelector(".action[data-fold]"); return f.open && f.querySelector(".fold-rows .step").open && f.querySelector(":scope > summary").getBoundingClientRect().height === 40; }));
+check("a bubble breaks a fold", await q(p, () => box("What breaks a fold").querySelectorAll(".action").length === 2 && !box("What breaks a fold").querySelector("[data-fold]")));
+check(
+  "M3 the engine: an opaque name not known to the inventory never folds; a known one does",
+  await q(p, () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const insert = (html) => (host.insertAdjacentHTML("beforeend", html), host.lastElementChild);
+    const feed = CT.feed({ insert, instant: () => true });
+    feed.start({ id: "u1", name: "linearCreateIssue", args: {} });
+    feed.start({ id: "u2", name: "linearCreateIssue", args: {} });
+    feed.start({ id: "k1", name: "skills_search", args: { query: "a" }, builtin: true });
+    feed.start({ id: "k2", name: "skills_search", args: { query: "b" }, builtin: true });
+    const kinds = [...host.children].map((c) => c.dataset.fold || "1").join(",");
+    host.remove();
+    return kinds === "1,1,2";
+  }),
+);
+await p.close();
+
+// The general card and tool servers ------------------------------------------------------------------
+p = await open(gallery("general"));
+const general = await lines(p, "Opaque names, in plain words", ":scope > .action");
+check("the general card puts an opaque name in plain words", general[0].startsWith("Used skills search") && general[1].startsWith("Used get weather now") && general[2].startsWith("Used github publish"), JSON.stringify(general));
+check("opened, it shows the gateway's own title as a row", await q(p, () => box("Opened").querySelector(".action").innerText.includes("The gateway calls it")));
+const server = await lines(p, "A tool-server call, before and after its result", ":scope > .action");
+check("a tool-server call is the general card until its result names its server", server[0].startsWith("Using linear create issue") && server[1].startsWith("Used linear") && server[1].includes("create issue"), JSON.stringify(server));
+await p.close();
+
+// T3 Code (M4, M5) ------------------------------------------------------------------------------------
+p = await open(gallery("t3code"));
+check(
+  "M4 a call is T3 Code's by its result naming one of the seven tools, whatever the server is called",
+  await q(p, () => {
+    const k = (mcp) => CT.kindOf({ id: "x", name: "anything", args: {}, status: "done", mcp }).kind;
+    return k({ server: "t3code", tool: "t3_thread_launch" }) === "t3" && k({ server: "work-coder", tool: "t3_thread_send" }) === "t3" && k({ server: "t3code", tool: "orchestrator_capabilities" }) === "server" && k({ server: "t3code", tool: "t3_project_list" }) === "t3list";
+  }),
+);
+check(
+  "M4 a thread is keyed by server, environment and thread id, read from structured content or its rendering",
+  await q(p, () => {
+    const a = CT.threadKey(S.calls.t3Launch);
+    const fromHistory = CT.threadKey({ ...S.calls.t3Launch, details: undefined });
+    const other = CT.threadKey({ ...S.calls.t3Send, mcp: { server: "work-coder", tool: "t3_thread_send" } });
+    const env = CT.threadKey({ ...S.calls.t3Send, args: { ...S.calls.t3Send.args, environmentId: "env-2" } });
+    return a === fromHistory && a === CT.threadKey(S.calls.t3Send) && a !== other && a !== env;
+  }),
+);
+check("M5 every call on a thread has its own item and its own Raw", await q(p, () => { const card = box("One thread, one card: every call on it, each with its own Raw").querySelector(".messaged"); const items = [...card.querySelectorAll(".t3-item")]; return items.length === 6 && items.every((i) => i.querySelector('[aria-label="Raw for this call"]')); }));
+const tools = await q(p, async () => {
+  const card = box("One thread, one card: every call on it, each with its own Raw").querySelector(".messaged");
+  card.open = true;
+  const seen = [];
+  for (const item of card.querySelectorAll(".t3-item")) {
+    const btn = item.querySelector('[aria-label="Raw for this call"]');
+    if (btn.getAttribute("aria-expanded") !== "true") btn.click();
+    const panel = document.getElementById(btn.getAttribute("aria-controls"));
+    seen.push([!panel.hidden, panel.querySelector(".tool-name")?.textContent, panel.textContent.includes(item.dataset.call)]);
+  }
+  return seen;
+});
+check("M5 each joined call's Raw opens to that call: its own tool and its own id", tools.length === 6 && tools.every(([shown, , own]) => shown && own) && new Set(tools.map(([, t]) => t)).size === 5, JSON.stringify(tools));
+check(
+  "M4 a read whose last page holds a cut item says part of the reply only, never that the end was read",
+  await q(p, () => { const t = box("A read whose last page holds a cut item").innerText; return t.includes("Part of the reply only") && !t.includes("Read to the end") && !t.includes("First page only"); }),
+);
+check(
+  "M4 Read to the end only when there are no more pages and no item is cut",
+  await q(p, () => { const t = box("One thread, one card: every call on it, each with its own Raw").innerText; return t.includes("Read to the end") && !t.includes("Part of the reply only"); }),
+);
+const threadStates = await lines(p, "The thread's state, from its calls", ":scope > .messaged");
+check(
+  "M5 the thread's state: an open call, then what T3 Code reported, never changed by a failed read",
+  ["Call started", "Checking", "Running", "Running", "Completed", "Stop requested"].every((w, i) => threadStates[i]?.endsWith(w)),
+  JSON.stringify(threadStates),
+);
+await spec(p, "Later calls leave a line where they happened").locator('.messaged[data-line="read"] [data-action="show-thread"]').click();
+check("M5 Show the thread finds the card by identity, opens the call's item and focuses it", await q(p, () => { const a = document.activeElement; const card = a.closest(".messaged"); return !!card && !card.dataset.line && card.open && a.closest(".t3-item")?.dataset.call === S.calls.t3Read.id; }));
+await spec(p, "Later calls leave a line where they happened").locator('.t3-item[data-call="' + "call_01HXM2A" + '"] [data-action="show-where"]').click();
+check("M5 Show where it happened goes back to the call's own line", await q(p, () => document.activeElement.closest(".messaged")?.dataset.line === "send"));
+check("listings fold, and never join a thread", (await lines(p, "Listing projects and threads", ":scope > .action"))[0].startsWith("Looked through T3 Code 2 times"));
+await p.close();
+
+// M5 live: the change in place, joining, lines and Raw, in the T3 scene ----------------------------------
+p = await open(scene("t3"));
+await q(p, () => { scenes.reset(); scenes.runTo(2); });
+const before = await q(p, async () => {
+  const card = document.querySelector("#transcript-inner .action");
+  card.open = true;
+  card.querySelector('[data-view-button="raw"]').click();
+  card.querySelector('[aria-label="Copy tool name"]').focus();
+  return [card.id, card.offsetTop, line(card)];
+});
+await q(p, () => scenes.runTo(3));
+const after = await q(p, () => {
+  const card = document.querySelector("#transcript-inner .messaged[data-thread]");
+  const item = card.querySelector(`.t3-item[data-call="${S.calls.t3Launch.id}"]`);
+  const raw = item.querySelector('[aria-label="Raw for this call"]');
+  return [card.offsetTop, line(card), card.open, raw.getAttribute("aria-expanded"), document.activeElement.getAttribute("aria-label"), Boolean(item.contains(document.activeElement))];
+});
+check(
+  "M5 a launch known only by its result becomes the T3 Code card in place, open, with its Raw open and focus on the same control",
+  before[2].startsWith("Using t3code t3 thread launch") && after[1].startsWith("Messaged T3 Code") && after[0] === before[1] && after[2] && after[3] === "true" && after[4] === "Copy tool name" && after[5],
+  JSON.stringify({ before, after }),
+);
+await q(p, () => scenes.runTo(5));
+await p.waitForTimeout(450);
+check("M5 a wait right after the card joins it directly: no line of its own, an item with its Raw", await q(p, () => !document.querySelector(`#transcript-inner [data-line][data-call="${S.calls.t3Wait.id}"]`) && !!document.querySelector(`#transcript-inner .messaged[data-thread] .t3-item[data-call="${S.calls.t3Wait.id}"] [aria-label="Raw for this call"]`)));
+await q(p, () => scenes.runTo("end"));
+await p.waitForTimeout(450);
+const t3end = await q(p, () => {
+  const card = document.querySelector("#transcript-inner .messaged[data-thread]");
+  return {
+    items: [...card.querySelectorAll(".t3-item")].map((i) => i.dataset.call),
+    lines: [...document.querySelectorAll("#transcript-inner .messaged[data-line]")].map((l) => l.dataset.line),
+    state: line(card),
+    failedItem: card.querySelector(`.t3-item[data-call="${S.calls.t3ReadFail.id}"] .state`)?.textContent,
+    runLine: document.querySelector("#transcript-inner .run-line summary").innerText.replace(/\s+/g, " "),
+  };
+});
+check(
+  "M5 later calls keep lines; every call is an item; the failed read is on its item, and the thread says Stop requested",
+  t3end.items.length === 6 && t3end.lines.join(",") === "send,read,read,interrupt" && t3end.failedItem === "Failed" && t3end.state.endsWith("Stop requested") && t3end.runLine.includes("7 actions"),
+  JSON.stringify(t3end),
+);
+const back = await q(p, async () => {
+  const host = document.createElement("div");
+  document.querySelector("#transcript-inner").append(host);
+  const feed = CT.feed({ insert: (html) => (host.insertAdjacentHTML("beforeend", html), host.lastElementChild) });
+  feed.start({ id: "o1", name: "t3code__t3_thread_send", args: { threadId: "mcp:x", message: "Also add a test." }, nameMap: { server: "t3code", tool: "t3_thread_send" } });
+  const card = host.firstElementChild;
+  const was = card.classList.contains("messaged");
+  card.open = true;
+  card.querySelector('[aria-label="Raw for this call"]').click();
+  card.querySelector('[aria-label="Copy arguments"]').focus();
+  const before = card.offsetTop;
+  feed.update("o1", { status: "done", mcp: { server: "t3code", tool: "create_issue" }, details: { mcpServer: "t3code", mcpTool: "create_issue" }, text: "ok" });
+  const now = host.firstElementChild;
+  const out = {
+    was,
+    isCard: now.classList.contains("action"),
+    words: line(now),
+    open: now.open,
+    rawTab: now.querySelector('[data-view-button="raw"]').getAttribute("aria-selected"),
+    rawShown: !now.querySelector('[data-view="raw"]').hidden,
+    focus: document.activeElement.getAttribute("aria-label"),
+    focusInside: now.contains(document.activeElement),
+    samePlace: now.offsetTop === before,
+    count: host.children.length,
+  };
+  host.remove();
+  return out;
+});
+check(
+  "M5 a mapped T3 Code line whose result names another tool becomes that tool's card in place, open, on its Raw tab, with focus on the same copy button",
+  back.was && back.isCard && back.words.startsWith("Used t3code") && back.open && back.rawTab === "true" && back.rawShown && back.focus === "Copy arguments" && back.focusInside && back.samePlace && back.count === 1,
+  JSON.stringify(back),
+);
+await p.close();
+
+// Reasoning and the run line ---------------------------------------------------------------------------
+p = await open(gallery("reasoning"));
+check("reasoning before a reply is one folded line; its text is not on screen", await q(p, () => { const t = box("Reasoning that led to the reply").querySelector(".thought"); return !t.open && t.querySelector("summary").textContent.startsWith("Thought for 8s") && !t.querySelector(".thought-body").checkVisibility(); }));
+check("opened, the reasoning shows, with Raw", await q(p, () => { const t = box("Opened").querySelector(".thought"); return t.open && t.innerText.includes("insulation") && !!t.querySelector('[data-action="raw"]'); }));
+const runLines = await q(p, () => [...box("The run line, every ending").querySelectorAll(".run-line summary")].map((s) => s.innerText.replace(/\s+/g, " ").trim()));
+check("F-090 the run line, every ending", runLines[0] === "Worked for 1m 12s · 14 actions" && runLines[1] === "Worked for 1m 12s · 14 actions · 1 failed" && runLines[2].startsWith("Stopped after 40s") && runLines[3].startsWith("Failed after 12s"), JSON.stringify(runLines));
+check("opened, the run line is the run's record", await q(p, () => { const t = box("The run line, opened").querySelector(".run-line").innerText; return t.includes("scripted/dev-1") && t.includes("low effort requested") && t.includes("run_7f3a91c2") && !!box("The run line, opened").querySelector("[aria-label='Copy run id']"); }));
+await p.close();
+
+// The test runs ---------------------------------------------------------------------------------------
+for (const [name, cards, actions] of [["short", 2, 2], ["long", 16, 40], ["thought", 0, 0]]) {
+  p = await open(scene(name, "&at=end"));
+  const r = await q(p, () => ({
+    cards: document.querySelectorAll("#transcript-inner > .card.action, #transcript-inner > .card.messaged").length,
+    runLine: document.querySelector("#transcript-inner .run-line summary")?.innerText.replace(/\s+/g, " ").trim() || "",
+    status: !!document.querySelector(".status-line"),
+    opened: [...document.querySelectorAll("#transcript-inner details")].filter((d) => d.open).length,
+    reasoning: document.querySelector("#transcript").innerText.includes("I know the general answer"),
+    count: scenes.state.actions,
+  }));
+  check(`${name} run: ${cards} cards for ${actions} actions, nothing opened, no status line once it ended`, r.cards === cards && r.count === actions && !r.status && r.opened === 0 && !r.reasoning, JSON.stringify(r));
+  if (actions) check(`${name} run: the run line counts ${actions} actions`, r.runLine.includes(`${actions} actions`), r.runLine);
+  else check("thought run: no run line, one Thought line over the reply", !r.runLine && (await q(p, () => document.querySelector("#transcript-inner .thought[data-place='reply'] + .msg") !== null)));
+  if (name === "long") {
+    check("long run stays calm: every card is one 40 px line, three columns between bubbles", await q(p, () => [...document.querySelectorAll("#transcript-inner .card > summary")].every((s) => Math.round(s.getBoundingClientRect().height) === 40) && [...document.querySelectorAll("#transcript-inner > .msg + .card")].length === 3));
+    check("long run: the one failure is named on its line", await q(p, () => [...document.querySelectorAll("#transcript-inner .action[data-fold]")].filter((c) => c.querySelector(".action-detail[data-tone='danger']")).length === 1));
+  }
+  await p.close();
+}
+
+// While it runs: a new action joins an open fold; focus and Thought survive -------------------------------
+p = await open(scene("long"));
+await q(p, () => { scenes.reset(); scenes.runTo(9); });
+const live = await q(p, () => {
+  const f = document.querySelector("#transcript-inner .action[data-kind='read'][data-fold]");
+  f.open = true;
+  const row = f.querySelector(".fold-rows .step");
+  row.open = true;
+  row.querySelector('[data-view-button="raw"]').click();
+  row.querySelector('[data-view-button="raw"]').focus();
+  const top = f.offsetTop;
+  scenes.runTo(10);
+  const g = document.querySelector("#transcript-inner .action[data-kind='read'][data-fold]");
+  const r = g.querySelector(".fold-rows .step");
+  return [g.open, g.querySelectorAll(".fold-rows .step").length, r.open, line(g).includes("3 files"), g.offsetTop - top, document.activeElement.dataset.viewButton, r.contains(document.activeElement), !r.querySelector("[data-view='raw']").hidden];
+});
+check("a new action while a fold is open is a new row; open rows stay open in their view; focus stays on the same control; nothing above moves", live[0] && live[1] === 3 && live[2] && live[3] && live[4] === 0 && live[5] === "raw" && live[6] && live[7], JSON.stringify(live));
+check("the status line says the running card's words", await q(p, () => document.querySelector(".status-phrase").textContent === "Reading epc-2019.pdf" && line(document.querySelector("#transcript-inner .action[data-kind='read'][data-fold]")).includes("reading epc-2019.pdf")));
+await p.close();
+
+// The scripted run -----------------------------------------------------------------------------------------
+p = await open(run);
+await q(p, () => demo.runTo("first-step"));
+check("as an action starts, its card and the status line say the same words", await q(p, () => document.querySelector("#s-read > summary").innerText.includes("Reading") && document.querySelector(".status-phrase").textContent === "Reading backup-2026-11-15.log"));
+await q(p, () => demo.disconnect());
+await p.waitForTimeout(120);
+check("B4 a running card is last seen while the connection is lost, and still", await q(p, () => document.querySelector("#s-read .action-state").textContent === "Last seen running" && document.getAnimations().filter((a) => a.playState === "running" && a.effect?.target?.closest("#s-read")).length === 0));
+await q(p, () => demo.reconnect());
+await p.waitForTimeout(900);
+await q(p, () => demo.runTo("second-read"));
+check("a card that was open becomes a fold with its row open", await q(p, () => { const f = document.querySelector("#fold-s-read"); return !!f && f.open && document.querySelector("#s-read").open && line(f).startsWith("Read 2 files"); }));
+await q(p, () => { const t = document.querySelector("#s-read2 .action-thought .thought"); t.open = true; });
+await q(p, () => demo.runTo("read-failed"));
+check("a failure in the fold is on its line", await q(p, () => { const t = line(document.querySelector("#fold-s-read")); return t.includes("1 failed") && t.includes("couldn't read backup-2026-11-08.log"); }));
+check("an open Thought line stays open through an ordinary update", await q(p, () => document.querySelector("#s-read2 .action-thought .thought").open));
+await q(p, () => demo.runTo("list"));
+await p.click(".status-line");
+check("the status line brings the running card into view and focuses it, without opening it", await q(p, () => document.activeElement.closest("#s-list") && !document.querySelector("#s-list").open));
+await q(p, () => demo.runTo("approval"));
+check("an approval ends the column: the waiting card, then the approval card", await q(p, () => document.querySelector("#s-exec").dataset.status === "waiting" && document.querySelector("#s-exec").nextElementSibling.id === "approval"));
+await q(p, () => { demo.answer("once"); });
+await p.waitForTimeout(50);
+await q(p, () => demo.runTo("question"));
+await p.click('#question .option[data-letter="A"]');
+await q(p, () => demo.runTo("finished"));
+await p.waitForTimeout(300);
+check("F-090 the run line follows the run and counts its actions and its failure", await q(p, () => { const l = [...document.querySelectorAll("#transcript-inner .run-line")].at(-1).innerText.replace(/\s+/g, " "); return /Worked for .* · \d+ actions · 1 failed/.test(l) && !document.querySelector(".status-line"); }));
+check("nothing folds by itself when the run ends", await q(p, () => document.querySelector("#fold-s-read").open));
+await p.close();
+
+p = await open(run + "&tier=read");
+await q(p, () => demo.runTo("approval"));
+check("read-only: the same cards, and the waiting card says Waiting for approval", await q(p, () => document.querySelector("#s-exec .action-state").textContent === "Waiting for approval" && !!document.querySelector("#fold-s-read")));
+await p.close();
+
+// One reading for every kind, one function for every fold (7.3, 7.4, 11.3) -----------------------------------
+p = await open(gallery("actions"));
+const r3 = await q(p, () => {
+  const call = (id, name, args, details = {}, extra = {}) => ({ id, name, args, details, text: JSON.stringify(details), status: "done", started: 1000, ended: 2000, took: "1.0s", ...extra });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const look = (html) => {
+    host.innerHTML = html;
+    const el = host.firstElementChild;
+    return { line: line(el), status: el.dataset.status, time: el.querySelector(":scope > summary .action-time")?.textContent || "", body: el.innerText };
+  };
+  const single = (c) => ({ ...look(CT.actionCard(c)), outcome: CT.outcomeOf(c).outcome });
+  const r = {};
+  r.history = single(call("h", "sessions_history", { sessionKey: "agent:other:main" }, { status: "forbidden", error: "Session history visibility is restricted." }));
+  r.search = single(call("s", "sessions_search", { sessionKey: "agent:other:main", query: "boiler" }, { status: "forbidden", error: "Session search visibility is restricted." }));
+  r.goal = single(call("g", "update_goal", { status: "complete" }, { status: "error", error: "No active goal requires a status change.", nextAction: "Do not retry update_goal." }));
+  r.pdfs = single(call("p", "pdf", { pdfs: Array.from({ length: 11 }, (_, i) => `file-${i}.pdf`) }, { error: "too_many_pdfs", count: 11, max: 10 }, { text: "Too many PDFs: 11 provided, maximum is 10." }));
+  r.images = single(call("i", "view_image", { paths: Array.from({ length: 21 }, (_, i) => `image-${i}.png`) }, { error: "too_many_images", count: 21, max: 20 }, { text: "Too many images: 21 provided, maximum is 20." }));
+  r.general = [{ outcome: { code: "unknown" } }, { removed: false }, { effect: "unverifiable" }, { status: "forbidden", error: "policy refused" }, { status: "queued" }].map((d, i) => single(call(`x${i}`, "custom_tool", {}, d)));
+  const pending = (id, command) => call(id, "exec", { command }, { status: "approval-pending", approvalId: `approval-${id}` });
+  r.pendingFold = look(CT.foldCard([pending("e1", "echo hi"), pending("e2", "echo hello")]));
+  const feedOf = () => {
+    host.replaceChildren();
+    return CT.feed({ insert: (html) => (host.insertAdjacentHTML("beforeend", html), host.lastElementChild), instant: () => true });
+  };
+  let feed = feedOf();
+  for (const id of ["f1", "f2"]) {
+    feed.start({ id, name: "exec", args: { command: "echo hi" } });
+    feed.update(id, { status: "done", text: "Approval pending.", details: { status: "approval-pending", approvalId: `approval-${id}` }, took: "1.0s" });
+  }
+  r.pendingFeed = { ...look(host.firstElementChild.outerHTML), cards: host.children.length };
+  r.keys = ["automations", "cron"].map((name) => CT.kindOf(call(`k-${name}`, name, { action: "list" })).key);
+  feed = feedOf();
+  for (const name of ["automations", "cron"]) {
+    feed.start({ id: `r-${name}`, name, args: { action: "list" } });
+    feed.update(`r-${name}`, { status: "done", details: { jobs: [] }, took: "0.1s" });
+  }
+  r.routineCards = host.children.length;
+  const read = (items) => look(CT.t3Thread([call("t3-read", "tools__t3_thread_read", { threadId: "thread-a" }, { mcpServer: "coder", mcpTool: "t3_thread_read", structuredContent: { thread: { id: "thread-a", latestRunId: "run-a", status: "completed" }, items, hasMore: false } }, { mcp: { server: "coder", tool: "t3_thread_read" } })], { open: true })).body;
+  const said = { position: 1, itemId: "item-a", type: "assistant_message", runId: "run-a", text: "The whole reply", textTruncated: false };
+  r.readWhole = read([said]);
+  r.readOtherCut = read([said, { position: 2, itemId: "item-b", type: "user_message", runId: "run-a", text: "Part of what you", textTruncated: true, nextTextOffset: 16 }]);
+  r.readEarlierRunCut = read([{ ...said, runId: "run-0", textTruncated: true, nextTextOffset: 8 }, said]);
+  host.remove();
+  return r;
+});
+check("M1 a forbidden task read is Not run, in words", r3.history.outcome === "refused" && r3.history.status === "refused" && r3.history.line.startsWith("Didn't read") && r3.history.line.endsWith("Not run"), JSON.stringify(r3.history));
+check("M1 a forbidden task search is Not run, in words", r3.search.outcome === "refused" && r3.search.line.startsWith('Didn\'t search tasks for "boiler"') && r3.search.line.endsWith("Not run"), JSON.stringify(r3.search));
+check("M1 a goal update that returned status error is Failed, with the next step", r3.goal.outcome === "failed" && r3.goal.line.startsWith("Couldn't mark the goal complete") && r3.goal.line.endsWith("Failed"), JSON.stringify(r3.goal));
+check("M1 too many PDFs is Not run: Too many", r3.pdfs.outcome === "refused" && r3.pdfs.line.startsWith("Didn't read 11 PDFs") && r3.pdfs.line.endsWith("Too many"), JSON.stringify(r3.pdfs));
+check("M1 too many images is Not run: Too many", r3.images.outcome === "refused" && r3.images.line.startsWith("Didn't look at 21 images") && r3.images.line.endsWith("Too many"), JSON.stringify(r3.images));
+check(
+  "M1 the general card reads every field of 7.3: unknown outcome, removed false, unverifiable, forbidden, queued; none is Done",
+  r3.general.map((g) => g.outcome).join(",") === "made,notfound,unconfirmed,refused,queued" && ["Unknown", "Not found", "Not confirmed", "Not run", "Queued"].every((w, i) => r3.general[i].line.endsWith(w) && r3.general[i].status !== "done"),
+  JSON.stringify(r3.general.map((g) => [g.outcome, g.line])),
+);
+check("M3 two commands pending approval, folded directly: Waiting, the neutral plural, no duration", r3.pendingFold.status === "waiting" && r3.pendingFold.line.startsWith("Commands · 2 calls") && r3.pendingFold.line.endsWith("Waiting for you") && !r3.pendingFold.time && !/\d\.\ds/.test(r3.pendingFold.line), JSON.stringify(r3.pendingFold));
+check("M3 the same two through the feed: one fold, Waiting, no duration", r3.pendingFeed.cards === 1 && r3.pendingFeed.status === "waiting" && r3.pendingFeed.line.startsWith("Commands · 2 calls") && !r3.pendingFeed.time && !/\d\.\ds/.test(r3.pendingFeed.line), JSON.stringify(r3.pendingFeed));
+check("M3 automations list and cron list have different keys and stay two cards", r3.keys[0] !== r3.keys[1] && r3.routineCards === 2, JSON.stringify([r3.keys, r3.routineCards]));
+check("M4 a read with every item whole says Read to the end", r3.readWhole.includes("Read to the end."), r3.readWhole);
+check("M4 a cut user message of the run: no Read to the end, and says the run was cut", !r3.readOtherCut.includes("Read to the end") && r3.readOtherCut.includes("Part of the run only"), r3.readOtherCut);
+check("M4 a cut item of an earlier run does not count against this run's reply", r3.readEarlierRunCut.includes("Read to the end."), r3.readEarlierRunCut);
+await p.close();
+
+// Phone width -------------------------------------------------------------------------------------------------
+p = await open(scene("long", "&at=end&width=phone"), { w: 390, h: 844, touch: true });
+check("phone: the detail moves to a last line and is never dropped", await q(p, () => [...document.querySelectorAll("#transcript-inner .action > summary")].every((s) => { const d = s.querySelector(".action-detail"); return !d.textContent || (d.checkVisibility() && d.getBoundingClientRect().top >= s.querySelector(".action-sentence").getBoundingClientRect().bottom - 2); })));
+check("phone: no card is wider than the column", await q(p, () => { const t = document.querySelector("#transcript-inner").getBoundingClientRect(); return [...document.querySelectorAll("#transcript-inner .card")].every((c) => c.getBoundingClientRect().right <= t.right + 0.5); }));
+await p.close();
+
+await b.close();
+console.log(out.join("\n"));
+console.log(`\n${out.filter((l) => l.startsWith("ok")).length} ok, ${out.filter((l) => !l.startsWith("ok")).length} not ok`);
+if (out.some((l) => l.startsWith("FAIL") || l.startsWith("PAGEERROR"))) process.exit(1);

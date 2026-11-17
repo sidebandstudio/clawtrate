@@ -196,6 +196,7 @@ function message(id: string, extra: Partial<OutgoingMessage> = {}): OutgoingMess
     status: "sending",
     runId: null,
     messageSeq: null,
+    leftAt: null,
     createdAt: 1_000,
     error: null,
     attachments: [],

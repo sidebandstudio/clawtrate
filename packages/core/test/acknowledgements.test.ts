@@ -69,7 +69,7 @@ describe("an acknowledgement without a run id", () => {
 });
 
 describe(`a send nobody answers fails at the request deadline (REQUEST_TIMEOUT_MS = ${REQUEST_TIMEOUT_MS})`, () => {
-  it("is unknown, then unconfirmed once history lacks it, and goes out once more with the same key only on retry", async () => {
+  it("F-075: is checked, then unknown once history lacks it, never accepted, and goes out once more with the same key only on retry", async () => {
     const gateway = grantingGateway();
     let answer = false;
     gateway.handlers["chat.send"] = () => (answer ? { runId: "run-9" } : new Promise(() => {}));
@@ -78,7 +78,8 @@ describe(`a send nobody answers fails at the request deadline (REQUEST_TIMEOUT_M
     await until(() => transcript().outbox[0]?.status === "checking");
     // Not refused by the gateway, so no "couldn't start" run: the optimistic run is gone.
     expect(transcript().runs).toEqual([]);
-    await until(() => transcript().outbox[0]?.status === "unconfirmed");
+    await until(() => transcript().outbox[0]?.status === "unknown");
+    expect(transcript().outbox[0]!.error).toMatch(/not known/);
     expect(gateway.calls("chat.send")).toHaveLength(1);
     answer = true;
     client.retryMessage(KEY, id);

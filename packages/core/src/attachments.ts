@@ -211,6 +211,41 @@ export class AttachmentStore {
     };
   }
 
+  /**
+   * Whether these files, taken together, can be held again: each valid and
+   * within its type's ceiling, and the whole batch within the bytes and the
+   * number of files left, counting files still arriving.
+   */
+  fits(attachments: readonly OutgoingAttachment[]): boolean {
+    this.sweep();
+    if (this.entries.size + this.reserved.size + attachments.length > MAX_PENDING_ATTACHMENTS)
+      return false;
+    let bytes = 0;
+    for (const each of attachments) {
+      const size = decodedSize(each.content);
+      try {
+        validateAttachmentMeta(each.fileName, each.mimeType);
+      } catch {
+        return false;
+      }
+      if (size > attachmentLimit(each.mimeType)) return false;
+      bytes += size;
+    }
+    return bytes <= this.available();
+  }
+
+  /**
+   * Hold files again that a message gave back (taken back to be edited), as
+   * new entries the composer names by their new ids. The batch is checked
+   * whole, bytes and count (`fits`); if it does not fit, none is kept.
+   */
+  restore(attachments: readonly OutgoingAttachment[]): AttachmentInfo[] {
+    if (!this.fits(attachments)) throw new Error("Too many files are waiting to be sent.");
+    return attachments.map((each) =>
+      this.keep(each.fileName, each.mimeType, decodedSize(each.content), each.content),
+    );
+  }
+
   /** Forget files once a message has taken them. */
   release(ids: readonly string[]): void {
     for (const id of ids) this.entries.delete(id);
@@ -220,4 +255,11 @@ export class AttachmentStore {
     const now = this.options.now();
     for (const [id, entry] of this.entries) if (entry.expiresAt <= now) this.entries.delete(id);
   }
+}
+
+/** Bytes a base64 text decodes to. */
+function decodedSize(base64: string): number {
+  const clean = base64.replace(/\s+/g, "");
+  const padding = clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((clean.length * 3) / 4) - padding);
 }

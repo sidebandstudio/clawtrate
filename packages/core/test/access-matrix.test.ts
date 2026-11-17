@@ -111,9 +111,9 @@ describe("operations across a terminal connection failure (A3)", () => {
     expect(await pending.answer).toMatch(/Not connected/);
     expect(await pending.approval).toMatch(/Not connected/);
     expect(await pending.stop).toBe("resolved");
-    // The queued message starts once nothing is active; Stop reverted, so it waits queued.
-    const queued = transcript().outbox.find((each) => each.id === pending.messageId)!;
-    expect(queued.status).toBe("queued");
+    // The question is still pending, so the message is held, however it was sent (§15).
+    const held = transcript().outbox.find((each) => each.id === pending.messageId)!;
+    expect(held.status).toBe("held");
     expect(client.pendingAccessWaiters).toBe(0);
     expect(transcript().runs.find((run) => run.id === "run-1")!.state).toBe("waiting");
     for (const method of ACTIONS) expect(gateway.calls(method)).toEqual([]);

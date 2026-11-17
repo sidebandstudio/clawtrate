@@ -47,6 +47,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/bounds.ts:unknownKeys":
     "capped at `MAX_UNKNOWN_KEYS` (64) keys of 96 characters",
   // One read: kept while one list read is in flight, then dropped.
+  "packages/core/src/client.ts:afterActivityOnce>steered":
+    "transient, the held messages released as steers in one synchronous update, at most the task's outbox (16)",
   "packages/core/src/client.ts:backfillApprovalKind>pendingBefore":
     "one list read; the task's pending approvals, at most `MAX_PENDING_APPROVAL_COUNT`",
   "packages/core/src/client.ts:backfillApprovalKind>mine":

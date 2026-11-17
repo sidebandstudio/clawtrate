@@ -246,7 +246,17 @@ export default async function globalSetup() {
     const problems = [...cleanUpOnce()];
     const after = runningOthers(own);
     const gone = alreadyRunning.filter((row) => !after.includes(row));
-    if (gone.length > 0) problems.push(`instances that were running changed: ${gone.join(", ")}`);
+    // The default instance is this run's to leave alone. Another named instance belongs
+    // to other work on the machine and may stop or restart during a run, as the packaged
+    // check already allows; the sentinel proves this run touches no instance but its own.
+    const guarded = gone.filter((row) => row.startsWith("(default) "));
+    if (guarded.length > 0) {
+      problems.push(`instances that were running changed: ${guarded.join(", ")}`);
+    }
+    const others = gone.filter((row) => !row.startsWith("(default) "));
+    if (others.length > 0) {
+      console.log(`Note: other instances changed during the run, not by it: ${others.join(", ")}`);
+    }
     if (listInstances().some((row) => row.name !== null && own.includes(row.name))) {
       problems.push("this run's instance folders were not removed");
     }

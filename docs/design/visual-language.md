@@ -33,7 +33,7 @@ Each of these is a rule a reviewer can check.
 6. **One typeface, two weights.** Regular and medium. Semibold only for headings inside a reply and for the product name. A mono face only for code.
 7. **Nothing below 12 px, and every text colour reaches 4.5:1** on every surface it is allowed to sit on. Section 13 lists the one surface with restrictions. A disabled control changes its fill and text; it is never faded with opacity.
 8. **Messages are bubbles.** No name, avatar or time beside a message. Time is a centred stamp between blocks.
-9. **The bot's work is quiet until asked for.** Thoughts and tool calls fold into one line.
+9. **The bot's work reads as what it did.** Each action is one quiet line in plain words, and actions of one kind in a row share one. Reasoning and raw calls stay folded until asked for.
 10. **One list.** Tasks live under their bot in the rail. There is no separate task column.
 
 ## 2. Tokens
@@ -397,7 +397,7 @@ Until the conversation components are built, the shell's own inspector is kept, 
   - a tool call shows the tool's name on `--bg-code`, the one-line summary of its arguments, and its state at the right ("done", "failed" in `--danger`, "no result"), and opens to the full arguments and the result or the error, each in a code block on `--bg-pane` under a small label.
 - Kept exactly: the order of blocks, the full reasoning, the full argument text, the result text (with "(empty)" for an empty one), the error and missing-result states, system messages, and live output, which is a bubble that grows.
 
-`conversation.md` replaces the folded group with the activity block; the per-call detail it opens to is this one.
+`conversation.md` replaces the folded group with action cards, one plain-words line per action or per fold of one kind, shown without opening anything (its section 7); the per-call detail they open to is this one.
 
 ### Jump to latest
 

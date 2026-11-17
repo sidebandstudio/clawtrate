@@ -15,28 +15,30 @@ The desktop renderer gets one over IPC (`apps/desktop/src/renderer/bridge-deskto
 
 ## What the interface calls
 
-| To                                   | Command                                                                | Answer                                  |
-| ------------------------------------ | ---------------------------------------------------------------------- | --------------------------------------- |
-| Open or close a task                 | `openSession` / `closeSession` with `key`                              | none                                    |
-| Create a task with its first message | `createTask` with `botId`, `text`, `label`                             | `{ key }`, already open for this viewer |
-| Retry or forget a task creation      | `retryCreation` / `dismissCreation` with `creationId`                  | `{ key }` / none                        |
-| Send                                 | `sendMessage` with `key`, `text`, `mode: "auto"`, `attachmentIds`      | `{ messageId }`                         |
-| Steer                                | `sendMessage` with `mode: "auto"` while a run is running or waiting    | `{ messageId }`                         |
-| Queue after this turn                | `sendMessage` with `mode: "queue"`                                     | `{ messageId }`                         |
-| Send a queued message now, as steer  | `sendQueuedNow` with `key`, `messageId`                                | none                                    |
-| Cancel a queued message              | `cancelQueued` with `key`, `messageId`                                 | none                                    |
-| Retry or delete a message            | `retryMessage` / `deleteMessage` with `key`, `messageId`               | none                                    |
-| Stop                                 | `stopRun` with `key`, `runId`                                          | none                                    |
-| Answer or dismiss a question         | `answerQuestion` with `answers` / `dismissQuestion`                    | none                                    |
-| Resolve an approval                  | `resolveApproval` with `decision`, `expiresInDays`, `shownDigest`      | none                                    |
-| Read an approval's whole text        | `readApprovalText` with `key`, `approvalId`                            | `{ text, digest }`                      |
-| Read back a decision that failed     | `checkApproval` with `key`, `approvalId`                               | none; the card's state changes          |
-| Read a step's whole raw call/result  | `readStepRaw` with `key`, `stepId`                                     | `StepRead`, or null for an unknown step |
-| Read a history item whole            | `readHistoryItem` with `key`, `itemId`                                 | `TranscriptItem`, or null               |
-| Request more access                  | `requestAccess`                                                        | none; progress in `connection.upgrade`  |
-| Connect, disconnect, retry           | `connect` (`url`, `token`), `connectDevGateway`, `disconnect`, `retry` | none                                    |
+| To                                   | Command                                                                | Answer                                                  |
+| ------------------------------------ | ---------------------------------------------------------------------- | ------------------------------------------------------- |
+| Open or close a task                 | `openSession` / `closeSession` with `key`                              | none                                                    |
+| Create a task with its first message | `createTask` with `botId`, `text`, `label`                             | `{ key }`, already open for this viewer                 |
+| Retry or forget a task creation      | `retryCreation` / `dismissCreation` with `creationId`                  | `{ key }` / none                                        |
+| Send                                 | `sendMessage` with `key`, `text`, `mode: "auto"`, `attachmentIds`      | `{ messageId }`                                         |
+| Steer                                | `sendMessage` with `mode: "auto"` while a run is running or waiting    | `{ messageId }`                                         |
+| Queue after this turn                | `sendMessage` with `mode: "queue"`                                     | `{ messageId }`                                         |
+| Send a queued message now, as steer  | `sendQueuedNow` with `key`, `messageId`                                | none                                                    |
+| Cancel a queued message              | `cancelQueued` with `key`, `messageId`                                 | none                                                    |
+| Take a held or queued message back   | `takeBackMessage` with `key`, `messageId`                              | `{ text, attachments }`, files held again under new ids |
+| Send a held message again as new     | `sendAgain` with `key`, `messageId` (its files go with it)             | `{ messageId }`                                         |
+| Retry or delete a message            | `retryMessage` / `deleteMessage` with `key`, `messageId`               | none                                                    |
+| Stop                                 | `stopRun` with `key`, `runId`                                          | none                                                    |
+| Answer or dismiss a question         | `answerQuestion` with `answers` / `dismissQuestion`                    | none                                                    |
+| Resolve an approval                  | `resolveApproval` with `decision`, `expiresInDays`, `shownDigest`      | none                                                    |
+| Read an approval's whole text        | `readApprovalText` with `key`, `approvalId`                            | `{ text, digest }`                                      |
+| Read back a decision that failed     | `checkApproval` with `key`, `approvalId`                               | none; the card's state changes                          |
+| Read a step's whole raw call/result  | `readStepRaw` with `key`, `stepId`                                     | `StepRead`, or null for an unknown step                 |
+| Read a history item whole            | `readHistoryItem` with `key`, `itemId`                                 | `TranscriptItem`, or null                               |
+| Request more access                  | `requestAccess`                                                        | none; progress in `connection.upgrade`                  |
+| Connect, disconnect, retry           | `connect` (`url`, `token`), `connectDevGateway`, `disconnect`, `retry` | none                                                    |
 
-There is no separate steer command. `mode: "auto"` starts a new run when the task has no active run, steers into the active run when it is running or waiting, and queues when it is stopping. `mode: "queue"` always queues. A steer while a question from the run is pending is held, not sent, until the question is answered or dismissed.
+There is no separate steer command. `mode: "auto"` starts a new run when the task has no active run, steers into the active run when it is running or waiting, and queues when it is stopping. `mode: "queue"` queues behind the active run whenever a run is active; with none it starts a run. While a question from the run is pending, every message is held, not sent, whichever mode it was sent with, until the last pending question is answered, dismissed or expires. Held messages are then released in order as a message sent at that moment would go: a steer into the running run unless it was queued, queued while the run stops, and queued, one run each, once the run has ended by itself.
 
 A question answer maps each question id to its answers. Each answer is either text as typed or `{ option: index }`, where `index` is the option's `QuestionOption.index`. At most 3 questions and 8 answers each are accepted.
 
@@ -84,9 +86,10 @@ Runs (`RunState`):
 - `waiting`: the run holds a card in `pendingCards`, because its lifecycle reported `waiting-approval` or it asked a question. An approval record alone does not make a run `waiting`.
 - `stopping`: Stop was pressed and `chat.abort` is on its way or unanswered. The run becomes `stopped` when the abort took, or `completed` with `finishedBeforeStop` when it finished first. A failed stop puts the run back and sets `stopError`.
 - `completed`, `stopped`, `failed`, `cancelled`: the gateway's terminal event, or history, said so.
+- `reportedStartAt` is when the gateway says the run started (its lifecycle start, or the history snapshot); null until it says. `startedAt` may be this client's own send time.
 - `bound` is false until the gateway has named the run; until then `id` is this client's key. `outcomeKnown: false` means the run is known to have ended but nothing established how; its terminal state is a stand-in.
 
-Outgoing messages (`OutgoingStatus`): `sending`, then `sent` once the gateway accepted it. The message leaves the outbox when history holds it. `checking` means no answer came, so whether the gateway took the message is unknown and history is being read. `unconfirmed` means it was accepted, its run ended, and no history row ties to it. `handled` means the gateway treated it as a command and started no run. `failed` and `cancelled` are what they say. `held` and `queued` have not been sent. A retry reuses the message id as the idempotency key, so the gateway delivers it at most once.
+Outgoing messages (`OutgoingStatus`): `sending`, then `sent` once the gateway accepted it. The message leaves the outbox when history holds it. `checking` means no answer came, so whether the gateway took the message is unknown and history is being read. `unknown` means no answer came and the history read since holds no row with its key: whether the gateway took it is still not known, and it is never shown as accepted; retry (same key) and delete apply, and a later history row with its key settles it. `unconfirmed` means it was accepted (the gateway answered), its run ended, and no history row ties to it. `handled` means the gateway treated it as a command and started no run. `failed` and `cancelled` are what they say. `held` and `queued` have not been sent. `not-sent` is every message whose frame had not left when a Stop was confirmed: held, queued, or released and still waiting in the task's delivery chain. Nothing starts by itself after a stop, so it stays unsent until `retryMessage` sends it (a run starts with it, same key) or `deleteMessage` removes it. Whether a message has left is recorded in one place, `leftAt`: the time its `chat.send` frame was handed to the connection, null while the message waits in this client. Entering the delivery chain clears it, the send sets it, and the stop rule reads only it, never the status; a message whose frame left is not parked and settles as the gateway answers it. The outbox lives in the host's memory: a renderer reload keeps it, since the host holds the state, but a host restart loses it, every unsent status included. A retry reuses the message id as the idempotency key, so the gateway delivers it at most once. A message that came from the queue keeps `mode: "queue"` through every attempt until it starts or is removed: a refused start is `failed` with `queue` (the shelf's "Couldn't start"), and `retryMessage` on it starts it at once when no run is active, or queues it again behind the active run (held while a question is pending), so a second refusal reads the same as the first.
 
 Questions: `pending`, `answered`, `dismissed`, `expired`, `cancelled` (the run was stopped), or `closed` (no longer pending on the gateway, and this client did not see how it ended).
 
@@ -101,14 +104,14 @@ Message cards: a tool start is the model's request, not a delivery, so a card is
 - A viewer holds at most `MAX_VIEWER_OPEN_TASKS` (4) tasks open, and fewer when the host sets `maxOpenTasks`. It may have at most `MAX_VIEWER_PENDING_COMMANDS` (16) commands in flight.
 - The client follows at most `MAX_TRACKED_TASKS` (8) tasks: open in some viewer, kept for unsent work after the last viewer closed them, or being created. The host may set fewer (`limits.trackedTasks`).
 - Message text: at most `MAX_MESSAGE_CHARS` (32,000), never cut, refused if longer. One task's outbox holds at most 16 messages in any status. A new message past that is refused; nothing is dropped.
-- Files: at most 20 per message; at most 64 files and 32 MiB waiting on the host, each kept for 15 minutes; images up to 6 MiB (less if the gateway says so), other files up to 20 MiB; the whole send within the gateway's frame limit. Oversized sends throw `SendTooLargeError` before anything is sent.
+- Files: at most 20 per message; at most 64 files and 32 MiB waiting on the host, each kept for 15 minutes; images up to 6 MiB (less if the gateway says so), other files up to 20 MiB; the whole send within the gateway's frame limit. Oversized sends throw `SendTooLargeError` before anything is sent. Taking a message back (`takeBackMessage`) is all or nothing: its files are checked as one batch, bytes and count together, against what is left of those bounds before anything is cancelled or released. When they do not fit, the message stays exactly as it was, held or queued with its words and files, and the command is refused with `TAKE_BACK_NO_ROOM`, which says why in plain words. A restore never takes the waiting files past 64.
 - The web bridge refuses a command frame over 64 KiB (`MAX_BRIDGE_FRAME_BYTES`). A command's answer on the web host must fit one result frame of `MAX_RESULT_CHARS` (262,144) JSON characters. An approval text too long for it is not given, so that approval stays deny-only for that viewer.
 - Per task: 32 runs, 128 steps shared by its runs (older finished steps go first; `omittedSteps` counts them), 4 pending questions (`questionsOmitted`), 16 pending approvals (more wait in `unroutedApprovals`), the last 200 history rows. Earlier history pages are not loaded.
 - Question cards show at most 8 options per question (`optionsOmitted` counts the rest) and 3 questions.
 - At most 4 whole reads (`readStepRaw` from history, `readHistoryItem`, `readApprovalText`) run at once; a fifth is refused with an error to show.
 - A host subscribes to the client's store (`client.store.subscribe`) at most `MAX_STORE_LISTENERS` (32) times at once; one more throws.
 - A run this client started fails after 50 minutes (`DEFAULT_TURN_LIMIT_MS`). A request unanswered for 60 seconds fails locally.
-- Not promised: a reasoning step's id once its run's `reasoningRevision` changed, or after its task is closed and reopened or read from a different history window; that a step's whole text can be read before history holds it; that history itself is uncut (`Step.truncated` and `TranscriptItem.truncated` mark what the gateway cut); delivery of a message whose status is `checking` or `unconfirmed`; any order or link between a late reply and the send it answers.
+- Not promised: a reasoning step's id once its run's `reasoningRevision` changed, or after its task is closed and reopened or read from a different history window; that a step's whole text can be read before history holds it; that history itself is uncut (`Step.truncated` and `TranscriptItem.truncated` mark what the gateway cut); delivery of a message whose status is `checking`, `unknown` or `unconfirmed`; any order or link between a late reply and the send it answers.
 
 ## Changes interface builders must adapt to
 

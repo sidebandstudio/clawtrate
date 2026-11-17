@@ -38,7 +38,7 @@ import {
 } from "./MessagedCard.tsx";
 import { botMessageKey, mayDispatch, nameOf, sentVerb } from "./model.ts";
 import { Announcer } from "./parts.tsx";
-import { cardDomId, codingCalls, oldestPending, placeCards, type CardRef } from "./placement.ts";
+import { cardDomId, codingCalls, placeCards, type CardRef } from "./placement.ts";
 import { QuestionCardView } from "./QuestionCard.tsx";
 import { useCards } from "./useCards.ts";
 import "./cards.css";
@@ -146,19 +146,8 @@ export function CardScope({
     ],
   );
 
-  // ⌘J goes to what needs you: the oldest pending card, focused.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
-        const ref = oldestPending(transcript);
-        if (!ref) return;
-        event.preventDefault();
-        focusPending(ref);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [transcript]);
+  // ⌘J, Review and "Needs you" are the conversation's: it sends them to focusPending(oldestPending(…)),
+  // and only while the conversation is on screen.
 
   // Arriving from "Open in <bot>": the receiving card of that run, open, in view and focused.
   useLayoutEffect(() => {
@@ -382,14 +371,24 @@ export function RunCardList({ runId }: { runId: string }) {
   );
 }
 
-/** Cards whose run the transcript does not show yet, before the streaming reply. */
-export function TrailingCards() {
+/**
+ * Cards whose run the transcript does not show yet, before the streaming reply.
+ * `except` names runs the transcript draws itself with RunCardList.
+ */
+export function TrailingCards({ except }: { except?: ReadonlySet<string> }) {
   const { placement } = useScope();
+  const drawn = new Set(
+    [...(except ?? [])].flatMap((runId) =>
+      (placement.byRun.get(runId) ?? []).map((ref) => `${ref.kind}:${ref.id}`),
+    ),
+  );
   return (
     <>
-      {placement.trailing.map((ref) => (
-        <CardFor key={`${ref.kind}:${ref.id}`} cardRef={ref} />
-      ))}
+      {placement.trailing
+        .filter((ref) => !drawn.has(`${ref.kind}:${ref.id}`))
+        .map((ref) => (
+          <CardFor key={`${ref.kind}:${ref.id}`} cardRef={ref} />
+        ))}
     </>
   );
 }

@@ -221,6 +221,12 @@ export type Run = {
   suspendedCards: PendingCard[];
   closedCards: ClosedCard[];
   startedAt: number | null;
+  /**
+   * When the gateway says the run started: its lifecycle start's `startedAt`,
+   * else that event's own time, or the history snapshot's. Null until the
+   * gateway has reported it; `startedAt` may be this client's own time.
+   */
+  reportedStartAt: number | null;
   endedAt: number | null;
   error: RunError | null;
   /** When the user pressed Stop. */
@@ -276,6 +282,12 @@ export type OutgoingStatus =
   | "held"
   /** Held until the active run is terminal. */
   | "queued"
+  /**
+   * Held or queued when a Stop was confirmed: nothing starts by itself after
+   * a stop, so it stays here, never sent, until the person sends it (retry)
+   * or removes it (delete).
+   */
+  | "not-sent"
   | "sending"
   /** The gateway accepted it; it leaves the outbox once history has it. */
   | "sent"
@@ -292,6 +304,14 @@ export type OutgoingStatus =
    */
   | "unconfirmed"
   /**
+   * No answer came, and the history read since does not hold it: whether the
+   * gateway took it is not known. Nothing establishes acceptance, so it is
+   * never shown as accepted. It can be retried with the same idempotency key,
+   * so the gateway delivers it at most once, or deleted; a later history
+   * read that holds its key still settles it.
+   */
+  | "unknown"
+  /**
    * The gateway handled it as a command without starting a run (a `/stop`
    * answered `{ok, aborted, runIds}`): nothing more comes of it, and no
    * history row is expected. It can be dismissed.
@@ -304,13 +324,25 @@ export type OutgoingMessage = {
   /** Also the `idempotencyKey`, so a retry can never deliver it twice. */
   id: string;
   text: string;
-  /** How it was delivered: a new run, a steer into the active run, or queued after it. */
+  /**
+   * How it was delivered: a new run, a steer into the active run, or queued
+   * after it. A queued message keeps `queue` once it starts and through every
+   * retry, until it starts or is removed, so a start the gateway refuses is
+   * told apart from a send that failed however often it is tried again.
+   */
   mode: "new" | "steer" | "queue";
   status: OutgoingStatus;
   /** The run it started or was steered into. */
   runId: string | null;
   /** `chat.send`'s `messageSeq`, when the gateway returned one. */
   messageSeq: number | null;
+  /**
+   * When its `chat.send` frame was handed to the connection, for the attempt
+   * under way; null while it waits in this client, in the task's delivery
+   * chain or for access. The one record of whether it has left: a confirmed
+   * Stop parks every message that has not, whatever its status says.
+   */
+  leftAt: number | null;
   createdAt: number;
   error: string | null;
   /** Files sent with it, without their content. */
@@ -701,6 +733,7 @@ export function newRun(
     suspendedCards: [],
     closedCards: [],
     startedAt: now,
+    reportedStartAt: null,
     endedAt: null,
     error: null,
     stopRequestedAt: null,
@@ -720,6 +753,20 @@ export function newRun(
 
 export function findRun(activity: TaskActivity, runId: string): Run | undefined {
   return activity.runs.find((run) => run.id === runId);
+}
+
+/**
+ * Whether the run has a question pending, by the question records as well as
+ * the run's cards, so a plain message is never sent while the gateway would
+ * take it as the answer. A pending question holds every outgoing message, and
+ * this is the one definition of it: the engine and the interface both use it.
+ */
+export function questionPending(activity: TaskActivity, run: Run): boolean {
+  return (
+    activity.questions.some(
+      (question) => question.status === "pending" && question.runId === run.id,
+    ) || [...run.pendingCards, ...run.suspendedCards].some((card) => card.kind === "question")
+  );
 }
 
 /** The task's run that is running, waiting or stopping, if any. */
@@ -1448,7 +1495,11 @@ export function applyAgentEvent(
 function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContext): Run {
   switch (data.phase) {
     case "start":
-      return { ...run, startedAt: num(data.startedAt) ?? run.startedAt ?? ts };
+      return {
+        ...run,
+        startedAt: num(data.startedAt) ?? run.startedAt ?? ts,
+        reportedStartAt: num(data.startedAt) ?? ts,
+      };
     case "model":
       // Each model call starts a new reasoning segment.
       return closeReasoning({ ...run, model: str(data.model) ?? run.model }, ctx, ts);
@@ -2060,7 +2111,13 @@ export function runsFromHistory(
         runs.get(inFlightRunId) ??
           newRun(
             inFlightRunId,
-            { state: "running", origin: "history", bound: true, anchorItemId: anchor },
+            {
+              state: "running",
+              origin: "history",
+              bound: true,
+              anchorItemId: anchor,
+              reportedStartAt: num(snapshot?.startedAt),
+            },
             num(snapshot?.startedAt),
           ),
       ],
@@ -2493,6 +2550,7 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
       outgoing.status !== "sent" &&
       outgoing.status !== "checking" &&
       outgoing.status !== "unconfirmed" &&
+      outgoing.status !== "unknown" &&
       outgoing.status !== "failed"
     ) {
       return true;
@@ -2528,15 +2586,68 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
 export const UNCONFIRMED_ERROR =
   "The gateway accepted this message, but its history does not show it. It may not have been delivered.";
 
+/** The run that ended last: by its end time, and among equal or unknown ones, by its place. */
+function lastEnded(runs: readonly Run[]): Run | undefined {
+  let last: Run | undefined;
+  for (const run of runs) {
+    if (!isTerminal(run.state) || run.state === "cancelled") continue;
+    if (!last || (run.endedAt ?? -Infinity) >= (last.endedAt ?? -Infinity)) last = run;
+  }
+  return last;
+}
+
+/** Whether a message is unsent work this client still holds: its frame has not left. */
+function notLeft(message: OutgoingMessage): boolean {
+  if (message.status === "queued" || message.status === "held") return true;
+  return (
+    (message.status === "sending" || message.status === "awaiting-access") &&
+    message.leftAt === null
+  );
+}
+
+/**
+ * After a confirmed Stop nothing starts by itself (conversation.md §15–16):
+ * with no run active and the last one stopped, every message whose frame has
+ * not left (`leftAt`) becomes `not-sent`, whatever its status said: queued,
+ * held, or released and still waiting in the delivery chain. Queued runs are
+ * cancelled. A message whose frame left is not touched; it settles as the
+ * gateway answers it. Messages sent after the stop start a run of their own,
+ * so this applies only to work left from before it.
+ */
+export function parkAfterStop(activity: TaskActivity, now: number): TaskActivity {
+  if (activity.runs.some((run) => isActive(run.state))) return activity;
+  if (lastEnded(activity.runs)?.state !== "stopped") return activity;
+  const parked = activity.outbox.filter(notLeft);
+  if (parked.length === 0) return activity;
+  let next = activity;
+  for (const message of parked) {
+    next = updateMessage(cancelQueuedRun(next, message.id, now), message.id, {
+      status: "not-sent",
+      runId: null,
+    });
+  }
+  return next;
+}
+
+/** Shown on a message no answer came for and history does not hold. */
+export const UNKNOWN_ERROR =
+  "No answer came from the gateway, and its history does not show this message. Whether it was received is not known.";
+
 /**
  * After a history read: a message the gateway accepted whose run has ended,
  * and that the read did not tie to a row, is `unconfirmed`. Its run ending
  * means history should hold it; without a row nothing establishes delivery.
+ * A message no answer came for (`checking`) was never shown to be accepted:
+ * the read not finding it makes it `unknown`, never `unconfirmed`.
  */
 export function markUnconfirmed(activity: TaskActivity): TaskActivity {
   let changed = false;
   const outbox = activity.outbox.map((message) => {
-    if (message.status !== "sent" && message.status !== "checking") return message;
+    if (message.status === "checking") {
+      changed = true;
+      return { ...message, status: "unknown" as const, error: UNKNOWN_ERROR };
+    }
+    if (message.status !== "sent") return message;
     const run = message.runId ? findRun(activity, message.runId) : undefined;
     if (run && !isTerminal(run.state)) return message;
     changed = true;
