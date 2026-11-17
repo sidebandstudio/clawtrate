@@ -91,6 +91,8 @@ import {
   applyChatEvent,
   applyQuestionRequested,
   applyQuestionResolved,
+  foreignQuestionRequested,
+  foreignQuestionResolved,
   bindRun,
   cancelQueuedRun,
   dropUnboundRun,
@@ -4147,6 +4149,16 @@ export class ClawtrateClient {
           this.updateActivity(key, (activity, ctx) =>
             applyQuestionRequested(activity, record, ctx),
           );
+        } else if (
+          record &&
+          key &&
+          typeof record.runId === "string" &&
+          this.foreign.get(capId(key, MAX_ID_CHARS))?.runs.some((run) => run.id === record.runId)
+        ) {
+          // A recipient's run this client follows asks its own user: it waits.
+          this.updateForeign(key, (activity, ctx) =>
+            foreignQuestionRequested(activity, record, ctx),
+          );
         }
         return;
       }
@@ -4180,6 +4192,10 @@ export class ClawtrateClient {
         const payload = asRecord(event.payload);
         const id = payload?.id;
         if (!payload || typeof id !== "string") return;
+        for (const [key, activity] of [...this.foreign.entries()]) {
+          if (activity.runs.some((run) => run.pendingCards.some((card) => card.id === id)))
+            this.updateForeign(key, (each) => foreignQuestionResolved(each, payload));
+        }
         for (const transcript of Object.values(this.state.transcripts)) {
           if (transcript.questions.some((question) => question.id === id)) {
             this.updateActivity(transcript.sessionKey, (activity) =>

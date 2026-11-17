@@ -1174,6 +1174,37 @@ export function applyQuestionRequested(
   });
 }
 
+/**
+ * A question in a session nobody here has open, whose run this client follows
+ * as a recipient's: the run waits on it, holding only the card's id; the
+ * question itself is not kept.
+ */
+export function foreignQuestionRequested(
+  activity: TaskActivity,
+  record: RawRecord,
+  ctx: EngineContext,
+): TaskActivity {
+  const next = applyQuestionRequested(activity, record, ctx);
+  return next.questions.length > 0 ? { ...next, questions: [] } : next;
+}
+
+/** That question settled: its run goes on. */
+export function foreignQuestionResolved(activity: TaskActivity, payload: RawRecord): TaskActivity {
+  const id = str(payload.id);
+  if (!id || !activity.runs.some((run) => run.pendingCards.some((card) => card.id === id))) {
+    return activity;
+  }
+  const reason: CardCloseReason =
+    payload.status === "answered"
+      ? "answered"
+      : payload.status === "expired"
+        ? "expired"
+        : payload.status === "cancelled"
+          ? "dismissed"
+          : "closed";
+  return { ...activity, runs: activity.runs.map((run) => closeCard(run, id, reason)) };
+}
+
 function closeCard(run: Run, cardId: string, reason: CardCloseReason): Run {
   const suspended = run.suspendedCards.find((each) => each.id === cardId);
   if (suspended) {
