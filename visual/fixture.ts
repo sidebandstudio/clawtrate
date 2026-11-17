@@ -53,3 +53,56 @@ export async function settle(page: Page): Promise<void> {
       ),
   );
 }
+
+/** On a phone the conversation covers the list; show the list. */
+export async function showList(page: Page): Promise<void> {
+  const back = page.getByRole("button", { name: "Back to bots" });
+  if (await back.isVisible()) await back.click();
+}
+
+const railButton = (page: Page, name: string) =>
+  page.getByTestId("bot-list").getByRole("button", { name: new RegExp(`^${name}\\b`) });
+
+export type StateScene = { name: string; query: string; prepare?: (page: Page) => Promise<void> };
+
+/** The states this branch added, for screenshots and the legibility audit. */
+export const STATE_SCENES: StateScene[] = [
+  { name: "rail-pinned", query: `scene=main&${OTTO_DISK}&pins=main,otto,pip`, prepare: showList },
+  { name: "task-states", query: `scene=task-states&${OTTO_DISK}`, prepare: showList },
+  {
+    name: "hidden-bots",
+    query: `scene=main&${OTTO_DISK}&hidden=marlow,quartermaster`,
+    prepare: async (page) => {
+      await showList(page);
+      await page.getByRole("button", { name: /^Hidden bots/ }).click();
+    },
+  },
+  {
+    name: "sort-menu",
+    query: `scene=main&${OTTO_DISK}&sort=manual`,
+    prepare: async (page) => {
+      await showList(page);
+      await page.getByRole("button", { name: /^Sort bots/ }).click();
+      await expect(page.getByRole("menu", { name: "Sort bots" })).toBeVisible();
+    },
+  },
+  {
+    name: "bot-menu",
+    query: `scene=main&${OTTO_DISK}&sort=manual`,
+    prepare: async (page) => {
+      await showList(page);
+      await railButton(page, "Juniper").focus();
+      await page.keyboard.press("Shift+F10");
+      await expect(page.getByRole("menu", { name: "Juniper" })).toBeVisible();
+    },
+  },
+  {
+    name: "bot-search",
+    query: `scene=main&${OTTO_DISK}`,
+    prepare: async (page) => {
+      await showList(page);
+      await page.getByRole("button", { name: "Search bots" }).click();
+      await page.getByRole("textbox", { name: "Search bots" }).fill("p");
+    },
+  },
+];

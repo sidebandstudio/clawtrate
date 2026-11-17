@@ -132,31 +132,34 @@ test.describe("moving between bots", () => {
       await expect(page.locator(".title-pill-name")).toHaveText(bot);
     };
     await page.locator(".transcript").focus();
-    await page.keyboard.press("ControlOrMeta+2");
+    // The rail's order is recent activity: Otto, Juniper, Marlow, Pip, Quartermaster.
+    await page.keyboard.press("ControlOrMeta+3");
     await opened("Marlow", "Main");
-    await page.keyboard.press("ControlOrMeta+1");
+    await page.keyboard.press("ControlOrMeta+2");
     await opened("Juniper", "Heat pump vs. gas furnace");
     await page.keyboard.press("ControlOrMeta+5");
     await opened("Quartermaster of the Family Calendar and Errands", /Pick up the dry cleaning/);
     // There is no sixth bot, so nothing changes.
     await page.keyboard.press("ControlOrMeta+6");
     await opened("Quartermaster of the Family Calendar and Errands", /Pick up the dry cleaning/);
-    await page.keyboard.press("ControlOrMeta+3");
+    await page.keyboard.press("ControlOrMeta+1");
     await opened("Otto", "Disk almost full on the media box");
     await page.keyboard.press("Alt+ArrowDown");
-    await opened("Pip", "Plan the week");
+    await opened("Juniper", "Heat pump vs. gas furnace");
+    await page.keyboard.press("Alt+ArrowDown");
+    await opened("Marlow", "Main");
     await page.keyboard.press("Alt+ArrowUp");
-    await opened("Otto", "Disk almost full on the media box");
-    await page.keyboard.press("Alt+ArrowUp");
+    await opened("Juniper", "Heat pump vs. gas furnace");
+    await page.keyboard.press("Control+Tab");
     await opened("Marlow", "Main");
     await page.keyboard.press("Control+Tab");
-    await opened("Otto", "Disk almost full on the media box");
+    await opened("Pip", "Plan the week");
     await page.keyboard.press("Control+Shift+Tab");
     await opened("Marlow", "Main");
     // From a row in the rail, focus follows to the bot that opened.
     await botRow(page, "Marlow").focus();
     await page.keyboard.press("Control+Tab");
-    await opened("Otto", "Disk almost full on the media box");
-    await expect(botRow(page, "Otto")).toBeFocused();
+    await opened("Pip", "Plan the week");
+    await expect(botRow(page, "Pip")).toBeFocused();
   });
 });

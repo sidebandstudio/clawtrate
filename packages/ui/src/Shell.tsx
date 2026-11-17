@@ -150,7 +150,7 @@ export function Shell({
       const rail = shellRef.current?.querySelector(".rail");
       (
         rail?.querySelector<HTMLElement>('.task[aria-current="true"]') ??
-        rail?.querySelector<HTMLElement>('.bot[aria-current="true"]') ??
+        rail?.querySelector<HTMLElement>(':is(.bot, .pin)[aria-current="true"]') ??
         rail?.querySelector<HTMLElement>(".bot")
       )?.focus();
     }

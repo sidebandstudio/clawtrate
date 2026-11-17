@@ -1,8 +1,8 @@
-import { useEffect, useRef, type CSSProperties, type KeyboardEvent } from "react";
+import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
 export type MenuEntry =
-  | { kind: "item"; label: string; onSelect: () => void; tone?: "danger" }
-  | { kind: "radio"; label: string; checked: boolean; onSelect: () => void }
+  | { kind: "item"; label: string; onSelect: () => void; tone?: "danger"; icon?: ReactNode }
+  | { kind: "radio"; label: string; checked: boolean; onSelect: () => void; note?: string }
   | { kind: "head"; title: string; lines: string[] }
   | { kind: "label"; text: string }
   | { kind: "rule" };
@@ -107,10 +107,15 @@ export function Menu({
                   className="menu-item"
                   role="menuitemradio"
                   aria-checked={entry.checked}
+                  aria-label={entry.label}
+                  aria-description={entry.note}
                   tabIndex={-1}
                   onClick={entry.onSelect}
                 >
-                  {entry.label}
+                  <span className="menu-item-text">
+                    {entry.label}
+                    {entry.note && <span className="menu-note">{entry.note}</span>}
+                  </span>
                   <span className="glyph" data-state="check" aria-hidden="true" />
                 </button>
               </li>
@@ -126,6 +131,7 @@ export function Menu({
                   tabIndex={-1}
                   onClick={entry.onSelect}
                 >
+                  {entry.icon}
                   {entry.label}
                 </button>
               </li>

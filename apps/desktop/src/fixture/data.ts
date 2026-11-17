@@ -309,6 +309,27 @@ export function fixtureTasks(now: number, bots: Bot[]): Record<string, Task[]> {
   return byBot;
 }
 
+/**
+ * Every state a task can be in, on fixed tasks: Juniper has a task waiting for
+ * you and one working; Otto has one working and one done with failures; Marlow's
+ * only task is blocked; Pip keeps its failed task.
+ */
+export const TASK_STATES: Record<string, Task["status"]> = {
+  "agent:main:heat-pump": "waiting",
+  "agent:main:ebook-apps": "running",
+  "agent:otto:backup-check": "done-with-failures",
+  "agent:marlow:main": "blocked",
+};
+
+export function withTaskStates(byBot: Record<string, Task[]>): Record<string, Task[]> {
+  return Object.fromEntries(
+    Object.entries(byBot).map(([bot, tasks]) => [
+      bot,
+      tasks.map((task) => ({ ...task, status: TASK_STATES[task.key] ?? task.status })),
+    ]),
+  );
+}
+
 const text = (value: string): TranscriptBlock => ({ kind: "text", text: value });
 const thought = (value: string): TranscriptBlock => ({ kind: "reasoning", text: value });
 function tool(

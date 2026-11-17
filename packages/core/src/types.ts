@@ -54,7 +54,19 @@ export type Bot = {
   isDefault: boolean;
 };
 
-export type TaskStatus = "running" | "done" | "failed" | "idle";
+export type TaskStatus =
+  | "running"
+  | "done"
+  | "failed"
+  | "idle"
+  /**
+   * The next three come from run events (a pending approval or question, an
+   * unreachable machine, a failed step in a finished run) that a read-only
+   * connection does not receive yet; the mapping never produces them today.
+   */
+  | "waiting"
+  | "blocked"
+  | "done-with-failures";
 
 export type Task = {
   key: string;

@@ -3,7 +3,15 @@
 // translucent fills composited over their real parents. Text behind the Work
 // drawer's scrim is inert and deliberately concealed, so it is not measured.
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import {
+  contextFor,
+  openFixture,
+  OTTO_DISK,
+  settle,
+  SIZES,
+  STATE_SCENES,
+  THEMES,
+} from "./fixture.ts";
 
 type Finding = { text: string; size: number; ratio: number; color: string; background: string };
 
@@ -159,6 +167,7 @@ const SCENES: Scene[] = [
       await expect(page.getByRole("menu", { name: "Gateway" })).toBeVisible();
     },
   },
+  ...STATE_SCENES,
 ];
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;

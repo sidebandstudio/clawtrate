@@ -10,7 +10,14 @@ import {
   type ConnectionState,
   type HostInfo,
 } from "@clawtrate/core";
-import { FAILING_TASK, OPEN_TASK, fixtureBots, fixtureTasks, fixtureTranscripts } from "./data.ts";
+import {
+  FAILING_TASK,
+  OPEN_TASK,
+  fixtureBots,
+  fixtureTasks,
+  fixtureTranscripts,
+  withTaskStates,
+} from "./data.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -44,6 +51,7 @@ export const SCENES = [
   "empty",
   "partial",
   "zero-tasks",
+  "task-states",
 ] as const;
 
 export type SceneName = (typeof SCENES)[number];
@@ -281,6 +289,8 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: { ...base, discovery: { ...base.discovery, partial: true } }, steps: [] };
     case "zero-tasks":
       return { initial: { ...base, tasksByBot: { ...base.tasksByBot, marlow: [] } }, steps: [] };
+    case "task-states":
+      return { initial: { ...base, tasksByBot: withTaskStates(base.tasksByBot) }, steps: [] };
   }
 }
 
@@ -290,6 +300,8 @@ export function isScene(value: string | null): value is SceneName {
 
 export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
+  /** Every command the interface sent, for tests that check what was asked of the host. */
+  sent: BridgeCommand[];
 } {
   const now = Date.now();
   const { initial, steps } = scene(name, now);
@@ -301,8 +313,10 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
   };
   for (const step of steps) setTimeout(() => set(step.change(state)), step.after);
   let pairingChecks = 0;
+  const sent: BridgeCommand[] = [];
 
   async function apply(command: BridgeCommand): Promise<void> {
+    sent.push(command);
     switch (command.type) {
       case "connect":
       case "connectDevGateway":
@@ -343,5 +357,6 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
     },
     send: apply,
     setState: (change) => set(change(state)),
+    sent,
   };
 }

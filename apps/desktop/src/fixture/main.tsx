@@ -7,6 +7,9 @@
 //   &bot=otto&task=<key>   the bot and task to open (stored as the app stores them)
 //   &panel=open            the Work pane
 //   &theme=dark            the app's own theme override
+//   &pins=main,otto        pinned bots, in order (this device's rail arrangement)
+//   &hidden=marlow         hidden bots
+//   &sort=name             the rail's sort order: recent, name or manual
 
 import { App, BridgeProvider } from "@clawtrate/ui";
 import { StrictMode } from "react";
@@ -37,6 +40,18 @@ function seedPreferences() {
   if (bot && task) write("tasks", JSON.stringify({ [bot]: task }));
   const panel = params.get("panel");
   if (panel === "open" || panel === "closed") write("panel", panel);
+  const list = (name: string) => params.get(name)?.split(",").filter(Boolean);
+  if (params.has("pins") || params.has("hidden") || params.has("sort")) {
+    write(
+      "roster",
+      JSON.stringify({
+        pinned: list("pins") ?? [],
+        hidden: list("hidden") ?? [],
+        sort: params.get("sort") ?? "recent",
+        manual: list("order") ?? [],
+      }),
+    );
+  }
 }
 
 seedPreferences();

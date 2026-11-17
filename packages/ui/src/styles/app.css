@@ -2245,3 +2245,352 @@ textarea {
 [data-input="touch"] .rail-search input {
   font-size: var(--text-lg);
 }
+
+/* The state avatar in the rail (conversation.md, section 3). The ring travels
+   round the avatar while the bot works, and the body bobs; a badge at the top
+   right says it needs you or something failed. */
+.presence {
+  --size: var(--avatar-row);
+  --ring: var(--accent-line);
+  position: relative;
+  display: inline-grid;
+  flex: none;
+  width: var(--size);
+  height: var(--size);
+  --presence-surface: var(--bg-rail);
+}
+
+.presence > .avatar {
+  width: 100%;
+  height: 100%;
+}
+
+.presence > .avatar svg {
+  transform-origin: 50% 85%;
+}
+
+.presence[data-state="working"] > .avatar svg {
+  animation: bob calc(var(--loop-work) / 2) var(--ease-in-out) infinite alternate;
+}
+
+.presence[data-state="waiting"] > .avatar svg {
+  transform-origin: 50% 50%;
+  animation: lean var(--loop-nudge) var(--ease-in-out) infinite;
+}
+
+.presence[data-state="blocked"] > .avatar svg,
+.presence[data-state="failed"] > .avatar svg {
+  transform: translateY(5%) rotate(5deg);
+}
+
+.presence::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  padding: 1.5px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from var(--orbit),
+    color-mix(in srgb, var(--ring) 16%, transparent) 0 55%,
+    var(--ring) 100%
+  );
+  opacity: 0;
+  pointer-events: none;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+}
+
+.presence[data-state="working"]::before {
+  opacity: 1;
+  animation: orbit var(--loop-work) linear infinite;
+}
+
+.presence > .glyph {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  box-shadow: 0 0 0 2px var(--presence-surface);
+}
+
+/* The gateway's primary bot: a star on a disc at the avatar's lower right. */
+.primary-star {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+  box-shadow: 0 0 0 2px var(--presence-surface);
+}
+
+.primary-star .icon {
+  width: 10px;
+  height: 10px;
+}
+
+.bot[aria-current="true"] .presence {
+  --presence-surface: color-mix(in srgb, var(--bg-rail), var(--text) 8%);
+}
+
+@keyframes bob {
+  from {
+    transform: translateY(3%);
+  }
+  to {
+    transform: translateY(-6%);
+  }
+}
+
+@keyframes lean {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+/* The states the conversation components bring, as 12 px marks. */
+.glyph[data-state="waiting"] {
+  --ring: var(--warn);
+  background: var(--ring);
+}
+
+.glyph[data-state="blocked"] {
+  --ring: var(--warn);
+  background: var(--ring);
+}
+
+.glyph[data-state="blocked"]::after {
+  top: 5.25px;
+  right: 3px;
+  left: 3px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: var(--glyph-ink);
+}
+
+/* A bot's label: a small grey pill beside its name. */
+.bot-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-code);
+  font-size: var(--text-xs);
+  line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.bot-name:has(+ .bot-label) {
+  flex: 0 1 auto;
+}
+
+.bot-label + .bot-time {
+  margin-left: auto;
+}
+
+/* Pinned bots: a grid of large avatars at the top of the list. */
+.pin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.pin {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 4px 8px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  cursor: pointer;
+}
+
+.pin:hover {
+  background: var(--bg-hover);
+}
+
+.pin[aria-current="true"] {
+  background: var(--bg-selected);
+}
+
+/* A pinned bot whose tasks are showing but which is not the open bot. */
+.pin[aria-expanded="true"]:not([aria-current="true"]) {
+  background: color-mix(in srgb, var(--bg-hover) 55%, transparent);
+}
+
+.pin .presence {
+  --size: var(--avatar-pin);
+}
+
+.pin-name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  max-width: 100%;
+  font-size: var(--text-sm);
+}
+
+.pin-name > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The pin grid has one task block. It belongs to one pinned bot at a time and
+   says whose it is. */
+.pin-tasks {
+  margin-bottom: 6px;
+  padding: 4px 0 6px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-hover) 55%, transparent);
+}
+
+.pin-tasks-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  margin: 0;
+  padding: 0 26px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.pin-tasks-label .avatar {
+  width: 16px;
+  height: 16px;
+}
+
+/* Hidden bots: a small grey word at the foot of the list that folds them away. */
+.rail-hidden {
+  margin-top: 14px;
+}
+
+.hidden-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.hidden-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.hidden-toggle .icon {
+  width: 12px;
+  height: 12px;
+  transition: transform var(--dur-quick) var(--ease-out);
+}
+
+.hidden-toggle[aria-expanded="true"] .icon {
+  transform: rotate(90deg);
+}
+
+.hidden-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.hidden-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Manual order: where a dragged bot will land. */
+.bot-group[data-drop]::before {
+  content: "";
+  position: absolute;
+  right: 12px;
+  left: 12px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent-line);
+}
+
+.bot-group[data-drop="before"]::before {
+  top: -2px;
+}
+
+.bot-group[data-drop="after"]::before {
+  bottom: -2px;
+}
+
+.bot[draggable="true"] {
+  cursor: grab;
+}
+
+.menu-item-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.menu-note {
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  color: var(--text-faint);
+}
+
+[data-input="touch"] .pin .presence {
+  --size: var(--avatar-pin);
+}
+
+.glyph[data-state="waiting"]::before {
+  inset: 0;
+  border-radius: 50%;
+  animation: ping var(--loop-nudge) var(--ease-out) infinite;
+}
+
+@keyframes ping {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ring) 55%, transparent);
+  }
+  45%,
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+/* Reduced motion: the ping becomes a fixed halo. */
+[data-motion="reduce"] .glyph[data-state="waiting"]::before {
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--ring) 30%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glyph[data-state="waiting"]::before {
+    box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--ring) 30%, transparent);
+  }
+}
