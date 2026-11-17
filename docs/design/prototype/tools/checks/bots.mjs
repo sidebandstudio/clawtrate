@@ -384,7 +384,7 @@ await p.close();
 
 // An account that fails.
 p = await open("fail=quota");
-check("FM-04 out of quota: the bound account named as bound, and as failed only from the log", (await text(p, '[data-testid="account-error"]')).includes("OpenAI refused the run for credit or quota. Otto is bound to OpenAI · Work; the gateway's log names it as the account that failed.") && !(await text(p, '[data-testid="account-error"]')).includes("Otto's account, OpenAI · Work, is out of"));
+check("FM-04 out of quota: the bound account named as bound, and as failed only from the log", (await text(p, '[data-testid="account-error"]')).includes("The gateway reports a billing failure from OpenAI. Otto is bound to OpenAI · Work; the gateway's log names it as the account that failed.") && !(await text(p, '[data-testid="account-error"]')).includes("Otto's account, OpenAI · Work, is out of"));
 check("P2 out of quota: Change account and Try again", await p.evaluate(() => [...document.querySelectorAll('[data-testid="account-error"] .button')].map((b) => b.textContent).join("|").startsWith("Change account|Try again")));
 check("P2 the bot's row shows the failure", await p.evaluate(() => document.querySelector('.bot[data-bot="otto"] .bot-preview').dataset.tone === "danger"));
 await p.click('[data-testid="account-error"] [data-bs="change-account"]');

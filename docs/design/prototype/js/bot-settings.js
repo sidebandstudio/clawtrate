@@ -298,7 +298,7 @@
         note(`<p><b>Bound.</b> ${name} runs on ${esc(acctName(a))}. If that account fails, the gateway may use ${other.length ? `another ${who} account, such as ${esc(acctName(other[0]))},` : `another ${who} account, if one is added,`} for that run.</p>`, "", icon("approval")) +
         warnings +
         `<h4 class="b-group">Lock to this account</h4>` +
-        `<p class="b-step">Clawtrate can't set the lock itself; only the gateway's command line can. Run this on the gateway's machine:</p>` +
+        `<p class="b-step">To keep this bot on this account alone, run this on the gateway's machine. A sign-in can also leave a bot limited to one account; Clawtrate shows the limit it finds, however it was made:</p>` +
         `<div class="command-line"><code>${cmd(lockCommand(id, a))}</code>${copy("lock command", lockCommand(id, a))}</div>` +
         evidenceRow +
         `<p class="b-hint">What this cannot see: if ${esc(acctName(a))} is pausing after a failure, a run can start on another ${who} account without leaving a record Clawtrate can read.</p>`;
@@ -409,7 +409,7 @@
   const FAIL = {
     quota: {
       preview: "Couldn't finish: OpenAI refused for quota",
-      reason: "OpenAI refused the run for credit or quota. Otto is bound to OpenAI · Work; the gateway's log names it as the account that failed. Otto is locked to it, so the gateway didn't try another account. The gateway pauses an account after a billing error, for 10 minutes at first.",
+      reason: "The gateway reports a billing failure from OpenAI. Otto is bound to OpenAI · Work; the gateway's log names it as the account that failed. Otto is locked to it, so the gateway didn't try another account. The gateway pauses an account after a billing error, for 10 minutes at first.",
       actions: [["Change account", "change-account", "primary"], ["Try again", "retry-turn", ""]],
     },
     signedout: {
