@@ -461,7 +461,13 @@ async function windowsSetup() {
 
   const teardown = async () => {
     const problems: string[] = [];
-    if (appProcess && appProcess.exitCode === null && appProcess.signalCode === null) {
+    if (appProcess && (appProcess.exitCode !== null || appProcess.signalCode !== null)) {
+      // The app must still be running when it is asked to close. One that ended by
+      // itself, cleanly or not, did not "stay up and close when asked".
+      problems.push(
+        `the app exited before it was asked to close, with ${appProcess.exitCode ?? appProcess.signalCode}`,
+      );
+    } else if (appProcess) {
       const exited = new Promise((resolve) => appProcess!.once("exit", resolve));
       const refused = askToClose(appProcess.pid!);
       if (refused) problems.push(`asking the app to close failed: ${refused}`);
