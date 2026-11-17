@@ -1456,8 +1456,11 @@ allowed.
     the persisted ancestor audience of `session.approval`. The event's
     `sourceSessionKey` names the raising session and `sessionKey` the
     audience (`<openclaw>/docs/gateway/protocol/rpc-bootstrap-and-events.md`).
-    Live: own-session approvals carry both keys equal. A sub-agent's exec
-    could not raise an approval at all (row 20).
+    Live: own-session approvals carry both keys equal. A helper or recipient
+    can raise an exec approval, subject to scopes and live run authority; both
+    did so from an admin-started parent, while the read, write, approvals and
+    questions probe failed for an unexplained missing approval scope, as
+    detailed in row 20.
 - **Parallel runs** (source):
   - one run at a time per session, through the `session:<key>` lane;
   - across sessions, the global cap is `agents.defaults.maxConcurrent`,
