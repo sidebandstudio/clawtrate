@@ -246,11 +246,20 @@ describe("N-02: revocation seen only when asked", () => {
     const access = new Access();
     // The host's retained access may change without signalling: only assertCurrent says so.
     const quiet = Object.assign(access, {
-      retain: () => ({ signal: new AbortController().signal, assertCurrent: access.assertCurrent, release() {} }),
+      retain: () => ({
+        signal: new AbortController().signal,
+        assertCurrent: access.assertCurrent,
+        release() {},
+      }),
     });
-    const generation = (await h.call("control.take", tab, { ...A, access: quiet })).payload!.generation;
+    const generation = (await h.call("control.take", tab, { ...A, access: quiet })).payload!
+      .generation;
     h.browser.replyDelayMs = 40;
-    const input = h.call("input", { ...tab, generation, kind: "click", x: 1, y: 1 }, { ...A, access: quiet });
+    const input = h.call(
+      "input",
+      { ...tab, generation, kind: "click", x: 1, y: 1 },
+      { ...A, access: quiet },
+    );
     await until(() => h.browser.sent("Input.").length === 1);
     access.revoked = true;
     expect((await input).ok).toBe(false);
