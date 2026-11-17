@@ -3,7 +3,7 @@
 // part of the Electron renderer or the web preview's build.
 //
 // The address picks what to show:
-//   ?scene=main            one of SCENES in bridge-fixture.ts
+//   ?scene=main            one of SCENES in bridge-fixture.ts, or of CARD_SCENES in cards.ts
 //   &bot=otto&task=<key>   the bot and task to open (stored as the app stores them)
 //   &panel=open            the Work pane
 //   &theme=dark            the app's own theme override
@@ -15,6 +15,7 @@ import { App, BridgeProvider, rosterKey, rosterScope } from "@clawtrate/ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createFixtureBridge, GATEWAY_ID, GATEWAY_URL, isScene } from "./bridge-fixture.ts";
+import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 
 const params = new URLSearchParams(location.search);
@@ -34,8 +35,15 @@ function seedPreferences() {
   } catch {
     // As above.
   }
-  const bot = params.get("bot") ?? (stored === null ? OPEN_BOT : null);
-  const task = params.get("task") ?? (bot === OPEN_BOT && !params.has("bot") ? OPEN_TASK : null);
+  // A card scene opens its own task unless the address names one.
+  const card = isCardScene(params.get("scene"))
+    ? params.get("scene")!.startsWith("received")
+      ? CARD_TASKS.marlow
+      : CARD_TASKS.otto
+    : null;
+  const bot = params.get("bot") ?? card?.botId ?? (stored === null ? OPEN_BOT : null);
+  const task =
+    params.get("task") ?? card?.key ?? (bot === OPEN_BOT && !params.has("bot") ? OPEN_TASK : null);
   if (bot) write("bot", bot);
   if (bot && task) write("tasks", JSON.stringify({ [bot]: task }));
   const panel = params.get("panel");

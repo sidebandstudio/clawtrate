@@ -327,10 +327,22 @@ function fakedInstance(home: string, runRoot: string, name: string | null) {
   };
   const fakeSpawn = ((bin: string, args: string[], options: SpawnOptions) => {
     if (bin === "/bin/sh" && args[0] === "-c") return stand(options);
-    // An OpenClaw CLI call: health answers, and the exec policy is denied everywhere.
+    // An OpenClaw CLI call: health answers, and the exec policy is denied
+    // everywhere but the shell bot, which asks.
     const out = args.includes("approvals")
       ? JSON.stringify({
-          effectivePolicy: { scopes: [{ agentId: "main", security: { effective: "deny" } }] },
+          effectivePolicy: {
+            scopes: [
+              { agentId: "main", security: { effective: "deny" } },
+              {
+                agentId: "otto",
+                mode: { effective: "ask" },
+                security: { effective: "allowlist" },
+                ask: { effective: "on-miss" },
+                askFallback: { effective: "deny" },
+              },
+            ],
+          },
         })
       : "{}";
     return spawn(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(out)})`], {

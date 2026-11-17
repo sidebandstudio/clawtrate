@@ -16,6 +16,7 @@ import {
   type RefObject,
 } from "react";
 import { Avatar } from "./Avatar.tsx";
+import { CardScope, CardSlot, TrailingCards, useStepHandover } from "./cards/index.ts";
 import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime, summarizeArguments } from "./format.ts";
 import { ArrowDownIcon, BackIcon, ChevronIcon, EyeIcon, PanelIcon } from "./icons.tsx";
@@ -41,8 +42,22 @@ function ReasoningStep({ text }: { text: string }) {
 
 function ToolStep({ call }: { call: ToolCall }) {
   const state = call.result ? (call.result.isError ? "failed" : "done") : "no result";
+  // Kept for the card this call may become once its result names it.
+  const handover = useStepHandover();
+  const note = (element: HTMLDetailsElement, focused: boolean) =>
+    call.callId && handover?.note(call.callId, { open: element.open, focused });
   return (
-    <details className="step" data-testid="tool-call">
+    <details
+      className="step"
+      data-testid="tool-call"
+      onToggle={(event) =>
+        note(event.currentTarget, event.currentTarget.contains(document.activeElement))
+      }
+      onFocus={(event) => note(event.currentTarget, true)}
+      onBlur={(event) =>
+        note(event.currentTarget, event.currentTarget.contains(event.relatedTarget as Node | null))
+      }
+    >
       <summary>
         <ChevronIcon className="step-chevron" />
         <span className="step-tool-name">{call.name}</span>
@@ -76,7 +91,13 @@ export function stepsLabel(blocks: TranscriptBlock[]): string {
 }
 
 /** A run of thoughts and tool calls, folded into one line until asked for. */
-function Steps({ blocks }: { blocks: TranscriptBlock[] }) {
+function Steps({ blocks: all }: { blocks: TranscriptBlock[] }) {
+  // A call drawn as a card is not drawn here as well.
+  const handover = useStepHandover();
+  const blocks = all.filter(
+    (block) => block.kind !== "tool-call" || !block.callId || !handover?.isCard(block.callId),
+  );
+  if (blocks.length === 0) return null;
   return (
     <details className="steps">
       <summary className="event-line">
@@ -145,6 +166,7 @@ const NEAR_BOTTOM_PX = 96;
 /** Blocks of readable text in a transcript; the place is held in the finest one. */
 const TEXT_BLOCKS =
   ".task-line, .stamp, .event-line, .steps > summary, .step > summary, .thinking, " +
+  ".request-title, .card > summary, " +
   ".bubble :is(p, li, h1, h2, h3, h4, h5, h6, pre, td, th, blockquote)";
 
 type Caret = { node: Node; offset: number };
@@ -175,8 +197,8 @@ function caretTop(caret: Caret): number | null {
 
 /**
  * The reader's place survives a change of width: opening, closing, docking or
- * undocking Work, or resizing the window, and late reflows such as fonts
- * arriving. A reader following the end stays at the end. Otherwise the text
+ * undocking Work, or resizing the window, late reflows such as fonts
+ * arriving, and any change of content above or below it. A reader following the end stays at the end. Otherwise the text
  * at the reading line, just under the protected band at the top, stays where
  * it was while the lines reflow around it: the exact character when the
  * engine can say which, or else the start of its paragraph, list item or row.
@@ -190,7 +212,6 @@ function useHoldPlace(
     const element = scroller.current;
     if (!element) return;
     let place: { block: Element; caret: Caret | null; top: number } | null = null;
-    let width = element.clientWidth;
 
     /** Where the reading line is, and where a held place is drawn, relative to the scroller. */
     const frame = () => {
@@ -225,14 +246,14 @@ function useHoldPlace(
       place = held;
     };
 
-    // Watching the content too covers late reflows, such as fonts arriving.
+    // Watching the content too covers late reflows, such as fonts arriving, and every
+    // change of content: a step becoming a card, a card arriving or resolving above.
     const observer = new ResizeObserver(() => {
       if (following.current) toEnd();
-      else if (element.clientWidth !== width && place) {
+      else if (place) {
         const now = drawnAt(place);
         if (now !== null) element.scrollTop += now - frame().top - place.top;
       }
-      width = element.clientWidth;
       record();
     });
     record();
@@ -328,13 +349,15 @@ function TranscriptView({
     }
     if (at !== null) previous = at;
     rows.push(
-      item.role === "system" ? (
-        <p className="event-line" data-side="center" key={item.id}>
-          {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
-        </p>
-      ) : (
-        <Turn key={item.id} item={item} />
-      ),
+      <CardSlot key={item.id} item={item}>
+        {item.role === "system" ? (
+          <p className="event-line" data-side="center">
+            {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
+          </p>
+        ) : (
+          <Turn item={item} />
+        )}
+      </CardSlot>,
     );
   }
 
@@ -350,12 +373,15 @@ function TranscriptView({
         data-testid="transcript"
       >
         <div className="transcript-inner">
-          <h1 className="task-line" tabIndex={-1}>
-            {task.title}
-          </h1>
-          <TaskContext task={task} />
-          {note}
-          {rows}
+          <CardScope taskKey={task.key} transcript={transcript}>
+            <h1 className="task-line" tabIndex={-1}>
+              {task.title}
+            </h1>
+            <TaskContext task={task} />
+            {note}
+            {rows}
+            <TrailingCards />
+          </CardScope>
           {transcript.live && (
             <div className="turn" data-role="assistant" data-testid="live-turn">
               <div className="msg" data-role="assistant">
