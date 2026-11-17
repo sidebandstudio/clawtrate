@@ -208,4 +208,37 @@ describe("connecting", () => {
     expect(last.auth?.token ?? last.auth?.deviceToken).toBe("device-token");
     client.stop();
   });
+
+  it("F-457: after Disconnect, a restarted client stays disconnected until Reconnect, which then lasts across a restart too", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const storage = memoryStorage();
+    const first = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await first.start();
+    await first.connect({ url: URL, token: "bootstrap" });
+    await until(() => first.state.connection.status === "connected");
+    await createBridgeSession(first).apply(parseBridgeCommand({ type: "suspend" }));
+    first.stop();
+
+    // The app quits and starts again, on the same device storage.
+    const attempts = gateway.connects.length;
+    const second = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await second.start();
+    await sleep(150);
+    expect(gateway.connects.length, "it does not reconnect by itself").toBe(attempts);
+    expect(second.state.connection).toMatchObject({ status: "disconnected", gatewayUrl: URL });
+    // Reconnect: the same gateway and device token.
+    await createBridgeSession(second).apply(parseBridgeCommand({ type: "retry" }));
+    await until(() => second.state.connection.status === "connected");
+    second.stop();
+
+    // Having reconnected, the next start opens the gateway as usual.
+    const third = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await third.start();
+    await until(() => third.state.connection.status === "connected");
+    third.stop();
+  });
 });

@@ -73,7 +73,12 @@ const PAIRING_RETRY_MS = 3000;
 
 const SETTINGS_KEY = "connection";
 
-export type ConnectionSettings = { url: string; token: string | null };
+export type ConnectionSettings = {
+  url: string;
+  token: string | null;
+  /** The user chose Disconnect: stay disconnected, across restarts, until Reconnect. */
+  suspended?: boolean;
+};
 
 export type ConnectOptions = { url: string; token?: string | null };
 
@@ -183,11 +188,20 @@ export class ClawtrateClient {
     return raw ? (JSON.parse(raw) as ConnectionSettings) : null;
   }
 
-  /** Resume the saved gateway, if any and if allowed. */
+  private async saveSettings(settings: ConnectionSettings): Promise<void> {
+    this.settings = settings;
+    await this.host.storage.set(SETTINGS_KEY, JSON.stringify(settings));
+  }
+
+  /** Resume the saved gateway, if any and if allowed, unless the user disconnected from it. */
   async start(): Promise<void> {
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
     this.settings = await this.savedSettings();
+    if (this.settings?.suspended) {
+      this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
+      return;
+    }
     if (this.settings) await this.open();
   }
 
@@ -225,6 +239,7 @@ export class ClawtrateClient {
       await this.bootstrap(this.generation);
       return;
     }
+    if (this.settings.suspended) await this.saveSettings({ ...this.settings, suspended: false });
     await this.open();
   }
 
@@ -234,6 +249,8 @@ export class ClawtrateClient {
    */
   async suspend(): Promise<void> {
     if (!this.settings) return;
+    // Saved, so a restart does not reconnect by itself.
+    await this.saveSettings({ ...this.settings, suspended: true });
     this.close();
     this.clearLiveText();
     this.setConnection({ status: "disconnected", retryAt: null, error: null, pairing: null });
