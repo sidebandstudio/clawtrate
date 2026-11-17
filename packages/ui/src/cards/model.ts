@@ -686,8 +686,23 @@ export function targetChips(args: unknown): Row[] {
   };
   pick("Project", "project", "projectId", "projectName");
   pick("Thread", "thread", "threadId", "threadTitle");
-  pick("Branch", "branch");
+  if (!pick("Branch", "branch")) {
+    // T3 Code takes the branch inside `workspaceStrategy`.
+    const strategy = record(a.workspaceStrategy);
+    const branch = strategy?.branch;
+    if (typeof branch === "string" && branch.trim()) out.push({ label: "Branch", value: branch });
+  }
   return out;
+}
+
+/**
+ * The link a T3 Code call's result carries: a `resource_link` in its content,
+ * or the `link` its structured result names. Never fetched; opened only when chosen.
+ */
+export function resultLink(card: McpCallCard): { uri: string; title: string | null } | null {
+  if (card.links[0]) return card.links[0];
+  const link = record(card.structuredContent)?.link;
+  return typeof link === "string" && /^https?:\/\//.test(link) ? { uri: link, title: null } : null;
 }
 
 /** A T3 Code call's sent text: its `message`, or the first text argument it carries. */

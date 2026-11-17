@@ -8,11 +8,11 @@
 //   &panel=open            the Work pane
 //   &theme=dark            the app's own theme override
 
-import { App, BridgeProvider, CardSettingsContext } from "@clawtrate/ui";
+import { App, BridgeProvider } from "@clawtrate/ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createFixtureBridge, isScene } from "./bridge-fixture.ts";
-import { CARD_TASKS, isCardScene, T3_SERVER } from "./cards.ts";
+import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 
 const params = new URLSearchParams(location.search);
@@ -57,10 +57,7 @@ Object.assign(window, { clawtrateFixture: bridge });
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BridgeProvider bridge={bridge}>
-      {/* The card scenes name one tool server as T3 Code; the app itself names none. */}
-      <CardSettingsContext.Provider value={{ codingServers: [T3_SERVER] }}>
-        <App info={bridge.info} />
-      </CardSettingsContext.Provider>
+      <App info={bridge.info} />
     </BridgeProvider>
   </StrictMode>,
 );

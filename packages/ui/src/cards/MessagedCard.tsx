@@ -24,6 +24,7 @@ import {
   MESSAGED_STATES,
   nameOf,
   recipientName,
+  resultLink,
   sentText,
   sentVerb,
   targetChips,
@@ -391,7 +392,7 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
   const text = sentText(card);
   const first = firstLineOf(text);
   const chips = targetChips(card.args);
-  const link = card.links[0] ?? null;
+  const link = resultLink(card);
   const domId = cardDomId({ kind: "t3-code", id: card.id });
 
   const agent = (

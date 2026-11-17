@@ -55,10 +55,27 @@ type Read =
   | { status: "failed" };
 
 /**
- * The engine's card selection for a task. A call to a T3 Code server is
- * known before its result by its tool name, which starts with the server's
- * name and `__` (conversation.md section 21); after it, by the result's own
- * `details.mcpServer`.
+ * T3 Code's published tool names. A tool-server call is a T3 Code call when
+ * the tool's own name, apart from the server's prefix as the gateway reports
+ * it, is one of these, whatever the server is called.
+ */
+export const T3_CODE_TOOLS: readonly string[] = [
+  "t3_project_list",
+  "t3_thread_launch",
+  "t3_thread_send",
+  "t3_thread_read",
+  "t3_thread_wait",
+  "t3_thread_list",
+  "t3_thread_interrupt",
+];
+
+/**
+ * The engine's card selection for a task. A call is a T3 Code call when its
+ * tool, after the server's prefix, is one of T3 Code's published tools: before
+ * its result by the tool name the gateway reports, `<server>__<tool>`, and
+ * after it by the result's own `details.mcpServer` and `details.mcpTool`. A
+ * server a host names as T3 Code (`codingServers`) counts for any of its tools.
+ * Nothing more is read out of a name.
  */
 export function selectCards(
   transcript: Pick<Transcript, "runs" | "approvals" | "linkedRuns" | "interSession">,
@@ -67,11 +84,30 @@ export function selectCards(
   previous?: SelectedCards,
 ): SelectedCards {
   const mcpTools: Record<string, { server: string; tool: string }> = {};
+  const servers = new Set(codingServers);
   for (const run of transcript.runs) {
     for (const step of run.steps) {
       const name = step.toolName;
-      const server = name ? codingServers.find((each) => name.startsWith(`${each}__`)) : undefined;
-      if (name && server) mcpTools[name] = { server, tool: name.slice(server.length + 2) };
+      if (!name) continue;
+      const named = codingServers.find((each) => name.startsWith(`${each}__`));
+      if (named) {
+        mcpTools[name] = { server: named, tool: name.slice(named.length + 2) };
+        continue;
+      }
+      const tool = T3_CODE_TOOLS.find((each) => name.endsWith(`__${each}`));
+      const server = tool ? name.slice(0, -(tool.length + 2)) : "";
+      if (tool && server) {
+        mcpTools[name] = { server, tool };
+        servers.add(server);
+      }
+      const details = resultDetails(rawOf(step));
+      if (
+        typeof details?.mcpServer === "string" &&
+        typeof details.mcpTool === "string" &&
+        T3_CODE_TOOLS.includes(details.mcpTool)
+      ) {
+        servers.add(details.mcpServer);
+      }
     }
   }
   return selectMessageCards(
@@ -81,8 +117,16 @@ export function selectCards(
       linkedRuns: transcript.linkedRuns,
       interSession: transcript.interSession,
     },
-    { codingServers, mcpTools, rawOf, ...(previous ? { previous } : {}) },
+    { codingServers: [...servers], mcpTools, rawOf, ...(previous ? { previous } : {}) },
   );
+}
+
+/** A tool result's `details`, live (`result.result.details`) or from history (`details`). */
+function resultDetails(raw: StepRaw | null): Record<string, unknown> | null {
+  const result = raw?.result as Record<string, unknown> | null | undefined;
+  const body = (result?.result ?? result) as Record<string, unknown> | null | undefined;
+  const details = body?.details;
+  return details && typeof details === "object" ? (details as Record<string, unknown>) : null;
 }
 
 /** The cards' states, to tell when the remembered selection needs replacing. */
@@ -98,7 +142,8 @@ function isCardCall(step: Step, codingServers: readonly string[]): boolean {
   if (step.kind !== "tool" || !step.toolName) return false;
   return (
     step.toolName === BOT_MESSAGE_TOOL ||
-    codingServers.some((server) => step.toolName!.startsWith(`${server}__`))
+    codingServers.some((server) => step.toolName!.startsWith(`${server}__`)) ||
+    T3_CODE_TOOLS.some((tool) => step.toolName!.endsWith(`__${tool}`))
   );
 }
 

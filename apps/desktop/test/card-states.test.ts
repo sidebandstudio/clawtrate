@@ -29,6 +29,7 @@ import {
   expiryLine,
   mayDispatch,
   mcpKey,
+  resultLink,
   MESSAGED_STATES,
   sentVerb,
   type MessagedKey,
@@ -40,13 +41,12 @@ import {
   targetChips,
 } from "../../../packages/ui/src/cards/model.ts";
 import { placeCards } from "../../../packages/ui/src/cards/placement.ts";
-import { selectCards } from "../../../packages/ui/src/cards/useCards.ts";
+import { selectCards, T3_CODE_TOOLS } from "../../../packages/ui/src/cards/useCards.ts";
 import {
   CARD_SCENES,
   CARD_TASK,
   cardScene,
   RECEIVING_TASK,
-  T3_SERVER,
   wholeApproval,
   type CardSceneName,
 } from "../src/fixture/cards.ts";
@@ -90,7 +90,8 @@ const question = (name: CardSceneName): { card: QuestionCard; run: Run | undefin
 const rawOf = (step: Step) => step.raw;
 const cards = (name: CardSceneName) => {
   const { transcript } = scene(name);
-  return { transcript, selected: selectCards(transcript, [T3_SERVER], rawOf) };
+  // No server is named as T3 Code: its calls are known by T3 Code's own tool names.
+  return { transcript, selected: selectCards(transcript, [], rawOf) };
 };
 
 describe("approval cards from the engine's state", () => {
@@ -413,11 +414,12 @@ describe("Messaged T3 Code cards from the engine's state", () => {
       { label: "Branch", value: "main" },
     ]);
     expect(call.files.map((file) => file.name)).toEqual(["plan.md"]);
-    expect(call.links).toEqual([
-      { uri: "https://t3.example.test/projects/backup-scripts/threads/18", title: "Thread 18" },
-    ]);
+    expect(resultLink(call)).toEqual({
+      uri: "https://t3.example.test/projects/backup-scripts/threads/18",
+      title: null,
+    });
     // A call with no link in its result offers none.
-    expect(cards("t3-failed").selected.mcpCalls[0]!.links).toEqual([]);
+    expect(resultLink(cards("t3-failed").selected.mcpCalls[0]!)).toBeNull();
   });
 
   it("F-137: after a stop, a call that returned keeps Call made and says work may continue; one that had not returned is Delivery unknown", () => {
@@ -440,15 +442,63 @@ describe("Messaged T3 Code cards from the engine's state", () => {
       raw: run.steps[0]!.raw ? { ...run.steps[0]!.raw } : null,
     };
     const doubled = { ...transcript, runs: [{ ...run, steps: [...run.steps, second] }] };
-    const calls = selectCards(doubled, [T3_SERVER], rawOf).mcpCalls;
+    const calls = selectCards(doubled, [], rawOf).mcpCalls;
     expect(calls.map((card) => card.id)).toEqual(["tool:call_t3", "tool:call_t3b"]);
   });
 
-  it("F-138: no T3 Code server is built in: with none named, no call is drawn as T3 Code", () => {
-    const { transcript } = cards("t3-call-made");
-    expect(selectCards(transcript, [], rawOf).mcpCalls.filter((card) => card.codingAgent)).toEqual(
-      [],
-    );
+  it("F-132 F-138: a call is T3 Code by T3 Code's published tool name on any server, with no setting and no address", () => {
+    const run = (name: string, details?: Record<string, unknown>) => {
+      const raw = new RawTable();
+      const ctx = { sessionKey: "agent:otto:t", now: 1, raw };
+      let a = applyAgentEvent(
+        emptyActivity,
+        {
+          runId: "r",
+          seq: 1,
+          stream: "tool",
+          ts: 1,
+          sessionKey: ctx.sessionKey,
+          data: { phase: "start", name, toolCallId: "c", args: { message: "Go" } },
+        },
+        ctx,
+      ).activity;
+      if (details) {
+        a = applyAgentEvent(
+          a,
+          {
+            runId: "r",
+            seq: 2,
+            stream: "tool",
+            ts: 2,
+            sessionKey: ctx.sessionKey,
+            data: {
+              phase: "result",
+              name,
+              toolCallId: "c",
+              isError: false,
+              result: { content: [{ type: "text", text: "ok" }], details },
+            },
+          },
+          ctx,
+        ).activity;
+      }
+      return { runs: a.runs, approvals: [], linkedRuns: {}, interSession: [] };
+    };
+    const t3 = (name: string, details?: Record<string, unknown>, servers: string[] = []) =>
+      selectCards(run(name, details), servers, rawOf).mcpCalls.filter((card) => card.codingAgent)
+        .length;
+    for (const tool of T3_CODE_TOOLS) {
+      expect(t3(`my_coder__${tool}`), tool).toBe(1);
+    }
+    // After the result, by the result's own server and tool.
+    expect(t3("renamed_tool_9", { mcpServer: "coder", mcpTool: "t3_thread_send" })).toBe(1);
+    // Another tool, even on the same server, is not T3 Code; nor is a name only containing one.
+    expect(t3("my_coder__orchestrator_capabilities")).toBe(0);
+    expect(t3("my_coder__send_message")).toBe(0);
+    expect(t3("t3_thread_launch")).toBe(0);
+    expect(t3("my_coder__t3_thread_launch_v2")).toBe(0);
+    // A server a host names counts for any of its tools.
+    expect(t3("my_coder__send_message", undefined, ["my_coder"])).toBe(1);
   });
 });
 
@@ -501,25 +551,28 @@ describe("cards follow the gateway's identifiers, forward only", () => {
   ) =>
     selectCards(
       { runs: activity.runs, approvals: [], linkedRuns, interSession: [] },
-      [T3_SERVER],
+      [],
       rawOf,
       previous,
     );
 
   it("F-443 F-441: two simultaneous calls whose results arrive in the opposite order each land on the card their identifiers name", () => {
-    let a = start(emptyActivity, "t3code__send_message", "c1", "First change");
-    a = start(a, "t3code__send_message", "c2", "Second change");
+    let a = start(emptyActivity, "t3code__t3_thread_send", "c1", "First change");
+    a = start(a, "t3code__t3_thread_send", "c2", "Second change");
     a = event(a, {
       phase: "result",
-      name: "t3code__send_message",
+      name: "t3code__t3_thread_send",
       toolCallId: "c2",
       isError: true,
       result: {
         content: [{ type: "text", text: "second failed" }],
-        details: { mcpServer: T3_SERVER, mcpTool: "send_message" },
+        details: { mcpServer: "t3code", mcpTool: "t3_thread_send" },
       },
     });
-    a = result(a, "t3code__send_message", "c1", { mcpServer: T3_SERVER, mcpTool: "send_message" });
+    a = result(a, "t3code__t3_thread_send", "c1", {
+      mcpServer: "t3code",
+      mcpTool: "t3_thread_send",
+    });
     const calls = select(a).mcpCalls;
     expect(calls.map((card) => [card.text, card.state, card.error])).toEqual([
       ["First change", "returned", null],
@@ -528,24 +581,24 @@ describe("cards follow the gateway's identifiers, forward only", () => {
   });
 
   it("F-313: a later call with its own identifier never changes an earlier card; nothing is matched by project or thread", () => {
-    let a = start(emptyActivity, "t3code__send_message", "c1", "Fix the check");
-    a = result(a, "t3code__send_message", "c1", {
-      mcpServer: T3_SERVER,
-      mcpTool: "send_message",
+    let a = start(emptyActivity, "t3code__t3_thread_send", "c1", "Fix the check");
+    a = result(a, "t3code__t3_thread_send", "c1", {
+      mcpServer: "t3code",
+      mcpTool: "t3_thread_send",
       structuredContent: { threadId: 18 },
     });
     const before = select(a);
-    a = start(a, "t3code__check_thread", "c3", "How is thread 18 going?");
+    a = start(a, "t3code__t3_thread_read", "c3", "How is thread 18 going?");
     a = event(a, {
       phase: "result",
-      name: "t3code__check_thread",
+      name: "t3code__t3_thread_read",
       toolCallId: "c3",
       isError: true,
       result: {
         content: [{ type: "text", text: "thread 18 failed" }],
         details: {
-          mcpServer: T3_SERVER,
-          mcpTool: "check_thread",
+          mcpServer: "t3code",
+          mcpTool: "t3_thread_read",
           structuredContent: { threadId: 18 },
         },
       },

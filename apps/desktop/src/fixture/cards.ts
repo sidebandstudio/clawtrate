@@ -33,7 +33,10 @@ export const CARD_RUN = "run_7f3a91c2";
 const USER_ITEM = "u-7f3a:0";
 const MINUTE = 60_000;
 
-/** The tool server the card scenes treat as T3 Code. */
+/**
+ * The tool server T3 Code is on in the card scenes. The cards know it is T3
+ * Code from the tool's published name, not from this name.
+ */
 export const T3_SERVER = "t3code";
 
 export const CARD_SCENES = [
@@ -373,7 +376,8 @@ function linked(state: LinkedRun["state"], now: number): Record<string, LinkedRu
 
 // T3 Code -------------------------------------------------------------------------
 
-const T3_TOOL = `${T3_SERVER}__send_message`;
+/** T3 Code's own tool, as the gateway names a simple server's tool. */
+const T3_TOOL = `${T3_SERVER}__t3_thread_launch`;
 const T3_SENT =
   "In backup-scripts, make the weekly check skip machines that are asleep instead of failing, and add a test for it.";
 
@@ -381,7 +385,13 @@ function t3Call(now: number, b = new Builder(CARD_TASK, now).start(now - 3 * MIN
   return b.toolStart(
     T3_TOOL,
     "call_t3",
-    { message: T3_SENT, project: "backup-scripts", branch: "main" },
+    {
+      environmentId: "local",
+      projectId: "backup-scripts",
+      title: "Skip machines that are asleep",
+      workspaceStrategy: { type: "root", branch: "main" },
+      message: T3_SENT,
+    },
     now - 2 * MINUTE,
   );
 }
@@ -393,22 +403,27 @@ function t3Result(b: Builder, now: number, isError = false) {
     isError
       ? {
           content: text("connect ECONNREFUSED: the coding agent's server did not answer"),
-          details: { mcpServer: T3_SERVER, mcpTool: "send_message" },
+          details: { mcpServer: T3_SERVER, mcpTool: "t3_thread_launch" },
         }
       : {
           content: [
             ...text("Started thread 18 in backup-scripts on main. Working on the change now."),
             {
-              type: "resource_link",
-              uri: "https://t3.example.test/projects/backup-scripts/threads/18",
-              name: "Thread 18",
-            },
-            {
               type: "resource",
               resource: { name: "plan.md", mimeType: "text/markdown", uri: "file:///plan.md" },
             },
           ],
-          details: { mcpServer: T3_SERVER, mcpTool: "send_message" },
+          details: {
+            mcpServer: T3_SERVER,
+            mcpTool: "t3_thread_launch",
+            structuredContent: {
+              threadId: "thread-18",
+              link: "https://t3.example.test/projects/backup-scripts/threads/18",
+              projectId: "backup-scripts",
+              runId: "run-t3-1",
+              status: "starting",
+            },
+          },
         },
     now - MINUTE,
     isError,
