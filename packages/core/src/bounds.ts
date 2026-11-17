@@ -176,6 +176,16 @@ export function sameDigest(left: Digest, right: Digest): boolean {
 export const digestKey = (digest: Digest): string =>
   `${digest.length.toString(36)}.${digest.a.toString(36)}.${digest.b.toString(36)}`;
 
+/**
+ * An identifier within `max` JSON characters: itself when it fits, otherwise
+ * `#<digest>` of itself, the same for the same input. Every id the host keeps,
+ * in its state or as a key of its own maps, passes through this, so a
+ * long id is the same short value wherever it is kept and looked up.
+ */
+export function capId(value: string, max: number): string {
+  return jsonTextLength(value) <= max ? value : `#${digestKey(digestOf(value))}`;
+}
+
 // Enforcing -------------------------------------------------------------------------
 
 type Pools = Map<string, number>;
@@ -242,7 +252,7 @@ function walk(bound: Bound, value: unknown, path: string, pools: Pools, cuts: st
       if (typeof value !== "string") return wrongShape(value, bound.max, path, cuts);
       if (jsonTextLength(value) <= bound.max) return value;
       cuts.push(path);
-      return `#${digestKey(digestOf(value))}`;
+      return capId(value, bound.max);
     }
     case "scalar": {
       if (typeof value !== "string") return wrongShape(value, bound.max, path, cuts);
@@ -337,12 +347,14 @@ function walk(bound: Bound, value: unknown, path: string, pools: Pools, cuts: st
         out[key] = next;
       }
       if (bound.flags) {
-        const previous = Array.isArray(record.cut) ? (record.cut as string[]) : [];
+        const previous: unknown[] = Array.isArray(record.cut) ? record.cut : [];
+        // Only strings are paths: anything else in a `cut` list is dropped, never kept as it is.
+        const kept = previous.filter((each): each is string => typeof each === "string");
         const fresh = own.map((each) =>
           path && each.startsWith(path) ? each.slice(path.length + 1) : each,
         );
         if (fresh.length > 0 || previous.length > 0) {
-          const merged = [...new Set([...previous, ...fresh])]
+          const merged = [...new Set([...kept, ...fresh])]
             .map((each) => cutText(each, MAX_CUT_PATH_CHARS))
             .slice(-MAX_CUT_PATHS);
           if (merged.length !== previous.length || merged.some((each, i) => each !== previous[i]))

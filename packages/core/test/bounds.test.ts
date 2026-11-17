@@ -151,6 +151,12 @@ describe("no input exceeds the totals", () => {
     expect(total).toBeLessThanOrEqual(WORST_STATE_CHARS);
   });
 
+  it("an object inside a `cut` list is dropped, not kept past the bound", () => {
+    const enforced = enforce(STEP, { cut: [{ unbounded: "x".repeat(100_000) }, "output.text"] });
+    expect(size(enforced)).toBeLessThanOrEqual(worstCase(STEP));
+    expect((enforced as { cut: unknown[] }).cut).toEqual(["output.text"]);
+  });
+
   for (const shape of ["string", "object", "number"] as const) {
     it(`a ${shape} where any field belongs is brought within its bound`, () => {
       for (const bound of [STEP, RUN, OUTGOING, QUESTION, APPROVAL, TRANSCRIPT, STATE]) {
