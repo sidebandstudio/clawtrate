@@ -622,7 +622,7 @@ test("F-456: a refused request leaves the read tier as it was; an approved one g
   await expect(gateway).toBeVisible();
 });
 
-test("F-081 F-082 F-085 F-089 F-095 F-433: a sent message shows the status line within a second, its reply streams in, and the line leaves when the run completes", async ({
+test("F-081 F-082 F-083 F-085 F-089 F-095 F-433: a sent message shows the status line within a second, its reply streams in, and the line leaves when the run completes", async ({
   page,
 }) => {
   await openShell(page);

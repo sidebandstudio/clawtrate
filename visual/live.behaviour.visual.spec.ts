@@ -218,7 +218,7 @@ test("F-074: files can be dragged into the composer or pasted into its field", a
 });
 
 test.describe("the status line", () => {
-  test("F-082 F-086: a running step's title is the phrase and the avatar works; F-087: the phrase is its own tooltip", async ({
+  test("F-082 F-086 F-087: a running step's title is the phrase, the avatar works, and the phrase is its own tooltip", async ({
     page,
   }) => {
     await open(page, "run-working");
