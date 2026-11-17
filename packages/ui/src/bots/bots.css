@@ -951,7 +951,8 @@ button.b-open > .icon {
   padding: 4px var(--space-6) var(--space-6);
 }
 
-.b-section-body > .b-lead {
+.b-section-body > .b-lead,
+.b-headrow .b-lead {
   text-align: left;
 }
 
@@ -969,6 +970,14 @@ button.b-open > .icon {
 
 .b-headrow .b-group {
   margin-bottom: 8px;
+}
+
+/* Narrow: the sentence over its button, not squeezed beside it. */
+@media (max-width: 687px) {
+  .b-headrow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 /* Confirmation: a small card with a title, a sentence and two buttons. */
@@ -1198,8 +1207,6 @@ button.b-open > .icon {
 /* Touch: every control is at least 44 px to hit; fields are 56 px at 17 px text. */
 [data-input="touch"] .b-dialog .button[data-size="sm"],
 [data-input="touch"] .b-tab .button[data-size="sm"],
-[data-input="touch"] .event-body .button[data-size="sm"],
-[data-input="touch"] .turn-error .button[data-size="sm"],
 [data-input="touch"] .b-confirm .button {
   min-height: var(--tap-min);
   font-size: var(--text-base);
