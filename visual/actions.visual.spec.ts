@@ -755,6 +755,27 @@ test.describe("action cards", () => {
     await context.close();
   });
 
+  test("F-291: a card or fold row that arrives live rises in over 200 ms in ordinary motion; cards drawn with the page and reduced motion do not move", async ({
+    page,
+  }) => {
+    for (const reduce of [false, true]) {
+      await page.emulateMedia({ reducedMotion: reduce ? "reduce" : "no-preference" });
+      await open(page, "actions-becoming-fold");
+      // Drawn with the page: no arrival.
+      await expect(cards(page).last()).not.toHaveAttribute("data-fresh", "true");
+      // The second read arrives: the card becomes a fold, and its new row arrives.
+      const fold = page.locator(".transcript details.card.action[data-fold]").last();
+      await expect(fold).toBeAttached();
+      const row = fold.locator(".fold-rows > li").last();
+      await expect(row).toHaveAttribute("data-fresh", "true");
+      const motion = await row.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return [style.animationName, style.animationDuration];
+      });
+      expect(motion).toEqual(reduce ? ["none", "0s"] : ["rise", "0.2s"]);
+    }
+  });
+
   test("with reduced motion, cards, rows and Thought lines appear and open without animation, and the working mark is still", async ({
     page,
   }) => {

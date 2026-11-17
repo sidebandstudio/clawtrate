@@ -476,10 +476,16 @@ export function ActionScope({
       lost,
       readOnly,
       effort,
+      arriving: () => drawn.current,
     };
   }, [taskKey, transcript.runs, transcript.sessionKey, ctx, rawState, lost, readOnly, effort]);
 
   useKeepFocus();
+  // Cards drawn with the feed's first drawing are not arrivals; later ones are.
+  const drawn = useRef(false);
+  useEffect(() => {
+    drawn.current = true;
+  }, []);
 
   return (
     <ActionEnvContext.Provider value={env}>

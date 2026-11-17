@@ -69,7 +69,21 @@ export type ActionEnv = {
   readOnly: boolean;
   /** The reasoning effort the task asks for, when its row records one. */
   effort: string | null;
+  /** The feed has been drawn once: a card or row drawn now arrived live, and rises in (7.4). */
+  arriving: () => boolean;
 };
+
+/** A card or row that arrived after the feed was first drawn: it rises 4 px over 200 ms. */
+function useArrived(env: ActionEnv): true | undefined {
+  const [fresh] = useState(() => env.arriving());
+  return fresh || undefined;
+}
+
+/** A fold's row, rising in when it arrived live. */
+function FoldItem({ children }: { children: ReactNode }) {
+  const fresh = useArrived(useActionEnv());
+  return <li data-fresh={fresh}>{children}</li>;
+}
 
 export const ActionEnvContext = createContext<ActionEnv | null>(null);
 
@@ -642,9 +656,11 @@ export function ActionGroup({ members, revision }: { members: FeedMember[]; revi
     // Once, as it is drawn.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  const fresh = useArrived(env);
   const common = {
     ref: element,
     className: "card action",
+    "data-fresh": fresh,
     open,
     onToggle: (event: { currentTarget: HTMLDetailsElement }) => {
       if (event.currentTarget.open !== open) setOpen(event.currentTarget.open);
@@ -718,9 +734,9 @@ export function ActionGroup({ members, revision }: { members: FeedMember[]; revi
       <div className="action-body">
         <ol className="fold-rows" aria-label={label}>
           {members.map((member) => (
-            <li key={member.call.id}>
+            <FoldItem key={member.call.id}>
               <FoldRow member={member} revision={revision} />
-            </li>
+            </FoldItem>
           ))}
         </ol>
       </div>
