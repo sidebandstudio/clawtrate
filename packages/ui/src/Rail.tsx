@@ -596,11 +596,13 @@ export function Rail({
     : null;
 
   /** Mark unread or read (F-022), on the gateway and in this viewer. */
+  // This viewer's own read state follows only once the gateway took the change: a refused or
+  // failed one leaves the rail and the badge as the gateway reports them.
   const mark = (task: Task, unread: boolean) =>
     void runner.run(unread ? "mark it unread" : "mark it read", async () => {
+      await bridge.invoke({ type: "markTask", key: task.key, unread, opened: false });
       if (unread) selection.markUnreadHere(task.key);
       else selection.markReadHere(task);
-      await bridge.invoke({ type: "markTask", key: task.key, unread, opened: false });
     });
 
   const openTaskMenu = (task: Task, trigger: HTMLElement, x: number, y: number) => {

@@ -453,6 +453,8 @@ export function createFixtureBridge(
   sent: BridgeCommand[];
   /** The last unread count the interface gave for the dock badge. */
   badge: number | null;
+  /** From now on, refuse the rail's commands of this type, as a gateway refuses a change. */
+  refuse(type: string): void;
 } {
   const now = Date.now();
   const { initial, steps } = scene(name, now);
@@ -481,7 +483,8 @@ export function createFixtureBridge(
   // Files are named and counted, never kept.
   const files = new Map<string, { fileName: string; mimeType: string; sizeBytes: number }>();
   // The rail's task actions, answered as the engine would.
-  const railCommand = railCommands(now);
+  const railRefused = new Set<string>();
+  const railCommand = railCommands(now, railRefused);
   async function apply(command: BridgeCommand): Promise<unknown> {
     const rail = railCommand(
       command,
@@ -757,5 +760,6 @@ export function createFixtureBridge(
     setState: (change) => set(change(state)),
     sent,
     badge: null,
+    refuse: (type: string) => void railRefused.add(type),
   };
 }

@@ -194,7 +194,7 @@ const active = (task: Task) =>
  * Answer the rail's commands. Returns undefined for any other command. A
  * rename to "Taken" is refused as the gateway refuses a label in use.
  */
-export function railCommands(now: number) {
+export function railCommands(now: number, refused: ReadonlySet<string> = new Set()) {
   const archive = initialArchive(now);
   let created = 0;
   return (
@@ -243,6 +243,11 @@ export function railCommands(now: number) {
           }
         }, 120),
       );
+    // A command a test told the gateway to refuse, as the gateway refuses a change.
+    if (refused.has(command.type))
+      return later(() => {
+        throw new Error("The gateway refused the change.");
+      });
     switch (command.type) {
       case "newTask":
         return later(() => create(command.botId, command.label ?? "New task"));
