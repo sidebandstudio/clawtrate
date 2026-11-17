@@ -137,7 +137,7 @@
         .map((id) =>
           note(
             `<p>${esc(botName(id))} has the T3 Code tools without being turned on, because it was made outside Clawtrate.</p>` +
-              (isAdmin() ? `<div class="b-actions">${button(`Turn off for ${esc(botName(id))}`, `data-t3="deny" data-bot="${id}" data-size="sm"`)}</div>` : ""),
+              (isAdmin() ? `<div class="b-actions">${button(`Turn off for ${esc(botName(id))}`, `data-t3="deny" data-t3bot="${id}" data-size="sm"`)}</div>` : ""),
             "warn",
           ),
         )
@@ -153,7 +153,7 @@
     const ready = T.server && (signedIn() || T.signin === "unseen");
     const sub = !T.server ? "Add T3 Code in Settings first." : !ready ? "Sign the gateway in to T3 Code first, in Settings." : "Start and follow threads in T3 Code.";
     return (
-      `<h4 class="b-group">T3 Code</h4><dl class="facts">${switchRow("T3 Code", sub, t.on, `data-t3="bot-toggle" data-bot="${id}"${ready && isAdmin() ? "" : " disabled"}`, `T3 Code for ${esc(botName(id))}`)}` +
+      `<h4 class="b-group">T3 Code</h4><dl class="facts">${switchRow("T3 Code", sub, t.on, `data-t3="bot-toggle" data-t3bot="${id}"${ready && isAdmin() ? "" : " disabled"}`, `T3 Code for ${esc(botName(id))}`)}` +
       (t.on ? `<div><button type="button" class="b-open" data-bs="t3" aria-label="T3 Code limits for ${esc(botName(id))}. Open."><span>Limits</span><span class="b-open-value"><span>${limitsWord(t)}</span></span>${icon("chevron")}</button></div>` : "") +
       `</dl>` +
       (!ready && isAdmin() ? `<div class="b-actions" style="margin-top:8px">${button("Open Settings", 'data-t3="open-settings" data-size="sm"')}</div>` : "")
@@ -254,12 +254,12 @@
     if (what === "cancel") setSignin("cancelled");
     if (what === "open-link") announce("Opened in your browser");
     if (what === "deny") {
-      delete binding[t.dataset.bot].t3found;
+      delete binding[t.dataset.t3bot].t3found;
       rerender();
-      announce(`T3 Code turned off for ${botName(t.dataset.bot)}`);
+      announce(`T3 Code turned off for ${botName(t.dataset.t3bot)}`);
     }
     if (what === "bot-toggle") {
-      const id = t.dataset.bot;
+      const id = t.dataset.t3bot;
       const cur = binding[id].t3 || { on: false, projects: "all", chosen: [], models: [...T3MODELS], ask: true };
       cur.on = !cur.on;
       binding[id].t3 = cur;

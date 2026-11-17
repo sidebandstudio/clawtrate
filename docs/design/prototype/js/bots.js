@@ -343,7 +343,7 @@
     const a = acct(B.draft.account);
     binding[id] = { account: a ? a.id : null, model: a ? B.draft.model : null, effort: B.draft.effort, locked: false, inherits: !a };
     app.bots.push({ id, name, label: "", tasks: [{ id: `${id}-1`, title: "Main", at: 3000, when: "now", preview: "No messages yet.", unread: false, status: "idle", html: "", fresh: true }] });
-    B.create = { step: "look", status: "idle", opener: null };
+    B.create = { step: "look", status: "idle", opener: null, created: true };
     B.draft = { name: "", body: "drop", color: "#ff6f9c", account: null, model: null, effort: "Medium" };
     createDialog.close();
     app.selectBot(id);
@@ -792,6 +792,8 @@
     clearTimeout(flowTimer);
     if (B.create.step === "connect") B.create.step = "account";
     B.connect = null;
+    // After Create the new bot's composer has focus; otherwise focus goes back to the opener.
+    if (B.create.created) return void (B.create.created = false);
     const to = B.create.opener && document.contains(B.create.opener) && B.create.opener.offsetParent ? B.create.opener : $("#new-button");
     setTimeout(() => to?.focus?.(), 0);
   });

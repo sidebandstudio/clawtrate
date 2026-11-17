@@ -68,6 +68,7 @@ check("P1 back on the Account step with the new account chosen and the bot kept"
 await p.click('[data-b="create"]');
 check("P1 Create reads Creating… and is disabled", await p.evaluate(() => { const c = document.querySelector('[data-b="create"]'); return c.disabled && c.textContent === "Creating…"; }));
 await p.waitForTimeout(900);
+check("P1 after Create the new bot's composer has focus", await p.evaluate(() => document.activeElement.classList.contains("composer-input")));
 check("P1 the new bot is created on its account and opened", !(await dlg(p)) && (await p.evaluate(() => document.querySelector("#title-pill").getAttribute("aria-label").startsWith("Viral, Main") && window.bots.accounts().find((a) => a.id === window.bots.binding.viral.account)?.label === "Studio")));
 await p.close();
 
@@ -309,6 +310,7 @@ await p.click('[data-b="confirm-ok"]');
 check("P3 after confirming, it is off for the integration and for Otto", await p.evaluate(() => document.querySelector('[data-t3="toggle"]').getAttribute("aria-checked") === "false" && !window.bots.binding.otto.t3.on));
 await p.close();
 p = await open("t3=on&bot=marlow&panel=open&tab=settings");
+check("P3 a bot's switch is a plain switch, with no picture in it", await p.evaluate(() => !document.querySelector('#panel-settings [data-t3="bot-toggle"] svg')));
 check("P3 each bot has its own T3 Code switch, off by default", await p.evaluate(() => document.querySelector('#panel-settings [data-t3="bot-toggle"]').getAttribute("aria-checked") === "false"));
 await p.click('#panel-settings [data-t3="bot-toggle"]');
 check("P3 turned on, the bot gets its limits", (await text(p, '#panel-settings [data-bs="t3"]')).includes("All projects, asks first"));
