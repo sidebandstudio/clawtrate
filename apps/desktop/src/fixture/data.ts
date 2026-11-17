@@ -476,6 +476,7 @@ export function fixtureTranscripts(now: number, bots: Bot[]): Record<string, Tra
           spec.status === "running"
             ? { runId: "fixture-run", text: "Rack-1 is done. Rotating logs on rack-2 now." }
             : null,
+        loadedAt: now,
       };
     }
   }

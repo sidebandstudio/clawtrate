@@ -110,12 +110,10 @@ export function Shell({
 
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
-  const phase = useSyncPhase(state, transcript);
-  const strip = stripFor(state, phase, transcript);
+  const phase = useSyncPhase(state, taskKey);
+  const strip = stripFor(state, phase, taskKey);
   const catchingUp =
-    phase === "dropped" &&
-    state.connection.status === "connected" &&
-    state.discovery.status !== "ready";
+    phase === "dropped" && state.connection.status === "connected" && strip?.tone === "warn";
   const reload = useCallback(() => {
     if (!taskKey) return;
     void send({ type: "closeSession", key: taskKey }).then(() =>

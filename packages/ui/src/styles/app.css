@@ -1464,13 +1464,18 @@ textarea {
 }
 
 /* The state always shows in full. The explanation after it shortens first. */
+/* The text never runs under the action: the explanation shortens first, then
+   the state. The whole line stays in the strip's text and its tooltip. */
 .status-strip-text {
   display: flex;
+  flex: 0 1 auto;
   min-width: 0;
+  overflow: hidden;
   gap: 5px;
 }
 
 .status-strip-text > span {
+  flex: 0 1000 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1495,8 +1500,15 @@ textarea {
 }
 
 .status-strip-text strong {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-weight: var(--weight-medium);
+}
+
+.strip-short {
+  display: none;
 }
 
 /* Your own bubble keeps its links and code readable on the accent. */
@@ -2032,6 +2044,15 @@ textarea {
 
   .choose-task {
     display: inline-flex;
+  }
+
+  /* The phone's strip says the state in fewer words. */
+  .strip-long {
+    display: none;
+  }
+
+  .strip-short {
+    display: inline;
   }
 
   .ensemble {

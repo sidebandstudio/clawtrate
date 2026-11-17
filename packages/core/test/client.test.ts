@@ -338,3 +338,41 @@ describe("reconnecting (C2)", () => {
     client.stop();
   });
 });
+
+describe("knowing what is in sync after a reconnect", () => {
+  it("stamps each connect and each successful history load, so a kept transcript is not taken as fresh", async () => {
+    const { client, gateway } = await connected();
+    const key = "agent:main:task";
+    client.openSession(key);
+    await until(() => client.state.transcripts[key]?.status === "ready");
+    const firstLoad = client.state.transcripts[key]!.loadedAt!;
+    expect(firstLoad).toBeGreaterThanOrEqual(client.state.connection.connectedAt!);
+
+    // The next reload fails: the kept transcript keeps its old load time.
+    let fail = true;
+    gateway.handlers["chat.history"] = () => {
+      if (fail) throw new GatewayError({ code: "UNAVAILABLE", message: "history failed" });
+      return { messages: [], hasMore: false };
+    };
+    await sleep(5);
+    gateway.dropAll();
+    await until(() => client.state.connection.status === "reconnecting");
+    await until(() => client.state.transcripts[key]?.status === "error");
+    const reconnectedAt = client.state.connection.connectedAt!;
+    expect(reconnectedAt).toBeGreaterThan(firstLoad);
+    expect(client.state.transcripts[key]!.loadedAt).toBe(firstLoad);
+
+    // A reload that succeeds is stamped after the connect.
+    fail = false;
+    gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.transcripts[key]?.status === "ready",
+    );
+    expect(client.state.transcripts[key]!.loadedAt!).toBeGreaterThanOrEqual(
+      client.state.connection.connectedAt!,
+    );
+    client.stop();
+  });
+});

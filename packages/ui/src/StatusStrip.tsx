@@ -17,16 +17,30 @@ export function refreshFailed(transcript: Transcript | undefined): boolean {
   return transcript?.status === "error" && transcript.items.length > 0;
 }
 
-export function useSyncPhase(state: ClawtrateState, transcript: Transcript | undefined): SyncPhase {
+/**
+ * The open task's history has loaded since the latest connect. A transcript
+ * kept from before the drop still says "ready", so its load time decides.
+ */
+export function taskInSync(state: ClawtrateState, taskKey: string | null): boolean {
+  if (!taskKey) return true;
+  const transcript = state.transcripts[taskKey];
+  return (
+    transcript?.status === "ready" &&
+    (transcript.loadedAt ?? 0) >= (state.connection.connectedAt ?? 0)
+  );
+}
+
+export function useSyncPhase(state: ClawtrateState, taskKey: string | null): SyncPhase {
   const connected = state.connection.status === "connected";
   const [phase, setPhase] = useState<SyncPhase>(connected ? "none" : "dropped");
   // Adjusted while rendering, so the strip never shows a stale state for a frame.
+  // "Synced" waits for bots, tasks and the open task's reload to succeed.
   if (!connected && phase !== "dropped") setPhase("dropped");
   else if (
     connected &&
     phase === "dropped" &&
     state.discovery.status === "ready" &&
-    !refreshFailed(transcript)
+    taskInSync(state, taskKey)
   ) {
     setPhase("synced");
   }
@@ -40,8 +54,10 @@ export function useSyncPhase(state: ClawtrateState, transcript: Transcript | und
 
 export type Strip = {
   tone: "warn" | "danger" | "ok";
-  /** The state, always shown in full. */
+  /** The state. It keeps its place beside the action and shortens only after the explanation. */
   text: string;
+  /** The state in fewer words, for the one-pane layout. */
+  short?: string;
   /** The explanation after the middle dot; it shortens first. */
   more: string | null;
   action: "retry" | "reload" | null;
@@ -57,9 +73,10 @@ export type Strip = {
 export function stripFor(
   state: ClawtrateState,
   phase: SyncPhase,
-  transcript: Transcript | undefined,
+  taskKey: string | null,
 ): Strip | null {
   const { connection, discovery } = state;
+  const transcript = taskKey ? state.transcripts[taskKey] : undefined;
   switch (connection.status) {
     case "reconnecting":
     case "connecting":
@@ -74,6 +91,7 @@ export function stripFor(
       return {
         tone: "danger",
         text: `Can't reach ${gatewayLabel(connection.gatewayUrl)}`,
+        short: "Can't reach the gateway",
         more: connection.error?.message ?? "showing saved messages",
         action: "retry",
         countdown: false,
@@ -86,23 +104,15 @@ export function stripFor(
   if (discovery.status === "error") {
     return {
       tone: "danger",
-      text: "Could not load this gateway's bots and tasks",
+      text: "Couldn't load bots and tasks",
+      short: "Couldn't load bots",
       more: discovery.error,
       action: "retry",
       countdown: false,
     };
   }
   if (phase === "dropped") {
-    if (discovery.status !== "ready") {
-      return {
-        tone: "warn",
-        text: "Connected",
-        more: "catching up",
-        action: null,
-        countdown: false,
-      };
-    }
-    if (refreshFailed(transcript)) {
+    if (transcript?.status === "error") {
       return {
         tone: "danger",
         text: "Couldn't sync this task",
@@ -111,6 +121,8 @@ export function stripFor(
         countdown: false,
       };
     }
+    // Back, but bots, tasks or the open task have not loaded again yet.
+    return { tone: "warn", text: "Connected", more: "catching up", action: null, countdown: false };
   }
   if (phase === "synced") {
     return { tone: "ok", text: "Synced", more: null, action: null, countdown: false };
@@ -157,7 +169,14 @@ export function StatusStrip({
     >
       <span className="status-dot" aria-hidden="true" />
       <span className="status-strip-text">
-        <strong>{text}</strong>
+        {strip.short ? (
+          <strong>
+            <span className="strip-long">{text}</span>
+            <span className="strip-short">{strip.short}</span>
+          </strong>
+        ) : (
+          <strong>{text}</strong>
+        )}
         {strip.more && <span>· {strip.more}</span>}
       </span>
       {strip.action && (

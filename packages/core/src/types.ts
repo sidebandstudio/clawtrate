@@ -37,6 +37,8 @@ export type ConnectionState = {
   error: ConnectionError | null;
   /** Epoch ms of the next reconnect attempt, when one is scheduled. */
   retryAt: number | null;
+  /** Epoch ms of the latest hello: what was loaded before it is not yet in sync. */
+  connectedAt: number | null;
   /** True once this device holds a device token for the current gateway. */
   paired: boolean;
 };
@@ -96,6 +98,8 @@ export type Transcript = {
   hasMore: boolean;
   /** Text of a run that is streaming right now, before it lands in history. */
   live: { runId: string; text: string } | null;
+  /** Epoch ms of the latest successful history load. */
+  loadedAt: number | null;
 };
 
 /** Loading bots and tasks after each connect, separate from the socket's own state. */
@@ -125,6 +129,7 @@ export const initialConnectionState: ConnectionState = {
   pairing: null,
   error: null,
   retryAt: null,
+  connectedAt: null,
   paired: false,
 };
 

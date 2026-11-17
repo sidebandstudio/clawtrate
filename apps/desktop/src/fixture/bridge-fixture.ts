@@ -31,8 +31,10 @@ export const SCENES = [
   "reconnecting",
   "reconnecting-unloaded",
   "offline",
+  "offline-long-address",
   "catching-up",
   "synced",
+  "sync-pending",
   "sync-failed",
   "refresh-failed",
   "load-failed",
@@ -62,7 +64,7 @@ const connected: ConnectionState = {
 function loaded(now: number): ClawtrateState {
   const bots = fixtureBots();
   return {
-    connection: connected,
+    connection: { ...connected, connectedAt: now - 1000 },
     discovery: { status: "ready", error: null, partial: false },
     bots,
     tasksByBot: fixtureTasks(now, bots),
@@ -103,15 +105,43 @@ const withConnection = (state: ClawtrateState, change: Partial<ConnectionState>)
 const reconnecting = (state: ClawtrateState) =>
   withConnection(state, { status: "reconnecting", retryAt: Date.now() + 4000 });
 
+/**
+ * Strictly increasing times, so "loaded after the latest connect" holds even
+ * when a test fixes the page's clock.
+ */
+let tick = 0;
+const stamp = () => Date.now() + (tick += 1);
+
+/** The connection is back: what was loaded before is now out of date. */
 const catchingUp = (state: ClawtrateState): ClawtrateState => ({
-  ...withConnection(state, { status: "connected", retryAt: null, error: null }),
+  ...withConnection(state, {
+    status: "connected",
+    retryAt: null,
+    error: null,
+    connectedAt: stamp(),
+  }),
   discovery: { ...state.discovery, status: "loading" },
 });
 
-const caughtUp = (state: ClawtrateState): ClawtrateState => ({
+/** Bots and tasks have loaded again; open transcripts have not reloaded yet. */
+const discovered = (state: ClawtrateState): ClawtrateState => ({
   ...state,
   discovery: { status: "ready", error: null, partial: false },
 });
+
+/** Every transcript that did not fail has reloaded. */
+const reloaded = (state: ClawtrateState): ClawtrateState => {
+  const at = stamp();
+  const transcripts = Object.fromEntries(
+    Object.entries(state.transcripts).map(([key, transcript]) => [
+      key,
+      transcript.status === "error" ? transcript : { ...transcript, loadedAt: at },
+    ]),
+  );
+  return { ...state, transcripts };
+};
+
+const caughtUp = (state: ClawtrateState): ClawtrateState => reloaded(discovered(state));
 
 function failTranscript(state: ClawtrateState, key: string, keepItems: boolean): ClawtrateState {
   const transcript = state.transcripts[key];
@@ -175,6 +205,16 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
         }),
         steps: [],
       };
+    case "offline-long-address":
+      return {
+        initial: withConnection(base, {
+          status: "error",
+          gatewayUrl: "wss://gateway-in-the-basement-rack-two.example:18789",
+          retryAt: null,
+          error: { code: "ECONNREFUSED", message: "Connection refused", hint: null },
+        }),
+        steps: [],
+      };
     case "catching-up":
       return { initial: reconnecting(base), steps: [{ after: 60, change: catchingUp }] };
     case "synced":
@@ -183,6 +223,15 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
         steps: [
           { after: 60, change: catchingUp },
           { after: 160, change: caughtUp },
+        ],
+      };
+    case "sync-pending":
+      // Bots and tasks are back, but the open task has not reloaded.
+      return {
+        initial: reconnecting(base),
+        steps: [
+          { after: 60, change: catchingUp },
+          { after: 160, change: discovered },
         ],
       };
     case "sync-failed":

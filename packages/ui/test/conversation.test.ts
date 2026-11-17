@@ -7,7 +7,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { stepsLabel } from "../src/Conversation.tsx";
 import { rowTime, stampTime } from "../src/format.ts";
-import { stripFor } from "../src/StatusStrip.tsx";
+import { stripFor, taskInSync } from "../src/StatusStrip.tsx";
 
 function state(
   status: ConnectionStatus,
@@ -27,12 +27,24 @@ const failed: Transcript = {
   error: "timed out",
   hasMore: false,
   live: null,
+  loadedAt: 100,
 };
+
+const KEY = "agent:otto:a";
+
+/** A state with the open task's transcript, connected at `connectedAt`. */
+function withTask(base: ClawtrateState, transcript: Transcript, connectedAt = 500): ClawtrateState {
+  return {
+    ...base,
+    connection: { ...base.connection, connectedAt },
+    transcripts: { [KEY]: transcript },
+  };
+}
 
 describe("the status strip (visual-language.md, section 11)", () => {
   it("counts down while reconnecting, for reconnecting and connecting alike", () => {
     for (const status of ["reconnecting", "connecting"] as const) {
-      expect(stripFor(state(status), "dropped", undefined)).toMatchObject({
+      expect(stripFor(state(status), "dropped", null)).toMatchObject({
         tone: "warn",
         countdown: true,
         action: "retry",
@@ -41,29 +53,47 @@ describe("the status strip (visual-language.md, section 11)", () => {
   });
 
   it("names the gateway it cannot reach", () => {
-    expect(stripFor(state("error"), "dropped", undefined)).toMatchObject({
+    expect(stripFor(state("error"), "dropped", null)).toMatchObject({
       tone: "danger",
       text: "Can't reach 127.0.0.1:19001",
     });
   });
 
   it("says catching up, then synced, only after a drop", () => {
-    expect(stripFor(state("connected", "loading"), "dropped", undefined)?.more).toBe("catching up");
-    expect(stripFor(state("connected"), "synced", undefined)?.text).toBe("Synced");
-    expect(stripFor(state("connected", "loading"), "none", undefined)).toBeNull();
-    expect(stripFor(state("connected"), "none", undefined)).toBeNull();
+    expect(stripFor(state("connected", "loading"), "dropped", null)?.more).toBe("catching up");
+    expect(stripFor(state("connected"), "synced", null)?.text).toBe("Synced");
+    expect(stripFor(state("connected", "loading"), "none", null)).toBeNull();
+    expect(stripFor(state("connected"), "none", null)).toBeNull();
   });
 
   it("reports a task that failed to sync after a drop, and leaves other failures to the conversation", () => {
-    expect(stripFor(state("connected"), "dropped", failed)).toMatchObject({
+    expect(stripFor(withTask(state("connected"), failed), "dropped", KEY)).toMatchObject({
       text: "Couldn't sync this task",
       action: "reload",
     });
-    expect(stripFor(state("connected"), "none", failed)).toBeNull();
+    expect(stripFor(withTask(state("connected"), failed), "none", KEY)).toBeNull();
+  });
+
+  it("waits for the open task to reload after a drop before it can say Synced", () => {
+    const cached: Transcript = { ...failed, status: "ready", error: null, loadedAt: 100 };
+    // Loaded before the latest connect: still catching up, though bots and tasks are back.
+    expect(taskInSync(withTask(state("connected"), cached, 500), KEY)).toBe(false);
+    expect(stripFor(withTask(state("connected"), cached, 500), "dropped", KEY)?.more).toBe(
+      "catching up",
+    );
+    // Reloaded since then: in sync.
+    expect(taskInSync(withTask(state("connected"), { ...cached, loadedAt: 600 }, 500), KEY)).toBe(
+      true,
+    );
+    // A transcript still loading is not in sync either.
+    const loading: Transcript = { ...cached, status: "loading", loadedAt: null };
+    expect(taskInSync(withTask(state("connected"), loading, 500), KEY)).toBe(false);
+    // With no task open, bots and tasks are all there is to sync.
+    expect(taskInSync(state("connected"), null)).toBe(true);
   });
 
   it("reports a failed discovery while connected", () => {
-    expect(stripFor(state("connected", "error"), "none", undefined)).toMatchObject({
+    expect(stripFor(state("connected", "error"), "none", null)).toMatchObject({
       tone: "danger",
       action: "retry",
     });

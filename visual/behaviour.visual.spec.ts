@@ -244,6 +244,65 @@ test.describe("the status strip", () => {
     expect(await page.locator(".rail").boundingBox()).toEqual(before);
   });
 
+  test("Synced waits for the open task to reload, and a failed reload is never called synced", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openFixture(page, `scene=sync-pending&${OTTO_DISK}`, "light");
+    const strip = page.getByTestId("status-strip");
+    // Bots and tasks are back; the open task's history has not reloaded.
+    await expect(strip).toContainText("catching up");
+    await page.waitForTimeout(500);
+    await expect(strip).toContainText("catching up");
+    await expect(strip).not.toContainText("Synced");
+
+    // The reload fails: the strip says so, never Synced.
+    await page.evaluate((key) => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState(change: (s: Record<string, unknown>) => unknown): void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((s) => {
+        const transcripts = s.transcripts as Record<string, Record<string, unknown>>;
+        return {
+          ...s,
+          transcripts: {
+            ...transcripts,
+            [key]: { ...transcripts[key], status: "error", error: "timed out" },
+          },
+        };
+      });
+    }, "agent:otto:disk-space");
+    await expect(strip).toContainText("Couldn't sync this task");
+    await expect(page.locator(".load-note")).toHaveCount(0);
+
+    // Try again succeeds: now, and only now, Synced.
+    await page.evaluate((key) => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState(change: (s: Record<string, unknown>) => unknown): void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((s) => {
+        const transcripts = s.transcripts as Record<string, Record<string, unknown>>;
+        return {
+          ...s,
+          transcripts: {
+            ...transcripts,
+            [key]: {
+              ...transcripts[key],
+              status: "ready",
+              error: null,
+              loadedAt: Date.now() + 1000,
+            },
+          },
+        };
+      });
+    }, "agent:otto:disk-space");
+    await expect(strip).toContainText("Synced");
+  });
+
   test("a task with nothing saved waits for the gateway instead of loading forever", async ({
     page,
   }) => {
@@ -292,3 +351,26 @@ test.describe("the phone", () => {
     await expect(page.getByTestId("work-panel")).toHaveAttribute("role", "dialog");
   });
 });
+
+for (const width of [320, 390]) {
+  test.describe(`the strip on a ${width}px phone`, () => {
+    test.use(contextFor({ ...PHONE, width, height: 700 }, "light"));
+    for (const scene of ["discovery-error", "offline-long-address", "offline", "sync-failed"]) {
+      test(`keeps its state clear of its action: ${scene}`, async ({ page }) => {
+        await openFixture(page, `scene=${scene}&${OTTO_DISK}`, "light");
+        const strip = page.getByTestId("status-strip");
+        await expect(strip.getByRole("button")).toBeVisible();
+        const state = (await strip.locator("strong").boundingBox())!;
+        const action = (await strip.getByRole("button").boundingBox())!;
+        const box = (await strip.boundingBox())!;
+        expect(state.x + state.width, "the state ends before the action").toBeLessThanOrEqual(
+          action.x,
+        );
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(width);
+        // The whole line stays reachable: in the strip's text and its tooltip.
+        expect(await strip.getAttribute("title")).toMatch(/·|Couldn't sync/);
+      });
+    }
+  });
+}
