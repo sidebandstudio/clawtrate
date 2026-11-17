@@ -19,6 +19,14 @@ for (const size of SHOWN) {
           await expect(page).toHaveScreenshot(`live-${view.scene}-${theme}-${size.name}.png`);
         });
       }
+
+      test("F-467: the shortcut list", async ({ page }) => {
+        await openFixture(page, `scene=composer&${OTTO_DISK}&panel=closed`, theme);
+        await page.keyboard.press("ControlOrMeta+/");
+        await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+        await settle(page);
+        await expect(page).toHaveScreenshot(`live-shortcuts-${theme}-${size.name}.png`);
+      });
     });
   }
 }

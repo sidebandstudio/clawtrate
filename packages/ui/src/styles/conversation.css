@@ -1037,3 +1037,55 @@
 .access-id .mono {
   font-size: var(--text-sm);
 }
+
+/* The list of keyboard shortcuts, opened with ⌘/. */
+.shortcuts {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 70;
+  width: min(420px, calc(100vw - 32px));
+  padding: 16px 18px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+  transform: translate(-50%, -50%);
+}
+
+.shortcuts:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
+.shortcuts-title {
+  margin: 0 0 10px;
+  font-weight: var(--weight-strong);
+}
+
+.shortcuts dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.shortcuts dl > div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 12px;
+  font-size: var(--text-md);
+}
+
+.shortcuts dd {
+  margin: 0;
+}
+
+.shortcuts kbd {
+  font-family: inherit;
+  font-weight: var(--weight-medium);
+}
+
+.shortcuts-note {
+  margin: 12px 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}

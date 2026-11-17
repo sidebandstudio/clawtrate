@@ -181,6 +181,15 @@ SCENES.push({
   },
 });
 
+SCENES.push({
+  name: "F-467: the shortcut list",
+  query: `scene=composer&${OTTO_DISK}&panel=closed`,
+  prepare: async (page) => {
+    await page.keyboard.press("ControlOrMeta+/");
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+  },
+});
+
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
 

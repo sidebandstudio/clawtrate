@@ -8,6 +8,7 @@ import { readPreference, writePreference, type ThemeChoice } from "./preferences
 import { Rail } from "./Rail.tsx";
 import { useSelection } from "./selection.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
+import { ShortcutList } from "./Shortcuts.tsx";
 import { WorkPanel } from "./WorkPanel.tsx";
 
 /** A control that can take focus now: in the page, shown, and not behind the drawer. */
@@ -92,9 +93,13 @@ export function Shell({
   }, []);
   const togglePanel = useCallback(() => setPanel(!panelOpen), [panelOpen, setPanel]);
 
+  const [shortcuts, setShortcuts] = useState(false);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "\\") {
+      if ((event.metaKey || event.ctrlKey) && event.key === "/") {
+        event.preventDefault();
+        setShortcuts((open) => !open);
+      } else if ((event.metaKey || event.ctrlKey) && event.key === "\\") {
         event.preventDefault();
         togglePanel();
       } else if (event.key === "Escape" && drawerOpen) {
@@ -280,6 +285,7 @@ export function Shell({
           />
         )}
       </div>
+      {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
     </div>
   );
 }

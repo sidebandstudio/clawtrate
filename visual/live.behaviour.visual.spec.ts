@@ -533,6 +533,22 @@ test.describe("keyboard", () => {
   });
 });
 
+test("F-467: Cmd/Ctrl+/ shows every keyboard shortcut; Escape closes the list and returns focus", async ({
+  page,
+}) => {
+  await open(page, "composer");
+  await field(page).focus();
+  await page.keyboard.press("ControlOrMeta+/");
+  const list = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(list).toBeFocused();
+  for (const keys of ["↵", "⇧↵", "⌥↵", "⇧⌘↵", "⌘↵", "⌘.", "⌘J", "⌘I", "⌘L", "⌘\\", "⌘/"]) {
+    await expect(list.locator("kbd", { hasText: keys }).first()).toBeVisible();
+  }
+  await page.keyboard.press("Escape");
+  await expect(list).toHaveCount(0);
+  await expect(field(page)).toBeFocused();
+});
+
 test.describe("access", () => {
   test("F-456: Request access asks once, shows the host's command and request id, and is never made silently", async ({
     page,
