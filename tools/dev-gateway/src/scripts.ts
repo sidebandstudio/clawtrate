@@ -1,6 +1,6 @@
 // Deterministic reply plans for the scripted model.
 
-import { SEED_BOTS, type Round } from "./seed-data.ts";
+import { SEED_BOTS, UNSEEDED_TURNS, type Round } from "./seed-data.ts";
 
 export type ChatContentPart = { type?: string; text?: string };
 
@@ -13,7 +13,8 @@ export type ChatMessage = {
 
 export type ReplyStep =
   | { kind: "reasoning"; text: string }
-  | { kind: "text"; text: string }
+  /** `delayMs` overrides the pause between streamed pieces, for a run that takes a while. */
+  | { kind: "text"; text: string; delayMs?: number }
   | { kind: "tool"; id: string; name: string; arguments: Record<string, unknown> };
 
 export function messageText(message: ChatMessage): string {
@@ -41,6 +42,7 @@ for (const bot of SEED_BOTS) {
     for (const turn of task.turns) scriptedTurns.set(normalizePrompt(turn.prompt), turn.rounds);
   }
 }
+for (const turn of UNSEEDED_TURNS) scriptedTurns.set(normalizePrompt(turn.prompt), turn.rounds);
 
 /** Drop rounds whose tool the gateway did not offer, so replies stay valid. */
 function usableRounds(rounds: Round[], tools: Set<string>): Round[] {

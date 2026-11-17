@@ -1,8 +1,20 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { ChildProcess } from "node:child_process";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { protocolMismatch } from "../packages/core/src/connect-errors.ts";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
-import { devGateway, FORBIDDEN_PORTS, listInstances, runningOthers } from "./global-setup.ts";
+import { NARRATING_PROMPT, SLOW_PROMPT } from "../tools/dev-gateway/src/seed-data.ts";
+import {
+  devGateway,
+  FORBIDDEN_PORTS,
+  listInstances,
+  runningOthers,
+  startHost,
+  stopChild,
+} from "./global-setup.ts";
 
 /** This run's own development gateway instance, created by global setup. */
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -800,6 +812,156 @@ test("F-323: work goes on after the page is closed, and reopening shows where it
     "This is the scripted development model",
   );
   await expect(botRow(again, "Pip")).not.toHaveAccessibleName(/working/);
+});
+
+test("F-027: a hidden bot keeps working: a run on the gateway shows in the Hidden bots section, then its reply", async ({
+  page,
+}) => {
+  await openShell(page);
+  await botRow(page, "Marlow").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Hide from sidebar" }).click();
+  await page.getByRole("button", { name: /^Hidden bots/ }).click();
+  const hidden = page.getByRole("list", { name: "Hidden bots" }).locator('.bot[data-bot="marlow"]');
+  await expect(hidden).toBeVisible();
+  // Every state the hidden row's avatar takes while the run lasts.
+  await page.evaluate(() => {
+    const seen: string[] = [];
+    (window as unknown as { hiddenStates: string[] }).hiddenStates = seen;
+    const read = () => {
+      const state = document
+        .querySelector('.hidden-list .bot[data-bot="marlow"] .presence')
+        ?.getAttribute("data-state");
+      if (state) seen.push(state);
+    };
+    new MutationObserver(read).observe(document.body, {
+      subtree: true,
+      attributes: true,
+      childList: true,
+    });
+  });
+  const prompt = "From the end-to-end run, while hidden: anything new?";
+  await openclaw([
+    "agent",
+    "--agent",
+    "marlow",
+    "--session-key",
+    "agent:marlow:newsletter-intro",
+    "--message",
+    prompt,
+    "--thinking",
+    "low",
+    "--json",
+  ]);
+  await expect(hidden.locator(".bot-preview")).toContainText(
+    "This is the scripted development model",
+  );
+  const states = await page.evaluate(
+    () => (window as unknown as { hiddenStates: string[] }).hiddenStates,
+  );
+  expect(states).toContain("working");
+  await expect(hidden.locator(".presence")).not.toHaveAttribute("data-state", "working");
+  // It stayed hidden throughout.
+  await expect(page.locator('.bot-list > .bot-group > .bot[data-bot="marlow"]')).toHaveCount(0);
+});
+
+test("F-088: a gateway run that narrates between its tool calls shows each narration as its own short bubble, with the tool calls folded between", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openclaw([
+    "agent",
+    "--agent",
+    "pip",
+    "--session-key",
+    "agent:pip:weeknight-meals",
+    "--message",
+    NARRATING_PROMPT,
+    "--thinking",
+    "low",
+    "--json",
+  ]);
+  await openTask(page, "Pip", "Five weeknight dinners");
+  const turn = page.getByTestId("transcript-turn").last();
+  await expect(turn).toContainText("Thursday evening is free.");
+  const parts = await turn
+    .locator(':scope > .msg[data-role="assistant"], :scope > .steps')
+    .evaluateAll((nodes) =>
+      nodes.map((node) =>
+        node.classList.contains("steps")
+          ? `[${node.querySelector("summary")!.textContent!.trim()}]`
+          : node.textContent!.trim(),
+      ),
+    );
+  expect(parts).toEqual([
+    "On it. Reading your weekend list first.",
+    "[Used 1 tool]",
+    "Read it. Noting the free evening in a list next.",
+    "[Used 1 tool]",
+    "Thursday evening is free. I wrote it down in lists/free-evening.md.",
+  ]);
+  await expect(turn.locator('.msg[data-role="assistant"] .bubble')).toHaveCount(3);
+});
+
+test("F-323: a client quit while a run is in progress, and opened again, shows the run where it is, then how it ended", async ({
+  browser,
+}) => {
+  // A client of this test's own: the same build, a copy of the preview host's
+  // data (its device and pairing), started and quit here.
+  const data = mkdtempSync(join(tmpdir(), "clawtrate-e2e-restart-"));
+  cpSync(process.env.CLAWTRATE_E2E_DATA!, data, { recursive: true });
+  let host: ChildProcess | null = null;
+  const start = async () => {
+    const started = startHost(INSTANCE, process.env.CLAWTRATE_E2E_STATIC!, data);
+    host = started.host;
+    started.gated.release();
+    const url = await started.url;
+    expect(FORBIDDEN_PORTS).not.toContain(Number(new URL(url).port));
+    return url;
+  };
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  try {
+    let page = await context.newPage();
+    await page.goto(await start());
+    await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+    const run = openclaw([
+      "agent",
+      "--agent",
+      "pip",
+      "--session-key",
+      "agent:pip:weekend-trip",
+      "--message",
+      SLOW_PROMPT,
+      "--thinking",
+      "low",
+      "--json",
+    ]);
+    await expect(botRow(page, "Pip")).toHaveAccessibleName(/^Pip, working/, { timeout: 15_000 });
+    // Quit the client while the run goes on.
+    await page.close();
+    await stopChild(host!);
+    host = null;
+    // Open it again.
+    page = await context.newPage();
+    await page.goto(await start());
+    await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+    await expect(botRow(page, "Pip")).toHaveAccessibleName(/^Pip, working/);
+    await openTask(page, "Pip", "Two days in the mountains");
+    // The reply so far, still being written.
+    const live = page.getByTestId("live-turn");
+    await expect(live).toContainText("Here is the whole packing list");
+    await expect(live).not.toContainText("That is everything.");
+    await run;
+    // Then the finished reply, and the bot is no longer working.
+    await expect(page.getByTestId("transcript-turn").last()).toContainText("That is everything.", {
+      timeout: 15_000,
+    });
+    await expect(live).toHaveCount(0);
+    await expect(botRow(page, "Pip")).not.toHaveAccessibleName(/working/);
+  } finally {
+    await context.close();
+    if (host) await stopChild(host);
+    rmSync(data, { recursive: true, force: true });
+  }
 });
 
 test("F-263: a real gateway's protocol mismatch names the protocol it speaks", async () => {

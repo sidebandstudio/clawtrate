@@ -100,7 +100,7 @@ async function streamSteps(
     } else if (step.kind === "text") {
       for (const piece of chunkText(step.text)) {
         send({ content: piece });
-        await sleep(delayMs);
+        await sleep(step.delayMs ?? delayMs);
       }
     } else {
       const args = JSON.stringify(step.arguments);
