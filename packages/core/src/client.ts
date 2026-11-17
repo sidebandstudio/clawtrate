@@ -3178,8 +3178,10 @@ export class ClawtrateClient {
   private handleHello(hello: HelloOk, generation: number): void {
     const wasConnected = this.everConnected;
     this.everConnected = true;
+    // The protocol gives a boot id at most 96 characters; anything else names no start.
     const bootId = asRecord(hello.server)?.bootId;
-    this.gatewayBootId = typeof bootId === "string" && bootId ? bootId : null;
+    this.gatewayBootId =
+      typeof bootId === "string" && bootId.length > 0 && bootId.length <= 96 ? bootId : null;
     const scopes = [...(hello.auth.scopes ?? [])];
     const canWrite = scopeSatisfied(scopes, WRITE_SCOPE);
     const policy = asRecord(hello.policy);
