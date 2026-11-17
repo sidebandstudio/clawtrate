@@ -43,7 +43,9 @@ describe("the plugin opening", () => {
     });
     const config = devConfig("t", undefined, undefined, [plugin]);
     expect(config.plugins.load).toEqual({ paths: [plugin.dir] });
-    expect(config.plugins.entries["clawtrate-hello"]).toEqual(plugin.entry);
+    expect((config.plugins.entries as Record<string, unknown>)["clawtrate-hello"]).toEqual(
+      plugin.entry,
+    );
     expect(config.tools.allow).toContain("hello_tool");
     expect(sandboxProblems(config, undefined, undefined, [plugin])).toEqual([]);
   });
