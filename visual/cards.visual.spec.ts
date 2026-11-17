@@ -191,7 +191,8 @@ const PHONE = SIZES.find((size) => size.phone)!;
 for (const size of [WIDE, PHONE]) {
   for (const theme of THEMES) {
     test.describe(`cards ${size.name} ${theme}`, () => {
-      test.use(contextFor(size, theme));
+      // The same widths, made tall, so the tallest card fits whole inside the transcript.
+      test.use({ ...contextFor(size, theme), viewport: { width: size.width, height: 2400 } });
       for (const shot of SHOTS) {
         test(`${shot.rows}: ${shot.name} matches its baseline`, async ({ page }) => {
           await openFixture(page, `scene=${shot.scene}`, theme);
@@ -201,7 +202,10 @@ for (const size of [WIDE, PHONE]) {
           await (shot.prepare ?? open)(page, card);
           await settle(page);
           await page.mouse.move(0, 0);
-          await expect(card).toHaveScreenshot(`card-${shot.name}-${theme}-${size.name}.png`);
+          // The card alone: the controls that float over the transcript's top are not part of it.
+          await expect(card).toHaveScreenshot(`card-${shot.name}-${theme}-${size.name}.png`, {
+            style: ".conversation-header, .status-strip { visibility: hidden !important; }",
+          });
         });
       }
     });
