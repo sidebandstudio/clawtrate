@@ -1440,11 +1440,13 @@ const actionLines = (page: Page) =>
       nodes.map((node) => node.getAttribute("aria-label")!.replace(/, [0-9.]+ seconds$/, "")),
     );
 
+// These runs go to a task no other check sends to, so nothing another check leaves behind
+// (a stopped run, a refused send) changes them.
 test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five files fold into one card, the status line says the running card and brings it into view, and the run ends with a run line", async ({
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Otto", "Weekly backup check");
+  await openTask(page, "Pip", "Two days in the mountains");
   await composer(page).fill("Go through the workspace. #read-six #slow-tool 8");
   await page.keyboard.press("Enter");
   // While the slow tool runs: the reads are one card, the slow call its own card, running.
@@ -1462,7 +1464,7 @@ test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five 
     .trim();
   await expect(status.getByTestId("status-phrase")).toHaveText(words);
   await expect(status).toHaveAttribute("title", words);
-  await expect(status).toHaveAccessibleName(`Otto, working: ${words}. Show the action.`);
+  await expect(status).toHaveAccessibleName(`Pip, working: ${words}. Show the action.`);
   const live = await actionLines(page);
   // The text written beside the slow call is one bubble, not repeated as a streaming reply.
   await expect(page.getByText("I read six files in my workspace.", { exact: true })).toHaveCount(1);
@@ -1487,7 +1489,7 @@ test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five 
   // History reloaded: the page is loaded again and reads the task anew; the same cards.
   await page.reload();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
-  await openTask(page, "Otto", "Weekly backup check");
+  await openTask(page, "Pip", "Two days in the mountains");
   await expect(page.getByTestId("run-line").last()).toBeVisible({ timeout: 30_000 });
   // Every card is the same, except that the gateway's history keeps no `details` for a
   // tool-server result: without `mcpServer` and `mcpTool` the call is the general card (8.2).
@@ -1501,7 +1503,7 @@ test("F-092 F-294: a real step that fails shows its failure on its own line, and
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Otto", "Weekly backup check");
+  await openTask(page, "Pip", "Two days in the mountains");
   await composer(page).fill("Look for my old notes. #tool-fail");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });

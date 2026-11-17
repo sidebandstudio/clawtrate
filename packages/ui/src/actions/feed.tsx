@@ -136,6 +136,15 @@ function callEntries(
   return out;
 }
 
+/** Whether the engine's run already draws this text, as text beside a call or as its reply. */
+function shownByEngine(run: Run, text: string): boolean {
+  const t = text.trim();
+  return (
+    (run.text.trim() !== "" && run.text.trim().startsWith(t)) ||
+    (run.preambles ?? []).some((p) => p.text.trim() === t)
+  );
+}
+
 /** An assistant history item's record. */
 function itemEntries(
   item: TranscriptItem,
@@ -156,6 +165,8 @@ function itemEntries(
   const seen = new Map<string, number>();
   item.blocks.forEach((block, i) => {
     if (block.kind === "text") {
+      // The engine already shows this text for its run: a preamble, or the streaming reply.
+      if (fromEngine && run && shownByEngine(run, block.text)) return;
       const head = block.text.slice(0, 64);
       const n = (seen.get(head) ?? 0) + 1;
       seen.set(head, n);
