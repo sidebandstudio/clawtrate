@@ -1,54 +1,14 @@
-import type { ClawtrateState, ConnectionState, DiscoveryState } from "@clawtrate/core";
+import type { ClawtrateState } from "@clawtrate/core";
+import { canWrite } from "./access.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
-import { gatewayLabel } from "./format.ts";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
 import { readPreference, writePreference, type ThemeChoice } from "./preferences.ts";
 import { Rail } from "./Rail.tsx";
 import { useSelection } from "./selection.ts";
+import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
 import { WorkPanel } from "./WorkPanel.tsx";
-
-/**
- * One compact strip for connection and loading problems. It overlays the top of
- * the conversation instead of pushing the layout down, and it mounts only when
- * needed, so its countdown starts from the moment the problem appeared.
- */
-function StatusStrip({
-  connection,
-  discovery,
-}: {
-  connection: ConnectionState;
-  discovery: DiscoveryState;
-}) {
-  const send = useCommand();
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 500);
-    return () => clearInterval(timer);
-  }, []);
-  const seconds =
-    connection.retryAt !== null ? Math.max(0, Math.ceil((connection.retryAt - now) / 1000)) : null;
-  let tone: "warn" | "danger" = "warn";
-  let text: string;
-  if (connection.status === "error") {
-    tone = "danger";
-    text = `Disconnected from ${gatewayLabel(connection.gatewayUrl)}. ${connection.error?.message ?? ""}`;
-  } else if (connection.status !== "connected") {
-    text = `Connection lost. Reconnecting${seconds ? ` in ${seconds}s` : "…"}`;
-  } else {
-    tone = "danger";
-    text = discovery.error ?? "Could not load this gateway's bots and tasks.";
-  }
-  return (
-    <div className="status-strip" role="status" data-tone={tone} data-testid="status-strip">
-      <span className="status-strip-text">{text}</span>
-      <button type="button" onClick={() => void send({ type: "retry" })}>
-        Retry now
-      </button>
-    </div>
-  );
-}
 
 export function Shell({
   state,
@@ -144,7 +104,20 @@ export function Shell({
     drawerWasOpen.current = drawerOpen;
   }, [drawerOpen, panelOpen]);
 
-  const showStrip = state.connection.status !== "connected" || state.discovery.status === "error";
+  // One connection state drives the strip, the footer and the composer.
+  const transcript = taskKey ? state.transcripts[taskKey] : undefined;
+  const phase = useSyncPhase(state, transcript);
+  const strip = stripFor(state, phase, transcript);
+  const catchingUp =
+    phase === "dropped" &&
+    state.connection.status === "connected" &&
+    state.discovery.status !== "ready";
+  const reload = useCallback(() => {
+    if (!taskKey) return;
+    void send({ type: "closeSession", key: taskKey }).then(() =>
+      send({ type: "openSession", key: taskKey }),
+    );
+  }, [taskKey, send]);
 
   return (
     <div
@@ -158,7 +131,7 @@ export function Shell({
         tasksByBot={state.tasksByBot}
         discovery={state.discovery}
         connection={state.connection}
-        catchingUp={false}
+        catchingUp={catchingUp}
         selection={selection}
         onePane={onePane}
         onOpen={() => setView("detail")}
@@ -167,16 +140,29 @@ export function Shell({
         inert={drawerOpen}
       />
       <div className="main-pane" ref={mainRef}>
-        {showStrip && <StatusStrip connection={state.connection} discovery={state.discovery} />}
         <Conversation
           task={task}
           bot={bot}
           taskCount={selection.tasks.length}
           discovery={state.discovery}
-          transcript={taskKey ? state.transcripts[taskKey] : undefined}
+          transcript={transcript}
           panelOpen={panelOpen}
           onTogglePanel={togglePanel}
+          onOpenPanel={() => setPanel(true)}
           onBack={() => setView("list")}
+          onReload={reload}
+          strip={
+            strip && (
+              <StatusStrip
+                strip={strip}
+                retryAt={state.connection.retryAt}
+                onRetry={() => void send({ type: "retry" })}
+                onReload={reload}
+              />
+            )
+          }
+          refreshNote={phase !== "dropped" && refreshFailed(transcript)}
+          readOnly={!canWrite(state.connection)}
           toggleRef={toggleRef}
           inert={drawerOpen}
         />
