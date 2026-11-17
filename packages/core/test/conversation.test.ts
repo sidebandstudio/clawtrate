@@ -262,6 +262,40 @@ describe("sending (F-075, F-081, F-106)", () => {
     client.stop();
   });
 
+  it("F-095 F-433: reopened in the middle of a run whose reasoning came first, the reply streamed so far shows and goes on streaming", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        { role: "user", content: "How did last night go?", __openclaw: { id: "u1", seq: 1 } },
+        {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Check the backup log first." }],
+          __openclaw: { id: "a1", seq: 2, runId: "run-1" },
+        },
+      ],
+      hasMore: false,
+      inFlightRun: { runId: "run-1", text: "The backup finished at 02:14" },
+    });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().runs.some((run) => run.id === "run-1"));
+    const run = () => transcript().runs.find((each) => each.id === "run-1")!;
+    expect(run()).toMatchObject({ state: "running", text: "The backup finished at 02:14" });
+    expect(run().textComplete).toBe(false);
+    expect(run().steps.map((step) => step.kind)).toEqual(["reasoning"]);
+    gateway.emit("chat", {
+      runId: "run-1",
+      sessionKey: KEY,
+      seq: 3,
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "The backup finished at 02:14 and wrote 41 GB." }],
+      },
+    });
+    await until(() => run().text === "The backup finished at 02:14 and wrote 41 GB.");
+    client.stop();
+  });
+
   it("retries a refused message with the same key, and deletes one", async () => {
     const { client, gateway, transcript } = await openTask();
     let refuse = true;
