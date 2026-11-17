@@ -45,7 +45,13 @@ function record(value: unknown): Record<string, unknown> | null {
 
 // Approvals -------------------------------------------------------------------------
 
-export type Row = { label: string; value: string; mono?: boolean };
+export type Row = {
+  label: string;
+  value: string;
+  mono?: boolean;
+  /** Separate values that must keep their boundaries, such as a command's arguments. */
+  list?: string[];
+};
 
 /** A routine's standing grant, as the request's `scope` names it. */
 function standingGrant(card: ApprovalCard): { routine: string | null } | null {
@@ -88,6 +94,8 @@ export type ApprovalView = {
   warnings: string[];
   /** The exact text decided on, and its label. */
   exact: { label: string; text: string } | null;
+  /** The command's arguments, one by one, when the request gives them. */
+  argv: string[] | null;
   rows: Row[];
   /** Decisions the request offers, in the card's order. */
   once: boolean;
@@ -119,9 +127,11 @@ export function approvalView(
   const grant = standingGrant(card);
   let summary: ApprovalView["summary"];
   let exact: ApprovalView["exact"] = null;
+  const argv = card.exec?.commandArgv?.length ? card.exec.commandArgv : null;
   const rows: Row[] = [];
   if (card.exec) {
-    const command = card.exec.command ?? card.exec.commandArgv?.join(" ") ?? null;
+    // The command as the request gives it; its arguments are never joined into a stand-in for it.
+    const command = card.exec.command;
     summary = {
       lead: "Run ",
       code: command ? firstLine(command) : null,
@@ -129,6 +139,7 @@ export function approvalView(
       machine,
     };
     if (command) exact = { label: "Command", text: command };
+    if (argv) rows.push({ label: "Arguments", value: argv.join(" "), list: argv });
     if (machine) rows.push({ label: "Runs on", value: machine });
     if (card.exec.cwd) rows.push({ label: "Folder", value: card.exec.cwd, mono: true });
     if (card.agentId) rows.push({ label: "Asked by", value: asker });
@@ -161,10 +172,8 @@ export function approvalView(
 
   const formRows: Row[] = [];
   if (card.exec) {
-    const command = card.exec.commandArgv?.length
-      ? card.exec.commandArgv.join(" ")
-      : (card.exec.command ?? "");
-    if (command) formRows.push({ label: "Command", value: command, mono: true });
+    if (card.exec.command) formRows.push({ label: "Command", value: card.exec.command, mono: true });
+    if (argv) formRows.push({ label: "Arguments", value: argv.join(" "), list: argv, mono: true });
     if (card.exec.cwd) formRows.push({ label: "Folder", value: card.exec.cwd, mono: true });
     if (machine) formRows.push({ label: "Runs on", value: machine });
   }
@@ -187,6 +196,7 @@ export function approvalView(
     askerLine,
     warnings: approvalWarnings(card),
     exact,
+    argv,
     rows,
     once: card.allowedDecisions.includes("allow-once"),
     always: card.allowedDecisions.includes("allow-always"),

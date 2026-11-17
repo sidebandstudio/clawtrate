@@ -745,6 +745,33 @@
   overflow-wrap: anywhere;
 }
 
+/* A command's arguments, one per chip, so their boundaries stay visible. */
+.card .request-args {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.card .request-args code {
+  display: inline-block;
+  max-width: 100%;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.card .standing-grid .request-args {
+  margin: 0;
+}
+
 .card .request-actions {
   display: flex;
   flex-wrap: wrap;

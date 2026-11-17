@@ -66,6 +66,19 @@ function wholeText(value: Record<string, string | string[] | null>): string {
     .join("\n");
 }
 
+/** Arguments one by one, so their boundaries survive. */
+function ArgumentList({ args }: { args: string[] }) {
+  return (
+    <ol className="request-args" aria-label="Arguments">
+      {args.map((arg, index) => (
+        <li key={index}>
+          <code>{arg}</code>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function FullRequest({
   view,
   card,
@@ -92,12 +105,18 @@ function FullRequest({
             <CopyButton what={exact.label.toLowerCase()} text={exact.text} />
           </div>
         )}
+        {view.argv && !whole && (
+          <>
+            <p className="code-label">Arguments</p>
+            <ArgumentList args={view.argv} />
+          </>
+        )}
         {card.decisionCut && !whole && (
           <p className="request-cause">
             This shows the first part of a longer request. Read it whole before allowing it.
           </p>
         )}
-        <Fields rows={view.rows} />
+        <Fields rows={view.rows.filter((row) => !row.list)} />
       </div>
     </details>
   );
@@ -480,7 +499,15 @@ function PendingApproval({
                 {view.form.rows.map((row) => (
                   <div key={row.label} className="standing-row">
                     <dt>{row.label}</dt>
-                    <dd>{row.mono ? <code className="tool-name">{row.value}</code> : row.value}</dd>
+                    <dd>
+                      {row.list ? (
+                        <ArgumentList args={row.list} />
+                      ) : row.mono ? (
+                        <code className="tool-name">{row.value}</code>
+                      ) : (
+                        row.value
+                      )}
+                    </dd>
                   </div>
                 ))}
               </dl>
