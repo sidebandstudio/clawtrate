@@ -9,6 +9,8 @@
 //   user text "#ask <sessionKey> <message>" -> sessions_send tool call
 //   user text "#slow <seconds> <text>" -> stream text slowly (abort, steer)
 //   user text "#say <text>"         -> reply with exactly <text> (e.g. NO_REPLY)
+//   exec auto-review request        -> JSON verdict: deny if the command
+//                                      contains "rm ", else allow at low risk
 //   anything else                   -> stream reasoning, then "Echo: <text>"
 //
 // Usage: node fake-openai.mjs [--port 19102] [--log /path/requests.jsonl]
@@ -61,6 +63,18 @@ function plan(body) {
     const name = call?.function?.name ?? "tool";
     const result = textOf(last.content).slice(0, 400);
     return { reasoning: `The ${name} call finished.`, text: `Tool ${name} returned: ${result}` };
+  }
+  // Exec auto-review (tools.exec.mode "auto"): answer with the reviewer's JSON.
+  const lastText = textOf(last.content);
+  if (lastText.includes("UNTRUSTED_EXEC_REQUEST_JSON_BEGIN")) {
+    const deny = /"command":\s*"[^"]*\brm /.test(lastText);
+    return {
+      text: JSON.stringify(
+        deny
+          ? { decision: "deny", risk: "high", rationale: "Scripted reviewer: deletes files." }
+          : { decision: "allow", risk: "low", rationale: "Scripted reviewer: read-only command." },
+      ),
+    };
   }
   // Utility calls (session activity recaps, titles) carry no tools and a JSON
   // body; answer briefly so recaps do not grow by echoing themselves.
