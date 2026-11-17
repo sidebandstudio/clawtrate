@@ -20,6 +20,14 @@ const files = "&panel=open&tab=files";
 // Part 1: the pane and its files ---------------------------------------------------------------
 
 let p = await open(files);
+check("the pane's one tab bar: Details, Files, Computer, Settings", await q(p, () => [...document.querySelectorAll(".tabs .tab")].map((x) => x.textContent).join() === "Details,Files,Computer,Settings"));
+await p.focus("#tab-files");
+await p.keyboard.press("End");
+check("End reaches Settings, which keeps its place when the task changes", await q(p, () => document.activeElement.id === "tab-settings" && !document.querySelector("#panel-settings").hidden));
+await p.click('.task[data-task="o3"]');
+check("…the tab stays as it is on another task", await q(p, () => document.querySelector("#tab-settings").getAttribute("aria-selected") === "true"));
+await p.click("#tab-files");
+await p.click('.task[data-task="o1"]');
 check("F-152 files tab lists the task's changed and read files", await q(p, () => {
   const heads = [...document.querySelectorAll("#panel-files .files h3")].map((h) => h.textContent);
   return heads.join() === "Changed,Read,Sent in chat" && document.querySelectorAll('#panel-files [data-open]').length === 5;

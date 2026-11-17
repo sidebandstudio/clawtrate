@@ -48,23 +48,23 @@ Reference
 
 ## 1. How the pane works
 
-**Tabs.** Details, Files, Computer, as `visual-language.md` section 9 has them: plain words, centred, the chosen one on a `--bg-selected` pill. Nothing else is added to the row. The Computer tab adds one mark when the bot's browser is in use (section 15).
+**Tabs.** The pane has one tab bar, shared with the design of a bot's settings (`bots.md`, section 8): Details, Files, Computer, Settings, in that order, as `visual-language.md` section 9 draws them: plain words, centred, the chosen one on a `--bg-selected` pill. Details, Files and Computer are about the open task; Settings is about the bot, whichever task is open, and is specified there. This document adds nothing to the row except one mark on Computer while the bot's browser is in use (section 15). The arrows, Home and End move across all four; the bar behaves the same docked, as a drawer and as the phone's sheet.
 
 **What opens it, and on which tab.**
 
-| From                                                          | Opens on                                                 | Focus, docked                         | Focus, drawer or sheet |
-| ------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------- | ---------------------- |
-| The title pill, the Work pane button, ⌘\                      | The tab last shown for this task; Details the first time | Stays where it was                    | Close                  |
-| "Open file" on a step (section 10)                            | Files, with that file open                               | The file's name, the reader's heading | The file's name        |
-| A file or media card in the conversation (section 12)         | Files, with that item open                               | The item's name                       | The item's name        |
-| The computer button in the conversation's header (section 15) | Computer                                                 | The Computer tab                      | The Computer tab       |
+| From                                                          | Opens on                                   | Focus, docked                         | Focus, drawer or sheet |
+| ------------------------------------------------------------- | ------------------------------------------ | ------------------------------------- | ---------------------- |
+| The title pill, the Work pane button, ⌘\                      | The tab last shown; Details the first time | Stays where it was                    | Close                  |
+| "Open file" on a step (section 10)                            | Files, with that file open                 | The file's name, the reader's heading | The file's name        |
+| A file or media card in the conversation (section 12)         | Files, with that item open                 | The item's name                       | The item's name        |
+| The computer button in the conversation's header (section 15) | Computer                                   | The Computer tab                      | The Computer tab       |
 
 When the person asked for a particular file or the computer, focus goes to it, docked or not: they chose to go there. Opening the pane by itself does not take focus while docked, as `visual-language.md` says.
 
 **The pane follows the open task.** It always shows the open task's bot and that task's files and computer. It never shows another task's.
 
-- The pane remembers, for each task, its tab, where Files was (the folder or the file open, and the view), and how far each was scrolled. Switching tasks and coming back restores all of it.
-- Switching to a task the pane has not shown yet keeps the pane open on the same tab and starts Files at its top.
+- The chosen tab stays as it is when the person switches tasks, so Settings, which is about the bot, does not jump away. What the pane remembers for each task is where Files was (the folder or the file open, and the view) and how far each level was scrolled; coming back to a task restores it.
+- Switching to a task the pane has not shown yet starts Files at its top.
 - With no task open, Files and Computer show one line: "Pick one of <Bot>'s tasks to see its files." and "Pick one of <Bot>'s tasks to see its computer." Details keeps its own line.
 
 **One navigation inside Files.** Files is a short stack: the task's list, then a folder of the workspace, then a file. Each level below the top has a Back button at its top left; Back returns to the level above with its scroll position and the row that was opened focused. There are no breadcrumbs and no second row of tabs.

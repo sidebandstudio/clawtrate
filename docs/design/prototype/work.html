@@ -117,11 +117,16 @@
                   <button type="button" class="tab" role="tab" id="tab-details" aria-controls="panel-details" aria-selected="true" data-tab="details">Details</button>
                   <button type="button" class="tab" role="tab" id="tab-files" aria-controls="panel-files" aria-selected="false" tabindex="-1" data-tab="files">Files</button>
                   <button type="button" class="tab" role="tab" id="tab-computer" aria-controls="panel-computer" aria-selected="false" tabindex="-1" data-tab="computer">Computer</button>
+                  <button type="button" class="tab" role="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="false" tabindex="-1" data-tab="settings">Settings</button>
                 </div>
                 <div class="work-sections">
                   <div role="tabpanel" id="panel-details" aria-labelledby="tab-details" tabindex="0"></div>
                   <div role="tabpanel" id="panel-files" aria-labelledby="tab-files" tabindex="0" hidden></div>
                   <div role="tabpanel" id="panel-computer" aria-labelledby="tab-computer" tabindex="0" hidden></div>
+                  <!-- A bot's settings are specified in bots.md, section 8, and shown in bots.html. -->
+                  <div role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" tabindex="0" hidden>
+                    <p class="work-note">A bot's settings are designed in docs/design/bots.md and shown in the prototype's bots.html. This page shows the other three tabs.</p>
+                  </div>
                 </div>
               </aside>
             </div>
