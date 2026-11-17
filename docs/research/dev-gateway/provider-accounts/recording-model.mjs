@@ -4,10 +4,12 @@
 //   node recording-model.mjs --port <19200-19999> --label <name> --log <file.jsonl>
 //
 // Every POST /v1/chat/completions appends one JSON line to the log:
-//   {t, label, port, auth, model, marker, serverTools}
+//   {t, label, port, auth, model, marker, tag, serverTools}
 // where `auth` is the Authorization header the gateway sent (a scripted
 // placeholder key, never a real credential) and `marker` is the control word
-// found in the last user message, if any. Prompt text is not logged: the
+// found in the last user message, if any, and `tag` is the first `RUN-<letters
+// and digits>` word in it, so a probe can attribute a request to the run it
+// started (the gateway's own maintenance runs carry no tag). Prompt text is not logged: the
 // gateway adds runtime context to it. `serverTools` lists the offered tool names
 // that come from a tool server (they contain "__").
 // The reply is one streamed sentence naming the label, so a transcript also
@@ -108,9 +110,10 @@ const server = createServer(async (req, res) => {
   const keyStatus = failKeys[key] ?? null;
   const promptMarker = ["FAIL401", "FAIL402", "FAIL429", "SLOW"].find((word) => prompt.includes(word)) ?? null;
   const marker = keyStatus ? `key-${keyStatus}` : promptMarker;
+  const tag = /\bRUN-[A-Za-z0-9]+\b/.exec(prompt)?.[0] ?? null;
   appendFileSync(
     values.log,
-    `${JSON.stringify({ t: Date.now(), label, port, auth: req.headers.authorization ?? null, model: body.model ?? null, marker, serverTools: (body.tools ?? []).map((t) => t.function?.name).filter((n) => typeof n === "string" && n.includes("__")) })}\n`,
+    `${JSON.stringify({ t: Date.now(), label, port, auth: req.headers.authorization ?? null, model: body.model ?? null, marker, tag, serverTools: (body.tools ?? []).map((t) => t.function?.name).filter((n) => typeof n === "string" && n.includes("__")) })}\n`,
   );
   if (marker === "SLOW") await new Promise((resolve) => setTimeout(resolve, 4000));
   const failure = keyStatus ?? { FAIL401: 401, FAIL402: 402, FAIL429: 429 }[marker] ?? null;

@@ -24,9 +24,19 @@
 //     runs follow;
 //   - the same with bot `ord-<code>`, which also has a stored one-profile order
 //     `[<p>:one]` set with `openclaw models auth order set --agent ord-<code>`;
-//   - an explicit session selection of the other account on an ordered bot.
+//   - an explicit session selection of the other account on an ordered bot;
+//   - what a client can read after a switch: `logs.tail` (on a read-only
+//     connection) with the instance's log written to a file in its own state
+//     folder, `models.authStatus` `lastUsedAt` for a bot whose two profiles are
+//     in its own store (`loc-401`), and a configured `displayName` label;
+//   - two other ways to start a run on the other account of an ordered bot: a
+//     new task from `sessions.create {model:"…@<p>:two"}` and a routine whose
+//     `payload.model` names `…@<p>:two` (an agent-turn routine, removed after).
+// Each run's message carries a `RUN-…` tag that the recording server logs, so
+// requests are attributed to the run that caused them, not to a time window.
 // No real provider, credential or sign-in is involved.
 
+import crypto from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -69,11 +79,13 @@ const accountOfKey = (auth) => (auth ? auth.replace(/^Bearer scripted-/, "") : "
 const model = { id: "dev-1", name: "Scripted dev model", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192 };
 
 /** One run: the requests it caused, its terminal event, its events, and what the client can read back afterwards. */
-async function run(agentId, sessionName, message) {
-  const sessionKey = `agent:${agentId}:${sessionName}`;
-  const before = recorders.requests().length;
-  const r = await sendAndCapture(gw, sessionKey, message);
-  const reached = recorders.requests().slice(before);
+const newTag = () => `RUN-${crypto.randomBytes(5).toString("hex")}`;
+const tagged = (tag) => recorders.requests().filter((x) => x.tag === tag);
+async function run(agentId, sessionName, message, key = `agent:${agentId}:${sessionName}`) {
+  const sessionKey = key;
+  const tag = newTag();
+  const r = await sendAndCapture(gw, sessionKey, `${message} ${tag}`);
+  const reached = tagged(tag);
   const history = await gw.call("chat.history", { sessionKey, limit: 4 });
   const lastAssistant = (history.messages ?? []).filter((m) => m.role === "assistant").at(-1);
   const sessions = await gw.call("sessions.list", { limit: 100 });
@@ -86,9 +98,14 @@ async function run(agentId, sessionName, message) {
     metadata = { error: String(err?.message ?? err) };
   }
   const { message: _m, ...terminal } = r.terminal;
+  const phases = r.events.filter((e) => e.event === "agent" && e.payload?.stream === "lifecycle").map((e) => e.payload.data ?? {});
   return {
     sessionKey,
+    runId: r.runId,
     reached: reached.map((x) => ({ server: x.label, account: accountOfKey(x.auth), marker: x.marker })),
+    fallbackSteps: phases.filter((d) => d.phase === "fallback_step"),
+    receipt: phases.find((d) => d.terminalReceipt)?.terminalReceipt ?? null,
+    rawEvents: r.events,
     terminal: { ...terminal, finalText: r.terminal.state === "final" ? JSON.stringify(r.terminal.message?.content ?? r.terminal.message ?? null).slice(0, 120) : undefined },
     events: summarizeEvents(r.events),
     historyLastAssistant: lastAssistant ? Object.fromEntries(Object.entries(lastAssistant).filter(([k]) => k !== "content")) : null,
@@ -102,8 +119,42 @@ const profilesOf = async (agentId, provider) => {
   return p ? { status: p.status, profileOrder: p.profileOrder, profileOrderLocked: p.profileOrderLocked, profiles: p.profiles.map((x) => ({ profileId: x.profileId, type: x.type, status: x.status, reasonCode: x.reasonCode, source: x.source })) } : null;
 };
 
+const hash12 = (profileId) => `sha256:${crypto.createHash("sha256").update(profileId).digest("hex").slice(0, 12)}`;
+let reader;
+/** Log records for one run, read back through logs.tail on the read-only connection. */
+async function logRecordsFor(runId) {
+  const t = await reader.call("logs.tail", { limit: 5000, maxBytes: 1_000_000 });
+  return {
+    fileName: path.basename(t.file),
+    records: t.lines
+      .filter((l) => l.includes(runId))
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return { raw: l.slice(0, 300) };
+        }
+      }),
+  };
+}
+const failoverDecisions = (records) =>
+  records
+    .map((r) => Object.values(r).find((v) => v && typeof v === "object" && v.event === "embedded_run_failover_decision") ?? (r.event === "embedded_run_failover_decision" ? r : null))
+    .filter(Boolean)
+    .map((d) => ({ decision: d.decision, stage: d.stage, failoverReason: d.failoverReason, provider: d.provider, model: d.model, profileId: d.profileId }));
+const sameRoute = (receipt) => receipt && receipt.requested?.provider === receipt.effective?.provider && receipt.requested?.model === receipt.effective?.model;
+
 try {
   record("hello", { version: gw.hello.server?.version, scopes: gw.hello.auth?.scopes });
+
+  // 0. The instance's log goes to a file in its own state folder, and a second, read-only connection reads it.
+  const logFile = path.join(inst.stateDir, "logs", "probe-gateway.log");
+  await gw.patchConfig({ logging: { file: logFile } });
+  await sleep(1500);
+  reader = await connectGateway(inst, ["operator.read"]);
+  const firstTail = await reader.call("logs.tail", { limit: 1 });
+  record("logs.tail on an operator.read connection", { scopes: reader.hello.auth?.scopes, fileName: path.basename(firstTail.file), inStateFolder: firstTail.file === logFile });
+  check(firstTail.file === logFile, "logs.tail reads the instance's own log file, on an operator.read connection");
 
   // 1. Providers: `acct` for the baseline, one per scenario, and `other` as an inherited fallback.
   const scenarios = [401, 402, 429].flatMap((code) => [
@@ -182,8 +233,68 @@ try {
     };
     console.log(JSON.stringify(out.steps.at(-1).value.summary));
     for (const r of [first, second]) check(!r.reached.some((x) => x.server === "other"), `${s.bot} ${s.code}: no request reached the inherited fallback provider`);
-    if (s.mode === "ord") for (const r of [first, second]) check(!r.reached.some((x) => x.account === `${s.provider}-two`), `${s.bot} ${s.code}: with the stored one-profile order no request used ${s.provider}:two`);
+    const one = `${s.provider}-one`;
+    const two = `${s.provider}-two`;
+    const reason = { 401: "auth", 402: "billing", 429: "rate_limit" }[s.code];
+    const logs = await logRecordsFor(first.runId);
+    const decisions = failoverDecisions(logs.records);
+    out.steps.at(-1).value.firstRunLog = { fileName: logs.fileName, decisions, recordCount: logs.records.length };
+    console.log(JSON.stringify({ decisions }));
+    if (s.mode === "pin") {
+      const ones = first.reached.filter((x) => x.account === one).length;
+      check(first.terminal.state === "final" && first.reached.at(-1)?.account === two && ones === (s.code === 429 ? 10 : 1) && first.reached.length === ones + 1, `${s.bot} ${s.code}: the first run tried ${s.provider}:one${s.code === 429 ? " ten times" : ""}, then finished on ${s.provider}:two`);
+      check(first.fallbackSteps.length === 0 && sameRoute(first.receipt), `${s.bot} ${s.code}: no fallback_step, and the receipt's requested and effective provider and model agree`);
+      check(!first.rawEvents.some((e) => JSON.stringify(e.payload ?? {}).includes(`${s.provider}:`)), `${s.bot} ${s.code}: no event the client received names either profile`);
+      check(second.terminal.state === "final" && second.reached.length === 1 && second.reached[0].account === two, `${s.bot} ${s.code}: the second run went straight to ${s.provider}:two`);
+      check(decisions.some((d) => d.decision === "rotate_profile" && d.profileId === hash12(`${s.provider}:one`)), `${s.bot} ${s.code}: logs.tail has a rotate_profile decision for the run, with the hash of ${s.provider}:one`);
+      check(!decisions.some((d) => d.profileId === hash12(`${s.provider}:two`)), `${s.bot} ${s.code}: the log names no decision for ${s.provider}:two (the destination)`);
+    } else {
+      for (const r of [first, second]) check(!r.reached.some((x) => x.account === two), `${s.bot} ${s.code}: with the stored one-profile order no request used ${s.provider}:two`);
+      check(first.terminal.state === "error" && first.terminal.errorDetail?.failoverReason === reason && first.fallbackSteps.some((d) => d.fallbackStepFinalOutcome === "chain_exhausted"), `${s.bot} ${s.code}: the first run ended in error with errorDetail.failoverReason ${reason} and a chain_exhausted fallback_step`);
+      check(second.terminal.state === "error" && second.reached.length === 0 && !second.terminal.errorDetail && typeof second.terminal.errorMessage === "string", `${s.bot} ${s.code}: the second run made no request and ended in error with a message and no errorDetail`);
+      check(!decisions.some((d) => d.decision === "rotate_profile"), `${s.bot} ${s.code}: logs.tail has no rotate_profile decision for the run`);
+    }
   }
+
+  // 6a. A bot whose two profiles live in its own store: lastUsedAt before and after a switch.
+  await gw.patchConfig({ models: { providers: { loc401: { baseUrl: `http://127.0.0.1:${accountsPort}/v1`, api: "openai-completions", models: [model] } } } });
+  await gw.call("agents.create", { name: "loc-401", workspace: path.join(inst.stateDir, "workspace-loc-401"), model: "loc401/dev-1@loc401:one" });
+  for (const account of ["one", "two"]) {
+    const r = await cli(["models", "auth", "paste-api-key", "--agent", "loc-401", "--provider", "loc401", "--profile-id", `loc401:${account}`], `${keyOf("loc401", account)}\n`);
+    if (r.status !== 0) throw new Error(`paste-api-key --agent loc-401 loc401:${account} failed: ${r.stderr || r.stdout}`);
+  }
+  await gw.patchConfig({ agents: { entries: { "loc-401": { model: { primary: "loc401/dev-1@loc401:one", fallbacks: [] } } } } });
+  await sleep(1500);
+  const lastUsed = async (agentId, provider, connection = gw) => {
+    const st = await connection.call("models.authStatus", { agentId });
+    return Object.fromEntries((st.providers.find((x) => x.provider === provider)?.profiles ?? []).map((x) => [x.profileId, { source: x.source, lastUsedAt: x.lastUsedAt ?? null }]));
+  };
+  const locBase = await run("loc-401", "switch", "Baseline on the local profile");
+  const locAfterBase = await lastUsed("loc-401", "loc401");
+  await recorders.control(accountsPort, { [keyOf("loc401", "one")]: 401 });
+  const locSwitch = await run("loc-401", "switch", "First run after the local account starts failing");
+  await recorders.control(accountsPort, {});
+  const locAfterSwitch = await lastUsed("loc-401", "loc401");
+  const locAfterSwitchReadOnly = await lastUsed("loc-401", "loc401", reader);
+  const sharedPin = await lastUsed("pin-401", "pin401");
+  record("lastUsedAt: bot-local profiles (loc-401) and shared profiles (pin-401)", {
+    baseline: { reached: locBase.reached.map((x) => x.account), state: locBase.terminal.state, lastUsed: locAfterBase },
+    switch: { reached: locSwitch.reached.map((x) => x.account), state: locSwitch.terminal.state, lastUsedAdmin: locAfterSwitch, lastUsedReadOnly: locAfterSwitchReadOnly, finishedAt: Date.now() },
+    sharedPin401: sharedPin,
+  });
+  check(locBase.reached.length === 1 && locBase.reached[0].account === "loc401-one" && locAfterBase["loc401:one"]?.lastUsedAt && !locAfterBase["loc401:two"]?.lastUsedAt, "loc-401 baseline: served by loc401:one, which alone has lastUsedAt");
+  check(locSwitch.terminal.state === "final" && locSwitch.reached.at(-1)?.account === "loc401-two" && locAfterSwitch["loc401:two"]?.lastUsedAt > locAfterBase["loc401:one"].lastUsedAt, "loc-401 switch: served by loc401:two, whose lastUsedAt is now set and newest (admin connection)");
+  check(Object.values(locAfterSwitchReadOnly).every((x) => x.lastUsedAt === null), "lastUsedAt is withheld from an operator.read connection");
+  check(Object.values(sharedPin).every((x) => x.lastUsedAt === null), "shared profiles used by pin-401 report no lastUsedAt");
+
+  // 6c. A configured display name as the account's label.
+  await gw.patchConfig({ auth: { profiles: { "acct:one": { provider: "acct", mode: "api_key", displayName: "Work account" } } } });
+  await sleep(1500);
+  const labelled = (await gw.call("models.authStatus", { agentId: "on-one" })).providers.find((x) => x.provider === "acct")?.profiles.find((x) => x.profileId === "acct:one");
+  const labelledReadOnly = (await reader.call("models.authStatus", { agentId: "on-one" })).providers.find((x) => x.provider === "acct")?.profiles.find((x) => x.profileId === "acct:one");
+  const labelMeta = await gw.call("chat.metadata", { sessionKey: "agent:on-one:baseline" });
+  record("auth.profiles.acct:one.displayName = \"Work account\"", { authStatusAdmin: labelled?.displayName ?? null, authStatusReadOnly: labelledReadOnly?.displayName ?? null, chatMetadataLabel: labelMeta.accountSelection?.label ?? null });
+  check(labelled?.displayName === "Work account", "a configured displayName is returned by models.authStatus to an admin connection");
 
   // 6b. After the 401 cooldown (30 s for a first auth failure) has passed.
   for (const bot of ["pin-401", "ord-401"]) {
@@ -200,11 +311,35 @@ try {
   record("sessions.patch model ord401/dev-1@ord401:two on ord-401", { ok: patched?.ok, entry: Object.fromEntries(Object.entries(patched?.entry ?? {}).filter(([k]) => /auth|model|provider/i.test(k))) });
   const explicit = await run("ord-401", "explicit", "Which account answers with the session selection?");
   record("ord-401 run after the session selected ord401:two", explicit);
+  check(explicit.terminal.state === "final" && explicit.reached.length === 1 && explicit.reached[0].account === "ord401-two", "an explicit session selection of ord401:two on ord-401 overrode the stored order");
+
+  // 8. A new task created with the other account.
+  const created = await gw.call("sessions.create", { agentId: "ord-401", key: "agent:ord-401:new-task", model: "ord401/dev-1@ord401:two" });
+  record("sessions.create {agentId:ord-401, model:ord401/dev-1@ord401:two}", { ok: created?.ok, key: created?.key, entry: Object.fromEntries(Object.entries(created?.entry ?? {}).filter(([k]) => /auth|model|provider/i.test(k))) });
+  const newTask = await run("ord-401", "new-task", "Which account answers in the new task?", created?.key ?? "agent:ord-401:new-task");
+  record("ord-401 run in the task created with ord401:two", { reached: newTask.reached, state: newTask.terminal.state, metadata: newTask.metadata });
+  check(newTask.terminal.state === "final" && newTask.reached.length === 1 && newTask.reached[0].account === "ord401-two", "a task created with sessions.create {model:…@ord401:two} ran on ord401:two despite the stored order");
+
+  // 9. A routine whose payload names the other account.
+  const tag = newTag();
+  const job = await gw.call("cron.add", { name: "probe-account-routine", agentId: "ord-401", enabled: false, schedule: { kind: "at", at: new Date(Date.now() + 86_400_000).toISOString() }, sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: `Which account answers in the routine? ${tag}`, model: "ord401/dev-1@ord401:two" } });
+  const jobId = job?.id ?? job?.job?.id ?? job?.jobId;
+  let ran;
+  try {
+    ran = await gw.call("cron.run", { id: jobId, mode: "force", waitTimeoutMs: 120_000 }, 150_000);
+  } finally {
+    await gw.call("cron.remove", { id: jobId }).catch(() => {});
+  }
+  for (let i = 0; i < 30 && tagged(tag).length === 0; i += 1) await sleep(1000);
+  const routineReached = tagged(tag).map((x) => x.account ?? accountOfKey(x.auth));
+  record("routine (agentTurn, payload.model ord401/dev-1@ord401:two) on ord-401", { jobId, run: ran ? Object.fromEntries(Object.entries(ran).filter(([k]) => /status|ok|ran|error|outcome/i.test(k))) : null, reached: routineReached });
+  check(routineReached.length >= 1 && routineReached.every((a) => a === "ord401-two"), "a routine whose payload names ord401:two ran on ord401:two despite the stored order");
 } catch (err) {
   record("probe stopped", String(err?.stack ?? err));
   check(false, "probe ran to the end");
 } finally {
   await gw.stop();
+  await reader?.stop();
   recorders.stop();
   out.checks = checks;
   if (opts.out) writeFileSync(opts.out, `${JSON.stringify(out, null, 2)}\n`);
