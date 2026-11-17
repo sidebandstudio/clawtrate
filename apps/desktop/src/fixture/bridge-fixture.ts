@@ -3,13 +3,30 @@
 // everything in memory, and never opens a socket or makes a request.
 
 import {
+  applyApprovalResolved,
+  applyQuestionResolved,
+  decisionText,
   initialState,
+  markApproval,
+  markQuestion,
+  type ApprovalCard,
   type BridgeCommand,
+  type BridgeResultFor,
   type ClawtrateBridge,
   type ClawtrateState,
   type ConnectionState,
   type HostInfo,
+  type TaskActivity,
+  type Transcript,
 } from "@clawtrate/core";
+import {
+  CARD_SCENES,
+  cardScene,
+  isCardScene,
+  wholeApproval,
+  type CardSceneName,
+  type DecisionMode,
+} from "./cards.ts";
 import { FAILING_TASK, OPEN_TASK, fixtureBots, fixtureTasks, fixtureTranscripts } from "./data.ts";
 
 export const FIXTURE_INFO: HostInfo = {
@@ -46,7 +63,7 @@ export const SCENES = [
   "zero-tasks",
 ] as const;
 
-export type SceneName = (typeof SCENES)[number];
+export type SceneName = (typeof SCENES)[number] | CardSceneName;
 
 type Step = { after: number; change: (state: ClawtrateState) => ClawtrateState };
 
@@ -168,6 +185,7 @@ function failTranscript(state: ClawtrateState, key: string, keepItems: boolean):
 /** The scene's first state, and the changes that follow it. */
 function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: Step[] } {
   const base = loaded(now);
+  if (isCardScene(name)) return { initial: cardScene(name, now).change(base), steps: [] };
   switch (name) {
     case "main":
       return { initial: base, steps: [] };
@@ -289,7 +307,46 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
 }
 
 export function isScene(value: string | null): value is SceneName {
-  return value !== null && (SCENES as readonly string[]).includes(value);
+  return value !== null && [...SCENES, ...CARD_SCENES].includes(value as SceneName);
+}
+
+/** Change one task's live state, as the engine would. */
+function inTask(
+  state: ClawtrateState,
+  key: string,
+  change: (activity: TaskActivity) => TaskActivity,
+): ClawtrateState {
+  const transcript = state.transcripts[key];
+  if (!transcript) return state;
+  return {
+    ...state,
+    transcripts: {
+      ...state.transcripts,
+      [key]: { ...transcript, ...change(transcript) } as Transcript,
+    },
+  };
+}
+
+/** The strings the gateway would report for an answer: each chosen option's value or label. */
+function answerStrings(
+  transcript: Transcript | undefined,
+  questionId: string,
+  answers: Record<string, Array<string | { option: number }>>,
+): Record<string, string[]> {
+  const card = transcript?.questions.find((each) => each.id === questionId);
+  return Object.fromEntries(
+    Object.entries(answers).map(([id, list]) => {
+      const item = card?.questions.find((each) => each.id === id);
+      return [
+        id,
+        list.map((answer) => {
+          if (typeof answer === "string") return answer;
+          const option = item?.options.find((each) => each.index === answer.option);
+          return option?.value ?? option?.label ?? String(answer.option);
+        }),
+      ];
+    }),
+  );
 }
 
 export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
@@ -305,6 +362,12 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
   };
   for (const step of steps) setTimeout(() => set(step.change(state)), step.after);
   let pairingChecks = 0;
+  // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
+  const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
+  const later = (ms: number, change: (state: ClawtrateState) => ClawtrateState) =>
+    setTimeout(() => set(change(state)), ms);
+  const approval = (key: string, id: string): ApprovalCard | undefined =>
+    state.transcripts[key]?.approvals.find((each) => each.id === id);
 
   async function apply(command: BridgeCommand): Promise<void> {
     switch (command.type) {
@@ -334,7 +397,152 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
       }
       case "openSession":
       case "closeSession":
+      case "requestAccess":
         return;
+      case "resolveApproval": {
+        const { key, approvalId, decision } = command;
+        const card = approval(key, approvalId);
+        if (!card || card.status !== "pending") throw new Error("That approval is no longer open.");
+        if (decision !== "deny" && card.decisionError === "unknown") {
+          throw new Error("Whether the last decision was applied is not known yet.");
+        }
+        if (
+          decision !== "deny" &&
+          card.decisionCut &&
+          command.shownDigest !== card.decisionDigest
+        ) {
+          throw new Error("This approval's text was cut; read it whole before allowing it.");
+        }
+        set(
+          inTask(state, key, (a) =>
+            markApproval(a, approvalId, {
+              submitting: true,
+              error: null,
+              decisionError: null,
+              stillOpen: false,
+            }),
+          ),
+        );
+        const mode = decision === "deny" ? "apply" : decisions;
+        if (mode === "apply") {
+          later(400, (s) =>
+            inTask(s, key, (a) =>
+              applyApprovalResolved(a, {
+                id: approvalId,
+                status: decision === "deny" ? "denied" : "allowed",
+                decision,
+                reason: "user",
+                resolvedAt: Date.now(),
+                resolvedBy: null,
+                resolver: null,
+                applicationStatus: null,
+                authoritative: true,
+                lossy: false,
+                sessionKey: key,
+                runId: card.runId,
+              }),
+            ),
+          );
+        } else if (mode === "refuse") {
+          later(400, (s) =>
+            inTask(s, key, (a) =>
+              markApproval(a, approvalId, {
+                submitting: false,
+                error: "This host is set to always ask, so nothing can be saved for it.",
+                decisionError: "refused",
+                stillOpen: false,
+              }),
+            ),
+          );
+          later(800, (s) =>
+            inTask(s, key, (a) =>
+              markApproval(a, approvalId, {
+                submitting: false,
+                error: "This host is set to always ask, so nothing can be saved for it.",
+                stillOpen: true,
+              }),
+            ),
+          );
+        } else {
+          later(400, (s) =>
+            inTask(s, key, (a) =>
+              markApproval(a, approvalId, {
+                submitting: false,
+                error: "The gateway did not answer within 60 seconds.",
+                decisionError: "unknown",
+              }),
+            ),
+          );
+        }
+        return;
+      }
+      case "checkApproval": {
+        // Read back: still pending on the gateway, so the unanswered decision was not applied.
+        const { key, approvalId } = command;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        set(
+          inTask(state, key, (a) => {
+            const card = a.approvals.find((each) => each.id === approvalId);
+            if (!card || card.decisionError === null) return a;
+            return card.decisionError === "unknown"
+              ? markApproval(a, approvalId, {
+                  submitting: false,
+                  error: null,
+                  decisionError: null,
+                  stillOpen: false,
+                })
+              : markApproval(a, approvalId, {
+                  submitting: false,
+                  error: card.error,
+                  stillOpen: true,
+                });
+          }),
+        );
+        return;
+      }
+      case "answerQuestion": {
+        const { key, questionId } = command;
+        const answers = answerStrings(state.transcripts[key], questionId, command.answers);
+        set(
+          inTask(state, key, (a) => markQuestion(a, questionId, { submitting: true, error: null })),
+        );
+        later(300, (s) =>
+          inTask(s, key, (a) =>
+            applyQuestionResolved(a, { id: questionId, status: "answered", answers: { answers } }),
+          ),
+        );
+        return;
+      }
+      case "dismissQuestion": {
+        const { key, questionId } = command;
+        set(
+          inTask(state, key, (a) => markQuestion(a, questionId, { submitting: true, error: null })),
+        );
+        later(300, (s) =>
+          inTask(s, key, (a) => applyQuestionResolved(a, { id: questionId, status: "cancelled" })),
+        );
+        return;
+      }
+    }
+  }
+
+  async function answer<C extends BridgeCommand>(command: C): Promise<BridgeResultFor<C>> {
+    switch (command.type) {
+      case "readApprovalText": {
+        const whole = wholeApproval(name, now, command.approvalId);
+        if (!whole) throw new Error("That approval is no longer open.");
+        return { text: decisionText(whole), digest: whole.decisionDigest } as BridgeResultFor<C>;
+      }
+      case "readStepRaw": {
+        const transcript = state.transcripts[command.key];
+        const step = transcript?.runs
+          .flatMap((run) => run.steps)
+          .find((each) => each.id === command.stepId);
+        return (step?.raw ? { status: "available", raw: step.raw } : null) as BridgeResultFor<C>;
+      }
+      default:
+        await apply(command);
+        return undefined as BridgeResultFor<C>;
     }
   }
 
@@ -346,8 +554,7 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
       return () => listeners.delete(listener);
     },
     send: apply,
-    // The shell only sends; no command here has an answer, and no file is held.
-    invoke: (command) => Promise.reject(new Error(`the fixture does not answer ${command.type}`)),
+    invoke: answer,
     attach: () => Promise.reject(new Error("the fixture does not hold files")),
     setState: (change) => set(change(state)),
   };
