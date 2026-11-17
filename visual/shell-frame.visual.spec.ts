@@ -161,5 +161,40 @@ test.describe("moving between bots", () => {
     await page.keyboard.press("Control+Tab");
     await opened("Pip", "Plan the week");
     await expect(botRow(page, "Pip")).toBeFocused();
+
+    // Ten bots: Cmd/Ctrl+6 to 9 open the sixth to the ninth; the tenth has no shortcut.
+    const extra = ["Ash", "Birch", "Cedar", "Dahlia", "Elm"];
+    await page.evaluate((names) => {
+      type State = { bots: Array<Record<string, unknown>> };
+      (
+        window as unknown as {
+          clawtrateFixture: { setState: (change: (state: State) => State) => void };
+        }
+      ).clawtrateFixture.setState((state) => ({
+        ...state,
+        bots: [
+          ...state.bots,
+          ...names.map((name) => ({
+            id: name.toLowerCase(),
+            name,
+            emoji: null,
+            avatarUrl: null,
+            theme: null,
+            model: null,
+            isDefault: false,
+          })),
+        ],
+      }));
+    }, extra);
+    await expect(page.getByTestId("bot")).toHaveCount(10);
+    await page.locator(".transcript").focus();
+    for (const [index, name] of extra.slice(0, 4).entries()) {
+      await page.keyboard.press(`ControlOrMeta+${index + 6}`);
+      await expect(page.locator(".title-pill-name")).toHaveText(name);
+    }
+    await page.keyboard.press("ControlOrMeta+1");
+    await opened("Otto", "Disk almost full on the media box");
+    await page.keyboard.press("ControlOrMeta+9");
+    await expect(page.locator(".title-pill-name")).toHaveText("Dahlia");
   });
 });
