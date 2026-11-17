@@ -55,15 +55,31 @@ function approvalRaw(card: Approval): RawContent {
   };
 }
 
-/** The whole text of a cut request, read through the engine, with its digest. */
-type WholeText = { text: string; digest: string };
+/**
+ * The whole text of a cut request, read through the engine: each field the
+ * request carries, kept apart (`decisionText`), and the digest to allow it with.
+ */
+type WholeText = { fields: Record<string, string | string[] | null>; digest: string };
 
-function wholeText(value: Record<string, string | string[] | null>): string {
-  return Object.values(value)
-    .filter((part) => part !== null)
-    .map((part) => (Array.isArray(part) ? part.join(" ") : part))
-    .filter((part) => part !== "")
-    .join("\n");
+/** Labels for the fields `readApprovalText` returns, in the order they are shown. */
+const WHOLE_FIELDS: Array<[string, string]> = [
+  ["command", "Command"],
+  ["commandArgv", "Arguments"],
+  ["cwd", "Folder"],
+  ["title", "Title"],
+  ["description", "Description"],
+  ["detail", "Detail"],
+];
+
+/** One field of the request, exactly as carried, with a copy button that can fall back to selecting it. */
+function ExactBlock({ label, text }: { label: string; text: string }) {
+  const code = useRef<HTMLElement>(null);
+  return (
+    <div className="command-line">
+      <code ref={code}>{text}</code>
+      <CopyButton what={label.toLowerCase()} text={text} selectTarget={() => code.current} />
+    </div>
+  );
 }
 
 /** Arguments one by one, so their boundaries survive. */
@@ -84,31 +100,51 @@ function FullRequest({
   card,
   whole,
   open,
+  onToggle,
 }: {
   view: ApprovalView;
   card: Approval;
   whole: WholeText | null;
-  open?: boolean;
+  open: boolean;
+  onToggle?: (open: boolean) => void;
 }) {
-  const exact = whole ? { label: view.exact?.label ?? "Request", text: whole.text } : view.exact;
+  const rows = view.rows.filter((row) => !row.list && !(whole && row.label === "Folder"));
   return (
-    <details className="request-full" open={open}>
+    <details
+      className="request-full"
+      open={open}
+      onToggle={(event) => onToggle?.((event.currentTarget as HTMLDetailsElement).open)}
+    >
       <summary>
         <span className="when-closed">Show full request</span>
         <span className="when-open">Hide full request</span>
         <ChevronIcon className="chevron" />
       </summary>
-      <div className="request-inset">
-        {exact && (
-          <div className="command-line">
-            <code>{exact.text}</code>
-            <CopyButton what={exact.label.toLowerCase()} text={exact.text} />
-          </div>
-        )}
-        {view.argv && !whole && (
+      <div className="request-inset" data-whole={whole ? "true" : undefined}>
+        {whole ? (
+          WHOLE_FIELDS.map(([key, label]) => {
+            const value = whole.fields[key];
+            if (value === null || value === undefined || value.length === 0) return null;
+            return (
+              <div key={key} className="request-field">
+                <p className="code-label">{label}</p>
+                {Array.isArray(value) ? (
+                  <ArgumentList args={value} />
+                ) : (
+                  <ExactBlock label={label} text={value} />
+                )}
+              </div>
+            );
+          })
+        ) : (
           <>
-            <p className="code-label">Arguments</p>
-            <ArgumentList args={view.argv} />
+            {view.exact && <ExactBlock label={view.exact.label} text={view.exact.text} />}
+            {view.argv && (
+              <>
+                <p className="code-label">Arguments</p>
+                <ArgumentList args={view.argv} />
+              </>
+            )}
           </>
         )}
         {card.decisionCut && !whole && (
@@ -116,7 +152,7 @@ function FullRequest({
             This shows the first part of a longer request. Read it whole before allowing it.
           </p>
         )}
-        <Fields rows={view.rows.filter((row) => !row.list)} />
+        <Fields rows={rows} />
       </div>
     </details>
   );
@@ -222,12 +258,14 @@ function PendingApproval({
   const [chosen, setChosen] = useState<ApprovalDecision | null>(null);
   const [days, setDays] = useState("");
   const [whole, setWhole] = useState<WholeText | null>(null);
+  // Allow needs the whole text on screen: read, and its disclosure open.
+  const [fullOpen, setFullOpen] = useState(false);
   const [reading, setReading] = useState<"idle" | "loading" | "failed">("idle");
   const [checking, setChecking] = useState(false);
   const alwaysButton = useRef<HTMLButtonElement>(null);
   const saveButton = useRef<HTMLButtonElement>(null);
   const phase = decisionPhase(card);
-  const sendable = sendableDecisions(card, whole !== null);
+  const sendable = sendableDecisions(card, whole !== null && fullOpen);
   const name = env.bot?.name ?? "The bot";
   // Without approval access nothing here decides: no button, no shortcut, no command.
   const mayDecide = env.connection.canApprove;
@@ -260,7 +298,9 @@ function PendingApproval({
     env
       .invoke({ type: "readApprovalText", key: env.taskKey, approvalId: card.id })
       .then((result) => {
-        setWhole({ text: wholeText(result.text), digest: result.digest });
+        setWhole({ fields: result.text, digest: result.digest });
+        // Fetching is not showing: the whole text opens in the card, and Allow follows it.
+        setFullOpen(true);
         setReading("idle");
       })
       .catch(() => setReading("failed"));
@@ -448,7 +488,7 @@ function PendingApproval({
           {name}'s run has ended. This request is still open, and you can still answer it.
         </p>
       )}
-      <FullRequest view={view} card={card} whole={whole} />
+      <FullRequest view={view} card={card} whole={whole} open={fullOpen} onToggle={setFullOpen} />
       {readOnly ? (
         <>
           <p className="request-ended">

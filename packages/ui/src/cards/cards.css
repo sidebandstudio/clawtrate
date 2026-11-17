@@ -772,6 +772,10 @@
   margin: 0;
 }
 
+.card .request-field .code-label {
+  margin: 0 0 4px;
+}
+
 .card .request-actions {
   display: flex;
   flex-wrap: wrap;
