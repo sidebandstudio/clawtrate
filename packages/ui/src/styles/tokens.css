@@ -4,7 +4,6 @@
 
 :root {
   --font-ui: "Figtree Variable", "Figtree", ui-sans-serif, system-ui, sans-serif;
-  --font-display: var(--font-ui);
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
 
   /* 12px is the floor for any text. */
@@ -103,7 +102,6 @@
   --shadow-button: 0 0 0 1px rgba(17, 18, 19, 0.06), 0 1px 2px rgba(17, 18, 19, 0.06);
   --shadow-raised: 0 0 0 1px rgba(17, 18, 19, 0.06), 0 2px 8px rgba(17, 18, 19, 0.08);
   --shadow-pop: 0 0 0 1px rgba(17, 18, 19, 0.06), 0 12px 36px rgba(17, 18, 19, 0.16);
-  --stage-glow: none;
 }
 
 /* Dark theme */
@@ -150,7 +148,6 @@
     --shadow-button: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
     --shadow-raised: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 4px 14px rgba(0, 0, 0, 0.4);
     --shadow-pop: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 16px 44px rgba(0, 0, 0, 0.6);
-    --stage-glow: none;
   }
 }
 
@@ -196,5 +193,4 @@
   --shadow-button: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
   --shadow-raised: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 4px 14px rgba(0, 0, 0, 0.4);
   --shadow-pop: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 16px 44px rgba(0, 0, 0, 0.6);
-  --stage-glow: none;
 }

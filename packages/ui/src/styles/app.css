@@ -222,6 +222,8 @@ textarea {
   object-fit: cover;
 }
 
+/* Shell -------------------------------------------------------------------- */
+
 /* Two columns: the rail and the main pane. The task list column is gone. */
 .shell {
   --rail: var(--rail-width);
@@ -276,8 +278,7 @@ textarea {
 }
 
 /* Working: an arc travelling round a faint ring. */
-.glyph[data-state="working"]::before,
-.glyph[data-state="sending"]::before {
+.glyph[data-state="working"]::before {
   inset: 0;
   padding: 1.5px;
   border-radius: 50%;
@@ -296,43 +297,6 @@ textarea {
   animation: orbit var(--loop-work) linear infinite;
 }
 
-.glyph[data-state="sending"] {
-  --ring: var(--text-muted);
-}
-
-/* Waiting on the user: a solid dot that pings. */
-.glyph[data-state="waiting"] {
-  --ring: var(--warn);
-  background: var(--ring);
-}
-
-.glyph[data-state="waiting"]::before {
-  inset: 0;
-  border-radius: 50%;
-  animation: ping var(--loop-nudge) var(--ease-out) infinite;
-}
-
-/* Blocked: a bar. */
-.glyph[data-state="blocked"] {
-  --ring: var(--warn);
-  background: var(--ring);
-}
-
-.glyph[data-state="blocked"]::after {
-  top: 5.25px;
-  right: 3px;
-  left: 3px;
-  height: 1.5px;
-  border-radius: 1px;
-  background: var(--glyph-ink);
-}
-
-/* Done: a check on a disc. Check: the quiet form, a stroke alone. */
-.glyph[data-state="done"] {
-  background: var(--ring);
-}
-
-.glyph[data-state="done"]::after,
 .glyph[data-state="check"]::after {
   top: 2.4px;
   left: 4.1px;
@@ -365,30 +329,11 @@ textarea {
   );
 }
 
-/* Stopped: a square. */
-.glyph[data-state="stopped"] {
-  --ring: var(--text-faint);
-  background: var(--ring);
-}
-
-.glyph[data-state="stopped"]::after {
-  inset: 3.75px;
-  border-radius: 1px;
-  background: var(--glyph-ink);
-}
-
 /* Unread: a dot. The one place the accent appears in the rail at rest. */
 .glyph[data-state="unread"]::after {
   inset: 2px;
   border-radius: 50%;
   background: var(--accent-line);
-}
-
-.glyph[data-state="queued"]::after,
-.glyph[data-state="idle"]::after {
-  inset: 1.5px;
-  border: 1.5px solid var(--text-faint);
-  border-radius: 50%;
 }
 
 /* Rail: the one list ----------------------------------------------------- */
@@ -620,15 +565,8 @@ textarea {
 }
 
 /* The last rows of a task list: show all, show fewer, new task. */
-.task-more,
-.task-new {
+.task-more {
   color: var(--text-faint);
-}
-
-.task-new .icon {
-  width: 14px;
-  height: 14px;
-  margin-left: -2px;
 }
 
 /* new: the full title of a truncated row, on hover and on keyboard focus.
@@ -772,6 +710,11 @@ textarea {
   background: var(--bg-hover);
 }
 
+/* The ring sits inside the menu, so it is not clipped by the menu's edge. */
+.menu-item:focus-visible {
+  outline-offset: -2px;
+}
+
 .menu-item .icon {
   color: var(--text-muted);
 }
@@ -826,13 +769,6 @@ textarea {
   display: none;
 }
 
-.menu-item kbd {
-  margin-left: auto;
-  font-family: var(--font-ui);
-  font-size: var(--text-xs);
-  color: var(--text-faint);
-}
-
 /* The gateway menu opens upward from the footer row. */
 .gateway-menu {
   position: absolute;
@@ -847,304 +783,6 @@ textarea {
 }
 .menu-head span {
   display: block;
-}
-
-/* Connection and pairing screens ------------------------------------------ */
-
-/* One column on the bare stage, with the bots along the foot. The bots are in
-   the flow, after the form, so they can never sit over it. */
-.connect {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  height: 100%;
-  overflow: hidden auto;
-  background: var(--bg);
-}
-
-.connect-drag {
-  position: absolute;
-  inset: 0 0 auto;
-  height: 40px;
-  -webkit-app-region: drag;
-}
-
-.connect-card {
-  position: relative;
-  z-index: 1;
-  width: min(360px, 100% - 40px);
-  margin: auto 0;
-  padding: var(--space-8) 0 var(--space-6);
-  text-align: center;
-}
-
-/* The product mark: packages/ui/src/assets/logo-mark.png, at 56px. */
-.connect-brand img {
-  display: block;
-  width: 56px;
-  height: 56px;
-  margin: 0 auto 16px;
-  border-radius: 16px;
-}
-
-.connect-brand h1 {
-  margin: 0;
-  font-size: var(--text-title);
-  font-weight: var(--weight-strong);
-  letter-spacing: -0.01em;
-  line-height: 1.15;
-}
-
-.connect-brand p {
-  margin: 6px 0 0;
-  font-size: var(--text-base);
-  color: var(--text-muted);
-}
-
-/* The shell's .panel loses its card: no border, no shadow, no fill. */
-.panel {
-  margin-top: 28px;
-}
-
-.connect-brand:not(:has(h1)) + .panel {
-  margin-top: 0;
-}
-
-.panel h2 {
-  margin: 0 0 6px;
-  font-size: 22px;
-  font-weight: var(--weight-strong);
-  letter-spacing: -0.005em;
-  line-height: 1.25;
-}
-
-.panel-lede {
-  margin: 0 0 var(--space-5);
-  font-size: var(--text-base);
-  color: var(--text-muted);
-}
-
-.field {
-  display: block;
-  margin-bottom: var(--space-2);
-}
-
-.field-hint {
-  margin: 10px 0 0;
-  font-size: var(--text-sm);
-  color: var(--text-faint);
-}
-
-.actions {
-  display: grid;
-  gap: var(--space-2);
-  margin-top: var(--space-3);
-}
-
-.form-error {
-  margin-top: var(--space-3);
-  padding: 10px 14px;
-  border-radius: var(--radius-md);
-  background: var(--danger-soft);
-  font-size: var(--text-md);
-  text-align: left;
-  color: var(--danger);
-}
-
-.form-error[hidden] {
-  display: none;
-}
-
-.form-error strong {
-  display: block;
-  font-weight: var(--weight-medium);
-}
-
-/* One command to run, with a copy button. */
-.command {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0 0 var(--space-2);
-  padding: 8px 8px 8px 16px;
-  border-radius: var(--radius-md);
-  background: var(--bg-inset);
-  text-align: left;
-}
-
-.command code {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-/* The shell's .copy-status, a live region: "Copied." after a real copy, or how
-   to copy the selected command when the clipboard refused. */
-.copy-status {
-  min-height: 18px;
-  margin: 0;
-  font-size: var(--text-xs);
-  color: var(--text-faint);
-}
-
-.waiting {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  margin: 2px 0 0;
-  font-size: var(--text-md);
-  color: var(--text-muted);
-}
-
-/* new: what this device will be allowed to do, in plain words. */
-.scopes {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 6px;
-  margin: var(--space-3) 0 var(--space-5);
-  padding: 0;
-  list-style: none;
-}
-
-.scopes li {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 2px 11px;
-  border-radius: var(--radius-pill);
-  background: var(--bg-bubble);
-  font-size: var(--text-sm);
-}
-
-.scopes .icon {
-  width: 13px;
-  height: 13px;
-  color: var(--text-muted);
-}
-
-.connect-foot {
-  margin: var(--space-6) 0 0;
-  font-size: var(--text-xs);
-  color: var(--text-faint);
-}
-
-/* new: the bots, lined up along the foot of the page, after the form. */
-.ensemble {
-  display: flex;
-  flex: none;
-  align-items: flex-end;
-  justify-content: center;
-  gap: clamp(10px, 3cqw, 34px);
-  width: 100%;
-  height: 170px;
-  margin-top: var(--space-6);
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.ensemble .avatar {
-  --shown: calc(var(--size, 96px) * var(--ensemble-scale, 1));
-  width: var(--shown);
-  height: var(--shown);
-  margin-bottom: calc(var(--shown) * var(--sink, -0.3));
-  transform: rotate(var(--tilt, 0deg));
-}
-
-/* On a short window the form comes first and the bots stay away. */
-@container app (max-height: 640px) {
-  .ensemble {
-    display: none;
-  }
-}
-
-/* The host's note on where to run the command, one line above it. */
-.approve-note {
-  margin: 0 0 var(--space-2);
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-
-.field-hint code {
-  font-family: var(--font-mono);
-  font-size: 0.92em;
-}
-
-.form-error-code {
-  display: block;
-  margin-top: 2px;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-
-/* Motion ---------------------------------------------------------------- */
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.45;
-    transform: scale(0.82);
-  }
-}
-
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@keyframes orbit {
-  to {
-    --orbit: 360deg;
-  }
-}
-
-@keyframes ping {
-  0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ring) 55%, transparent);
-  }
-  45%,
-  100% {
-    box-shadow: 0 0 0 6px transparent;
-  }
-}
-
-@keyframes shimmer {
-  to {
-    background-position: -200% 0;
-  }
-}
-
-/* Reduced motion, from the system setting or from the app's own setting. */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation: none !important;
-    transition: none !important;
-  }
-}
-
-[data-motion="reduce"] *,
-[data-motion="reduce"] *::before,
-[data-motion="reduce"] *::after {
-  animation: none !important;
-  transition: none !important;
 }
 
 /* Conversation ---------------------------------------------------------- */
@@ -1371,16 +1009,6 @@ textarea {
 .event-line .icon {
   width: 13px;
   height: 13px;
-}
-
-/* A message written offline has not been sent, so it is not yet in your colour. */
-.turn[data-waiting="true"] .msg[data-role="user"] .bubble {
-  background: var(--bg-bubble);
-  color: var(--text);
-}
-
-.event-line[data-side="end"] {
-  margin-left: auto;
 }
 
 /* A system message: the same quiet line, centred. */
@@ -1690,37 +1318,6 @@ textarea {
   height: 34px;
   background: var(--bg-bubble);
   box-shadow: none;
-}
-
-.composer-input {
-  flex: 1;
-  min-width: 0;
-  min-height: 34px;
-  max-height: 220px;
-  padding: 6px 6px;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  line-height: 22px;
-  resize: none;
-}
-
-.composer-input::placeholder {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--text-faint);
-}
-
-.composer-box .send-button {
-  background: var(--bg-inverse);
-  color: var(--text-inverse);
-}
-
-.composer-box .send-button:disabled {
-  background: var(--bg-bubble);
-  color: var(--text-faint);
-  opacity: 1;
 }
 
 /* A connection that may only read keeps the pill and says why. */
@@ -2113,6 +1710,278 @@ textarea {
   font-size: var(--text-md);
   color: var(--text-muted);
 }
+
+/* Connection and pairing screens ------------------------------------------ */
+
+/* One column on the bare stage, with the bots along the foot. The bots are in
+   the flow, after the form, so they can never sit over it. */
+.connect {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  overflow: hidden auto;
+  background: var(--bg);
+}
+
+.connect-drag {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 40px;
+  -webkit-app-region: drag;
+}
+
+.connect-card {
+  position: relative;
+  z-index: 1;
+  width: min(360px, 100% - 40px);
+  margin: auto 0;
+  padding: var(--space-8) 0 var(--space-6);
+  text-align: center;
+}
+
+/* The product mark: packages/ui/src/assets/logo-mark.png, at 56px. */
+.connect-brand img {
+  display: block;
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 16px;
+  border-radius: 16px;
+}
+
+.connect-brand h1 {
+  margin: 0;
+  font-size: var(--text-title);
+  font-weight: var(--weight-strong);
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+
+.connect-brand p {
+  margin: 6px 0 0;
+  font-size: var(--text-base);
+  color: var(--text-muted);
+}
+
+/* The shell's .panel loses its card: no border, no shadow, no fill. */
+.panel {
+  margin-top: 28px;
+}
+
+.connect-brand:not(:has(h1)) + .panel {
+  margin-top: 0;
+}
+
+.panel h2 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: var(--weight-strong);
+  letter-spacing: -0.005em;
+  line-height: 1.25;
+}
+
+.panel-lede {
+  margin: 0 0 var(--space-5);
+  font-size: var(--text-base);
+  color: var(--text-muted);
+}
+
+.field {
+  display: block;
+  margin-bottom: var(--space-2);
+}
+
+.field-hint {
+  margin: 10px 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.actions {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.form-error {
+  margin-top: var(--space-3);
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
+  font-size: var(--text-md);
+  text-align: left;
+  color: var(--danger);
+}
+
+.form-error[hidden] {
+  display: none;
+}
+
+.form-error strong {
+  display: block;
+  font-weight: var(--weight-medium);
+}
+
+/* One command to run, with a copy button. */
+.command {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding: 8px 8px 8px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  text-align: left;
+}
+
+.command code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* The shell's .copy-status, a live region: "Copied." after a real copy, or how
+   to copy the selected command when the clipboard refused. */
+.copy-status {
+  min-height: 18px;
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.waiting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin: 2px 0 0;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+
+/* new: what this device will be allowed to do, in plain words. */
+.scopes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin: var(--space-3) 0 var(--space-5);
+  padding: 0;
+  list-style: none;
+}
+
+.scopes li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 2px 11px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+  font-size: var(--text-sm);
+}
+
+.scopes .icon {
+  width: 13px;
+  height: 13px;
+  color: var(--text-muted);
+}
+
+.connect-foot {
+  margin: var(--space-6) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+/* new: the bots, lined up along the foot of the page, after the form. */
+.ensemble {
+  display: flex;
+  flex: none;
+  align-items: flex-end;
+  justify-content: center;
+  gap: clamp(10px, 3cqw, 34px);
+  width: 100%;
+  height: 170px;
+  margin-top: var(--space-6);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ensemble .avatar {
+  --shown: calc(var(--size, 96px) * var(--ensemble-scale, 1));
+  width: var(--shown);
+  height: var(--shown);
+  margin-bottom: calc(var(--shown) * var(--sink, -0.3));
+  transform: rotate(var(--tilt, 0deg));
+}
+
+/* On a short window the form comes first and the bots stay away. */
+@container app (max-height: 640px) {
+  .ensemble {
+    display: none;
+  }
+}
+
+/* The host's note on where to run the command, one line above it. */
+.approve-note {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.field-hint code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.form-error-code {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* Motion ---------------------------------------------------------------- */
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+
+@keyframes orbit {
+  to {
+    --orbit: 360deg;
+  }
+}
+
+/* Reduced motion, from the system setting or from the app's own setting. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+[data-motion="reduce"] *,
+[data-motion="reduce"] *::before,
+[data-motion="reduce"] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
 /* Compact layouts ----------------------------------------------------------- */
 
 @container app (max-width: 899px) {
@@ -2235,8 +2104,7 @@ textarea {
   font-size: var(--text-base);
 }
 
-[data-input="touch"] .bubble,
-[data-input="touch"] .composer-input {
+[data-input="touch"] .bubble {
   font-size: var(--text-lg);
   line-height: 1.4;
 }
