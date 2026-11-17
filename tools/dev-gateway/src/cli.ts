@@ -330,10 +330,7 @@ function assertNotInUse(inst: DevInstance): void {
  * foreign state, and state whose gateway another checkout runs, is refused
  * untouched. Ends with a seeded, verified gateway.
  */
-export async function start(
-  inst: DevInstance,
-  options: { seed?: boolean } = {},
-): Promise<void> {
+export async function start(inst: DevInstance, options: { seed?: boolean } = {}): Promise<void> {
   assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
   if (ownership(inst.stateDir) === "foreign") throw new ForeignStateError(inst.stateDir);
   assertNotInUse(inst);
