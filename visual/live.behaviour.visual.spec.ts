@@ -1089,7 +1089,12 @@ test.describe("access", () => {
     page,
   }) => {
     await open(page, "access-granted");
-    await page.getByRole("button", { name: "Copy request id" }).focus();
+    // The scene grants access 300 ms after it opens, and the request's controls go with
+    // it. Focus one if it is still there; on a loaded machine it may already be gone.
+    await page
+      .getByRole("button", { name: "Copy request id" })
+      .focus({ timeout: 200 })
+      .catch(() => {});
     await expect(page.getByTestId("status-strip")).toContainText(
       "Access granted· you can send, stop and answer",
     );
