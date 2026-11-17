@@ -17,256 +17,114 @@
     <header class="proto-bar" id="proto-bar"></header>
     <main class="proto-stage">
       <div class="proto-frame">
+        <!-- The markup below follows the shell's own structure: .shell holds the
+             rail and .main-pane; .main-pane holds the status strip, the
+             conversation, the drawer scrim and the Work pane. js/app.js fills
+             the parts that depend on what is selected. -->
         <div class="app" id="root">
           <div class="shell" data-panel="closed" data-view="detail">
-            <!-- The connection strip. Hidden unless ?banner= is set. -->
-            <div class="banner" role="status" hidden></div>
-
-            <!-- Rail: bots, with tasks under the open bot ------------------- -->
             <nav class="rail" aria-label="Bots">
               <div class="rail-top">
-                <button type="button" class="icon-button rail-status" aria-label="Settings. Home gateway, connected.">
+                <button type="button" class="icon-button rail-status" data-action="gateway-menu" aria-haspopup="menu" aria-expanded="false">
                   <i data-icon="settings"></i>
                   <span class="status-dot" data-status="connected"></span>
                 </button>
-                <button type="button" class="icon-button" aria-label="Search" title="Search (⌘K)">
+                <button type="button" class="icon-button" data-action="search" aria-label="Search" title="Search (⌘K)">
                   <i data-icon="search"></i>
                 </button>
-                <button type="button" class="icon-button" aria-label="New bot" title="New bot (⌘N)">
+                <button type="button" class="icon-button" data-action="new-bot" aria-label="New bot" title="New bot (⌘N)">
                   <i data-icon="plus"></i>
                 </button>
               </div>
 
-              <ul class="bot-list">
-                <li class="bot-group" data-open="true">
-                  <button type="button" class="bot" aria-expanded="true" aria-label="Otto, 3 tasks">
-                    <span class="avatar" data-bot="otto"></span>
-                    <span class="bot-text">
-                      <span class="bot-line"><span class="bot-name">Otto</span><time class="bot-time">5:36 PM</time></span>
-                      <span class="bot-line"><span class="bot-preview">Done. The disk is now at 61%.</span></span>
-                    </span>
-                  </button>
-                  <ul class="task-list" aria-label="Otto's tasks">
-                    <li>
-                      <button type="button" class="task" aria-current="true">
-                        <span class="task-title">Disk almost full on the media box</span>
-                      </button>
-                    </li>
-                    <li>
-                      <button type="button" class="task" data-unread="true" aria-label="Weekly backup check, unread">
-                        <span class="task-title">Weekly backup check</span>
-                        <span class="unread-dot"></span>
-                      </button>
-                    </li>
-                    <li>
-                      <button type="button" class="task">
-                        <span class="task-title">Certificate renewal warning</span>
-                      </button>
-                    </li>
-                    <li>
-                      <button type="button" class="task task-new">
-                        <i data-icon="plus"></i>
-                        <span class="task-title">New task</span>
-                      </button>
-                    </li>
-                  </ul>
-                </li>
-                <li class="bot-group">
-                  <button type="button" class="bot" aria-label="Juniper, 3 tasks">
-                    <span class="avatar" data-bot="juniper"></span>
-                    <span class="bot-text">
-                      <span class="bot-line"><span class="bot-name">Juniper</span><time class="bot-time">5:24 PM</time></span>
-                      <span class="bot-line"><span class="bot-preview">Ask these five, and get the answers in writing.</span></span>
-                    </span>
-                  </button>
-                </li>
-                <li class="bot-group">
-                  <button type="button" class="bot" aria-label="Marlow, 2 tasks">
-                    <span class="avatar" data-bot="marlow"></span>
-                    <span class="bot-text">
-                      <span class="bot-line"><span class="bot-name">Marlow</span><time class="bot-time">4:58 PM</time></span>
-                      <span class="bot-line"><span class="bot-preview">Tightened the intro and cut about 80 words.</span></span>
-                    </span>
-                  </button>
-                </li>
-                <li class="bot-group">
-                  <button type="button" class="bot" aria-label="Pip, 3 tasks, unread">
-                    <span class="avatar" data-bot="pip"></span>
-                    <span class="bot-text">
-                      <span class="bot-line"><span class="bot-name">Pip</span><time class="bot-time">3:10 PM</time></span>
-                      <span class="bot-line"><span class="bot-preview">Here is the week, with Thursday kept clear.</span><span class="unread-dot"></span></span>
-                    </span>
-                  </button>
-                </li>
-              </ul>
+              <ul class="bot-list" id="bot-list" data-testid="bot-list"></ul>
 
               <div class="rail-footer">
-                <button type="button" class="gateway-pill" aria-label="Home gateway, connected. Open gateway settings.">
+                <button type="button" class="gateway-pill" data-action="gateway-menu" aria-haspopup="menu" aria-expanded="false">
                   <span class="status-dot" data-status="connected"></span>
                   <span class="gateway-pill-text">
                     <strong>Home gateway</strong>
-                    <span>Connected</span>
+                    <span id="gateway-state">Connected</span>
                   </span>
                 </button>
-                <button type="button" class="icon-button" data-variant="quiet" aria-label="Settings" title="Settings (⌘,)">
-                  <i data-icon="settings"></i>
-                </button>
               </div>
+
+              <ul class="menu gateway-menu" id="gateway-menu" role="menu" aria-label="Gateway" hidden>
+                <li class="menu-head" role="presentation">
+                  <strong>Home gateway</strong>
+                  <span id="gateway-menu-state">Connected · gateway.local</span>
+                </li>
+                <li class="menu-rule" role="separator"></li>
+                <li class="menu-label" role="presentation">Theme</li>
+                <li role="none"><button type="button" class="menu-item" role="menuitemradio" data-theme-choice="system" aria-checked="false">Match the system<span class="glyph" data-state="check"></span></button></li>
+                <li role="none"><button type="button" class="menu-item" role="menuitemradio" data-theme-choice="light" aria-checked="false">Light<span class="glyph" data-state="check"></span></button></li>
+                <li role="none"><button type="button" class="menu-item" role="menuitemradio" data-theme-choice="dark" aria-checked="false">Dark<span class="glyph" data-state="check"></span></button></li>
+                <li class="menu-rule" role="separator"></li>
+                <li role="none"><button type="button" class="menu-item" role="menuitem" data-tone="danger" data-action="disconnect">Disconnect</button></li>
+              </ul>
             </nav>
 
-            <!-- Conversation ------------------------------------------------- -->
-            <section class="conversation" aria-label="Conversation">
-              <header class="conversation-header">
-                <div class="header-side">
-                  <button type="button" class="icon-button back-button" data-action="back" aria-label="Back to bots">
-                    <i data-icon="back"></i>
+            <div class="main-pane">
+              <div class="status-strip" id="status-strip" role="status" data-testid="status-strip" hidden></div>
+
+              <section class="conversation" aria-label="Conversation">
+                <header class="conversation-header">
+                  <div class="header-side">
+                    <button type="button" class="icon-button back-button" data-action="back" aria-label="Back to bots">
+                      <i data-icon="back"></i>
+                    </button>
+                  </div>
+                  <button type="button" class="title-pill" id="title-pill" data-action="panel"></button>
+                  <div class="header-side" data-side="end">
+                    <button type="button" class="icon-button" id="panel-button" data-action="panel" aria-pressed="false" aria-label="Show work pane" title="Work pane (⌘\)">
+                      <i data-icon="panel"></i>
+                    </button>
+                  </div>
+                </header>
+
+                <div class="transcript-wrap">
+                  <div class="transcript" id="transcript" tabindex="0" data-testid="transcript"></div>
+                  <button type="button" class="jump-latest" id="jump-latest" data-action="jump" hidden>
+                    Jump to latest <i data-icon="arrow-down"></i>
                   </button>
                 </div>
-                <button type="button" class="title-pill" data-action="panel" aria-label="Otto, Disk almost full on the media box. Show details.">
-                  <span class="avatar" data-bot="otto"></span>
-                  <span class="title-pill-name">Otto</span>
-                  <span class="title-pill-task">Disk almost full on the media box</span>
+
+                <footer class="composer" id="composer"></footer>
+              </section>
+
+              <button type="button" class="drawer-scrim" data-action="panel-close" aria-label="Close work pane" tabindex="-1"></button>
+
+              <aside class="work-panel" id="work-panel" aria-label="Work pane" data-testid="work-panel">
+                <button type="button" class="icon-button work-close" data-action="panel-close" aria-label="Close work pane">
+                  <i data-icon="x"></i>
                 </button>
-                <div class="header-side" data-side="end">
-                  <button type="button" class="icon-button" data-action="panel" aria-pressed="false" aria-label="Show work pane" title="Work pane (⌘\)">
-                    <i data-icon="panel"></i>
-                  </button>
-                </div>
-              </header>
-
-              <div class="transcript" tabindex="0">
-                <div class="transcript-inner">
-                  <div class="stamp">Today 5:31 PM</div>
-
-                  <div class="msg" data-role="user">
-                    <div class="bubble">The media box says the disk is 94% full. What is eating the space?</div>
-                  </div>
-
-                  <details class="steps">
-                    <summary class="event-line">Used 2 tools <i data-icon="chevron"></i></summary>
-                    <ul class="steps-list">
-                      <li class="step"><span class="step-tool-name">ls</span><span class="step-summary">path: .</span></li>
-                      <li class="step"><span class="step-tool-name">read</span><span class="step-summary">path: AGENTS.md</span></li>
-                    </ul>
-                  </details>
-
-                  <div class="msg" data-role="assistant">
-                    <div class="bubble md">
-                      <h3>Found</h3>
-                      <p>The usual suspects on a media box, largest first:</p>
-                      <ol>
-                        <li><code>/var/lib/transcode-cache</code>, about 180 GB of temporary transcodes that were never cleaned up.</li>
-                        <li>Old container images, about 40 GB across 12 unused tags.</li>
-                        <li>Rotated logs, about 6 GB, mostly from one noisy service.</li>
-                      </ol>
-                      <h3>Changed</h3>
-                      <p>Nothing yet.</p>
-                      <h3>Left</h3>
-                      <ul>
-                        <li>Clearing the transcode cache is safe and frees the most. Its files are regenerated on demand.</li>
-                        <li>Pruning unused images is also safe, but the next update will download them again.</li>
-                      </ul>
-                    </div>
-                  </div>
-                  <div class="msg" data-role="assistant">
-                    <div class="bubble">Should I clear the transcode cache? I will move it aside first so it can be restored.</div>
-                  </div>
-
-                  <div class="stamp">Today 5:36 PM</div>
-
-                  <div class="msg" data-role="user">
-                    <div class="bubble">Yes, clear the transcode cache.</div>
-                  </div>
-
-                  <details class="steps">
-                    <summary class="event-line">Used 1 tool <i data-icon="chevron"></i></summary>
-                    <ul class="steps-list">
-                      <li class="step"><span class="step-tool-name">write</span><span class="step-summary">path: notes/disk-2026-11-16.md</span></li>
-                    </ul>
-                  </details>
-
-                  <div class="msg" data-role="assistant">
-                    <div class="bubble md">
-                      <p>Done. The disk is now at 61%.</p>
-                      <table>
-                        <thead>
-                          <tr><th>What</th><th>Before</th><th>After</th></tr>
-                        </thead>
-                        <tbody>
-                          <tr><td>Disk used</td><td>94%</td><td>61%</td></tr>
-                          <tr><td>Transcode cache</td><td>180 GB</td><td>0 GB</td></tr>
-                          <tr><td>Free space</td><td>33 GB</td><td>213 GB</td></tr>
-                        </tbody>
-                      </table>
-                      <p>I moved the cache to <code>transcode-cache.old</code> instead of deleting it. To undo, move it back. I will remove it in a week unless you say otherwise.</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <footer class="composer">
-                <div class="composer-inner">
-                  <div class="composer-box">
-                    <button type="button" class="icon-button" aria-label="Attach files"><i data-icon="plus"></i></button>
-                    <textarea class="composer-input" rows="1" placeholder="Message Otto" aria-label="Message Otto"></textarea>
-                    <button type="button" class="icon-button send-button" aria-label="Send" disabled><i data-icon="arrow-up"></i></button>
-                  </div>
-                </div>
-              </footer>
-            </section>
-
-            <!-- Work pane ------------------------------------------------------ -->
-            <aside class="work-panel" aria-label="Work pane">
-              <div class="work-panel-inner">
-                <div class="work-top">
-                  <button type="button" class="icon-button" data-action="panel" aria-label="Close work pane">
-                    <i data-icon="x"></i>
-                  </button>
-                </div>
-                <div class="work-hero">
-                  <span class="avatar" data-bot="otto"></span>
-                  <h2>Otto</h2>
-                  <p>Operations</p>
-                </div>
+                <div class="work-hero" id="work-hero"></div>
                 <div class="tabs" role="tablist" aria-label="Work pane">
-                  <button type="button" class="tab" role="tab" aria-selected="true" data-tab="details">Details</button>
-                  <button type="button" class="tab" role="tab" aria-selected="false" data-tab="files">Files</button>
-                  <button type="button" class="tab" role="tab" aria-selected="false" data-tab="computer">Computer</button>
+                  <button type="button" class="tab" role="tab" id="tab-details" aria-controls="panel-details" aria-selected="true" data-tab="details">Details</button>
+                  <button type="button" class="tab" role="tab" id="tab-files" aria-controls="panel-files" aria-selected="false" tabindex="-1" data-tab="files">Files</button>
+                  <button type="button" class="tab" role="tab" id="tab-computer" aria-controls="panel-computer" aria-selected="false" tabindex="-1" data-tab="computer">Computer</button>
                 </div>
                 <div class="work-sections">
-                  <div data-tab-panel="details">
-                    <section class="work-section">
-                      <h3>This task</h3>
-                      <dl class="facts">
-                        <div><dt>Task</dt><dd>Disk almost full on the media box</dd></div>
-                        <div><dt>Model</dt><dd>scripted/dev-1</dd></div>
-                        <div><dt>Runs on</dt><dd>Gateway host</dd></div>
-                        <div><dt>Last activity</dt><dd>Today, 5:36 PM</dd></div>
-                      </dl>
-                    </section>
-                    <section class="work-section">
-                      <h3>Routines</h3>
-                      <p class="work-note">None yet. Ask Otto to do something on a schedule.</p>
-                    </section>
-                  </div>
-                  <div data-tab-panel="files" hidden>
+                  <div role="tabpanel" id="panel-details" aria-labelledby="tab-details" tabindex="0"></div>
+                  <div role="tabpanel" id="panel-files" aria-labelledby="tab-files" tabindex="0" hidden>
                     <div class="work-empty">
                       <span class="empty-mark"><i data-icon="file"></i></span>
                       <h4>No files yet</h4>
-                      <p>Files Otto reads or writes in this task appear here.</p>
+                      <p id="files-empty"></p>
                     </div>
                   </div>
-                  <div data-tab-panel="computer" hidden>
+                  <div role="tabpanel" id="panel-computer" aria-labelledby="tab-computer" tabindex="0" hidden>
                     <div class="work-empty">
                       <span class="empty-mark"><i data-icon="screen"></i></span>
                       <h4>No screen to show</h4>
-                      <p>When Otto uses a browser or a desktop, you can watch it here.</p>
+                      <p id="computer-empty"></p>
                     </div>
                   </div>
                 </div>
-              </div>
-            </aside>
+              </aside>
+            </div>
           </div>
+          <div class="rail-tooltip" id="rail-tooltip" role="tooltip" hidden></div>
         </div>
       </div>
     </main>

@@ -55,6 +55,15 @@
   apply();
   CT.settings = settings;
 
+  // The app's own theme choice, used by the gateway menu: system, light or dark.
+  CT.setTheme = (choice) => {
+    settings.followSystem = choice === "system";
+    settings.theme =
+      choice === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : choice;
+    store("theme", settings.theme);
+    apply();
+  };
+
   const seg = (label, key, options) =>
     `<span class="proto-seg">${label}<span>` +
     options
