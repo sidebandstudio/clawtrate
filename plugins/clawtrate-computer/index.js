@@ -431,12 +431,39 @@ export function createComputer(api, options = {}) {
   }
 
   const retainOf = (auth) => {
+    let retained;
     try {
-      return auth.retain();
+      retained = auth.retain();
+      retained.assertCurrent();
+      return retained;
     } catch {
+      try {
+        retained?.release();
+      } catch {
+        // already released
+      }
       return refuse("FORBIDDEN", "session_access_ended", "the session's access ended");
     }
   };
+
+  /**
+   * Whether the caller may still be answered: its connection is open and the
+   * gateway still grants the access (`authority`, the request's or a
+   * retained one). Access can end, or start refreshing, while the plugin
+   * waits on the browser, before any abort reaches it; so this runs after
+   * every wait and before anything is disclosed or granted.
+   */
+  const stillCurrent = (caller, authority) => {
+    if (caller.gone()) return false;
+    try {
+      authority.assertCurrent();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const accessEnded = () =>
+    refuse("FORBIDDEN", "session_access_ended", "the session's access ended");
 
   // ---- methods ----
 
@@ -460,11 +487,12 @@ export function createComputer(api, options = {}) {
 
   method("tabs", async (opts) => {
     const caller = callerOf(opts);
-    const { bot } = admitBot(opts);
+    const { auth, bot } = admitBot(opts);
     let tabs;
     try {
       tabs = await cdpTargets(bot, { ...net, signal: caller.signal });
     } catch (error) {
+      if (!stillCurrent(caller, auth)) accessEnded();
       // An empty list says only that there is nothing to show.
       opts.respond(true, {
         agentId: bot.agentId,
@@ -476,6 +504,8 @@ export function createComputer(api, options = {}) {
       return;
     }
     reconcile(bot, tabs);
+    // Nothing about the tabs is said once the caller's access has ended.
+    if (!stillCurrent(caller, auth)) accessEnded();
     opts.respond(true, {
       agentId: bot.agentId,
       profile: bot.profile,
@@ -500,6 +530,7 @@ export function createComputer(api, options = {}) {
     const { auth, bot } = admitBot(opts);
     const targetId = targetIdOf(params);
     await admitTab(bot, targetId, caller);
+    if (!stillCurrent(caller, auth)) accessEnded();
     const mine = [...state.streams.values()].filter((s) => s.connId === caller.connId);
     if (state.streams.size >= MAX_STREAMS || mine.length >= MAX_STREAMS_PER_CONNECTION) {
       refuse("UNAVAILABLE", "too_many_views", "too many views are open");
@@ -547,27 +578,39 @@ export function createComputer(api, options = {}) {
 
   method("view.renew", async (opts, params) => {
     const caller = callerOf(opts);
-    const { bot } = admitBot(opts);
+    const { auth, bot } = admitBot(opts);
     const targetId = targetIdOf(params);
     if (params.streamId === undefined && params.generation === undefined) {
       refuse("INVALID_REQUEST", "bad_request", "give a streamId, a generation, or both");
     }
     await admitTab(bot, targetId, caller);
-    let streamRenewed = false;
     const stream =
       typeof params.streamId === "string" ? state.streams.get(params.streamId) : undefined;
-    if (
+    const ownStream =
       stream &&
       !stream.ended &&
       stream.connId === caller.connId &&
       stream.bot.profile === bot.profile &&
       stream.targetId === targetId
-    ) {
-      armStreamExpiry(stream);
-      streamRenewed = true;
+        ? stream
+        : undefined;
+    const lease = heldLease(bot, targetId, caller, params.generation);
+    if (!stillCurrent(caller, auth)) {
+      // What this caller holds on the tab ends with its access.
+      if (ownStream) endStream(ownStream, 4006, "authority_revoked");
+      if (lease) void endLease(lease, "revoked", "access-revoked");
+      accessEnded();
+    }
+    let streamRenewed = false;
+    if (ownStream) {
+      if (stillCurrent(caller, ownStream.retained)) {
+        armStreamExpiry(ownStream);
+        streamRenewed = true;
+      } else {
+        endStream(ownStream, 4006, "authority_revoked");
+      }
     }
     let leaseRenewed = false;
-    const lease = heldLease(bot, targetId, caller, params.generation);
     if (lease && lease.state === "granted") {
       try {
         lease.retained.assertCurrent();
@@ -627,6 +670,10 @@ export function createComputer(api, options = {}) {
     );
     if (lease.ending)
       refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
+    if (!stillCurrent(caller, lease.retained)) {
+      await endLease(lease, "revoked", "access-revoked");
+      accessEnded();
+    }
     if (!drained) {
       const running = runningCalls(bot.profile);
       await endLease(lease, "busy", "bot-still-acting");
@@ -637,12 +684,6 @@ export function createComputer(api, options = {}) {
         generation: lease.generation,
       });
       return;
-    }
-    try {
-      lease.retained.assertCurrent();
-    } catch {
-      await endLease(lease, "revoked", "access-revoked");
-      refuse("FORBIDDEN", "session_access_ended", "the session's access ended");
     }
     // The lease's own connection to the tab: input goes through it, and the
     // lease ends when it closes (the tab or the browser went away).
@@ -662,6 +703,11 @@ export function createComputer(api, options = {}) {
     lease.cdp.onClose(() => void endLease(lease, "tab-closed", "target-closed"));
     if (lease.ending)
       refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
+    // Connecting waited: the grant goes out only while the access still holds.
+    if (!stillCurrent(caller, lease.retained)) {
+      await endLease(lease, "revoked", "access-revoked");
+      accessEnded();
+    }
     lease.state = "granted";
     armLeaseExpiry(lease);
     emitControl(lease, "granted");
@@ -789,6 +835,18 @@ export function createComputer(api, options = {}) {
       stream.cdp = cdp;
       let url = cdp.target.url;
       cdp.onClose(() => endStream(stream, 4004, "target_closed"));
+      // Nothing about the page goes out once the access behind the ticket
+      // has ended: not the first address and title, not a later address.
+      const current = () => {
+        try {
+          stream.retained.assertCurrent();
+          return true;
+        } catch {
+          endStream(stream, 4006, "authority_revoked");
+          return false;
+        }
+      };
+      if (!current()) return true;
       socket.write(
         textFrame({ type: "ready", targetId: stream.targetId, url, title: cdp.target.title }),
       );
@@ -797,12 +855,7 @@ export function createComputer(api, options = {}) {
         if (message.method === "Page.screencastFrame") {
           const { data, metadata = {}, sessionId } = message.params ?? {};
           void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
-          try {
-            stream.retained.assertCurrent();
-          } catch {
-            endStream(stream, 4006, "authority_revoked");
-            return;
-          }
+          if (!current()) return;
           if (typeof data !== "string" || socket.destroyed) return;
           if (socket.writableLength > STREAM_BUFFER_LIMIT) return;
           // The built-in screencast's layout, so one decoder serves both:
@@ -821,6 +874,7 @@ export function createComputer(api, options = {}) {
           length.writeUInt32BE(header.length, 0);
           socket.write(binaryFrame(Buffer.concat([length, header, Buffer.from(data, "base64")])));
         } else if (message.method === "Page.frameNavigated" && !message.params?.frame?.parentId) {
+          if (!current()) return;
           url = String(message.params?.frame?.url ?? "").slice(0, 2048);
           socket.write(textFrame({ type: "meta", url }));
         } else if (message.method === "Inspector.detached") {
