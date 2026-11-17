@@ -660,11 +660,14 @@ test.describe("tool-server calls on a real gateway", () => {
   /** The stand-in names its own tools (`coder__send_message`, …), none of T3 Code's: no card. */
   const ordinaryStep = async (on: Page, text: string) => {
     await expect(card(on, "t3-card")).toHaveCount(0);
-    await on.locator(".steps > summary").first().click();
+    // Its action card: a tool server's call (by the gateway's map or its result), else the general card.
     const step = on.getByTestId("tool-call").first();
-    await expect(step.locator(".step-tool-name")).toHaveText(/^coder__/);
-    await step.locator("summary").click();
+    await expect(step).toHaveAttribute("data-kind", /^(server|tool)$/);
+    await step.locator(":scope > summary").click();
     await expect(step).toContainText(text);
+    await step.getByRole("tab", { name: "Raw" }).click();
+    await expect(step.locator(".tool-name")).toHaveText(/^coder__/);
+    await step.getByRole("tab", { name: "Readable" }).click();
     return step;
   };
 
@@ -696,7 +699,7 @@ test.describe("tool-server calls on a real gateway", () => {
     await clients.plain.terminal(t.runId);
     await openTask(page, "Juniper", t.title);
     const step = await ordinaryStep(page, "Error");
-    await expect(step.locator(".step-state")).toHaveText("failed");
+    await expect(step.locator(":scope > summary .action-state")).toHaveText("Failed");
   });
 
   test("F-134: a slow call, and a call stopped mid-way, stay ordinary steps", async () => {
@@ -714,8 +717,9 @@ test.describe("tool-server calls on a real gateway", () => {
     await expect(page.getByTestId("live-turn")).toHaveCount(0, { timeout: 15_000 });
     // Read from history on the read-only page: history keeps the call and no result for it.
     await openTask(reader, "Juniper", stop.title);
-    const step = await ordinaryStep(reader, '"seconds": 3600');
-    await expect(step.locator(".step-state")).toHaveText("no result");
+    // Its arguments, as label and value rows; nothing establishes what the server did: Unknown.
+    const step = await ordinaryStep(reader, "3600");
+    await expect(step.locator(":scope > summary .action-state")).toHaveText("Unknown");
   });
 });
 

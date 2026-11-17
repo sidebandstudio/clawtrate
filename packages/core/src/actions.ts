@@ -85,6 +85,8 @@ export type ActionCall = {
   lastSeen?: boolean;
   /** An earlier call of the same tool came before it in the task: a plan saved again, not made. */
   repeat?: boolean;
+  /** Its run was stopped: an error result that says nothing more is the stop's, not a failure. */
+  runStopped?: boolean;
 };
 
 /** What the reading needs to know beyond the call. */
@@ -571,7 +573,12 @@ function errorOutcome(call: ActionCall, kind: KindInfo): OutcomeOf {
   if (d.timedOut === true || str(d.failureKind) === "overall-timeout")
     return { outcome: "failed", word: STATE_WORDS.timedOut };
   // A call cut short by a stop: what it did is unknown when its effect leaves the gateway.
-  if (status === "aborted" || status === "cancelled" || text === "Aborted")
+  if (
+    status === "aborted" ||
+    status === "cancelled" ||
+    /^aborted\.?$/i.test(text) ||
+    (call.runStopped === true && (text === "" || /abort|cancel/i.test(text)))
+  )
     return kind.leaves ? { outcome: "unknown" } : { outcome: "stopped" };
   return { outcome: "failed" };
 }

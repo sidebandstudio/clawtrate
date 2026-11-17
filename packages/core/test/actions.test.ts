@@ -1529,3 +1529,31 @@ describe("the gateway's name map for tool servers", () => {
     expect(kindOf(back, mapped).kind).toBe("server");
   });
 });
+
+describe("a call its run's stop cut short", () => {
+  it("reads Unknown for an effect that leaves the gateway, Stopped for one that stays, never Failed", () => {
+    const mcp = call(
+      "coder__slow_task",
+      { seconds: 3600 },
+      { isError: true, text: "", details: {}, runStopped: true },
+    );
+    expect(
+      outcomeOf(mcp, { toolServers: { coder__slow_task: { server: "coder", tool: "slow_task" } } })
+        .outcome,
+    ).toBe("unknown");
+    expect(
+      outcomeOf(call("read", { path: "a" }, { isError: true, text: "", runStopped: true })).outcome,
+    ).toBe("stopped");
+    // Without a stop, an empty error is a failure.
+    expect(outcomeOf(call("read", { path: "a" }, { isError: true, text: "" })).outcome).toBe(
+      "failed",
+    );
+  });
+  it("gives no duration under half a second", () => {
+    const groups = groupFeed<string>([
+      { type: "reasoning", segment: { id: "r", text: "x", startedAt: 0, endedAt: 200 } },
+      { type: "bubble", id: "b", ref: "b" },
+    ]);
+    expect(groups[0]).toMatchObject({ type: "thought", thought: { ms: null } });
+  });
+});

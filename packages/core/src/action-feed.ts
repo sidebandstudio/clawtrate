@@ -67,7 +67,8 @@ function thoughtOf(segments: ThoughtSegment[]): Thought {
       : null,
   );
   const total = spans.every((s) => s !== null) ? spans.reduce<number>((t, s) => t + s!, 0) : null;
-  return { id: segments[0]!.id, segments, ms: total !== null && total > 0 ? total : null };
+  // Under half a second reads as no duration: the line says "Thought", never a zero (7.5).
+  return { id: segments[0]!.id, segments, ms: total !== null && total >= 500 ? total : null };
 }
 
 /**
@@ -212,6 +213,7 @@ export function callFromStep(
     endedAt: open ? null : step.endedAt,
     fromHistory: run.origin === "history" && !step.details,
     partial: open ? (step.output?.text ?? null) : null,
+    runStopped: run.state === "stopped" || run.state === "cancelled",
   };
 }
 
@@ -222,7 +224,15 @@ export function callFromBlock(
   run: Pick<Run, "state" | "error" | "ending" | "origin"> | undefined,
 ): ActionCall {
   if (step && run) {
-    const call = callFromStep(step, run);
+    const fromStep = callFromStep(step, run);
+    // A viewer sent only item events has no arguments for the call: history's block has them.
+    const call = Object.keys(fromStep.args).length
+      ? fromStep
+      : { ...fromStep, args: parseArgs(block.argumentsText) };
+    // History holds no result, and the step's error says nothing (it came from an item's end,
+    // not a result): nothing establishes how the call ended.
+    if (!block.result && call.isError && !call.text)
+      return { ...call, status: "unreturned", isError: false, text: null };
     // History holds a result the engine's step does not have yet: history is newer.
     if (block.result && (call.status !== "returned" || !call.text))
       return {

@@ -9,6 +9,7 @@ import {
   lineOf,
   phraseCall,
   type ActionCall,
+  type ReadingContext,
   activeRun,
   isActive,
   questionPending,
@@ -34,16 +35,16 @@ export { questionPending };
  * while it runs, then the earliest still running (7.8), by the engine's
  * reading of each call.
  */
-export function phraseCallOf(run: Run): ActionCall | null {
+export function phraseCallOf(run: Run, ctx: ReadingContext = {}): ActionCall | null {
   const calls = run.steps
     .filter((step) => step.kind === "tool" && step.toolCallId)
     .map((step) => callFromStep(step, run));
-  return phraseCall(calls);
+  return phraseCall(calls, ctx);
 }
 
 /** The status line's words for a running call: its card's running words (section 5). */
-export function actionPhrase(call: ActionCall): string {
-  const line = lineOf(call);
+export function actionPhrase(call: ActionCall, ctx: ReadingContext = {}): string {
+  const line = lineOf(call, ctx);
   return line.outcome === "review" ? actionWords.PHRASES.reviewing : line.running;
 }
 
@@ -82,7 +83,9 @@ export function statusLineFor(
   options: { connected: boolean; interactive: boolean },
 ): StatusLineView {
   let view: StatusLineView;
-  const call = phraseCallOf(run);
+  // Read as the cards read it: with the gateway's map of tool-server names.
+  const ctx: ReadingContext = { toolServers: transcript.mcpTools };
+  const call = phraseCallOf(run, ctx);
   if (run.state === "stopping") {
     view = {
       state: "idle",
@@ -118,7 +121,7 @@ export function statusLineFor(
     view = {
       state: "working",
       badge: null,
-      phrase: actionPhrase(call),
+      phrase: actionPhrase(call, ctx),
       tone: "live",
       startedAt: null,
       callId: call.id,
