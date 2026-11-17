@@ -8,6 +8,7 @@ import type { ApprovalCard } from "./approvals.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import {
   isOpenStep,
+  isTerminal,
   type Run,
   type RunState,
   type Step,
@@ -20,6 +21,12 @@ export type LinkedRun = {
   id: string;
   sessionKey: string;
   state: RunState;
+  /**
+   * False when the run is known to have ended but not how (the engine's
+   * `outcomeKnown`): its state is then a stand-in and says nothing about the
+   * recipient's outcome.
+   */
+  outcomeKnown: boolean;
   startedAt: number | null;
   endedAt: number | null;
 };
@@ -49,6 +56,12 @@ export type BotMessageState =
   | "working"
   | "recipient-waiting"
   | "no-reply-yet"
+  /**
+   * The send was accepted and the recipient's run has ended, but nothing
+   * established how: no reply came back in the call, and the run's outcome is
+   * unknown.
+   */
+  | "recipient-outcome-unknown"
   /** The call ended without a result that says what happened, or the sender was stopped. */
   | "unknown"
   // Terminal
@@ -87,8 +100,18 @@ export type BotMessageCard = {
   error: string | null;
   state: BotMessageState;
   approvalId: string | null;
-  sentAt: number | null;
+  /**
+   * When the model asked for the send (the tool's start). A request is not a
+   * delivery: approval or execution may follow minutes later.
+   */
+  requestedAt: number | null;
+  /** When the gateway reports the message sent. It reports no such time, so this stays null. */
+  sentAt: null;
+  /** When this connection saw the call's result, if it has one. */
+  resultAt: number | null;
   endedAt: number | null;
+  /** Bumped when the gateway explicitly corrected the call's result; previous card states then do not hold. */
+  correction: number;
 };
 
 export type McpCallState =
@@ -122,12 +145,26 @@ export type McpCallCard = {
   files: Array<{ name: string | null; mimeType: string | null; uri: string | null }>;
   links: Array<{ uri: string; title: string | null }>;
   state: McpCallState;
+  /** The error the call returned, whenever it returned one, including after Stop. */
   error: string | null;
+  /**
+   * Whether the external server received the call is not established: the
+   * sender was stopped before a result, or the result says the call was
+   * aborted or cancelled. Kept apart from whether the call returned an error.
+   */
+  deliveryUncertain: boolean;
   /** The sender's run was stopped after the call returned: work it handed over may continue there. */
   workMayContinue: boolean;
   approvalId: string | null;
-  sentAt: number | null;
+  /** When the model asked for the call (the tool's start). Not a delivery time. */
+  requestedAt: number | null;
+  /** The gateway reports no delivery time, so this stays null. */
+  sentAt: null;
+  /** When this connection saw the call's result, if it has one. */
+  resultAt: number | null;
   endedAt: number | null;
+  /** Bumped when the gateway explicitly corrected the call's result. */
+  correction: number;
 };
 
 export type CardInput = {
@@ -214,6 +251,7 @@ const BOT_RANK: Record<BotMessageState, number> = {
   working: 3,
   "recipient-waiting": 3,
   "no-reply-yet": 4,
+  "recipient-outcome-unknown": 4,
   unknown: -1,
   replied: 5,
   failed: 5,
@@ -259,6 +297,10 @@ export function advanceMcpCallState(
 
 function recipientState(run: LinkedRun | undefined): BotMessageState | null {
   if (!run) return null;
+  // An ending that history could not establish says nothing about the recipient's outcome.
+  if (!run.outcomeKnown && (isTerminal(run.state) || run.state === "stopping")) {
+    return "recipient-outcome-unknown";
+  }
   switch (run.state) {
     case "queued":
     case "running":
@@ -377,8 +419,11 @@ function botMessageCard(
     error: state === "failed" || state === "blocked-by-policy" ? error : null,
     state,
     approvalId: approval?.id ?? null,
-    sentAt: step.startedAt,
+    requestedAt: step.startedAt,
+    sentAt: null,
+    resultAt: hasResult ? step.endedAt : null,
     endedAt: step.endedAt,
+    correction: step.correction,
   };
 }
 
@@ -432,11 +477,15 @@ function mcpCallCard(
   const approval = approvalFor(step, input.approvals ?? []);
   const stopped = run.state === "stopped" || run.state === "stopping";
   const hasResult = raw?.result !== null && raw?.result !== undefined;
+  // Only the result's own structured fields identify an abort; error text is never read for it.
+  const aborted =
+    details?.aborted === true || details?.status === "aborted" || details?.status === "cancelled";
   let state: McpCallState;
   if (isOpenStep(step)) state = "started";
   else if (approval?.status === "denied") state = "not-sent";
-  else if (!hasResult) state = "unknown";
-  else if (step.status === "failed") state = stopped ? "unknown" : "failed";
+  else if (!hasResult || (step.status === "failed" && aborted)) state = "unknown";
+  // A returned error stays an error: Stop winning the sender's run does not undo it.
+  else if (step.status === "failed") state = "failed";
   else state = "returned";
   const { files, links } = contentAttachments(body);
   return {
@@ -454,19 +503,31 @@ function mcpCallCard(
     files,
     links,
     state,
-    error: state === "failed" ? step.error : null,
+    error: hasResult && step.status === "failed" ? step.error : null,
+    deliveryUncertain: state === "unknown" || (stopped && step.status === "failed"),
     workMayContinue: stopped && state === "returned",
     approvalId: approval?.id ?? null,
-    sentAt: step.startedAt,
+    requestedAt: step.startedAt,
+    sentAt: null,
+    resultAt: hasResult ? step.endedAt : null,
     endedAt: step.endedAt,
+    correction: step.correction,
   };
 }
 
 /** Turn a task's steps into Messaged cards and MCP call cards. */
 export function selectMessageCards(input: CardInput, options: CardOptions): SelectedCards {
   const rawOf = options.rawOf ?? ((step: Step) => step.raw);
-  const previousBot = new Map(options.previous?.botMessages.map((card) => [card.id, card.state]));
-  const previousMcp = new Map(options.previous?.mcpCalls.map((card) => [card.id, card.state]));
+  // A previous state holds only for the same result: an explicit correction starts again from the facts.
+  const previousBot = new Map(options.previous?.botMessages.map((card) => [card.id, card]));
+  const previousMcp = new Map(options.previous?.mcpCalls.map((card) => [card.id, card]));
+  const prior = <T extends { state: S; correction: number }, S>(
+    previous: Map<string, T>,
+    card: { id: string; correction: number },
+  ): S | undefined => {
+    const before = previous.get(card.id);
+    return before && before.correction === card.correction ? before.state : undefined;
+  };
   const botMessages: BotMessageCard[] = [];
   const mcpCalls: McpCallCard[] = [];
 
@@ -476,14 +537,14 @@ export function selectMessageCards(input: CardInput, options: CardOptions): Sele
       const raw = rawOf(step);
       if (step.toolName === BOT_MESSAGE_TOOL) {
         const card = botMessageCard(step, run, raw, input);
-        card.state = advanceBotMessageState(previousBot.get(card.id), card.state);
+        card.state = advanceBotMessageState(prior(previousBot, card), card.state);
         botMessages.push(card);
         continue;
       }
       const identity = mcpIdentity(step, resultBody(raw), options);
       if (!identity) continue;
       const card = mcpCallCard(step, run, raw, identity, input, options.codingServers);
-      card.state = advanceMcpCallState(previousMcp.get(card.id), card.state);
+      card.state = advanceMcpCallState(prior(previousMcp, card), card.state);
       mcpCalls.push(card);
     }
   }
@@ -533,9 +594,28 @@ export function linkedRunOf(run: Run, sessionKey: string): LinkedRun {
     id: run.id,
     sessionKey,
     state: run.state,
+    outcomeKnown: run.outcomeKnown,
     startedAt: run.startedAt,
     endedAt: run.endedAt,
   };
+}
+
+/** The recipients a task's `sessions_send` results name: the recipient's run and session, as sent. */
+export function recipientLinks(
+  runs: Run[],
+  rawOf: (step: Step) => StepRaw | null,
+): Array<{ runId: string | null; sessionKey: string | null }> {
+  const links: Array<{ runId: string | null; sessionKey: string | null }> = [];
+  for (const run of runs) {
+    for (const step of run.steps) {
+      if (step.toolName !== BOT_MESSAGE_TOOL) continue;
+      const details = asRecord(resultBody(rawOf(step))?.details);
+      const runId = str(details?.runId);
+      const sessionKey = str(details?.sessionKey);
+      if (runId || sessionKey) links.push({ runId, sessionKey });
+    }
+  }
+  return links;
 }
 
 /** Recipient run ids named by a task's `sessions_send` results. */

@@ -252,10 +252,17 @@ describe("reconciling sent messages with history (F-075, F-107)", () => {
   });
 
   it("never retires a message on a text match alone", () => {
+    // Messages from before identifier-only matching carried a history watermark
+    // (`afterSeq`) and were retired by text past it; the rows below are past it.
+    const legacy = (each: OutgoingMessage) => ({ ...each, ...({ afterSeq: 1 } as object) });
     const activity: TaskActivity = startLocalRun(
       {
         ...emptyActivity,
-        outbox: [message("m1", { status: "failed" }), message("m2"), message("m3", { text: "" })],
+        outbox: [
+          legacy(message("m1", { status: "failed" })),
+          legacy(message("m2")),
+          legacy(message("m3", { text: "" })),
+        ],
       },
       message("m1", { status: "failed" }),
       3_000,

@@ -158,6 +158,7 @@ describe("bridge session policy", () => {
   const calls: unknown[] = [];
   const client = {
     connect: async (options: unknown) => void calls.push(options),
+    withdraw: () => {},
   } as unknown as ClawtrateClient;
 
   it("connects to the development gateway with the host's token, never the renderer's", async () => {

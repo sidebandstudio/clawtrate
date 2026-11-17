@@ -307,8 +307,12 @@ export function createBridgeSession(
   policy: BridgePolicy = {},
 ): BridgeSession {
   const open = new Set<string>();
+  /** Task creations under way: they count against this viewer's open tasks before the gateway is asked. */
+  let creating = 0;
   let disposed = false;
   let inFlight = 0;
+  /** Names this viewer to the client, so what it asked for is withdrawn when it goes away. */
+  const owner = {};
   /** Task commands act only on tasks this viewer has open. */
   const mine = (key: string) => {
     if (!open.has(key)) throw new Error("This task is not open in this view.");
@@ -330,7 +334,7 @@ export function createBridgeSession(
         return client.retryNow();
       case "openSession":
         if (!open.has(command.key)) {
-          if (open.size >= MAX_VIEWER_OPEN_TASKS) {
+          if (open.size + creating >= MAX_VIEWER_OPEN_TASKS) {
             throw new Error(`A view can hold ${MAX_VIEWER_OPEN_TASKS} tasks open at once.`);
           }
           client.openSession(command.key);
@@ -364,25 +368,38 @@ export function createBridgeSession(
       case "sendQueuedNow":
         return client.sendQueuedNow(mine(command.key), command.messageId);
       case "createTask": {
-        // Until the gateway is asked, a viewer that goes away takes its request with it.
-        const key = await client.createTask(command.botId, command.text, {
-          ...(command.label ? { label: command.label } : {}),
-          cancelled: () => disposed,
-        });
+        // The new task is one of this viewer's open tasks from the start.
+        if (open.size + creating >= MAX_VIEWER_OPEN_TASKS) {
+          throw new Error(`A view can hold ${MAX_VIEWER_OPEN_TASKS} tasks open at once.`);
+        }
+        creating += 1;
+        let key: string;
+        try {
+          // Until the gateway is asked, a viewer that goes away takes its request with it.
+          key = await client.createTask(command.botId, command.text, {
+            ...(command.label ? { label: command.label } : {}),
+            owner,
+          });
+        } finally {
+          creating -= 1;
+        }
         // The client already counts this viewer's interest in the new task.
         if (disposed || open.has(key)) client.closeSession(key);
         else open.add(key);
         return { key };
       }
       case "stopRun":
-        return client.stopRun(mine(command.key), command.runId);
+        return client.stopRun(mine(command.key), command.runId, { owner });
       case "answerQuestion":
-        return client.answerQuestion(mine(command.key), command.questionId, command.answers);
+        return client.answerQuestion(mine(command.key), command.questionId, command.answers, {
+          owner,
+        });
       case "dismissQuestion":
-        return client.dismissQuestion(mine(command.key), command.questionId);
+        return client.dismissQuestion(mine(command.key), command.questionId, { owner });
       case "resolveApproval":
         return client.resolveApproval(mine(command.key), command.approvalId, command.decision, {
           expiresInDays: command.expiresInDays,
+          owner,
         });
       case "readStepRaw":
         return client.stepRaw(mine(command.key), command.stepId);
@@ -403,6 +420,8 @@ export function createBridgeSession(
     dispose() {
       if (disposed) return;
       disposed = true;
+      // What this viewer asked for and the gateway has not been asked yet goes with it, now.
+      client.withdraw(owner);
       for (const key of open) client.closeSession(key);
       open.clear();
     },

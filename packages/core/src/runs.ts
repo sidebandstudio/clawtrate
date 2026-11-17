@@ -4,7 +4,12 @@
 // docs/research/grok-bot-flows.md §5.6. Every function here is pure apart from
 // the raw table, which keeps the exact gateway payloads off the state snapshots.
 
-import type { ApprovalAccess, ApprovalCard } from "./approvals.ts";
+import type {
+  ApprovalAccess,
+  ApprovalCard,
+  ApprovalKind,
+  ApprovalSourceAccess,
+} from "./approvals.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 
 export type RunState =
@@ -110,6 +115,13 @@ export type Step = {
   /** The gateway marked the result `replaceable`: a later `replace` frame may correct it. */
   replaceable: boolean;
   /**
+   * How many times the gateway explicitly corrected this step's finished
+   * result (a `replace` frame, or the transcript's canonical copy of a
+   * replaceable result). Views that keep state across renders start again
+   * from the facts when it changes.
+   */
+  correction: number;
+  /**
    * The raw call and result as known so far, inline when its JSON form is at
    * most `RAW_INLINE_LIMIT` characters (set at the tool's start and again when
    * it finishes). Otherwise null; read it with the client's `stepRaw` (bridge
@@ -184,6 +196,14 @@ export type Run = {
   outcomeKnown: boolean;
   /** Errors of attempts the gateway retried, newest last, at most `MAX_ATTEMPT_ERRORS`. */
   attemptErrors: string[];
+  /**
+   * Older finished steps dropped to keep the task within its bounds
+   * (`MAX_STEPS_PER_RUN`, the task's activity budget). The transcript still
+   * holds them; their raw payloads may no longer be available here.
+   */
+  omittedSteps: number;
+  /** The finished run's reply text was dropped for the same reason; the transcript holds it. */
+  textOmitted: boolean;
 };
 
 export type OutgoingStatus =
@@ -200,6 +220,12 @@ export type OutgoingStatus =
   | "sending"
   /** The gateway accepted it; it leaves the outbox once history has it. */
   | "sent"
+  /**
+   * The gateway accepted it, but its run has ended and history holds no row
+   * tied to it: delivery is not established. It can be retried with the same
+   * idempotency key, so the gateway delivers it at most once, or deleted.
+   */
+  | "unconfirmed"
   | "failed"
   | "cancelled";
 
@@ -274,6 +300,8 @@ export type TaskActivity = {
   approvals: ApprovalCard[];
   /** Whether this connection can see approvals. On a read-only connection it cannot, which is not "none". */
   approvalAccess: ApprovalAccess;
+  /** Whether each kind's list loaded: one kind failing leaves the others shown, and says so. */
+  approvalSources: Record<ApprovalKind, ApprovalSourceAccess>;
   /**
    * Run ids a steer send returned, mapped to the run the steer joined. The
    * gateway settles them at once with an empty final; while the joined run is
@@ -290,6 +318,7 @@ export const emptyActivity: TaskActivity = {
   questions: [],
   approvals: [],
   approvalAccess: "unavailable",
+  approvalSources: { exec: "unavailable", plugin: "unavailable", "system-agent": "unavailable" },
   steerAliases: {},
   caughtUp: null,
 };
@@ -310,6 +339,18 @@ export const MAX_STEER_ALIASES = 50;
 export const MAX_SETTLED_QUESTIONS = 20;
 /** Settled approvals kept per task; pending ones are always kept. */
 export const MAX_SETTLED_APPROVALS = 20;
+/** Steps one run keeps; older finished ones give way, counted in `omittedSteps`. Open steps are always kept. */
+export const MAX_STEPS_PER_RUN = 256;
+/**
+ * Characters of activity one task keeps on its snapshot: step text, inline
+ * raw payloads, run text, outbox text and approval and question records,
+ * counted by `activitySize`. Past it the oldest finished steps give way, then
+ * finished runs' reply text. The client lowers it when many tasks are followed,
+ * so all of them together stay within `MAX_ACTIVITY_CHARS`.
+ */
+export const MAX_TASK_ACTIVITY_CHARS = 4_000_000;
+/** Characters of activity the client keeps across every task it follows. */
+export const MAX_ACTIVITY_CHARS = 64_000_000;
 
 /** Full raw payloads, keyed by task and step id. Owned by the client, never snapshotted. */
 export class RawTable {
@@ -492,6 +533,8 @@ export function newRun(
     ending: null,
     outcomeKnown: true,
     attemptErrors: [],
+    omittedSteps: 0,
+    textOmitted: false,
     ...init,
   };
 }
@@ -1324,6 +1367,7 @@ function applyThinking(
     failureKind: null,
     truncated: false,
     replaceable: false,
+    correction: 0,
     raw: null,
     rawSize: null,
   });
@@ -1362,6 +1406,7 @@ function blankToolStep(toolCallId: string, name: string | null, ts: number | nul
     failureKind: null,
     truncated: false,
     replaceable: false,
+    correction: 0,
     raw: null,
     rawSize: null,
   };
@@ -1426,6 +1471,7 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
         failureKind: isError ? str(details?.failureKind) : null,
         truncated: details?.truncated === true,
         replaceable: data.replaceable === true,
+        correction: replacing ? step.correction + 1 : step.correction,
       };
       return upsertStep(current, settleRaw(finished, ctx));
     }
@@ -1510,6 +1556,8 @@ export function runsFromHistory(
   const inFlightRunId = str(snapshot?.runId);
   const runs = new Map<string, Run>();
   const lastAssistant = new Map<string, RawRecord>();
+  /** Runs whose last persisted content is a thinking block: that segment may still be streaming. */
+  const trailingThinking = new Map<string, boolean>();
   let anchor: string | null = null;
   const rows = Array.isArray(messages) ? messages : [];
 
@@ -1531,14 +1579,19 @@ export function runsFromHistory(
       lastAssistant.set(runId, message);
       run = { ...run, model: str(message.model) ?? run.model, endedAt: at ?? run.endedAt };
       const content = Array.isArray(message.content) ? message.content : [];
+      if (typeof message.content === "string" && message.content.trim())
+        trailingThinking.set(runId, false);
       for (const part of content) {
         const block = asRecord(part);
         if (!block) continue;
+        if (block.type === "text" && typeof block.text === "string" && block.text.trim())
+          trailingThinking.set(runId, false);
         if (
           block.type === "thinking" &&
           typeof block.thinking === "string" &&
           block.thinking.trim()
         ) {
+          trailingThinking.set(runId, true);
           const index = run.steps.filter((step) => step.kind === "reasoning").length;
           const id = `reasoning:${runId}:${index}`;
           ctx.raw.set(ctx.sessionKey, id, { source: "history", runId, call: block, result: null });
@@ -1562,6 +1615,7 @@ export function runsFromHistory(
                 failureKind: null,
                 truncated: false,
                 replaceable: false,
+                correction: 0,
                 raw: null,
                 rawSize: null,
               },
@@ -1571,6 +1625,7 @@ export function runsFromHistory(
         } else if (block.type === "toolCall" || block.type === "tool_use") {
           const toolCallId = str(block.id);
           if (!toolCallId) continue;
+          trailingThinking.set(runId, false);
           const name = str(block.name);
           const id = toolStepId(toolCallId);
           ctx.raw.set(ctx.sessionKey, id, { source: "history", runId, call: block, result: null });
@@ -1581,6 +1636,7 @@ export function runsFromHistory(
         }
       }
     } else if (message.role === "toolResult" || message.role === "tool") {
+      trailingThinking.set(runId, false);
       const toolCallId = str(message.toolCallId) ?? str(message.tool_call_id);
       const step = toolCallId
         ? run.steps.find((each) => each.id === toolStepId(toolCallId))
@@ -1610,8 +1666,10 @@ export function runsFromHistory(
     runs.set(runId, run);
   });
 
-  // The run in flight may have no transcript row yet: build it from the
-  // snapshot, replaying the activity events it carries.
+  // The run in flight: what its rows hold, plus the current progress its
+  // snapshot carries (tool and item events, never thinking), replayed by step
+  // id so a step the rows already finished is not repeated. A run with no row
+  // yet is built from the snapshot alone.
   if (inFlightRunId) {
     let activity: TaskActivity = {
       ...emptyActivity,
@@ -1624,14 +1682,25 @@ export function runsFromHistory(
           ),
       ],
     };
-    if (!runs.has(inFlightRunId)) {
-      for (const entry of Array.isArray(snapshot?.events) ? snapshot.events : []) {
-        const event = asRecord(entry);
-        if (event)
-          activity = applyAgentEvent(activity, { ...event, runId: inFlightRunId }, ctx).activity;
-      }
+    for (const entry of Array.isArray(snapshot?.events) ? snapshot.events : []) {
+      const event = asRecord(entry);
+      if (event)
+        activity = applyAgentEvent(activity, { ...event, runId: inFlightRunId }, ctx).activity;
     }
-    const run = activity.runs[0]!;
+    let run = activity.runs[0]!;
+    // A thinking block that is still the run's last activity may be the
+    // segment streaming now: it stays open, as the live view has it, so the
+    // next cumulative frame continues it rather than starting another.
+    const last = run.steps.at(-1);
+    if (trailingThinking.get(inFlightRunId) && last?.kind === "reasoning") {
+      run = {
+        ...run,
+        steps: [
+          ...run.steps.slice(0, -1),
+          { ...last, status: "running", endedAt: null, raw: null, rawSize: null },
+        ],
+      };
+    }
     const text = typeof snapshot?.text === "string" ? snapshot.text : "";
     runs.set(inFlightRunId, text && !run.text ? { ...run, text } : run);
   }
@@ -1662,7 +1731,12 @@ function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "h
   // result replaceable: then the transcript holds the canonical result.
   if ((isOpenStep(live) && !isOpenStep(history)) || (live.replaceable && !isOpenStep(history))) {
     return {
-      step: { ...history, startedAt: live.startedAt ?? history.startedAt },
+      step: {
+        ...history,
+        startedAt: live.startedAt ?? history.startedAt,
+        // The canonical copy replaced a finished, replaceable result: an explicit correction.
+        correction: isOpenStep(live) ? live.correction : live.correction + 1,
+      },
       source: "history",
     };
   }
@@ -1783,12 +1857,112 @@ export function settleVanishedRuns(
   });
 }
 
+const sizes = new WeakMap<object, number>();
+
+function jsonLength(value: unknown): number {
+  try {
+    return JSON.stringify(value ?? null)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+function cached<T extends object>(value: T, measure: (value: T) => number): number {
+  let size = sizes.get(value);
+  if (size === undefined) {
+    size = measure(value);
+    sizes.set(value, size);
+  }
+  return size;
+}
+
+function stepSize(step: Step): number {
+  return cached(
+    step,
+    (each) =>
+      256 +
+      each.title.length +
+      (each.argsText?.text.length ?? 0) +
+      (each.output?.text.length ?? 0) +
+      (each.result?.text.length ?? 0) +
+      (each.error?.length ?? 0) +
+      (each.raw ? (each.rawSize ?? jsonLength(each.raw)) : 0),
+  );
+}
+
+function runSize(run: Run): number {
+  return cached(run, (each) => {
+    let size = 512 + each.text.length + (each.error?.message.length ?? 0);
+    for (const message of each.attemptErrors) size += message.length;
+    for (const step of each.steps) size += stepSize(step);
+    return size;
+  });
+}
+
+/** The characters a task's activity puts on every snapshot, approximately. */
+export function activitySize(activity: TaskActivity): number {
+  let size = 0;
+  for (const run of activity.runs) size += runSize(run);
+  for (const message of activity.outbox) size += 256 + message.text.length;
+  for (const approval of activity.approvals)
+    size += cached(approval, (a) => 512 + jsonLength(a.raw));
+  for (const question of activity.questions)
+    size += cached(question, (q) => 256 + jsonLength(q.raw));
+  return size;
+}
+
+/** Drop the oldest finished steps of a run beyond `keep`, counting them. */
+function dropOldSteps(run: Run, excess: number): Run {
+  if (excess <= 0) return run;
+  let dropped = 0;
+  const steps = run.steps.filter((step) => {
+    if (dropped >= excess || isOpenStep(step)) return true;
+    dropped += 1;
+    return false;
+  });
+  return dropped === 0 ? run : { ...run, steps, omittedSteps: run.omittedSteps + dropped };
+}
+
+/** Bring a task under its activity budget: oldest finished steps first, then finished runs' text. */
+function fitBudget(runs: Run[], over: number): Run[] {
+  let remaining = over;
+  const next = [...runs];
+  // Finished runs first, oldest first; then the finished steps of active runs.
+  const order = [
+    ...next.map((run, index) => ({ run, index })).filter(({ run }) => isTerminal(run.state)),
+    ...next.map((run, index) => ({ run, index })).filter(({ run }) => !isTerminal(run.state)),
+  ];
+  for (const { index } of order) {
+    if (remaining <= 0) break;
+    let run = next[index]!;
+    let dropped = 0;
+    const steps = run.steps.filter((step) => {
+      if (remaining <= 0 || isOpenStep(step)) return true;
+      remaining -= stepSize(step);
+      dropped += 1;
+      return false;
+    });
+    if (dropped > 0) run = { ...run, steps, omittedSteps: run.omittedSteps + dropped };
+    if (remaining > 0 && isTerminal(run.state) && run.text) {
+      remaining -= run.text.length;
+      run = { ...run, text: "", textOmitted: true };
+    }
+    next[index] = run;
+  }
+  return next;
+}
+
 /**
  * Bound what a task keeps while it stays open: the newest finished runs, the
- * newest closed cards per run, the newest steer aliases and settled questions.
- * Anything active, queued or pending is always kept. Idempotent.
+ * newest closed cards per run, the newest steer aliases and settled questions,
+ * at most `MAX_STEPS_PER_RUN` steps per run, and `budget` characters of
+ * activity in all. Anything active, queued or pending is always kept, and
+ * every step or text dropped is counted on its run. Idempotent.
  */
-export function retainActivity(activity: TaskActivity): TaskActivity {
+export function retainActivity(
+  activity: TaskActivity,
+  budget: number = MAX_TASK_ACTIVITY_CHARS,
+): TaskActivity {
   let changed = false;
   const finished = activity.runs.filter((run) => isTerminal(run.state));
   let runs = activity.runs;
@@ -1804,6 +1978,13 @@ export function retainActivity(activity: TaskActivity): TaskActivity {
         : run,
     );
     changed = true;
+  }
+  if (runs.some((run) => run.steps.length > MAX_STEPS_PER_RUN)) {
+    const capped = runs.map((run) => dropOldSteps(run, run.steps.length - MAX_STEPS_PER_RUN));
+    if (capped.some((run, index) => run !== runs[index])) {
+      runs = capped;
+      changed = true;
+    }
   }
   let steerAliases = activity.steerAliases;
   const aliasKeys = Object.keys(steerAliases);
@@ -1828,6 +2009,14 @@ export function retainActivity(activity: TaskActivity): TaskActivity {
     );
     approvals = approvals.filter((approval) => !drop.has(approval));
     changed = true;
+  }
+  const over = activitySize({ ...activity, runs, questions, approvals }) - budget;
+  if (over > 0) {
+    const fitted = fitBudget(runs, over);
+    if (fitted.some((run, index) => run !== runs[index])) {
+      runs = fitted;
+      changed = true;
+    }
   }
   return changed ? { ...activity, runs, steerAliases, questions, approvals } : activity;
 }
@@ -1855,6 +2044,7 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
     if (
       outgoing.status !== "sending" &&
       outgoing.status !== "sent" &&
+      outgoing.status !== "unconfirmed" &&
       outgoing.status !== "failed"
     ) {
       return true;
@@ -1864,7 +2054,8 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
     );
     const bySeq =
       byKey ??
-      (outgoing.status === "sent" && outgoing.messageSeq !== null
+      ((outgoing.status === "sent" || outgoing.status === "unconfirmed") &&
+      outgoing.messageSeq !== null
         ? rows.find((row) => {
             if (used.has(row.index) || num(meta(row.message).seq) !== outgoing.messageSeq)
               return false;
@@ -1883,4 +2074,25 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
     return anchor ? { ...run, messageId: null, anchorItemId: run.anchorItemId ?? anchor } : run;
   });
   return { ...activity, outbox, runs };
+}
+
+/** Shown on a message the gateway accepted that history does not hold. */
+export const UNCONFIRMED_ERROR =
+  "The gateway accepted this message, but its history does not show it. It may not have been delivered.";
+
+/**
+ * After a history read: a message the gateway accepted whose run has ended,
+ * and that the read did not tie to a row, is `unconfirmed`. Its run ending
+ * means history should hold it; without a row nothing establishes delivery.
+ */
+export function markUnconfirmed(activity: TaskActivity): TaskActivity {
+  let changed = false;
+  const outbox = activity.outbox.map((message) => {
+    if (message.status !== "sent") return message;
+    const run = message.runId ? findRun(activity, message.runId) : undefined;
+    if (run && !isTerminal(run.state)) return message;
+    changed = true;
+    return { ...message, status: "unconfirmed" as const, error: UNCONFIRMED_ERROR };
+  });
+  return changed ? { ...activity, outbox } : activity;
 }

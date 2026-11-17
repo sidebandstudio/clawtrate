@@ -4,7 +4,15 @@
 // that names no step is its own card. Everything here needs `operator.approvals`.
 
 import { asRecord, type RawRecord } from "./mapping.ts";
-import { findRun, isOpenStep, isTerminal, type Run, type Step, type TaskActivity } from "./runs.ts";
+import {
+  findRun,
+  isOpenStep,
+  isTerminal,
+  type Run,
+  type RunState,
+  type Step,
+  type TaskActivity,
+} from "./runs.ts";
 
 export type ApprovalKind = "exec" | "plugin" | "system-agent";
 export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
@@ -52,7 +60,15 @@ export type PluginApprovalDetail = {
 export type SystemAgentApprovalDetail = {
   title: string | null;
   description: string | null;
+  /** The change described as a command, as the request sends it. */
+  command: string | null;
   proposalHash: string | null;
+};
+
+/** Who settled an approval, as a terminal `ApprovalSnapshot` names it. No display label is invented. */
+export type ApprovalResolver = {
+  kind: "device" | "channel" | "runtime" | "system";
+  id: string | null;
 };
 
 export type ApprovalCard = {
@@ -73,7 +89,22 @@ export type ApprovalCard = {
   createdAt: number | null;
   expiresAt: number | null;
   resolvedAt: number | null;
+  /** The human-readable label the legacy resolved event carries (`resolvedBy`), as sent. */
   resolvedBy: string | null;
+  /** The typed resolver of a terminal `ApprovalSnapshot` (`resolver.kind`, `resolver.id`). */
+  resolver: ApprovalResolver | null;
+  /**
+   * The terminal status is this client's inference, not the gateway's word:
+   * the expiry time passed, or a reload no longer listed it. A later outcome
+   * from the gateway replaces it.
+   */
+  inferred: boolean;
+  /**
+   * For a system-agent change that was allowed: whether the gateway then
+   * applied it (`applicationStatus`, `applied` or `not-applied`), kept apart
+   * from the permission outcome.
+   */
+  applicationStatus: string | null;
   /**
    * The decisions the request offers, and nothing it did not: a standing allow
    * appears only when offered. Always contains `deny`.
@@ -86,6 +117,13 @@ export type ApprovalCard = {
    * helper or a bot messaged by another (`spawnedBy` on its events).
    */
   parentSessionKey: string | null;
+  /**
+   * How the asking session relates to the task showing the approval: a helper
+   * it spawned (`spawnedBy`), or a bot one of its `sessions_send` calls
+   * messaged (the result named the recipient's run or session). Null when the
+   * approval is the task's own.
+   */
+  relation: "helper" | "messaged" | null;
   exec: ExecApprovalDetail | null;
   plugin: PluginApprovalDetail | null;
   systemAgent: SystemAgentApprovalDetail | null;
@@ -98,8 +136,15 @@ export type ApprovalCard = {
   raw: unknown;
 };
 
-/** Whether this connection can see approvals at all. Read-only connections cannot: that is not "none". */
-export type ApprovalAccess = "unavailable" | "loading" | "ready" | "error";
+/**
+ * Whether this connection can see approvals at all. Read-only connections
+ * cannot: that is not "none". `partial` means some kinds' lists loaded and
+ * others failed (`approvalSources` says which); an incomplete list is not "no
+ * approvals".
+ */
+export type ApprovalAccess = "unavailable" | "loading" | "ready" | "partial" | "error";
+export type ApprovalSourceAccess = "unavailable" | "loading" | "ready" | "error";
+export const APPROVAL_KINDS: readonly ApprovalKind[] = ["exec", "plugin", "system-agent"];
 
 const DECISIONS: readonly ApprovalDecision[] = ["allow-once", "allow-always", "deny"];
 
@@ -122,14 +167,30 @@ function decisionList(value: unknown): ApprovalDecision[] {
 }
 
 /**
- * The offered decisions, in a fixed order: the listed ones; without a list,
- * allow once less anything marked unavailable. A standing allow is never
- * assumed. Deny is always possible.
+ * What the gateway offers by default when a request lists no decisions, per
+ * kind. Exec requests always list theirs; without one, allow once is the safe
+ * reading. A plugin request without a list gets the plugin default of allow
+ * once, allow always and deny (`resolvePluginApprovalRequestAllowedDecisions`
+ * in OpenClaw 2026.10.6). System-agent changes offer allow once and deny.
  */
-function decisions(allowed: unknown, unavailable: unknown = undefined): ApprovalDecision[] {
+const DEFAULT_DECISIONS: Record<ApprovalKind, readonly ApprovalDecision[]> = {
+  exec: ["allow-once"],
+  plugin: ["allow-once", "allow-always", "deny"],
+  "system-agent": ["allow-once", "deny"],
+};
+
+/**
+ * The offered decisions, in a fixed order: the listed ones; without a list,
+ * the kind's default less anything marked unavailable. Deny is always possible.
+ */
+function decisions(
+  kind: ApprovalKind,
+  allowed: unknown,
+  unavailable: unknown = undefined,
+): ApprovalDecision[] {
   const listed = decisionList(allowed);
   const offered = new Set<ApprovalDecision>(
-    Array.isArray(allowed) && listed.length > 0 ? listed : ["allow-once"],
+    Array.isArray(allowed) && listed.length > 0 ? listed : DEFAULT_DECISIONS[kind],
   );
   for (const each of decisionList(unavailable)) if (each !== "deny") offered.delete(each);
   offered.add("deny");
@@ -153,9 +214,13 @@ function blank(id: string, kind: ApprovalKind, raw: unknown): ApprovalCard {
     expiresAt: null,
     resolvedAt: null,
     resolvedBy: null,
-    allowedDecisions: decisions(undefined),
+    resolver: null,
+    inferred: false,
+    applicationStatus: null,
+    allowedDecisions: decisions(kind, undefined),
     unavailableDecisions: [],
     parentSessionKey: null,
+    relation: null,
     exec: null,
     plugin: null,
     systemAgent: null,
@@ -187,7 +252,7 @@ export function parseExecApproval(value: unknown): ApprovalCard | null {
     toolCallId: str(request.toolCallId),
     createdAt: num(record.createdAtMs),
     expiresAt: num(record.expiresAtMs),
-    allowedDecisions: decisions(request.allowedDecisions, request.unavailableDecisions),
+    allowedDecisions: decisions("exec", request.allowedDecisions, request.unavailableDecisions),
     unavailableDecisions: decisionList(request.unavailableDecisions),
     scope: request.scope ?? null,
     exec: {
@@ -225,8 +290,9 @@ export function parsePluginApproval(value: unknown): ApprovalCard | null {
     toolCallId: str(request.toolCallId),
     createdAt: num(record.createdAtMs),
     expiresAt: num(record.expiresAtMs),
-    allowedDecisions: decisions(request.allowedDecisions, request.unavailableDecisions),
-    unavailableDecisions: decisionList(request.unavailableDecisions),
+    // The producer omits the list when the plugin did not set one; the gateway then offers its default.
+    allowedDecisions: decisions("plugin", request.allowedDecisions),
+    unavailableDecisions: [],
     scope: request.scope ?? null,
     plugin: {
       title: str(request.title),
@@ -240,17 +306,54 @@ export function parsePluginApproval(value: unknown): ApprovalCard | null {
 }
 
 /**
- * A generic `ApprovalSnapshot` (`openclaw.approval.*`, `approval.get`), or an
- * event that wraps one as `approval`. A snapshot names no run or tool call, so
- * it never links to a step on its own; it merges into an exec or plugin record
- * with the same id.
+ * A system-agent request: an `openclaw.approval.requested` event or an
+ * `openclaw.approval.list` item, `{approvalKind?, id, request{title,
+ * description, command, proposalHash, allowedDecisions, agentId, sessionKey,
+ * runId}, createdAtMs, expiresAtMs}` (OpenClaw 2026.10.6 `buildRequestedApprovalEvent`
+ * and `listVisiblePendingApprovalRequests`). It is not an `ApprovalSnapshot`.
+ */
+export function parseSystemAgentApproval(value: unknown): ApprovalCard | null {
+  const record = asRecord(value);
+  const id = str(record?.id);
+  const request = asRecord(record?.request);
+  if (!record || !id || !request) return null;
+  if (record.approvalKind !== undefined && record.approvalKind !== "system-agent") return null;
+  return {
+    ...blank(id, "system-agent", value),
+    sessionKey: str(request.sessionKey),
+    agentId: str(request.agentId),
+    runId: str(request.runId),
+    createdAt: num(record.createdAtMs),
+    expiresAt: num(record.expiresAtMs),
+    allowedDecisions: decisions("system-agent", request.allowedDecisions),
+    systemAgent: {
+      title: str(request.title),
+      description: str(request.description),
+      command: str(request.command),
+      proposalHash: str(request.proposalHash),
+    },
+  };
+}
+
+function resolverOf(value: unknown): ApprovalResolver | null {
+  const record = asRecord(value);
+  const kind = record?.kind;
+  if (kind !== "device" && kind !== "channel" && kind !== "runtime" && kind !== "system")
+    return null;
+  return { kind, id: str(record?.id) };
+}
+
+/**
+ * An `ApprovalSnapshot` as `approval.get` and `approval.resolve` return it.
+ * A pending snapshot may name `sourceSessionKey`; a terminal one names
+ * `source{agentId, sessionKey}` and a typed `resolver{kind, id}`. A snapshot
+ * names no run or tool call, so it never links to a step on its own.
  */
 export function parseApprovalSnapshot(
   value: unknown,
   sessionKey?: string | null,
 ): ApprovalCard | null {
-  const outer = asRecord(value);
-  const record = asRecord(outer?.approval) ?? outer;
+  const record = asRecord(value);
   const id = str(record?.id);
   const presentation = asRecord(record?.presentation);
   const kind = presentation?.kind;
@@ -262,13 +365,14 @@ export function parseApprovalSnapshot(
   ) {
     return null;
   }
+  const source = asRecord(record.source);
   const card: ApprovalCard = {
     ...blank(id, kind, value),
-    sessionKey: sessionKey ?? str(outer?.sessionKey) ?? str(record.sourceSessionKey),
-    agentId: str(presentation.agentId),
+    sessionKey: sessionKey ?? str(source?.sessionKey) ?? str(record.sourceSessionKey),
+    agentId: str(source?.agentId) ?? str(presentation.agentId),
     createdAt: num(record.createdAtMs),
     expiresAt: num(record.expiresAtMs),
-    allowedDecisions: decisions(presentation.allowedDecisions),
+    allowedDecisions: decisions(kind, presentation.allowedDecisions),
     scope: presentation.scope ?? null,
   };
   if (kind === "exec") {
@@ -300,6 +404,7 @@ export function parseApprovalSnapshot(
     card.systemAgent = {
       title: str(presentation.title),
       description: str(presentation.description),
+      command: null,
       proposalHash: str(presentation.proposalHash),
     };
   }
@@ -314,7 +419,7 @@ export function parseApprovalSnapshot(
     card.decision = decision(record.decision);
     card.reason = str(record.reason);
     card.resolvedAt = num(record.resolvedAtMs);
-    card.resolvedBy = str(asRecord(record.resolver)?.label) ?? str(record.resolver);
+    card.resolver = resolverOf(record.resolver);
   }
   return card;
 }
@@ -327,35 +432,90 @@ export type ApprovalResolution = {
   reason: string | null;
   resolvedAt: number | null;
   resolvedBy: string | null;
+  resolver: ApprovalResolver | null;
+  /** A system-agent application result (`applied`, `not-applied`), when the event carries one. */
+  applicationStatus: string | null;
+  /** False for this client's own inference (local expiry, no longer listed). */
+  authoritative: boolean;
+  /** The session the request named (`request.sessionKey`, or a terminal snapshot's `source.sessionKey`). */
+  sessionKey: string | null;
+  runId: string | null;
 };
 
 /**
- * `exec.approval.resolved` / `plugin.approval.resolved`: `{id, decision,
- * resolvedBy, ts, request}`. A generic snapshot event is read for its status.
+ * `exec.approval.resolved`, `plugin.approval.resolved` and
+ * `openclaw.approval.resolved`: `{id, decision, resolvedBy, ts, request}`.
+ * A system-agent event may add `terminalStatus` (`cancelled` or `expired`),
+ * which is authoritative although its projected decision is deny, and a
+ * later application result adds `applicationStatus`. None of them is an
+ * `ApprovalSnapshot`.
  */
-export function parseApprovalResolved(value: unknown): ApprovalResolution | null {
+export function parseApprovalResolved(
+  value: unknown,
+  kind: ApprovalKind,
+): ApprovalResolution | null {
   const record = asRecord(value);
-  const snapshot = parseApprovalSnapshot(value);
-  if (snapshot && snapshot.status !== "pending") {
-    return {
-      id: snapshot.id,
-      status: snapshot.status,
-      decision: snapshot.decision,
-      reason: snapshot.reason,
-      resolvedAt: snapshot.resolvedAt,
-      resolvedBy: snapshot.resolvedBy,
-    };
-  }
   const id = str(record?.id);
   const chosen = decision(record?.decision);
   if (!record || !id || !chosen) return null;
+  const request = asRecord(record.request);
+  const terminal = kind === "system-agent" ? record.terminalStatus : undefined;
+  const status: ApprovalResolution["status"] =
+    terminal === "cancelled"
+      ? "cancelled"
+      : terminal === "expired"
+        ? "expired"
+        : chosen === "deny"
+          ? "denied"
+          : "allowed";
   return {
     id,
-    status: chosen === "deny" ? "denied" : "allowed",
-    decision: chosen,
-    reason: str(record.reason),
+    status,
+    decision: status === "allowed" || status === "denied" ? chosen : null,
+    reason: str(record.reason) ?? (status === "expired" ? "timeout" : null),
     resolvedAt: num(record.ts),
-    resolvedBy: str(record.resolvedBy) ?? str(asRecord(record.resolvedBy)?.label),
+    resolvedBy: str(record.resolvedBy),
+    resolver: null,
+    applicationStatus: kind === "system-agent" ? str(record.applicationStatus) : null,
+    authoritative: true,
+    sessionKey: str(request?.sessionKey),
+    runId: str(request?.runId),
+  };
+}
+
+/** The outcome a terminal `ApprovalSnapshot` reports, as `approval.resolve` returns it. */
+export function resolutionFromSnapshot(value: unknown): ApprovalResolution | null {
+  const card = parseApprovalSnapshot(value);
+  if (!card || card.status === "pending") return null;
+  return {
+    id: card.id,
+    status: card.status,
+    decision: card.decision,
+    reason: card.reason,
+    resolvedAt: card.resolvedAt,
+    resolvedBy: null,
+    resolver: card.resolver,
+    applicationStatus: null,
+    authoritative: true,
+    sessionKey: card.sessionKey,
+    runId: null,
+  };
+}
+
+/** Fold a later report about the same approval into what is known: an application result adds to the outcome. */
+export function mergeResolution(
+  known: ApprovalResolution | undefined,
+  next: ApprovalResolution,
+): ApprovalResolution {
+  if (!known || (!known.authoritative && next.authoritative)) return next;
+  if (!next.authoritative) return known;
+  return {
+    ...known,
+    applicationStatus: next.applicationStatus ?? known.applicationStatus,
+    resolver: known.resolver ?? next.resolver,
+    resolvedBy: known.resolvedBy ?? next.resolvedBy,
+    sessionKey: known.sessionKey ?? next.sessionKey,
+    runId: known.runId ?? next.runId,
   };
 }
 
@@ -393,25 +553,47 @@ function pickSet<T extends Record<string, unknown>>(value: T): Partial<T> {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== null)) as Partial<T>;
 }
 
+/**
+ * Settle an approval. The gateway's word settles a pending card and corrects a
+ * closure this client only inferred (local expiry, no longer listed),
+ * including its decision, reason and resolver. Once the gateway has settled
+ * it, only a later application result is added; nothing reopens it.
+ */
 export function applyApprovalResolved(
   activity: TaskActivity,
   resolution: ApprovalResolution,
 ): TaskActivity {
   const existing = activity.approvals.find((each) => each.id === resolution.id);
-  if (!existing || existing.status !== "pending") return activity;
+  if (!existing) return activity;
+  let patch: Partial<ApprovalCard> | null = null;
+  if (existing.status === "pending" || (existing.inferred && resolution.authoritative)) {
+    patch = {
+      status: resolution.status,
+      decision: resolution.decision,
+      reason: resolution.reason,
+      resolvedAt: resolution.resolvedAt,
+      resolvedBy: resolution.resolvedBy ?? existing.resolvedBy,
+      resolver: resolution.resolver ?? existing.resolver,
+      applicationStatus: resolution.applicationStatus ?? existing.applicationStatus,
+      inferred: !resolution.authoritative,
+      submitting: false,
+      error: null,
+    };
+  } else if (
+    !existing.inferred &&
+    resolution.authoritative &&
+    ((resolution.applicationStatus !== null &&
+      resolution.applicationStatus !== existing.applicationStatus) ||
+      (existing.resolver === null && resolution.resolver !== null))
+  ) {
+    patch = {
+      applicationStatus: resolution.applicationStatus ?? existing.applicationStatus,
+      resolver: existing.resolver ?? resolution.resolver,
+    };
+  }
+  if (!patch) return activity;
   const approvals = activity.approvals.map((each) =>
-    each.id === resolution.id
-      ? {
-          ...each,
-          status: resolution.status,
-          decision: resolution.decision,
-          reason: resolution.reason,
-          resolvedAt: resolution.resolvedAt,
-          resolvedBy: resolution.resolvedBy,
-          submitting: false,
-          error: null,
-        }
-      : each,
+    each.id === resolution.id ? { ...each, ...patch } : each,
   );
   return normalizeApprovals({ ...activity, approvals });
 }
@@ -427,18 +609,37 @@ export function markApproval(
   };
 }
 
-/** Pending approvals past their `expiresAt` expire. The gateway does not run them. */
+function inferredResolution(
+  id: string,
+  status: "expired" | "closed",
+  reason: string,
+): ApprovalResolution {
+  return {
+    id,
+    status,
+    decision: null,
+    reason,
+    resolvedAt: null,
+    resolvedBy: null,
+    resolver: null,
+    applicationStatus: null,
+    authoritative: false,
+    sessionKey: null,
+    runId: null,
+  };
+}
+
+/**
+ * Pending approvals past their `expiresAt` expire. The gateway does not run
+ * them. This is an inference: the gateway's own outcome, if it differs, wins.
+ */
 export function expireApprovals(activity: TaskActivity, now: number): TaskActivity {
   let next = activity;
   for (const approval of activity.approvals) {
     if (approval.status === "pending" && approval.expiresAt !== null && approval.expiresAt <= now) {
       next = applyApprovalResolved(next, {
-        id: approval.id,
-        status: "expired",
-        decision: null,
-        reason: "timeout",
+        ...inferredResolution(approval.id, "expired", "timeout"),
         resolvedAt: approval.expiresAt,
-        resolvedBy: null,
       });
     }
   }
@@ -461,14 +662,10 @@ export function settleUnlistedApprovals(
       !listed.has(approval.id) &&
       (pendingBefore === undefined || pendingBefore.has(approval.id))
     ) {
-      next = applyApprovalResolved(next, {
-        id: approval.id,
-        status: "closed",
-        decision: null,
-        reason: "no-longer-listed",
-        resolvedAt: null,
-        resolvedBy: null,
-      });
+      next = applyApprovalResolved(
+        next,
+        inferredResolution(approval.id, "closed", "no-longer-listed"),
+      );
     }
   }
   return next;
@@ -489,7 +686,15 @@ export function settleUnlistedApprovals(
  *   the gateway resolves it, it expires, or a reload no longer lists it;
  *   `runEnded` says it outlived its run. To withdraw it, deny it.
  */
-export function normalizeApprovals(activity: TaskActivity): TaskActivity {
+export function normalizeApprovals(
+  activity: TaskActivity,
+  /**
+   * The state of a run this task does not hold, such as a helper's or a
+   * messaged bot's, when the caller follows it. Without it, such an
+   * approval's `runEnded` is left as it was.
+   */
+  otherRun?: (runId: string) => { state: RunState } | undefined,
+): TaskActivity {
   if (activity.approvals.length === 0) return activity;
   let runs = activity.runs;
   let changed = false;
@@ -498,7 +703,15 @@ export function normalizeApprovals(activity: TaskActivity): TaskActivity {
     const stepId = approval.toolCallId ? `tool:${approval.toolCallId}` : null;
     const linked =
       run && stepId && run.steps.some((step) => step.id === stepId) ? stepId : approval.stepId;
-    const runEnded = approval.status === "pending" && run !== undefined && isTerminal(run.state);
+    const elsewhere = !run && approval.runId ? otherRun?.(approval.runId) : undefined;
+    const runEnded =
+      approval.status !== "pending"
+        ? false
+        : run
+          ? isTerminal(run.state)
+          : elsewhere
+            ? isTerminal(elsewhere.state)
+            : approval.runEnded;
     const next =
       linked !== approval.stepId || runEnded !== approval.runEnded
         ? { ...approval, stepId: linked, runEnded }

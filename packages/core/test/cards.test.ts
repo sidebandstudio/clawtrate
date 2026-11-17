@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyApprovalRequested,
   applyApprovalResolved,
+  parseApprovalResolved,
   parsePluginApproval,
 } from "../src/approvals.ts";
 import {
@@ -92,7 +93,14 @@ const OPTIONS: CardOptions = { codingServers: ["coder"] };
 const select = (activity: TaskActivity, extra: Partial<CardInput> = {}, options = OPTIONS) =>
   selectMessageCards({ runs: activity.runs, approvals: activity.approvals, ...extra }, options);
 const linked = (state: LinkedRun["state"]): Record<string, LinkedRun> => ({
-  "run-r": { id: "run-r", sessionKey: "agent:atlas:main", state, startedAt: 1, endedAt: null },
+  "run-r": {
+    id: "run-r",
+    sessionKey: "agent:atlas:main",
+    state,
+    outcomeKnown: true,
+    startedAt: 1,
+    endedAt: null,
+  },
 });
 
 describe("Messaged cards (F-119, F-122, F-123, F-309)", () => {
@@ -277,14 +285,10 @@ describe("Messaged cards (F-119, F-122, F-123, F-309)", () => {
       state: "waiting-for-approval",
       approvalId: "pl-1",
     });
-    activity = applyApprovalResolved(activity, {
-      id: "pl-1",
-      status: "denied",
-      decision: "deny",
-      reason: "user",
-      resolvedAt: 2,
-      resolvedBy: null,
-    });
+    activity = applyApprovalResolved(
+      activity,
+      parseApprovalResolved({ id: "pl-1", decision: "deny", ts: 2 }, "plugin")!,
+    );
     activity = tool(activity, {
       phase: "result",
       name: "sessions_send",
@@ -473,7 +477,7 @@ describe("MCP and coding-agent cards (F-132, F-133, F-135, F-137, F-313, F-314)"
     });
   });
 
-  it("Unknown when the sender was stopped before the call returned; work may continue only after it returned (F-137, F-470)", () => {
+  it("Unknown, with the returned error kept, when the result says the call was aborted; work may continue only after it returned (F-137, F-470)", () => {
     const known = {
       codingServers: ["coder"],
       mcpTools: { coder__send_message: { server: "coder", tool: "send_message" } },
@@ -482,12 +486,14 @@ describe("MCP and coding-agent cards (F-132, F-133, F-135, F-137, F-313, F-314)"
     aborted = mcpResult(
       aborted,
       "m1",
-      {},
+      { status: "aborted" },
       { isError: true, content: [{ type: "text", text: "Aborted" }] },
     );
     aborted = lifecycle(aborted, { phase: "end", aborted: true });
     expect(selectMessageCards({ runs: aborted.runs }, known).mcpCalls[0]).toMatchObject({
       state: "unknown",
+      error: "Aborted",
+      deliveryUncertain: true,
       workMayContinue: false,
     });
 

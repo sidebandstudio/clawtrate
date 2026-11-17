@@ -16,9 +16,9 @@ import {
   type BridgeCommand,
 } from "../src/bridge.ts";
 import {
-  MAX_TASKS_WITH_UNSENT,
+  MAX_TASKS_WITH_OUTBOX,
   MAX_TRACKED_TASKS,
-  MAX_UNSENT_PER_TASK,
+  MAX_OUTBOX_PER_TASK,
   type ClawtrateClient,
 } from "../src/client.ts";
 import {
@@ -44,6 +44,7 @@ function stubClient(overrides: Partial<Record<string, (...args: never[]) => unkn
       counts.set(key, (counts.get(key) ?? 1) - 1);
     },
     retryNow: () => new Promise(() => {}),
+    withdraw: () => {},
     ...overrides,
   } as unknown as ClawtrateClient;
   return { client, calls, counts };
@@ -156,11 +157,11 @@ describe("client-wide bounds", () => {
     client.stop();
   });
 
-  it(`holds at most MAX_UNSENT_PER_TASK (${MAX_UNSENT_PER_TASK}) unsent messages per task`, async () => {
+  it(`holds at most MAX_OUTBOX_PER_TASK (${MAX_OUTBOX_PER_TASK}) unsent messages per task`, async () => {
     const { client, gateway } = await openTask();
     gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
     await until(() => client.state.transcripts[KEY]!.runs.length === 1);
-    for (let i = 0; i < MAX_UNSENT_PER_TASK; i += 1)
+    for (let i = 0; i < MAX_OUTBOX_PER_TASK; i += 1)
       client.sendMessage(KEY, `m${i}`, { mode: "queue" });
     expect(() => client.sendMessage(KEY, "one more", { mode: "queue" })).toThrow(
       /waiting to be sent/,
@@ -168,19 +169,19 @@ describe("client-wide bounds", () => {
     client.stop();
   });
 
-  it(`lets at most MAX_TASKS_WITH_UNSENT (${MAX_TASKS_WITH_UNSENT}) tasks hold unsent messages`, async () => {
+  it(`lets at most MAX_TASKS_WITH_OUTBOX (${MAX_TASKS_WITH_OUTBOX}) tasks hold unsent messages`, async () => {
     const { client, gateway } = await openTask();
-    for (let i = 0; i <= MAX_TASKS_WITH_UNSENT; i += 1) {
+    for (let i = 0; i <= MAX_TASKS_WITH_OUTBOX; i += 1) {
       const key = `agent:otto:q${i}`;
       client.openSession(key);
       gateway.emit("agent", agentEvent(`run-${i}`, 1, "lifecycle", { phase: "start" }, key));
     }
     await until(() => client.state.transcripts["agent:otto:q0"]?.runs.length === 1);
     await sleep(20);
-    for (let i = 0; i < MAX_TASKS_WITH_UNSENT; i += 1)
+    for (let i = 0; i < MAX_TASKS_WITH_OUTBOX; i += 1)
       client.sendMessage(`agent:otto:q${i}`, "later", { mode: "queue" });
     expect(() =>
-      client.sendMessage(`agent:otto:q${MAX_TASKS_WITH_UNSENT}`, "later", { mode: "queue" }),
+      client.sendMessage(`agent:otto:q${MAX_TASKS_WITH_OUTBOX}`, "later", { mode: "queue" }),
     ).toThrow(/waiting in/);
     client.stop();
   });

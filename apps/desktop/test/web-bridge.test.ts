@@ -45,6 +45,7 @@ async function host(policy: HostRuntime["policy"] = {}) {
     openSession: (key: string) => interest.set(key, (interest.get(key) ?? 0) + 1),
     closeSession: (key: string) => interest.set(key, (interest.get(key) ?? 1) - 1),
     sendMessage: () => "m-1",
+    withdraw: () => {},
   } as unknown as ClawtrateClient;
   const runtime: HostRuntime = {
     client,

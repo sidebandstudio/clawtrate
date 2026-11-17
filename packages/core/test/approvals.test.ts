@@ -11,6 +11,7 @@ import {
   parseApprovalSnapshot,
   parseExecApproval,
   parsePluginApproval,
+  resolutionFromSnapshot,
   resolveRequest,
   settleUnlistedApprovals,
   type ApprovalCard,
@@ -97,6 +98,31 @@ function waitingOnExec(): TaskActivity {
   let activity = feed(emptyActivity, agent("run-1", 1, "lifecycle", { phase: "start" }), execStart);
   activity = applyApprovalRequested(activity, parseExecApproval(execItem("ap-1"))!);
   return activity;
+}
+
+/**
+ * A system-agent request as OpenClaw 2026.10.6 sends it in `openclaw.approval.requested`
+ * and `openclaw.approval.list` (`buildRequestedApprovalEvent`): not an `ApprovalSnapshot`.
+ */
+function systemAgentRequest(id: string, request: Record<string, unknown> = {}) {
+  return {
+    approvalKind: "system-agent",
+    id,
+    request: {
+      title: "OpenClaw change",
+      description: "Set the default model",
+      command: "Set the default model",
+      proposalHash: "hash-1",
+      allowedDecisions: ["allow-once", "deny"],
+      agentId: "otto",
+      sessionKey: KEY,
+      sessionId: "s-1",
+      runId: "run-1",
+      ...request,
+    },
+    createdAtMs: 1,
+    expiresAtMs: 9_999_999_999_999,
+  };
 }
 
 const run = (activity: TaskActivity) => activity.runs[0]!;
@@ -262,13 +288,16 @@ describe("resolving (F-165, F-166, F-167)", () => {
   it("allow once releases the step to running, and the tool result finishes it", () => {
     let activity = applyApprovalResolved(
       waitingOnExec(),
-      parseApprovalResolved({
-        id: "ap-1",
-        decision: "allow-once",
-        resolvedBy: "Clawtrate Desktop",
-        ts: 3_000,
-        request: {},
-      })!,
+      parseApprovalResolved(
+        {
+          id: "ap-1",
+          decision: "allow-once",
+          resolvedBy: "Clawtrate Desktop",
+          ts: 3_000,
+          request: {},
+        },
+        "exec",
+      )!,
     );
     expect(approval(activity)).toMatchObject({
       status: "allowed",
@@ -293,7 +322,7 @@ describe("resolving (F-165, F-166, F-167)", () => {
   it("deny ends the approval; the tool's error result fails the step", () => {
     let activity = applyApprovalResolved(
       waitingOnExec(),
-      parseApprovalResolved({ id: "ap-1", decision: "deny", ts: 3_000 })!,
+      parseApprovalResolved({ id: "ap-1", decision: "deny", ts: 3_000 }, "exec")!,
     );
     expect(approval(activity)).toMatchObject({ status: "denied", decision: "deny" });
     activity = feed(
@@ -335,7 +364,7 @@ describe("resolving (F-165, F-166, F-167)", () => {
   it("a resolved approval is final; a late duplicate request does not reopen it", () => {
     const resolved = applyApprovalResolved(
       waitingOnExec(),
-      parseApprovalResolved({ id: "ap-1", decision: "deny" })!,
+      parseApprovalResolved({ id: "ap-1", decision: "deny" }, "exec")!,
     );
     expect(applyApprovalRequested(resolved, parseExecApproval(execItem("ap-1"))!)).toBe(resolved);
   });
@@ -354,9 +383,10 @@ describe("how pending approvals end (F-168, F-169)", () => {
     );
     expect(run(activity).state).toBe("stopped");
     expect(approval(activity)).toMatchObject({ status: "pending", runEnded: true });
+    // As `approval.get` or `approval.resolve` reports it: a terminal snapshot.
     activity = applyApprovalResolved(
       activity,
-      parseApprovalResolved({
+      resolutionFromSnapshot({
         id: "ap-1",
         urlPath: "/a",
         createdAtMs: 1,
@@ -364,10 +394,15 @@ describe("how pending approvals end (F-168, F-169)", () => {
         resolvedAtMs: 3,
         status: "cancelled",
         reason: "run-aborted",
+        resolver: { kind: "system" },
         presentation: { kind: "exec", commandText: "uname -s", allowedDecisions: ["deny"] },
       })!,
     );
-    expect(approval(activity)).toMatchObject({ status: "cancelled", reason: "run-aborted" });
+    expect(approval(activity)).toMatchObject({
+      status: "cancelled",
+      reason: "run-aborted",
+      resolver: { kind: "system", id: null },
+    });
   });
 
   it("an interrupt aborts the run; the approval waits for the gateway's word too", () => {
@@ -521,21 +556,7 @@ describe("approvals through the client (F-163, F-165, F-166, F-168)", () => {
       createdAtMs: 1,
       expiresAtMs: 9_999_999_999_999,
     });
-    gateway.emit("openclaw.approval.requested", {
-      id: "sa-1",
-      urlPath: "/a",
-      createdAtMs: 1,
-      expiresAtMs: 9_999_999_999_999,
-      status: "pending",
-      sourceSessionKey: KEY,
-      presentation: {
-        kind: "system-agent",
-        title: "Apply",
-        description: "Apply it",
-        proposalHash: "h",
-        allowedDecisions: ["allow-once", "deny"],
-      },
-    });
+    gateway.emit("openclaw.approval.requested", systemAgentRequest("sa-1"));
     await until(() => transcript().approvals.length === 3);
     expect(transcript().approvals.map((each) => each.kind)).toEqual([
       "exec",
@@ -552,19 +573,11 @@ describe("approvals through the client (F-163, F-165, F-166, F-168)", () => {
     gateway.emit("plugin.approval.resolved", { id: "pl-1", decision: "deny", ts: 5 });
     gateway.emit("openclaw.approval.resolved", {
       id: "sa-1",
-      urlPath: "/a",
-      createdAtMs: 1,
-      expiresAtMs: 2,
-      resolvedAtMs: 6,
-      status: "expired",
-      reason: "timeout",
-      presentation: {
-        kind: "system-agent",
-        title: "Apply",
-        description: "Apply it",
-        proposalHash: "h",
-        allowedDecisions: ["deny"],
-      },
+      decision: "deny",
+      resolvedBy: null,
+      ts: 6,
+      request: systemAgentRequest("sa-1").request,
+      terminalStatus: "expired",
     });
     await until(() => transcript().approvals.every((each) => each.status !== "pending"));
     expect(transcript().approvals.map((each) => each.status)).toEqual([
@@ -695,17 +708,8 @@ describe("approvals raised by a helper run (F-098)", () => {
       status: "pending",
     });
     gateway.emit("exec.approval.resolved", { id: "ap-h", decision: "deny", ts: 2 });
-    gateway.emit("openclaw.approval.resolved", {
-      id: "ap-h",
-      urlPath: "/a",
-      createdAtMs: 1,
-      expiresAtMs: 2,
-      resolvedAtMs: 3,
-      status: "cancelled",
-      reason: "run-aborted",
-      presentation: { kind: "exec", commandText: "uname -s", allowedDecisions: ["deny"] },
-    });
     await until(() => transcript().approvals[0]!.status !== "pending");
+    expect(transcript().approvals[0]).toMatchObject({ status: "denied", relation: "helper" });
     client.stop();
   });
 });

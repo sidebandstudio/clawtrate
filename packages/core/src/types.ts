@@ -1,6 +1,7 @@
 // View models the interface renders. Gateway payloads are mapped into these in
 // mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
 
+import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
 
@@ -159,6 +160,13 @@ export type ClawtrateState = {
   bots: Bot[];
   tasksByBot: Record<string, Task[]>;
   transcripts: Record<string, Transcript>;
+  /**
+   * Pending approvals no followed task can show yet: the asking session is not
+   * open, and no open task is known to have spawned or messaged it. Kept, with
+   * their origin, until a task they belong to is known or the gateway settles
+   * them; at most `MAX_UNROUTED_APPROVALS`.
+   */
+  unroutedApprovals: ApprovalCard[];
 };
 
 export const initialScopeUpgrade: ScopeUpgradeState = {
@@ -200,4 +208,5 @@ export const initialState: ClawtrateState = {
   bots: [],
   tasksByBot: {},
   transcripts: {},
+  unroutedApprovals: [],
 };

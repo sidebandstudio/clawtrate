@@ -18,20 +18,32 @@ import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import {
   applyApprovalRequested,
   applyApprovalResolved,
+  APPROVAL_KINDS,
   expireApprovals,
   markApproval,
+  mergeResolution,
   normalizeApprovals,
   parseApprovalResolved,
-  parseApprovalSnapshot,
   parseExecApproval,
   parsePluginApproval,
+  parseSystemAgentApproval,
+  resolutionFromSnapshot,
   resolveRequest,
   settleUnlistedApprovals,
+  type ApprovalAccess,
   type ApprovalCard,
   type ApprovalDecision,
   type ApprovalKind,
+  type ApprovalResolution,
+  type ApprovalSourceAccess,
 } from "./approvals.ts";
-import { interSessionMessages, linkedRunOf, recipientRunIds, type LinkedRun } from "./cards.ts";
+import {
+  interSessionMessages,
+  linkedRunOf,
+  recipientLinks,
+  recipientRunIds,
+  type LinkedRun,
+} from "./cards.ts";
 import { MAX_FILE_BYTES, MAX_IMAGE_BYTES } from "./attachments.ts";
 import { utf8Length } from "./encoding.ts";
 import type { ApprovalInstructions, ClawtrateHost } from "./host.ts";
@@ -65,6 +77,9 @@ import {
   findRun,
   isActive,
   isTerminal,
+  markUnconfirmed,
+  MAX_ACTIVITY_CHARS,
+  MAX_TASK_ACTIVITY_CHARS,
   markQuestion,
   mergeHistoryRuns,
   queueLocalRun,
@@ -145,12 +160,34 @@ export const SESSION_PAGE_SIZE = 200;
 export const MAX_SESSION_PAGES = 50;
 /** Clawtrate's turn limit (F-100): a run this client started fails after it. */
 export const DEFAULT_TURN_LIMIT_MS = 50 * 60_000;
-/** Tasks the client follows at once: open in some viewer, or kept for their unsent work. */
+/** Tasks the client follows at once: open in some viewer, kept for their unsent work, or being created. */
 export const MAX_TRACKED_TASKS = 128;
-/** Unsent messages (queued, held, waiting for access or being sent) one task may hold. */
-export const MAX_UNSENT_PER_TASK = 50;
-/** Tasks that may hold unsent messages at once. */
-export const MAX_TASKS_WITH_UNSENT = 16;
+/**
+ * Messages one task's outbox may hold, whatever their state: waiting, being
+ * sent, accepted but not yet in history, unconfirmed, failed or cancelled. A
+ * new message past it is refused before anything is kept; nothing accepted is
+ * dropped to make room.
+ */
+export const MAX_OUTBOX_PER_TASK = 50;
+/** Tasks whose outbox may hold messages at once. */
+export const MAX_TASKS_WITH_OUTBOX = 16;
+/**
+ * Decoded bytes of files the client keeps for messages in outboxes, across
+ * every task, until history confirms them or the user deletes them. With the
+ * waiting uploads (`MAX_PENDING_ATTACHMENT_BYTES`) this is all the file
+ * content the host keeps.
+ */
+export const MAX_RETAINED_ATTACHMENT_BYTES = 128 * 1024 * 1024;
+/** Operations waiting for access at once; past it a new one is refused. */
+export const MAX_ACCESS_WAITERS = 512;
+/**
+ * Approval outcomes the gateway reported, kept by id apart from the visible
+ * cards so a request or list entry that arrives after its resolution can never
+ * make it actionable again. The oldest give way; switching gateways clears them.
+ */
+export const MAX_APPROVAL_OUTCOMES = 4096;
+/** Pending approvals kept while no followed task can show them (`unroutedApprovals`). */
+export const MAX_UNROUTED_APPROVALS = 64;
 
 /** Longest message text the client sends. */
 export const MAX_MESSAGE_CHARS = 32_000;
@@ -240,7 +277,41 @@ type Plan = GatewayBrowserDeviceAuthPlan;
  */
 type StoredDeviceToken = { token: string; grantedScopes: string[]; heldScopes: string[] };
 
-type Waiter = { scope: string; resolve: () => void; reject: (error: Error) => void };
+type Waiter = {
+  scope: string;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  /** Who asked: a viewer's operations are withdrawn with `withdraw` when it goes away. */
+  owner: object | null;
+};
+
+/** The approval kinds' list methods and readers. */
+const APPROVAL_SOURCES: ReadonlyArray<{
+  kind: ApprovalKind;
+  method: string;
+  parse: (value: unknown) => ApprovalCard | null;
+}> = [
+  { kind: "exec", method: "exec.approval.list", parse: parseExecApproval },
+  { kind: "plugin", method: "plugin.approval.list", parse: parsePluginApproval },
+  { kind: "system-agent", method: "openclaw.approval.list", parse: parseSystemAgentApproval },
+];
+
+function approvalAccessOf(sources: Record<ApprovalKind, ApprovalSourceAccess>): ApprovalAccess {
+  const values = APPROVAL_KINDS.map((kind) => sources[kind]);
+  if (values.every((each) => each === "ready")) return "ready";
+  if (values.every((each) => each === "unavailable")) return "unavailable";
+  if (values.some((each) => each === "loading")) return "loading";
+  if (values.some((each) => each === "ready")) return "partial";
+  return "error";
+}
+
+/** A withdrawn operation: its viewer went away before the gateway was asked. */
+export class WithdrawnError extends Error {
+  constructor() {
+    super("The request was withdrawn.");
+    this.name = "WithdrawnError";
+  }
+}
 
 /** The interactive scopes were asked for and not granted. */
 export class AccessRequestError extends Error {
@@ -291,8 +362,6 @@ export class GatewayNotAllowedError extends Error {
   }
 }
 
-const UNSENT = new Set(["awaiting-access", "queued", "held", "sending"]);
-
 /**
  * Whether the run has a question pending, by the question records as well as
  * the run's cards, so a plain message is never sent while the gateway would
@@ -306,12 +375,15 @@ function questionPending(activity: TaskActivity, run: Run): boolean {
   );
 }
 
-/** A task holds work that must outlive its viewers: unsent, unconfirmed or failed words, or a run this client started. */
+/**
+ * A task holds work that must outlive its viewers: unsent or failed words,
+ * words the gateway accepted that history has not confirmed, or a run this
+ * client started. Cancelled messages are not work.
+ */
 function hasUnsettledWork(activity: TaskActivity): boolean {
   return (
-    activity.outbox.some(
-      (message) => message.status !== "sent" && message.status !== "cancelled",
-    ) || activity.runs.some((run) => run.origin === "local" && !isTerminal(run.state))
+    activity.outbox.some((message) => message.status !== "cancelled") ||
+    activity.runs.some((run) => run.origin === "local" && !isTerminal(run.state))
   );
 }
 
@@ -394,8 +466,23 @@ export class ClawtrateClient {
   private accessWaiters: Waiter[] = [];
   /** `hello-ok.policy`, for the frame and attachment ceilings. */
   private policy: RawRecord | null = null;
-  /** Attachment content for outgoing messages, kept off the state snapshots. */
-  private readonly attachmentContent = new Map<string, OutgoingAttachment[]>();
+  /** Attachment content for outgoing messages, kept off the state snapshots, with its decoded size. */
+  private readonly attachmentContent = new Map<
+    string,
+    { files: OutgoingAttachment[]; bytes: number }
+  >();
+  private attachmentBytes = 0;
+  /** Task slots held for tasks being created, so a creation never exceeds `MAX_TRACKED_TASKS`. */
+  private reservedTasks = 0;
+  /** What the gateway reported about approvals, by id, newest last (`MAX_APPROVAL_OUTCOMES`). */
+  private readonly approvalOutcomes = new Map<string, ApprovalResolution>();
+  /** Pending approvals no followed task can show yet, oldest first (`MAX_UNROUTED_APPROVALS`). */
+  private readonly unrouted = new Map<string, ApprovalCard>();
+  /** Recipient runs and sessions each task's `sessions_send` results name. */
+  private readonly recipients = new Map<string, { runs: Set<string>; sessions: Set<string> }>();
+  /** Per task and list (`<key>\0<kind>`): the last list requested, and the newest applied. */
+  private readonly listRequested = new Map<string, number>();
+  private readonly listApplied = new Map<string, number>();
 
   constructor(host: ClawtrateHost, options: ClientOptions = {}) {
     this.host = host;
@@ -439,6 +526,7 @@ export class ClawtrateClient {
     this.rows = new Map();
     this.raw.clear();
     this.retained.clear();
+    this.forgetGatewayState();
     await this.host.storage.delete(SETTINGS_KEY);
     this.store.set({
       ...initialState,
@@ -465,8 +553,9 @@ export class ClawtrateClient {
   }
 
   /** Open a transcript. Calls are counted; the last matching close releases it. */
-  openSession(key: string): void {
-    if (!this.tracked(key) && this.openSessions.size + this.retained.size >= MAX_TRACKED_TASKS) {
+  openSession(key: string, reservation = false): void {
+    const taken = this.openSessions.size + this.retained.size + this.reservedTasks;
+    if (!this.tracked(key) && !reservation && taken >= MAX_TRACKED_TASKS) {
       throw new Error(`At most ${MAX_TRACKED_TASKS} tasks can be open at once.`);
     }
     const count = this.openSessions.get(key) ?? 0;
@@ -477,7 +566,26 @@ export class ClawtrateClient {
     if (!kept || !this.incarnations.has(key))
       this.incarnations.set(key, (this.nextIncarnation += 1));
     this.setTranscript(key, (current) => current ?? this.emptyTranscript(key));
+    // More tasks share the activity budget: bring every task within its share.
+    this.retainAll();
+    // An approval waiting for a task that can show it may belong here now.
+    this.routeUnrouted();
     if (this.state.connection.status === "connected") void this.loadTranscript(key, !kept, null);
+  }
+
+  /** The characters of activity each followed task may keep: its own bound, or its share of the client's. */
+  private activityBudget(): number {
+    const tasks = Math.max(1, this.openSessions.size + this.retained.size);
+    return Math.min(MAX_TASK_ACTIVITY_CHARS, Math.floor(MAX_ACTIVITY_CHARS / tasks));
+  }
+
+  private retainAll(): void {
+    const budget = this.activityBudget();
+    for (const key of Object.keys(this.state.transcripts)) {
+      const current = this.state.transcripts[key]!;
+      const next = retainActivity(current, budget);
+      if (next !== current) this.setTranscript(key, () => ({ ...current, ...next }));
+    }
   }
 
   /**
@@ -523,7 +631,12 @@ export class ClawtrateClient {
     if (expiry) clearTimeout(expiry);
     this.expiryTimers.delete(key);
     for (const message of this.state.transcripts[key]?.outbox ?? []) {
-      this.attachmentContent.delete(message.id);
+      this.dropAttachments(message.id);
+    }
+    this.recipients.delete(key);
+    for (const map of [this.listRequested, this.listApplied]) {
+      for (const listKey of [...map.keys()])
+        if (listKey.startsWith(`${key}\u0000`)) map.delete(listKey);
     }
     if (this.state.connection.status === "connected") {
       this.request("sessions.messages.unsubscribe", { key }).catch(() => {});
@@ -687,12 +800,28 @@ export class ClawtrateClient {
   /**
    * Resolves once the connection holds `scope`. When the client does not mean
    * to hold it yet, this asks for the interactive scopes; when it already does
-   * (the connection is only down), it waits for the next hello.
+   * (the connection is only down), it waits for the next hello. A connection
+   * that has stopped (the gateway refused the device, or reconnecting gave up)
+   * will not bring one, so the operation fails at once and stays retryable.
+   * `owner` names the viewer that asked, so its operations can be withdrawn.
    */
-  private ensureScope(scope: string): Promise<void> {
+  private ensureScope(scope: string, owner: object | null = null): Promise<void> {
     if (this.holds(scope)) return Promise.resolve();
+    const connection = this.state.connection;
+    if (connection.status === "error" || connection.status === "idle" || !this.protocol) {
+      return Promise.reject(
+        new Error(
+          `Not connected to the gateway${connection.error ? `: ${connection.error.message}` : "."}`,
+        ),
+      );
+    }
+    if (this.accessWaiters.length >= MAX_ACCESS_WAITERS) {
+      return Promise.reject(
+        new Error("Too many operations are waiting for access; try again when they finish."),
+      );
+    }
     const waiting = new Promise<void>((resolve, reject) => {
-      this.accessWaiters.push({ scope, resolve, reject });
+      this.accessWaiters.push({ scope, resolve, reject, owner });
     });
     // Not meant to be held yet, or held and then lost (capped or revoked) on a
     // live connection: ask the gateway's owner. Otherwise the connection is
@@ -706,6 +835,23 @@ export class ClawtrateClient {
       });
     }
     return waiting;
+  }
+
+  /**
+   * A viewer went away: everything it asked for that is still waiting for
+   * access is withdrawn now, before the gateway is asked, and nothing of it is
+   * kept. Work the client owns (outgoing messages) is not a viewer's.
+   */
+  withdraw(owner: object): void {
+    const withdrawn = this.accessWaiters.filter((waiter) => waiter.owner === owner);
+    if (withdrawn.length === 0) return;
+    this.accessWaiters = this.accessWaiters.filter((waiter) => waiter.owner !== owner);
+    for (const waiter of withdrawn) waiter.reject(new WithdrawnError());
+  }
+
+  /** Operations waiting for access, for tests and diagnostics. */
+  get pendingAccessWaiters(): number {
+    return this.accessWaiters.length;
   }
 
   /** Reject every operation waiting for access, without changing what is being asked for. */
@@ -731,6 +877,12 @@ export class ClawtrateClient {
         (scope) => scope !== missing && scope !== "operator.admin",
       ),
     );
+    // Without the scope no list can be read: say so, rather than show what was read before as current.
+    if (!this.holds(APPROVALS_SCOPE)) {
+      for (const key of Object.keys(this.state.transcripts)) {
+        for (const kind of APPROVAL_KINDS) this.setApprovalSource(key, kind, "unavailable");
+      }
+    }
   }
 
   /** The scopes this connection holds, and every flag derived from them, set together. */
@@ -756,10 +908,16 @@ export class ClawtrateClient {
     if (!transcript) throw new Error("Open the task before sending to it.");
     const body = text.trim();
     const attachments = options.attachments ?? [];
-    this.checkUnsentRoom(key);
+    this.checkOutboxRoom(key);
     if (!body && attachments.length === 0) throw new Error("The message is empty.");
     if (body.length > MAX_MESSAGE_CHARS) throw new Error("The message is too long.");
     this.checkSize(this.sendParams(key, body, "x".repeat(36), "followup", attachments));
+    const bytes = attachments.reduce((sum, each) => sum + decodedBytes(each.content), 0);
+    if (this.attachmentBytes + bytes > MAX_RETAINED_ATTACHMENT_BYTES) {
+      throw new Error(
+        "Files of earlier messages are still waiting to go out; send or delete some of them first.",
+      );
+    }
     const active = activeRun(transcript);
     const resolved = !active
       ? "new"
@@ -782,7 +940,10 @@ export class ClawtrateClient {
         sizeBytes: decodedBytes(attachment.content),
       })),
     };
-    if (attachments.length > 0) this.attachmentContent.set(message.id, attachments);
+    if (attachments.length > 0) {
+      this.attachmentContent.set(message.id, { files: attachments, bytes });
+      this.attachmentBytes += bytes;
+    }
     this.updateActivity(key, (activity) => {
       const withMessage = { ...activity, outbox: [...activity.outbox, message] };
       if (resolved === "new") return startLocalRun(withMessage, message, this.now());
@@ -793,24 +954,45 @@ export class ClawtrateClient {
     return message.id;
   }
 
-  /** Refuse a new unsent message beyond the per-task and per-client bounds, before keeping anything. */
-  private checkUnsentRoom(key: string): void {
-    const unsent = (activity: TaskActivity) =>
-      activity.outbox.filter((message) => UNSENT.has(message.status)).length;
-    const here = unsent(this.state.transcripts[key] ?? emptyActivity);
-    if (here >= MAX_UNSENT_PER_TASK) {
-      throw new Error(`This task already has ${MAX_UNSENT_PER_TASK} messages waiting to be sent.`);
+  /**
+   * Refuse a new outgoing message beyond the per-task and per-client bounds,
+   * before keeping anything. Every message the outbox holds counts, failed and
+   * unconfirmed ones included, so retrying and deleting are always possible
+   * and nothing accepted is dropped to make room.
+   */
+  private checkOutboxRoom(key: string): void {
+    const here = (this.state.transcripts[key] ?? emptyActivity).outbox.length;
+    if (here >= MAX_OUTBOX_PER_TASK) {
+      throw new Error(
+        `This task already holds ${MAX_OUTBOX_PER_TASK} messages waiting to be sent, confirmed, retried or deleted.`,
+      );
     }
-    if (here === 0) {
-      const busy = Object.values(this.state.transcripts).filter(
-        (transcript) => unsent(transcript) > 0,
-      ).length;
-      if (busy >= MAX_TASKS_WITH_UNSENT) {
-        throw new Error(
-          `Messages are waiting in ${MAX_TASKS_WITH_UNSENT} tasks; let some of them go out first.`,
-        );
-      }
+    if (here === 0) this.checkOutboxTaskRoom();
+  }
+
+  /** Refuse a message in one more task once `MAX_TASKS_WITH_OUTBOX` tasks hold messages, counting tasks being created. */
+  private checkOutboxTaskRoom(): void {
+    const busy =
+      Object.values(this.state.transcripts).filter((transcript) => transcript.outbox.length > 0)
+        .length + this.reservedTasks;
+    if (busy >= MAX_TASKS_WITH_OUTBOX) {
+      throw new Error(
+        `Messages are waiting in ${MAX_TASKS_WITH_OUTBOX} tasks; let some of them go out first.`,
+      );
     }
+  }
+
+  /** Forget a message's file content and give its bytes back. */
+  private dropAttachments(messageId: string): void {
+    const kept = this.attachmentContent.get(messageId);
+    if (!kept) return;
+    this.attachmentContent.delete(messageId);
+    this.attachmentBytes -= kept.bytes;
+  }
+
+  /** Decoded bytes of files held for outgoing messages, for tests and diagnostics. */
+  get retainedAttachmentBytes(): number {
+    return this.attachmentBytes;
   }
 
   private sendParams(
@@ -858,11 +1040,14 @@ export class ClawtrateClient {
     }
   }
 
-  /** Send a failed message again, with the same idempotency key. */
+  /**
+   * Send a failed or unconfirmed message again, with the same idempotency key,
+   * so the gateway delivers it at most once. It already counts against the
+   * outbox bounds, so a retry is never refused for room.
+   */
   retryMessage(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);
-    if (!message || message.status !== "failed") return;
-    this.checkUnsentRoom(key);
+    if (!message || (message.status !== "failed" && message.status !== "unconfirmed")) return;
     const transcript = this.state.transcripts[key]!;
     const active = activeRun(transcript);
     const mode = !active ? "new" : active.state === "stopping" ? "queue" : "steer";
@@ -889,11 +1074,17 @@ export class ClawtrateClient {
     if (mode !== "queue" && !held) this.enqueueDelivery(key, messageId);
   }
 
-  /** Remove a failed or cancelled message, and the run that never started with it. */
+  /** Remove a failed, cancelled or unconfirmed message, and the run that never started with it. */
   deleteMessage(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);
-    if (!message || (message.status !== "failed" && message.status !== "cancelled")) return;
-    this.attachmentContent.delete(messageId);
+    if (
+      !message ||
+      (message.status !== "failed" &&
+        message.status !== "cancelled" &&
+        message.status !== "unconfirmed")
+    )
+      return;
+    this.dropAttachments(messageId);
     this.updateActivity(key, (activity) => ({
       ...removeMessage(activity, messageId),
       runs: activity.runs.filter(
@@ -906,6 +1097,8 @@ export class ClawtrateClient {
   cancelQueued(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);
     if (!message || message.status !== "queued") return;
+    // A cancelled message is never sent: its files are not kept.
+    this.dropAttachments(messageId);
     this.updateActivity(key, (activity) =>
       updateMessage(cancelQueuedRun(activity, messageId, this.now()), messageId, {
         status: "cancelled",
@@ -950,64 +1143,79 @@ export class ClawtrateClient {
   async createTask(
     botId: string,
     text: string,
-    options: { label?: string; cancelled?: () => boolean } = {},
+    options: { label?: string; owner?: object } = {},
   ): Promise<string> {
     const body = text.trim();
     if (!body) throw new Error("The message is empty.");
     if (body.length > MAX_MESSAGE_CHARS) throw new Error("The message is too long.");
-    await this.ensureScope(WRITE_SCOPE);
-    // The caller went away while access was being approved: nothing was asked of the gateway yet.
-    if (options.cancelled?.()) throw new Error("The request was withdrawn.");
-    const id = this.randomId();
-    const label = options.label?.trim();
-    const result = asRecord(
-      await this.request("sessions.create", {
-        agentId: botId,
-        message: body,
-        idempotencyKey: id,
-        ...(label ? { label } : {}),
-      }),
-    );
-    const key = typeof result?.key === "string" ? result.key : null;
-    if (!key) throw new Error("The gateway did not return the new task.");
-    const runId = typeof result?.runId === "string" ? result.runId : null;
-    const runError = asRecord(result?.runError);
-    const now = this.now();
-    const message: OutgoingMessage = {
-      id,
-      text: body,
-      mode: "new",
-      status: runError ? "failed" : "sent",
-      runId,
-      messageSeq: typeof result?.messageSeq === "number" ? result.messageSeq : null,
-      createdAt: now,
-      error: runError ? String(runError.message ?? "The run did not start.") : null,
-      attachments: [],
+    // The new task's slot is held before anything is asked of the gateway, and given back on failure.
+    if (this.openSessions.size + this.retained.size + this.reservedTasks >= MAX_TRACKED_TASKS) {
+      throw new Error(`At most ${MAX_TRACKED_TASKS} tasks can be open at once.`);
+    }
+    this.checkOutboxTaskRoom();
+    this.reservedTasks += 1;
+    let reserved = true;
+    const release = () => {
+      if (reserved) this.reservedTasks -= 1;
+      reserved = false;
     };
-    this.openSession(key);
-    this.updateActivity(key, (activity, ctx) => {
-      let next = startLocalRun(
-        { ...activity, outbox: [...activity.outbox, message] },
-        message,
-        now,
+    try {
+      // A viewer that goes away while access is approved takes its request with it (`withdraw`).
+      await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
+      const id = this.randomId();
+      const label = options.label?.trim();
+      const result = asRecord(
+        await this.request("sessions.create", {
+          agentId: botId,
+          message: body,
+          idempotencyKey: id,
+          ...(label ? { label } : {}),
+        }),
       );
-      if (runId) next = bindRun(next, id, runId);
-      if (runError) {
-        next = failRunStart(
-          next,
-          runId ?? id,
-          {
-            message: message.error!,
-            kind: typeof runError.code === "string" ? runError.code : "not-started",
-          },
-          ctx,
+      const key = typeof result?.key === "string" ? result.key : null;
+      if (!key) throw new Error("The gateway did not return the new task.");
+      const runId = typeof result?.runId === "string" ? result.runId : null;
+      const runError = asRecord(result?.runError);
+      const now = this.now();
+      const message: OutgoingMessage = {
+        id,
+        text: body,
+        mode: "new",
+        status: runError ? "failed" : "sent",
+        runId,
+        messageSeq: typeof result?.messageSeq === "number" ? result.messageSeq : null,
+        createdAt: now,
+        error: runError ? String(runError.message ?? "The run did not start.") : null,
+        attachments: [],
+      };
+      release();
+      this.openSession(key, true);
+      this.updateActivity(key, (activity, ctx) => {
+        let next = startLocalRun(
+          { ...activity, outbox: [...activity.outbox, message] },
+          message,
+          now,
         );
-      } else if (!runId) {
-        next = dropUnboundRun(next, id);
-      }
-      return next;
-    });
-    return key;
+        if (runId) next = bindRun(next, id, runId);
+        if (runError) {
+          next = failRunStart(
+            next,
+            runId ?? id,
+            {
+              message: message.error!,
+              kind: typeof runError.code === "string" ? runError.code : "not-started",
+            },
+            ctx,
+          );
+        } else if (!runId) {
+          next = dropUnboundRun(next, id);
+        }
+        return next;
+      });
+      return key;
+    } finally {
+      release();
+    }
   }
 
   private outgoing(key: string, messageId: string): OutgoingMessage | undefined {
@@ -1080,7 +1288,7 @@ export class ClawtrateClient {
         message.text,
         message.id,
         message.mode === "steer" ? "steer" : "followup",
-        this.attachmentContent.get(messageId) ?? [],
+        this.attachmentContent.get(messageId)?.files ?? [],
       );
       this.checkSize(params);
       result = asRecord(await this.request("chat.send", params));
@@ -1111,7 +1319,7 @@ export class ClawtrateClient {
       }
       return next;
     });
-    this.attachmentContent.delete(messageId);
+    // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
     this.scheduleHistory(key);
   }
 
@@ -1149,12 +1357,12 @@ export class ClawtrateClient {
    * until the gateway reports how it ended: `stopped` when the abort took,
    * `completed` with `finishedBeforeStop` when the run finished first.
    */
-  async stopRun(key: string, runId: string): Promise<void> {
+  async stopRun(key: string, runId: string, options: { owner?: object } = {}): Promise<void> {
     const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
     if (!run || (run.state !== "running" && run.state !== "waiting")) return;
     this.updateActivity(key, (activity) => requestStop(activity, runId, this.now()));
     try {
-      await this.ensureScope(WRITE_SCOPE);
+      await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
       const current = findRun(this.state.transcripts[key] ?? emptyActivity, runId);
       if (!current || current.state !== "stopping") return;
       const result = asRecord(
@@ -1178,17 +1386,20 @@ export class ClawtrateClient {
    * standing allow (`allow-always`), optionally limited to `expiresInDays`
    * days where the gateway takes a duration (exec and the generic kind). Deny
    * is always possible. The gateway offers no field for which bots a standing
-   * allow covers.
+   * allow covers. The generic method answers with the approval's actual
+   * outcome, which is what the card then shows, even when another reviewer
+   * settled it first.
    */
   async resolveApproval(
     key: string,
     approvalId: string,
     decision: ApprovalDecision,
-    options: { expiresInDays?: number | null } = {},
+    options: { expiresInDays?: number | null; owner?: object } = {},
   ): Promise<void> {
     const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
     if (!approval || approval.status !== "pending")
       throw new Error("That approval is no longer open.");
+    if (approval.submitting) throw new Error("An answer to that approval is already on its way.");
     if (decision !== "deny" && !approval.allowedDecisions.includes(decision)) {
       throw new Error(`The gateway does not offer ${decision} for this approval.`);
     }
@@ -1205,18 +1416,40 @@ export class ClawtrateClient {
       markApproval(activity, approvalId, { submitting: true, error: null }),
     );
     try {
-      await this.ensureScope(APPROVALS_SCOPE);
-      await this.request(method, params);
-      this.updateActivity(key, (activity) =>
-        applyApprovalResolved(activity, {
+      await this.ensureScope(APPROVALS_SCOPE, options.owner ?? null);
+      const result = asRecord(await this.request(method, params));
+      let resolution: ApprovalResolution | null;
+      let applied = true;
+      if (method === "approval.resolve") {
+        // `{applied, approval}`: the approval as it actually ended.
+        resolution = resolutionFromSnapshot(result?.approval);
+        applied = result?.applied === true;
+        if (!resolution) throw new Error("The gateway did not say how the approval ended.");
+      } else {
+        // The legacy methods answer `{ok: true}` once the decision is applied.
+        resolution = {
           id: approvalId,
           status: decision === "deny" ? "denied" : "allowed",
           decision,
           reason: "user",
           resolvedAt: this.now(),
           resolvedBy: this.host.client.displayName,
-        }),
-      );
+          resolver: null,
+          applicationStatus: null,
+          authoritative: true,
+          sessionKey: approval.sessionKey,
+          runId: approval.runId,
+        };
+      }
+      this.noteApprovalOutcome(resolution);
+      if (!applied) {
+        this.updateActivity(key, (activity) =>
+          markApproval(activity, approvalId, {
+            submitting: false,
+            error: "It had already been settled; this is how it ended.",
+          }),
+        );
+      }
     } catch (error) {
       this.updateActivity(key, (activity) =>
         markApproval(activity, approvalId, { submitting: false, error: errorMessage(error) }),
@@ -1227,125 +1460,219 @@ export class ClawtrateClient {
   }
 
   /**
-   * Put an approval in the task it belongs to: by session key, else by its run,
-   * else, for a helper or a bot messaged by another, in the task that spawned
-   * its session, recording that parent.
+   * Remember what the gateway reported about an approval and apply it to every
+   * task showing it. Kept apart from the cards, so a request or list entry that
+   * arrives later can never make it actionable again.
+   */
+  private noteApprovalOutcome(resolution: ApprovalResolution): void {
+    const known = mergeResolution(this.approvalOutcomes.get(resolution.id), resolution);
+    this.approvalOutcomes.delete(resolution.id);
+    this.approvalOutcomes.set(resolution.id, known);
+    while (this.approvalOutcomes.size > MAX_APPROVAL_OUTCOMES) {
+      this.approvalOutcomes.delete(this.approvalOutcomes.keys().next().value as string);
+    }
+    if (this.unrouted.delete(resolution.id)) this.publishUnrouted();
+    for (const transcript of Object.values(this.state.transcripts)) {
+      if (transcript.approvals.some((approval) => approval.id === resolution.id)) {
+        this.updateActivity(transcript.sessionKey, (activity) =>
+          applyApprovalResolved(activity, known),
+        );
+      }
+    }
+  }
+
+  /**
+   * The followed task an approval belongs in, and how it got there: where it
+   * already is; its own session; the task holding its run; the task that
+   * spawned its session (a helper); or the task whose `sessions_send` result
+   * named its run, or, for an approval naming no run, its session (a messaged
+   * bot). Null when no followed task is known to be its origin.
+   */
+  private approvalTarget(
+    card: ApprovalCard,
+  ): { key: string; parent: string | null; relation: ApprovalCard["relation"] } | null {
+    const transcripts = Object.values(this.state.transcripts).filter((each) =>
+      this.tracked(each.sessionKey),
+    );
+    for (const transcript of transcripts) {
+      const existing = transcript.approvals.find((approval) => approval.id === card.id);
+      if (existing) {
+        return {
+          key: transcript.sessionKey,
+          parent: existing.parentSessionKey,
+          relation: existing.relation,
+        };
+      }
+    }
+    if (card.sessionKey && this.tracked(card.sessionKey)) {
+      return { key: card.sessionKey, parent: null, relation: null };
+    }
+    if (card.runId) {
+      const holder = transcripts.find((each) => findRun(each, card.runId!) !== undefined);
+      if (holder) return { key: holder.sessionKey, parent: null, relation: null };
+    }
+    const spawner = card.sessionKey ? this.spawnedBy.get(card.sessionKey) : undefined;
+    if (spawner && this.tracked(spawner)) {
+      return { key: spawner, parent: spawner, relation: "helper" };
+    }
+    for (const [key, links] of this.recipients) {
+      if (!this.tracked(key)) continue;
+      if (
+        (card.runId !== null && links.runs.has(card.runId)) ||
+        (card.runId === null && card.sessionKey !== null && links.sessions.has(card.sessionKey))
+      ) {
+        return { key, parent: key, relation: "messaged" };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Put a pending approval in the one task it belongs to, with where it came
+   * from. One no followed task can show yet is kept in `unroutedApprovals`
+   * until its origin is known. What the gateway already reported about it is
+   * applied at once, so it never shows as actionable after its resolution.
    */
   private routeApproval(card: ApprovalCard): void {
-    let key = card.sessionKey && this.tracked(card.sessionKey) ? card.sessionKey : null;
-    const parent = !key && card.sessionKey ? this.spawnedBy.get(card.sessionKey) : undefined;
-    if (parent && this.tracked(parent)) {
-      this.updateActivity(parent, (activity) =>
-        applyApprovalRequested(activity, { ...card, parentSessionKey: parent }),
-      );
+    const outcome = this.approvalOutcomes.get(card.id);
+    const target = this.approvalTarget(card);
+    if (!target) {
+      if (!outcome && card.status === "pending") this.keepUnrouted(card);
       return;
     }
-    if (!key) {
-      key =
-        Object.values(this.state.transcripts).find(
-          (transcript) =>
-            transcript.approvals.some((approval) => approval.id === card.id) ||
-            (card.runId !== null && findRun(transcript, card.runId) !== undefined),
-        )?.sessionKey ?? null;
+    if (this.unrouted.delete(card.id)) this.publishUnrouted();
+    this.updateActivity(target.key, (activity) => {
+      let next = applyApprovalRequested(activity, {
+        ...card,
+        parentSessionKey: target.parent,
+        relation: target.relation,
+      });
+      if (outcome) next = applyApprovalResolved(next, outcome);
+      return next;
+    });
+  }
+
+  private keepUnrouted(card: ApprovalCard): void {
+    this.unrouted.delete(card.id);
+    this.unrouted.set(card.id, card);
+    while (this.unrouted.size > MAX_UNROUTED_APPROVALS) {
+      this.unrouted.delete(this.unrouted.keys().next().value as string);
     }
-    if (key) this.updateActivity(key, (activity) => applyApprovalRequested(activity, card));
+    this.publishUnrouted();
+  }
+
+  private publishUnrouted(): void {
+    this.store.update((state) => ({ ...state, unroutedApprovals: [...this.unrouted.values()] }));
+  }
+
+  /** Approvals kept without a task: route the ones whose origin is now known. */
+  private routeUnrouted(): void {
+    if (this.unrouted.size === 0) return;
+    for (const card of [...this.unrouted.values()]) {
+      if (this.approvalTarget(card)) this.routeApproval(card);
+    }
   }
 
   /**
    * Pending approvals for one task, from `exec.approval.list`,
    * `plugin.approval.list` and `openclaw.approval.list`, when it opens and
-   * after every reconnect. On a connection without `operator.approvals` the
-   * task says approvals are unavailable.
+   * after every reconnect. Each list is read against a revision and the
+   * task's opening: a response older than one already applied, or from an
+   * earlier opening or connection, changes nothing. Each kind's access is kept
+   * apart, and a list refused for a missing scope drops that scope. On a
+   * connection without `operator.approvals` the task says approvals are
+   * unavailable.
    */
   private async backfillApprovals(key: string, generation: number): Promise<void> {
     if (!this.holds(APPROVALS_SCOPE)) {
-      this.setApprovalAccess(key, "unavailable");
+      for (const kind of APPROVAL_KINDS) this.setApprovalSource(key, kind, "unavailable");
       return;
     }
-    if (this.state.transcripts[key]?.approvalAccess !== "ready")
-      this.setApprovalAccess(key, "loading");
-    const sources: Array<{
-      kind: ApprovalKind;
-      method: string;
-      parse: (v: unknown) => ApprovalCard | null;
-    }> = [
-      { kind: "exec", method: "exec.approval.list", parse: parseExecApproval },
-      { kind: "plugin", method: "plugin.approval.list", parse: parsePluginApproval },
-      {
-        kind: "system-agent",
-        method: "openclaw.approval.list",
-        parse: (v) => parseApprovalSnapshot(v),
-      },
-    ];
-    // Only approvals pending now can be found settled by these lists; later arrivals are newer than them.
-    const pendingBefore = new Set(
-      (this.state.transcripts[key]?.approvals ?? [])
-        .filter((approval) => approval.status === "pending")
-        .map((approval) => approval.id),
+    await Promise.all(
+      APPROVAL_SOURCES.map((source) => this.backfillApprovalKind(key, source, generation)),
     );
-    const results = await Promise.allSettled(
-      sources.map((source) => this.request(source.method, {})),
-    );
-    if (generation !== this.generation || !this.tracked(key)) return;
-    const run = (activity: TaskActivity) => {
-      let next = activity;
-      results.forEach((result, index) => {
-        const source = sources[index]!;
-        if (result.status !== "fulfilled") return;
-        const record = asRecord(result.value);
-        const items = Array.isArray(result.value)
-          ? result.value
-          : Array.isArray(record?.approvals)
-            ? record.approvals
-            : Array.isArray(record?.items)
-              ? record.items
-              : [];
-        const cards = items
-          .map((item) => source.parse(item))
-          .filter((card): card is ApprovalCard => card !== null && card.status === "pending")
-          .map((card) =>
-            card.sessionKey &&
-            card.sessionKey !== key &&
-            this.spawnedBy.get(card.sessionKey) === key
-              ? { ...card, parentSessionKey: key }
-              : card,
-          )
-          .filter(
-            (card) =>
-              card.sessionKey === key ||
-              card.parentSessionKey === key ||
-              (card.sessionKey === null &&
-                card.runId !== null &&
-                findRun(next, card.runId) !== undefined),
-          );
-        for (const card of cards) next = applyApprovalRequested(next, card);
-        // Only kinds this card set can come from: a generic snapshot of an exec approval counts as exec.
-        const kinds: ApprovalKind[] = [source.kind];
-        next = settleUnlistedApprovals(
-          next,
-          kinds,
-          new Set(cards.map((card) => card.id)),
-          pendingBefore,
-        );
-      });
-      return next;
-    };
-    this.updateActivity(key, run);
-    const failed = results.filter((result) => result.status === "rejected");
-    // The exec list is the one the map shows live; it decides whether approvals could be read.
-    this.setApprovalAccess(key, results[0]!.status === "fulfilled" ? "ready" : "error");
-    for (const failure of failed) {
-      this.log(
-        "warn",
-        `approval list failed: ${errorMessage((failure as PromiseRejectedResult).reason)}`,
-      );
-    }
   }
 
-  private setApprovalAccess(key: string, access: TaskActivity["approvalAccess"]): void {
+  private async backfillApprovalKind(
+    key: string,
+    source: (typeof APPROVAL_SOURCES)[number],
+    generation: number,
+  ): Promise<void> {
+    const incarnation = this.incarnations.get(key);
+    const listKey = `${key}\u0000${source.kind}`;
+    const revision = (this.listRequested.get(listKey) ?? 0) + 1;
+    this.listRequested.set(listKey, revision);
+    const stale = () =>
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation ||
+      (this.listApplied.get(listKey) ?? 0) > revision;
+    if (this.state.transcripts[key]?.approvalSources[source.kind] !== "ready")
+      this.setApprovalSource(key, source.kind, "loading");
+    // Only approvals pending now can be found settled by this list; later arrivals are newer than it.
+    const pendingBefore = new Set(
+      (this.state.transcripts[key]?.approvals ?? [])
+        .filter((approval) => approval.status === "pending" && approval.kind === source.kind)
+        .map((approval) => approval.id),
+    );
+    let value: unknown;
+    try {
+      value = await this.request(source.method, {});
+    } catch (error) {
+      if (stale()) return;
+      this.noteMissingScope(error);
+      this.setApprovalSource(key, source.kind, isMissingScope(error) ? "unavailable" : "error");
+      this.log("warn", `${source.method} failed: ${errorMessage(error)}`);
+      return;
+    }
+    if (stale()) return;
+    this.listApplied.set(listKey, revision);
+    const record = asRecord(value);
+    const items = Array.isArray(value)
+      ? value
+      : Array.isArray(record?.approvals)
+        ? record.approvals
+        : Array.isArray(record?.items)
+          ? record.items
+          : [];
+    const mine: ApprovalCard[] = [];
+    for (const card of items
+      .map((item) => source.parse(item))
+      .filter((each): each is ApprovalCard => each !== null && each.status === "pending")) {
+      const target = this.approvalTarget(card);
+      if (target?.key === key) {
+        mine.push({ ...card, parentSessionKey: target.parent, relation: target.relation });
+      } else if (!target && !this.approvalOutcomes.has(card.id)) {
+        this.keepUnrouted(card);
+      }
+    }
+    this.updateActivity(key, (activity) => {
+      let next = activity;
+      for (const card of mine) {
+        next = applyApprovalRequested(next, card);
+        const outcome = this.approvalOutcomes.get(card.id);
+        if (outcome) next = applyApprovalResolved(next, outcome);
+      }
+      return settleUnlistedApprovals(
+        next,
+        [source.kind],
+        new Set(mine.map((card) => card.id)),
+        pendingBefore,
+      );
+    });
+    // Another list may have been refused for the scope meanwhile: this one cannot be kept current then.
+    this.setApprovalSource(key, source.kind, this.holds(APPROVALS_SCOPE) ? "ready" : "unavailable");
+  }
+
+  private setApprovalSource(key: string, kind: ApprovalKind, access: ApprovalSourceAccess): void {
     const transcript = this.state.transcripts[key];
-    if (!transcript || transcript.approvalAccess === access) return;
-    this.setTranscript(key, () => ({ ...transcript, approvalAccess: access }));
+    if (!transcript || transcript.approvalSources[kind] === access) return;
+    const approvalSources = { ...transcript.approvalSources, [kind]: access };
+    this.setTranscript(key, () => ({
+      ...transcript,
+      approvalSources,
+      approvalAccess: approvalAccessOf(approvalSources),
+    }));
   }
 
   /** Expire pending approvals at their `expiresAt`, then re-read the lists to confirm. */
@@ -1400,14 +1727,44 @@ export class ClawtrateClient {
       this.foreign.delete(oldest);
     }
     const changed = next.runs.some((run) => findRun(before, run.id)?.state !== run.state);
-    if (changed) for (const key of Object.keys(this.state.transcripts)) this.refreshLinkedRuns(key);
+    if (!changed) return;
+    for (const key of Object.keys(this.state.transcripts)) {
+      this.refreshLinkedRuns(key);
+      // An approval from a helper or a messaged bot follows that run's end.
+      if (this.state.transcripts[key]?.approvals.some((approval) => approval.relation !== null))
+        this.updateActivity(key, (activity) => activity);
+    }
+  }
+
+  /** A run this task does not hold: a followed foreign session's, or another task's. */
+  private otherRun(runId: string): Run | undefined {
+    for (const activity of this.foreign.values()) {
+      const run = findRun(activity, runId);
+      if (run) return run;
+    }
+    for (const transcript of Object.values(this.state.transcripts)) {
+      const run = findRun(transcript, runId);
+      if (run) return run;
+    }
+    return undefined;
   }
 
   /** Copy the state of every recipient run a task's `sessions_send` results name, where it is known. */
   private refreshLinkedRuns(key: string): void {
     const transcript = this.state.transcripts[key];
     if (!transcript) return;
-    const ids = recipientRunIds(transcript.runs, (step) => step.raw ?? this.raw.get(key, step.id));
+    const rawOf = (step: Run["steps"][number]) => step.raw ?? this.raw.get(key, step.id);
+    const links = recipientLinks(transcript.runs, rawOf);
+    const known = this.recipients.get(key);
+    const runs = new Set(links.flatMap((link) => (link.runId ? [link.runId] : [])));
+    const sessions = new Set(links.flatMap((link) => (link.sessionKey ? [link.sessionKey] : [])));
+    const grew =
+      [...runs].some((id) => !known?.runs.has(id)) ||
+      [...sessions].some((id) => !known?.sessions.has(id));
+    this.recipients.set(key, { runs, sessions });
+    // A send result naming a recipient can place an approval that arrived before it.
+    if (grew) this.routeUnrouted();
+    const ids = recipientRunIds(transcript.runs, rawOf);
     const linked: Record<string, LinkedRun> = {};
     for (const id of ids) {
       for (const [sessionKey, activity] of [
@@ -1422,7 +1779,10 @@ export class ClawtrateClient {
     const same =
       Object.keys(current).length === Object.keys(linked).length &&
       Object.entries(linked).every(
-        ([id, run]) => current[id]?.state === run.state && current[id]?.endedAt === run.endedAt,
+        ([id, run]) =>
+          current[id]?.state === run.state &&
+          current[id]?.endedAt === run.endedAt &&
+          current[id]?.outcomeKnown === run.outcomeKnown,
       );
     if (!same)
       this.setTranscript(key, () => ({ ...this.state.transcripts[key]!, linkedRuns: linked }));
@@ -1438,6 +1798,7 @@ export class ClawtrateClient {
     key: string,
     questionId: string,
     answers: Record<string, string[]>,
+    options: { owner?: object } = {},
   ): Promise<void> {
     const question = this.pendingQuestion(key, questionId);
     const known = new Set(question.questions.map((item) => item.id));
@@ -1453,28 +1814,48 @@ export class ClawtrateClient {
         throw new Error(`The answer to ${id} is empty.`);
       }
     }
-    await this.resolveQuestion(key, questionId, { id: questionId, answers: { answers } });
+    await this.resolveQuestion(
+      key,
+      questionId,
+      { id: questionId, answers: { answers } },
+      options.owner ?? null,
+    );
   }
 
   /** Close a question card with its X: the bot is told there is no answer and carries on. */
-  async dismissQuestion(key: string, questionId: string): Promise<void> {
+  async dismissQuestion(
+    key: string,
+    questionId: string,
+    options: { owner?: object } = {},
+  ): Promise<void> {
     this.pendingQuestion(key, questionId);
-    await this.resolveQuestion(key, questionId, { id: questionId, cancel: true });
+    await this.resolveQuestion(
+      key,
+      questionId,
+      { id: questionId, cancel: true },
+      options.owner ?? null,
+    );
   }
 
   private pendingQuestion(key: string, questionId: string) {
     const question = this.state.transcripts[key]?.questions.find((each) => each.id === questionId);
     if (!question || question.status !== "pending")
       throw new Error("That question is no longer open.");
+    if (question.submitting) throw new Error("An answer to that question is already on its way.");
     return question;
   }
 
-  private async resolveQuestion(key: string, questionId: string, params: RawRecord): Promise<void> {
+  private async resolveQuestion(
+    key: string,
+    questionId: string,
+    params: RawRecord,
+    owner: object | null,
+  ): Promise<void> {
     this.updateActivity(key, (activity) =>
       markQuestion(activity, questionId, { submitting: true, error: null }),
     );
     try {
-      await this.ensureScope(QUESTIONS_SCOPE);
+      await this.ensureScope(QUESTIONS_SCOPE, owner);
       const result = asRecord(await this.request("question.resolve", params));
       // Apply the answer at once; `question.resolved` repeats it.
       this.updateActivity(key, (activity) =>
@@ -1493,9 +1874,22 @@ export class ClawtrateClient {
     }
   }
 
-  /** Pending questions for one task, from `question.list`, after it reloads. */
+  /**
+   * Pending questions for one task, from `question.list`, after it reloads.
+   * Fenced like the approval lists: a response older than one applied, or
+   * from an earlier opening or connection, changes nothing.
+   */
   private async backfillQuestions(key: string, generation: number): Promise<void> {
     if (!this.holds(QUESTIONS_SCOPE)) return;
+    const incarnation = this.incarnations.get(key);
+    const listKey = `${key}\u0000question`;
+    const revision = (this.listRequested.get(listKey) ?? 0) + 1;
+    this.listRequested.set(listKey, revision);
+    const stale = () =>
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation ||
+      (this.listApplied.get(listKey) ?? 0) > revision;
     const pendingBefore = new Set(
       (this.state.transcripts[key]?.questions ?? [])
         .filter((question) => question.status === "pending")
@@ -1503,7 +1897,8 @@ export class ClawtrateClient {
     );
     try {
       const result = asRecord(await this.request("question.list", {}));
-      if (generation !== this.generation || !this.tracked(key)) return;
+      if (stale()) return;
+      this.listApplied.set(listKey, revision);
       const records = (Array.isArray(result?.questions) ? result.questions : [])
         .map((entry) => asRecord(entry))
         .filter(
@@ -1520,6 +1915,7 @@ export class ClawtrateClient {
         );
       });
     } catch (error) {
+      if (!stale()) this.noteMissingScope(error);
       this.log("warn", `question.list failed: ${errorMessage(error)}`);
     }
   }
@@ -1543,7 +1939,10 @@ export class ClawtrateClient {
     const current = this.state.transcripts[key];
     if (!current) return;
     const next = retainActivity(
-      settleQuestionsOfEndedRuns(normalizeApprovals(fn(current, this.context(key)))),
+      settleQuestionsOfEndedRuns(
+        normalizeApprovals(fn(current, this.context(key)), (runId) => this.otherRun(runId)),
+      ),
+      this.activityBudget(),
     );
     if (next === current) return;
     this.setTranscript(key, () => withLive({ ...current, ...next }));
@@ -1685,6 +2084,7 @@ export class ClawtrateClient {
       let next = activity;
       for (const run of activity.runs) {
         if (run.state !== "queued") continue;
+        this.dropAttachments(run.id);
         next = updateMessage(cancelQueuedRun(next, run.id, this.now()), run.id, {
           status: "cancelled",
         });
@@ -1737,6 +2137,7 @@ export class ClawtrateClient {
       this.raw.clear();
       // Work kept for another gateway's tasks is never carried to this one.
       this.retained.clear();
+      this.forgetGatewayState();
     }
     this.everConnected = hasData;
     this.store.update((state) => ({
@@ -1896,6 +2297,20 @@ export class ClawtrateClient {
       reconnect: { initialMs: reconnect.initialMs, multiplier: 2, maxMs: reconnect.maxMs },
     });
     this.protocol.start();
+  }
+
+  /** What one gateway reported that must never be read against another. */
+  private forgetGatewayState(): void {
+    this.approvalOutcomes.clear();
+    this.unrouted.clear();
+    this.recipients.clear();
+    this.spawnedBy.clear();
+    this.foreign.clear();
+    this.foreignRaw.clear();
+    this.listRequested.clear();
+    this.listApplied.clear();
+    for (const { bytes } of this.attachmentContent.values()) this.attachmentBytes -= bytes;
+    this.attachmentContent.clear();
   }
 
   private close(): void {
@@ -2270,11 +2685,22 @@ export class ClawtrateClient {
         inFlightId,
         ctx,
       );
-      const activity = reconcileOutbox({ ...current, runs }, messages);
+      const reconciled = reconcileOutbox({ ...current, runs }, messages);
+      // History holds these now: their files are no longer needed.
+      for (const message of current.outbox) {
+        if (!reconciled.outbox.some((each) => each.id === message.id))
+          this.dropAttachments(message.id);
+      }
+      const activity = markUnconfirmed(reconciled);
       this.setTranscript(key, () =>
         withLive({
           ...current,
-          ...retainActivity(settleQuestionsOfEndedRuns(normalizeApprovals(activity))),
+          ...retainActivity(
+            settleQuestionsOfEndedRuns(
+              normalizeApprovals(activity, (runId) => this.otherRun(runId)),
+            ),
+            this.activityBudget(),
+          ),
           sessionKey: key,
           status: "ready",
           items: mapHistory(messages),
@@ -2338,10 +2764,13 @@ export class ClawtrateClient {
     const child = payload.sessionKey;
     const parent = payload.spawnedBy;
     if (typeof child !== "string" || typeof parent !== "string" || child === parent) return;
+    const known = this.spawnedBy.get(child) === parent;
     this.spawnedBy.delete(child);
     this.spawnedBy.set(child, parent);
     while (this.spawnedBy.size > MAX_SPAWN_LINKS)
       this.spawnedBy.delete(this.spawnedBy.keys().next().value as string);
+    // A helper's approval that arrived before its spawn was known can be placed now.
+    if (!known) this.routeUnrouted();
   }
 
   private handleAgent(event: EventFrame): void {
@@ -2401,22 +2830,22 @@ export class ClawtrateClient {
             ? parseExecApproval(event.payload)
             : event.event === "plugin.approval.requested"
               ? parsePluginApproval(event.payload)
-              : parseApprovalSnapshot(event.payload);
+              : parseSystemAgentApproval(event.payload);
         if (card) this.routeApproval(card);
         return;
       }
       case "exec.approval.resolved":
       case "plugin.approval.resolved":
       case "openclaw.approval.resolved": {
-        const resolution = parseApprovalResolved(event.payload);
-        if (!resolution) return;
-        for (const transcript of Object.values(this.state.transcripts)) {
-          if (transcript.approvals.some((approval) => approval.id === resolution.id)) {
-            this.updateActivity(transcript.sessionKey, (activity) =>
-              applyApprovalResolved(activity, resolution),
-            );
-          }
-        }
+        const kind: ApprovalKind =
+          event.event === "exec.approval.resolved"
+            ? "exec"
+            : event.event === "plugin.approval.resolved"
+              ? "plugin"
+              : "system-agent";
+        const resolution = parseApprovalResolved(event.payload, kind);
+        // Kept even when no card has arrived yet: its request or list entry may come later.
+        if (resolution) this.noteApprovalOutcome(resolution);
         return;
       }
       case "question.resolved": {
