@@ -524,7 +524,170 @@ Pictures, video, PDF pages and pages open in one viewer that fills the window (F
 
 # Part 3. The computer
 
-Part 3 follows in this document when it is finished. Sections 20 to 22 cover Parts 1 and 2 now.
+## 15. The Computer tab
+
+The Computer tab is where a person sees what the bot is doing on a machine: its browser, live, when the gateway can show it; which machine it works on and how that machine is; and what it did there, in order, with every action one step from its raw call.
+
+```
+needs-you banner     only while the bot waits on the person and its browser can be taken
+screen               the tile, its tabs, Watch / Open / Stop watching
+machine              where the bot's commands and browser run, and their state
+recent actions       the bot's browser and command actions in this task
+commands             what it ran, how each ended, what is still running
+```
+
+Each section is headed by a small grey word, as Details' groups are. Sections without anything to say are left out, except the screen section, which always says why there is nothing to watch.
+
+**The computer button and the tab's mark** (F-139). The conversation's header gains a round icon button with the screen icon, left of the Work pane button, once the open task has used the browser tool. It opens the pane on Computer. While a browser tool call is running in the task, the button carries an 8 px `--accent-line` dot at its top right, with a 2 px ring of the button's fill, and the Computer tab carries a 6 px dot after its word. The accent here is the bot working, its one allowed use. Names: "Juniper's computer. Show the computer" and, while the browser is in use, "Juniper's computer, in use. Show the computer". The dot is drawn from tool events, at `operator.read`, so it shows on every connection and with or without the plugin.
+
+## 16. The machine
+
+Which machine a bot works on is a pair of facts, because the gateway routes them separately (F-147):
+
+| Row             | Value                                                                                                                                    | From                                                                                                        |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Commands run on | The node's name, or "The gateway's machine"                                                                                              | The bot's `tools.exec.host` and `tools.exec.node` in the gateway's configuration, and the node's own record |
+| Browser runs on | "The gateway's machine" when the computer plugin gives the bot its own browser; otherwise "The gateway's machine, shared with every bot" | The plugin pins a bot's browser to the gateway's machine; without it every bot uses one browser profile     |
+
+Under each machine that is a node, one facts block (`.facts`):
+
+| Row            | Shows                                                                                                                                                                                  |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| State          | "Connected", "Reconnecting" or "Offline", with the state mark: done for connected, the working arc for reconnecting, the failed disc for offline. Colour is never the only cue (F-148) |
+| Last heartbeat | "40 s ago", "5:12 PM"; with the reason the node gave when it has one: "5:12 PM, while going to sleep". From the node's `lastSeenAtMs` and `lastSeenReason`                             |
+| Load           | "2 cores, 0.4 average", from the node's host stats when it sends them                                                                                                                  |
+| Memory         | "3.1 of 8 GB free"                                                                                                                                                                     |
+| Disk           | "780 GB of 2 TB free", only when the node reports its disk                                                                                                                             |
+
+- Host stats arrive every 60 s, and a node started with a restricted command list sends none. Then the three rows are left out and one line says "media-box doesn't report its load." Nothing reads zero.
+- The block's foot is a link button, "Node settings", which opens Settings at that node (the Settings screen is not part of this design).
+- **When the bot's commands run on the gateway's own machine**, the block has only the first row, "The gateway's machine", and the state of the gateway's connection, which the rail's footer already gives.
+- **Machines and bots.** When two bots use the same node, a line under the block says so: "Otto and Pip both run commands here." When the browser is shared, the browser row says it (above). (F-275)
+
+## 17. Watching
+
+### The screen section, before anything is shown
+
+The bot's browser is not drawn until the person asks for it. A signed-in browser can show mail, banking or messages, and the pane is beside a conversation that may be on a shared screen or in a meeting.
+
+- **The tile**: 16:9, the pane's width, radius 14, filled with the dark theme's `--bg-inset` in either theme, with the screen icon and a centred pill button, "Watch" (`--bg-raised`, `--shadow-button`, 36 px, the eye icon). Under it a caption (13, muted): "<Bot>'s browser", and the open tab's title and domain when the gateway lists them: "Juniper's browser · Your account · library.example".
+- **Tabs**: when the bot's browser has more than one tab, a list under the caption: each tab a row with its title and domain, the one shown marked with `aria-current`. Choosing a row shows that tab. Titles and addresses come from the gateway's tab list, not from the picture.
+- **"Show live when I open Computer"**, a checkbox under the tile, off by default and kept for each bot on this device. With it on, opening the tab starts watching at once.
+- **The first time** a person watches a given bot on this device, one line sits above the tile, on `--bg-bubble`: "Juniper's browser may be signed in to sites. What you see here is live, and anyone who can see your screen sees it too." with "Got it". It does not come back for that bot.
+
+### Watching in the pane
+
+Choosing Watch opens the view (F-140, F-143):
+
+- The tile shows the live picture, scaled to fit, with a small "Live" label at its top left on a dark disc, and the bot's pointer as the picture shows it.
+- Over the tile's bottom right, two round buttons on dark discs: "Open" (expand) and "Stop watching" (the eye with a bar). The caption updates as the page navigates.
+- While the picture is loading: the dark tile with the working mark and "Connecting to Juniper's browser…". The gateway answers within a few seconds or the view ends (below).
+
+### The full view ("Open")
+
+"Open" fills the window with the same live picture, as Grok Bot's takeover screen does; the conversation and the pane are one Close away. It is a `dialog`, modal, on the dark theme's tokens in either theme, like the media viewer (section 14).
+
+- **Top bar**, 56 px: at the left the bot's avatar (22 px), "<Bot>'s browser" (15/500), and the page's title and address (13, faint), updated on every navigation. At the right: "Take control" (default button, the hand icon) and a round "Close" (the collapse icon, named "Close the full view (Esc)").
+- **The picture**, centred and letterboxed, at most its own size. In Watching mode the pointer over it is the ordinary arrow, and clicks and keys are not sent.
+- **Tabs**: when there are several, a row of pills under the bar, the shown one selected.
+- **The mode** is always in words in the bar: "Watching" or "You have control".
+- Escape closes the full view and returns focus to "Open". Watching continues in the tile.
+
+### How a view ends
+
+| Cause                                                                                             | What the person sees                                                                                                |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Stop watching, or Close and then Stop watching                                                    | The tile returns to "Watch". Nothing of the picture remains                                                         |
+| Leaving the Computer tab, closing the pane, switching task or bot                                 | The same, at once                                                                                                   |
+| The window is hidden or minimised, or the device locks                                            | The view stops; on return the tile shows "Watch", or watches again when "Show live" is on                           |
+| The bot closed the tab                                                                            | "Juniper closed this tab." over the dark tile, and the tab list. The gateway closes the stream with "target closed" |
+| The gateway ended the view (it stopped being renewed, or this device lost its access to the task) | "The view ended. The gateway stopped sending it." with "Watch again"                                                |
+| The connection to the gateway dropped                                                             | "The view ended when the connection dropped." The tile does not reconnect by itself                                 |
+
+### What is never captured
+
+- Frames are drawn and dropped. The app never writes one to disk, to a cache, to a log, to Raw, to a notification, or to a crash report, and offers no screenshot or recording of the view.
+- When the app goes to the background on the phone, the view is covered before the system takes its snapshot for the app switcher.
+- Text typed while in control (section 18) is never shown back: the control's Raw records each `input` call with its kind and position, and "12 characters typed" in place of the text.
+- A read-only connection never receives a frame (section 19).
+
+## 18. Taking over and handing back
+
+**When a bot needs the person** (F-144). The gateway has no "computer card": a bot that needs a sign-in, a code or a check asks with its question tool, offering answers such as "I'm done" and "Skip". The conversation shows that question as its question card (`conversation.md` section 13), unchanged. The Computer tab adds, while that question is pending and the bot's browser can be taken:
+
+- a banner at the top of the tab, on `--warn-soft`, with the waiting mark: "Juniper is waiting for you", the question's own title on the next line, and two buttons, "Take control" (primary) and "Show the question", which scrolls to the card;
+- nothing else. The banner never answers the question; only the person does.
+
+The banner links a pending question of this task's bot to that bot's browser. It never guesses from the question's words that the browser is involved.
+
+**Taking control** (F-142, F-145). "Take control" in the banner or the full view's bar asks the gateway for control. The full view opens if it was not open.
+
+| Moment                                         | The bar says                                                                      | Controls                                                                                                                                                                   |
+| ---------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Asked                                          | The working mark, "Waiting for Juniper to finish what it's doing in the browser…" | "Cancel"                                                                                                                                                                   |
+| Granted                                        | The hand icon, "You have control". The picture gets a 2 px `--accent-line` ring   | The pending question's own answers as buttons, in its order, the first primary; then "Give back control" (quiet). With no question pending, "Give back control" is primary |
+| Refused: the bot is still acting (after 15 s)  | "Juniper is still acting in this browser. Try again in a moment."                 | "Try again"                                                                                                                                                                |
+| Refused: someone else has or is taking control | "Someone on another device has control of Juniper's browser."                     | none; Watching continues                                                                                                                                                   |
+| Ended by the gateway (expired or revoked)      | "Your control ended. The gateway stopped hearing from this device."               | "Take control" again                                                                                                                                                       |
+
+While the person has control, one line under the bar, 13, muted, says what the gateway does and does not do: "Clicks, scrolling and typed text reach the page. Enter, Tab and other keys don't yet. Juniper can't use its browser in any task until you give control back. Pages you open aren't checked by the gateway's browser rules." Pressing Enter or Tab over the picture shows "Enter isn't sent to the page. Click the page's button instead." for 3 s, in the same place.
+
+**Input.** A click on the picture is sent as a click at that point of the page. The scroll wheel scrolls. Typing is sent as text, as it is typed; there is no separate field on the desktop. On the phone, a tap is a click, a drag scrolls, and a keyboard button at the bottom right opens a field whose text is sent as it is typed.
+
+**Handing back.** Choosing one of the question's answers answers the question with that option, as the question card would, and gives control back in the same moment. "Give back control" only gives control back: the bot is still waiting for its answer, and the banner and the question card say so ("Juniper is still waiting for you."). Releasing control alone does not resume the bot.
+
+**In the conversation.** Control changes are event lines (`visual-language.md` section 8), from the gateway's control events: "You took control of Juniper's browser · 3:12 PM" and "You gave control back · 3:14 PM"; for another device, "Someone on another device took control of Juniper's browser". A browser call the bot makes while the person has control is refused by the gateway, and arrives as a blocked step, shown as `conversation.md` shows a call that was blocked; the family of plain-words cards decides its final wording.
+
+**Keyboard and names.** In the full view, Tab moves through the bar's controls only; the picture is one focusable region named "Juniper's browser, live" (and "…, you have control"). While in control and focused, typing goes to the page; Escape does not leave control, it moves focus to "Give back control", so that a reflex never hands back by accident and never sends Escape to the page either. ⌘↵ chooses the bar's primary button.
+
+**Motion.** The ring appears without animation. The working mark in "Waiting for Juniper…" turns; under reduced motion it holds still.
+
+## 19. When watching is not available, and recovery
+
+### Without the computer plugin
+
+Watching and taking control need Clawtrate's computer plugin on the gateway. The gateway's own browser view needs full admin access, which Clawtrate does not ask for (section 20). Without the plugin the screen section is a calm empty state, never a broken tile:
+
+- the round mark with the screen icon, "Watching isn't set up on this gateway" (15/500);
+- "To watch Juniper's browser here, the gateway's owner installs Clawtrate's computer plugin and gives Juniper a browser of its own." (14, muted);
+- a quiet link, "What the plugin adds", which opens the plugin's page in the project's documentation;
+- one line under it (13, faint): "Without it, every bot on this gateway shares one browser, so a site one bot signs in to is signed in for all of them." (F-275)
+
+The rest of the tab works without the plugin: the computer button and its dot, the machine, recent actions and commands.
+
+### The plugin is installed, but not for this bot
+
+"Juniper has no browser of its own yet." and "The gateway's owner adds Juniper to the computer plugin's list of bots. Until then Juniper uses the shared browser, which can't be watched here." The same faint line about sharing follows.
+
+### A read-only connection
+
+The plugin's view and control need a connection that may send. On the read tier the screen section says: "Watching needs a connection that can send. This device is read-only." with "Request access", which starts the conversation's access request (`conversation.md` section 3). The gateway's control events reach every reader, so a read-only device still sees "Someone on another device has control of Juniper's browser" and the event lines, never a frame.
+
+### Nothing to show
+
+| State                              | The screen section                                                                                                                                                                             |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The task has not used a browser    | The empty state from `visual-language.md`: "No screen to show", "When Juniper uses its browser, you can watch it here."                                                                        |
+| The bot's browser has no tabs open | "Juniper's browser isn't open. It starts when Juniper next uses it." There is no "Wake" button: no way to start it is offered to this device, and no sleep state exists at the gateway (F-141) |
+
+### Recent actions and commands
+
+**Recent actions** (F-154) lists the task's browser and command actions, newest first, eight at a time with "Show all 23". Each row: the time (12, faint, tabular), the step's kind icon, the step's title in the step card's words ("Opened library.example", "Ran du"), and, when the gateway establishes it, what started the run: "Routine: Weekly cleanup" or "Message from Marlow". A run that the person's own message started has no label. Choosing a row is "Show in chat" for that step (section 10).
+
+**Commands** (F-153) lists the commands the bot ran in this task: the command in mono, one line, then "exit 0", "exit 1" or "Timed out" and the duration, and "Show in chat". A command still running has the working mark and "Running"; its output so far is in its step. "Running on media-box" heads the processes the gateway reports for the task (`sessions.processes.list`).
+
+### When something is stuck
+
+| Trouble                                                          | The tab shows                                                                                                                                                                                       | What the person can do                                                                                                      |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| The node is offline                                              | The machine block's state, "Offline", the last heartbeat and its reason. Above it, on `--danger-soft`: "Can't reach media-box. It reconnects by itself when it can; check that it's on and online." | "Check again", which reads the node's state again (F-150)                                                                   |
+| The gateway's own desktop isn't ready (when the gateway has one) | "The gateway's desktop isn't available." and the gateway's error                                                                                                                                    | "Prepare it again", which asks the gateway to prepare it, and says it is doing so                                           |
+| Control stays refused because a call never finished              | After a refusal for the same reason three times in a row: "Juniper's browser has been busy for a while. A call that never finished can keep control from being handed over."                        | "Stop Juniper in this task" (below). The line adds: "If that doesn't free it, the gateway's owner can restart the gateway." |
+| The bot itself is stuck in this task                             | Nothing new: Stop is in the composer (`conversation.md` section 16)                                                                                                                                 |                                                                                                                             |
+
+**"Stop Juniper in this task"** (F-149) asks to confirm in a small `.menu`-styled dialog: "Stop Juniper's runs in this task? Steps already done stay done. Juniper's other tasks and other bots keep going." with "Stop" (`--danger` text on a default button) and "Cancel". It is the conversation's Stop, offered here because this is where the trouble shows; it needs a connection that may send.
+
+There is no "Recover", "Reset" or "Update" of a computer: the gateway offers no such action for a machine (section 20).
 
 ## 20. What the gateway's facts drive
 
@@ -568,6 +731,47 @@ What Part 1 assumes and the map does not establish: that `sessions.files.list` l
 
 What Part 2 assumes and the map does not establish: that a bot's outgoing documents, recordings and videos reach the transcript as blocks of those types. The source collects them when they are there (above); the map names only image blocks with an `artifactId` (parity F-115's cell). The cards follow whatever blocks arrive; a task with only pictures shows only pictures.
 
+### Part 3
+
+The computer plugin is P4, `clawtrate-computer`, in the map's section 3. The map's P4 is a research prototype that has not passed a security review; the shipped plugin is written from the map's "Requirements for the shipped plugin". Everything below marked P4 is what that contract provides, as shown live on a development gateway unless the map says otherwise.
+
+| Shown                                                                           | Driven by                                                                                                                                                                                                                                                                | Source                                                                                                                                                        |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The computer button and its dot; the tab's dot                                  | `agent` `tool` events for the `browser` tool (`operator.read`)                                                                                                                                                                                                           | Parity F-139 cell; map §7 and §19 "Tool events in depth"                                                                                                      |
+| Whether the plugin is installed                                                 | `hello-ok.features.methods`, which includes methods registered by loaded plugins; the client also treats an unknown-method answer from `clawtrate-computer.tabs` as "not installed"                                                                                      | Map §1 ("Use `hello-ok.features.methods`… for feature detection"); `dist/server-start-D6vaUNGz.mjs` lines 577, 2147 and 5536-5543; not exercised live with P4 |
+| The tab list: titles and addresses                                              | P4 `clawtrate-computer.tabs`, the bot's live CDP target list (`operator.write`, session access, `requiredTool: "browser"`)                                                                                                                                               | Map §3 P4; map §18                                                                                                                                            |
+| The live picture                                                                | P4 `view.open` gives a one-use 60 s ticket for `/clawtrate-computer/stream`; binary frames with a header `{url, cssWidth, cssHeight, scrollX, scrollY, ts}` and JPEG bytes; `meta` on navigation                                                                         | Map §3 P4 "Frames"; map §18 items 4 and 8                                                                                                                     |
+| The view stays open only while watched                                          | `view.renew` about every 5 s; the stream closes when renewals stop for 20 s                                                                                                                                                                                              | Map §3 P4 "Not bound to the connection", "Stream"                                                                                                             |
+| "Juniper closed this tab"; "The gateway stopped sending it"                     | Close codes `4004 target_closed`, `4006 authority_revoked`, `1000`                                                                                                                                                                                                       | Map §3 P4 "Frames"; map §18 item 11                                                                                                                           |
+| Taking control: waiting, granted, refused                                       | `control.take {sessionKey, targetId}` emits `draining` at once and answers once: `{state:"granted", generation, renewWithinMs}` or, after `drainTimeoutMs` (15 s by default), `{state:"busy", reason, runningCalls}`; `CONFLICT` when someone holds or is taking the tab | Map §3 P4 "Contract"; map §18 items 5 and 10                                                                                                                  |
+| Only clicks, scrolling and text                                                 | `input {kind: "click"\|"scroll"\|"text", x?, y?, deltaY?, text?}` with the lease's `generation`                                                                                                                                                                          | Map §3 P4 "Contract"                                                                                                                                          |
+| "Juniper can't use its browser in any task"                                     | While a lease exists, the hook blocks every browser call from every session of that bot, with "The user has control of this bot's browser"                                                                                                                               | Map §3 P4 "Limits"; map §18 item 6                                                                                                                            |
+| "Pages you open aren't checked by the gateway's browser rules"                  | Frames and input go straight over CDP and skip the browser plugin's navigation checks                                                                                                                                                                                    | Map §3 P4 "Policy bypass"                                                                                                                                     |
+| Giving back; the lease ends                                                     | `control.release` with the holder's `generation`; a holder that stops renewing loses the lease (live: 22.6 s after a disconnect)                                                                                                                                         | Map §3 P4; map §18 items 7, 9 and 11                                                                                                                          |
+| Event lines; "Someone on another device has control" on every connection        | `plugin.clawtrate-computer.control {profile, targetId, holder, state}`, states `draining`, `granted`, `busy`, `released`, `expired`, `revoked`, `tab-closed`, at `operator.read`                                                                                         | Map §3 P4 "Events"                                                                                                                                            |
+| The question's answers in the control bar; handing back does not resume the bot | The bot's `ask_user` question (`question.requested`, answered with `question.resolve`, `operator.questions`); releasing control alone does not resume it                                                                                                                 | Parity F-144 and F-145 cells; map §19 "Question cards"                                                                                                        |
+| No dedicated "needs a human" signal                                             | None was found; the bot asks with `ask_user`                                                                                                                                                                                                                             | Map §20 "Computer signals"                                                                                                                                    |
+| Not watchable without the plugin                                                | The gateway's `browser.request` screencast needs `operator.admin`, and has no takeover arbitration                                                                                                                                                                       | Map §18 "Caveats of the built-in route"                                                                                                                       |
+| One shared browser without the plugin; a browser per bot with it                | The managed `openclaw` profile is shared by every bot; P4 pins each configured bot to its own profile; unconfigured bots keep the shared one and get no view                                                                                                             | Map §18 "Isolation model"; map §3 P4 "Limits"; parity F-275 cell                                                                                              |
+| Read-only: no frames                                                            | P4's methods are `operator.write`; its event is `operator.read`                                                                                                                                                                                                          | Map §3 P4                                                                                                                                                     |
+| Commands run on                                                                 | The bot's `agents.entries.<id>.tools.exec.{host, node}` from `config.get` (`operator.read`)                                                                                                                                                                              | Map §13; map §2 row 3 (`config.get` is `operator.read`)                                                                                                       |
+| Browser runs on the gateway's machine                                           | P4 rewrites every bot browser call to `target: "host"`                                                                                                                                                                                                                   | Map §3 P4, first row                                                                                                                                          |
+| State, last heartbeat and reason                                                | `node.list`, `node.describe` (`operator.read`): `connected`, `lastConnectedAtMs`, `lastSeenAtMs`, `lastSeenReason`                                                                                                                                                       | Map §20 "Computer signals"; parity F-148 cell                                                                                                                 |
+| Load, memory, disk                                                              | `node.hostStats {nodeId, hostStats:{cpuCount, loadAverage, memoryTotalBytes, memoryFreeBytes, diskTotalBytes?, diskAvailableBytes?, updatedAtMs}}` every 60 s, not from a node started with `--commands`                                                                 | Map §20 "Computer signals"                                                                                                                                    |
+| No "asleep", no "Wake"                                                          | No sleep state exists; a disconnected node is not evidence of sleep; starting a browser needs `operator.admin` or P4's bot-side `start`                                                                                                                                  | Map §20 "Computer signals"; parity F-141 cell                                                                                                                 |
+| The gateway's desktop, "Prepare it again"                                       | `computer.status {probe?}` (`operator.read`) gives `{configured, available, computerUse?, error?}`; `probe:false` only reads; `probe` (the default) prepares                                                                                                             | Map §20 "Computer signals"                                                                                                                                    |
+| No Recover, Reset or Update                                                     | No method recovers a machine; the only "recover" methods act on sessions and worktrees                                                                                                                                                                                   | Map §20 "Computer signals"; parity F-150 cell                                                                                                                 |
+| A call that never finished keeps control refused                                | A bot call without `after_tool_call` keeps takeover busy until the gateway restarts; whether `after_tool_call` fires for an aborted run is unverified                                                                                                                    | Map §3 P4 "Limits"                                                                                                                                            |
+| "Stop Juniper in this task"                                                     | `sessions.abort` (`operator.write`) stops one task's runs; other bots keep running. `sessions.recover` is named but not described                                                                                                                                        | Parity F-149 cell; map §2 row 5                                                                                                                               |
+| Recent actions and their trigger                                                | Tool events and history; a routine's run by its session key `agent:<agentId>:cron:<jobId>:run:<sessionId>`; another bot's by inter-session provenance; no field names the trigger                                                                                        | Parity F-154 cell; map §19 "Bot-to-bot"                                                                                                                       |
+| Commands, exit codes, running processes                                         | `exec` tool events with `command_output`; `toolCall` and `toolResult` history rows; `sessions.processes.list` (`operator.read`)                                                                                                                                          | Parity F-153 cell; map §19 "Tool events in depth"                                                                                                             |
+
+What Part 3 assumes and the map does not establish:
+
+- Text input through P4 was not shown live (map §3 P4, "Not demonstrated live"). The control bar promises typed text because the contract has it; a builder checks it first.
+- Two viewers taking control at the same moment was shown only offline.
+- The plugin's page in the documentation does not exist yet; the link in section 19 is written for it.
+
 ## 21. Parity rows to reword
 
 Only the Clawtrate column changes.
@@ -584,6 +788,20 @@ Only the Clawtrate column changes.
 | F-307 | better: from a file card, a format the device cannot preview shows its details and "Download"; an item the gateway holds no content for says so and offers no "Download"; a failed load shows the error and "Try again"; a successful retry shows the preview (F-115 covers the successful card preview; the Files pane has its own rows). | The `unsupported` download mode. |
 
 F-320, F-446 and F-447 are met as written, and so are F-115, F-116, F-117, F-118, F-305 and F-306. F-115's dependency cell says that only image blocks are named; the gateway's source collects file, audio and video blocks as artifacts too (section 20), and a builder correcting that cell can cite it.
+
+**Part 3.**
+
+| Row   | New wording for the Clawtrate column                                                                                                                                                                                                                                               | Why                                                                                                                 |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| F-140 | better: the Computer tab shows a 16:9 tile with a "Watch" pill and the caption "&lt;Bot&gt;'s browser" and the tab's title; the live picture starts only when the person chooses Watch, or at once when they have turned on "Show live" for that Bot.                              | A signed-in browser is not shown unasked.                                                                           |
+| F-141 | better: when the Bot's browser has no tabs open, the tile reads "&lt;Bot&gt;'s browser isn't open. It starts when &lt;Bot&gt; next uses it."; a node that is offline shows "Offline" and its last heartbeat with the reason it gave. No asleep state and no wake action are shown. | The gateway has no sleep state, and a disconnected node is not evidence of sleep; starting the browser needs admin. |
+| F-142 | better: "Open" shows the Bot's browser full window in "Watching" mode; "Take control" asks the gateway for control and says while it waits, and the bar says which input reaches the page; Escape and the collapse control return.                                                 | Takeover waits for the Bot's current call (up to 15 s) and input is clicks, scrolling and text.                     |
+| F-144 | better: when the Bot asks a question while its browser can be taken, the conversation shows its question card, and the Computer tab shows "&lt;Bot&gt; is waiting for you" with the question's title, "Take control" and "Show the question"; the row shows "Waiting for you".     | The gateway has no computer card; the human step is the Bot's own question.                                         |
+| F-145 | better: after "Take control", the bar shows the pending question's own answers (for example "I'm done" and "Skip") and "Give back control"; choosing an answer answers the question and gives control back, and the Bot resumes; "Give back control" alone leaves the Bot waiting. | Releasing control does not resume the Bot.                                                                          |
+| F-149 | better: "Stop &lt;Bot&gt; in this task" stops that task's runs after a confirmation that says other tasks and other Bots keep going; offered in the Computer tab when the Bot's browser stays busy, and as Stop in the composer (FC-08).                                           | `sessions.abort` stops one task's runs; no restart or recover method is described.                                  |
+| F-150 | same; note: for an unreachable node, the tab says it reconnects by itself and offers "Check again"; for the gateway's own desktop, "Prepare it again". No recover action.                                                                                                          | No machine recovery method exists.                                                                                  |
+
+F-139, F-143, F-147, F-148, F-153, F-154 and F-275 are met as written. F-275's isolation is the plugin's; without it the tab says that every Bot shares one browser.
 
 ## 22. For builders
 
@@ -669,3 +887,59 @@ Nothing new for Part 1. Every call is `operator.read`.
 | `artifactload`                | `failed`: the first opening of an item fails, and Try again succeeds                                                                                                 |
 | `viewer`                      | An item to open in the viewer: `a-usage`, `a-growth`, `a-chart`, `a-walk` (video), `page`                                                                            |
 | `menu=artifact&menuitem=<id>` | The card's menu for an item                                                                                                                                          |
+
+### Part 3: what each part uses
+
+| Part                                  | Uses                                                      | New                                          |
+| ------------------------------------- | --------------------------------------------------------- | -------------------------------------------- |
+| The computer button and the tab's dot | The round icon button; `--accent-line`                    | `.computer-button[data-active]`, `.tab-mark` |
+| The screen section                    | The empty state; `.work-section h3`                       | `.screen` (the tile), `.screen-tabs`         |
+| The full view                         | The media viewer's frame and dark tokens (section 14)     | `.screen-view`                               |
+| The control bar                       | Buttons; state marks                                      | `.control-bar`                               |
+| The banner                            | The conversation's shelf row on `--warn-soft`             |                                              |
+| The machine                           | `.facts`, state marks                                     |                                              |
+| Recent actions and commands           | File rows' metrics; the step card's titles and kind icons | `.action-row`                                |
+| The stop confirmation                 | `.menu`'s surface                                         |                                              |
+
+### What the engine supplies for Part 3
+
+- Whether the plugin is installed (from `hello-ok.features.methods`), and for each bot whether it is configured for it (from `clawtrate-computer.tabs` answering for the bot's session).
+- The task's browser activity from tool events: whether a browser call is running now.
+- A view session for the open task: `view.open`, the stream, `view.renew` every 5 s, and its end, with the cause. It ends on the triggers in section 17 without being asked twice.
+- A control session: `control.take`, the local "waiting" state from the `draining` event, the lease's `generation` kept in memory only, `view.renew` with it, `input`, `control.release`, and the control events for every tab of the bot.
+- The pending question of the open task, matched to the bot whose browser the tab shows.
+- The bot's machines (`config.get`, `node.list`, `node.describe`, `node.hostStats`), and which other bots share a node.
+- Recent actions and commands of the task, with each run's trigger where the session key or provenance establishes it.
+
+### What the plugin must supply
+
+The shipped plugin is written from the map's "Requirements for the shipped plugin". For this design it must keep P4's contract above, and:
+
+- answer `clawtrate-computer.tabs` with a distinct error for "this bot is not configured", so the tab can tell that state from "not installed";
+- keep the `draining` event, the single answer to `control.take`, and the control event at `operator.read`;
+- keep frames out of any log on the gateway, as the client keeps them out of its own.
+
+Without the plugin, nothing in this part asks for more access: the client never requests `operator.admin` to watch a browser.
+
+### Order to build Part 3
+
+1. The computer button and the tab's dot from tool events. Check F-139.
+2. The machine section from `config.get` and the node methods. Check F-147, F-148.
+3. Recent actions and commands. Check F-153, F-154.
+4. The screen section's states without the plugin, for an unconfigured bot, on a read-only connection, and with nothing to show. Check F-275 as stated, F-141 as reworded.
+5. Against a development gateway with the plugin: the tile, Watch, the view's end, the full view. Check F-140 as reworded, F-143.
+6. Control: take, waiting, refused, granted, the bar, input, handing back, the event lines, the banner. Check F-142, F-144, F-145 as reworded.
+7. Recovery: Check again, Prepare it again, Stop in this task. Check F-149, F-150 as reworded.
+
+### Building the whole pane
+
+Part 1 first, because it needs nothing but `operator.read` and gives the pane its navigation; then Part 2, whose cards and viewer the computer's full view reuses; then Part 3, whose screen and control wait for the shipped plugin while its other sections do not.
+
+### Prototype states for Part 3
+
+| Parameter                                     | Values                                                                                                                                                                                                               |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bot=juniper&task=j2&panel=open&tab=computer` | Juniper's browser, waiting for the person to sign in                                                                                                                                                                 |
+| `computer`                                    | `noplugin`, `unconfigured`, `unused` (no browser use in the task), `closed` (no tabs open), `watching`, `full` (the full view), `draining`, `control`, `busy`, `conflict`, `ended`, `offline` (Otto's node), `stuck` |
+| `firstwatch`                                  | `1`: the one-time note before the first watch                                                                                                                                                                        |
+| `state=readonly`                              | The read-only connection                                                                                                                                                                                             |

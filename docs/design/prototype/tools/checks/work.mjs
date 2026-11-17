@@ -337,6 +337,160 @@ await p.waitForTimeout(50);
 check("phone: the viewer fills the screen", await q(p, () => document.querySelector(".viewer").getBoundingClientRect().width >= 389));
 await p.close();
 
+// Part 3: the computer -----------------------------------------------------------------------
+
+const comp = "&bot=juniper&task=j2&panel=open&tab=computer";
+const work = (p, what) => p.evaluate((w) => window.CT.work.bar(w), what);
+
+p = await open("&bot=juniper&task=j2&computer=active");
+check("F-139 the computer button shows once the task used the browser, marked while in use", await q(p, () => {
+  const button = document.querySelector("#computer-button");
+  return !button.hidden && button.dataset.active === "true" && button.getAttribute("aria-label") === "Juniper's computer, in use. Show the computer" && !!document.querySelector("#tab-computer .tab-mark");
+}));
+await p.click("#computer-button");
+check("the computer button opens the pane on Computer", await q(p, () => document.querySelector(".shell").dataset.panel === "open" && document.querySelector("#tab-computer").getAttribute("aria-selected") === "true" && document.activeElement.id === "tab-computer"));
+await p.close();
+p = await open("");
+check("a task that never used the browser has no computer button", await q(p, () => document.querySelector("#computer-button").hidden));
+await p.close();
+
+p = await open(comp + "&firstwatch=1");
+check("F-140 nothing is drawn before Watch", await q(p, () => document.querySelector('.screen[data-state="idle"]') && !document.querySelector(".screen > svg") && !!document.querySelector('.screen [data-cmp="watch"]')));
+check("the first watch of a bot carries the one-time note", await q(p, () => document.querySelector(".computer .files-alert").textContent.includes("may be signed in to sites")));
+await p.click('[data-cmp="note-ok"]');
+check("Got it removes the note for good", await q(p, () => !document.querySelector('[data-cmp="note-ok"]')));
+check("F-144 the banner says the bot waits, with Take control and Show the question", await q(p, () => document.querySelector(".computer-banner strong").textContent === "Juniper is waiting for you" && !!document.querySelector('.computer-banner [data-cmp="take"]')));
+await p.click('[data-cmp="watch"]');
+check("Watch connects first", await q(p, () => document.querySelector('.screen[data-state="connecting"]').getAttribute("aria-busy") === "true"));
+await p.waitForTimeout(600);
+check("F-140 F-143 then the live picture, labelled Live, with Open and Stop watching", await q(p, () =>
+  !!document.querySelector('.screen[data-state="live"] svg') && document.querySelector(".screen-live").textContent === "Live" && !!document.querySelector('[data-cmp="open"]') && !!document.querySelector('[data-cmp="stop"]')));
+await p.click("#tab-files");
+await p.click("#tab-computer");
+check("leaving the Computer tab ends the view", await q(p, () => !document.querySelector(".screen > svg") && !!document.querySelector('[data-cmp="watch"]')));
+await p.check('[data-cmp="auto"]');
+await p.click("#tab-files");
+await p.click("#tab-computer");
+await p.waitForTimeout(600);
+check("with Show live on, opening Computer watches at once", await q(p, () => !!document.querySelector('.screen[data-state="live"]')));
+await p.click('[data-cmp="stop"]');
+check("Stop watching clears the picture", await q(p, () => !document.querySelector(".screen > svg") && document.activeElement.dataset.cmp === "watch"));
+await p.close();
+
+p = await open(comp + "&computer=watching");
+await q(p, () => window.app.setConnection("reconnecting"));
+check("a dropped connection ends the view and says so", await q(p, () => document.querySelector('.screen[data-state="ended"]').textContent.includes("when the connection dropped")));
+await p.close();
+
+p = await open(comp + "&computer=watching");
+await p.click('[data-cmp="open"]');
+check("F-142 Open fills the window in Watching mode", await q(p, () => {
+  const v = document.querySelector(".screen-view");
+  return v.getAttribute("aria-modal") === "true" && v.querySelector(".screen-mode").textContent === "Watching" && document.activeElement.dataset.cmp === "take" && document.querySelector(".shell").inert;
+}));
+await p.keyboard.press("Escape");
+check("F-142 Escape closes the full view, back to Open; watching goes on", await q(p, () => !document.querySelector(".screen-view") && document.activeElement.dataset.cmp === "open" && !!document.querySelector('.screen[data-state="live"]')));
+await p.click('[data-cmp="open"]');
+await p.click('.screen-view [data-cmp="take"]');
+check("F-142 Take control waits for the bot and says so", await q(p, () => document.querySelector(".control-bar").textContent.startsWith("Waiting for Juniper to finish") && !!document.querySelector('[data-cmp="cancel-take"]')));
+await p.waitForTimeout(1000);
+check("F-145 granted: the question's own answers and Give back control", await q(p, () =>
+  [...document.querySelectorAll(".control-bar .button")].map((x) => x.textContent).join() === "I'm done,Skip,Give back control" && document.querySelector(".screen-frame").dataset.control === "true"));
+check("the bar says which input reaches the page", await q(p, () => document.querySelector(".control-note").textContent.startsWith("Clicks, scrolling and typed text reach the page. Enter, Tab and other keys don't yet.")));
+check("taking control is an event line in the conversation", await q(p, () => [...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You took control of Juniper's browser"))));
+await p.focus(".screen-frame");
+await p.keyboard.type("2208");
+check("typing goes to the page as text", await q(p, () => window.CT.work.computer.typed === "2208" && document.querySelector(".screen-frame svg").textContent.includes("2208")));
+await p.keyboard.press("Enter");
+check("Enter is not sent, and the view says so", await q(p, () => !document.querySelector(".screen-hint").hidden && document.querySelector(".screen-hint").textContent.startsWith("Enter isn't sent to the page")));
+await p.keyboard.press("Escape");
+check("Escape in control never hands back: it moves to Give back control", await q(p, () => document.activeElement.dataset.cmp === "release" && window.CT.work.computer.control === "granted"));
+await p.click('.control-bar [data-answer="0"]');
+check("F-145 an answer answers the question and gives control back", await q(p, () =>
+  window.CT.work.computer.control === "none" && document.querySelector("#q-library").dataset.state !== "pending" && [...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You gave control back"))));
+await p.close();
+
+p = await open(comp + "&computer=control");
+await p.waitForTimeout(50);
+await p.click('.screen-view [data-cmp="release"]');
+check("F-145 Give back control alone leaves the bot waiting", await q(p, () => document.querySelector(".computer-banner strong").textContent === "Juniper is still waiting for you" && document.querySelector("#q-library").dataset.state === "pending"));
+await p.close();
+
+for (const [m, words, name] of [
+  ["busy", "Juniper is still acting in this browser. Try again in a moment.", "still acting"],
+  ["conflict", "Someone on another device has control of Juniper's browser.", "someone else has control"],
+]) {
+  p = await open(comp + `&computer=${m}`);
+  await p.waitForTimeout(50);
+  await p.click('.screen-view [data-cmp="take"]');
+  await p.waitForTimeout(1000);
+  check(`F-142 take refused: ${name}`, (await q(p, () => document.querySelector(".control-bar").textContent)).startsWith(words));
+  await p.close();
+}
+p = await open(comp + "&computer=control");
+await p.waitForTimeout(50);
+await work(p, "lease-ends");
+check("when the gateway ends the lease, control ends and says why", await q(p, () => document.querySelector(".control-bar").textContent.startsWith("Your control ended. The gateway stopped hearing from this device.")));
+await p.close();
+p = await open(comp + "&computer=watching");
+await work(p, "tab-closed");
+check("when the bot closes the tab, the tile says so", await q(p, () => document.querySelector('.screen[data-state="ended"]').textContent.startsWith("Juniper closed this tab.")));
+await p.close();
+
+// When watching is not available.
+p = await open(comp + "&computer=noplugin");
+check("without the plugin: a calm empty state that says what is missing and what adds it", await q(p, () =>
+  document.querySelector(".computer-empty h4").textContent === "Watching isn't set up on this gateway" &&
+  document.querySelector(".computer-empty p").textContent.includes("installs Clawtrate's computer plugin") && !document.querySelector(".screen")));
+check("F-275 without the plugin the tab says every bot shares one browser", await q(p, () => document.querySelector(".computer-shared").textContent.startsWith("Without it, every bot on this gateway shares one browser")));
+check("without the plugin the machine and actions still show", await q(p, () => [...document.querySelectorAll("#panel-computer h3")].map((h) => h.textContent).join() === "Screen,Machine,Recent actions" && !document.querySelector(".computer-banner")));
+await p.close();
+p = await open(comp + "&computer=unconfigured");
+check("the plugin without this bot says so", await q(p, () => document.querySelector(".computer-empty h4").textContent === "Juniper has no browser of its own yet"));
+await p.close();
+p = await open(comp + "&state=readonly");
+check("read-only: no frames, and a way to ask for access", await q(p, () => document.querySelector('.screen[data-state="blocked"]').textContent.includes("Watching needs a connection that can send") && !document.querySelector('[data-cmp="watch"]') && !!document.querySelector('[data-cmp="request"]')));
+await p.close();
+p = await open(comp + "&computer=closed");
+check("F-141 a browser with no tabs: it starts when the bot uses it, and no Wake", await q(p, () => document.querySelector('.screen[data-state="closed"]').textContent.includes("isn't open. It starts when Juniper next uses it.") && !/wake/i.test(document.querySelector("#panel-computer").textContent)));
+await p.close();
+p = await open(comp + "&computer=stuck");
+check("a browser that stays busy offers Stop in this task", await q(p, () => document.querySelector(".computer .files-alert").textContent.includes("A call that never finished") && !!document.querySelector('[data-cmp="stop-task"]')));
+await p.click('[data-cmp="stop-task"]');
+check("F-149 stopping asks first and says what keeps going", await q(p, () => document.querySelector(".stop-confirm").textContent.includes("Juniper's other tasks and other bots keep going") && document.activeElement.dataset.cmp === "cancel-stop"));
+await p.click('[data-cmp="confirm-stop"]');
+check("F-149 then it stops this task's runs", await q(p, () => document.querySelector(".computer [role=status]").textContent.startsWith("Stopped Juniper's runs in this task")));
+await p.close();
+
+// The machine, actions and commands.
+p = await open("&panel=open&tab=computer");
+check("F-147 the tab names where commands and the browser run", await q(p, () => {
+  const rows = [...document.querySelectorAll("#panel-computer .facts")[0].querySelectorAll("div")].map((d) => d.textContent);
+  return rows[0] === "Commands run onmedia-box" && rows[1] === "Browser runs onThe gateway's machine, shared with every bot";
+}));
+check("F-148 the node's state and last heartbeat", await q(p, () => {
+  const t = document.querySelector("#panel-computer").textContent;
+  return t.includes("StateConnected") && t.includes("Last heartbeat40 s ago") && t.includes("Disk780 GB of 2 TB free");
+}));
+check("F-153 commands with how each ended", await q(p, () => document.querySelectorAll(".command-row").length === 3 && document.querySelector(".command-row span").textContent === "exit 0 · 2.1s"));
+await p.click('.action-row[data-show-step="st-du"]');
+check("F-154 an action leads to its step", await q(p, () => document.querySelector("#st-du").open && document.activeElement === document.querySelector("#st-du > summary")));
+await p.close();
+p = await open("&panel=open&tab=computer&computer=offline");
+check("F-148 F-150 an offline node: its state, last heartbeat with reason, and Check again", await q(p, () => {
+  const t = document.querySelector("#panel-computer").textContent;
+  return t.includes("StateOffline") && t.includes("5:12 PM, while going to sleep") && document.querySelector("#panel-computer [role=alert]").textContent.startsWith("Can't reach media-box") && !/recover|reset/i.test(t);
+}));
+await p.close();
+
+p = await open(comp + "&computer=watching&motion=reduce");
+check("reduced motion: the watched pointer holds still", await q(p, () => document.getAnimations().filter((a) => a.playState === "running").length === 0));
+await p.close();
+p = await open("&bot=juniper&task=j2&computer=full&width=phone", { width: 390, height: 844 });
+await p.waitForTimeout(50);
+check("phone: the full view fills the screen", await q(p, () => document.querySelector(".screen-view").getBoundingClientRect().width >= 389));
+await p.close();
+
 await b.close();
 console.log(out.join("\n"));
 const failed = out.filter((l) => l.startsWith("FAIL") || l.startsWith("PAGEERROR")).length;
