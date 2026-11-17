@@ -845,6 +845,8 @@ So when an approval arrives and the shelf row appears, or the standing-allow for
 
 One thing limits following: what the reader has just opened stays in view. If staying at the end would push the first line of a step, a card or a form the reader opened above the top of the view, that line is held at the top instead, and the reader is no longer following. Nobody is scrolled away from what they opened to keep the status line in view.
 
+A reader who is not following and opens something whose content falls below the foot of the view (a Raw panel, the full request) has it brought into view by the smallest scroll that shows it, and never past its first line.
+
 **Jump to latest** is the shell's `.jump-latest` control (see `visual-language.md`), with the states a run needs. It shows only while the reader is not following and its destination is out of view: centred 10 px above the foot of the transcript, a pill on `--bg-raised` with `--shadow-pop`, 36 px (44 on touch), at most 380 px wide. It rises 6 px and fades in over 200 ms.
 
 | State              | Content                                                                           | Destination                                                                                              |
