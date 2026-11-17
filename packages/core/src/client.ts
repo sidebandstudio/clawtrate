@@ -112,7 +112,10 @@ import {
   queueLocalRun,
   RawTable,
   reconcileOutbox,
+  registerRunAlias,
   registerSteerAlias,
+  settleRunFromSendAnswer,
+  throughRunAliases,
   removeMessage,
   requestStop,
   revertStop,
@@ -1928,7 +1931,7 @@ export class ClawtrateClient {
     // run or turn is recorded: the gateway handled it, and no run or history
     // row will follow.
     const command = runId === null && typeof result?.aborted === "boolean";
-    this.updateActivity(key, (activity) => {
+    this.updateActivity(key, (activity, ctx) => {
       if (command) {
         return dropUnboundRun(
           updateMessage(activity, messageId, {
@@ -1957,10 +1960,15 @@ export class ClawtrateClient {
         // The steer's own run id settles at once; the reply streams under the run it joined.
         if (steeredInto && runId) next = registerSteerAlias(next, runId, steeredInto);
       } else if (runId) {
-        next = bindRun(next, messageId, runId);
+        next = settleRunFromSendAnswer(bindRun(next, messageId, runId), runId, result!, ctx);
       }
       return next;
     });
+    // Stop was pressed before the gateway had taken the send: abort the run it named now.
+    if (runId && !command && message.mode !== "steer") {
+      const run = findRun(this.state.transcripts[key] ?? emptyActivity, runId);
+      if (run?.state === "stopping") void this.abortRun(key, runId);
+    }
     // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
     if (command) this.dropAttachments(messageId);
     this.scheduleHistory(key);
@@ -2009,12 +2017,22 @@ export class ClawtrateClient {
       this.checkNotWithdrawn(options.owner);
       const current = findRun(this.state.transcripts[key] ?? emptyActivity, runId);
       if (!current || current.state !== "stopping") return;
-      const result = asRecord(
-        await this.request("chat.abort", {
-          sessionKey: key,
-          ...(current.bound ? { runId: current.id } : {}),
-        }),
-      );
+      // The gateway cancels only a run it has registered: an abort that reaches it before it
+      // has taken the send stops nothing, with or without the run's id, and the turn then runs
+      // in full. So a run the gateway has not named yet is aborted once the send's answer
+      // names it (`deliver`); an answer that says it is over already needs no abort.
+      if (!current.bound) return;
+      await this.abortRun(key, current.id);
+    } catch (error) {
+      this.noteMissingScope(error);
+      this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(error)));
+    }
+  }
+
+  /** `chat.abort` for one run the gateway has named, its exact id. */
+  private async abortRun(key: string, runId: string): Promise<void> {
+    try {
+      const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
       // Nothing was aborted: the run ended already. Its terminal event or history settles it.
       if (result?.aborted === false) this.scheduleHistory(key);
     } catch (error) {
@@ -3132,16 +3150,19 @@ export class ClawtrateClient {
     const scratch = new RawTable(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
     const ctx = { ...this.context(key), raw: scratch };
     const windowCut = history?.hasMore === true;
-    const fromHistory = runsFromHistory(history?.messages, asRecord(history?.inFlightRun), ctx, {
-      windowCut,
-    });
+    const aliased = throughRunAliases(
+      history?.messages,
+      asRecord(history?.inFlightRun),
+      current.steerAliases,
+    );
+    const fromHistory = runsFromHistory(aliased.messages, aliased.inFlight, ctx, { windowCut });
     const whole = scratch.get(key, stepId);
     const read = fromHistory.flatMap((each) => each.steps).find((each) => each.id === stepId);
     // A step's id is its place, which history can give another block: what was fetched is
     // this step only when it shows so. This check only ever withholds `available`.
     const same = whole !== null && read !== undefined && sameStep(shown, read, whole);
     // Its message replaced by the gateway's placeholder: not a cut text, and asking again does not help.
-    if ((!same || read.truncated) && oversizedWhere(history?.messages, run.id, shown, windowCut)) {
+    if ((!same || read.truncated) && oversizedWhere(aliased.messages, run.id, shown, windowCut)) {
       return {
         status: "too-large-for-gateway",
         reason:
@@ -3994,6 +4015,7 @@ export class ClawtrateClient {
    */
   private handleSessionsChanged(payload: unknown, generation: number): void {
     if (this.bootstrapping) this.changedDuringBootstrap = true;
+    this.noteRunChange(payload);
     const row = sessionChangeRow(payload);
     const rowKey = row ? sessionRowKey(row) : null;
     // Rows are kept under the id cap.
@@ -4017,6 +4039,35 @@ export class ClawtrateClient {
     if (isTaskSession(merged)) this.rows.set(key, SESSION_ROW(merged));
     else this.rows.delete(key);
     this.publishTasks();
+  }
+
+  /**
+   * A `sessions.changed` row for a run's phase. It names the gateway's run id
+   * (`runId`) and, for a turn the gateway ran from its queue, the send's id the
+   * turn's lifecycle and end carry (`clientRunId`): the first becomes an alias of
+   * the second. Its `end` or `error` for a run the task still shows as active,
+   * under either id, reads history again, so a run whose own end did not reach
+   * this client under the id it knows is settled rather than shown working.
+   */
+  private noteRunChange(payload: unknown): void {
+    const row = asRecord(payload);
+    const key = typeof row?.sessionKey === "string" ? row.sessionKey : null;
+    const runId = typeof row?.runId === "string" ? capId(row.runId, MAX_ID_CHARS) : null;
+    if (!row || !key || !runId || !this.tracked(key)) return;
+    const clientRunId =
+      typeof row.clientRunId === "string" ? capId(row.clientRunId, MAX_ID_CHARS) : null;
+    if (clientRunId && clientRunId !== runId) {
+      this.updateActivity(key, (activity) => registerRunAlias(activity, runId, clientRunId));
+    }
+    if (row.phase !== "end" && row.phase !== "error") return;
+    const transcript = this.state.transcripts[key];
+    const named = [runId, clientRunId].flatMap((id) => {
+      const run = id && transcript ? findRun(transcript, id) : undefined;
+      return run ? [run] : [];
+    });
+    if (named.some((run) => !isTerminal(run.state) && run.state !== "queued")) {
+      this.scheduleHistory(key);
+    }
   }
 
   // Transcripts ----------------------------------------------------------------
@@ -4144,9 +4195,12 @@ export class ClawtrateClient {
       if (stale()) return;
       // A resync starts every stream of this task again from what the gateway sends next.
       if (resync) this.streams.retire(key);
-      const inFlight = asRecord(history?.inFlightRun);
+      const { messages, inFlight } = throughRunAliases(
+        history?.messages,
+        asRecord(history?.inFlightRun),
+        this.state.transcripts[key]?.steerAliases ?? {},
+      );
       const inFlightId = typeof inFlight?.runId === "string" ? inFlight.runId : null;
-      const messages = history?.messages;
       const ctx = this.context(key);
       // History is built aside; only the steps the merge takes from it bring their raw payloads.
       const scratch = new RawTable();

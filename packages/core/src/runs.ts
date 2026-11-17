@@ -436,9 +436,13 @@ export type TaskActivity = {
   /** Whether each kind's list loaded: one kind failing leaves the others shown, and says so. */
   approvalSources: Record<ApprovalKind, ApprovalSourceAccess>;
   /**
-   * Run ids a steer send returned, mapped to the run the steer joined. The
-   * gateway settles them at once with an empty final; while the joined run is
-   * active their events are ignored.
+   * Other run ids for a run this task shows, mapped to it. Two kinds: the id a
+   * steer send returned, mapped to the run the steer joined (the gateway
+   * settles it at once with an empty final); and the gateway's own id for a
+   * turn it ran from its queue, mapped to the send's run id that the turn's
+   * lifecycle and end carry (`sessions.changed` names both, `runId` and
+   * `clientRunId`). While the run it names is active, an alias's events are
+   * ignored.
    */
   steerAliases: Record<string, string>;
   /** Set after the task was reloaded because of an event gap or a reconnect. */
@@ -1056,6 +1060,52 @@ export function registerSteerAlias(
       !(run.id === aliasId && run.origin === "gateway" && run.steps.length === 0 && !run.text),
   );
   return { ...activity, runs, steerAliases: { ...activity.steerAliases, [aliasId]: targetId } };
+}
+
+/**
+ * The gateway ran a send's turn under an id of its own (a turn it took from its
+ * queue): it reports `run_status` under that id, and the turn's lifecycle and
+ * end under the send's id, `clientRunId`. The two are one run; the gateway's
+ * id becomes an alias, so its events never make a second run that no end
+ * would ever settle.
+ */
+export function registerRunAlias(
+  activity: TaskActivity,
+  gatewayRunId: string,
+  clientRunId: string,
+): TaskActivity {
+  if (gatewayRunId === clientRunId || activity.steerAliases[gatewayRunId] === clientRunId)
+    return activity;
+  return registerSteerAlias(activity, gatewayRunId, clientRunId);
+}
+
+/**
+ * The gateway's answer to a send names a run that is already over: a send it
+ * aborted before the turn ran (`status: "timeout"`, `summary: "aborted"`,
+ * from its abort of a send not yet registered), or a send it had already
+ * finished (`ok`) or failed (`error`). No event of that run will follow, so the
+ * answer settles it. Any other status (`started`, `in_flight`, `accepted`)
+ * leaves it to the run's events.
+ */
+export function settleRunFromSendAnswer(
+  activity: TaskActivity,
+  runId: string,
+  answer: RawRecord,
+  ctx: EngineContext,
+): TaskActivity {
+  const status = str(answer.status);
+  const endedAt = num(answer.endedAt) ?? ctx.now;
+  return updateRun(activity, runId, (run) => {
+    if (isTerminal(run.state) || run.state === "queued") return run;
+    if (status === "timeout" && answer.summary === "aborted")
+      return finishRun(run, "stopped", ctx, null, endedAt);
+    if (status === "ok") return finishRun(run, "completed", ctx, null, endedAt);
+    if (status === "error") {
+      const message = str(answer.summary) ?? "The gateway reported an error.";
+      return finishRun(run, "failed", ctx, { message, kind: "gateway" }, endedAt);
+    }
+    return run;
+  });
 }
 
 /** Events for a steer's own run id are dropped while the run it joined is active. */
@@ -1972,6 +2022,31 @@ function meta(message: RawRecord): RawRecord {
   return asRecord(message["__openclaw"]) ?? {};
 }
 
+/**
+ * History rows read through the task's run aliases: a turn the gateway ran from
+ * its queue is stored under the gateway's own run id, while its live events
+ * carry the send's id. Rows (and the in-flight run) naming an alias name the
+ * run it stands for, so history and the live run are one run, not two. Rows
+ * without an alias are returned as they are.
+ */
+export function throughRunAliases(
+  messages: unknown,
+  inFlight: RawRecord | null,
+  aliases: Readonly<Record<string, string>>,
+): { messages: unknown; inFlight: RawRecord | null } {
+  const target = (id: unknown) =>
+    typeof id === "string" && Object.hasOwn(aliases, id) ? aliases[id]! : null;
+  const rows = Array.isArray(messages)
+    ? messages.map((entry) => {
+        const message = asRecord(entry);
+        const to = message ? target(meta(message).runId) : null;
+        return to ? { ...message, __openclaw: { ...meta(message!), runId: to } } : entry;
+      })
+    : messages;
+  const flight = inFlight && target(inFlight.runId);
+  return { messages: rows, inFlight: flight ? { ...inFlight, runId: flight } : inFlight };
+}
+
 /** The display id `mapHistory` gives a row, so runs can anchor to transcript items. */
 export function historyItemId(message: RawRecord, index: number): string {
   return `${str(meta(message).id) ?? `row-${index}`}:${index}`;
@@ -2574,6 +2649,12 @@ function namesOutgoing(rowKey: string | null, outgoing: OutgoingMessage): boolea
   );
 }
 
+/** A user row the gateway wrote itself (`provenance.kind: "internal_system"`), never a person's message. */
+function gatewayAuthored(message: RawRecord): boolean {
+  const provenance = asRecord(message.provenance) ?? asRecord(meta(message).provenance);
+  return provenance?.kind === "internal_system";
+}
+
 /**
  * Match outgoing messages to the user rows history now holds, by identifiers
  * only: the row's idempotency key, or the `messageSeq` `chat.send` returned
@@ -2585,7 +2666,10 @@ function namesOutgoing(rowKey: string | null, outgoing: OutgoingMessage): boolea
 export function reconcileOutbox(activity: TaskActivity, messages: unknown): TaskActivity {
   const rows = (Array.isArray(messages) ? messages : [])
     .map((entry, index) => ({ message: asRecord(entry), index }))
-    .filter((row): row is { message: RawRecord; index: number } => row.message?.role === "user");
+    .filter(
+      (row): row is { message: RawRecord; index: number } =>
+        row.message?.role === "user" && !gatewayAuthored(row.message),
+    );
   const used = new Set<number>();
   const anchors = new Map<string, string>();
   const outbox = activity.outbox.filter((outgoing) => {
