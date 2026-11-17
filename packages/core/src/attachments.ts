@@ -211,6 +211,24 @@ export class AttachmentStore {
     };
   }
 
+  /**
+   * Hold files again that a message gave back (taken back to be edited), as
+   * new entries the composer names by their new ids. Checked like any added
+   * file; if one does not fit, none is kept.
+   */
+  restore(attachments: readonly OutgoingAttachment[]): AttachmentInfo[] {
+    let room = this.available();
+    for (const each of attachments) {
+      const size = decodedSize(each.content);
+      this.check(each, size);
+      if (size > room) throw new Error("Too many files are waiting to be sent.");
+      room -= size;
+    }
+    return attachments.map((each) =>
+      this.keep(each.fileName, each.mimeType, decodedSize(each.content), each.content),
+    );
+  }
+
   /** Forget files once a message has taken them. */
   release(ids: readonly string[]): void {
     for (const id of ids) this.entries.delete(id);
@@ -220,4 +238,11 @@ export class AttachmentStore {
     const now = this.options.now();
     for (const [id, entry] of this.entries) if (entry.expiresAt <= now) this.entries.delete(id);
   }
+}
+
+/** Bytes a base64 text decodes to. */
+function decodedSize(base64: string): number {
+  const clean = base64.replace(/\s+/g, "");
+  const padding = clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((clean.length * 3) / 4) - padding);
 }

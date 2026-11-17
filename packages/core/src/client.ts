@@ -1310,6 +1310,43 @@ export class ClawtrateClient {
     );
   }
 
+  /**
+   * "Edit" on a held or queued message's row: the message is taken back,
+   * never sent, and its words and files are handed to the caller as one
+   * record, to go back into the composer. The files leave this client's
+   * keeping at once.
+   */
+  takeBack(key: string, messageId: string): { text: string; attachments: OutgoingAttachment[] } {
+    const message = this.outgoing(key, messageId);
+    if (!message || (message.status !== "queued" && message.status !== "held"))
+      throw new Error("That message can no longer be edited.");
+    const files = this.attachmentContent.get(messageId)?.files ?? [];
+    if (message.attachments.length > 0 && files.length === 0)
+      throw new Error("Its files are no longer held; attach them again.");
+    this.dropAttachments(messageId);
+    this.updateActivity(key, (activity) =>
+      updateMessage(cancelQueuedRun(activity, messageId, this.now()), messageId, {
+        status: "cancelled",
+      }),
+    );
+    return { text: message.text, attachments: [...files] };
+  }
+
+  /**
+   * "Try again" on a turn that failed: the same words and files, sent now as
+   * a new message with its own key. The files must still be held for the
+   * message (until history holds it); otherwise it is refused, never sent
+   * without them.
+   */
+  sendAgain(key: string, messageId: string): string {
+    const message = this.outgoing(key, messageId);
+    if (!message) throw new Error("That message is no longer held here.");
+    const files = this.attachmentContent.get(messageId)?.files ?? [];
+    if (message.attachments.length > 0 && files.length === 0)
+      throw new Error("Its files are no longer held; attach them again.");
+    return this.sendMessage(key, message.text, { attachments: [...files] });
+  }
+
   /** "Send now" on a queued message's chip: a steer into the running or waiting run. */
   sendQueuedNow(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);

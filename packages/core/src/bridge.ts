@@ -36,6 +36,10 @@ export type BridgeCommand =
   | { type: "deleteMessage"; key: string; messageId: string }
   | { type: "cancelQueued"; key: string; messageId: string }
   | { type: "sendQueuedNow"; key: string; messageId: string }
+  /** Take a held or queued message back to edit it: its words and files, files held again under new ids. */
+  | { type: "takeBackMessage"; key: string; messageId: string }
+  /** Send a held message's words and files again as a new message (Try again on a failed turn). */
+  | { type: "sendAgain"; key: string; messageId: string }
   /** A new task under a bot with its first message. The viewer then has it open. */
   | { type: "createTask"; botId: string; text: string; label: string | null }
   | { type: "stopRun"; key: string; runId: string }
@@ -78,17 +82,21 @@ export type BridgeCommand =
 /** What each command answers with. */
 export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
-  : C extends { type: "createTask" }
-    ? { key: string }
-    : C extends { type: "readStepRaw" }
-      ? StepRead | null
-      : C extends { type: "readApprovalText" }
-        ? { text: Record<string, string | string[] | null>; digest: string }
-        : C extends { type: "readHistoryItem" }
-          ? TranscriptItem | null
-          : C extends { type: "retryCreation" }
-            ? { key: string }
-            : void;
+  : C extends { type: "sendAgain" }
+    ? { messageId: string }
+    : C extends { type: "takeBackMessage" }
+      ? { text: string; attachments: AttachmentInfo[] }
+      : C extends { type: "createTask" }
+        ? { key: string }
+        : C extends { type: "readStepRaw" }
+          ? StepRead | null
+          : C extends { type: "readApprovalText" }
+            ? { text: Record<string, string | string[] | null>; digest: string }
+            : C extends { type: "readHistoryItem" }
+              ? TranscriptItem | null
+              : C extends { type: "retryCreation" }
+                ? { key: string }
+                : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -261,6 +269,8 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "deleteMessage":
     case "cancelQueued":
     case "sendQueuedNow":
+    case "takeBackMessage":
+    case "sendAgain":
       return {
         type: command.type,
         key: sessionKey(command.key),
@@ -505,6 +515,23 @@ class ViewerSession implements BridgeSession {
         return client.cancelQueued(this.mine(command.key), command.messageId);
       case "sendQueuedNow":
         return client.sendQueuedNow(this.mine(command.key), command.messageId);
+      case "sendAgain":
+        return { messageId: client.sendAgain(this.mine(command.key), command.messageId) };
+      case "takeBackMessage": {
+        const key = this.mine(command.key);
+        if (!policy.attachments) {
+          const back = client.takeBack(key, command.messageId);
+          if (back.attachments.length > 0) throw new Error("This host does not take files.");
+          return { text: back.text, attachments: [] };
+        }
+        // Checked for room before the message is taken back, so a refusal changes nothing.
+        const held = client.state.transcripts[key]?.outbox.find((m) => m.id === command.messageId);
+        const bytes = (held?.attachments ?? []).reduce((sum, each) => sum + each.sizeBytes, 0);
+        if (bytes > policy.attachments.available())
+          throw new Error("Too many files are waiting to be sent.");
+        const back = client.takeBack(key, command.messageId);
+        return { text: back.text, attachments: policy.attachments.restore(back.attachments) };
+      }
       case "createTask":
         // Until the gateway is asked, a viewer that goes away takes its request with it.
         return this.created(() =>

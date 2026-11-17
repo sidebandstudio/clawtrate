@@ -15,25 +15,27 @@ The desktop renderer gets one over IPC (`apps/desktop/src/renderer/bridge-deskto
 
 ## What the interface calls
 
-| To                                   | Command                                                                | Answer                                  |
-| ------------------------------------ | ---------------------------------------------------------------------- | --------------------------------------- |
-| Open or close a task                 | `openSession` / `closeSession` with `key`                              | none                                    |
-| Create a task with its first message | `createTask` with `botId`, `text`, `label`                             | `{ key }`, already open for this viewer |
-| Retry or forget a task creation      | `retryCreation` / `dismissCreation` with `creationId`                  | `{ key }` / none                        |
-| Send                                 | `sendMessage` with `key`, `text`, `mode: "auto"`, `attachmentIds`      | `{ messageId }`                         |
-| Steer                                | `sendMessage` with `mode: "auto"` while a run is running or waiting    | `{ messageId }`                         |
-| Queue after this turn                | `sendMessage` with `mode: "queue"`                                     | `{ messageId }`                         |
-| Send a queued message now, as steer  | `sendQueuedNow` with `key`, `messageId`                                | none                                    |
-| Cancel a queued message              | `cancelQueued` with `key`, `messageId`                                 | none                                    |
-| Retry or delete a message            | `retryMessage` / `deleteMessage` with `key`, `messageId`               | none                                    |
-| Stop                                 | `stopRun` with `key`, `runId`                                          | none                                    |
-| Answer or dismiss a question         | `answerQuestion` with `answers` / `dismissQuestion`                    | none                                    |
-| Resolve an approval                  | `resolveApproval` with `decision`, `expiresInDays`, `shownDigest`      | none                                    |
-| Read an approval's whole text        | `readApprovalText` with `key`, `approvalId`                            | `{ text, digest }`                      |
-| Read a step's whole raw call/result  | `readStepRaw` with `key`, `stepId`                                     | `StepRead`, or null for an unknown step |
-| Read a history item whole            | `readHistoryItem` with `key`, `itemId`                                 | `TranscriptItem`, or null               |
-| Request more access                  | `requestAccess`                                                        | none; progress in `connection.upgrade`  |
-| Connect, disconnect, retry           | `connect` (`url`, `token`), `connectDevGateway`, `disconnect`, `retry` | none                                    |
+| To                                   | Command                                                                | Answer                                                  |
+| ------------------------------------ | ---------------------------------------------------------------------- | ------------------------------------------------------- |
+| Open or close a task                 | `openSession` / `closeSession` with `key`                              | none                                                    |
+| Create a task with its first message | `createTask` with `botId`, `text`, `label`                             | `{ key }`, already open for this viewer                 |
+| Retry or forget a task creation      | `retryCreation` / `dismissCreation` with `creationId`                  | `{ key }` / none                                        |
+| Send                                 | `sendMessage` with `key`, `text`, `mode: "auto"`, `attachmentIds`      | `{ messageId }`                                         |
+| Steer                                | `sendMessage` with `mode: "auto"` while a run is running or waiting    | `{ messageId }`                                         |
+| Queue after this turn                | `sendMessage` with `mode: "queue"`                                     | `{ messageId }`                                         |
+| Send a queued message now, as steer  | `sendQueuedNow` with `key`, `messageId`                                | none                                                    |
+| Cancel a queued message              | `cancelQueued` with `key`, `messageId`                                 | none                                                    |
+| Take a held or queued message back   | `takeBackMessage` with `key`, `messageId`                              | `{ text, attachments }`, files held again under new ids |
+| Send a held message again as new     | `sendAgain` with `key`, `messageId` (its files go with it)             | `{ messageId }`                                         |
+| Retry or delete a message            | `retryMessage` / `deleteMessage` with `key`, `messageId`               | none                                                    |
+| Stop                                 | `stopRun` with `key`, `runId`                                          | none                                                    |
+| Answer or dismiss a question         | `answerQuestion` with `answers` / `dismissQuestion`                    | none                                                    |
+| Resolve an approval                  | `resolveApproval` with `decision`, `expiresInDays`, `shownDigest`      | none                                                    |
+| Read an approval's whole text        | `readApprovalText` with `key`, `approvalId`                            | `{ text, digest }`                                      |
+| Read a step's whole raw call/result  | `readStepRaw` with `key`, `stepId`                                     | `StepRead`, or null for an unknown step                 |
+| Read a history item whole            | `readHistoryItem` with `key`, `itemId`                                 | `TranscriptItem`, or null                               |
+| Request more access                  | `requestAccess`                                                        | none; progress in `connection.upgrade`                  |
+| Connect, disconnect, retry           | `connect` (`url`, `token`), `connectDevGateway`, `disconnect`, `retry` | none                                                    |
 
 There is no separate steer command. `mode: "auto"` starts a new run when the task has no active run, steers into the active run when it is running or waiting, and queues when it is stopping. `mode: "queue"` always queues. A steer while a question from the run is pending is held, not sent, until the question is answered or dismissed.
 
