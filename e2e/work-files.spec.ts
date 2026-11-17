@@ -68,8 +68,9 @@ async function openTask(page: Page, bot: string, task: string) {
   if (await back.isVisible()) await back.click();
   const row = botRow(page, bot);
   if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
-  const rows = page.getByRole("list", { name: `${bot}'s tasks` }).getByTestId("task");
-  const all = page.getByRole("button", { name: /^Show all/ });
+  const list = page.getByRole("list", { name: `${bot}'s tasks` });
+  const rows = list.getByTestId("task");
+  const all = list.getByRole("button", { name: /^Show all/ });
   if (await all.isVisible()) await all.click();
   if ((await rows.count()) > 0) await rows.filter({ hasText: task }).click();
   // The title pill names the bot and the task, whatever the transcript shows.
