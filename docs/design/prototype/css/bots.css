@@ -694,6 +694,7 @@ select.input {
 /* A row of a fact block that holds a switch or opens something. */
 .facts > .b-row {
   min-height: 48px;
+  padding: 8px 0;
 }
 
 .b-row-main {
@@ -1017,6 +1018,10 @@ button.b-open > .icon {
 }
 
 /* A command breaks between words, never inside a flag. */
+.b-tok {
+  white-space: nowrap;
+}
+
 #panel-settings .command-line code,
 .b-dialog .command-line code {
   overflow-wrap: break-word;
@@ -1059,6 +1064,38 @@ button.b-open > .icon {
 
 .b-panel-foot {
   margin-top: 18px;
+}
+
+/* T3 Code ---------------------------------------------------------------------- */
+
+/* A checkbox row: the label is the whole row. Checks are neutral, like selection. */
+.b-check {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+
+.b-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--text);
+}
+
+.b-warn {
+  color: var(--warn);
+}
+
+.facts .b-row .b-switch {
+  margin-left: auto;
+}
+
+button.b-open[role="radio"] .icon {
+  color: var(--text);
 }
 
 /* The served line, opened: the conversation's event body. */

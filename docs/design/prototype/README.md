@@ -8,7 +8,7 @@ Static pages for the design in `docs/design/`. Open `index.html` in a browser. T
 | `pairing.html` | Waiting for the gateway's owner to approve this device. `?state=copied` and `?state=selected` show the copy button's two outcomes. |
 | `app.html` | The main view: bots with their tasks, a conversation, the Work pane. It runs on a small local model, so selecting, folding, pinning, the menus, sending, the connection states and the Work pane all work. Right-click a bot for its menu. |
 | `gallery.html` | Every conversation component in every state. Steps and cards work as they do in the app: they open, Raw opens, copy copies, approvals and questions resolve. The composer, the access bar and the rail rows are pictures of each state there. |
-| `bots.html` | The app with what `bots.md` adds: "New bot" in the "+" menu (⌘N) with its Account step, connecting an account (inside New bot and in Settings), Settings from the gateway menu (⌘,), a bot's Settings tab in the Work pane with its account and lock, and T3 Code. The prototype bar's "Sign-in approved", "Expire", "Refuse" and "Drop connection" end a sign-in that is waiting. |
+| `bots.html` | The app with what `bots.md` adds: "New bot" in the "+" menu (⌘N) with its Account step, connecting an account (inside New bot and in Settings), Settings from the gateway menu (⌘,), a bot's Settings tab in the Work pane with its account and lock, and T3 Code. The prototype bar's "Sign-in approved", "Expire", "Refuse" and "Drop connection" end a sign-in that is waiting, and "T3 approved" signs the gateway in to T3 Code. |
 | `conversation.html` | One scripted turn, played inside the shell: Play, Step, Drop the connection and Restart are in the bar. The approval and the question pause it until you answer; Stop, steer, queue, hold and the send menu work at any point. "Start read-only" plays it on a read-only connection, with the access bar and the request for access. |
 
 The dark bar at the top is prototype chrome, not part of the product. It switches the theme, the width of the frame the app sits in (full, 1100, 800, phone) and reduced motion.
@@ -43,6 +43,10 @@ Every setting can be given in the address, which is how the screenshots are take
 | `access` | `read`, `write` or `admin` (the default), what the connection may do (bots) |
 | `req` | The request for admin access: `asking`, `requested`, `denied`, `expired`, `failed` (bots) |
 | `accounts`, `chosen`, `name`, `create` | `accounts=none` for no accounts; the account chosen in the Account step; the new bot's name; `create=creating`, `slow` or `failed` (bots) |
+| `tab=settings`, `bview` | The bot's Settings tab in the Work pane (with `panel=open`), and a page in it: `account`, `change`, `t3` (bots) |
+| `lock` | The open bot's lock: `watching`, `locked`, `stale` (bots) |
+| `served`, `fail`, `differs`, `running`, `long`, `bstate` | `served=1`: Marlow's last run was served by another account; `fail=quota` or `signedout`: Otto's last run failed on its account; `differs=1`: Pip's model has fallbacks; `running=1`: the open bot has a run in progress; `long=1`: a long account label; `bstate=loading` or `error` (bots) |
+| `t3`, `t3server`, `t3signin`, `t3origin`, `t3plugin`, `t3found` | `t3=on` turns the integration on; `t3server=none`; `t3signin=none`, `starting`, `waiting`, `failed`, `expired`, `cancelled`, `unseen`, `expiring`; `t3origin=1` when this connection can start the sign-in; `t3plugin=0` without Clawtrate's plugin; `t3found=1` a bot with the tools that was not turned on (bots) |
 
 ## Checks
 
@@ -54,7 +58,7 @@ node docs/design/prototype/tools/checks/conversation.mjs
 node docs/design/prototype/tools/checks/bots.mjs
 ```
 
-Each prints one line for every check, `ok` or `FAIL`, then a count, and exits with a failure when any check fails. `shell.mjs` covers the rail, tasks, pins, menus, the Work pane, the status strip and the pairing screen. `bots.mjs` covers `bots.html`: creating a bot with its account, every stage of the three kinds of sign-in, the API key path, labels, the request for admin access, Settings and its Accounts section, and the phone width. `conversation.mjs` plays the scripted run through its visible controls and covers steps and Raw, copy, the Messaged cards, approvals and their form, questions, held and queued messages, Stop, a lost connection, the read-only tier, the phone width and the gallery.
+Each prints one line for every check, `ok` or `FAIL`, then a count, and exits with a failure when any check fails. `shell.mjs` covers the rail, tasks, pins, menus, the Work pane, the status strip and the pairing screen. `bots.mjs` covers `bots.html`: creating a bot with its account, every stage of the three kinds of sign-in, the API key path, labels, the request for admin access, Settings and its Accounts section, a bot's settings with bound and locked accounts, changing an account, the served line, failures on an account, T3 Code on and off, and the phone width. `conversation.mjs` plays the scripted run through its visible controls and covers steps and Raw, copy, the Messaged cards, approvals and their form, questions, held and queued messages, Stop, a lost connection, the read-only tier, the phone width and the gallery.
 
 ## Files
 
@@ -71,7 +75,7 @@ Each prints one line for every check, `ok` or `FAIL`, then a count, and exits wi
 | `js/connect.js` | What the buttons on the connection screens do. |
 | `js/components.js`, `js/samples.js`, `js/behaviors.js` | The conversation components' markup, their sample content, and their behaviour: the two views of a step, Raw, copy, the approval form, question cards and the keyboard paths. |
 | `js/gallery.js`, `js/run.js` | The gallery and the scripted run. |
-| `js/bots.js` | The screens of `bots.md` on top of `app.js`: New bot, connecting accounts, Settings, a bot's settings, T3 Code. Accounts, sign-ins and models are local fixtures. |
+| `js/bots.js`, `js/bot-settings.js`, `js/t3.js` | The screens of `bots.md` on top of `app.js`, one file per part: New bot, connecting accounts and Settings; a bot's settings with its account and lock, the served line and failures; T3 Code. Accounts, sign-ins and models are local fixtures. |
 | `tools/make-local-fonts.mjs` | Builds the ignored local font stylesheet. |
 | `tools/checks/` | Headless checks of the pages' behaviour: `shell.mjs` for the app and pairing pages, `conversation.mjs` for the scripted run and the gallery, `bots.mjs` for the bots page. |
 

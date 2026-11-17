@@ -392,7 +392,92 @@ When the bot is bound, not locked, the second sentence is "The gateway tried Ott
 
 Some accounts bring tools. An xAI account brings "Search posts on X" and "Run code" while the bot runs on xAI (F-481). They appear in the bot's Settings, in the Tools group, in their own block headed "With xAI", after "Permissions", one row each with the rule that applies ("Allowed", "Ask", "Denied"), and a line under the block: "These come with xAI accounts, while <Bot> runs on xAI. xAI bills them per call." The names are Clawtrate's plain words for the gateway's tool names (`x_search`, `code_execution`), shown in the row's tooltip. Choosing and changing those rules is the tool permissions screen, a later task; this section fixes only where they appear. Changing the bot to another provider removes the block, and Change account says so before saving (section 11).
 
-<!-- PART3 -->
+## 15. T3 Code: the switch
+
+T3 Code integration is optional (F-487). Settings, **Integrations**, has one row: "T3 Code", "Let bots start and follow threads in T3 Code, a coding app you run. Off by default; nothing else in Clawtrate needs it.", and a switch, off.
+
+- **Off** is the whole of it. Nothing else about T3 Code appears anywhere: no server, no sign-in, no per-bot switch, no limits, no prompt to set it up, and Clawtrate writes nothing about T3 Code to the gateway.
+- **On** reveals, under the row, the server (section 16), the gateway's sign-in, and the list of bots that have it on; and each bot's Settings gains its own T3 Code switch (section 17).
+- The switch is the person's own preference, stored with the gateway so their desktop and phone agree. Changing it needs the interactive tier, not admin; on the read tier it is disabled, with the access bar. Everything it reveals that writes to the gateway needs admin.
+- The "Messaged T3 Code" card in the conversation (`conversation.md` §11) does not depend on this switch: it is drawn whenever a bot's own tool events show such a call, on or off.
+- The switch has role `switch` and the name "T3 Code integration"; changing it is announced ("T3 Code is on").
+
+## 16. T3 Code: the server and the gateway's sign-in
+
+**The server.** With no server on the gateway: "Add your T3 Code server to the gateway. Copy its address from T3 Code's settings.", a field "T3 Code address" (placeholder `https://code.example.net`), "T3 Code signs in only over https, or on the gateway's own machine (localhost).", "Adding it turns T3 Code off for every bot first, so no bot gets its tools until you turn it on for that bot.", and "Add to gateway" (primary).
+
+- A plain-http address that is not localhost is refused under the field, in `--danger`: "T3 Code signs in only over https, or on localhost. Use its https address." An empty field: "Enter T3 Code's address." The field is marked invalid and keeps focus.
+- "Add to gateway" first denies the server's tools to every bot, then adds the server with the gateway's sign-in method for it, named `t3code` (section 20, rows 23 and 27). Once added, the section shows "Address" and "Name on the gateway" as facts.
+
+**The gateway's sign-in.** T3 Code has no key for outside apps: the gateway signs in with T3 Code's own sign-in, the person approves it on T3 Code's page (or types a pairing code from T3 Code there), and the gateway keeps the sign-in. There are two ways to start it, and the section shows the one this connection has:
+
+| This connection                                                                                | What the section shows                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Can start it (a desktop connection the gateway treats as coming from its own page, with admin) | "The gateway signs in to T3 Code and keeps the sign-in. You approve it on T3 Code's page." and "Sign in" (primary). Then the stages below.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Cannot (Clawtrate's connection as it is today)                                                 | "This connection can't start the gateway's sign-in. Run this on the gateway's machine, then approve the gateway on T3 Code's page:", the command block with `openclaw mcp login t3code` and "Copy sign-in command", and "Or sign in from Settings on the gateway's own web page." Under it: "Clawtrate confirms the sign-in by itself, from the T3 Code tools of a bot that has T3 Code on." (and ". No bot has it on yet" when none does). Once the command is copied, the waiting line: "Checking Otto's tools for T3 Code, again in 4s". |
+
+The stages when the app starts it, in the same forms as section 5:
+
+| Stage     | It shows                                                                                                                                                                                                                                                      |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Starting  | "Asking the gateway to start the sign-in…", "Cancel"                                                                                                                                                                                                          |
+| Waiting   | 1 "Open T3 Code's page and approve the gateway. If that browser isn't signed in to T3 Code, enter a pairing code from T3 Code's settings there." with "Open T3 Code's page". "Waiting for T3 Code. This works for 10 minutes." with the waiting dot. "Cancel" |
+| Signed in | The facts below                                                                                                                                                                                                                                               |
+| Failed    | "Couldn't sign in", "T3 Code refused the gateway's sign-in. Nothing was saved.", "Start again"                                                                                                                                                                |
+| Expired   | "The sign-in expired", "It wasn't approved in time. Nothing was saved.", "Start again"                                                                                                                                                                        |
+| Cancelled | "Sign-in cancelled", "Nothing was saved.", "Start again"                                                                                                                                                                                                      |
+
+**The state of the sign-in.** No gateway method reports whether the gateway is signed in to a tool server; a server it is not signed in to simply gives no tools (section 20, row 26). So the section says what Clawtrate saw, and when, and never more:
+
+| Row                   | Value                                                                                                                                                                                  |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| State                 | "Signed in" with a check, once Clawtrate's own sign-in finished or a bot with T3 Code on lists the server's tools; "Not seen" in `--warn` when that bot's tools no longer include them |
+| Confirmed             | "Nov 17, from Clawtrate's sign-in" or "Nov 17, from Otto's tools"                                                                                                                      |
+| Expires               | "By Dec 17 at the latest": T3 Code ends a sign-in after 30 days with no renewal, counted from when Clawtrate saw it work, so the real date can be earlier                              |
+| Gateway's last report | "8 T3 Code tools for Otto, 5:36 PM", or the gateway's diagnostic for the server as given                                                                                               |
+
+- Three days before that date the row turns `--warn` and a note says "T3 Code ends a sign-in after 30 days, and this one began by Oct 20. Sign in again before Nov 19."
+- "Not seen" adds: "The gateway lists no T3 Code tools for Otto any more. The sign-in may have ended in T3 Code, or the server can't be reached." Both have "Sign in again" (primary).
+- A sign-in revoked in T3 Code shows as "Not seen" at the next check, never before.
+
+**Bots.** "T3 Code is on for Otto. Turn it on for a bot in that bot's settings." A bot that has the server's tools without having been turned on (one created outside Clawtrate gets them, section 20, row 27) is reported on `--warn-soft`: "Pip has the T3 Code tools without being turned on, because it was made outside Clawtrate." with "Turn off for Pip".
+
+**Below admin** the switch still works and everything is shown; "Add to gateway", "Sign in" and "Turn off for <Bot>" are absent, and the access bar says "Adding T3 Code to the gateway needs admin access."
+
+## 17. T3 Code for one bot
+
+With the integration on, a bot's Settings has a block "T3 Code" with one switch row: "T3 Code", "Start and follow threads in T3 Code.", off by default for every bot, Clawtrate's new bots included (F-483). Turning it on gives the bot the T3 Code tools and Clawtrate's T3 Code skill, which explains how to choose a project, start a thread with a provider and model, follow up and read the result; turning it off removes both.
+
+- Before the server is added, the switch is disabled and the line reads "Add T3 Code in Settings first." with "Open Settings"; before the gateway is signed in, "Sign the gateway in to T3 Code first, in Settings."
+- Turned on, a row follows: "Limits", with a summary ("All projects, asks first"), opening the **T3 Code** page.
+
+**Limits** (F-486). "What <Bot> may do in T3 Code. A thread outside these is refused on the gateway, before it reaches T3 Code, and its card reads Not sent."
+
+| Group                | Control                                                                                                                                                 | Default      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| Projects             | A radio group: "All projects", "Only these"; with "Only these", a checkbox per project. With none checked: "Choose at least one project, or allow all." | All projects |
+| Providers and models | A checkbox per provider and model, "As T3 Code lists them for the gateway's sign-in."                                                                   | All          |
+| Approval             | A switch: "Ask before starting a thread", "On: a card asks you first, in the conversation." The card is the approval card of `conversation.md` §12.     | On           |
+
+Each change is saved at once and announced. The lists of projects and of providers and models come from T3 Code through the gateway; the client never connects to T3 Code (section 20, row 31). A limit applies to follow-ups that could change a thread's project, provider or model as well as to starting one.
+
+**Without Clawtrate's plugin.** Limits and asking first need a plugin on the gateway (section 20, row 29). Without it the page says, in a note: "**Limits need Clawtrate's plugin on the gateway.** Without it, <Bot> can use any project, provider and model its T3 Code sign-in allows, and starting a thread doesn't ask first." and "T3 Code itself limits an outside app only by the access level approved at sign-in." The Limits row's summary reads "None". There is no install button: the plugin is not built.
+
+## 18. Turning T3 Code off
+
+Turning the switch off while no bot has T3 Code on simply hides everything again. While some do, a confirmation (role `alertdialog`, focus on Cancel) asks first: "Turn off T3 Code?" and "Otto has T3 Code on. Turning the integration off turns it off for it: it loses the T3 Code tools and skill. The T3 Code server and its sign-in stay on the gateway for next time." with "Cancel" and "Turn off" (`--danger-soft`). After it, each of those bots has T3 Code off, as if switched off one by one; turning the integration on again shows the server and its sign-in as they were, with every bot off. Messaged T3 Code cards already in transcripts stay.
+
+## 19. Phone, themes, read-only, keyboard
+
+| Concern                                  | Rule                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phone (below 688 px, and the iPhone app) | New bot is a sheet over the whole screen, as Grok Bot's is; its picker keeps two rows of four. Settings opens on its list of sections, full width; a section replaces it, with Back. A bot's Settings is the Work pane's full-width sheet. Model and effort stack. Rows are 64 px, buttons 48 px, fields 56 px; every hit area is at least 44 px. A confirmation is a card at the foot of the screen. |
+| Themes                                   | Everything uses the token set; the screenshots show both. The switch's on state is `--bg-inverse` in both themes; warning and danger tones use the soft fills.                                                                                                                                                                                                                                        |
+| Read-only and below admin                | Section 2. Values are always shown; nothing that would do nothing is offered; the access bar asks for what is needed.                                                                                                                                                                                                                                                                                 |
+| Keyboard                                 | Dialogs trap focus and return it. Radio groups have one tab stop. Selects open menus with Enter, Space or Down. Tab order is reading order: head, content, foot. ⌘N, ⌘,.                                                                                                                                                                                                                              |
+| Screen readers                           | Every dialog is labelled by its title; confirmations are `alertdialog`s described by their sentence. Switches, radios and selects say their state. Waiting lines are live regions. The announcer's phrases are in section 2.                                                                                                                                                                          |
+| Motion                                   | Only the waiting dot moves, and it stops when motion is reduced (`visual-language.md` §13). The switch and the disclosure chevrons change instantly then.                                                                                                                                                                                                                                             |
+| Long content                             | Names, labels and models truncate in rows with a tooltip and keep their full text in the row's name; they wrap on a page's title and in fact blocks.                                                                                                                                                                                                                                                  |
 
 ## 20. What the gateway's facts drive
 
@@ -424,7 +509,15 @@ Sources: "research" is `docs/research/provider-accounts-and-t3-code.md`, by sect
 | 21 | Effort levels come from `models.list` `thinkingLevels`; a bot's default effort is `thinkingDefault` through `config.patch` (admin). | Effort (section 9) | parity F-043 cell | source |
 | 22 | Codex's cyber escalation and Anthropic's in-request refusal fallback switch models outside the account order and cannot be turned off per bot. | The last line of "What a lock doesn't cover" | research A.7, C.1 | source |
 
-<!-- FACTS3 -->
+| 23 | A tool server is `mcp.servers.<name> {url: "<T3 Code>/mcp", transport: "streamable-http", auth: "oauth"}`, global, written with `config.patch` (admin); there is no per-bot server setting. | "Add to gateway" (section 16) | research B.5 | source, probe |
+| 24 | T3 Code signs outside apps in with OAuth 2.1 and PKCE; the person approves on T3 Code's page or with a pairing code that works once for 5 minutes; the sign-in lasts 30 days with no renewal; it works only over https or localhost; T3 Code limits a caller by access level only. | The sign-in's words, "By <date> at the latest", the https rule (section 16) | research B.1 | source |
+| 25 | `mcp.authLogin` needs an admin connection with a browser origin; Clawtrate's present Node connection has none. A desktop connection in `webchat` mode with a qualifying `https` origin could start it. Otherwise `openclaw mcp login <name>` on the host, or the gateway's own Settings page. The sign-in waits 10 minutes at most. | The two ways (section 16) | research B.5, C.5; `<openclaw>/dist/mcp-auth-login-DAnddU_m.mjs` lines 19-44; `docs/research/gateway-capabilities.md`, "Signing in" | source; the qualifying connection was not exercised, and whether OpenClaw completes T3 Code's sign-in end to end was not tested |
+| 26 | No method reports a raw tool server's sign-in state; a server the gateway is not signed in to is left out of a bot's tools; `tools.effective {sessionKey}` reports cached transport and catalogue diagnostics without connecting afresh. | "Signed in", "Not seen", "Gateway's last report" (section 16) | `docs/research/gateway-capabilities.md`, "Auth state and accounts"; parity F-482 cell | source |
+| 27 | A global server reaches every bot whose tool policy permits it, bots created later included; `agents.entries.<id>.tools.deny: ["t3code__*"]` removes it from one bot; a default-level deny cannot be granted back per bot. | "Off by default" as a deny on every bot, the deny before the server, bots found with the tools (sections 16, 17) | research B.5, C.5 | probe |
+| 28 | A bot's skills are the `agents.entries.<id>.skills` allowlist (admin); installing an uploaded skill has no method. | The skill that comes with a bot's switch (section 17) | research B.5 | source; assumed: Clawtrate's skill reaches the gateway by a distribution path still to be chosen |
+| 29 | Limits on a tool's arguments and asking first need a plugin `before_tool_call` hook; a block reaches the tool result as `details.status: "blocked"`; its approval is `plugin.approval.*` (`operator.approvals`). | Limits and "Without Clawtrate's plugin" (section 17) | research B.5, C.5 | source; not built |
+| 30 | The switch is stored with `users.prefs.set` (`operator.write`), read with `users.prefs.get` (`operator.read`), with a `users.prefs.changed` event; preferences belong to the person, not the gateway. | The switch (section 15) | research B.5, "Where a shared setting can live" | source, probe |
+| 31 | T3 Code lists projects with `t3_project_list` and providers and models with `orchestrator_capabilities`, both tools of its server; the client never connects to T3 Code. | The lists on the Limits page (section 17) | research B.2; `conversation.md` §11 | source; assumed: Clawtrate's plugin calls them through the gateway and returns the lists |
 
 ## 21. Parity rows to reword
 
@@ -445,7 +538,10 @@ Only the Clawtrate column changes. Rows not listed are met as written.
 | F-489 | better: as written, where the line names the reason in words, says "finished this run on another <Provider> account" when the run completed and "tried another <Provider> account" when it failed, adds "likely <label>" only when the provider has exactly one other account, and opens to say what is inferred; the Bot's row shows "Used another account" in place of its latest message while the Bot is otherwise calm, until the user opens that task, the gateway's last-use time shows the bound account in use again, or the Bot is locked. | "Until its next run on the bound account" cannot be established for shared accounts. |
 | F-490 | better: as written, where Clawtrate starts looking for the lock when the Account page opens and shows a waiting line once the command is copied, and a Bot whose model lists fallbacks is reported with "Remove fallbacks". | How "confirms by itself" looks. |
 
-<!-- ROWS3 -->
+| F-482 | better: with T3 Code integration turned on (F-487), Settings show a "T3 Code" entry that adds a T3 Code server to the gateway by its https or localhost address and starts the gateway's own sign-in to T3 Code where the connection allows it, otherwise shows the command to run on the gateway's machine; the gateway keeps the sign-in; the entry shows what Clawtrate saw of the sign-in (signed in, from its own sign-in or from a bot's tools, or no longer seen), the date by which it ends at the latest (30 days after Clawtrate saw it work), and the gateway's last report on the server's tools; the client itself makes no connection to T3 Code (F-138). | No method reports the sign-in itself, and T3 Code has no static credential. |
+| F-483 | better: as written, where "off by default" is a deny of the server's tools on every Bot, written before the server is added and on every Bot Clawtrate creates; a Bot found with the tools that was not switched on is reported with "Turn off for <Bot>"; a Bot's switch is disabled until the server is added and signed in. | A global tool server reaches every Bot that does not deny it. |
+| F-486 | better: as written, where the limits are on a "T3 Code" page in the Bot's settings (projects: all or chosen; providers and models; asking before starting a thread, on by default), and without Clawtrate's plugin the page says the limits need it and what holds without them. | The limits need a plugin hook. |
+| F-487 | better: as written, where the switch is a per-person preference that the interactive tier may change, and everything it reveals that writes to the gateway needs admin. | The switch and the gateway writes have different scopes. |
 
 ## 22. For builders
 
@@ -462,7 +558,8 @@ Only the Clawtrate column changes. Rows not listed are met as written.
 | An account's failure | The turn error (`conversation.md` §17), the bot row's failed state | Nothing |
 | The row's warning | Bot row line two (`conversation.md` §20), in `--warn` | Nothing |
 
-<!-- BUILD3 -->
+| Settings, Integrations | Fact block, group word, the command block and waiting line, notes, result, the access bar, confirmation | Switch |
+| A bot's T3 Code | Fact block, `b-open` rows, radio group, checkboxes | Switch |
 
 ### What the engine or the gateway must supply
 
@@ -487,7 +584,12 @@ Only the Clawtrate column changes. Rows not listed are met as written.
 8. The failure card on an account, and the row's failed line.
 9. The log follower, the served line and the row's warning; last, because it depends on the gateway's log configuration.
 
-<!-- ORDER3 -->
+10. The T3 Code switch in Settings, with nothing behind it, and the "nothing appears when off" check.
+11. Adding the server, with the denies first; the command path for the sign-in; "Signed in", "Not seen" and the date.
+12. Each bot's switch, the skill and the found-with-tools report.
+13. Turning the integration off.
+14. The app-started sign-in, once a qualifying connection exists.
+15. Limits, once Clawtrate's plugin exists.
 
 ## 23. Not covered here
 

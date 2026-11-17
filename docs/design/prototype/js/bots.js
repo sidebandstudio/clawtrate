@@ -754,7 +754,8 @@
       const i = radios.indexOf(radio);
       const n = event.key === "Home" ? 0 : event.key === "End" ? radios.length - 1 : (i + (["ArrowDown", "ArrowRight"].includes(event.key) ? 1 : -1) + radios.length) % radios.length;
       radios[n].click();
-      const key = radios[n].dataset.bBody ? `[data-b-body="${radios[n].dataset.bBody}"]` : radios[n].dataset.bColor ? `[data-b-color="${radios[n].dataset.bColor}"]` : `[data-b-choose="${radios[n].dataset.bChoose}"]`;
+      const d = radios[n].dataset;
+      const key = d.bBody ? `[data-b-body="${d.bBody}"]` : d.bColor ? `[data-b-color="${d.bColor}"]` : d.bChoose ? `[data-b-choose="${d.bChoose}"]` : `[data-t3="${d.t3}"][data-value="${d.value}"]`;
       $(key, container)?.focus();
     }
     // An open select menu: arrows move, Escape closes it before anything else.

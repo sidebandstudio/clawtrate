@@ -46,6 +46,10 @@
   const lockCommand = (bot, a) => `openclaw models auth order set --provider ${a.provider} --agent ${bot} ${a.id}`;
   const unlockCommand = (bot, a) => `openclaw models auth order clear --provider ${a.provider} --agent ${bot}`;
 
+  // A command breaks only between its words, never inside a flag.
+  const cmd = (text) => text.split(" ").map((t) => `<span class="b-tok">${esc(t)}</span>`).join(" ");
+  CT.botsCmd = cmd;
+
   const sub = (title, backTo) =>
     `<div class="b-subhead"><button type="button" class="icon-button" data-variant="quiet" data-bs="${backTo}" aria-label="Back to ${backTo === "main" ? "settings" : "account"}">${icon("back")}</button>` +
     `<h3 tabindex="-1" data-bs-focus>${title}</h3></div>`;
@@ -143,7 +147,7 @@
       html +=
         note(`<p><b>Locked.</b> ${name} runs on ${esc(acctName(a))} only. If it fails, ${name}'s run fails and says why; the gateway doesn't use another account.</p><p class="b-faint">Confirmed by the gateway at ${b.lockedAt || "5:41 PM"}.</p>`, "", icon("lock")) +
         `<details class="b-disclosure"><summary>${icon("chevron")}Unlock</summary><div class="b-disclosure-body"><p class="b-hint" style="margin-top:4px">Run this on the gateway's machine. Clawtrate sees the change by itself.</p>` +
-        `<div class="command-line"><code>${unlockCommand(id, a)}</code>${copy("unlock command", unlockCommand(id, a))}</div></div></details>`;
+        `<div class="command-line"><code>${cmd(unlockCommand(id, a))}</code>${copy("unlock command", unlockCommand(id, a))}</div></div></details>`;
     } else {
       const stale = s === "stale";
       html += stale
@@ -153,7 +157,7 @@
       html +=
         `<h4 class="b-group">${stale ? "Lock to the new account" : "Lock to this account"}</h4>` +
         `<p class="b-step">Clawtrate can't set the lock itself; only the gateway's command line can. Run this on the gateway's machine:</p>` +
-        `<div class="command-line"><code>${lockCommand(id, a)}</code>${copy("lock command", lockCommand(id, a))}</div>` +
+        `<div class="command-line"><code>${cmd(lockCommand(id, a))}</code>${copy("lock command", lockCommand(id, a))}</div>` +
         // Clawtrate looks for the lock while this is open; once the command is
         // copied it says so, with the waiting line of the pairing screen.
         `<div class="b-actions b-lockwait">` +
@@ -347,7 +351,7 @@
     if (raw) return;
     const action = t.closest("[data-bs]")?.dataset.bs;
     if (!action) return;
-    if (action === "main" || action === "account" || action === "change") {
+    if (action === "main" || action === "account" || action === "change" || action === "t3") {
       if (action === "change") {
         S.pick = null;
         S.pickModel = null;
