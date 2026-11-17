@@ -30,10 +30,66 @@
   const S = { view: p("bview") || "main", bot: null, pick: null, pickModel: null, seconds: 4, state: p("bstate") || "ready" };
   const botName = (id) => app.bots.find((b) => b.id === id)?.name || id;
   const current = () => app.model.selectedBot;
-  const lockState = (id) => binding[id]?.lockState || (binding[id]?.locked ? "locked" : "bound");
-  if (p("lock") && binding[app.model.selectedBot]) {
-    binding[app.model.selectedBot].lockState = p("lock");
-    binding[app.model.selectedBot].locked = p("lock") === "locked";
+  // The gateway's side, which the page only reads: each bot's stored order, and
+  // whether a read fails. The prototype bar changes it, as a person on the
+  // gateway's machine would.
+  const GW = { order: { otto: ["openai:work"] }, fail: false };
+  let minute = 41;
+  const clock = () => `5:${String(minute++).padStart(2, "0")} PM`;
+  binding.otto.evidence = { state: "matched", at: "5:41 PM", lastMatch: "5:41 PM" };
+  const lockFixture = p("lock");
+  const sel = app.model.selectedBot;
+  if (lockFixture && binding[sel]?.account) {
+    const b = binding[sel];
+    const a = acct(b.account);
+    const other = D.accounts().find((x) => x.provider === a.provider && x.id !== a.id && !x.owner);
+    if (lockFixture === "locked") Object.assign(GW.order, { [sel]: [a.id] }) && (b.evidence = { state: "matched", at: "5:41 PM", lastMatch: "5:41 PM" });
+    if (lockFixture === "watching") Object.assign(b, { watching: true, evidence: { state: "nomatch", at: "5:40 PM" } }) && delete GW.order[sel];
+    if (lockFixture === "stale") (GW.order[sel] = [other.id]) && (b.evidence = { state: "stale", at: "5:41 PM", lastMatch: "5:39 PM" });
+    if (lockFixture === "gone") delete GW.order[sel], (b.evidence = { state: "gone", at: "5:52 PM", lastMatch: "5:41 PM" });
+    if (lockFixture === "readfail") (GW.fail = true), (GW.order[sel] = [a.id]), (b.evidence = { state: "failed", at: "5:52 PM", lastMatch: "5:41 PM" });
+    if (lockFixture === "old") (GW.order[sel] = [a.id]), (b.evidence = { state: "old", at: "5:41 PM", lastMatch: "5:41 PM" }), app.setConnection("reconnecting");
+    if (lockFixture === "multi") (GW.order[sel] = [a.id, other.id]), (b.evidence = { state: "multi", at: "5:41 PM" });
+    if (lockFixture === "bound") delete GW.order[sel], (b.evidence = { state: "nomatch", at: "5:40 PM" });
+  }
+  // What the page shows comes only from its last read of the gateway's order.
+  const lockState = (id) => {
+    const e = binding[id]?.evidence;
+    if (!e) return "unread";
+    if (e.state === "matched") return "locked";
+    if ((e.state === "failed" || e.state === "old") && e.lastMatch) return "locked-asof";
+    if (e.state === "stale") return "stale";
+    return "bound";
+  };
+  function readOrder(id, reason) {
+    const b = binding[id];
+    if (!b?.account) return;
+    const before = lockState(id);
+    const e = b.evidence || {};
+    // With the connection down nothing is read: the last check stands, marked old.
+    if (app.model.connection !== "connected") {
+      if (e.at) b.evidence = { ...e, state: e.state === "matched" || e.state === "old" ? "old" : e.state };
+      if (reason !== "silent") render();
+      return;
+    }
+    const at = clock();
+    if (GW.fail) b.evidence = { state: "failed", at, lastMatch: e.lastMatch };
+    else {
+      const order = GW.order[id];
+      const a = acct(b.account);
+      if (order && order.length === 1 && order[0] === a.id) b.evidence = { state: "matched", at, lastMatch: at };
+      else if (order && order.length === 1 && acct(order[0])?.provider === a.provider) b.evidence = { state: "stale", at, lastMatch: e.lastMatch };
+      else if (order && order.includes(a.id)) b.evidence = { state: "multi", at };
+      else if (e.state === "matched" || e.state === "gone" || e.state === "old") b.evidence = { state: "gone", at: e.state === "gone" ? e.at : at, lastMatch: e.lastMatch };
+      else b.evidence = { state: "nomatch", at, lastMatch: e.lastMatch };
+    }
+    const after = lockState(id);
+    if (after === "locked") b.watching = false;
+    if (before !== after) {
+      if (after === "locked") announce("Locked. The gateway confirmed it.");
+      if (before === "locked" && after === "bound") announce(`${botName(id)} is no longer locked`);
+    }
+    if (reason !== "silent") render();
   }
   if (p("differs")) binding.pip.fallbacks = ["anthropic/claude-sonnet-5.5"];
   if (p("running")) binding[app.model.selectedBot] && (binding[app.model.selectedBot].running = true);
@@ -63,6 +119,7 @@
     if (!b.account) return b.removed ? `<span class="b-state" data-tone="warn">${icon("warning")}No account</span>` : `<span class="b-state">Gateway chooses</span>`;
     const s = lockState(id);
     if (s === "locked") return `<span class="b-state">${icon("lock")}Locked</span>`;
+    if (s === "locked-asof") return `<span class="b-state">${icon("lock")}Locked, as of ${b.evidence.lastMatch}</span>`;
     if (s === "stale") return `<span class="b-state" data-tone="warn">${icon("warning")}Lock out of date</span>`;
     return `<span class="b-state">Bound</span>`;
   }
@@ -87,9 +144,17 @@
     else if (S.state === "error")
       html = `<div class="work-empty"><span class="empty-mark">${icon("warning")}</span><h4>Couldn't load ${esc(botName(id))}'s settings</h4><p>The gateway did not answer.</p><div style="margin-top:10px">${button("Try again", 'data-bs="reload" data-size="sm"')}</div></div>`;
     else html = S.view === "account" ? accountView(id) : S.view === "change" ? changeView(id) : (CT.botsT3View && S.view === "t3" ? CT.botsT3View(id) : mainView(id));
-    panel.innerHTML = html + (isAdmin() || S.state !== "ready" ? "" : `<div class="b-panel-foot">${adminBar(`Changing ${esc(botName(id))}'s settings needs admin access.`)}</div>`);
-    CT.hydrate(panel);
-    if (focus) requestAnimationFrame(() => $("[data-bs-focus]", panel)?.focus());
+    const paint = () => {
+      panel.innerHTML = html + (isAdmin() || S.state !== "ready" ? "" : `<div class="b-panel-foot">${adminBar(`Changing ${esc(botName(id))}'s settings needs admin access.`)}</div>`);
+      CT.hydrate(panel);
+    };
+    // A re-render keeps focus where it was; a change of page moves it on purpose:
+    // to the page's title, or back to the row that opened the page.
+    if (!focus) return CT.botsKeep(panel, paint);
+    paint();
+    CT.botsRove(panel);
+    const back = S.view === "main" && S.from ? $(`[data-bs="${S.from}"]`, panel) : null;
+    requestAnimationFrame(() => (back || $("[data-bs-focus]", panel))?.focus());
   }
 
   function mainView(id) {
@@ -144,28 +209,55 @@
       `</dl>`;
     const other = D.accounts().filter((x) => x.provider === a.provider && x.id !== a.id);
     const who = esc(providerName(a.provider));
-    if (s === "locked") {
+    const e = b.evidence || { state: "checking" };
+    const evidence = {
+      checking: `<p class="b-wait" role="status" style="margin:0"><span class="status-dot" data-status="connecting"></span>Checking the gateway's order for ${name}…</p>`,
+      matched: `<p class="b-hint" role="status" style="margin:0">Checked with the gateway at ${e.at}.</p>`,
+      nomatch: b.watching
+        ? `<p class="b-wait" role="status" style="margin:0"><span class="status-dot" data-status="connecting"></span>Checking the gateway for the lock, again in ${S.seconds}s</p>`
+        : `<p class="b-hint" role="status" style="margin:0">Not locked. Checked at ${e.at}.</p>`,
+      multi: `<p class="b-hint" role="status" style="margin:0">The gateway's order for ${name} lists ${esc(acctName(a))} and 1 more account, so it is not a lock.</p>`,
+      gone: "",
+      failed: "",
+      old: `<p class="b-hint" role="status" style="margin:0">Last checked at ${e.at}. Clawtrate checks again when it reconnects.</p>`,
+      stale: `<p class="b-hint" role="status" style="margin:0">Checked with the gateway at ${e.at}.</p>`,
+    }[e.state];
+    const evidenceRow = `<div class="b-actions b-lockwait">${evidence}${button("Check now", 'data-bs="lock-check" data-size="sm"')}</div>`;
+    const warnings =
+      (e.state === "gone" ? note(`<p>The lock is gone: the gateway's order for ${name} changed at or before ${e.at}.</p>`, "warn") : "") +
+      (e.state === "failed"
+        ? note(`<p>Couldn't read the gateway's order for ${name}. ${e.lastMatch ? `Last confirmed locked at ${e.lastMatch}.` : "Never confirmed."}</p>`, "warn")
+        : "");
+    const unlock =
+      `<details class="b-disclosure"><summary>${icon("chevron")}Unlock</summary><div class="b-disclosure-body"><p class="b-hint" style="margin-top:4px">Run this on the gateway's machine. Clawtrate sees the change by itself. ${name} then follows the gateway's other orders.</p>` +
+      `<div class="command-line"><code>${cmd(unlockCommand(id, a))}</code>${copy("unlock command", unlockCommand(id, a))}</div></div></details>`;
+    if (s === "locked" || s === "locked-asof") {
       html +=
-        note(`<p><b>Locked.</b> ${name} runs on ${esc(acctName(a))} only. If it fails, ${name}'s run fails and says why; the gateway doesn't use another account.</p><p class="b-faint">Confirmed by the gateway at ${b.lockedAt || "5:41 PM"}.</p>`, "", icon("lock")) +
-        `<details class="b-disclosure"><summary>${icon("chevron")}Unlock</summary><div class="b-disclosure-body"><p class="b-hint" style="margin-top:4px">Run this on the gateway's machine. Clawtrate sees the change by itself.</p>` +
-        `<div class="command-line"><code>${cmd(unlockCommand(id, a))}</code>${copy("unlock command", unlockCommand(id, a))}</div></div></details>`;
+        note(
+          `<p><b>Locked${s === "locked-asof" ? `, as of ${e.lastMatch}` : ""}.</b> ${name}'s ordinary runs use ${esc(acctName(a))} only: if it fails, the run fails and says why, and the gateway doesn't try another account. A run started with another account named still goes round it.</p>`,
+          "",
+          icon("lock"),
+        ) +
+        warnings +
+        evidenceRow +
+        unlock;
+    } else if (s === "stale") {
+      const old = acct(GW.order[id]?.[0]) || acct(b.lockedTo);
+      html +=
+        note(`<p><b>The lock is out of date.</b> ${name} runs on ${esc(acctName(a))} first, but the gateway's order for ${name} still lists only ${esc(acctName(old))}, so when ${esc(acctName(a))} fails the gateway tries ${esc(acctName(old))}.</p>`, "warn") +
+        `<h4 class="b-group">Lock to ${esc(acctName(a))}</h4>` +
+        `<p class="b-step">Run this on the gateway's machine:</p>` +
+        `<div class="command-line"><code>${cmd(lockCommand(id, a))}</code>${copy("lock command", lockCommand(id, a))}</div>` +
+        evidenceRow +
+        unlock;
     } else {
-      const stale = s === "stale";
-      html += stale
-        ? note(`<p><b>The lock is out of date.</b> The gateway still keeps ${name} to ${esc(acctName(acct(b.lockedTo)))}, so ${name} keeps using it until the lock is changed.</p>`, "warn")
-        : note(`<p><b>Bound.</b> ${name} runs on ${esc(acctName(a))}. If that account fails, the gateway may use ${other.length ? `another ${who} account, such as ${esc(acctName(other[0]))},` : `another ${who} account, if one is added,`} for that run.</p>`, "", icon("approval"));
-      const watching = s === "watching";
       html +=
-        `<h4 class="b-group">${stale ? "Lock to the new account" : "Lock to this account"}</h4>` +
+        note(`<p><b>Bound.</b> ${name} runs on ${esc(acctName(a))}. If that account fails, the gateway may use ${other.length ? `another ${who} account, such as ${esc(acctName(other[0]))},` : `another ${who} account, if one is added,`} for that run.</p>`, "", icon("approval")) +
+        warnings +
+        `<h4 class="b-group">Lock to this account</h4>` +
         `<p class="b-step">Clawtrate can't set the lock itself; only the gateway's command line can. Run this on the gateway's machine:</p>` +
         `<div class="command-line"><code>${cmd(lockCommand(id, a))}</code>${copy("lock command", lockCommand(id, a))}</div>` +
-        // Clawtrate looks for the lock while this is open; once the command is
-        // copied it says so, with the waiting line of the pairing screen.
-        `<div class="b-actions b-lockwait">` +
-        (watching
-          ? `<p class="b-wait" role="status" style="margin:0"><span class="status-dot" data-status="connecting"></span>Checking the gateway for the lock, again in ${S.seconds}s</p>`
-          : `<p class="b-hint" role="status" style="margin:0">${S.notYet ? `Not locked yet. Checked at ${S.notYet}.` : "When the gateway has the lock, this page shows Locked by itself."}</p>`) +
-        `${button("Check now", 'data-bs="lock-check" data-size="sm"')}</div>` +
+        evidenceRow +
         `<p class="b-hint">What this cannot see: if ${esc(acctName(a))} is pausing after a failure, a run can start on another ${who} account without leaving a record Clawtrate can read.</p>`;
     }
     html +=
@@ -173,10 +265,11 @@
       `<li>A task or conversation set to another account, by another app or with the model command in chat. Clawtrate never does this.</li>` +
       `<li>A routine, or a helper bot, whose model names another account.</li>` +
       `<li>A message from another bot into a conversation that already uses another account.</li>` +
-      `<li>A new ${who} sign-in on the gateway can add itself to the lock. Clawtrate checks after every sign-in it starts.</li>` +
-      `<li>Removing ${esc(acctName(a))}: the gateway then uses ${who}'s other accounts.</li>` +
+      `<li>A run that uses another model than ${name}'s own, set in a task or a routine: it doesn't carry ${name}'s account, so the gateway's own provider settings or order choose one.</li>` +
+      `<li>A new ${who} sign-in on the gateway can add itself to the order. Clawtrate checks after every sign-in it starts.</li>` +
+      `<li>Removing ${esc(acctName(a))}: the gateway then repairs the order to ${who}'s other accounts.</li>` +
       `<li>Commands run on the gateway's machine itself.</li>` +
-      `<li>A lock is about accounts. Some providers can still switch the model inside a request.</li></ul></div></details>`;
+      `<li>A lock is about accounts. An empty fallback list keeps ${name} off other models in the gateway's fallback list, but some providers can still switch the model inside a request.</li></ul></div></details>`;
     if (b.fallbackWriteFailed)
       html += note(
         `<p>Clawtrate couldn't write ${name}'s empty fallback list. ${name} has no fallbacks of its own, so nothing moves it to another model; the list only makes that explicit.</p>` +
@@ -214,7 +307,7 @@
       }
       if (b.running) html += note(`<p>A run in progress finishes on ${esc(acctName(was))}. The next run uses ${esc(acctName(pick))}.</p>`, "", icon("clock"));
       if (was && lockState(id) === "locked" && was.provider === pick.provider)
-        html += note(`<p>${name} is locked to ${esc(acctName(was))}. Until the lock is changed, the gateway keeps using it. After saving, Account shows the command for the new lock.</p>`, "warn");
+        html += note(`<p>${name} is locked to ${esc(acctName(was))}. After saving, ${name} runs on ${esc(acctName(pick))} first, and the gateway still tries ${esc(acctName(was))} when ${esc(acctName(pick))} fails, until you lock to ${esc(acctName(pick))} or unlock. Account then shows both commands.</p>`, "warn");
       const leaving = was && was.provider !== pick.provider ? PROVIDER_TOOLS[was.provider] : null;
       if (leaving) html += note(`<p>${leaving.map(([t]) => t).join(" and ")} come with ${esc(providerName(was.provider))} and leave ${name}'s tools.</p>`);
     }
@@ -316,15 +409,12 @@
     const t = event.target;
     const id = current();
     const b = binding[id];
-    // Copying the lock command is the sign the person is about to run it.
-    if (t.closest('.copy[data-what="lock command"]') && ["bound", "stale"].includes(lockState(id))) {
-      b.prevState = lockState(id);
-      b.lockState = "watching";
-      setTimeout(() => {
-        render();
-        $('[data-bs="lock-check"]', panel)?.focus();
-      }, 0);
-      announce("Checking the gateway for the lock");
+    // Copying the lock command is the sign the person is about to run it: the
+    // page shows that it is watching, and reads more often. It proves nothing.
+    if (t.closest('.copy[data-what="lock command"]') && lockState(id) !== "locked") {
+      b.watching = true;
+      S.seconds = 4;
+      setTimeout(() => readOrder(id), 0);
       return;
     }
     const choose = t.closest("[data-b-choose]");
@@ -358,30 +448,18 @@
     const action = t.closest("[data-bs]")?.dataset.bs;
     if (!action) return;
     if (action === "main" || action === "account" || action === "change" || action === "t3") {
+      if (S.view === "main" && action !== "main") S.from = action;
       if (action === "change") {
         S.pick = null;
         S.pickModel = null;
       }
       S.view = action;
+      if (action === "account") readOrder(id, "silent"); // the page reads the order when it opens
       render(true);
     }
-    if (action === "lock-check" && lockState(id) !== "watching") {
-      S.notYet = "5:40 PM";
-      render();
-      $('[data-bs="lock-check"]', panel)?.focus();
-      announce("Not locked yet");
-      return;
-    }
     if (action === "lock-check") {
-      S.notYet = null;
-      b.lockState = "locked";
-      b.locked = true;
-      b.lockedTo = b.account;
-      b.lockedAt = "5:41 PM";
-      render();
-      $("[data-bs-focus]", panel)?.focus();
-      announce("Locked. The gateway confirmed it.");
-      CT.botsChanged?.();
+      readOrder(id);
+      $('[data-bs="lock-check"]', panel)?.focus();
     }
     if (action === "write-fallbacks") {
       b.fallbackWriteFailed = false;
@@ -398,14 +476,7 @@
       const pick = acct(S.pick);
       if (S.pickModel) b.model = S.pickModel;
       else if (!MODELS[pick.provider].includes(b.model)) b.model = MODELS[pick.provider][0];
-      if (b.locked && was && was.provider === pick.provider) {
-        b.lockState = "stale";
-        b.lockedTo = was.id;
-        b.locked = false;
-      } else if (!was || was.provider !== pick.provider) {
-        b.lockState = "bound";
-        b.locked = false;
-      }
+      b.watching = false;
       b.account = pick.id;
       b.removed = false;
       b.inherits = false;
@@ -415,6 +486,7 @@
       S.view = "account";
       S.pick = null;
       app.openTask(id, app.model.selectedTask);
+      readOrder(id, "silent");
       render(true);
       announce(`${botName(id)} now runs on ${acctName(pick)}`);
     }
@@ -446,17 +518,43 @@
     if (action === "copy-id") announce("Copied request ID");
   });
 
+  // While the Account page is open the page reads the order by itself: every 4
+  // seconds once the command was copied, every 30 seconds otherwise.
+  let tick = 0;
   setInterval(() => {
-    const b = binding[current()];
-    if (!b || b.lockState !== "watching") return;
-    S.seconds = S.seconds <= 1 ? 4 : S.seconds - 1;
-    const line = $(".b-wait", panel);
-    if (line) line.lastChild.textContent = `Checking the gateway for the lock, again in ${S.seconds}s`;
+    const id = current();
+    const b = binding[id];
+    if (!b?.account || S.view !== "account" || panel.hidden || !panel.isConnected) return;
+    tick += 1;
+    if (b.watching && lockState(id) !== "locked") {
+      S.seconds = S.seconds <= 1 ? 4 : S.seconds - 1;
+      if (S.seconds === 4) return readOrder(id);
+      const line = $(".b-lockwait .b-wait", panel);
+      if (line) line.lastChild.textContent = `Checking the gateway for the lock, again in ${S.seconds}s`;
+    } else if (tick % 30 === 0) readOrder(id);
   }, 1000);
+
+  // Prototype controls: what a person on the gateway's machine would do.
+  const extra = $("#proto-extra .run-controls");
+  if (extra) {
+    extra.insertAdjacentHTML(
+      "afterbegin",
+      `<button type="button" data-gw="set">Gateway: lock set</button><button type="button" data-gw="clear">Gateway: lock cleared</button><button type="button" data-gw="fail">Gateway: order unreadable</button>`,
+    );
+    extra.addEventListener("click", (event) => {
+      const what = event.target.closest("[data-gw]")?.dataset.gw;
+      if (!what) return;
+      const id = current();
+      const a = acct(binding[id]?.account);
+      if (what === "set" && a) GW.order[id] = [a.id];
+      if (what === "clear") delete GW.order[id];
+      if (what === "fail") GW.fail = !GW.fail;
+    });
+  }
 
   CT.botsChanged = () => render();
   CT.botsRender = render;
-  window.botSettings = { S, render, openPanelSettings };
+  window.botSettings = { S, GW, render, openPanelSettings, readOrder };
 
   $("#tab-settings").hidden = false;
   render();

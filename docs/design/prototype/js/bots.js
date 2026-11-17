@@ -548,7 +548,7 @@
     const others = accounts.filter((a) => a.provider === provider && a.id !== c.newId);
     const who = providerName(provider);
     const clash = others.find((a) => a.label.trim().toLowerCase() === c.label.trim().toLowerCase() && c.label.trim());
-    const locked = Object.entries(binding).filter(([, b]) => b.locked && acct(b.account)?.provider === provider);
+    const locked = Object.entries(binding).filter(([, b]) => b.evidence?.state === "matched" && acct(b.account)?.provider === provider);
     const body =
       result("ok", "check", c.keyProvider ? "Key saved" : `Connected to ${esc(who)}`, c.keyProvider ? `Your gateway keeps the key.` : `Your gateway keeps the sign-in.`).replace(" data-b-focus", "") +
       `<label class="b-field"><span>Label</span><input class="input" data-b-label data-b-focus maxlength="32" placeholder="${others.length ? "For example, Home or Studio" : "For example, Personal"}" value="${esc(c.label)}" aria-describedby="b-label-help" /></label>` +
@@ -655,7 +655,7 @@
     const users = usedBy(a.id);
     const [tone, word] = stateOf(a);
     const edit = B.settings.edit;
-    const lockedBy = users.filter((name) => binding[app.bots.find((x) => x.name === name)?.id]?.locked);
+    const lockedBy = users.filter((name) => binding[app.bots.find((x) => x.name === name)?.id]?.evidence?.state === "matched");
     const labelRow = edit
       ? `<div class="b-row"><dt>Label</dt><dd style="display:flex;gap:6px;align-items:center"><input class="input" style="height:34px;width:150px" data-b-relabel data-b-focus maxlength="32" value="${esc(a.label)}" aria-label="Label" />` +
         `${button("Save", 'data-b="relabel-save" data-size="sm"', "primary")}${button("Cancel", 'data-b="relabel-cancel" data-size="sm"', "quiet")}</dd></div>`
@@ -700,7 +700,7 @@
         Object.values(binding).forEach((b) => {
           if (b.account === a.id) {
             b.account = null;
-            b.locked = false;
+            delete b.evidence;
             b.removed = true;
           }
         });
@@ -748,11 +748,11 @@
 
   // Wiring -------------------------------------------------------------------------------------------------
 
+  // Focus moves at once, in the same task as the change it follows, so a key
+  // pressed straight after cannot be overtaken by it.
   function focusFirst(dialog) {
-    requestAnimationFrame(() => {
-      const target = $("[data-b-focus]", dialog) || $("h2[tabindex], h3[tabindex]", dialog);
-      target?.focus();
-    });
+    const target = $("[data-b-focus]", dialog) || $("h2[tabindex], h3[tabindex]", dialog);
+    target?.focus();
   }
 
   // Re-render whichever dialog shows the connect component.

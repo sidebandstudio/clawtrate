@@ -22,6 +22,13 @@ const text = (p, sel) => p.evaluate((s) => document.querySelector(s)?.textConten
 const dlg = (p, id = "create-dialog") => p.evaluate((i) => document.getElementById(i).open, id);
 const focused = (p) => p.evaluate(() => document.activeElement?.id || document.activeElement?.dataset?.b || document.activeElement?.tagName);
 
+// Print what ran so far if a step throws, so the failing step can be found.
+process.on("uncaughtException", (e) => {
+  console.log(out.join("\n"));
+  console.log("THREW", e.message.split("\n")[0]);
+  process.exit(1);
+});
+
 // Part 1: creating a bot ------------------------------------------------------------------------
 let p = await open();
 await p.click("#new-button");
@@ -210,12 +217,18 @@ check("P2 Account opens with focus on its title", await p.evaluate(() => documen
 check("P2 bound: says plainly that the gateway may use another account", (await pane(p)).includes("Bound. Marlow runs on OpenAI · Work. If that account fails, the gateway may use another OpenAI account"));
 check("P2 the lock is one command, ready to copy", (await text(p, "#panel-settings .command-line code")) === "openclaw models auth order set --provider openai --agent marlow openai:work" && (await p.evaluate(() => !!document.querySelector('#panel-settings .copy[aria-label="Copy lock command"]'))));
 check("P2 bound: says what it cannot see", (await pane(p)).includes("a run can start on another OpenAI account without leaving a record Clawtrate can read"));
-check("P2 the ways round a lock are listed, folded", await p.evaluate(() => { const d = [...document.querySelectorAll("#panel-settings .b-disclosure")].find((x) => x.textContent.includes("What a lock doesn't cover")); return d && !d.open && d.querySelectorAll("li").length === 7; }));
+check("P2 the ways round a lock are listed, folded", await p.evaluate(() => { const d = [...document.querySelectorAll("#panel-settings .b-disclosure")].find((x) => x.textContent.includes("What a lock doesn't cover")); return d && !d.open && d.querySelectorAll("li").length === 8; }));
 await p.click('#panel-settings .copy[aria-label="Copy lock command"]');
 await p.waitForTimeout(80);
 check("P2 copying the command starts checking the gateway", (await text(p, "#panel-settings .b-wait")).includes("Checking the gateway for the lock"));
 await p.click('#panel-settings [data-bs="lock-check"]');
-check("P2 the gateway's lock is confirmed: Locked", (await pane(p)).includes("Locked. Marlow runs on OpenAI · Work only.") && (await pane(p)).includes("Confirmed by the gateway"));
+check("FM-03 Check now reads the gateway: no order yet, so not locked", !(await pane(p)).includes("Locked.") && (await p.evaluate(() => document.activeElement.dataset.bs === "lock-check")));
+await p.focus('#panel-settings [data-bs="main"]');
+await p.evaluate(() => (window.botSettings.GW.order.marlow = ["openai:work"]));
+await p.waitForTimeout(4600);
+check("FM-03 once the gateway has the order, the page turns Locked by itself", (await pane(p)).includes("Locked. Marlow's ordinary runs use OpenAI · Work only") && (await pane(p)).includes("Checked with the gateway at"));
+check("FM-03 a read in the background does not move focus", await p.evaluate(() => document.activeElement.dataset.bs === "main"));
+check("FM-03 Locked says the ordinary-run boundary on the page itself", (await pane(p)).includes("A run started with another account named still goes round it."));
 check("P2 locked: the command to unlock, folded", await p.evaluate(() => [...document.querySelectorAll("#panel-settings .b-disclosure")].some((d) => d.textContent.includes("openclaw models auth order clear --provider openai --agent marlow"))));
 await p.click('#panel-settings [data-bs="main"]');
 check("P2 the account row now says Locked", (await text(p, '#panel-settings [data-bs="account"]')).includes("Locked"));
@@ -235,10 +248,25 @@ await p.close();
 
 p = await open("bot=otto&panel=open&tab=settings&bview=change");
 await p.click('#panel-settings [data-b-choose="openai:home"]');
-check("P2 locked to the old account: says the lock must change too", (await pane(p)).includes("Otto is locked to OpenAI · Work. Until the lock is changed, the gateway keeps using it."));
+check("FM-02 locked to the old account: the new one leads and the old one is still tried", (await pane(p)).includes("Otto is locked to OpenAI · Work. After saving, Otto runs on OpenAI · Home first, and the gateway still tries OpenAI · Work when OpenAI · Home fails"));
 await p.click('#panel-settings [data-bs="save-change"]');
-check("P2 after saving, the lock is out of date and gives the new command", (await pane(p)).includes("The lock is out of date") && (await text(p, "#panel-settings .command-line code")).endsWith("--agent otto openai:home"));
+check("FM-02 after saving, the lock is out of date, said as the gateway runs it, with the new command", (await pane(p)).includes("The lock is out of date. Otto runs on OpenAI · Home first, but the gateway's order for Otto still lists only OpenAI · Work, so when OpenAI · Home fails the gateway tries OpenAI · Work.") && (await text(p, "#panel-settings .command-line code")).endsWith("--agent otto openai:home"));
+check("FM-02 the account row says Lock out of date", await p.evaluate(() => { document.querySelector('#panel-settings [data-bs="main"]').click(); return document.querySelector('#panel-settings [data-bs="account"]').textContent.includes("Lock out of date"); }));
 await p.close();
+
+// FM-03: what the page shows when its evidence of the lock is old, unreadable or gone.
+for (const [lock, words, word] of [
+  ["readfail", "Couldn't read the gateway's order for Otto. Last confirmed locked at 5:41 PM.", "Locked, as of 5:41 PM"],
+  ["gone", "The lock is gone: the gateway's order for Otto changed at or before 5:52 PM.", "Bound"],
+  ["old", "Last checked at 5:41 PM. Clawtrate checks again when it reconnects.", "Locked, as of 5:41 PM"],
+  ["multi", "lists OpenAI · Work and 1 more account, so it is not a lock", "Bound"],
+]) {
+  p = await open(`bot=otto&panel=open&tab=settings&lock=${lock}`);
+  const row = await text(p, '#panel-settings [data-bs="account"]');
+  await p.click('#panel-settings [data-bs="account"]');
+  check(`FM-03 lock evidence ${lock}: says so, and the row reads ${word}`, (await pane(p)).includes(words) && row.includes(word), row);
+  await p.close();
+}
 
 // Served by another account.
 p = await open("bot=otto&served=1");
