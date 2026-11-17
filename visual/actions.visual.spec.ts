@@ -172,6 +172,44 @@ test.describe("action cards", () => {
     await expect(page.locator(".raw-panel")).toHaveCount(0);
   });
 
+  test("F-093: Raw never builds a result: a call history kept no result for is unavailable, and kept text names where it came from", async ({
+    page,
+  }) => {
+    await open(page, "actions-history");
+    await setState(
+      page,
+      `const key = "agent:otto:disk-space";
+       const t = state.transcripts[key];
+       const block = (callId, path, result) => ({
+         kind: "tool-call", callId, name: "custom_lookup",
+         argumentsText: JSON.stringify({ path }), result,
+       });
+       return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, runs: [], items: [
+         { id: "h-user", role: "user", timestamp: Date.now(), model: null, blocks: [{ kind: "text", text: "Look them up." }] },
+         { id: "h-a", role: "assistant", timestamp: Date.now(), model: null, blocks: [block("call_none", "a.md", null)] },
+         { id: "h-t", role: "assistant", timestamp: Date.now(), model: null, blocks: [{ kind: "text", text: "Between." }] },
+         { id: "h-b", role: "assistant", timestamp: Date.now(), model: null, blocks: [block("call_text", "b.md", { isError: false, text: "two entries" })] },
+       ] } } };`,
+    );
+    const none = page.locator('[data-call="call_none"]');
+    await line(none).click();
+    await none.getByRole("tab", { name: "Raw" }).click();
+    await expect(none.locator(".raw-state")).toHaveText(
+      "The gateway's history holds no result for this call, and this app keeps nothing more of it.",
+    );
+    await expect(none.getByText('"content"')).toHaveCount(0);
+    const kept = page.locator('[data-call="call_text"]');
+    await line(kept).click();
+    await kept.getByRole("tab", { name: "Raw" }).click();
+    await expect(
+      kept.getByText("Result text, from the history the gateway returned"),
+    ).toBeVisible();
+    await expect(kept.locator(".raw-panel pre").last()).not.toContainText('"content"');
+    await expect(
+      kept.locator(".raw-panel").getByText("two entries", { exact: true }),
+    ).toBeVisible();
+  });
+
   test("F-488 F-091: a run of six reads is one card with a count; reasoning between actions is not shown", async ({
     page,
   }) => {

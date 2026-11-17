@@ -327,13 +327,17 @@ export function RawView({ raw }: { raw: RawContent }) {
         </dl>
       )}
       {raw.args !== undefined && (
-        <CodeBlock label="Arguments" text={formatJson(raw.args)} copy="arguments" />
+        <CodeBlock
+          label={raw.argsLabel ?? "Arguments"}
+          text={formatJson(raw.args)}
+          copy="arguments"
+        />
       )}
       {raw.error ? (
-        <CodeBlock label="Error" text={raw.error} copy="error" tone="danger" />
+        <CodeBlock label={raw.resultLabel ?? "Error"} text={raw.error} copy="error" tone="danger" />
       ) : raw.result !== undefined && raw.result !== null ? (
         <CodeBlock
-          label="Result"
+          label={raw.resultLabel ?? "Result"}
           text={formatJson(raw.result)}
           copy="result"
           {...(raw.truncated ? { truncated: "structured" as const } : {})}

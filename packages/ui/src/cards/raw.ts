@@ -12,6 +12,10 @@ export type RawContent =
       tool?: string | null;
       args?: unknown;
       result?: unknown;
+      /** Where the arguments shown came from, when it is not the gateway's raw payload. */
+      argsLabel?: string;
+      /** Where the result or error shown came from, when it is not the gateway's raw payload. */
+      resultLabel?: string;
       error?: string | null;
       /** A tool call still running. */
       running?: boolean;

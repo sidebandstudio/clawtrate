@@ -198,15 +198,30 @@ function rawContentOf(call: ActionCall, env: ActionEnv): { content: RawContent; 
     ...(found ? [{ label: "Run", value: found.runId }] : []),
     { label: "Session", value: env.sessionKey },
   ];
+  // Nothing is filled in: a result that was not kept is said to be missing, never built (section 9).
+  const noResult = !open && call.text === null;
   if (!found) {
-    // Only the history item's row is here: its arguments and result as the page kept them.
+    // Only the history item's row is here: its arguments and result text as the page kept them.
+    if (noResult)
+      return {
+        load: () => {},
+        content: {
+          state: "unavailable",
+          reason:
+            "The gateway's history holds no result for this call, and this app keeps nothing more of it.",
+        },
+      };
     return {
       load: () => {},
       content: {
         state: "loaded",
         tool: call.name,
         args: call.args,
-        ...(call.isError ? { error: call.text ?? "" } : { result: { content: call.text ?? "" } }),
+        argsLabel: "Arguments, from the history the gateway returned",
+        ...(open ? {} : call.isError ? { error: call.text ?? "" } : { result: call.text ?? "" }),
+        resultLabel: call.isError
+          ? "Error text, from the history the gateway returned"
+          : "Result text, from the history the gateway returned",
         running: open,
         timing,
         ids,
@@ -217,13 +232,21 @@ function rawContentOf(call: ActionCall, env: ActionEnv): { content: RawContent; 
   const state = env.rawState(found.step.id);
   if (state.state === "pending") return { content: state.content, load: state.load };
   const raw: StepRaw | null = state.raw;
+  if (!raw && noResult)
+    return {
+      load: state.load,
+      content: {
+        state: "unavailable",
+        reason: "The gateway sent no result for this call that this app kept.",
+      },
+    };
   const callRec = rec(raw?.call);
   const resultRec = rec(raw?.result);
   const args = raw
     ? raw.source === "live"
       ? callRec?.args
       : (callRec?.arguments ?? callRec?.input)
-    : call.args;
+    : undefined;
   const result = raw
     ? raw.source === "live"
       ? (resultRec?.result ?? raw.result)
@@ -231,16 +254,34 @@ function rawContentOf(call: ActionCall, env: ActionEnv): { content: RawContent; 
     : null;
   const notes: string[] = [];
   if (state.cut) notes.push(state.cut);
-  if (!raw) notes.push("Only what this app keeps of the call is here.");
+  if (!raw)
+    notes.push(
+      "This app no longer holds what the gateway sent; only the texts it keeps of the call are here.",
+    );
+  const argsText = found.step.argsText?.text;
   return {
     load: state.load,
     content: {
       state: "loaded",
       tool: call.name,
-      args: args ?? call.args,
-      ...(call.isError && result !== null && result !== undefined
-        ? { error: formatJson(result) }
-        : { result: result ?? (open ? null : { content: call.text ?? "" }) }),
+      // Without the payload, the texts the engine keeps, each named as such.
+      ...(raw
+        ? { args: args ?? null }
+        : argsText !== undefined
+          ? { args: argsText, argsLabel: "Arguments, as this app keeps them" }
+          : {}),
+      ...(raw
+        ? call.isError && result !== null && result !== undefined
+          ? { error: formatJson(result) }
+          : { result: result ?? null }
+        : open
+          ? {}
+          : {
+              ...(call.isError ? { error: call.text ?? "" } : { result: call.text ?? "" }),
+              resultLabel: call.isError
+                ? "Error text, as this app keeps it"
+                : "Result text, as this app keeps it",
+            }),
       running: open,
       truncated: found.step.truncated || Boolean(state.cut),
       timing,
