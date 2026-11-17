@@ -31,7 +31,10 @@ const digest = (data: Uint8Array) => createHash("sha256").update(data).digest("h
 export function safeFileName(raw: unknown): string {
   const name = typeof raw === "string" ? raw : "";
   const cleaned = basename(name.replaceAll("\\", "/"))
-    .replace(/[\u0000-\u001f\u007f<>:"|?*]/g, "_")
+    .replace(/[<>:"|?*]/g, "_")
+    .replace(/./gu, (char) =>
+      char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f ? "_" : char,
+    )
     .replace(/^\.+$/, "")
     .trim()
     .slice(0, MAX_NAME_CHARS);
