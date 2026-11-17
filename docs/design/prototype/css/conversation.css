@@ -555,10 +555,29 @@ details.step {
   height: 15px;
 }
 
+/* Each part has its own column, so hiding the detail on a narrow column
+   leaves the others where they are. */
+.step-node {
+  grid-column: 1;
+}
+
 .step-title {
+  grid-column: 2;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.step-detail {
+  grid-column: 3;
+}
+
+.step-status {
+  grid-column: 4;
+}
+
+.step > summary > .chevron {
+  grid-column: 5;
 }
 
 .step-detail {
@@ -1407,56 +1426,34 @@ li + li > .option {
   background: transparent;
 }
 
-/* Jump to latest: appears when new output lands out of view. */
-.jump {
-  position: absolute;
-  bottom: calc(100% + 10px);
-  left: 50%;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+/* Jump to latest: the shell's .jump-latest, with the states a run needs. */
+.jump-latest {
   max-width: min(380px, calc(100% - 32px));
-  height: 36px;
-  padding: 0 12px 0 14px;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: var(--bg-raised);
-  box-shadow: var(--shadow-pop);
-  font-size: var(--text-md);
-  cursor: pointer;
-  transform: translateX(-50%);
   --presence-surface: var(--bg-raised);
   animation: jump-in var(--dur-base) var(--ease-out) both;
 }
 
-.jump[hidden] {
-  display: none;
-}
-
-.jump[data-state="live"] {
+.jump-latest[data-state="live"] {
   padding-left: 9px;
 }
 
-.jump .presence {
+.jump-latest .presence {
   --size: 20px;
 }
 
-.jump > span:not(.presence, .glyph) {
+.jump-latest > span:not(.presence, .glyph) {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.jump .icon {
-  width: 13px;
-  height: 13px;
-  color: var(--text-muted);
+.jump-latest[data-state="needs-you"] {
+  color: var(--warn);
 }
 
-.jump[data-state="needs-you"] {
-  color: var(--warn);
+.jump-latest[data-state="needs-you"] .icon {
+  color: inherit;
 }
 
 /* Errors and notes -------------------------------------------------------------- */
@@ -1544,15 +1541,18 @@ li + li > .option {
   color: var(--text);
 }
 
-/* Rows that reflect a run -------------------------------------------------------- */
+/* Rows that reflect a run --------------------------------------------------------
+   With the state avatar, a bot row's run state is on the avatar: the ring for
+   working, the badge for waiting, blocked and failed. Line two keeps the words
+   and the unread dot. */
 
-.bot .presence {
+.bot .presence,
+.pin .presence {
   --presence-surface: var(--bg-rail);
 }
 
-.bot-preview[data-state="working"],
-.bot-preview[data-state="thinking"] {
-  color: var(--text-muted);
+.pin .presence {
+  --size: var(--avatar-pin);
 }
 
 .bot-preview[data-state="waiting"],
@@ -1564,36 +1564,12 @@ li + li > .option {
   color: var(--danger);
 }
 
-.bot-line > .glyph,
 .task > .glyph {
-  align-self: center;
   --presence-surface: var(--bg-rail);
 }
 
-.task[data-status="waiting"] .task-title,
-.task[data-status="running"] .task-title {
+.task[data-status="waiting"] .task-title {
   color: var(--text);
-}
-
-.task-word {
-  font-size: var(--text-xs);
-  white-space: nowrap;
-}
-
-.task-end {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.task[data-status="waiting"] .task-word,
-.task[data-status="blocked"] .task-word {
-  color: var(--warn);
-}
-
-.task[data-status="failed"] .task-word,
-.task[data-status="done-failed"] .task-word {
-  color: var(--danger);
 }
 
 .title-pill .presence {
@@ -1700,7 +1676,7 @@ li + li > .option {
   padding: 0 14px;
 }
 
-[data-input="touch"] .jump {
+[data-input="touch"] .jump-latest {
   height: 40px;
 }
 

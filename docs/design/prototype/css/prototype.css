@@ -308,9 +308,14 @@
   color: var(--text-faint);
 }
 
-.spec-static .jump,
+.spec-static {
+  display: inline-block;
+}
+
+.spec-static .jump-latest,
 .spec-static .status-strip {
   position: static;
+  max-width: none;
   margin: 0;
   transform: none;
   animation: none;

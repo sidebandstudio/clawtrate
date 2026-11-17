@@ -364,7 +364,7 @@
     `<div class="shelf-row"${tone ? ` data-tone="${tone}"` : ""}>${lead}<span class="shelf-text">${text}</span>${actions}</div>`;
 
   // run: idle, running, waiting, stopping, offline, readonly. mode: steer or queue.
-  CT.composer = ({ bot, run = "idle", text = "", shelf = "", menu = false, jump = "", mode = "steer" }) => {
+  CT.composer = ({ bot, run = "idle", text = "", shelf = "", menu = false, mode = "steer" }) => {
     const name = CT.bots[bot].name;
     const active = run === "running" || run === "waiting";
     const placeholder = {
@@ -376,7 +376,7 @@
     }[run];
     const sendLabel = active ? (mode === "queue" ? "Queue after this turn" : "Steer this turn") : run === "stopping" ? "Queue" : "Send";
     return (
-      `<footer class="composer" data-run="${run}">${jump}<div class="composer-inner">` +
+      `<footer class="composer" data-run="${run}"><div class="composer-inner">` +
       `<div class="composer-shelf">${shelf}</div>` +
       `<div class="composer-box">` +
       `<button type="button" class="icon-button" aria-label="Attach files" title="Attach files">${icon("plus")}</button>` +
@@ -402,9 +402,10 @@
       : `<li><button type="button" class="menu-item" role="menuitem" data-active="true" data-mode="send">${icon("arrow-up")}Send<kbd>↵</kbd></button></li>`) +
     `<li><button type="button" class="menu-item" role="menuitem" data-mode="new-task">${icon("new-task")}Start as new task<kbd>⇧⌘↵</kbd></button></li></ul>`;
 
-  // Jump to latest. state: latest, live, needs-you.
+  // Jump to latest: the shell's .jump-latest, with the states a run needs.
+  // state: latest, live, needs-you.
   CT.jump = ({ state = "latest", bot, phrase = "", hidden = false, up = false }) =>
-    `<button type="button" class="jump" data-state="${state}" data-action="jump"${hidden ? " hidden" : ""}>` +
+    `<button type="button" class="jump-latest" data-state="${state}" data-action="jump" data-testid="jump-latest"${hidden ? " hidden" : ""}>` +
     (state === "live"
       ? `${CT.presence(bot, "working", { size: "sm", label: false })}<span>${esc(phrase)}</span>`
       : state === "needs-you"
@@ -440,39 +441,44 @@
 
   // Rail rows -------------------------------------------------------------------------
 
+  // A task row: the title and at most one mark.
   // status: idle, running, waiting, blocked, failed, done-failed, unread, queued.
   const taskMarks = {
-    running: ["working", "", "working"],
-    waiting: ["waiting", "", "needs you"],
-    blocked: ["blocked", "", "blocked"],
-    failed: ["failed", "", "last run failed"],
-    "done-failed": ["failed", "", "done with failures"],
-    unread: ["unread", "", "unread"],
-    queued: ["queued", "", "queued"],
+    running: ["working", "working"],
+    waiting: ["waiting", "needs you"],
+    blocked: ["blocked", "blocked"],
+    failed: ["failed", "last run failed"],
+    "done-failed": ["failed", "done with failures"],
+    queued: ["queued", "queued"],
   };
 
   CT.taskRow = ({ title, status = "idle", current = false, id = "" }) => {
     const mark = taskMarks[status];
+    const spoken = title + (mark ? `, ${mark[1]}` : status === "unread" ? ", unread" : "");
     return (
       `<li><button type="button" class="task"${id ? ` id="${id}"` : ""} aria-current="${current}" data-status="${status}"` +
-      `${status === "unread" ? ' data-unread="true"' : ""} aria-label="${esc(title)}${mark ? `, ${mark[2]}` : ""}">` +
-      `<span class="task-title">${esc(title)}</span>` +
-      (mark ? `<span class="task-end">${mark[1] ? `<span class="task-word">${mark[1]}</span>` : ""}${CT.glyph(mark[0])}</span>` : "") +
+      ` data-unread="${status === "unread"}" aria-label="${esc(spoken)}"><span class="task-title">${esc(title)}</span>` +
+      (mark ? CT.glyph(mark[0]) : status === "unread" ? '<span class="unread-dot" aria-hidden="true"></span>' : "") +
       `</button></li>`
     );
   };
 
-  // A bot row with its tasks. state is the most urgent state among its tasks.
-  CT.botGroup = ({ bot, state = "idle", preview, time, mark = "", open = false, current = false, tasks = "", i = 0, id = "" }) => {
+  // A bot row. It speaks for all of the bot's tasks, with three independent
+  // signals: the avatar's state (the most urgent state among the tasks), the
+  // preview and time (the latest activity), and the unread dot (any unread task).
+  // state: idle, thinking, working, waiting, blocked, failed, done, done-failed.
+  CT.botGroup = ({ bot, state = "idle", preview, time, unread = false, tone = "", open = false, current = false, tasks = "", i = 0, id = "" }) => {
     const b = CT.bots[bot];
-    const spoken = `${b.name}, ${stateWord[state]}${mark === "unread" ? ", unread" : mark === "failed" ? ", done with failures" : ""}`;
+    const face = state === "done-failed" ? "done" : state;
+    const spoken =
+      `${b.name}, ${state === "done-failed" ? "done with failures" : stateWord[state]}` + (unread ? ", unread" : "");
     return (
       `<li class="bot-group"${open ? ' data-open="true"' : ""}${id ? ` id="${id}"` : ""}>` +
       `<button type="button" class="bot" aria-current="${current}"${tasks ? ` aria-expanded="${open}"` : ""} aria-label="${spoken}">` +
-      `${CT.presence(bot, state, { label: false, i })}` +
+      `${CT.presence(bot, face, { label: false, i, badge: state === "done-failed" ? "failed" : undefined })}` +
       `<span class="bot-text"><span class="bot-line"><span class="bot-name">${b.name}</span><time class="bot-time">${time}</time></span>` +
-      `<span class="bot-line"><span class="bot-preview" data-state="${state}">${esc(preview)}</span>` +
-      `${mark === "unread" ? '<span class="unread-dot"></span>' : mark ? CT.glyph(mark) : ""}</span></span></button>` +
+      `<span class="bot-line"><span class="bot-preview" data-state="${tone || face}">${esc(preview)}</span>` +
+      `${unread ? '<span class="unread-dot" aria-hidden="true"></span>' : ""}</span></span></button>` +
       (open && tasks ? `<ul class="task-list" aria-label="${b.name}'s tasks">${tasks}</ul>` : "") +
       `</li>`
     );
