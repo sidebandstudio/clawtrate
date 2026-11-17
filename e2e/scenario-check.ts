@@ -205,6 +205,7 @@ async function computerChecks(
       openExtra: (label) =>
         openOperator(inst, label, ["operator.read", "operator.write"], ["tool-events"]),
       gatewayPort: ports.gatewayPort,
+      stateDir: inst.stateDir,
       pagesOrigin: `http://127.0.0.1:${pagesPort}`,
       bots: order.map((id) => ({ id, cdpPort: botCdpPorts[declaration.bots.indexOf(id)]! })),
       renewTimeoutMs: declaration.renewTimeoutMs,

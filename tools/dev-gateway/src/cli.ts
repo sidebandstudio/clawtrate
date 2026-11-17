@@ -1153,7 +1153,8 @@ export function browserProcesses(
     .map((row) => row.pid);
 }
 
-function listProcesses(): { pid: number; command: string }[] | null {
+/** Every process with its full command line, or null when `ps` cannot say. */
+export function listProcesses(): { pid: number; command: string }[] | null {
   const result = spawnSync("ps", ["-axww", "-o", "pid=,command="], {
     encoding: "utf8",
     timeout: 5000,

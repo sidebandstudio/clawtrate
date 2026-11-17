@@ -8,6 +8,8 @@
 // check of a caller that leaves. Bots act through the scripted model's
 // browser directives (#browse, #browse-read, #browse-slow, #browse-outside).
 
+import { spawnSync } from "node:child_process";
+import { browserProcesses, listProcesses } from "./cli.ts";
 import type { OperatorSession, GatewayEvent } from "./operator.ts";
 import { OTHER_LOOPBACK, OUTSIDE_ADDRESS } from "./scenarios.ts";
 import { PAGES_RECORD_PATH, REFUSED_TITLE, SLOW_PAGE_MS, type Refusal } from "./scripted-pages.ts";
@@ -51,6 +53,8 @@ export type ComputerContext = {
   gatewayPort: number;
   /** The scripted pages' origin, `http://127.0.0.1:<port>`. */
   pagesOrigin: string;
+  /** The instance's state folder, which names its browser's profiles in their processes' arguments. */
+  stateDir: string;
   /** The two bots with browsers of their own, and each one's debugging port. */
   bots: { id: string; cdpPort: number }[];
   /** How long a lease or view lives without renewal, as configured. */
@@ -266,6 +270,38 @@ async function watchTab(cdpPort: number, targetId: string) {
   );
   socket.send(JSON.stringify({ id: 1, method: "Page.enable", params: {} }));
   return { seen, close: () => socket.close() };
+}
+
+/** Whether an address as `lsof -nP` prints it is on loopback. */
+const onLoopback = (address: string) =>
+  /^127\.\d+\.\d+\.\d+:/.test(address) || address.startsWith("[::1]:");
+
+/**
+ * The internet sockets of the instance's browser processes that are not on
+ * loopback, local or remote end, as `lsof` lists them; null when the
+ * processes or their sockets cannot be listed.
+ */
+function offLoopbackSockets(stateDir: string): { pids: number; sockets: string[] } | null {
+  const rows = listProcesses();
+  if (!rows) return null;
+  const pids = browserProcesses(stateDir, rows);
+  if (pids.length === 0) return { pids: 0, sockets: [] };
+  const result = spawnSync("lsof", ["-nP", "-a", "-p", pids.join(","), "-i"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  // 1: none of them has an internet socket at this moment.
+  if (result.error || (result.status !== 0 && result.status !== 1)) return null;
+  const sockets: string[] = [];
+  for (const line of result.stdout.split("\n").slice(1)) {
+    const match = /\s(TCP|UDP)\s+(\S+?)(?:->(\S+))?(?:\s|$)/.exec(line);
+    if (!match) continue;
+    const [, protocol, local, remote] = match;
+    if (!onLoopback(local!) || (remote !== undefined && !onLoopback(remote))) {
+      sockets.push(`${protocol} ${local}${remote ? `->${remote}` : ""}`);
+    }
+  }
+  return { pids: pids.length, sockets };
 }
 
 /** Shared between the checks, which run in order. */
@@ -968,6 +1004,33 @@ export const COMPUTER_CHECKS: ComputerCheck[] = [
         refusals.some((r) => r.host === new URL(OTHER_LOOPBACK).host),
         `the scripted pages recorded no refusal for ${new URL(OTHER_LOOPBACK).host}: ${show(refusals)}`,
       );
+    },
+  },
+  {
+    name: "the development browser's own connections stay on loopback while it runs",
+    covers: [],
+    async run(ctx) {
+      // Chromium makes connections of its own (a time service, for one) even with
+      // background networking off. Every socket of every one of the instance's
+      // browser processes, sampled for a while, must be on loopback at both ends.
+      const off = new Set<string>();
+      let samples = 0;
+      let most = 0;
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        const found = offLoopbackSockets(ctx.stateDir);
+        expect(found, "could not list the browser's processes or their sockets");
+        most = Math.max(most, found.pids);
+        for (const socket of found.sockets) off.add(socket);
+        samples += 1;
+        await sleep(250);
+      }
+      expect(
+        most >= ctx.bots.length,
+        `found ${most} browser processes of the instance, fewer than its ${ctx.bots.length} browsers`,
+      );
+      expect(samples >= 5, `only ${samples} samples of the browser's sockets`);
+      same([...off], [], "the browser's sockets that are not on loopback");
     },
   },
 ];
