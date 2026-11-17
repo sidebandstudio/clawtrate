@@ -857,7 +857,8 @@ be alive with its recorded start time). They start their recording servers
 on the instance's scripted-model port + 1, + 2 and + 3, refuse a port that is
 already taken, wait until each listens, and stop them by PID. They change the
 instance's config, bots, sessions and pairing, so the instance is stopped and
-reset afterwards. Each prints what it saw, checks the facts this document
+reset afterwards, by hand or by passing `--reset-after`, which has the probe
+run `pnpm dev-gateway stop` and `reset` for its own instance when it ends. Each prints what it saw, checks the facts this document
 takes from it, and exits 1 if any check fails.
 
 ```bash

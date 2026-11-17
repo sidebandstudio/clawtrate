@@ -85,3 +85,11 @@ export function instanceCli(inst) {
       child.stdin.end(input ?? "");
     });
 }
+
+/** Stops and resets this instance through the tool (only its own processes and state folder). */
+export function resetInstance(inst) {
+  for (const command of ["stop", "reset"]) {
+    const r = spawnSync("pnpm", ["dev-gateway", command, "--instance", inst.name], { cwd: checkout, encoding: "utf8" });
+    console.log(`pnpm dev-gateway ${command} --instance ${inst.name}: exit ${r.status}`);
+  }
+}

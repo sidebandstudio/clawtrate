@@ -5,6 +5,7 @@
 //   pnpm dev-gateway start --instance <name> --no-seed
 //   CLAWTRATE_DEV_INSTANCE=<name> node docs/research/dev-gateway/provider-accounts/probe.mjs
 //   pnpm dev-gateway stop --instance <name> && pnpm dev-gateway reset --instance <name>
+// or pass --reset-after to have the probe stop and reset the instance itself when it ends.
 //
 // The target check is instance-guard.mjs: a named instance this checkout started,
 // whose recorded gateway is still running; after connecting, the gateway must
@@ -21,10 +22,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveInstance } from "./instance-guard.mjs";
+import { parseArgs } from "node:util";
+import { resetInstance, resolveInstance } from "./instance-guard.mjs";
 import { connectGateway, sendAndCapture, sleep, startRecorders } from "./probe-client.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const { values: opts } = parseArgs({ options: { "reset-after": { type: "boolean", default: false } } });
 const inst = resolveInstance();
 const { stateDir, gatewayPort, scriptedPort } = inst;
 const recPorts = [scriptedPort + 1, scriptedPort + 2, scriptedPort + 3];
@@ -225,5 +228,6 @@ try {
   recorders.stop();
   const failed = checks.filter((c) => !c.ok);
   console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);
+  if (opts["reset-after"]) resetInstance(inst);
   process.exitCode = failed.length ? 1 : 0;
 }

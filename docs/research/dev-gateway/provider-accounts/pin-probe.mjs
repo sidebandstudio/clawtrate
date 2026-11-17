@@ -5,6 +5,7 @@
 //   pnpm dev-gateway start --instance <name> --no-seed
 //   CLAWTRATE_DEV_INSTANCE=<name> node docs/research/dev-gateway/provider-accounts/pin-probe.mjs [--out <file.json>]
 //   pnpm dev-gateway stop --instance <name> && pnpm dev-gateway reset --instance <name>
+// or pass --reset-after to have the probe stop and reset the instance itself when it ends.
 //
 // The target check is instance-guard.mjs: a named instance this checkout started,
 // whose recorded gateway is still running. OpenClaw's command line is run only
@@ -41,10 +42,10 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { instanceCli, resolveInstance } from "./instance-guard.mjs";
+import { instanceCli, resetInstance, resolveInstance } from "./instance-guard.mjs";
 import { connectGateway, sendAndCapture, sleep, startRecorders, summarizeEvents } from "./probe-client.mjs";
 
-const { values: opts } = parseArgs({ options: { out: { type: "string" } } });
+const { values: opts } = parseArgs({ options: { out: { type: "string" }, "reset-after": { type: "boolean", default: false } } });
 const inst = resolveInstance();
 const cli = instanceCli(inst);
 const accountsPort = inst.scriptedPort + 1;
@@ -345,5 +346,6 @@ try {
   if (opts.out) writeFileSync(opts.out, `${JSON.stringify(out, null, 2)}\n`);
   const failed = checks.filter((c) => !c.ok);
   console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);
+  if (opts["reset-after"]) resetInstance(inst);
   process.exitCode = failed.length ? 1 : 0;
 }
