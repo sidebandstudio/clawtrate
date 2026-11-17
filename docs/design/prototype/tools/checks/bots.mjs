@@ -218,6 +218,34 @@ await p.click('[data-b-section="accounts"]');
 check("P1 phone: a section replaces the list, with a way back", await p.evaluate(() => getComputedStyle(document.querySelector(".b-nav")).display === "none" && getComputedStyle(document.querySelector('[data-b="to-nav"]')).display !== "none"));
 await p.close();
 
+// FM-16 and FM-17 at phone width.
+const phone = { width: 390, height: 844 };
+p = await open("open=settings&section=accounts&account=openai:work", phone);
+await p.click('[data-b="disconnect"]');
+check("FM-16 phone: a confirmation is a card at the foot, as tall as its content", await p.evaluate(() => { const r = document.querySelector("#confirm-dialog").getBoundingClientRect(); return r.height < 360 && Math.abs(innerHeight - r.bottom - 12) < 2; }));
+check("FM-16 phone: its buttons are at least 44 px", await p.evaluate(() => [...document.querySelectorAll("#confirm-dialog .button")].every((b) => b.getBoundingClientRect().height >= 44)));
+await p.close();
+p = await open("open=settings&section=accounts&account=openai:home&long=1", phone);
+check("FM-16 phone: a long label wraps, and Edit stays in view", await p.evaluate(() => { const v = document.querySelector(".b-label-value span"); const e = document.querySelector('[data-b="relabel"]'); const r = e.getBoundingClientRect(); return v.scrollWidth <= v.clientWidth + 1 && r.right <= innerWidth && r.width > 0; }));
+check("FM-16 phone: small actions are at least 44 px to touch", await p.evaluate(() => [...document.querySelectorAll('#settings-dialog .button[data-size="sm"]')].every((b) => b.getBoundingClientRect().height >= 44)));
+await p.close();
+p = await open("bot=pip&panel=open&tab=settings&long=1", phone);
+check("FM-16 phone: with a long label, the account's state word is shown whole", await p.evaluate(() => { const st = document.querySelector('#panel-settings [data-bs="account"] .b-state'); return st.textContent === "Bound" && st.scrollWidth <= st.clientWidth + 1; }));
+await p.click('#panel-settings [data-b-select="model"]');
+await p.keyboard.press("Escape");
+check("FM-17 phone: Escape in a menu closes the menu and not the Work pane", await p.evaluate(() => !document.querySelector(".b-menu") && window.app.model.panel && document.activeElement.dataset.bSelect === "model"));
+await p.close();
+p = await open("open=settings", phone);
+check("FM-16 phone: the Settings list has its own Close", await p.evaluate(() => { const c = document.querySelector('.b-nav .b-close'); return c && getComputedStyle(c).display !== "none" && c.getBoundingClientRect().width > 0; }));
+await p.close();
+
+// The tab bar: tabs that don't fit never wrap or shorten.
+p = await open("bot=marlow&panel=open&tab=settings", { width: 1100, height: 800 });
+await p.evaluate(() => { const words = ["Einzelheiten", "Dateien", "Computer", "Einstellungen"]; document.querySelectorAll(".work-panel .tab").forEach((t, i) => (t.textContent = words[i])); });
+await p.waitForTimeout(100);
+check("Tab bar: longer words stay on one row, unshortened, with the chosen tab in view", await p.evaluate(() => { const bar = document.querySelector(".work-panel .tabs"); const tabs = [...bar.querySelectorAll(".tab")]; const on = bar.querySelector('[aria-selected="true"]'); const b = bar.getBoundingClientRect(); const r = on.getBoundingClientRect(); return new Set(tabs.map((t) => Math.round(t.getBoundingClientRect().top))).size === 1 && tabs.every((t) => t.scrollWidth <= t.clientWidth + 1) && r.left >= b.left - 1 && r.right <= b.right + 1 && bar.dataset.fit; }));
+await p.close();
+
 // Part 2: a bot's settings ------------------------------------------------------------------------
 const pane = (p) => text(p, "#panel-settings");
 p = await open("bot=marlow&panel=open&tab=settings");

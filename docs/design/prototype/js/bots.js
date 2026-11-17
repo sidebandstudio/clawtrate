@@ -692,9 +692,9 @@
     const edit = B.settings.edit;
     const lockedBy = users.filter((name) => binding[app.bots.find((x) => x.name === name)?.id]?.evidence?.state === "matched");
     const labelRow = edit
-      ? `<div class="b-row"><dt>Label</dt><dd style="display:flex;gap:6px;align-items:center"><input class="input" style="height:34px;width:150px" data-b-relabel data-b-focus maxlength="32" value="${esc(a.label)}" aria-label="Label" />` +
+      ? `<div class="b-row b-edit-row"><dt>Label</dt><dd class="b-edit"><input class="input" data-b-relabel data-b-focus maxlength="32" value="${esc(a.label)}" aria-label="Label" />` +
         `${button("Save", 'data-b="relabel-save" data-size="sm"', "primary")}${button("Cancel", 'data-b="relabel-cancel" data-size="sm"', "quiet")}</dd></div>`
-      : `<div class="b-row"><dt>Label</dt><dd>${isAdmin() ? `${esc(a.label || "None")} ${button("Edit", 'data-b="relabel" data-size="sm"', "quiet")}` : "Shown to admin connections"}</dd></div>`;
+      : `<div class="b-row"><dt>Label</dt><dd class="b-wrap-value b-label-value">${isAdmin() ? `<span>${esc(a.label || "None")}</span>${button("Edit", 'data-b="relabel" data-size="sm" aria-label="Edit label"', "quiet")}` : "Shown to admin connections"}</dd></div>`;
     const body =
       `<dl class="facts"><div><dt>Provider</dt><dd>${esc(providerName(a.provider))}</dd></div>${labelRow}` +
       `<div><dt>Kind</dt><dd>${kindWord(a)}</dd></div>` +
@@ -902,6 +902,40 @@
       $('[data-b="next"]', createDialog)?.click();
     }
   });
+
+  // Escape belongs to the innermost thing that is open: a menu, then a dialog,
+  // and only then the shell (the Work pane drawer, the rail's menus).
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape") return;
+      if (menu) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeSelect(true);
+      } else if (document.querySelector(".b-dialog[open]")) event.stopPropagation();
+    },
+    true,
+  );
+
+  // The Work pane's tab bar: the tabs never wrap or shorten. When they don't fit,
+  // their padding tightens; when they still don't, the row scrolls sideways with
+  // the chosen tab kept in view.
+  function fitTabs() {
+    const bar = $(".work-panel .tabs");
+    if (!bar || !bar.offsetParent) return;
+    delete bar.dataset.fit;
+    if (bar.scrollWidth > bar.clientWidth + 1) bar.dataset.fit = "tight";
+    if (bar.scrollWidth > bar.clientWidth + 1) bar.dataset.fit = "scroll";
+    const on = $('.tab[aria-selected="true"]', bar);
+    if (on && bar.dataset.fit === "scroll") {
+      const l = on.offsetLeft - bar.offsetLeft;
+      if (l < bar.scrollLeft || l + on.offsetWidth > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = l - 16;
+    }
+  }
+  new ResizeObserver(fitTabs).observe($("#work-panel"));
+  new MutationObserver(fitTabs).observe($(".work-panel .tabs"), { subtree: true, attributes: true, attributeFilter: ["aria-selected"], childList: true, characterData: true });
+  CT.botsFitTabs = fitTabs;
 
   [createDialog, settingsDialog, confirmDialog].forEach((dialog) =>
     dialog.addEventListener("cancel", (event) => {
@@ -1179,6 +1213,11 @@
       case "relabel-save": {
         const a = acct(B.settings.account);
         const value = $("[data-b-relabel]", settingsDialog).value.trim();
+        // A label can't be cleared while another account of its provider needs telling apart.
+        if (!value && accounts.some((x) => x !== a && x.provider === a.provider)) {
+          $("[data-b-relabel]", settingsDialog).setAttribute("aria-invalid", "true");
+          return announce(`A label is needed: you have another ${providerName(a.provider)} account`);
+        }
         if (accounts.some((x) => x !== a && x.provider === a.provider && x.label.toLowerCase() === value.toLowerCase())) {
           $("[data-b-relabel]", settingsDialog).setAttribute("aria-invalid", "true");
           return announce(`Another ${providerName(a.provider)} account is called ${value}`);
