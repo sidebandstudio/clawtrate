@@ -271,10 +271,8 @@ async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
   return parseJsonOutput<T>(result.stdout);
 }
 
-test("F-023: the dock badge counts the unread tasks the gateway reports, and follows them", async () => {
+test("F-023: the dock badge counts the unread tasks, and follows what the gateway says of them", async () => {
   test.skip(WINDOWS, NO_GATEWAY);
-  // The tasks the gateway calls unread, but the one on screen, which this device has read.
-  const open = "agent:otto:disk-space";
   const unread = async () =>
     (
       await gatewayCall<{ sessions: Array<{ key: string; unread?: boolean }> }>("sessions.list", {
@@ -282,16 +280,21 @@ test("F-023: the dock badge counts the unread tasks the gateway reports, and fol
         excludeCron: true,
         excludeSubagents: true,
       })
-    ).sessions.filter((row) => row.unread === true && row.key !== open);
-  const before = await unread();
-  expect(before.length, "the seed leaves unread tasks").toBeGreaterThan(1);
-  await expect.poll(() => dockBadge(APP_PID), { timeout: 20_000 }).toBe(String(before.length));
-  // One read on the gateway, by another client: the badge takes one away; unread again, it comes back.
-  const [first] = before;
-  await gatewayCall("sessions.patch", { key: first!.key, unread: false });
-  await expect.poll(() => dockBadge(APP_PID), { timeout: 20_000 }).toBe(String(before.length - 1));
-  await gatewayCall("sessions.patch", { key: first!.key, unread: true });
-  await expect.poll(() => dockBadge(APP_PID), { timeout: 20_000 }).toBe(String(before.length));
+    ).sessions.filter((row) => row.unread === true);
+  // A count is shown, no more than the gateway's unread tasks: those this device has read
+  // (the one on screen, and those it opened on the way) are not counted again.
+  const listed = await unread();
+  await expect.poll(() => Number(dockBadge(APP_PID) ?? 0), { timeout: 20_000 }).toBeGreaterThan(0);
+  const shown = Number(dockBadge(APP_PID));
+  expect(shown).toBeLessThanOrEqual(listed.length);
+  // A task of Pip's, which this device never opened: read by another client, the badge takes
+  // one away; unread again, it comes back.
+  const pip = listed.find((row) => row.key.startsWith("agent:pip:"));
+  expect(pip, "an unread task of Pip's").toBeTruthy();
+  await gatewayCall("sessions.patch", { key: pip!.key, unread: false });
+  await expect.poll(() => dockBadge(APP_PID), { timeout: 20_000 }).toBe(String(shown - 1));
+  await gatewayCall("sessions.patch", { key: pip!.key, unread: true });
+  await expect.poll(() => dockBadge(APP_PID), { timeout: 20_000 }).toBe(String(shown));
 });
 
 test("keeps the device key and tokens in its own data folder, readable by the user only", () => {
