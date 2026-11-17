@@ -1322,9 +1322,20 @@ export class ClawtrateClient {
       return;
     const transcript = this.state.transcripts[key]!;
     const active = activeRun(transcript);
-    const mode = !active ? "new" : active.state === "stopping" ? "queue" : "steer";
+    // A message that came from the queue keeps that origin through every attempt, until
+    // it starts or is removed: it starts now with no run active, and otherwise waits
+    // behind the active run, so a refusal still reads "Couldn't start" on the shelf.
+    const fromQueue = message.mode === "queue";
+    const mode = fromQueue
+      ? "queue"
+      : !active
+        ? "new"
+        : active.state === "stopping"
+          ? "queue"
+          : "steer";
     const held =
       active !== undefined && active.state !== "stopping" && questionPending(transcript, active);
+    const status = held ? "held" : mode === "queue" && active ? "queued" : "sending";
     this.updateActivity(key, (activity) => {
       // A run the gateway refused never started; the retry is a new attempt.
       const cleared = {
@@ -1335,16 +1346,16 @@ export class ClawtrateClient {
       };
       const next = updateMessage(cleared, messageId, {
         mode,
-        status: mode === "queue" ? "queued" : held ? "held" : "sending",
+        status,
         error: null,
         runId: mode === "steer" ? active!.id : null,
       });
       const updated = next.outbox.find((each) => each.id === messageId)!;
-      if (mode === "new") return startLocalRun(next, updated, this.now());
-      if (mode === "queue") return queueLocalRun(next, updated, this.now());
+      if (status === "sending" && !active) return startLocalRun(next, updated, this.now());
+      if (status === "queued") return queueLocalRun(next, updated, this.now());
       return next;
     });
-    if (mode !== "queue" && !held) this.enqueueDelivery(key, messageId);
+    if (status === "sending") this.enqueueDelivery(key, messageId);
   }
 
   /** Remove a failed, cancelled or unconfirmed message, and the run that never started with it. */

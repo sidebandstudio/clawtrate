@@ -168,6 +168,36 @@ describe("queued messages (F-421, F-420)", () => {
     client.stop();
   });
 
+  it("F-061: a queued message keeps its queue origin through every refused Try again, and queues again behind a run", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["chat.send"] = () => {
+      throw new GatewayError({ code: "INVALID_REQUEST", message: "budget exhausted" });
+    };
+    start(gateway);
+    await until(() => transcript().runs.length === 1);
+    const id = client.sendMessage(KEY, "queued words", { mode: "queue" });
+    gateway.emit("agent", agentEvent("run-x", 2, "lifecycle", { phase: "end" }));
+    await until(() => transcript().outbox[0]?.status === "failed");
+    for (let attempt = 2; attempt <= 3; attempt += 1) {
+      client.retryMessage(KEY, id);
+      await until(
+        () =>
+          gateway.calls("chat.send").length === attempt &&
+          transcript().outbox[0]?.status === "failed",
+      );
+      // Still from the queue: the shelf keeps it as "Couldn't start".
+      expect(transcript().outbox[0]).toMatchObject({ id, mode: "queue", status: "failed" });
+    }
+    // Tried again while another run works, it waits behind that run.
+    gateway.emit("agent", agentEvent("run-y", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.id === "run-y"));
+    client.retryMessage(KEY, id);
+    expect(transcript().outbox[0]).toMatchObject({ mode: "queue", status: "queued" });
+    expect(transcript().runs.find((run) => run.id === id)?.state).toBe("queued");
+    expect(gateway.calls("chat.send")).toHaveLength(3);
+    client.stop();
+  });
+
   it("cancels and sends-now through the bridge, and refuses send-now while stopping", async () => {
     const { client, gateway, transcript } = await openTask();
     const viewer = createBridgeSession(client);

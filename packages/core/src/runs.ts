@@ -326,8 +326,9 @@ export type OutgoingMessage = {
   text: string;
   /**
    * How it was delivered: a new run, a steer into the active run, or queued
-   * after it. A queued message keeps `queue` once it starts, so a start the
-   * gateway refuses is told apart from a send that failed.
+   * after it. A queued message keeps `queue` once it starts and through every
+   * retry, until it starts or is removed, so a start the gateway refuses is
+   * told apart from a send that failed however often it is tried again.
    */
   mode: "new" | "steer" | "queue";
   status: OutgoingStatus;
