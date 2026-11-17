@@ -129,9 +129,9 @@ describe("F-488 every kind of 8.1 has its words, its kind and its outcome", () =
     expect(line(c).detail).toBe('"Dana wants the boiler serviced in…"');
     expect(kindOf(call("write", { path: "./MEMORY.md", content: "x" })).kind).toBe("memory");
     // An absolute path is memory only inside the bot's workspace.
-    expect(kindOf(call("write", { path: "/home/bot/ws/memory/a.md" }), {}).kind).toBe("edit");
+    expect(kindOf(call("write", { path: "/workspace/bot/memory/a.md" }), {}).kind).toBe("edit");
     expect(
-      kindOf(call("write", { path: "/home/bot/ws/memory/a.md" }), { workspaceRoot: "/home/bot/ws" })
+      kindOf(call("write", { path: "/workspace/bot/memory/a.md" }), { workspaceRoot: "/workspace/bot" })
         .kind,
     ).toBe("memory");
     expect(kindOf(call("write", { path: "notes/memory/a.md" })).kind).toBe("edit");
