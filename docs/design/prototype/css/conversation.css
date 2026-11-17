@@ -2468,7 +2468,7 @@ dl.standing-grid {
 
 .action > summary {
   display: grid;
-  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto 12px;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto 12px;
   align-items: center;
   gap: 8px;
   min-height: 40px;
@@ -2481,7 +2481,16 @@ dl.standing-grid {
   background: var(--bg-hover);
 }
 
+.action-sentence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
 .action-verb {
+  flex: none;
   white-space: nowrap;
   color: var(--text-muted);
 }
@@ -2565,9 +2574,38 @@ dl.standing-grid {
   color: var(--accent);
 }
 
-.action[data-status="failed"]:not([data-fold]) > summary .action-verb,
-.action[data-status="failed"]:not([data-fold]) > summary .action-object {
+.action:is([data-status="failed"], [data-status="blocked"]):not([data-fold]) > summary .action-verb,
+.action:is([data-status="failed"], [data-status="blocked"]):not([data-fold]) > summary .action-object {
   color: var(--danger);
+}
+
+.action-detail[data-tone="muted"] {
+  color: var(--text-muted);
+}
+
+/* A T3 Code thread's card: its calls, each with its own Raw. */
+.t3-count {
+  color: var(--text-faint);
+}
+
+.t3-item .exchange-meta {
+  flex-wrap: wrap;
+}
+
+.t3-item .exchange-meta .state {
+  margin-left: auto;
+}
+
+.t3-item .card-actions {
+  padding: 2px 0 0;
+}
+
+.t3-item .exchange-note {
+  margin-top: 4px;
+}
+
+.action-plan li[data-status="pending"] {
+  color: var(--text-muted);
 }
 
 .action[data-fresh="true"] {
@@ -2774,19 +2812,60 @@ dl.standing-grid {
 }
 
 @container conversation (max-width: 560px) {
-  /* The detail moves to a second line; it is never dropped. */
+  /* The verb and the object are one sentence that wraps over at most two lines, so
+     the object stays readable in every state; the detail is the last line. */
   .action > summary {
-    grid-template-columns: auto minmax(0, 1fr) auto 12px;
+    grid-template-columns: minmax(0, 1fr) auto 12px;
+    align-items: start;
     gap: 0 8px;
-    padding-top: 8px;
-    padding-bottom: 8px;
+    padding-top: 9px;
+    padding-bottom: 9px;
   }
 
-  .action-verb,
-  .action-what,
-  .action-state,
-  .action > summary > .chevron {
+  .action-sentence {
+    display: -webkit-box;
+    grid-column: 1;
     grid-row: 1;
+    overflow: hidden;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-height: 1.45;
+  }
+
+  .action-sentence .action-what {
+    display: inline;
+  }
+
+  .action-sentence .action-what > .icon,
+  .action-sentence .action-what > .agent-mark,
+  .action-sentence .action-what > .glyph {
+    display: inline-block;
+    margin: 0 4px 0 0;
+    vertical-align: -2px;
+  }
+
+  .action-sentence .action-what > .agent-mark {
+    display: inline-grid;
+    vertical-align: -4px;
+  }
+
+  .action-object {
+    overflow: visible;
+    overflow-wrap: break-word;
+    white-space: normal;
+  }
+
+  .action-state {
+    grid-column: 2;
+    grid-row: 1;
+    min-height: 20px;
+  }
+
+  .action > summary > .chevron {
+    grid-column: 3;
+    grid-row: 1;
+    margin-top: 4px;
   }
 
   .action-detail {
