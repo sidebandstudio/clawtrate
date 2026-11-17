@@ -54,6 +54,7 @@ const SURFACES = [
   "bg-code",
   "bg-selected",
   "bg-hover",
+  "bg-bubble",
 ];
 
 const themes = {
@@ -77,6 +78,22 @@ describe("text contrast (C6)", () => {
         expect(worst).toBeGreaterThanOrEqual(4.5);
       });
     }
+  }
+
+  for (const [name, tokens] of Object.entries(themes)) {
+    it(`${name} secondary text reaches 4.5:1 on the selected task inside an open bot`, () => {
+      // The open bot's block is 55% of the hover fill over the rail; the current
+      // task's fill sits on that (visual-language.md, section 13).
+      const rail = parse(tokens["bg-rail"]!, [0, 0, 0]);
+      const hover = /^rgba\((.+),\s*([\d.]+)\)$/.exec(tokens["bg-hover"]!)!;
+      const group = parse(`rgba(${hover[1]}, ${Number(hover[2]) * 0.55})`, rail);
+      const selected = parse(tokens["bg-selected"]!, group);
+      for (const text of ["text", "text-muted", "text-faint"]) {
+        expect(contrast(parse(tokens[text]!, selected), selected), text).toBeGreaterThanOrEqual(
+          4.5,
+        );
+      }
+    });
   }
 
   it("keeps the smallest text size at 12px", () => {
