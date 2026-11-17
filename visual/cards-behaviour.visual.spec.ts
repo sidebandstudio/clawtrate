@@ -1023,15 +1023,7 @@ test.describe("Messaged cards", () => {
     for (const scene of ["messaged-sent", "messaged-replied", "messaged-no-reply"]) {
       expect(await verb(scene, "messaged-card"), scene).toBe("sent");
     }
-    for (const scene of [
-      "t3-started",
-      "t3-approval",
-      "t3-delivery-unknown",
-      "t3-failed",
-      "t3-not-sent",
-    ]) {
-      expect(await verb(scene, "t3-card"), scene).toBe("asked to send");
-    }
+    expect(await verb("t3-failed", "t3-card")).toBe("asked to send");
     expect(await verb("t3-call-made", "t3-card")).toBe("sent");
     await openFixture(page, "scene=received-completed", "light");
     const received = page.getByTestId("received-card");
@@ -1189,7 +1181,7 @@ test.describe("Messaged cards", () => {
     const state = page.getByTestId("messaged-card").locator("summary .state");
     await expect(state).toHaveText("Last seen working");
     await expect(state.locator(".glyph")).toHaveCSS("animation-name", "none");
-    for (const scene of ["messaged-working", "t3-started", "messaged-approval"]) {
+    for (const scene of ["messaged-working", "messaged-approval"]) {
       await page.goto(`/?scene=${scene}&theme=light&motion=reduce`);
       await page.locator(".app").waitFor();
       const glyph = page.locator(".card summary .state .glyph").first();
@@ -1203,6 +1195,18 @@ test.describe("Messaged cards", () => {
 
 test.describe("Messaged T3 Code cards", () => {
   test.use(contextFor(WIDE, "light"));
+
+  test("F-132: before its result names it, a call is an ordinary tool step and no T3 Code card is drawn", async ({
+    page,
+  }) => {
+    for (const scene of ["t3-started", "t3-approval", "t3-delivery-unknown", "t3-not-sent"]) {
+      await openFixture(page, `scene=${scene}`, "light");
+      await expect(page.getByTestId("transcript-turn").first(), scene).toBeVisible();
+      await expect(page.getByTestId("t3-card"), scene).toHaveCount(0);
+    }
+    await openFixture(page, "scene=t3-call-made", "light");
+    await expect(page.getByTestId("t3-card")).toHaveCount(1);
+  });
 
   test("F-132: the folded card shows Clawtrate's own mark, the label T3 Code, the first line sent and the state", async ({
     page,
@@ -1249,40 +1253,22 @@ test.describe("Messaged T3 Code cards", () => {
     await expect(page.getByTestId("t3-card").getByRole("link")).toHaveCount(0);
   });
 
-  test("F-134 F-314 F-470: each state is what the bot's tool events established", async ({
+  test("F-134 F-314: each state a call's result establishes is what the card says", async ({
     page,
   }) => {
     const states: Record<string, string> = {
-      "t3-started": "Call started",
-      "t3-approval": "Waiting for approval",
       "t3-call-made": "Call made",
-      "t3-delivery-unknown": "Delivery unknown",
       "t3-failed": "Failed",
-      "t3-not-sent": "Not sent",
     };
     for (const [scene, state] of Object.entries(states)) {
       await openFixture(page, `scene=${scene}`, "light");
       await expect(page.getByTestId("t3-card").locator("summary .state"), scene).toHaveText(state);
     }
     await page.getByTestId("t3-card").locator("summary").click();
-    await expect(
-      page.getByTestId("t3-card").getByText("You denied the approval. Nothing was sent."),
-    ).toBeVisible();
-    await openFixture(page, "scene=t3-failed", "light");
-    await page.getByTestId("t3-card").locator("summary").click();
     await expect(page.getByTestId("t3-card").getByText("The call failed.")).toBeVisible();
     await expect(page.getByTestId("t3-card").locator("pre[data-tone=danger]")).toContainText(
       "ECONNREFUSED",
     );
-    await openFixture(page, "scene=t3-delivery-unknown", "light");
-    await page.getByTestId("t3-card").locator("summary").click();
-    await expect(
-      page
-        .getByTestId("t3-card")
-        .getByText(
-          "Otto was stopped before the call returned. The gateway cannot say whether T3 Code received it.",
-        ),
-    ).toBeVisible();
   });
 
   test("F-137: after a stop, a call that returned keeps Call made and says work may continue", async ({

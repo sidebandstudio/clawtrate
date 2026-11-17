@@ -29,6 +29,8 @@ export type StepRawState =
 
 /** Whole reads this view keeps while it is mounted; older ones are read again when needed. */
 const MAX_READS = 24;
+/** Whole reads this view has on their way at once; the engine refuses past its own `MAX_FULL_READS` (4). */
+const MAX_READS_IN_FLIGHT = 2;
 
 /** What a whole read answered, kept for this view. Only `available` carries the step's whole payload. */
 function readOf(answer: StepRead | null, correction: number): Read {
@@ -56,8 +58,8 @@ type Read =
 
 /**
  * T3 Code's published tool names. A tool-server call is a T3 Code call when
- * the tool's own name, apart from the server's prefix as the gateway reports
- * it, is one of these, whatever the server is called.
+ * its own tool, as its result names it (`details.mcpTool`), is one of these,
+ * whatever the server is called.
  */
 export const T3_CODE_TOOLS: readonly string[] = [
   "t3_project_list",
@@ -70,12 +72,19 @@ export const T3_CODE_TOOLS: readonly string[] = [
 ];
 
 /**
- * The engine's card selection for a task. A call is a T3 Code call when its
- * tool, after the server's prefix, is one of T3 Code's published tools: before
- * its result by the tool name the gateway reports, `<server>__<tool>`, and
- * after it by the result's own `details.mcpServer` and `details.mcpTool`. A
- * server a host names as T3 Code (`codingServers`) counts for any of its tools.
- * Nothing more is read out of a name.
+ * The engine's card selection for a task, and which calls are T3 Code. That
+ * is decided per call, never per server: a call is T3 Code when its result
+ * names its own tool (`details.mcpTool`) as one of T3 Code's published tools,
+ * or names its server (`details.mcpServer`) as one a host configured as T3
+ * Code (`codingServers`, the only whole-server rule).
+ *
+ * Before its result a call is not identified. The tool name a call starts
+ * with is the gateway's effective name, `<safe server>__<safe tool>`, cut to
+ * 64 characters and given a `-2` suffix on a collision (`buildSafeToolName`
+ * in OpenClaw 2026.10.6's `agent-bundle-mcp-names`), so its pieces are not
+ * the server and tool; the engine reads no map from effective names to
+ * tools. Until its result names it, the call stays an ordinary tool step;
+ * then its card takes the place where the call began.
  */
 export function selectCards(
   transcript: Pick<Transcript, "runs" | "approvals" | "linkedRuns" | "interSession">,
@@ -83,50 +92,21 @@ export function selectCards(
   rawOf: (step: Step) => StepRaw | null,
   previous?: SelectedCards,
 ): SelectedCards {
-  const mcpTools: Record<string, { server: string; tool: string }> = {};
-  const servers = new Set(codingServers);
-  for (const run of transcript.runs) {
-    for (const step of run.steps) {
-      const name = step.toolName;
-      if (!name) continue;
-      const named = codingServers.find((each) => name.startsWith(`${each}__`));
-      if (named) {
-        mcpTools[name] = { server: named, tool: name.slice(named.length + 2) };
-        continue;
-      }
-      const tool = T3_CODE_TOOLS.find((each) => name.endsWith(`__${each}`));
-      const server = tool ? name.slice(0, -(tool.length + 2)) : "";
-      if (tool && server) {
-        mcpTools[name] = { server, tool };
-        servers.add(server);
-      }
-      const details = resultDetails(rawOf(step));
-      if (
-        typeof details?.mcpServer === "string" &&
-        typeof details.mcpTool === "string" &&
-        T3_CODE_TOOLS.includes(details.mcpTool)
-      ) {
-        servers.add(details.mcpServer);
-      }
-    }
-  }
-  return selectMessageCards(
+  const selected = selectMessageCards(
     {
       runs: transcript.runs,
       approvals: transcript.approvals,
       linkedRuns: transcript.linkedRuns,
       interSession: transcript.interSession,
     },
-    { codingServers: [...servers], mcpTools, rawOf, ...(previous ? { previous } : {}) },
+    { codingServers, rawOf, ...(previous ? { previous } : {}) },
   );
-}
-
-/** A tool result's `details`, live (`result.result.details`) or from history (`details`). */
-function resultDetails(raw: StepRaw | null): Record<string, unknown> | null {
-  const result = raw?.result as Record<string, unknown> | null | undefined;
-  const body = (result?.result ?? result) as Record<string, unknown> | null | undefined;
-  const details = body?.details;
-  return details && typeof details === "object" ? (details as Record<string, unknown>) : null;
+  // Without a map of names, the engine identifies a call only from its result's own details.
+  const mcpCalls = selected.mcpCalls.map((card) => {
+    const t3 = codingServers.includes(card.server) || T3_CODE_TOOLS.includes(card.tool);
+    return t3 === card.codingAgent ? card : { ...card, codingAgent: t3 };
+  });
+  return { ...selected, mcpCalls };
 }
 
 /** The cards' states, to tell when the remembered selection needs replacing. */
@@ -137,14 +117,25 @@ function statesOf(cards: SelectedCards | undefined): string {
     .join("|");
 }
 
-/** Whether a step may be a call a card is drawn for, before its payload says so. */
-function isCardCall(step: Step, codingServers: readonly string[]): boolean {
+/**
+ * Whether a step may be a call a card is drawn for, so its payload is worth
+ * reading whole when it did not travel with the snapshot. Not an identity:
+ * every tool-server call's effective name holds the gateway's `__` separator
+ * (a safe server name is at most 30 characters of the 64), whatever it was
+ * renamed to, so every such call is read and its result decides.
+ */
+export function isCardCall(step: Step): boolean {
   if (step.kind !== "tool" || !step.toolName) return false;
-  return (
-    step.toolName === BOT_MESSAGE_TOOL ||
-    codingServers.some((server) => step.toolName!.startsWith(`${server}__`)) ||
-    T3_CODE_TOOLS.some((tool) => step.toolName!.endsWith(`__${tool}`))
-  );
+  return step.toolName === BOT_MESSAGE_TOOL || step.toolName.includes("__");
+}
+
+/** Keep at most `MAX_READS` reads, the newest: every way into the map goes through here. */
+function withRead(current: Map<string, Read>, stepId: string, read: Read): Map<string, Read> {
+  const next = new Map(current);
+  next.delete(stepId);
+  next.set(stepId, read);
+  while (next.size > MAX_READS) next.delete(next.keys().next().value as string);
+  return next;
 }
 
 export function useCards(
@@ -160,33 +151,34 @@ export function useCards(
     (step: Step) => {
       const key = `${step.id}#${step.correction}`;
       asked.current.add(key);
-      setReads((current) => new Map(current).set(step.id, { status: "loading" }));
+      setReads((current) => withRead(current, step.id, { status: "loading" }));
       invoke({ type: "readStepRaw", key: taskKey, stepId: step.id })
-        .then((answer) => {
-          setReads((current) => {
-            const next = new Map(current);
-            next.set(step.id, readOf(answer, step.correction));
-            while (next.size > MAX_READS) next.delete(next.keys().next().value as string);
-            return next;
-          });
-        })
-        .catch(() => setReads((current) => new Map(current).set(step.id, { status: "failed" })));
+        .then((answer) =>
+          setReads((current) => withRead(current, step.id, readOf(answer, step.correction))),
+        )
+        .catch(() => setReads((current) => withRead(current, step.id, { status: "failed" })));
     },
     [invoke, taskKey],
   );
 
   // A finished call whose payload did not travel with the snapshot is read whole once.
   const steps = useMemo(() => transcript.runs.flatMap((run) => run.steps), [transcript.runs]);
+  // At most `MAX_READS_IN_FLIGHT` at once, inside the engine's own gate; the rest follow.
   useEffect(() => {
+    let free =
+      MAX_READS_IN_FLIGHT - [...reads.values()].filter((each) => each.status === "loading").length;
     for (const step of steps) {
-      if (step.raw !== null || !isCardCall(step, codingServers)) continue;
+      if (free <= 0) break;
+      if (step.raw !== null || !isCardCall(step)) continue;
       if (step.status === "running" || step.status === "waiting") continue;
-      if (!asked.current.has(`${step.id}#${step.correction}`)) read(step);
+      if (asked.current.has(`${step.id}#${step.correction}`)) continue;
+      read(step);
+      free -= 1;
     }
     // Forget attempts for steps the task no longer keeps, or for a corrected result.
     const kept = new Set(steps.map((step) => `${step.id}#${step.correction}`));
     for (const key of asked.current) if (!kept.has(key)) asked.current.delete(key);
-  }, [steps, codingServers, read]);
+  }, [steps, reads, read]);
 
   const rawOf = useCallback(
     (step: Step): StepRaw | null => {

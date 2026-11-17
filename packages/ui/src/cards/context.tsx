@@ -14,9 +14,10 @@ import { createContext, useContext, useEffect, useState } from "react";
 
 export type CardSettings = {
   /**
-   * The tool servers that are T3 Code, by the name the gateway's tool events
-   * give them (`details.mcpServer`, or the `<server>__` tool-name prefix).
-   * Nothing is built in: a host that knows which server is T3 Code says so.
+   * The tool servers configured as T3 Code, by the name a call's result gives
+   * its server (`details.mcpServer`): every call such a result names is a T3
+   * Code call. Nothing is built in; without it, a call is T3 Code by its own
+   * tool, as its result names it.
    */
   codingServers: readonly string[];
 };
