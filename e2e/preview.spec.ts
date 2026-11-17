@@ -1327,6 +1327,76 @@ test("F-282: Start as new task runs the message in a new task under the same bot
   );
 });
 
+/** Whether the gateway's history of a task holds a message of yours with this text. */
+async function gatewayHasMessage(key: string, text: string): Promise<boolean> {
+  const history = await gatewayCall<{ messages: Array<{ role: string; content?: unknown }> }>(
+    "chat.history",
+    { sessionKey: key, limit: 40 },
+  );
+  return history.messages.some(
+    (row) => row.role === "user" && JSON.stringify(row.content ?? "").includes(text),
+  );
+}
+
+test("F-468: a message queued behind a slow reply stays Not sent after a confirmed Stop, and no run starts", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  // The scripted model's slow reply: still going when Stop is pressed, whatever the machine.
+  await composer(page).fill("#slow 120");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await composer(page).fill("Then send me a summary of the stop test.");
+  await page.keyboard.press("Alt+Enter");
+  const row = page
+    .getByTestId("shelf-row")
+    .filter({ hasText: "Then send me a summary of the stop test." });
+  await expect(row).toContainText("Queued");
+  await page.getByRole("button", { name: "Stop Otto" }).click();
+  const note = page.getByTestId("stop-note").last();
+  await expect(note).toContainText("Completed steps are not undone.", { timeout: 30_000 });
+  await expect(note).toContainText(/^Stopped/);
+  // The engine decides when the stop is confirmed: the message stays, not sent, until asked.
+  await expect(row).toContainText("Not sent");
+  await expect(row.getByRole("button", { name: "Send" })).toBeVisible();
+  await expect(page.getByTestId("status-line")).toHaveCount(0);
+  expect(
+    await gatewayHasMessage("agent:otto:backup-check", "Then send me a summary of the stop test."),
+  ).toBe(false);
+  // Removed, it never reaches the gateway.
+  await row.getByRole("button", { name: "Remove" }).click();
+  await expect(row).toHaveCount(0);
+});
+
+test("F-468: a real question holds a message typed while it is pending, and answering releases it", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Disk almost full on the media box");
+  await composer(page).fill("#ask");
+  await page.keyboard.press("Enter");
+  const card = page.getByTestId("question-card");
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("status-phrase")).toHaveText("Waiting for you");
+  const text = "Also keep anything from this month, as asked.";
+  await composer(page).fill(text);
+  await page.keyboard.press("Enter");
+  const row = page.getByTestId("shelf-row").filter({ hasText: text });
+  await expect(row).toContainText("Held until you answer");
+  await expect(row.getByRole("button", { name: "Send now" })).toHaveCount(0);
+  await expect(page.getByTestId("needs-you")).toContainText("Otto asked you a question");
+  expect(await gatewayHasMessage("agent:otto:disk-space", text)).toBe(false);
+  // Answering the question, the last one pending, releases the held message.
+  await card.locator(".option").first().click();
+  await expect(row).toHaveCount(0, { timeout: 30_000 });
+  await expect
+    .poll(() => gatewayHasMessage("agent:otto:disk-space", text), { timeout: 30_000 })
+    .toBe(true);
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByTestId("transcript-turn").filter({ hasText: text })).not.toHaveCount(0);
+});
+
 test("leaves every other instance's gateway as it found it", () => {
   // Same processes on the same ports as before this run's instance started.
   const before = JSON.parse(process.env.CLAWTRATE_E2E_OTHERS!) as string[];
