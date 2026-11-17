@@ -185,6 +185,8 @@
       when: latest ? latest.when : "",
       unread: tasks.some((t) => t.unread && !onScreen(t)), // any unread task
       state: tasks.some((t) => t.status === "failed") ? "failed" : tasks.some((t) => t.status === "running") ? "running" : "idle", // by priority
+      // An account notice (bots.md): replaces line two's preview, in its own tone.
+      notice: b.notice || null,
     };
   }
   const stateMark = (state) =>
@@ -242,6 +244,7 @@
   const spokenBot = (b, s) =>
     `${b.name}, ${b.tasks.length} ${b.tasks.length === 1 ? "task" : "tasks"}` +
     (s.state === "running" ? ", working" : s.state === "failed" ? ", a run failed" : "") +
+    (s.notice ? `, ${s.notice.spoken}` : "") +
     (s.unread ? ", unread" : "");
 
   function renderRail() {
@@ -295,7 +298,7 @@
           `${several ? ` aria-expanded="${open}"` : ""} aria-label="${esc(spokenBot(b, s))}" data-testid="bot">` +
           `<span class="avatar" data-bot="${b.id}"></span>` +
           `<span class="bot-text"><span class="bot-line"><span class="bot-name">${b.name}</span><time class="bot-time">${s.when}</time></span>` +
-          `<span class="bot-line">${stateMark(s.state)}<span class="bot-preview">${esc(s.preview)}</span>${s.unread ? '<span class="unread-dot"></span>' : ""}</span></span></button>` +
+          `<span class="bot-line">${stateMark(s.state)}<span class="bot-preview"${s.notice ? ` data-tone="${s.notice.tone}"` : ""}>${esc(s.notice ? s.notice.text : s.preview)}</span>${s.unread ? '<span class="unread-dot"></span>' : ""}</span></span></button>` +
           (several
             ? `<button type="button" class="icon-button bot-toggle" data-toggle="${b.id}" tabindex="-1" aria-label="${open ? "Hide" : "Show"} ${b.name}'s tasks">${icon("chevron")}</button>`
             : "") +
