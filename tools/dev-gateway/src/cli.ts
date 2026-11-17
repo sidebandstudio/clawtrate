@@ -1071,6 +1071,38 @@ export function checkHistory(messages: HistoryMessage[], task: SeedTask): string
     problems.push(`expected ${expectedTools} tool results, found ${results.length}`);
   }
   if (results.some((m) => m.isError)) problems.push("a tool call failed");
+  // The scripted reasoning, calls and their arguments, and each turn's final text.
+  const steps = task.turns.flatMap((turn) => turn.rounds.flat());
+  const blocks = messages.flatMap((m) =>
+    m.role === "assistant" && Array.isArray(m.content)
+      ? (m.content as Record<string, unknown>[])
+      : [],
+  );
+  const reasoning = blocks.flatMap((b) => (b.type === "thinking" ? [String(b.thinking)] : []));
+  const scriptedReasoning = steps.flatMap((step) => (step.kind === "reasoning" ? [step.text] : []));
+  if (reasoning.join("\n") !== scriptedReasoning.join("\n")) {
+    problems.push("the reasoning differs from the script");
+  }
+  const calls = blocks.flatMap((b) =>
+    b.type === "toolCall" ? [JSON.stringify([b.name, b.arguments])] : [],
+  );
+  const scriptedCalls = steps.flatMap((step) =>
+    step.kind === "tool" ? [JSON.stringify([step.name, step.arguments])] : [],
+  );
+  if (JSON.stringify(calls) !== JSON.stringify(scriptedCalls)) {
+    problems.push("the tool calls or their arguments differ from the script");
+  }
+  const texts = messages
+    .filter((m) => m.role === "assistant" && m.stopReason === "stop")
+    .map((m) =>
+      (Array.isArray(m.content) ? (m.content as Record<string, unknown>[]) : [])
+        .flatMap((b) => (b.type === "text" ? [String(b.text)] : []))
+        .join("")
+        .trim(),
+    );
+  if (JSON.stringify(texts) !== JSON.stringify(task.turns.map(expectedFinalText))) {
+    problems.push("the replies differ from the script");
+  }
   const last = messages.at(-1);
   if (last?.role !== "assistant" || last.stopReason !== "stop") {
     problems.push("the session does not end with a completed assistant reply");

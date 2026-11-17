@@ -5,7 +5,8 @@
 // the session's durable history.
 
 import { TERMINAL_CHAT_STATES, type OperatorSession } from "./operator.ts";
-import { sessionKeyFor, type ScenarioExample } from "./seed-data.ts";
+import { resolveRound, scenarioRounds, selectScenarios } from "./scenarios.ts";
+import { SCENARIO_EXAMPLES, sessionKeyFor, type ScenarioExample } from "./seed-data.ts";
 
 type JsonRecord = Record<string, unknown>;
 const rec = (value: unknown): JsonRecord =>
@@ -23,6 +24,7 @@ export const SEED_CAPS = ["tool-events", "approvals", "exec-approvals"];
 
 export type HistoryRow = {
   role?: string;
+  provenance?: unknown;
   stopReason?: string;
   isError?: boolean;
   content?: unknown;
@@ -38,9 +40,53 @@ const textOf = (row: HistoryRow): string =>
       ? row.content
       : "";
 
+/** The reasoning and tool calls an example's prompt scripts, from its scenario. */
+export function scriptedSteps(example: ScenarioExample) {
+  const ctx = { agentId: example.botId, sessionKey: null, results: [] };
+  const steps = scenarioRounds(selectScenarios(example.prompt)).flatMap((round) =>
+    resolveRound(round, ctx, "seed"),
+  );
+  return {
+    reasoning: steps.flatMap((step) => (step.kind === "reasoning" ? [step.text] : [])),
+    calls: steps.flatMap((step) =>
+      step.kind === "tool" ? [{ name: step.name, arguments: step.arguments }] : [],
+    ),
+  };
+}
+
+/** Thinking blocks and tool calls of a history's assistant rows, in order. */
+function assistantBlocks(rows: HistoryRow[]) {
+  const blocks = rows.flatMap((row) =>
+    row.role === "assistant" && Array.isArray(row.content) ? (row.content as unknown[]) : [],
+  );
+  return {
+    reasoning: blocks.flatMap((part) =>
+      rec(part).type === "thinking" ? [String(rec(part).thinking ?? "")] : [],
+    ),
+    calls: blocks.flatMap((part) =>
+      rec(part).type === "toolCall"
+        ? [{ name: String(rec(part).name), arguments: rec(part).arguments }]
+        : [],
+    ),
+  };
+}
+
 /** Check an example session's history against what it should hold. Returns what is wrong. */
 export function checkExampleHistory(rows: HistoryRow[], example: ScenarioExample): string[] {
   const problems: string[] = [];
+  const scripted = scriptedSteps(example);
+  const found = assistantBlocks(rows);
+  // Reasoning steps of one model call can arrive as one block, so compare the text in order.
+  if (found.reasoning.join("\n") !== scripted.reasoning.join("\n")) {
+    problems.push(
+      `expected reasoning ${JSON.stringify(scripted.reasoning)}, found ${JSON.stringify(found.reasoning)}`,
+    );
+  }
+  if (JSON.stringify(found.calls) !== JSON.stringify(scripted.calls)) {
+    problems.push(
+      `expected the scripted calls and arguments ${JSON.stringify(scripted.calls)}, found ${JSON.stringify(found.calls)}`,
+    );
+  }
   const users = rows.filter((row) => row.role === "user").length;
   // Messages from another bot also arrive as user rows; the person's own turn is the first.
   if (users < 1) problems.push("no user turn");
@@ -59,6 +105,15 @@ export function checkExampleHistory(rows: HistoryRow[], example: ScenarioExample
   const results = rows.filter((row) => row.role === "toolResult");
   if (results.length !== example.toolCalls.length) {
     problems.push(`expected ${example.toolCalls.length} tool results, found ${results.length}`);
+  }
+  const resultNames = results.map((row) => row.toolName);
+  if (JSON.stringify(resultNames) !== JSON.stringify(example.toolCalls)) {
+    problems.push(
+      `expected results of ${JSON.stringify(example.toolCalls)}, found ${JSON.stringify(resultNames)}`,
+    );
+  }
+  if (results.some((row) => !row.isError && textOf(row).trim() === "")) {
+    problems.push("a successful tool result is empty");
   }
   const errors = results.filter((row) => row.isError).length;
   if (errors !== example.toolErrors) {
@@ -178,10 +233,54 @@ export async function seedExample(
   await op.request("sessions.patch", { key, label: example.label });
 }
 
+/**
+ * The recipient's side of a bot-to-bot example: the sender's message, marked
+ * as an inter-session message from the sender's task (the gateway records it
+ * with role "assistant"), and the reply after it.
+ */
+export function checkRecipientExchange(
+  rows: HistoryRow[],
+  senderKey: string,
+  request: string,
+  reply: string,
+): string[] {
+  const incoming = rows.findIndex(
+    (row) =>
+      // Recorded with role "assistant" and inter-session provenance, not as a user turn.
+      rec(row.provenance).kind === "inter_session" &&
+      rec(row.provenance).sourceSessionKey === senderKey &&
+      textOf(row).includes(request),
+  );
+  if (incoming < 0) return [`the recipient has no message from ${senderKey}`];
+  const answered = rows
+    .slice(incoming + 1)
+    .some(
+      (row) =>
+        row.role === "assistant" && row.stopReason === "stop" && textOf(row).trim() === reply,
+    );
+  return answered ? [] : ["the recipient's reply is not after the message"];
+}
+
 /** Verify an example's session from its history alone; used again by `seed`. */
 export async function verifyExample(op: OperatorSession, example: ScenarioExample): Promise<void> {
   const key = sessionKeyFor(example.botId, example.slug);
   const problems = checkExampleHistory(await history(op, key), example);
+  if (example.recipientSession) {
+    const call = scriptedSteps(example).calls.find((c) => c.name === "sessions_send");
+    const message = String(rec(call?.arguments).message ?? "");
+    // The recipient's reply is the note its own example scripts.
+    const reply =
+      SCENARIO_EXAMPLES.find((e) => sessionKeyFor(e.botId, e.slug) === example.recipientSession)
+        ?.finalText ?? "";
+    problems.push(
+      ...checkRecipientExchange(
+        await history(op, example.recipientSession),
+        key,
+        message.replace(/^#\S+\s*/, ""),
+        reply,
+      ),
+    );
+  }
   if (problems.length > 0) {
     throw new Error(`${example.botId} / ${example.label}: ${problems.join("; ")}`);
   }

@@ -314,18 +314,47 @@ describe("seed verification", () => {
     ).toMatch(/differs from the script/);
   });
 
-  it("checks turns, tool results and a completed final reply in history", () => {
-    const tools = task.turns
-      .flatMap((t) => t.rounds.flat())
-      .filter((s) => s.kind === "tool").length;
-    const good = [
-      ...task.turns.flatMap(() => [{ role: "user" }]),
-      ...Array.from({ length: tools }, () => ({ role: "toolResult", isError: false })),
-      { role: "assistant", stopReason: "stop" },
-    ];
+  /** A history as the gateway records the scripted task. */
+  const recorded = () =>
+    task.turns.flatMap((t) => [
+      { role: "user", content: t.prompt },
+      ...t.rounds.flatMap((round, r) => {
+        const content = round.map((step) =>
+          step.kind === "reasoning"
+            ? { type: "thinking", thinking: step.text }
+            : step.kind === "text"
+              ? { type: "text", text: step.text }
+              : step.kind === "tool"
+                ? { type: "toolCall", id: step.id, name: step.name, arguments: step.arguments }
+                : { type: "text", text: "" },
+        );
+        const last = r === t.rounds.length - 1;
+        const results = round.flatMap((step) =>
+          step.kind === "tool" ? [{ role: "toolResult", toolName: step.name, isError: false }] : [],
+        );
+        return [{ role: "assistant", stopReason: last ? "stop" : "toolUse", content }, ...results];
+      }),
+    ]) as { role?: string; stopReason?: string; isError?: boolean; content?: unknown }[];
+
+  it("checks turns, reasoning, calls, results and replies in history", () => {
+    const good = recorded();
     expect(checkHistory(good, task)).toEqual([]);
     expect(checkHistory(good.slice(0, -1), task)).toContain(
       "the session does not end with a completed assistant reply",
+    );
+    const noReasoning = clone(good).map((m) =>
+      Array.isArray(m.content)
+        ? { ...m, content: (m.content as { type: string }[]).filter((b) => b.type !== "thinking") }
+        : m,
+    );
+    expect(checkHistory(noReasoning, task)).toContain("the reasoning differs from the script");
+    const otherArgs = clone(good);
+    const call = otherArgs
+      .flatMap((m) => (Array.isArray(m.content) ? (m.content as Record<string, unknown>[]) : []))
+      .find((b) => b.type === "toolCall")!;
+    call.arguments = { path: "/etc" };
+    expect(checkHistory(otherArgs, task)).toContain(
+      "the tool calls or their arguments differ from the script",
     );
     expect(
       checkHistory([{ role: "user" }, { role: "assistant", stopReason: "stop" }], task),
