@@ -3,7 +3,14 @@
 // `OpenclawRunner`, which checks the state folder first (state-guard.ts) and
 // always passes `--dev` and a scrubbed environment.
 
-import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
+import {
+  spawn,
+  spawnSync,
+  type ChildProcess,
+  type SpawnOptions,
+  type StdioOptions,
+} from "node:child_process";
+import type { Writable } from "node:stream";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -249,15 +256,60 @@ export class OpenclawRunner {
     });
   }
 
-  /** Start a long-running OpenClaw process detached from this one. */
-  spawnDetached(args: string[], options: SpawnOptions) {
+  /** Start a long-running OpenClaw process detached from this one, behind a gate (`gatedSpawn`). */
+  spawnGated(args: string[], options: SpawnOptions): Gated {
     this.assertAllowed();
-    return this.spawnImpl(this.bin, guardArgs(args, this.instance), {
+    return gatedSpawn(this.spawnImpl, this.bin, guardArgs(args, this.instance), {
       ...options,
       ...this.baseOptions(),
       detached: true,
     });
   }
+}
+
+/**
+ * The shell a gated process starts as. It waits for one line on file
+ * descriptor 3, then replaces itself with the real command, keeping its PID
+ * and start time. If the pipe closes first, because the process that spawned
+ * it died before recording it, it exits without running anything.
+ */
+export const GATE_SCRIPT = 'read -r _ <&3 || exit 70; exec "$0" "$@" 3<&-';
+
+export type Gated = {
+  child: ChildProcess;
+  /** Let the command run. Called only once its PID and start time are recorded. */
+  release(): void;
+  /** Make it exit without running the command. */
+  abort(): void;
+};
+
+/**
+ * Spawn a command so that it cannot run before the caller has recorded it.
+ * A spawn followed by a file write is not atomic against the caller being
+ * killed; with the gate, a process the caller never recorded never runs.
+ */
+export function gatedSpawn(
+  spawnFn: typeof spawn,
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+): Gated {
+  const base: unknown[] = Array.isArray(options.stdio)
+    ? options.stdio
+    : ["ignore", "ignore", "ignore"];
+  const stdio = [base[0], base[1], base[2], "pipe"] as StdioOptions;
+  const child: ChildProcess = spawnFn("/bin/sh", ["-c", GATE_SCRIPT, command, ...args], {
+    ...options,
+    stdio,
+  });
+  const gate = child.stdio[3] as Writable | null | undefined;
+  // A gate that closes early only means the command does not run.
+  gate?.on("error", () => {});
+  return {
+    child,
+    release: () => gate?.end("go\n"),
+    abort: () => gate?.destroy(),
+  };
 }
 
 /** Where an instance lives: its OpenClaw state and this checkout's run files for it. */

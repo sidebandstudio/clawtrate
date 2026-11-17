@@ -15,15 +15,17 @@ import {
   stateDirFor,
 } from "./instance.ts";
 import {
-  isLegacyMarker,
   ownership,
   processIdentity,
   processState,
   readMarker,
-  validPid,
   type Identify,
   type Marker,
+  type ProcessState,
 } from "./state-guard.ts";
+
+/** A process lookup for callers that only need recorded data, never a verdict. */
+export const NOT_CHECKED: Identify = () => ({ state: "unknown", reason: "not checked" });
 
 export type InstanceEntry = {
   /** null is the default instance. */
@@ -34,6 +36,7 @@ export type InstanceEntry = {
   providerPort: number | undefined;
   /** Its recorded gateway is running, proven by PID and start time. */
   gatewayRunning: boolean;
+  gatewayState: ProcessState;
 };
 
 /** Every state folder under `home` that this tool created, default instance first. */
@@ -47,17 +50,15 @@ export function listInstances(home: string, identify: Identify = processIdentity
     const marker = readMarker(stateDir)!;
     // A folder whose marker names another instance is not listed as this one.
     if ((marker.instance ?? null) !== name) continue;
-    const gatewayRunning =
-      name === null && isLegacyMarker(marker)
-        ? validPid(marker.gatewayPid) && identify(marker.gatewayPid) !== null
-        : processState(marker.gatewayPid, marker.gatewayIdentity, identify) === "alive";
+    const gatewayState = processState(marker.gatewayPid, marker.gatewayIdentity, identify);
     entries.push({
       name,
       stateDir,
       marker,
       gatewayPort: name === null ? 19001 : marker.gatewayPort,
       providerPort: name === null ? 19091 : marker.providerPort,
-      gatewayRunning,
+      gatewayRunning: gatewayState === "alive",
+      gatewayState,
     });
   }
   return entries.sort((a, b) => (a.name === null ? -1 : b.name === null ? 1 : 0));
@@ -115,7 +116,7 @@ export async function choosePorts(
   free: (port: number) => Promise<boolean> = portFree,
 ): Promise<InstancePorts> {
   const recorded = new Set<number>();
-  for (const entry of listInstances(home, () => null)) {
+  for (const entry of listInstances(home, NOT_CHECKED)) {
     for (const port of [entry.gatewayPort, entry.providerPort]) {
       if (port === undefined) continue;
       for (let p = port; p < port + 3; p += 1) recorded.add(p);

@@ -42,6 +42,9 @@ export type Marker = MarkerOrigin & {
   createdAt: string;
   /** Unguessable id of the start that created this folder. */
   runId: string;
+  /** Written before the process is spawned; replaced by its PID and identity after. */
+  providerPending?: true;
+  gatewayPending?: true;
   providerPid?: number;
   providerIdentity?: string;
   gatewayPid?: number;
@@ -126,43 +129,96 @@ export function validPid(pid: unknown): pid is number {
   return typeof pid === "number" && Number.isInteger(pid) && pid > 1;
 }
 
-/** What identifies a process beyond its PID: its start time, or null if it is not running. */
-export type Identify = (pid: number) => string | null;
+/**
+ * What a look at one PID established. "exited" needs positive evidence: the
+ * kernel reports no such process, or `ps` shows it as a zombie. A lookup that
+ * failed, timed out or could not be read is "unknown", never "exited".
+ */
+export type Lookup =
+  | { state: "alive"; identity: string }
+  | { state: "exited"; how: "absent" | "zombie" }
+  | { state: "unknown"; reason: string };
 
+export type Identify = (pid: number) => Lookup;
+
+const unknown = (reason: string): Lookup => ({ state: "unknown", reason });
+
+/** Asks the kernel whether the PID exists. Signal 0 delivers nothing. */
+function kernelSaysAbsent(pid: number): boolean | string {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return true;
+    // EPERM: it exists and belongs to someone else. Anything else is not an answer.
+    return code === "EPERM" ? false : `could not check pid ${pid}: ${String(code)}`;
+  }
+}
+
+/** The process's start time from `ps`, which together with its PID identifies it. */
 export const processIdentity: Identify = (pid) => {
-  if (!validPid(pid)) return null;
+  if (!validPid(pid)) return unknown(`${String(pid)} is not a process id this tool checks`);
+  const absent = kernelSaysAbsent(pid);
+  if (absent === true) return { state: "exited", how: "absent" };
+  if (typeof absent === "string") return unknown(absent);
   const result = spawnSync("ps", ["-o", "stat=", "-o", "lstart=", "-p", String(pid)], {
     encoding: "utf8",
+    timeout: 5000,
   });
-  const match = result.status === 0 ? /^\s*(\S+)\s+(.+?)\s*$/.exec(result.stdout) : null;
+  // A process that exited between the two looks makes ps fail; that much is still positive.
+  const failed = (reason: string): Lookup =>
+    kernelSaysAbsent(pid) === true ? { state: "exited", how: "absent" } : unknown(reason);
+  if (result.error) return failed(`could not run ps for pid ${pid}: ${result.error.message}`);
+  if (result.status !== 0) {
+    return failed(`ps for pid ${pid} exited with ${result.status ?? result.signal}`);
+  }
+  const match = /^\s*([A-Za-z<>+|]+)\s+(\S.*\S)\s*$/.exec(result.stdout);
+  if (!match) return failed(`could not read ps output for pid ${pid}`);
   // A zombie has exited; only its parent has not collected it yet.
-  if (!match || match[1]!.startsWith("Z")) return null;
-  return match[2]!;
+  if (match[1]!.startsWith("Z")) return { state: "exited", how: "zombie" };
+  return { state: "alive", identity: match[2]! };
 };
 
-/** "none": not recorded. "unknown": recorded but not identifiable, so treated as running. */
+/** "none": not recorded. "unknown": not determinable, so treated as possibly running. */
 export type ProcessState = "none" | "dead" | "alive" | "unknown";
 
 export function processState(pid: unknown, identity: unknown, identify: Identify): ProcessState {
-  if (pid === undefined && identity === undefined) return "none";
-  if (!validPid(pid) || typeof identity !== "string" || identity === "") return "unknown";
-  const now = identify(pid);
-  if (now === null) return "dead";
-  // A different start time is a reused PID: the recorded process is gone.
-  return now === identity ? "alive" : "dead";
+  return processVerdict(pid, identity, identify).state;
 }
 
-/** Markers written before process identities were recorded: the default instance only. */
+/** The state of a recorded process, with why it is unknown when it is. */
+export function processVerdict(
+  pid: unknown,
+  identity: unknown,
+  identify: Identify,
+): { state: ProcessState; reason?: string } {
+  if (pid === undefined && identity === undefined) return { state: "none" };
+  if (!validPid(pid) || typeof identity !== "string" || identity === "") {
+    return { state: "unknown", reason: "its record cannot identify a process" };
+  }
+  const now = identify(pid);
+  if (now.state === "unknown") return { state: "unknown", reason: now.reason };
+  if (now.state === "exited") return { state: "dead" };
+  // A live process with another start time holds a reused PID: the recorded one is gone.
+  return { state: now.identity === identity ? "alive" : "dead" };
+}
+
+/** Markers written by versions of the tool before process identities were recorded. */
 export function isLegacyMarker(marker: Marker): boolean {
-  return marker.startIdentity === undefined && marker.instance === undefined;
+  return marker.startIdentity === undefined;
 }
 
 /**
  * Everything wrong with a marker for the instance whose folder it sits in.
- * Legacy markers are checked by `activityRefusal` instead, conservatively.
+ * Any problem makes the folder untrusted: never started over, signalled or
+ * deleted by the tool. Markers of older versions always have problems.
  */
 export function markerProblems(marker: Marker, instance: string | null): string[] {
   const problems: string[] = [];
+  if (isLegacyMarker(marker)) {
+    problems.push("it was written by an older version of this tool (see the README on migrating)");
+  }
   if (typeof marker.runId !== "string" || !/^[0-9a-f]{48}$/.test(marker.runId)) {
     problems.push("its run id is missing or malformed");
   }
@@ -193,6 +249,12 @@ export function markerProblems(marker: Marker, instance: string | null): string[
     if (recorded && (!validPid(pid) || typeof identity !== "string" || identity === "")) {
       problems.push(`its ${role} process record is incomplete or invalid`);
     }
+    if (role !== "start") {
+      const pending = marker[`${role}Pending`];
+      if (pending !== undefined && (pending !== true || recorded)) {
+        problems.push(`its ${role} process record is inconsistent`);
+      }
+    }
   }
   return problems;
 }
@@ -205,35 +267,40 @@ function instanceLabel(instance: string | null, stateDir: string): string {
 type Activity =
   | { kind: "idle" }
   | { kind: "untrusted"; reason: string }
-  | { kind: "running"; role: ProcessRole; pid: number; marker: Marker };
+  | { kind: "running"; role: ProcessRole; pid: number; marker: Marker }
+  | { kind: "unknown"; role: ProcessRole; pid: unknown; reason: string; marker: Marker };
 
 /**
- * Whether anything recorded on an owned folder could still be running. Every
- * recorded process must be proven gone for "idle". An invalid marker, or one
- * that names another instance, is "untrusted". Legacy markers count a recorded
- * PID as running whenever any process has it.
+ * Whether anything recorded on an owned folder could still be running. "idle"
+ * needs every recorded process proven gone. A process recorded as pending, to
+ * be spawned but not yet recorded, is gated (see `gatedSpawn` in env.ts): it
+ * cannot run before its record is written, and exits as soon as the start that
+ * spawned it is gone. So it counts as running while that start runs, unknown
+ * while that start is unknown, and gone once that start is proven gone.
  */
 function activity(stateDir: string, instance: string | null, identify: Identify): Activity {
   if (ownership(stateDir) !== "owned") return { kind: "idle" };
   const marker = readMarker(stateDir)!;
-  if (instance === null && isLegacyMarker(marker)) {
-    for (const role of ["gateway", "provider"] as const) {
-      const pid = marker[`${role}Pid`];
-      if (pid === undefined) continue;
-      if (!validPid(pid)) {
-        return { kind: "untrusted", reason: `its old marker records an invalid ${role} pid` };
-      }
-      if (identify(pid) !== null) return { kind: "running", role, pid, marker };
-    }
-    return { kind: "idle" };
-  }
   const problems = markerProblems(marker, instance);
   if (problems.length > 0) return { kind: "untrusted", reason: problems.join("; ") };
+  // A start holds the instance's lifecycle lock until it has finished, so a
+  // caller that is itself the recorded start process (and holds that lock, as
+  // every deleting command does) knows that start is over.
+  const startIsSelf = marker.startPid === process.pid;
+  const start = startIsSelf
+    ? ({ state: "none" } as const)
+    : processVerdict(marker.startPid, marker.startIdentity, identify);
   for (const role of PROCESS_ROLES) {
-    const pid = marker[`${role}Pid`];
-    const state = processState(pid, marker[`${role}Identity`], identify);
-    if (state === "alive" || state === "unknown") {
-      return { kind: "running", role, pid: pid as number, marker };
+    const pending = role !== "start" && marker[`${role}Pending`] === true;
+    const verdict = pending
+      ? start
+      : role === "start"
+        ? start
+        : processVerdict(marker[`${role}Pid`], marker[`${role}Identity`], identify);
+    const pid = pending ? marker.startPid : marker[`${role}Pid`];
+    if (verdict.state === "alive") return { kind: "running", role, pid: pid!, marker };
+    if (verdict.state === "unknown") {
+      return { kind: "unknown", role, pid, reason: verdict.reason ?? "unknown", marker };
     }
   }
   return { kind: "idle" };
@@ -250,9 +317,12 @@ export function activityRefusal(
   if (found.kind === "untrusted") {
     return `${label} has a marker this tool cannot trust: ${found.reason}. Nothing was changed.`;
   }
+  if (found.kind === "unknown") {
+    return `${label}: could not determine whether its ${found.role} process (pid ${String(found.pid)}) is still running (${found.reason}). Nothing was changed.`;
+  }
   if (found.kind === "running") {
     const where = found.marker.checkout ? `, started from ${found.marker.checkout}` : "";
-    return `${label} is in use: its ${found.role} process (pid ${found.pid}${where}) may still be running. Nothing was changed.`;
+    return `${label} is in use: its ${found.role} process (pid ${found.pid}${where}) is still running. Nothing was changed.`;
   }
   return null;
 }
@@ -279,8 +349,8 @@ export function runMatches(
 
 /**
  * Why this checkout must not touch the folder because processes it cannot
- * prove its own may run on it, or null. Processes of this checkout's own run
- * are for `stop` to prove and stop.
+ * prove its own may run on it, or because it cannot tell, or null. Running
+ * processes of this checkout's own run are for `stop` to prove and stop.
  */
 export function inUseRefusal(
   stateDir: string,
@@ -292,11 +362,11 @@ export function inUseRefusal(
   const found = activity(stateDir, instance, identify);
   if (found.kind === "idle") return null;
   if (found.kind === "running" && runMatches(run, found.marker, instance, checkout)) return null;
-  if (found.kind === "untrusted") return activityRefusal(stateDir, instance, identify);
+  if (found.kind !== "running") return activityRefusal(stateDir, instance, identify);
   const where = found.marker.checkout ? ` (${found.marker.checkout})` : "";
   return (
     `${instanceLabel(instance, stateDir)} is in use: its ${found.role} process (pid ${found.pid}) ` +
-    `may still be running and was started by another checkout${where}, not by this one. ` +
+    `is still running and was started by another checkout${where}, not by this one. ` +
     "Nothing was changed. Use another instance name, or stop it from the checkout that started it."
   );
 }
@@ -334,7 +404,20 @@ export function prepareFreshState(
   writeMarker(stateDir, { ...origin, createdBy: CREATED_BY, createdAt: now.toISOString(), runId });
 }
 
-/** Record a process the start that created this folder has just spawned. */
+function markerOfRun(stateDir: string, runId: string): Marker {
+  const marker = readMarker(stateDir);
+  if (ownership(stateDir) !== "owned" || marker?.runId !== runId) {
+    throw new Error(`${stateDir} is no longer the state this start created`);
+  }
+  return marker;
+}
+
+/** Record, before spawning it, that this start is about to spawn a process. */
+export function recordPending(stateDir: string, runId: string, role: "provider" | "gateway"): void {
+  writeMarker(stateDir, { ...markerOfRun(stateDir, runId), [`${role}Pending`]: true });
+}
+
+/** Complete a pending record with the PID and start time of the process just spawned. */
 export function recordProcess(
   stateDir: string,
   runId: string,
@@ -342,15 +425,16 @@ export function recordProcess(
   pid: number | undefined,
   identify: Identify = processIdentity,
 ): void {
-  const marker = readMarker(stateDir);
-  if (ownership(stateDir) !== "owned" || marker?.runId !== runId) {
-    throw new Error(`${stateDir} is no longer the state this start created`);
+  const marker = markerOfRun(stateDir, runId);
+  const found = validPid(pid) ? identify(pid) : null;
+  if (!validPid(pid) || found?.state !== "alive") {
+    throw new Error(
+      `the ${role} process (pid ${String(pid)}) could not be recorded: ${found?.state === "unknown" ? found.reason : "it is not running"}`,
+    );
   }
-  const identity = validPid(pid) ? identify(pid) : null;
-  if (!validPid(pid) || identity === null) {
-    throw new Error(`the ${role} process (pid ${String(pid)}) exited before it was recorded`);
-  }
-  writeMarker(stateDir, { ...marker, [`${role}Pid`]: pid, [`${role}Identity`]: identity });
+  const next: Marker = { ...marker, [`${role}Pid`]: pid, [`${role}Identity`]: found.identity };
+  delete next[`${role}Pending`];
+  writeMarker(stateDir, next);
 }
 
 /** A run file, if it is a regular file with every field of the current format. */
@@ -391,9 +475,6 @@ export function spawnRefusal(params: {
   if (owner === "foreign") return new ForeignStateError(params.stateDir).message;
   const marker = readMarker(params.stateDir)!;
   const { instance } = params;
-  if (isLegacyMarker(marker)) {
-    return "The development gateway state predates this tool version. Run `pnpm dev-gateway start`.";
-  }
   const problems = markerProblems(marker, instance);
   if (problems.length > 0) {
     return `${params.stateDir} has a marker this tool cannot trust: ${problems.join("; ")}.`;

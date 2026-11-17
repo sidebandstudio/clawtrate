@@ -44,20 +44,22 @@ import {
   activityRefusal,
   ForeignStateError,
   inUseRefusal,
-  isLegacyMarker,
   markerProblems,
   newRunId,
   ownership,
   prepareFreshState,
   processIdentity,
   processState,
+  processVerdict,
   readMarker,
   readRunRecord,
+  recordPending,
   recordProcess,
   runMatches,
   StateInUseError,
   validPid,
   type Identify,
+  type ProcessState,
   type RunRecord,
 } from "./state-guard.ts";
 import {
@@ -69,9 +71,11 @@ import {
   PROVIDER_ID,
   PROVIDER_PORT,
   assertInstanceStateDir,
+  gatedSpawn,
   instancePaths,
   parseJsonOutput,
   providerEnv,
+  type Gated,
   type InstancePaths,
 } from "./env.ts";
 import { isNamedInstancePort, profileArgs, selectInstance } from "./instance.ts";
@@ -79,6 +83,7 @@ import { instanceLockPath, portLockPath, withLock } from "./lock.ts";
 import {
   choosePorts,
   listInstances,
+  NOT_CHECKED,
   portOpen,
   type InstanceEntry,
   type InstancePorts,
@@ -110,6 +115,8 @@ export type DevInstance = InstancePaths & {
   runner: OpenclawRunner;
   identify: Identify;
   listening: (port: number) => Promise<boolean>;
+  /** Spawns the scripted model (the gateway goes through the runner). */
+  spawn: typeof spawn;
 };
 
 export function openInstance(
@@ -121,6 +128,7 @@ export function openInstance(
     checkout?: string;
     identify?: Identify;
     listening?: (port: number) => Promise<boolean>;
+    spawn?: typeof spawn;
   } = {},
 ): DevInstance {
   const home = options.home ?? homedir();
@@ -139,7 +147,15 @@ export function openInstance(
       checkout,
       identify,
     });
-  return { ...paths, home, checkout, runner, identify, listening: options.listening ?? portOpen };
+  return {
+    ...paths,
+    home,
+    checkout,
+    runner,
+    identify,
+    listening: options.listening ?? portOpen,
+    spawn: options.spawn ?? spawn,
+  };
 }
 
 const DEFAULT_PORTS: InstancePorts = { gatewayPort: GATEWAY_PORT, providerPort: PROVIDER_PORT };
@@ -342,9 +358,10 @@ function writeFreshConfig(inst: DevInstance, ports: InstancePorts, runId: string
 }
 
 /** Healthy means the guard allows OpenClaw and the gateway answers; a refusal spawns nothing. */
-async function gatewayHealthy(runner: OpenclawRunner): Promise<boolean> {
+async function gatewayHealthy(inst: DevInstance): Promise<boolean> {
+  const runner = inst.runner;
   if (runner.refusal()) return false;
-  if (!(await portOpen(runner.gatewayPort()))) return false;
+  if (!(await inst.listening(runner.gatewayPort()))) return false;
   const result = await runner.run(["gateway", "call", "health", "--json", "--timeout", "3000"]);
   return result.status === 0;
 }
@@ -407,11 +424,39 @@ async function deletionRefusal(inst: DevInstance): Promise<string | null> {
   return null;
 }
 
-/** Hold the instance's lifecycle lock, shared by start, stop, reset and prune. */
+/**
+ * Hold the instance's lifecycle lock, shared by start, stop, reset and prune.
+ * A start holds it until its gateway is seeded, so others wait for that.
+ */
 function withInstanceLock<T>(inst: DevInstance, fn: () => Promise<T>): Promise<T> {
   return withLock(instanceLockPath(inst.home, inst.name), fn, {
     what: `the lifecycle lock of ${label(inst)}`,
+    timeoutMs: 10 * 60_000,
   });
+}
+
+/**
+ * Spawn one of the instance's processes so that a start killed at any instant
+ * leaves a record of it: the intent is recorded first, the process is spawned
+ * behind its gate, its PID and start time complete the record, and only then
+ * may it run. A process that cannot be recorded is made to exit unrun.
+ */
+function spawnRecorded(
+  inst: DevInstance,
+  runId: string,
+  role: "provider" | "gateway",
+  spawnIt: () => Gated,
+): void {
+  recordPending(inst.stateDir, runId, role);
+  const gated = spawnIt();
+  gated.child.unref();
+  try {
+    recordProcess(inst.stateDir, runId, role, gated.child.pid, inst.identify);
+  } catch (error) {
+    gated.abort();
+    throw error;
+  }
+  gated.release();
 }
 
 const RUN_ID_PATTERN = /^[0-9a-f]{48}$/;
@@ -431,15 +476,17 @@ export async function start(
   const runId = options.runId ?? newRunId();
   if (!RUN_ID_PATTERN.test(runId)) throw new Error("--run-id must be 48 lowercase hex digits");
   const runner = inst.runner;
-  const ports = await withInstanceLock(inst, async () => {
+  await withInstanceLock(inst, async () => {
     if (ownership(inst.stateDir) === "foreign") throw new ForeignStateError(inst.stateDir);
     assertNotInUse(inst);
     await stopLocked(inst);
     const blocked = await deletionRefusal(inst);
     if (blocked) throw new StateInUseError(blocked);
+    const self = inst.identify(process.pid);
+    if (self.state !== "alive") throw new Error("could not determine this process's start time");
     // Ports are chosen and recorded in the new marker under one lock, so two
     // starts on this machine never take the same ones.
-    const chosen = await withLock(
+    const ports = await withLock(
       portLockPath(inst.home),
       async () => {
         const picked = inst.name === null ? DEFAULT_PORTS : await choosePorts(inst.name, inst.home);
@@ -456,7 +503,7 @@ export async function start(
             ...picked,
             checkout: inst.checkout,
             startPid: process.pid,
-            startIdentity: inst.identify(process.pid) ?? "",
+            startIdentity: self.identity,
           },
           inst.identify,
         );
@@ -468,70 +515,78 @@ export async function start(
       runId,
       instance: inst.name,
       checkout: inst.checkout,
-      ...chosen,
+      ...ports,
       startedAt: new Date().toISOString(),
     });
     runner.freshRunId = runId;
     try {
-      writeFreshConfig(inst, chosen, runId);
-      assertSandboxed(inst, chosen);
-      // Each spawn is recorded in the same synchronous step. Signal handlers
-      // run only between steps, so an interrupted start never leaves a process
-      // it did not record.
+      writeFreshConfig(inst, ports, runId);
+      assertSandboxed(inst, ports);
       const providerLog = openSync(join(inst.runDir, "provider.log"), "w");
-      const provider = spawn(
-        process.execPath,
-        [fileURLToPath(new URL("./provider-main.ts", import.meta.url))],
-        {
-          detached: true,
-          stdio: ["ignore", providerLog, providerLog],
-          env: providerEnv(process.env, chosen.providerPort),
-        },
+      spawnRecorded(inst, runId, "provider", () =>
+        gatedSpawn(
+          inst.spawn,
+          process.execPath,
+          [fileURLToPath(new URL("./provider-main.ts", import.meta.url))],
+          {
+            detached: true,
+            stdio: ["ignore", providerLog, providerLog],
+            env: providerEnv(process.env, ports.providerPort),
+          },
+        ),
       );
-      provider.unref();
       closeSync(providerLog);
-      recordProcess(inst.stateDir, runId, "provider", provider.pid, inst.identify);
-      await waitFor("the scripted provider", () => portOpen(chosen.providerPort), 10_000);
+      await waitFor("the scripted provider", () => inst.listening(ports.providerPort), 10_000);
 
       const gatewayLog = openSync(join(inst.runDir, "gateway.log"), "w");
-      const gateway = runner.spawnDetached(
-        ["gateway", "run", "--port", String(chosen.gatewayPort), "--bind", "loopback"],
-        { stdio: ["ignore", gatewayLog, gatewayLog] },
+      spawnRecorded(inst, runId, "gateway", () =>
+        runner.spawnGated(
+          ["gateway", "run", "--port", String(ports.gatewayPort), "--bind", "loopback"],
+          { stdio: ["ignore", gatewayLog, gatewayLog] },
+        ),
       );
-      gateway.unref();
       closeSync(gatewayLog);
-      recordProcess(inst.stateDir, runId, "gateway", gateway.pid, inst.identify);
     } finally {
       // From here on OpenClaw runs only while this start's gateway is alive.
       runner.freshRunId = null;
     }
-    return chosen;
+    // The lock is held until the gateway is healthy, sandboxed and seeded, so
+    // no other command acts on an instance that is still starting.
+    await waitFor("the development gateway", () => gatewayHealthy(inst), 90_000);
+    await assertExecDenied(inst);
+    const marker = readMarker(inst.stateDir);
+    console.log(
+      `Development gateway (${label(inst)}) ready on ws://127.0.0.1:${ports.gatewayPort}`,
+    );
+    console.log(`  profile         openclaw ${profileArgs(inst.name).join(" ")}`);
+    console.log(`  state           ${inst.stateDir}`);
+    console.log(
+      `  scripted model  http://127.0.0.1:${ports.providerPort}/v1 (pid ${marker?.providerPid})`,
+    );
+    console.log(`  gateway         pid ${marker?.gatewayPid}, logs in ${inst.runDir}`);
+    // Unseeded starts are for checks that need a running gateway, not its data.
+    if (options.seed !== false) await seed(inst);
   });
-  await waitFor("the development gateway", () => gatewayHealthy(runner), 90_000);
-  await assertExecDenied(inst);
-  const marker = readMarker(inst.stateDir);
-  console.log(`Development gateway (${label(inst)}) ready on ws://127.0.0.1:${ports.gatewayPort}`);
-  console.log(`  profile         openclaw ${profileArgs(inst.name).join(" ")}`);
-  console.log(`  state           ${inst.stateDir}`);
-  console.log(
-    `  scripted model  http://127.0.0.1:${ports.providerPort}/v1 (pid ${marker?.providerPid})`,
-  );
-  console.log(`  gateway         pid ${marker?.gatewayPid}, logs in ${inst.runDir}`);
-  // Unseeded starts are for checks that need a running gateway, not its data.
-  if (options.seed !== false) await seed(inst);
 }
 
-/** Direct children of a process, each with its identity at the time it was listed. */
+/**
+ * Direct children of a process, each with its identity at the time it was
+ * listed. A child that cannot be listed or identified is not signalled later.
+ */
 function childProcesses(pid: number, identify: Identify): { pid: number; identity: string }[] {
-  const result = spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8" });
+  const result = spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8", timeout: 5000 });
+  if (result.error || (result.status !== 0 && result.status !== 1)) {
+    console.log(`Could not list the children of pid ${pid}; none of them will be signalled`);
+    return [];
+  }
   return result.stdout
     .split(/\s+/)
     .filter(Boolean)
     .map(Number)
     .filter(validPid)
     .flatMap((child) => {
-      const identity = identify(child);
-      return identity === null ? [] : [{ pid: child, identity }];
+      const found = identify(child);
+      return found.state === "alive" ? [{ pid: child, identity: found.identity }] : [];
     });
 }
 
@@ -541,28 +596,40 @@ type StopTarget = { role: string; pid: number; identity: string };
  * Stop one proven process: its identity is checked again right before every
  * signal, so a PID the system reused is never signalled. Its direct children
  * are listed while it is still the proven parent, and each is signalled only
- * if it is still that same process.
+ * if it is still that same process. Returns false when its end could not be
+ * confirmed.
  */
-async function stopProcess(target: StopTarget, identify: Identify): Promise<void> {
-  const same = () => identify(target.pid) === target.identity;
-  if (!same()) return;
+async function stopProcess(target: StopTarget, identify: Identify): Promise<boolean> {
+  const state = () => processState(target.pid, target.identity, identify);
+  if (state() !== "alive") return state() === "dead";
   const children = childProcesses(target.pid, identify);
-  if (!same()) return;
+  if (state() !== "alive") return state() === "dead";
   process.kill(target.pid, "SIGTERM");
   const deadline = Date.now() + 15_000;
-  while (same() && Date.now() < deadline) await sleep(200);
-  if (same()) {
+  while (state() === "alive" && Date.now() < deadline) await sleep(200);
+  let forced = false;
+  if (state() === "alive") {
     process.kill(target.pid, "SIGKILL");
-    console.log(`Stopped the ${target.role} (pid ${target.pid}) after a forced kill`);
-  } else {
-    console.log(`Stopped the ${target.role} (pid ${target.pid})`);
+    forced = true;
+    const killDeadline = Date.now() + 5_000;
+    while (state() === "alive" && Date.now() < killDeadline) await sleep(100);
   }
+  if (state() !== "dead") {
+    console.log(
+      `Signalled the ${target.role} (pid ${target.pid}) but could not confirm it stopped`,
+    );
+    return false;
+  }
+  console.log(
+    `Stopped the ${target.role} (pid ${target.pid})${forced ? " after a forced kill" : ""}`,
+  );
   for (const child of children) {
-    if (identify(child.pid) === child.identity) {
+    if (processState(child.pid, child.identity, identify) === "alive") {
       process.kill(child.pid, "SIGTERM");
       console.log(`Stopped a leftover child of the ${target.role} (pid ${child.pid})`);
     }
   }
+  return true;
 }
 
 /**
@@ -603,7 +670,6 @@ async function stopLocked(inst: DevInstance): Promise<void> {
     );
     return;
   }
-  if (isLegacyMarker(marker)) refuse("its marker records no process identities");
   const problems = markerProblems(marker, inst.name);
   if (problems.length > 0) refuse(`its marker cannot be trusted: ${problems.join("; ")}`);
   if (!runMatches(run, marker, inst.name, inst.checkout)) {
@@ -617,11 +683,21 @@ async function stopLocked(inst: DevInstance): Promise<void> {
   for (const role of ["gateway", "provider"] as const) {
     const pid = marker[`${role}Pid`];
     const identity = marker[`${role}Identity`];
-    const state = processState(pid, identity, inst.identify);
-    if (state === "unknown") refuse(`its ${role} process record cannot identify a process`);
-    if (state === "alive") targets.push({ role, pid: pid!, identity: identity! });
+    const verdict = processVerdict(pid, identity, inst.identify);
+    if (verdict.state === "unknown") {
+      refuse(
+        `could not determine whether its ${role} (pid ${String(pid)}) is running: ${verdict.reason}`,
+      );
+    }
+    if (verdict.state === "alive") targets.push({ role, pid: pid!, identity: identity! });
   }
-  for (const target of targets) await stopProcess(target, inst.identify);
+  let confirmed = true;
+  for (const target of targets) confirmed = (await stopProcess(target, inst.identify)) && confirmed;
+  if (!confirmed) {
+    throw new StateInUseError(
+      `${label(inst)}: could not confirm that every process stopped; its records are kept.`,
+    );
+  }
   rmSync(inst.runFile, { force: true });
 }
 
@@ -686,13 +762,18 @@ export async function status(
   const marker = owner === "owned" ? readMarker(runner.stateDir) : null;
   for (const role of ["provider", "gateway"] as const) {
     const pid = marker?.[`${role}Pid`];
-    const state = processState(pid, marker?.[`${role}Identity`], inst.identify);
+    const state =
+      marker?.[`${role}Pending`] === true
+        ? "pending"
+        : processState(pid, marker?.[`${role}Identity`], inst.identify);
     const shown =
       state === "alive"
         ? `running, pid ${pid}`
         : state === "unknown"
           ? `unknown (pid ${String(pid)})`
-          : "stopped";
+          : state === "pending"
+            ? "being started"
+            : "stopped";
     log(`${role.padEnd(12)}${shown}`);
   }
   const inUse = inUseRefusal(
@@ -705,7 +786,7 @@ export async function status(
   if (inUse) log(`in use      ${inUse}`);
   const refusal = runner.refusal();
   if (refusal) log(`healthy     no (not checked: ${refusal})`);
-  else log(`healthy     ${(await gatewayHealthy(runner)) ? "yes" : "no"}`);
+  else log(`healthy     ${(await gatewayHealthy(inst)) ? "yes" : "no"}`);
   if (connection) log(`url         ${connection.url}`);
 }
 
@@ -883,7 +964,7 @@ async function seedConversations(inst: DevInstance, bot: SeedBot): Promise<void>
 export async function seed(inst: DevInstance): Promise<void> {
   const refusal = inst.runner.refusal();
   if (refusal) throw new Error(refusal);
-  if (!(await gatewayHealthy(inst.runner))) {
+  if (!(await gatewayHealthy(inst))) {
     throw new Error(
       `the development gateway is not running. Run \`pnpm dev-gateway start${instanceFlag(inst)}\` first.`,
     );
@@ -928,6 +1009,8 @@ export type ListedInstance = {
   providerPort: number | null;
   gatewayPid: number | null;
   gatewayRunning: boolean;
+  /** "unknown" when it could not be determined whether the recorded gateway runs. */
+  gatewayState: ProcessState;
   /** Started from this checkout, by its marker. */
   thisCheckout: boolean;
   checkout: string | null;
@@ -942,6 +1025,7 @@ function describeEntry(entry: InstanceEntry, checkout: string): ListedInstance {
     providerPort: entry.providerPort ?? null,
     gatewayPid: entry.marker.gatewayPid ?? null,
     gatewayRunning: entry.gatewayRunning,
+    gatewayState: entry.gatewayState,
     thisCheckout: entry.marker.checkout === checkout,
     checkout: entry.marker.checkout ?? null,
   };
@@ -967,7 +1051,12 @@ export function list(
   }
   if (rows.length === 0) log("No development gateway instances on this machine.");
   for (const row of rows) {
-    const gateway = row.gatewayRunning ? `running, pid ${row.gatewayPid}` : "stopped";
+    const gateway =
+      row.gatewayState === "alive"
+        ? `running, pid ${row.gatewayPid}`
+        : row.gatewayState === "unknown"
+          ? `unknown (pid ${String(row.gatewayPid)})`
+          : "stopped";
     const owner = row.thisCheckout ? "this checkout" : (row.checkout ?? "unknown checkout");
     log(`${row.name ?? "(default)"}`);
     log(`  state     ${row.stateDir}`);
@@ -996,7 +1085,7 @@ export async function prune(
   const log = options.log ?? console.log;
   const home = options.home ?? homedir();
   const removed: string[] = [];
-  for (const entry of listInstances(home, () => null)) {
+  for (const entry of listInstances(home, NOT_CHECKED)) {
     if (entry.name === null) continue;
     const inst = openInstance(entry.name, {
       home,
@@ -1077,9 +1166,11 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  // A signal ends the command at its next step, never inside one: a spawn and
-  // its record, or a check and the change it allows, are each one synchronous
-  // step. Locks are released by the operating system when the process exits.
+  // A signal ends the command at its next step, never inside one: a check and
+  // the change it allows are one synchronous step. A kill can land anywhere,
+  // which is why every process is recorded before its gate opens
+  // (`spawnRecorded`). Locks are released by the operating system when the
+  // process exits.
   for (const [signal, code] of [
     ["SIGINT", 130],
     ["SIGTERM", 143],

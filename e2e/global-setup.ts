@@ -18,18 +18,12 @@
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
-import { newRunId, processIdentity, validPid } from "../tools/dev-gateway/src/state-guard.ts";
+import { join } from "node:path";
+import { gatedSpawn, type Gated } from "../tools/dev-gateway/src/env.ts";
+import { newRunId, processIdentity, processState } from "../tools/dev-gateway/src/state-guard.ts";
+import { cleanUp, recoverDeadRuns, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
@@ -37,7 +31,6 @@ const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
 const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
 /** The default instance's ports and the web preview's. An e2e run uses none of them. */
 export const FORBIDDEN_PORTS = [19001, 19091, 5310, 5311];
-const TEMP_PREFIX = "clawtrate-e2e-";
 
 export type ListedInstance = {
   name: string | null;
@@ -46,6 +39,7 @@ export type ListedInstance = {
   providerPort: number | null;
   gatewayPid: number | null;
   gatewayRunning: boolean;
+  gatewayState: "none" | "dead" | "alive" | "unknown";
 };
 
 function cliEnv(): NodeJS.ProcessEnv {
@@ -78,7 +72,8 @@ export function runningOthers(own: string[], keep: string[] = []): string[] {
   return listInstances()
     .filter(
       (row) =>
-        row.gatewayRunning &&
+        // A gateway that cannot be checked counts as running: it must be left alone too.
+        (row.gatewayState === "alive" || row.gatewayState === "unknown") &&
         (row.name === null ||
           (!own.includes(row.name) && (!row.name.startsWith("e2e-") || keep.includes(row.name)))),
     )
@@ -89,94 +84,12 @@ export function runningOthers(own: string[], keep: string[] = []): string[] {
     .sort();
 }
 
-type Proc = { pid: number; identity: string };
-
-/** What a run created, saved as it goes so an interrupted run can be cleaned up. */
-type RunRecord = {
-  run: string;
-  runner: Proc;
-  instances: { name: string; runId: string }[];
-  host: Proc | null;
-  dirs: string[];
+/** Reset one of this run's instances, only if it still holds the run this run gave it. */
+const resetInstance = (name: string, runId: string) => {
+  devGateway(name, "reset", "--run-id", runId);
 };
 
-const recordPath = (run: string) => join(RECORDS, `${run}.json`);
-
-function saveRecord(record: RunRecord): void {
-  mkdirSync(RECORDS, { recursive: true });
-  const temp = `${recordPath(record.run)}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(record, null, 2)}\n`);
-  renameSync(temp, recordPath(record.run));
-}
-
-function readRecord(path: string): RunRecord | null {
-  try {
-    const record = JSON.parse(readFileSync(path, "utf8")) as RunRecord;
-    const proc = (p: unknown) =>
-      p !== null &&
-      typeof p === "object" &&
-      validPid((p as Proc).pid) &&
-      typeof (p as Proc).identity === "string";
-    if (
-      /^[0-9a-f]{8}$/.test(record.run) &&
-      proc(record.runner) &&
-      (record.host === null || proc(record.host)) &&
-      Array.isArray(record.instances) &&
-      Array.isArray(record.dirs)
-    ) {
-      return record;
-    }
-  } catch {
-    // unreadable: left alone
-  }
-  return null;
-}
-
-const alive = (proc: Proc) => processIdentity(proc.pid) === proc.identity;
 const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-
-/**
- * Remove everything a run record lists, synchronously, so it also works from a
- * signal or exit handler. The preview host is signalled only if it is still the
- * process that was spawned. Each instance is reset by name and run id; the dev
- * tooling proves its processes before signalling and deletes only when nothing
- * runs. Returns what could not be cleaned up.
- */
-function cleanUp(record: RunRecord): string[] {
-  const problems: string[] = [];
-  if (record.host && alive(record.host)) process.kill(record.host.pid, "SIGTERM");
-  for (const dir of record.dirs) {
-    if (dirname(dir) === tmpdir() && basename(dir).startsWith(TEMP_PREFIX)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
-  for (const { name, runId } of [...record.instances].reverse()) {
-    try {
-      devGateway(name, "reset", "--run-id", runId);
-    } catch (error) {
-      problems.push(`reset ${name}: ${String(error)}`);
-    }
-  }
-  if (problems.length === 0) rmSync(recordPath(record.run), { force: true });
-  return problems;
-}
-
-/** Clean up this checkout's earlier runs that were killed and can no longer clean up. */
-function recoverDeadRuns(): void {
-  let files: string[];
-  try {
-    files = readdirSync(RECORDS).filter((file) => /^[0-9a-f]{8}\.json$/.test(file));
-  } catch {
-    return;
-  }
-  for (const file of files) {
-    const record = readRecord(join(RECORDS, file));
-    if (!record || alive(record.runner)) continue;
-    console.log(`Cleaning up interrupted end-to-end run ${record.run}`);
-    const problems = cleanUp(record);
-    if (problems.length > 0) console.error(problems.join("\n"));
-  }
-}
 
 /** Stop a child we started: SIGTERM, a bounded wait, then SIGKILL. */
 async function stopChild(child: ChildProcess, timeoutMs = 10_000): Promise<void> {
@@ -192,8 +105,10 @@ async function stopChild(child: ChildProcess, timeoutMs = 10_000): Promise<void>
   }
 }
 
+/** The preview host, spawned behind a gate so it cannot run before it is recorded. */
 function startHost(instance: string, staticDir: string, dataDir: string) {
-  const host = spawn(
+  const gated: Gated = gatedSpawn(
+    spawn,
     process.execPath,
     [
       join(ROOT, "apps/desktop/src/web-host/main.ts"),
@@ -211,6 +126,7 @@ function startHost(instance: string, staticDir: string, dataDir: string) {
     ],
     { cwd: ROOT, stdio: ["ignore", "pipe", "inherit"] },
   );
+  const host = gated.child;
   const url = new Promise<string>((resolve, reject) => {
     let output = "";
     const timer = setTimeout(
@@ -227,7 +143,13 @@ function startHost(instance: string, staticDir: string, dataDir: string) {
     });
     host.once("exit", (code) => reject(new Error(`preview host exited with ${code}:\n${output}`)));
   });
-  return { host, url };
+  return { host, url, gated };
+}
+
+function selfIdentity(): string {
+  const found = processIdentity(process.pid);
+  if (found.state !== "alive") throw new Error("could not determine this process's start time");
+  return found.identity;
 }
 
 export default async function globalSetup() {
@@ -240,17 +162,17 @@ export default async function globalSetup() {
   process.env.CLAWTRATE_DEV_INSTANCE = name;
   process.env.CLAWTRATE_E2E_SENTINEL = sentinel;
 
-  recoverDeadRuns();
+  recoverDeadRuns(RECORDS, resetInstance);
 
   // Registered before anything is started.
   const record: RunRecord = {
     run,
-    runner: { pid: process.pid, identity: processIdentity(process.pid)! },
+    runner: { pid: process.pid, identity: selfIdentity() },
     instances: [],
     host: null,
     dirs: [],
   };
-  saveRecord(record);
+  saveRecord(RECORDS, record);
   let child: ChildProcess | null = null;
   let host: ChildProcess | null = null;
   let cleaned: string[] | null = null;
@@ -259,13 +181,20 @@ export default async function globalSetup() {
     // A dev-gateway command still running is ended first; the reset below
     // waits for the instance's lock, which that command holds until it exits.
     if (child && child.exitCode === null && child.signalCode === null) {
-      const command = { pid: child.pid!, identity: processIdentity(child.pid!) ?? "" };
+      const found = processIdentity(child.pid!);
       child.kill("SIGTERM");
       // Wait, synchronously, until it has exited: the reset must not see it running.
-      const deadline = Date.now() + 15_000;
-      while (alive(command) && Date.now() < deadline) sleepSync(100);
+      if (found.state === "alive") {
+        const deadline = Date.now() + 15_000;
+        while (
+          processState(child.pid, found.identity, processIdentity) === "alive" &&
+          Date.now() < deadline
+        ) {
+          sleepSync(100);
+        }
+      }
     }
-    cleaned = cleanUp(record);
+    cleaned = cleanUp(RECORDS, record, resetInstance);
     return cleaned;
   };
   const onSignal = (signal: NodeJS.Signals) => {
@@ -297,13 +226,13 @@ export default async function globalSetup() {
   const startInstance = (instance: string, ...flags: string[]) => {
     const runId = newRunId();
     record.instances.push({ name: instance, runId });
-    saveRecord(record);
+    saveRecord(RECORDS, record);
     return cli(instance, "start", "--run-id", runId, ...flags);
   };
   const tempDir = () => {
     const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
     record.dirs.push(dir);
-    saveRecord(record);
+    saveRecord(RECORDS, record);
     return dir;
   };
 
@@ -354,10 +283,19 @@ export default async function globalSetup() {
       { cwd: ROOT, stdio: "ignore" },
     );
     if (cleaned) throw new Error("the run was interrupted");
+    record.hostPending = true;
+    saveRecord(RECORDS, record);
     const started = startHost(name, staticDir, dataDir);
     host = started.host;
-    record.host = { pid: host.pid!, identity: processIdentity(host.pid!)! };
-    saveRecord(record);
+    const found = processIdentity(host.pid!);
+    if (found.state !== "alive") {
+      started.gated.abort();
+      throw new Error("could not record the preview host");
+    }
+    record.host = { pid: host.pid!, identity: found.identity };
+    delete record.hostPending;
+    saveRecord(RECORDS, record);
+    started.gated.release();
     const url = await started.url;
     if (FORBIDDEN_PORTS.includes(Number(new URL(url).port))) {
       throw new Error(`preview host is on ${url}, a port e2e never uses`);

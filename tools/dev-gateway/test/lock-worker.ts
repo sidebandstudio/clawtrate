@@ -7,11 +7,22 @@
 //                                        pause replace its folder with a new run whose start
 //                                        process is this one, release the lock and stay alive
 //                                        until killed
-import { appendFileSync } from "node:fs";
+//   gate-crash <file>                    gated-spawn `touch <file>`, print its pid, then die by
+//                                        SIGKILL before recording or releasing it
+//   start-crash <home> <runRoot> <name> <role>
+//                                        run the real `start` with OpenClaw and the scripted model
+//                                        replaced by gated `sleep` stand-ins; the moment <role>
+//                                        (provider or gateway) is spawned, print its pid and die
+//                                        by SIGKILL. A provider spawned before that is printed as
+//                                        `provider <pid>` and left running.
+import { spawn, type SpawnOptions } from "node:child_process";
+import { appendFileSync, writeSync } from "node:fs";
+import { openInstance } from "../src/cli.ts";
+import { GATE_SCRIPT, gatedSpawn, OpenclawRunner } from "../src/env.ts";
 import { stateDirFor } from "../src/instance.ts";
 import { instanceLockPath, portLockPath, withLock } from "../src/lock.ts";
 import { choosePorts } from "../src/registry.ts";
-import { newRunId, prepareFreshState, processIdentity } from "../src/state-guard.ts";
+import { newRunId, prepareFreshState, processIdentity, readMarker } from "../src/state-guard.ts";
 
 const [mode, ...args] = process.argv.slice(2);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -41,7 +52,7 @@ if (mode === "hold") {
       ...chosen,
       checkout: "/test/worker",
       startPid: process.pid,
-      startIdentity: processIdentity(process.pid)!,
+      startIdentity: (processIdentity(process.pid) as { identity: string }).identity,
     });
     return chosen;
   });
@@ -59,10 +70,54 @@ if (mode === "hold") {
       providerPort: 19250,
       checkout: "/test/worker",
       startPid: process.pid,
-      startIdentity: processIdentity(process.pid)!,
+      startIdentity: (processIdentity(process.pid) as { identity: string }).identity,
     });
   });
   forever();
+} else if (mode === "gate-crash") {
+  const gated = gatedSpawn(spawn, "touch", [args[0]!], { detached: true });
+  writeSync(1, `pid ${gated.child.pid}\n`);
+  process.kill(process.pid, "SIGKILL");
+} else if (mode === "start-crash") {
+  const [home, runRoot, name, role] = args as [string, string, string, "provider" | "gateway"];
+  const fakeSync = (() => ({ status: 0, stdout: "", stderr: "" })) as never;
+  // Only the gate itself is real; what it would run is always a `sleep` stand-in.
+  const standIn = (options: SpawnOptions) =>
+    spawn("/bin/sh", ["-c", GATE_SCRIPT, "sleep", "120"], { ...options, env: { PATH: "/bin" } });
+  const crashing = (_command: string, _args: string[], options: SpawnOptions) => {
+    const child = standIn(options);
+    writeSync(1, `pid ${child.pid}\n`);
+    process.kill(process.pid, "SIGKILL");
+    return child;
+  };
+  const surviving = (_command: string, _args: string[], options: SpawnOptions) => {
+    const child = standIn(options);
+    writeSync(1, `provider ${child.pid}\n`);
+    return child;
+  };
+  const base = openInstance(name, { home, runRoot, checkout: "/test/worker" });
+  let providerPort = 0;
+  const inst = openInstance(name, {
+    home,
+    runRoot,
+    checkout: "/test/worker",
+    // The provider stand-in "listens" so that the start goes on to the gateway.
+    listening: async (port) => role === "gateway" && port === providerPort,
+    runner: new OpenclawRunner({
+      instance: name,
+      stateDir: base.stateDir,
+      runFile: base.runFile,
+      checkout: "/test/worker",
+      spawnSyncImpl: fakeSync,
+      spawnImpl: crashing as never,
+    }),
+    spawn: ((command: string, spawnArgs: string[], options: SpawnOptions) => {
+      providerPort = readMarker(base.stateDir)?.providerPort ?? 0;
+      return (role === "provider" ? crashing : surviving)(command, spawnArgs, options);
+    }) as never,
+  });
+  const { start } = await import("../src/cli.ts");
+  await start(inst, { seed: false });
 } else {
   console.error(`unknown mode ${mode}`);
   process.exit(2);

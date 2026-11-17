@@ -150,26 +150,19 @@ describe("preparing fresh state", () => {
     expect(snapshot(target)).toEqual(before);
   });
 
-  it("starts over an old marker only when nothing it records is running, and never runs on it", () => {
+  it("never starts over, runs on or deletes an old marker, even when nothing runs", () => {
     const home = tempHome();
     const stateDir = devStateDir(home);
     plant(stateDir, MARKER_FILE, '{"createdBy":"clawtrate tools/dev-gateway","createdAt":"x"}');
     expect(ownership(stateDir)).toBe("owned");
+    const before = snapshot(stateDir);
     expect(
       spawnRefusal({ stateDir, run: null, freshRunId: "", instance: null, checkout: CHECKOUT }),
-    ).toMatch(/predates this tool version/);
-    prepareFreshState(stateDir, "a".repeat(48), origin());
-    expect(readMarker(stateDir)?.runId).toBe("a".repeat(48));
-
-    const live = devStateDir(tempHome());
-    plant(
-      live,
-      MARKER_FILE,
-      JSON.stringify({ createdBy: "clawtrate tools/dev-gateway", gatewayPid: liveProcess().pid }),
+    ).toMatch(/older version of this tool/);
+    expect(() => prepareFreshState(stateDir, newRunId(), origin())).toThrow(
+      /older version of this tool/,
     );
-    const before = snapshot(live);
-    expect(() => prepareFreshState(live, newRunId(), origin())).toThrow(/may still be running/);
-    expect(snapshot(live)).toEqual(before);
+    expect(snapshot(stateDir)).toEqual(before);
   });
 
   it("creates the folder with only a marker when none exists", () => {
@@ -212,7 +205,7 @@ describe("the OpenClaw spawn boundary", () => {
     expect(runner.refusal()).toMatch(/\) is not running/);
     await expect(runner.run(["devices", "list"])).rejects.toBeInstanceOf(SpawnRefusedError);
     expect(() => runner.runSync(["config", "validate"])).toThrow(SpawnRefusedError);
-    expect(() => runner.spawnDetached(["gateway", "run"], {})).toThrow(SpawnRefusedError);
+    expect(() => runner.spawnGated(["gateway", "run"], {})).toThrow(SpawnRefusedError);
     expect(calls).toEqual([]);
   });
 

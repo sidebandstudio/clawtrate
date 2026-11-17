@@ -55,11 +55,18 @@ export type Proc = { pid: number; identity: string };
 /** Children the tests started; stopped by PID in `stopChildren`. */
 export const children: ChildProcess[] = [];
 
+/** The start time of a live process, or a test failure. */
+export function identityOf(pid: number): string {
+  const found = processIdentity(pid);
+  if (found.state !== "alive") throw new Error(`pid ${pid} is not alive: ${JSON.stringify(found)}`);
+  return found.identity;
+}
+
 /** A live stand-in process with its real identity. */
 export function liveProcess(): Proc {
   const child = spawn("sleep", ["120"], { stdio: "ignore" });
   children.push(child);
-  return { pid: child.pid!, identity: processIdentity(child.pid!)! };
+  return { pid: child.pid!, identity: identityOf(child.pid!) };
 }
 
 export function childFor(pid: number): ChildProcess {

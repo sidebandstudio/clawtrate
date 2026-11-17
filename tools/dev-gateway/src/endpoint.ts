@@ -9,7 +9,6 @@
 import { join } from "node:path";
 import { DEFAULT_GATEWAY_PORT, stateDirFor, validateInstanceName } from "./instance.ts";
 import {
-  isLegacyMarker,
   markerProblems,
   ownership,
   processIdentity,
@@ -38,7 +37,6 @@ export function provenEndpoint(options: {
     return { refusal: `${stateDir} is not a state folder this tool created` };
   }
   const marker = readMarker(stateDir)!;
-  if (isLegacyMarker(marker)) return { refusal: "its marker records no process identities" };
   const problems = markerProblems(marker, instance);
   if (problems.length > 0)
     return { refusal: `its marker cannot be trusted: ${problems.join("; ")}` };

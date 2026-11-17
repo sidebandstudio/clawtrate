@@ -418,7 +418,7 @@ describe("a gateway another checkout started", () => {
       await expect(start(inst)).rejects.toThrow(
         new RegExp(
           `${name === null ? "the default instance" : 'instance "alpha"'} \\(${stateDir}\\) is in use: ` +
-            `its gateway process \\(pid ${gateway.pid}\\) may still be running and was started by another checkout \\(${OTHER_CHECKOUT}\\)`,
+            `its gateway process \\(pid ${gateway.pid}\\) is still running and was started by another checkout \\(${OTHER_CHECKOUT}\\)`,
         ),
       );
       await expect(reset(inst)).rejects.toBeInstanceOf(StateInUseError);
@@ -496,23 +496,42 @@ describe("deletion needs proof that nothing runs (A5)", () => {
     expect(snapshot(alphaDir)).toEqual(before);
   });
 
-  it("refuses an old marker whose recorded PID is alive", async () => {
-    const home = tempDir("clawtrate-home-");
-    const stateDir = stateDirFor(null, home);
-    mkdirSync(stateDir);
-    writeFileSync(
-      join(stateDir, MARKER_FILE),
-      JSON.stringify({
-        createdBy: "clawtrate tools/dev-gateway",
-        runId: "old",
-        gatewayPid: liveProcess().pid,
-      }),
-    );
-    const before = snapshot(stateDir);
-    await expect(reset(testInstance(home, tempDir("clawtrate-run-"), null))).rejects.toThrow(
-      /may still be running/,
-    );
-    expect(snapshot(stateDir)).toEqual(before);
+  it("refuses every old-format marker, live or not, with or without fields (A5)", async () => {
+    const shapes: Record<string, Record<string, unknown>> = {
+      // Before instances: the default instance only, no instance field.
+      "pre-instance, live gateway": { runId: "old", gatewayPid: liveProcess().pid },
+      "pre-instance, no process fields": { runId: newRunId() },
+      "pre-instance, nothing but the magic": {},
+      // fdea2bf: instance, ports and checkout, but no process identities.
+      "fdea2bf, processes gone": {
+        runId: newRunId(),
+        instance: null,
+        gatewayPort: 19001,
+        providerPort: 19091,
+        checkout: CHECKOUT,
+        startPid: deadProcess().pid,
+        gatewayPid: deadProcess().pid,
+        providerPid: deadProcess().pid,
+      },
+    };
+    for (const [shape, fields] of Object.entries(shapes)) {
+      const home = tempDir("clawtrate-home-");
+      const runRoot = tempDir("clawtrate-run-");
+      const stateDir = stateDirFor(null, home);
+      mkdirSync(stateDir);
+      writeFileSync(
+        join(stateDir, MARKER_FILE),
+        JSON.stringify({ createdBy: "clawtrate tools/dev-gateway", ...fields }),
+      );
+      writeFileSync(join(stateDir, "openclaw.json"), "{}");
+      const before = snapshot(stateDir);
+      const { inst, calls } = recordingInstance(home, null, runRoot);
+      for (const attempt of [() => reset(inst), () => start(inst, { seed: false })]) {
+        await expect(attempt(), shape).rejects.toThrow(/older version of this tool/);
+      }
+      expect(calls, shape).toEqual([]);
+      expect(snapshot(stateDir), shape).toEqual(before);
+    }
   });
 
   it("refuses while anything listens on the instance's ports, 19001 for the default instance", async () => {
@@ -620,7 +639,7 @@ describe("one lock for the life of an instance (A3, A6)", () => {
       await output(starter, "locked");
       if (command === "reset") {
         await expect(reset(testInstance(home, runRoot, "race"))).rejects.toThrow(
-          /start process .* may still be running/,
+          /start process .* is still running/,
         );
       } else {
         await expect(
