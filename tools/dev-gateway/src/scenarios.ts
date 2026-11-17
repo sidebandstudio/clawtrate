@@ -76,13 +76,20 @@ const mcp = (name: string, args: Record<string, unknown>) =>
 function lastResult(ctx: PlanContext, name: string): Record<string, unknown> | null {
   const found = [...ctx.results].reverse().find((result) => result.name === name);
   if (!found) return null;
-  for (const start of [0, found.text.search(/^\{/m)]) {
-    if (start < 0) continue;
-    try {
-      const parsed: unknown = JSON.parse(found.text.slice(start));
-      if (parsed !== null && typeof parsed === "object") return parsed as Record<string, unknown>;
-    } catch {
-      // try the next candidate
+  // The JSON may be the whole text, or follow a summary, or be followed by
+  // the tool's own text: try each object that starts a line, up to each "}"
+  // that ends one.
+  const starts = [...found.text.matchAll(/^\{/gm)].map((m) => m.index);
+  const ends = [...found.text.matchAll(/^\}/gm)].map((m) => m.index + 1).reverse();
+  for (const start of starts) {
+    for (const end of [found.text.length, ...ends]) {
+      if (end <= start) continue;
+      try {
+        const parsed: unknown = JSON.parse(found.text.slice(start, end));
+        if (parsed !== null && typeof parsed === "object") return parsed as Record<string, unknown>;
+      } catch {
+        // try the next candidate
+      }
     }
   }
   return null;

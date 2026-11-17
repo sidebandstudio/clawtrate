@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createCodingAgent, THREAD_URL_BASE } from "../src/coding-agent-mcp.ts";
+import { createCodingAgent, SEND_MESSAGE_TEXT, THREAD_URL_BASE } from "../src/coding-agent-mcp.ts";
+import { SCENARIO_CHECKS, uncoveredDirectives } from "../src/scenario-check.ts";
 import {
   resolveRound,
   scenarioRounds,
@@ -207,6 +208,9 @@ describe("the stand-in coding agent", () => {
       method: "tools/call",
       params: { name: "send_message", arguments: { message: "Fix it" } },
     });
+    expect((sent!.result as { content: unknown }).content).toEqual([
+      { type: "text", text: SEND_MESSAGE_TEXT },
+    ]);
     expect((sent!.result as { structuredContent: unknown }).structuredContent).toEqual({
       threadId: "thread-1",
       reply: "Opened a branch and drafted the change for: Fix it",
@@ -228,5 +232,14 @@ describe("the stand-in coding agent", () => {
     });
     expect(JSON.stringify(seen)).toContain("notifications/cancelled");
     agent.close();
+  });
+});
+
+describe("the scenario check's coverage", () => {
+  it("has a check that sends every directive", () => {
+    expect(uncoveredDirectives()).toEqual([]);
+    expect(SCENARIO_CHECKS.some((check) => check.name === "every directive has a check")).toBe(
+      true,
+    );
   });
 });

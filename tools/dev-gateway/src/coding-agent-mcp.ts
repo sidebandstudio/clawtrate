@@ -15,6 +15,8 @@ import { createInterface } from "node:readline";
 
 export const CODING_AGENT_SERVER = "coder";
 export const THREAD_URL_BASE = "https://coding-agent.example/threads/";
+/** The text send_message returns beside its structured content. */
+export const SEND_MESSAGE_TEXT = "Opened a branch and drafted the change.";
 
 type JsonRpcMessage = { id?: number | string; method?: string; params?: Record<string, unknown> };
 type ToolResult = {
@@ -106,8 +108,14 @@ export function createCodingAgent() {
         reply: `Opened a branch and drafted the change for: ${message.slice(0, 200)}`,
         url: `${THREAD_URL_BASE}${threadId}`,
       };
+      // A sentence of its own beside the structured reply, as a real agent
+      // would send; other tools repeat their structured content as text.
+      const result: ToolResult = {
+        content: [{ type: "text", text: SEND_MESSAGE_TEXT }],
+        structuredContent: out,
+      };
       const delay = clamp(args.delaySeconds, 0, 600, 0);
-      return delay > 0 ? later(delay, () => json(out)) : json(out);
+      return delay > 0 ? later(delay, () => result) : result;
     }
     if (name === "run_checks") {
       return {
