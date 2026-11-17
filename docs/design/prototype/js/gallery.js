@@ -200,7 +200,7 @@
           name: "Every kind, done",
           note: "Twenty-six kinds, in the order of the list in section 8, each with a result that its adapter reads as done. The two Messaged cards are members of the same family. The question shows as a card only on a read-only connection; with access it is the question card.",
           html: col(
-            A(C.read), A(C.list), A(C.edit), A(C.memory), A(C.recall), A(C.command), A(C.terminalList), A(C.web), A(C.xsearch), A(C.page), A(C.browserClick), A(C.computerClick), A(C.phoneTap), A(C.screen), A(C.routine),
+            A(C.read), A(C.list), A(C.edit), A(C.memory), A(C.recall), A(C.command), A(C.terminalList), A(C.web), A(C.xsearch), A(C.page), A(C.browserClick), A(C.computerClick), A(C.phoneObserve), A(C.screen), A(C.routine),
             messaged({ target: "marlow", first, state: "replied", body: S.marlowBody("replied") }),
             A(C.tasks), A(C.helper), A(C.question, { readOnly: true }), A(C.plan), A(C.imageMade), A(C.pdf), A(C.channelSent), A(C.server),
             T3(C.t3Launch, [C.t3Launch]),
@@ -231,7 +231,7 @@
         },
         {
           name: "A result is not always completed work",
-          note: "Each kind reads its result through an adapter. Admitted, queued, not confirmed, suppressed or unavailable work says so on its line, and never reads as done.",
+          note: "Each kind reads its result through an adapter, and every payload that carries its own status or code is read from it. Admitted, queued, not confirmed, suppressed, unavailable, refused, not found or unchanged work says so on its line, and never reads as done. A phone act that needs confirming did nothing; one that ran shows the device's own code (here a sample), because the gateway does not fix a done code.",
           html: col(
             A(C.image),
             A(C.imageMade),
@@ -245,6 +245,16 @@
             A(C.recallPartial),
             A(C.recallUnavailable),
             A(C.xsearchUnavailable),
+            A(C.phoneConfirm),
+            A(C.phoneTap),
+            A(C.phoneStale),
+            A(C.recallGetError),
+            A(C.recallGetNone),
+            A(C.unchanged),
+            A(C.pending),
+            A(C.helperRefused),
+            A(C.routineRemoveNone),
+            A(C.turn),
           ),
         },
         {
@@ -269,7 +279,7 @@
         {
           name: "Real operations, with their own words",
           note: "A shared terminal is not a command; the screen tool changes the Control UI; a phone has its own actions; documents and images are counted; a goal checked is not a plan updated.",
-          html: col(A(C.terminalList), A(C.terminalInput), A(C.screen), A(C.phoneObserve), A(C.phoneTap), A(C.pdf), A(C.images), A(C.patch), A(C.goalGet), A(C.goalUpdate), A(C.routineRemove), A(C.voice)),
+          html: col(A(C.terminalList), A(C.terminalInput), A(C.screen), A(C.phoneObserve), A(C.phoneConfirm), A(C.pdf), A(C.images), A(C.patch), A(C.goalGet), A(C.goalUpdate), A(C.routineRemove), A(C.nextCheck), A(C.voice)),
         },
         {
           name: "Last seen, while the connection is lost",
@@ -305,7 +315,7 @@
         {
           name: "Kinds opened",
           note: "Each kind's readable view: a search's results as links, a plan as a checklist with completed, in progress and pending steps, the media a result carries, admitted media, a browser action and its target, a routine with its time zone, an unavailable search and its reason, a queued message.",
-          html: col(A(C.web, {}, { open: true }), A(C.planUpdate, {}, { open: true }), A(C.imageMade, {}, { open: true }), A(C.image, {}, { open: true }), A(C.browserType, {}, { open: true }), A(C.routine, {}, { open: true }), A(C.recallUnavailable, {}, { open: true }), A(C.channel, {}, { open: true })),
+          html: col(A(C.web, {}, { open: true }), A(C.planUpdate, {}, { open: true }), A(C.imageMade, {}, { open: true }), A(C.image, {}, { open: true }), A(C.browserType, {}, { open: true }), A(C.routine, {}, { open: true }), A(C.recallUnavailable, {}, { open: true }), A(C.channel, {}, { open: true }), A(C.computerUnconfirmed, {}, { open: true }), A(C.phoneConfirm, {}, { open: true })),
         },
         {
           name: "On a read-only connection",
@@ -336,6 +346,21 @@
           name: "Mixed states: an earlier failure and a later approval",
           note: "Two places, so neither hides the other: the detail names the failure, the right side says what is happening now.",
           html: col(F([C.command, { ...C.mv, id: "call_7b20", status: "failed", isError: true, text: "mv: Permission denied" }, { ...C.mv, id: "call_7b21", status: "waiting" }]), F([C.read, C.readFail, { ...C.read2, id: "call_7b22", status: "running", elapsed: "0:04" }])),
+        },
+        {
+          name: "Outcomes short of Done in a fold",
+          note: "The plural is never more complete than its least-established member. Started alone has its own plural; Partial keeps the past verb; any other mix is neutral. Every outcome short of Done is counted, and there is no duration.",
+          html: col(F([C.image, { ...C.image, id: "call_7b30" }]), F([C.recallPartial, { ...C.recallPartial, id: "call_7b31", args: { query: "drains" } }]), F([C.image, C.imageMade]), F([C.computerClick, C.computerUnconfirmed])),
+        },
+        {
+          name: "Each operation folds under its own key and plural",
+          note: "Listing image models is not making images: its own key, its own plural.",
+          html: col(F([C.imageList, { ...C.imageList, id: "call_7b32" }]), A(C.imageMade)),
+        },
+        {
+          name: "Counting distinct documents and notes",
+          note: "Two calls over the same three PDFs are three PDFs, twice. Two writes of the same note are one note, twice.",
+          html: col(F([C.pdf, { ...C.pdf, id: "call_7b33" }]), F([{ ...C.memory, args: { path: "MEMORY.md", content: "Boiler: October." } }, { ...C.memory, id: "call_7b34", args: { path: "MEMORY.md", content: "Boiler: October, not winter." } }])),
         },
         {
           name: "Stopped, unavailable, and a missing time",
@@ -566,6 +591,11 @@
             T3(C.t3Launch, [C.t3Launch, C.t3Read]),
             T3(C.t3Launch, [C.t3Launch, C.t3Read, C.t3Stop]),
           ),
+        },
+        {
+          name: "A read whose last page holds a cut item",
+          note: "No more pages, but the reply's text was cut: the card says part of the reply only, and never that the end was read.",
+          html: T3(C.t3Launch, [C.t3Launch, C.t3ReadCut], { open: true }),
         },
         {
           name: "Later calls leave a line where they happened",
