@@ -5,6 +5,7 @@
 import { writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { MODEL_ID } from "./env.ts";
+import { ScriptedAccounts, type FailureStatus } from "./scripted-accounts.ts";
 import {
   messageText,
   gatewayTurnPrompt,
@@ -203,8 +204,39 @@ export const OFFERED_TOOLS_PATH = "/scripted/offered-tools";
 /** The turns the gateway started itself in a session and the scripted model answered quietly, by the prompt each was. */
 export const QUIET_TURNS_PATH = "/scripted/quiet-turns";
 
+/** A scripted account failure, in the shape the providers' APIs answer it. */
+function failureBody(status: FailureStatus) {
+  if (status === 401) {
+    return {
+      message: "Invalid API key (scripted)",
+      type: "authentication_error",
+      code: "invalid_api_key",
+    };
+  }
+  if (status === 402) {
+    return {
+      message: "You exceeded your current quota (scripted insufficient credits)",
+      type: "insufficient_quota",
+      code: "insufficient_quota",
+    };
+  }
+  return {
+    message: "Rate limit reached (scripted)",
+    type: "rate_limit_exceeded",
+    code: "rate_limit_exceeded",
+  };
+}
+
 export function startFakeProvider(options: FakeProviderOptions) {
   const delayMs = options.chunkDelayMs ?? 8;
+  // Which account each request came from, failures per account, and the
+  // scripted sign-ins (scripted-accounts.ts).
+  const accounts = new ScriptedAccounts({
+    baseUrl: () => {
+      const address = server.address();
+      return `http://127.0.0.1:${typeof address === "object" && address ? address.port : options.port}`;
+    },
+  });
   // The tool names of the latest model request in each session, as evidence
   // of which tools the gateway really offers a bot.
   const offered = new Map<string, string[]>();
@@ -263,6 +295,17 @@ export function startFakeProvider(options: FakeProviderOptions) {
           .map((tool) => tool.function?.name)
           .filter((name): name is string => typeof name === "string");
         const session = runtimeFacts(messages).sessionKey;
+        const accountFailure = accounts.observe({
+          authorization: req.headers.authorization,
+          model: body.model ?? null,
+          session: session ?? null,
+        });
+        if (accountFailure) {
+          log(`completion failing with ${accountFailure} for its account (or no credential)`);
+          if (accountFailure === 429) res.setHeader("retry-after", "1");
+          sendJson(res, accountFailure, { error: failureBody(accountFailure) });
+          return;
+        }
         if (session) offered.set(session, [...toolNames].sort());
         const steps = planReply(messages, new Set(toolNames));
         if (
@@ -301,6 +344,7 @@ export function startFakeProvider(options: FakeProviderOptions) {
         await streamSteps(res, model, id, steps, delayMs);
         return;
       }
+      if (url.pathname.startsWith("/scripted/") && (await accounts.handle(req, res, url))) return;
       sendJson(res, 404, { error: { message: "not found", type: "not_found" } });
     })().catch((error: unknown) => {
       log(`error ${String(error)}`);
