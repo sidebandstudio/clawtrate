@@ -95,6 +95,37 @@ describe("allowed gateways (A1)", () => {
   });
 });
 
+describe("allowed gateways on every reconnect (A2)", () => {
+  it("checks before every automatic retry and stops retrying once a gateway is refused", async () => {
+    const gateway = new FakeGateway();
+    let allowed = true;
+    let checks = 0;
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), {
+      ...FAST,
+      allowGatewayUrl: (url) => {
+        checks += 1;
+        return allowed && url === URL_A;
+      },
+    });
+    await client.start();
+    await client.connect({ url: URL_A, token: "bootstrap" });
+    await until(() => client.state.discovery.status === "ready");
+    expect(gateway.sockets).toHaveLength(1);
+    // The proof is lost, then the connection drops: the protocol's own retry
+    // must ask again and open nothing.
+    allowed = false;
+    const before = checks;
+    gateway.dropAll();
+    await until(() => client.state.connection.error?.code === "GATEWAY_NOT_ALLOWED");
+    await sleep(150);
+    expect(checks).toBeGreaterThan(before);
+    expect(gateway.sockets).toHaveLength(1);
+    expect(client.state.connection.status).toBe("error");
+    expect(client.state.connection.retryAt).toBeNull();
+    client.stop();
+  });
+});
+
 describe("pairing instructions (A3)", () => {
   function pairingGateway() {
     const gateway = new FakeGateway();
@@ -306,6 +337,44 @@ describe("reconnecting (C2)", () => {
     gateway.refuseConnections = false;
     await until(() => client.state.connection.status === "connected");
     stop();
+    client.stop();
+  });
+});
+
+describe("knowing what is in sync after a reconnect", () => {
+  it("stamps each connect and each successful history load, so a kept transcript is not taken as fresh", async () => {
+    const { client, gateway } = await connected();
+    const key = "agent:main:task";
+    client.openSession(key);
+    await until(() => client.state.transcripts[key]?.status === "ready");
+    const firstLoad = client.state.transcripts[key]!.loadedAt!;
+    expect(firstLoad).toBeGreaterThanOrEqual(client.state.connection.connectedAt!);
+
+    // The next reload fails: the kept transcript keeps its old load time.
+    let fail = true;
+    gateway.handlers["chat.history"] = () => {
+      if (fail) throw new GatewayError({ code: "UNAVAILABLE", message: "history failed" });
+      return { messages: [], hasMore: false };
+    };
+    await sleep(5);
+    gateway.dropAll();
+    await until(() => client.state.connection.status === "reconnecting");
+    await until(() => client.state.transcripts[key]?.status === "error");
+    const reconnectedAt = client.state.connection.connectedAt!;
+    expect(reconnectedAt).toBeGreaterThan(firstLoad);
+    expect(client.state.transcripts[key]!.loadedAt).toBe(firstLoad);
+
+    // A reload that succeeds is stamped after the connect.
+    fail = false;
+    gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        client.state.transcripts[key]?.status === "ready",
+    );
+    expect(client.state.transcripts[key]!.loadedAt!).toBeGreaterThanOrEqual(
+      client.state.connection.connectedAt!,
+    );
     client.stop();
   });
 });

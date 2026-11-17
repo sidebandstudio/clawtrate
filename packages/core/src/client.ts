@@ -2950,6 +2950,23 @@ export class ClawtrateClient {
 
     this.protocol = new GatewayProtocolClient<Plan>({
       createSocket: (handlers) => {
+        // Asked again before every attempt, including the protocol's own
+        // retries: a gateway that stops being allowed is never reopened, and
+        // throwing here ends the retries.
+        if (!this.isAllowed(settings.url)) {
+          if (generation === this.generation) {
+            this.setConnection({
+              status: "error",
+              retryAt: null,
+              error: {
+                code: "GATEWAY_NOT_ALLOWED",
+                message: new GatewayNotAllowedError(settings.url).message,
+                hint: null,
+              },
+            });
+          }
+          throw new GatewayNotAllowedError(settings.url);
+        }
         const socket = this.host.createWebSocket(settings.url);
         socket.onopen = () => handlers.open();
         socket.onmessage = (event) => handlers.message(String(event.data));
@@ -3202,6 +3219,7 @@ export class ClawtrateClient {
       pairing: null,
       error: null,
       retryAt: null,
+      connectedAt: this.now(),
       paired: true,
     });
     if (INTERACTIVE_SCOPES.every((scope) => scopeSatisfied(scopes, scope))) {
@@ -3371,6 +3389,7 @@ export class ClawtrateClient {
       live: null,
       linkedRuns: {},
       interSession: [],
+      loadedAt: null,
     };
   }
 
@@ -3501,6 +3520,7 @@ export class ClawtrateClient {
         error: null,
         hasMore: history?.hasMore === true,
         caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
+        loadedAt: this.now(),
       };
       this.dropRawOfRemovedSteps(key, current, rebuilt);
       this.setTranscript(key, () => withLive(rebuilt));

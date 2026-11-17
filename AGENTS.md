@@ -9,6 +9,8 @@ Open source, MIT licensed. This repository is public, so every commit is publish
 ## What we are building
 
 - The bar is the full user flow of Grok Bot, xAI's personal agent app, plus the controls its users say they lack. Those controls are per-bot model and reasoning effort, per-bot tool permissions and approval rules, an editable memory viewer, a choice of which machine a bot works on, and the raw tool calls behind every card.
+- Two things go beyond Grok Bot. Each bot runs on a provider account the user chooses when creating it: subscription sign-ins come first and API keys are a secondary option. Provider credentials stay on the gateway; Clawtrate starts the gateway's own sign-in and never reads, stores or copies them. And a bot can work with T3 Code: start a thread there, follow up and read the result. This integration is optional: it is a switch in settings, off by default, and nothing else depends on it. Its connection also belongs to the gateway, so the client never connects to T3 Code itself.
+- The conversation reads at the level of what a bot did. Each action shows as a plain-words card, in one family with the "Messaged &lt;bot&gt;" and "Messaged T3 Code" cards, that a person can follow without opening anything. Reasoning text stays folded away behind it, and the raw call is one step further. Grok Bot's handling of this is the model.
 - `docs/parity.md` is the definition of done. Every flow has a stable id such as `F-012`. Work is done when its flow passes an automated check.
 - This is a client. The agent runtime is the user's OpenClaw gateway. Where the gateway lacks something a flow needs, add it as an OpenClaw plugin under `plugins/`.
 - Own identity. The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixed. Saying what Clawtrate works with, including naming OpenClaw, is fine. Match layout and interaction patterns freely. Never use OpenClaw's, Grok's or xAI's logos, icons or copied assets.
@@ -30,7 +32,7 @@ A builder may change this layout when it has a reason. Record the reason in `doc
 
 ## Rules
 
-- Develop only against the development gateway: `openclaw --dev`, state in `~/.openclaw-dev`, port 19001. Never run `openclaw` without `--dev` or `--profile`. Never read or write `~/.openclaw`.
+- Develop only against development gateway instances started by `pnpm dev-gateway`. The default instance is `openclaw --dev`, state in `~/.openclaw-dev`, port 19001. A named instance (`--instance <name>` or `CLAWTRATE_DEV_INSTANCE`) is `openclaw --profile clawtrate-dev-<name>`, state in `~/.openclaw-clawtrate-dev-<name>`, on free ports the tool chooses and records. Use a named instance when another checkout may be running the default one. `pnpm e2e` always creates its own instance. Never run `openclaw` without `--dev` or `--profile clawtrate-dev-<name>`, never against the default profile, and never read or write `~/.openclaw`.
 - Never copy credentials from another OpenClaw profile. The development gateway uses the scripted fake model provider in `tools/dev-gateway`.
 - Build on the official `@openclaw/gateway-client` and `@openclaw/gateway-protocol` packages, pinned to an exact version, tested against the gateway version named in `docs/decisions.md`.
 - Request the smallest operator scopes a feature needs. A read-only connection must stay useful.

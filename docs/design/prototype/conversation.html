@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: a scripted run</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/conversation.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/icons.js"></script>
+    <script src="js/prototype.js"></script>
+    <script src="js/components.js" defer></script>
+    <script src="js/samples.js" defer></script>
+    <script src="js/behaviors.js" defer></script>
+    <script src="js/run.js" defer></script>
+  </head>
+  <body>
+    <header class="proto-bar" id="proto-bar"></header>
+    <main class="proto-stage">
+      <div class="proto-frame">
+        <div class="app" id="root">
+          <div class="shell" data-panel="closed" data-view="detail">
+            <!-- The rail. run.js fills the list so the rows can follow the run. -->
+            <nav class="rail" aria-label="Bots">
+              <div class="rail-top">
+                <button type="button" class="icon-button rail-status" data-action="elsewhere" aria-label="Home gateway, connected. Open the gateway menu.">
+                  <i data-icon="settings"></i>
+                  <span class="status-dot" data-status="connected"></span>
+                </button>
+                <button type="button" class="icon-button" data-action="elsewhere" aria-label="Search" title="Search (⌘K)"><i data-icon="search"></i></button>
+                <button type="button" class="icon-button" id="rail-new" data-action="elsewhere" data-where="New bot and New task belong to the shell. app.html shows them working." aria-label="New" title="New"><i data-icon="plus"></i></button>
+              </div>
+              <ul class="bot-list" id="rail-list"></ul>
+              <div class="rail-footer">
+                <div class="gateway-pill" role="status">
+                  <span class="status-dot" data-status="connected"></span>
+                  <span class="gateway-pill-text"><strong>Home gateway</strong><span id="gateway-state">Connected</span></span>
+                </div>
+              </div>
+            </nav>
+
+            <div class="main-pane">
+              <section class="conversation" aria-label="Conversation">
+                <!-- The strip belongs to the conversation, so it is centred on it at every width. -->
+                <div class="status-strip" id="status-strip" role="status" hidden></div>
+                <header class="conversation-header">
+                  <div class="header-side">
+                    <button type="button" class="icon-button back-button" data-action="back" aria-label="Back to bots"><i data-icon="back"></i></button>
+                  </div>
+                  <!-- In the app this pill opens the Work pane, which app.html shows. -->
+                  <div class="title-pill" id="title-pill" style="cursor: default">
+                    <span class="avatar" data-bot="otto"></span>
+                    <span class="title-pill-name">Otto</span>
+                    <span class="title-pill-task">Weekly backup check</span>
+                  </div>
+                  <div class="header-side" data-side="end"></div>
+                </header>
+                <div class="transcript-wrap">
+                  <div class="transcript" id="transcript" tabindex="0">
+                    <div class="transcript-inner" id="transcript-inner"></div>
+                    <!-- Another task's transcript: where "Open in Marlow" goes. -->
+                    <div class="transcript-inner" id="transcript-other" hidden></div>
+                  </div>
+                  <div id="jump-slot"></div>
+                </div>
+                <div id="composer-slot"></div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

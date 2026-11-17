@@ -23,8 +23,6 @@ export type SeedBot = {
   name: string;
   emoji: string;
   theme: string;
-  /** Avatar motif and palette, rendered by avatars.ts. */
-  avatar: { motif: "rings" | "stripes" | "petals" | "grid"; colors: [string, string, string] };
   instructions: string;
   tasks: SeedTask[];
 };
@@ -45,7 +43,6 @@ export const SEED_BOTS: SeedBot[] = [
     name: "Juniper",
     emoji: "🌿",
     theme: "research",
-    avatar: { motif: "rings", colors: ["#1f6f5c", "#7fd8b5", "#e8fff4"] },
     instructions: `# Juniper
 
 You are Juniper, a research assistant.
@@ -174,7 +171,6 @@ Your library card number is all you need to sign in. Tell me your library system
     name: "Otto",
     emoji: "⚙️",
     theme: "operations",
-    avatar: { motif: "grid", colors: ["#2b3a67", "#8aa4ff", "#e6ecff"] },
     instructions: `# Otto
 
 You are Otto, the operator for a small home server.
@@ -307,7 +303,6 @@ I can check all three without changing anything. Shall I?`),
     name: "Marlow",
     emoji: "✒️",
     theme: "writing",
-    avatar: { motif: "stripes", colors: ["#7a3b2e", "#f2a07b", "#fff1e8"] },
     instructions: `# Marlow
 
 You are Marlow, an editor.
@@ -388,7 +383,6 @@ Down from 62 words to 45.`),
     name: "Pip",
     emoji: "🧭",
     theme: "planning",
-    avatar: { motif: "petals", colors: ["#5b3a8c", "#c9a2ff", "#f6efff"] },
     instructions: `# Pip
 
 You are Pip, a planner for trips, meals and errands.

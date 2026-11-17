@@ -1,0 +1,23 @@
+import { connect, sleep, brief } from "./probe-lib.mjs";
+const A = await connect({ name: "A", scopes: ["operator.read", "operator.write"] });
+const ADM = await connect({ backend: true, scopes: ["operator.read", "operator.write", "operator.admin"] });
+const s = await A.call("sessions.create", { agentId: "pixel", label: `cr ${Date.now()}` });
+const key = s.key; await A.call("sessions.messages.subscribe", { key });
+for (const m of ["first fact", "second fact", "third fact"]) await (await A.send(key, m)).done;
+const sid = async () => (await A.call("sessions.describe", { key })).session.sessionId;
+console.log("sessionId before:", (await sid()).slice(0, 8));
+const step = async (label, fn) => {
+  const t0 = Date.now(); const out = await fn(); await sleep(6000);
+  const ev = A.events.filter((e) => e.t >= t0 && (e.payload?.sessionKey === key) && (e.event !== "agent" || ["compaction", "lifecycle"].includes(e.payload.stream)) && e.event !== "sessions.changed");
+  const changed = A.events.filter((e) => e.t >= t0 && e.event === "sessions.changed" && e.payload?.sessionKey === key).map((e) => e.payload.reason);
+  console.log(`\n## ${label}\n reply: ${JSON.stringify(out).slice(0, 300)}\n sessions.changed reasons: ${[...new Set(changed)].join(", ")}`);
+  for (const e of ev.slice(0, 14)) console.log("  ", brief(e, 260));
+  const h = await A.call("chat.history", { sessionKey: key, limit: 20 });
+  console.log(" history rows:", h.messages.map((m) => m.__openclaw?.kind ? `[${m.__openclaw.kind}${m.__openclaw.tokensBefore ? " " + m.__openclaw.tokensBefore + "->" + m.__openclaw.tokensAfter : ""}]` : m.role).join(" "), "| sessionId:", (await sid()).slice(0, 8));
+};
+await step("/compact from a write device", () => A.send(key, "/compact Focus on the facts").then((r) => r.done));
+await step("/new from a write device", () => A.send(key, "/new").then((r) => r.done));
+await step("/reset from a write device", () => A.send(key, "/reset").then((r) => r.done));
+await step("sessions.reset (admin)", () => ADM.call("sessions.reset", { key }).catch((e) => e.message));
+await step("sessions.compact from write (expect admin)", () => A.call("sessions.compact", { key }).catch((e) => e.message));
+await A.close(); await ADM.close();
