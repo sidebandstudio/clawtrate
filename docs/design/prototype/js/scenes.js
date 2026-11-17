@@ -44,9 +44,9 @@
       user: "Is last night's backup log there, and did it finish?",
       events: [
         { start: read, phrase: "Reading backup-2026-11-15.log" },
-        { end: read.id, status: "done" },
+        { end: read.id, status: "completed" },
         { start: tail, phrase: "Running tail" },
-        { end: tail.id, status: "done" },
+        { end: tail.id, status: "completed" },
         { reply: "<p>Yes. The log is there, and the backup finished at 3:25 AM. The next run is tonight at 2:14.</p>" },
         { run: { label: "Worked for 4s", actions: 2, failed: 0 } },
       ],
@@ -61,8 +61,8 @@
       e.push({ end: c.id, status: c.status || "done" });
     };
     e.push({ bubble: "On it. Checking what we already know about the house first." });
-    go(mk("memory_search", { query: "loft insulation" }, { text: "memory/2026-09-14.md: Loft insulation is 100 mm; the surveyor said 270 mm.", details: { count: 1 }, took: "0.3s" }), 'Searching memory for "loft insulation"');
-    go(mk("memory_search", { query: "heating bills" }, { text: "memory/2026-03-02.md: Gas last winter: about 14,800 kWh.", details: { count: 1 }, took: "0.3s" }), 'Searching memory for "heating bills"');
+    go(mk("memory_search", { query: "loft insulation" }, { text: "1 result.", details: { results: [{ path: "memory/2026-09-14.md", snippet: "Loft insulation is 100 mm; the surveyor said 270 mm.", score: 0.8 }] }, took: "0.3s" }), 'Searching memory for "loft insulation"');
+    go(mk("memory_search", { query: "heating bills" }, { text: "1 result.", details: { results: [{ path: "memory/2026-03-02.md", snippet: "Gas last winter: about 14,800 kWh.", score: 0.7 }] }, took: "0.3s" }), 'Searching memory for "heating bills"');
     go(mk("read", { path: "house/floor-plan.md" }, { text: "Ground floor 52 m²\nFirst floor 48 m²\nLoft (unconverted)", took: "0.2s" }), "Reading floor-plan.md");
     go(mk("read", { path: "house/energy-bills-2025.csv" }, { text: "month,kwh\njan,2410\nfeb,2105\nmar,1820", took: "0.2s" }), "Reading energy-bills-2025.csv");
     go(mk("read", { path: "house/epc-2019.pdf" }, { status: "failed", isError: true, text: "ENOENT: no such file or directory, open 'house/epc-2019.pdf'", took: "0.1s" }), "Reading epc-2019.pdf");
@@ -89,7 +89,7 @@
     go(br({ action: "snapshot" }, "installer.example"), "Reading the page");
     go(br({ action: "screenshot" }, "installer.example"), "Taking a screenshot");
     go(br({ action: "act", request: { kind: "click", ref: "e30", text: "Save quote" } }, "installer.example"), 'Clicking "Save quote"');
-    go(mk("progress_card", { plan: [{ step: "What fits the house", status: "done" }, { step: "What it costs after the rebate", status: "pending" }, { step: "Book a survey if it is worth it", status: "pending" }] }, { update: true, text: "Saved the plan.", details: { revision: 2, steps: {} }, took: "0.1s" }), "Updating the plan");
+    go(mk("progress_card", { plan: [{ step: "What fits the house", status: "completed" }, { step: "What it costs after the rebate", status: "pending" }, { step: "Book a survey if it is worth it", status: "pending" }] }, { update: true, text: "Saved the plan.", details: { revision: 2, steps: {} }, took: "0.1s" }), "Updating the plan");
     go(ex("python3 estimate.py --unit 8kw --loft 100", "Annual heat demand: 11,900 kWh", "0.9s"), "Running python3");
     go(ex("python3 estimate.py --unit 8kw --loft 270", "Annual heat demand: 9,400 kWh", "0.9s"), "Running python3");
     go(ex("python3 running-cost.py --scop 3.1 --kwh 9400", "Running cost: about £710 a year", "0.4s"), "Running python3");
@@ -105,8 +105,8 @@
       count: 1,
     });
     go(mk("automations", { action: "add", job: { name: "Rebate deadline", schedule: { kind: "cron", expr: "0 9 * * 1" }, payload: { message: "Remind me of the rebate deadline." } } }, { text: "Created.", took: "0.2s" }), "Creating routine Rebate deadline");
-    go(mk("progress_card", { plan: [{ step: "What fits the house", status: "done" }, { step: "What it costs after the rebate", status: "done" }, { step: "Book a survey if it is worth it", status: "done" }] }, { update: true, text: "Saved the plan.", details: { revision: 3, steps: {} }, took: "0.1s" }), "Updating the plan");
-    go(mk("message", { action: "send", channel: "Telegram", to: "Dana", message: "Heat pump survey booked for Dec 2. Summary in the house folder." }, { status: "made", text: "ok", took: "0.6s" }), "Sending a message on Telegram");
+    go(mk("progress_card", { plan: [{ step: "What fits the house", status: "completed" }, { step: "What it costs after the rebate", status: "completed" }, { step: "Book a survey if it is worth it", status: "completed" }] }, { update: true, text: "Saved the plan.", details: { revision: 3, steps: {} }, took: "0.1s" }), "Updating the plan");
+    go(mk("message", { action: "send", channel: "Telegram", target: "Dana", message: "Heat pump survey booked for Dec 2. Summary in the house folder." }, { text: "ok", took: "0.6s" }), "Message on Telegram");
     e.push({
       reply:
         "<p><strong>Worth it, once the loft is insulated.</strong> An 8 kW unit fits. After the 2026 rebate it costs about £2,300 and saves about £250 a year, so it pays back in roughly nine years.</p>" +
@@ -133,6 +133,42 @@
       { run: null },
     ],
   };
+
+  // T3 Code: a thread, live --------------------------------------------------------------
+  {
+    const C = S.calls;
+    const strip = (c) => ({ ...c, mcp: undefined, details: undefined, text: "", status: "running" });
+    const known = (c) => ({ ...c, mcp: undefined, details: undefined, text: "", status: "running", nameMap: c.mcp });
+    const result = (c) => ({ end: c.id, mcp: c.mcp, details: c.details, text: c.text, isError: c.isError, status: c.status || "done", ended: c.ended });
+    scenes.t3 = {
+      title: "A T3 Code thread, from its first call to a stop",
+      user: "Get the transcode cache excluded in backup-scripts through T3 Code, and stop it if it goes past one change.",
+      events: [
+        { bubble: "Handing the script change to T3 Code." },
+        // Not known until its result: the general card, then T3 Code's card in place.
+        { start: strip(C.t3Launch), phrase: "Using t3code t3 thread launch" },
+        result(C.t3Launch),
+        // Known by the name mapping, right after the card: it joins the card directly.
+        { start: known(C.t3Wait), phrase: "Waiting for T3 Code" },
+        result(C.t3Wait),
+        { bubble: "While that runs, I'll write it up for the house log." },
+        { start: { ...S.calls.edit, id: "call_9t01", status: "running" }, phrase: "Editing house-log.md" },
+        { end: "call_9t01", status: "done" },
+        // Later calls keep a line where they happened, and join the thread's card too.
+        { start: known(C.t3Send), phrase: "Following up with T3 Code" },
+        result(C.t3Send),
+        { start: strip(C.t3ReadFail), phrase: "Using t3code t3 thread read" },
+        result(C.t3ReadFail),
+        { start: known(C.t3Read), phrase: "Reading the thread in T3 Code" },
+        result(C.t3Read),
+        { bubble: "It made a second change, so I'm stopping it as you asked." },
+        { start: known(C.t3Stop), phrase: "Asking T3 Code to stop" },
+        result(C.t3Stop),
+        { reply: "<p>T3 Code added the exclude and a guard to <code>weekly.sh</code> and opened a pull request. It went past one change, so I asked it to stop; it has not confirmed that it stopped.</p>" },
+        { run: { label: "Worked for 2m 05s", actions: 7, failed: 1 } },
+      ],
+    };
+  }
 
   CT.scenes = scenes;
 
@@ -188,7 +224,7 @@
   const name = CT.params.get("scene");
   if (!name || !scenes[name] || !document.getElementById("transcript-inner")) return;
   const scene = scenes[name];
-  const titles = { short: "Backup log check", long: "Heat pump decision", thought: "Heat pumps in a damp town" };
+  const titles = { short: "Backup log check", long: "Heat pump decision", thought: "Heat pumps in a damp town", t3: "Exclude the transcode cache" };
 
   const state = { index: 0, clock: 0, phrase: "Thinking", face: "thinking", running: false, done: false, actions: 0 };
   let inner;
@@ -262,6 +298,11 @@
     replay() {
       reset();
       play();
+    },
+    // For tests: back to the start, without playing.
+    reset() {
+      clearTimeout(timer);
+      reset();
     },
   };
 

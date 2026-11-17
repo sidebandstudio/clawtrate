@@ -23,6 +23,9 @@
   const col = (...cards) => cards.join("");
   const files = ["backup-2026-11-15.log", "house-log.md", "plan.md", "exclude.list", "weekly.sh", "notes.md"];
   const reads = (k) => files.slice(0, k).map((f, i) => ({ ...C.read2, id: `call_7b${i}`, args: { path: `notes/${f}` }, took: `0.${i + 2}s` }));
+  // A T3 Code thread's card, drawn from its calls.
+  const key = CT.threadKey(C.t3Launch);
+  const T3 = (first, calls, opts = {}) => CT.t3Thread(calls, opts);
   const stepBlocked = (source) => A({ ...C.rm, blockedBy: source === "review" ? "review" : "policy", body: S.blockedBody(source) }, {}, { open: true });
 
   const first = S.marlowFirst;
@@ -195,23 +198,23 @@
       specimens: [
         {
           name: "Every kind, done",
-          note: "Twenty-two kinds, in the order of the list in section 8. The two Messaged cards are members of the same family. The question shows as a card only on a read-only connection; with access it is the question card.",
+          note: "Twenty-six kinds, in the order of the list in section 8, each with a result that its adapter reads as done. The two Messaged cards are members of the same family. The question shows as a card only on a read-only connection; with access it is the question card.",
           html: col(
-            A(C.read), A(C.list), A(C.edit), A(C.memory), A(C.recall), A(C.command), A(C.web), A(C.xsearch), A(C.page), A(C.browserClick), A(C.computerShot), A(C.routine),
+            A(C.read), A(C.list), A(C.edit), A(C.memory), A(C.recall), A(C.command), A(C.terminalList), A(C.web), A(C.xsearch), A(C.page), A(C.browserClick), A(C.computerClick), A(C.phoneTap), A(C.screen), A(C.routine),
             messaged({ target: "marlow", first, state: "replied", body: S.marlowBody("replied") }),
-            A(C.tasks), A(C.helper), A(C.question, { readOnly: true }), A(C.plan), A(C.image), A(C.channel), A(C.server),
-            messaged({ target: "t3code", first: S.t3First, state: "call-made", body: S.t3Body("call-made") }),
+            A(C.tasks), A(C.helper), A(C.question, { readOnly: true }), A(C.plan), A(C.imageMade), A(C.pdf), A(C.channelSent), A(C.server),
+            T3(C.t3Launch, [C.t3Launch]),
             A(C.general),
           ),
         },
         {
           name: "Every kind, while it runs",
-          note: "The working mark takes the icon's place and the verb is in the present tense. The status line says the same words at the same moment.",
+          note: "An action that stays on the gateway: the working mark and the present tense. One whose effect leaves the gateway (a helper, media, a channel, a tool server, T3 Code): its noun and Call started, because a start proves nothing. The status line says the same words at the same moment.",
           html: col(
-            ...[C.read, C.list, C.edit, C.memory, C.recall, C.command, C.web, C.xsearch, C.page, C.browserClick, C.computerShot, C.routine].map((c, i) => A(c, { status: "running", elapsed: i % 3 ? "" : "0:03" })),
+            ...[C.read, C.list, C.edit, C.memory, C.recall, C.command, C.terminalList, C.web, C.xsearch, C.page, C.browserClick, C.computerClick, C.phoneTap, C.screen, C.routine].map((c, i) => A(c, { status: "running", elapsed: i % 3 ? "" : "0:03" })),
             messaged({ target: "marlow", first, state: "call-started", body: S.marlowBody("call-started") }),
-            ...[C.tasks, C.helper, C.plan, C.image, C.channel, C.server].map((c) => A(c, { status: "running" })),
-            messaged({ target: "t3code", first: S.t3First, state: "call-started", body: S.t3Body("call-started") }),
+            ...[C.tasks, C.helper, C.plan, C.image, C.pdf, C.channel, C.server].map((c) => A(c, { status: "running" })),
+            T3(C.t3Launch, [{ ...C.t3Launch, status: "running" }]),
             A(C.general, { status: "running" }),
           ),
         },
@@ -219,16 +222,34 @@
           name: "Every kind, when it failed",
           note: "\"Couldn't\" and the failed mark. A failed card stays where it is, in view.",
           html: col(
-            ...[C.read, C.list, C.edit, C.memory, C.recall, C.command, C.web, C.xsearch, C.page, C.browserClick, C.computerShot, C.routine].map((c) => A(c, { status: "failed", isError: true, text: "The tool reported an error." })),
+            ...[C.read, C.list, C.edit, C.memory, C.recall, C.command, C.terminalList, C.web, C.xsearch, C.page, C.browserClick, C.computerClick, C.phoneTap, C.screen, C.routine].map((c) => A(c, { status: "failed", isError: true, text: "The tool reported an error." })),
             messaged({ target: "marlow", first, state: "failed", body: S.marlowBody("failed") }),
-            ...[C.tasks, C.helper, C.plan, C.image, C.channel, C.server].map((c) => A(c, { status: "failed", isError: true, text: "The tool reported an error." })),
-            messaged({ target: "t3code", first: S.t3First, state: "failed", body: S.t3Body("failed") }),
+            ...[C.tasks, C.helper, C.plan, C.imageMade, C.pdf, C.channel, C.server].map((c) => A(c, { status: "failed", isError: true, text: "The tool reported an error." })),
+            T3(C.t3Launch, [{ ...C.t3Launch, status: "failed", isError: true, details: { mcpServer: "t3code", mcpTool: "t3_thread_launch", structuredContent: { code: "provider_unavailable", message: "The project's provider is not signed in." } } }]),
             A(C.general, { status: "failed", isError: true, text: "The tool reported an error." }),
           ),
         },
         {
+          name: "A result is not always completed work",
+          note: "Each kind reads its result through an adapter. Admitted, queued, not confirmed, suppressed or unavailable work says so on its line, and never reads as done.",
+          html: col(
+            A(C.image),
+            A(C.imageMade),
+            A(C.helper),
+            A(C.routineRun),
+            A(C.channel),
+            A(C.channelSent),
+            A(C.channelSuppressed),
+            A(C.message),
+            A(C.computerUnconfirmed),
+            A(C.recallPartial),
+            A(C.recallUnavailable),
+            A(C.xsearchUnavailable),
+          ),
+        },
+        {
           name: "One card in every state",
-          note: "Each state is one the gateway can establish. A start is never proof that a call was made: a card says what came back only when the result says it.",
+          note: "Each state is one the gateway can establish. A start is never proof that a call was made; there is no sending state anywhere.",
           html: col(
             A(C.mv, { status: "running", elapsed: "0:02" }),
             A(C.mv, { status: "review" }),
@@ -237,13 +258,18 @@
             A(C.exit1),
             A(C.mv, { status: "failed", isError: true, text: "mv: cannot move: Permission denied" }),
             A(C.timeout),
-            A(C.mv, { status: "denied", text: "Exec denied (user-denied)" }),
+            A(C.mv, { status: "denied", isError: true, text: "Exec denied (gateway id=a1, user-denied): mv" }),
             A(C.rm),
             A(C.rm, { blockedBy: "review" }),
             A(C.mv, { status: "stopped" }),
             A(C.channel, { status: "unknown" }),
-            A(C.channel),
+            A(C.channel, { status: "running" }),
           ),
+        },
+        {
+          name: "Real operations, with their own words",
+          note: "A shared terminal is not a command; the screen tool changes the Control UI; a phone has its own actions; documents and images are counted; a goal checked is not a plan updated.",
+          html: col(A(C.terminalList), A(C.terminalInput), A(C.screen), A(C.phoneObserve), A(C.phoneTap), A(C.pdf), A(C.images), A(C.patch), A(C.goalGet), A(C.goalUpdate), A(C.routineRemove), A(C.voice)),
         },
         {
           name: "Last seen, while the connection is lost",
@@ -278,8 +304,8 @@
         },
         {
           name: "Kinds opened",
-          note: "Each kind's readable view: a search's results as links, a plan as a checklist, the media a result carries, a browser action and its target.",
-          html: col(A(C.web, {}, { open: true }), A(C.planUpdate, {}, { open: true }), A(C.image, {}, { open: true }), A(C.browserType, {}, { open: true }), A(C.routine, {}, { open: true }), A(C.memory, {}, { open: true })),
+          note: "Each kind's readable view: a search's results as links, a plan as a checklist with completed, in progress and pending steps, the media a result carries, admitted media, a browser action and its target, a routine with its time zone, an unavailable search and its reason, a queued message.",
+          html: col(A(C.web, {}, { open: true }), A(C.planUpdate, {}, { open: true }), A(C.imageMade, {}, { open: true }), A(C.image, {}, { open: true }), A(C.browserType, {}, { open: true }), A(C.routine, {}, { open: true }), A(C.recallUnavailable, {}, { open: true }), A(C.channel, {}, { open: true })),
         },
         {
           name: "On a read-only connection",
@@ -297,13 +323,24 @@
       title: "Actions of one kind in a row",
       note: "Two or more actions of one kind, with nothing shown between them, are one card with a count. Reasoning between them does not break it; a bubble, a request card or another kind does. Files are counted once.",
       specimens: [
-        { name: "Done", html: col(F(reads(6)), F([C.web, C.web2, { ...C.web, id: "call_7a90", args: { query: "heat pump noise at night" } }]), F([C.edit, C.create, C.patch]), F([C.browserOpen, C.browserClick, C.browserType, C.browserShot]), F([C.recall, C.recallGet]), F([C.plan, C.planUpdate, { ...C.planUpdate, id: "call_7a91" }])) },
+        { name: "Done", html: col(F(reads(6)), F([C.web, C.web2, { ...C.web, id: "call_7a90", args: { query: "heat pump noise at night" } }]), F([C.edit, C.create, C.patch]), F([C.browserOpen, C.browserClick, C.browserType, C.browserShot]), F([C.recall, { ...C.recall, id: "call_7a92", args: { query: "gas safety" } }]), F([C.plan, C.planUpdate, { ...C.planUpdate, id: "call_7a91" }]), F([C.t3Projects, C.t3Threads])) },
+        { name: "Counting files and actions", note: "Files are counted once, and the actions too when there are more of them.", html: col(F([C.read2, { ...C.read2, id: "call_7b11" }, { ...C.read, id: "call_7b12" }]), F([C.edit, { ...C.edit, id: "call_7b13" }, C.create])) },
         { name: "One action running", note: "The count includes it; the detail says what it is doing.", html: F([...reads(2), { ...C.read2, id: "call_7a95", status: "running", elapsed: "0:02" }]) },
         { name: "One action waiting for you", html: F([C.command, C.exit1, { ...C.mv, status: "waiting" }]) },
         {
           name: "A failure inside a fold",
-          note: "In view without opening anything: the line says how many failed and names the first. It is never drawn as a success.",
+          note: "In view without opening anything: the line names the first problem and counts them. It is never drawn as a success.",
           html: F([C.read, C.readFail, C.read2]),
+        },
+        {
+          name: "Mixed states: an earlier failure and a later approval",
+          note: "Two places, so neither hides the other: the detail names the failure, the right side says what is happening now.",
+          html: col(F([C.command, { ...C.mv, id: "call_7b20", status: "failed", isError: true, text: "mv: Permission denied" }, { ...C.mv, id: "call_7b21", status: "waiting" }]), F([C.read, C.readFail, { ...C.read2, id: "call_7b22", status: "running", elapsed: "0:04" }])),
+        },
+        {
+          name: "Stopped, unavailable, and a missing time",
+          note: "Every problem is named by kind. A duration is never a partial sum.",
+          html: col(F([{ ...C.read, status: "stopped" }, { ...C.read2, status: "stopped" }]), F([C.recall, { ...C.recallUnavailable, id: "call_7b23" }]), F([C.read2, { ...C.read, id: "call_7b24", took: undefined }])),
         },
         { name: "Opened", note: "Level 1: one row per action, in the singular. Each row opens to its own readable view and Raw.", html: F([C.read, C.readFail, C.read2], { open: true }) },
         { name: "Opened, with one row opened on Raw", html: F([C.read, C.readFail, C.read2], { open: true, rows: { [C.read2.id]: { open: true, view: "raw" } } }) },
@@ -506,47 +543,46 @@
         { name: "Open, not sent", html: messaged({ target: "t3code", first: S.t3First, state: "not-sent", open: true, body: S.t3Body("not-sent") }) },
         {
           name: "A tool-server call that becomes the T3 Code card",
-          note: "Recognized per call. Before its result names one of T3 Code's own tools, it is the general card with words from its effective name. Then the same line, in the same place, becomes the T3 Code card; whether it was open, and focus, are kept.",
+          note: "Recognized per call. Before its result names one of T3 Code's seven tools, it is the general card with words from its effective name. Then the same line, in the same place, becomes the T3 Code card, and whether it was open, which view, and focus carry over. Watch it live in conversation.html?scene=t3.",
           still: true,
           html:
-            A({ id: "call_01HXK9T", name: "t3code__start_thread", args: { project: "backup-scripts", message: S.t3Sent } }, { status: "running", elapsed: "0:01" }) +
-            `<p class="spec-then">The result names T3 Code's start_thread:</p>` +
-            messaged({ target: "t3code", first: S.t3First, state: "call-made", body: S.t3Body("call-made") }).replace('class="card messaged"', 'class="card messaged" data-changed="true"'),
+            A({ ...C.t3Launch, mcp: undefined, details: undefined, text: "" }, { status: "running", elapsed: "0:01" }) +
+            `<p class="spec-then">The result names t3_thread_launch, and the thread's id:</p>` +
+            T3(C.t3Launch, [C.t3Launch]),
         },
         {
-          name: "One thread, one card: a follow-up and a check that came right after it",
-          note: "Calls on one thread in a row join its card. It holds every call in order, each under its own time. Its state is that of the latest call that sent something.",
-          html: messaged({ target: "t3code", first: "Also add a test for the guard, and open a pull request.", state: "call-made", open: true, body: S.t3ThreadBody({ followup: true, check: true }) }),
+          name: "One thread, one card: every call on it, each with its own Raw",
+          note: "A wait that came right after the launch joined the card; a follow-up, a failed read and a stop, made later, are items here and keep their own lines below. Each item opens its own call's Raw.",
+          html: T3(C.t3Launch, [C.t3Launch, C.t3Wait, C.t3Send, C.t3ReadFail, C.t3Read, C.t3Stop], { open: true, items: { [C.t3Wait.id]: { raw: true } }, lines: [C.t3Send.id, C.t3ReadFail.id, C.t3Read.id, C.t3Stop.id] }),
         },
         {
-          name: "A check running on the thread",
-          note: "Checking while a read or a wait runs; when it returns, the state returns to the latest sending call's.",
-          html: messaged({ target: "t3code", first: S.t3First, state: "checking", open: true, body: S.t3ThreadBody({ checking: true }) }),
-        },
-        {
-          name: "Stop requested",
-          note: "The stop call returned. That shows the call was made, not that T3 Code stopped.",
-          html: messaged({ target: "t3code", first: S.t3First, state: "stop-requested", body: S.t3ThreadBody({ stop: true }) }),
+          name: "The thread's state, from its calls",
+          note: "An open call first (Call started, Checking), then what T3 Code last reported in a returned result, with its time, then the latest sending call. A failed read does not change it.",
+          html: col(
+            T3(C.t3Launch, [{ ...C.t3Launch, status: "running" }]),
+            T3(C.t3Launch, [C.t3Launch, { ...C.t3Wait, status: "running" }]),
+            T3(C.t3Launch, [C.t3Launch, C.t3Wait]),
+            T3(C.t3Launch, [C.t3Launch, C.t3Wait, C.t3ReadFail]),
+            T3(C.t3Launch, [C.t3Launch, C.t3Read]),
+            T3(C.t3Launch, [C.t3Launch, C.t3Read, C.t3Stop]),
+          ),
         },
         {
           name: "Later calls leave a line where they happened",
-          note: "Nothing above the reader moves, so a call made later is a line of its own at its moment, and is also added to the thread's card. Each line opens to that call and leads to the thread.",
+          note: "Nothing above the reader moves, so a call made later keeps its own line at its moment, and is also an item of the thread's card. Show the thread finds the card by the thread's identity, never by nearness.",
           html:
-            messaged({ target: "t3code", first: S.t3First, state: "call-made", body: S.t3ThreadBody({ followup: true, check: true, stop: true }) }) +
+            T3(C.t3Launch, [C.t3Launch, C.t3Wait, C.t3Send, C.t3Read, C.t3Stop], { lines: [C.t3Send.id, C.t3Read.id, C.t3Stop.id] }) +
             CT.msg({ html: "While that runs, I'll draft the house log entry." }) +
-            messaged({ target: "t3code", line: "followup", verb: "Followed up with", first: S.t3Followup, state: "call-made", body: S.t3LineBody("followup") }) +
+            CT.t3Line(C.t3Send, { thread: key }) +
             CT.msg({ html: "Checking whether T3 Code has finished." }) +
-            messaged({ target: "t3code", line: "check", verb: "Checked", first: "Added the exclude and a guard to weekly.sh…", state: "call-made", open: true, body: S.t3LineBody("check") }) +
+            CT.t3Line(C.t3Read, { thread: key, open: true }) +
             CT.msg({ html: "You asked me to stop the coding work." }) +
-            messaged({ target: "t3code", line: "stop", verb: "Asked", first: "to stop: In backup-scripts, add the cache…", state: "stop-requested", body: S.t3LineBody("stop") }),
+            CT.t3Line(C.t3Stop, { thread: key }),
         },
         {
           name: "Listing projects and threads",
           note: "Ordinary lines in T3 Code's family. They fold with each other and never join a thread's card.",
-          html: F([
-            { id: "call_01HXL01", name: "t3code__list_projects", args: {}, mcp: { server: "t3code", tool: "list_projects" }, text: "backup-scripts\nhouse-site\nrecipes\nnotes" },
-            { id: "call_01HXL02", name: "t3code__list_threads", args: { project: "backup-scripts" }, mcp: { server: "t3code", tool: "list_threads" }, text: "18 Exclude the cache\n17 Faster prune" },
-          ]),
+          html: F([C.t3Projects, C.t3Threads]),
         },
       ],
     },
