@@ -90,6 +90,12 @@ import {
 } from "./registry.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
 import { contractProblems, matching, optional, type Contract } from "./contract.ts";
+import {
+  loadDevPlugin,
+  pluginSelectionProblem,
+  pluginsRoot,
+  type DevPlugin,
+} from "./dev-plugins.ts";
 import { SEED_CAPS, SEED_SCOPES, seedExample, verifyExample } from "./examples.ts";
 import { OperatorSession } from "./operator.ts";
 import {
@@ -242,6 +248,7 @@ export function devConfig(
   token: string,
   ports: InstancePorts = DEFAULT_PORTS,
   stateDir: string = devStateDir(),
+  plugins: DevPlugin[] = [],
 ) {
   return {
     gateway: {
@@ -309,7 +316,7 @@ export function devConfig(
       },
       // The only tools any bot is offered: those the scenarios use. A tool
       // the gateway adds later is off until it is listed here.
-      allow: [...ALLOWED_TOOLS],
+      allow: [...ALLOWED_TOOLS, ...plugins.flatMap((plugin) => plugin.tools)],
       // Denied as well, so a change to the allowlist cannot bring them back:
       // tools that reach the network, manage the gateway or its installation,
       // drive a browser or another device, or send through a channel.
@@ -338,9 +345,30 @@ export function devConfig(
         "memory-core": { config: { dreaming: { enabled: false } } },
         // Only the search half of the bundled Ollama plugin is used, on loopback.
         ollama: { config: { webSearch: { baseUrl: searchBaseUrl(ports) } } },
+        // The project's own plugins named at start, each as its addition says.
+        ...Object.fromEntries(plugins.map((plugin) => [plugin.id, plugin.entry])),
       },
+      ...(plugins.length > 0 ? { load: { paths: plugins.map((plugin) => plugin.dir) } } : {}),
     },
   };
+}
+
+/** Plugin entries that belong to the development config itself. */
+export const RESERVED_PLUGIN_IDS = ["memory-core", "ollama"] as const;
+
+/** Load the checkout's own plugins named at start, each checked against the rule for plugins. */
+export function loadPlugins(
+  inst: { checkout: string; name: string | null },
+  names: string[],
+): DevPlugin[] {
+  const problem = pluginSelectionProblem(inst.name, names);
+  if (problem) throw new Error(problem);
+  return names.map((name) =>
+    loadDevPlugin(name, pluginsRoot(inst.checkout), {
+      denied: DENIED_TOOLS,
+      reserved: RESERVED_PLUGIN_IDS,
+    }),
+  );
 }
 
 /** The scripted model server also answers web searches. */
@@ -414,8 +442,9 @@ export const DENIED_TOOLS = [
 export function devConfigContract(
   ports: InstancePorts = DEFAULT_PORTS,
   stateDir: string = devStateDir(),
+  plugins: DevPlugin[] = [],
 ): Contract {
-  const contract = structuredClone(devConfig("", ports, stateDir)) as unknown as Record<
+  const contract = structuredClone(devConfig("", ports, stateDir, plugins)) as unknown as Record<
     string,
     Record<string, unknown>
   >;
@@ -454,11 +483,29 @@ export function sandboxProblems(
   config: unknown,
   ports?: InstancePorts,
   stateDir?: string,
+  plugins: DevPlugin[] = [],
 ): string[] {
-  return contractProblems(config, devConfigContract(ports, stateDir));
+  return contractProblems(config, devConfigContract(ports, stateDir, plugins));
 }
 
-function assertSandboxed(inst: DevInstance, ports: InstancePorts): void {
+/** The plugins this run of the instance was started with, recorded beside its run file. */
+const pluginsFile = (inst: DevInstance) => join(inst.runDir, "plugins.json");
+
+function recordedPlugins(inst: DevInstance): DevPlugin[] {
+  if (!existsSync(pluginsFile(inst))) return [];
+  const names = JSON.parse(readFileSync(pluginsFile(inst), "utf8")) as unknown;
+  if (!Array.isArray(names) || !names.every((n) => typeof n === "string")) {
+    throw new Error(`${pluginsFile(inst)} is not a list of plugin names`);
+  }
+  // Loaded and checked again, so a plugin changed since the start is noticed.
+  return loadPlugins(inst, names);
+}
+
+function assertSandboxed(
+  inst: DevInstance,
+  ports: InstancePorts,
+  plugins: DevPlugin[] = recordedPlugins(inst),
+): void {
   let config: unknown;
   try {
     config = JSON.parse(readFileSync(inst.configPath, "utf8"));
@@ -468,7 +515,7 @@ function assertSandboxed(inst: DevInstance, ports: InstancePorts): void {
       { cause: error },
     );
   }
-  const problems = sandboxProblems(config, ports, inst.stateDir);
+  const problems = sandboxProblems(config, ports, inst.stateDir, plugins);
   if (problems.length > 0) {
     throw new Error(
       `the development gateway config is not sandboxed:\n  - ${problems.join("\n  - ")}\nRun \`pnpm dev-gateway reset${instanceFlag(inst)}\` to recreate it.`,
@@ -477,11 +524,16 @@ function assertSandboxed(inst: DevInstance, ports: InstancePorts): void {
 }
 
 /** Write a new config and bootstrap token into the state folder `start` just created. */
-function writeFreshConfig(inst: DevInstance, ports: InstancePorts, runId: string): DevConnection {
+function writeFreshConfig(
+  inst: DevInstance,
+  ports: InstancePorts,
+  runId: string,
+  plugins: DevPlugin[] = [],
+): DevConnection {
   const token = randomBytes(24).toString("base64url");
   writeFileSync(
     inst.configPath,
-    `${JSON.stringify(devConfig(token, ports, inst.stateDir), null, 2)}\n`,
+    `${JSON.stringify(devConfig(token, ports, inst.stateDir, plugins), null, 2)}\n`,
     {
       mode: 0o600,
     },
@@ -638,11 +690,14 @@ const RUN_ID_PATTERN = /^[0-9a-f]{48}$/;
  */
 export async function start(
   inst: DevInstance,
-  options: { seed?: boolean; runId?: string } = {},
+  options: { seed?: boolean; runId?: string; plugins?: string[] } = {},
 ): Promise<void> {
   assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
   const runId = options.runId ?? newRunId();
   if (!RUN_ID_PATTERN.test(runId)) throw new Error("--run-id must be 48 lowercase hex digits");
+  // Refused before anything changes: a name that is not this checkout's own
+  // plugin, or whose addition breaks the rule for plugins.
+  const plugins = loadPlugins(inst, options.plugins ?? []);
   const runner = inst.runner;
   await withInstanceLock(inst, async () => {
     if (ownership(inst.stateDir) === "foreign") throw new ForeignStateError(inst.stateDir);
@@ -688,8 +743,9 @@ export async function start(
     });
     runner.freshRunId = runId;
     try {
-      writeFreshConfig(inst, ports, runId);
-      assertSandboxed(inst, ports);
+      writeFileAtomic(pluginsFile(inst), `${JSON.stringify(plugins.map((p) => p.name))}\n`);
+      writeFreshConfig(inst, ports, runId, plugins);
+      assertSandboxed(inst, ports, plugins);
       const providerLog = openSync(join(inst.runDir, "provider.log"), "w");
       spawnRecorded(inst, runId, "provider", () =>
         gatedSpawn(
@@ -1388,7 +1444,7 @@ export async function prune(
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>]\n" +
+  "usage: pnpm dev-gateway <start|up|seed|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-plugin <plugin>]...\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -1399,6 +1455,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       json: { type: "boolean", default: false },
       "no-seed": { type: "boolean", default: false },
       "run-id": { type: "string" },
+      "with-plugin": { type: "string", multiple: true },
     },
     allowPositionals: true,
     strict: true,
@@ -1427,7 +1484,11 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   switch (command) {
     case "start":
     case "up":
-      return start(inst, { seed: !values["no-seed"], ...(runId ? { runId } : {}) });
+      return start(inst, {
+        seed: !values["no-seed"],
+        ...(runId ? { runId } : {}),
+        plugins: values["with-plugin"] ?? [],
+      });
     case "stop":
       return stop(inst);
     case "seed":

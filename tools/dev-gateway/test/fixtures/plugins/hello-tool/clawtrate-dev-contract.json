@@ -1,0 +1,8 @@
+{
+  "plugin": "clawtrate-hello",
+  "entry": {
+    "enabled": true,
+    "config": { "greeting": "hello", "echoUrl": "http://127.0.0.1:9/echo" }
+  },
+  "tools": ["hello_tool"]
+}
