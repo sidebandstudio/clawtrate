@@ -8,6 +8,12 @@ export * from "./approval-refusals.ts";
 export * from "./cards.ts";
 export * from "./attachments.ts";
 export * from "./files.ts";
+export * from "./accounts.ts";
+export {
+  AdminNeededError,
+  isActive as isSignInActive,
+  type CreateBotInput,
+} from "./accounts-engine.ts";
 export * from "./file-paths.ts";
 export { fromBase64, sha256Hex, toBase64, utf8Bytes } from "./bytes.ts";
 export { worstCase, type Bound, type Digest } from "./bounds.ts";

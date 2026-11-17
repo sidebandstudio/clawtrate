@@ -16,6 +16,7 @@
 // `state-bounds.ts`; an entry whose values are the state's own objects counts
 // only its keys, since the state already counts the objects.
 
+import { MAX_ACCOUNTS } from "./accounts.ts";
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_PENDING_ATTACHMENTS } from "./attachments.ts";
 import { jsonLength, worstCase } from "./bounds.ts";
 import {
@@ -196,6 +197,11 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
   // Viewers that went away; an entry lives only as long as the viewer's own object.
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
+  // Provider accounts (`accounts-engine.ts`): how each account was made, from the record of the
+  // sign-ins Clawtrate started; what it set for each bot; bots whose empty fallback list did not land.
+  "accounts.kinds": { max: MAX_ACCOUNTS, each: ID + SHORT, row: "bookkeeping" },
+  "accounts.intents": { max: MAX_ACCOUNTS, each: 3 * ID, row: "bookkeeping" },
+  "accounts.unwritten": { max: MAX_ACCOUNTS, each: ID, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.
   "fileTransfers.held": {
@@ -215,6 +221,8 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   auth: "the official client package's device-auth lifecycle and this connection's token store",
   scopeUpgrade: "the official client package's access request, one at a time",
   "store.value": "the state, bounded by its schema (`state-bounds.ts`) and counted in `state`",
+  "accounts.ctx": "the client's own functions, handed to the accounts engine",
+  "accounts.signInAbort": "a handle that ends the one sign-in request that waits",
 };
 
 /** The class of each client property whose own collections are named under it. */
@@ -224,6 +232,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   streams: "ChatTextBaselines",
   store: "ObservableStore",
   fileTransfers: "FileTransfers",
+  accounts: "AccountsEngine",
 };
 
 /** One viewer's bridge session, per viewer (`MAX_WEB_VIEWERS` on the web host). */

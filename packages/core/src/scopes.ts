@@ -23,6 +23,13 @@ export const INTERACTIVE_SCOPES: readonly string[] = [
   QUESTIONS_SCOPE,
 ];
 
+/**
+ * Tier three, asked for only when the person starts something that changes
+ * the gateway's settings (bots.md section 2): creating a bot, changing its
+ * account, connecting an account. It includes the interactive tier.
+ */
+export const ADMIN_SCOPES: readonly string[] = [...INTERACTIVE_SCOPES, ADMIN_SCOPE];
+
 const IMPLIED_BY_WRITE = new Set([
   READ_SCOPE,
   "operator.talk",

@@ -1,6 +1,7 @@
 // View models the interface renders. Gateway payloads are mapped into these in
 // mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
 
+import { initialAccountsState, type AccountsState } from "./accounts.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
@@ -51,7 +52,7 @@ export type ScopeUpgradeStatus =
   /** The request failed, or was approved without the scope it asked for. */
   | "error";
 
-/** Stepping up from `operator.read` to `operator.write`. */
+/** Stepping up from `operator.read` to `operator.write`, or to `operator.admin` (`scopes` says which). */
 export type ScopeUpgradeState = {
   status: ScopeUpgradeStatus;
   /** The scopes asked for. */
@@ -84,6 +85,8 @@ export type ConnectionState = {
   canAnswer: boolean;
   /** True while the connection holds `operator.approvals`, so approvals can be seen and resolved. */
   canApprove: boolean;
+  /** True while the connection holds `operator.admin`, so bots and accounts can be changed. */
+  canAdmin: boolean;
   upgrade: ScopeUpgradeState;
   deviceId: string | null;
   pairing: PairingRequest | null;
@@ -236,6 +239,13 @@ export type ClawtrateState = {
   /** Task creations this client has asked for and not yet seen settled (`TaskCreation`). */
   creations: TaskCreation[];
   /**
+   * The gateway's provider accounts as each bot sees them, the sign-ins it
+   * can start, each bot's binding and lock evidence, and the sign-in and bot
+   * creation under way (`accounts.ts`). Read when a screen asks
+   * (`refreshAccounts`). Holds no credential and nothing the person typed.
+   */
+  accounts: AccountsState;
+  /**
    * A secondary alarm: roughly what the state takes, against the arithmetic
    * bound of `state-bounds.ts`. The bound holds by construction; `near` only
    * says it is being approached.
@@ -299,6 +309,7 @@ export const initialConnectionState: ConnectionState = {
   canWrite: false,
   canAnswer: false,
   canApprove: false,
+  canAdmin: false,
   upgrade: initialScopeUpgrade,
   deviceId: null,
   pairing: null,
@@ -323,5 +334,6 @@ export const initialState: ClawtrateState = {
   unroutedApprovals: [],
   unroutedApprovalsOmitted: 0,
   creations: [],
+  accounts: initialAccountsState,
   retention: { estimated: 0, bound: 0, near: false },
 };
