@@ -361,6 +361,9 @@ export function findDecision(line: string): JsonRecord | null {
 // ---------------------------------------------------------------------------
 // The checks
 
+/** The acme accounts the config lists, in its order: what a sign-in seeds a new order with. */
+const CONFIGURED_ACME = SCRIPTED_ACCOUNTS.filter((a) => a.provider === "acme").map((a) => a.id);
+
 const SHARED_ACME = SCRIPTED_ACCOUNTS.filter(
   (a) => a.provider === "acme" && "shared" in a.store,
 ).map((a) => a.id);
@@ -532,15 +535,17 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
         { main: null, otto: "saved", pip: null },
         "otto's sign-in, per bot",
       );
+      // Neither bot had an order and the config lists acme's accounts, so each
+      // sign-in created one: the new account, then the configured list.
       same(
-        views.main?.profileOrder?.[0],
-        "acme:landshared",
-        "main's order after its sign-in starts with the new account",
+        views.main?.profileOrder,
+        ["acme:landshared", ...CONFIGURED_ACME],
+        "main's order after its sign-in",
       );
       same(
-        views.otto?.profileOrder?.[0],
-        "acme:landotto",
-        "otto's order after its sign-in starts with the new account",
+        views.otto?.profileOrder,
+        ["acme:landotto", ...CONFIGURED_ACME],
+        "otto's order after its sign-in",
       );
       same(
         [
@@ -549,7 +554,7 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
           views.pip?.profileOrder ?? null,
         ],
         [true, true, null],
-        "a sign-in stores an order for its bot, and only for it",
+        "the order is stored for the bot signed in for, and for no other",
       );
       // Without refresh, the cached view of a bot that keeps no account of its
       // own (marlow) lists the shared accounts as saved once the gateway has
@@ -877,6 +882,65 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
       } finally {
         await heal(h, kept);
       }
+    },
+  },
+  {
+    name: "a sign-in leaves an order only when the bot has one or the config lists the provider's accounts",
+    rows: [12],
+    run: async (h) => {
+      const listed = await createBot(h, "acct-order-listed", "acme/dev-1");
+      const first = await signInKey(h, listed, "orderlisted");
+      same(
+        (await providerView(h.reader, listed, "acme"))?.profileOrder,
+        [first, ...CONFIGURED_ACME],
+        "a first sign-in, with the config listing acme's accounts",
+      );
+      const again = await signInKey(h, listed, "orderagain");
+      same(
+        (await providerView(h.reader, listed, "acme"))?.profileOrder,
+        [again, first, ...CONFIGURED_ACME],
+        "a later sign-in moves its account to the front of the order the bot has",
+      );
+      const configured = rec(rec((await readConfig(h)).config.auth).profiles);
+      const removed = (ids: string[]) => Object.fromEntries(ids.map((id) => [id, null]));
+      try {
+        await patchConfig(h, { auth: { profiles: removed(["acme:home", "acme:studio"]) } });
+        const single = await createBot(h, "acct-order-single", "acme/dev-1");
+        same(await signInKey(h, single, "work"), "acme:work", "the account signed in");
+        const view = await providerView(h.reader, single, "acme");
+        same(
+          [view?.profileOrder, view?.profileOrderStored],
+          [["acme:work"], true],
+          "a first sign-in of the only configured account leaves a one-account order",
+        );
+        expect(
+          profileIds(view).includes("acme:home"),
+          "another acme account is still available to the bot",
+        );
+        await patchConfig(h, { auth: { profiles: removed(["acme:work"]) } });
+        const none = await createBot(h, "acct-order-none", "acme/dev-1");
+        const saved = await signInKey(h, none, "ordernone");
+        const bare = await providerView(h.reader, none, "acme");
+        same(
+          [
+            profileIds(bare).includes(saved),
+            bare?.profileOrder ?? null,
+            bare?.profileOrderStored ?? null,
+          ],
+          [true, null, null],
+          "with no order and nothing configured, the sign-in saves its account and leaves no order",
+        );
+      } finally {
+        const restore = Object.fromEntries(
+          Object.entries(configured).filter(([id]) => id.startsWith("acme:")),
+        );
+        await patchConfig(h, { auth: { profiles: restore } });
+      }
+      same(
+        rec(rec((await readConfig(h)).config.auth).profiles),
+        configured,
+        "the configured accounts are back as they were",
+      );
     },
   },
 ];
