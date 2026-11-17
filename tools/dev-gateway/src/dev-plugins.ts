@@ -3,82 +3,164 @@
 //
 //   pnpm dev-gateway start --instance <name> --with-plugin <plugin> [--with-plugin …]
 //
-// A name is accepted only if it is a real folder (not a link) directly under
-// the `plugins/` folder of the checkout that starts the instance, with an
-// OpenClaw manifest (`openclaw.plugin.json`) and a contract addition beside it
-// (`clawtrate-dev-contract.json`). The addition says exactly what the plugin
-// turns on:
+// A plugin loaded this way is trusted code. It runs inside the gateway with
+// the user's full access to files, processes and the network. The guard
+// constrains the gateway's configuration and the tools bots are given, not
+// what plugin code does. Load only plugins from this repository that you have
+// read.
+//
+// Where it comes from. A name is accepted only if the plugin's real path is a
+// direct child, with exactly that name, of the real path of the checkout's own
+// `plugins/` folder; neither folder may be a link, and nothing inside the
+// plugin may be anything but files and folders. The folder is read whole into
+// memory when it is checked. That snapshot, not the source folder, is written
+// into the instance's own state folder, its digest is recorded, and the
+// gateway loads the copy and nothing else. A change to the source folder after
+// the check cannot change what runs.
+//
+// What it may set. Beside its manifest (`openclaw.plugin.json`) a plugin has a
+// contract addition (`clawtrate-dev-contract.json`), a closed description of
+// the exact config keys it sets and the exact tools it turns on:
 //
 //   { "plugin": "<the manifest's id>",
-//     "entry": { "enabled": true, "config": { … } },   // plugins.entries.<id>
-//     "tools": ["<tool>", …] }                         // added to tools.allow
+//     "settings": { "<key>": { "kind": "<kind>", "value": … }, … },
+//     "tools": [ { "name": "<tool>", "kind": "plugin-tool" }, … ] }
 //
-// The base contract (contract.ts) then includes the plugin's load path, its
-// entry and its tools, and the guard compares the config with it as strictly
-// as without plugins. Before that, `additionProblems` enforces a rule over
-// every addition: it can never turn on a real model provider, the default
-// profile, credentials from any profile, shell commands without asking, or
-// network access beyond loopback.
+// The setting kinds are SETTING_KINDS and nothing else: there is no kind for
+// free text, a command, an argument list, a credential or a model provider.
+// Any other key or kind is refused.
 
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export const MANIFEST_FILE = "openclaw.plugin.json";
 export const ADDITION_FILE = "clawtrate-dev-contract.json";
+/** The folder in an instance's state folder its plugins are copied to and loaded from. */
+export const PLUGIN_COPY_DIR = "clawtrate-plugins";
+/** The folder in an instance's state folder an `instance-path` setting lies under. */
+export const PLUGIN_DATA_DIR = "clawtrate-plugin-data";
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const TOOL = /^[a-z][a-z0-9_]*$/;
+const KEY = /^[a-z][A-Za-z0-9]{0,63}$/;
+const TOOL = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
+const PATH_SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;
+const MAX_FILES = 500;
+const MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * The kinds a setting may have. `flag` is true or false; `count` a whole
+ * number; `loopback-url` an http or ws URL whose host is a loopback address,
+ * written exactly as it parses; `instance-path` a relative path of plain
+ * names, given to the plugin resolved inside the instance's state folder.
+ */
+export const SETTING_KINDS = ["flag", "count", "loopback-url", "instance-path"] as const;
+export type SettingKind = (typeof SETTING_KINDS)[number];
+export type Setting = { kind: SettingKind; value: boolean | number | string };
+
+export type PluginFile = { path: string; mode: number; bytes: Buffer };
 
 export type DevPlugin = {
   /** The folder name under plugins/. */
   name: string;
-  /** Its real path. */
-  dir: string;
   /** The plugin id from its manifest; also its plugins.entries key. */
   id: string;
-  entry: Record<string, unknown>;
+  /** The folder as checked, file by file. */
+  files: PluginFile[];
+  /** The digest of exactly those files (digestFiles). */
+  digest: string;
+  settings: Record<string, Setting>;
   tools: string[];
 };
 
-/** The folder a checkout's own plugins live in. */
+export type PluginRule = {
+  /** Every tool the gateway itself provides; a plugin may not turn one on. */
+  gatewayTools: readonly string[];
+  /** Plugin ids the development config uses itself. */
+  reserved: readonly string[];
+};
+
+/** A checkout's own plugins folder. */
 export const pluginsRoot = (checkout: string) => join(checkout, "plugins");
+
+/** Where an instance loads a plugin from: its own copy. */
+export const pluginCopy = (stateDir: string, name: string) => join(stateDir, PLUGIN_COPY_DIR, name);
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
-/** Keys an addition may never set anywhere, by what they would turn on. */
-const FORBIDDEN_KEYS: [RegExp, string][] = [
-  [/(api[-_]?key|token|secret|password|passwd|credential|cookie|oauth|auth)/i, "credentials"],
-  [
-    /^(exec|security|ask|elevated|shell|shellenv|command|commands|argv|safebins)$/i,
-    "shell commands",
-  ],
-  [/^(model|models|provider|providers|fallbacks|primary)$/i, "a model provider"],
-  [/^(profile|statedir|configpath|home)$/i, "another profile"],
-];
+const LOOPBACK_HOST = /^(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\])$/;
 
-const LOOPBACK_URL = /^(https?|wss?):\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i;
+/** Why a setting is not a value of its declared kind, or null. */
+function settingProblem(key: string, setting: unknown): string | null {
+  if (!KEY.test(key)) return `setting ${JSON.stringify(key)} is not a plain key`;
+  if (!isPlainObject(setting) || Object.keys(setting).sort().join() !== "kind,value") {
+    return `setting ${key} must be exactly { kind, value }`;
+  }
+  const { kind, value } = setting;
+  switch (kind) {
+    case "flag":
+      return typeof value === "boolean" ? null : `setting ${key} (flag) must be true or false`;
+    case "count":
+      return Number.isSafeInteger(value) && (value as number) >= 0
+        ? null
+        : `setting ${key} (count) must be a whole number`;
+    case "loopback-url": {
+      if (typeof value !== "string") return `setting ${key} (loopback-url) must be a URL`;
+      let url: URL;
+      try {
+        url = new URL(value);
+      } catch {
+        return `setting ${key} (loopback-url) is not a URL: ${value}`;
+      }
+      if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol)) {
+        return `setting ${key} (loopback-url) has protocol ${url.protocol}`;
+      }
+      if (!LOOPBACK_HOST.test(url.hostname)) {
+        return `setting ${key} (loopback-url) reaches beyond loopback: ${url.hostname}`;
+      }
+      if (url.username || url.password) return `setting ${key} (loopback-url) carries credentials`;
+      // Written as it parses, so what the plugin reads is what was checked.
+      if (url.href !== value || value.includes("$")) {
+        return `setting ${key} (loopback-url) must be written as it parses: ${url.href}`;
+      }
+      return null;
+    }
+    case "instance-path": {
+      if (typeof value !== "string") return `setting ${key} (instance-path) must be a path`;
+      const segments = value.split("/");
+      if (segments.length > 8 || !segments.every((segment) => PATH_SEGMENT.test(segment))) {
+        return `setting ${key} (instance-path) must be plain names inside the instance, not ${JSON.stringify(value)}`;
+      }
+      return null;
+    }
+    default:
+      return `setting ${key} has kind ${JSON.stringify(kind)}, which does not exist (kinds: ${SETTING_KINDS.join(", ")})`;
+  }
+}
 
 /**
- * Why an addition breaks the rule for plugins, one line per problem. It may
- * set only its own plugin entry (`enabled` and `config`) and name tools; no
- * key or value in it may turn on a real model provider, the default profile,
- * credentials from any profile, shell commands without asking, or network
- * access beyond loopback, and no tool it names may be a denied one.
+ * Why an addition is not a closed description this guard accepts, one line
+ * per problem: only `plugin`, `settings` and `tools`; every setting a plain
+ * key with a value of a known kind; every tool a plain name of kind
+ * `plugin-tool` that the gateway does not provide itself.
  */
 export function additionProblems(
   addition: unknown,
-  options: {
-    pluginDir: string;
-    manifestId: string;
-    denied: readonly string[];
-    reserved: readonly string[];
-  },
+  options: PluginRule & { manifestId: string },
 ): string[] {
   if (!isPlainObject(addition)) return ["the addition must be an object"];
   const problems: string[] = [];
   for (const key of Object.keys(addition)) {
-    if (!["plugin", "entry", "tools"].includes(key))
+    if (!["plugin", "settings", "tools"].includes(key)) {
       problems.push(`the addition may not set ${key}`);
+    }
   }
   if (addition.plugin !== options.manifestId) {
     problems.push(
@@ -88,114 +170,212 @@ export function additionProblems(
   if (options.reserved.includes(String(addition.plugin))) {
     problems.push(`plugin id ${String(addition.plugin)} is the development config's own entry`);
   }
-  const entry = addition.entry;
-  if (!isPlainObject(entry)) {
-    problems.push("the addition's entry must be an object");
+  const settings = addition.settings ?? {};
+  if (!isPlainObject(settings)) {
+    problems.push("the addition's settings must be an object");
   } else {
-    for (const key of Object.keys(entry)) {
-      if (key !== "enabled" && key !== "config")
-        problems.push(`the entry may set only enabled and config, not ${key}`);
+    for (const [key, setting] of Object.entries(settings)) {
+      const problem = settingProblem(key, setting);
+      if (problem) problems.push(problem);
     }
-    if (entry.enabled !== undefined && entry.enabled !== true)
-      problems.push("the entry's enabled must be true");
-    problems.push(...valueProblems(entry, "entry", options.pluginDir));
   }
-  const tools = addition.tools;
+  const tools = addition.tools ?? [];
   if (!Array.isArray(tools)) {
     problems.push("the addition's tools must be a list");
   } else {
     for (const tool of tools) {
-      if (typeof tool !== "string" || !TOOL.test(tool)) {
-        problems.push(`tool ${JSON.stringify(tool)} is not a plain tool name (no wildcards)`);
-      } else if (options.denied.includes(tool) || ["exec", "process", "terminal"].includes(tool)) {
-        problems.push(`tool ${tool} is denied on a development gateway`);
+      if (!isPlainObject(tool) || Object.keys(tool).sort().join() !== "kind,name") {
+        problems.push(`tool ${JSON.stringify(tool)} must be exactly { name, kind }`);
+      } else if (tool.kind !== "plugin-tool") {
+        problems.push(
+          `tool ${JSON.stringify(tool.name)} has kind ${JSON.stringify(tool.kind)}; the only kind is plugin-tool`,
+        );
+      } else if (typeof tool.name !== "string" || !TOOL.test(tool.name)) {
+        problems.push(`tool ${JSON.stringify(tool.name)} is not a plain tool name`);
+      } else if (options.gatewayTools.includes(tool.name)) {
+        problems.push(`tool ${tool.name} is the gateway's own, not one the plugin provides`);
       }
     }
   }
   return problems;
 }
 
-function valueProblems(value: unknown, path: string, pluginDir: string): string[] {
-  if (Array.isArray(value))
-    return value.flatMap((item, i) => valueProblems(item, `${path}[${i}]`, pluginDir));
-  if (isPlainObject(value)) {
-    return Object.entries(value).flatMap(([key, item]) => {
-      const forbidden = FORBIDDEN_KEYS.find(([pattern]) => pattern.test(key));
-      const here = `${path}.${key}`;
-      return [
-        ...(forbidden ? [`${here} would turn on ${forbidden[1]}`] : []),
-        ...valueProblems(item, here, pluginDir),
-      ];
-    });
-  }
-  if (typeof value !== "string") return [];
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value) && !LOOPBACK_URL.test(value)) {
-    return [`${path} reaches beyond loopback: ${value}`];
-  }
-  if (/(^|[\\/~])\.openclaw($|[\\/])/.test(value)) return [`${path} names the default profile`];
-  if (/^OPENCLAW_|^[A-Z][A-Z0-9_]*_(KEY|TOKEN|SECRET)$/.test(value))
-    return [`${path} names credentials from the environment`];
-  if (value.startsWith("~") || isAbsolute(value)) {
-    const rel = relative(pluginDir, resolve(value));
-    if (value.startsWith("~") || rel.startsWith("..") || isAbsolute(rel)) {
-      return [`${path} is a path outside the plugin's own folder: ${value}`];
+/** Read a folder whole, refusing links and anything but files and folders. */
+function readFolder(dir: string, refuse: (why: string) => never): PluginFile[] {
+  const files: PluginFile[] = [];
+  let bytes = 0;
+  const walk = (rel: string) => {
+    for (const entry of readdirSync(join(dir, rel)).sort()) {
+      const path = rel ? `${rel}/${entry}` : entry;
+      const stat = lstatSync(join(dir, path));
+      if (stat.isSymbolicLink()) refuse(`${path} is a link`);
+      if (stat.isDirectory()) {
+        walk(path);
+      } else if (stat.isFile()) {
+        const content = readFileSync(join(dir, path));
+        bytes += content.length;
+        files.push({ path, mode: stat.mode & 0o755, bytes: content });
+      } else {
+        refuse(`${path} is not a file or a folder`);
+      }
+      if (files.length > MAX_FILES || bytes > MAX_BYTES) refuse("the folder is too large");
     }
-  }
-  return [];
+  };
+  walk("");
+  return files;
 }
 
-/**
- * Load one plugin of the checkout by name, or throw saying why it is refused.
- * `root` is the checkout's plugins folder.
- */
-export function loadDevPlugin(
-  name: string,
-  root: string,
-  options: { denied: readonly string[]; reserved: readonly string[] },
-): DevPlugin {
+/** A digest of a plugin's files: their paths, modes and contents. */
+export function digestFiles(files: readonly PluginFile[]): string {
+  const hash = createHash("sha256");
+  for (const file of [...files].sort((a, b) => (a.path < b.path ? -1 : 1))) {
+    hash.update(`${file.path}\0${file.mode}\0${file.bytes.length}\0`);
+    hash.update(file.bytes);
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
+/** A real folder: present, not a link, and its real path is exactly `path`. */
+function realFolder(path: string, refuse: (why: string) => never): void {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    return refuse(`there is no folder ${path}`);
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) refuse(`${path} is not a real folder`);
+  if (realpathSync.native(path) !== path) refuse(`${path} is not a real folder by that name`);
+}
+
+/** Check the plugin `name` in the real folder `root` and take it into memory. */
+function checkPlugin(name: string, root: string, rule: PluginRule): DevPlugin {
   const refuse = (why: string): never => {
     throw new Error(`plugin ${JSON.stringify(name)} is refused: ${why}`);
   };
   if (!NAME.test(name)) refuse("a plugin name is lowercase letters, digits and inner hyphens");
-  const realRoot = (() => {
-    try {
-      return realpathSync(root);
-    } catch {
-      return refuse(`there is no ${root} folder in this checkout`);
-    }
-  })();
+  realFolder(root, refuse);
+  // Exactly that name among the folder's entries, as stored.
+  if (!readdirSync(root).includes(name)) refuse(`there is no folder ${name} in ${root}`);
   const dir = join(root, name);
-  const stat = (() => {
+  realFolder(dir, refuse);
+  const files = readFolder(dir, refuse);
+  const json = (path: string): unknown => {
+    const file = files.find((f) => f.path === path);
+    if (!file) return refuse(`${path} is missing`);
     try {
-      return lstatSync(dir);
+      return JSON.parse(file.bytes.toString("utf8")) as unknown;
     } catch {
-      return refuse(`there is no folder ${name} in ${root}`);
-    }
-  })();
-  if (stat.isSymbolicLink() || !stat.isDirectory()) refuse(`${dir} is not a real folder`);
-  const realDir = realpathSync(dir);
-  if (dirname(realDir) !== realRoot) refuse(`${dir} is not directly under ${root}`);
-  const readJson = (file: string): unknown => {
-    const path = join(realDir, file);
-    try {
-      if (!lstatSync(path).isFile()) refuse(`${file} is not a regular file`);
-      return JSON.parse(readFileSync(path, "utf8")) as unknown;
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith("plugin ")) throw error;
-      return refuse(`${file} is missing or not JSON`);
+      return refuse(`${path} is not JSON`);
     }
   };
-  const manifest = readJson(MANIFEST_FILE);
+  const manifest = json(MANIFEST_FILE);
   const id =
     isPlainObject(manifest) && typeof manifest.id === "string"
       ? manifest.id
       : refuse(`${MANIFEST_FILE} has no id`);
-  const addition = readJson(ADDITION_FILE);
-  const problems = additionProblems(addition, { pluginDir: realDir, manifestId: id, ...options });
-  if (problems.length > 0)
-    refuse(`its contract addition breaks the rule for plugins:\n  - ${problems.join("\n  - ")}`);
-  const checked = addition as { entry: Record<string, unknown>; tools: string[] };
-  return { name, dir: realDir, id, entry: checked.entry, tools: [...checked.tools] };
+  // The code it names to run is inside the folder.
+  if (files.some((file) => file.path === "package.json")) {
+    const pkg = json("package.json");
+    const entries =
+      isPlainObject(pkg) && isPlainObject(pkg.openclaw) ? pkg.openclaw.extensions : [];
+    for (const entry of Array.isArray(entries) ? entries : [entries]) {
+      const path = typeof entry === "string" ? entry.replace(/^\.\//, "") : "";
+      if (!files.some((file) => file.path === path)) {
+        refuse(`package.json names ${JSON.stringify(entry)}, which is not a file in the plugin`);
+      }
+    }
+  }
+  const addition = json(ADDITION_FILE);
+  const problems = additionProblems(addition, { manifestId: id, ...rule });
+  if (problems.length > 0) {
+    refuse(`its contract addition is not one this guard accepts:\n  - ${problems.join("\n  - ")}`);
+  }
+  const checked = addition as { settings?: Record<string, Setting>; tools?: { name: string }[] };
+  return {
+    name,
+    id,
+    files,
+    digest: digestFiles(files),
+    settings: checked.settings ?? {},
+    tools: (checked.tools ?? []).map((tool) => tool.name),
+  };
+}
+
+/**
+ * Check one plugin of a checkout by name and take it into memory, or throw
+ * saying why it is refused. Nothing is read from the checkout after this.
+ */
+export function loadDevPlugin(name: string, checkout: string, rule: PluginRule): DevPlugin {
+  let realCheckout: string;
+  try {
+    realCheckout = realpathSync.native(checkout);
+  } catch {
+    throw new Error(`plugin ${JSON.stringify(name)} is refused: there is no checkout ${checkout}`);
+  }
+  return checkPlugin(name, pluginsRoot(realCheckout), rule);
+}
+
+/**
+ * Write the checked snapshot into the instance's state folder, then check
+ * the copy is exactly what was checked. Returns the folder the gateway loads.
+ */
+export function copyPlugin(plugin: DevPlugin, stateDir: string, rule: PluginRule): string {
+  const target = pluginCopy(stateDir, plugin.name);
+  for (const file of plugin.files) {
+    const path = join(target, file.path);
+    const rel = relative(target, path);
+    if (rel.startsWith("..") || isAbsolute(rel)) throw new Error(`refusing to write ${path}`);
+    mkdirSync(dirname(path), { recursive: true });
+    // wx: never through anything already there.
+    writeFileSync(path, file.bytes, { mode: file.mode, flag: "wx" });
+  }
+  mkdirSync(pluginData(stateDir, plugin.name), { recursive: true });
+  checkedCopy(plugin.name, plugin.digest, stateDir, rule);
+  return target;
+}
+
+/**
+ * The plugin as the instance's copy holds it, refused unless the copy is a
+ * real folder whose digest is the recorded one.
+ */
+export function checkedCopy(
+  name: string,
+  digest: string,
+  stateDir: string,
+  rule: PluginRule,
+): DevPlugin {
+  const plugin = checkPlugin(name, join(realpathSync.native(stateDir), PLUGIN_COPY_DIR), rule);
+  if (plugin.digest !== digest) {
+    throw new Error(
+      `plugin ${JSON.stringify(name)} is refused: its copy in the instance is ${plugin.digest}, not the ${digest} that was checked`,
+    );
+  }
+  return plugin;
+}
+
+/** The folder a plugin's instance-path settings lie under. */
+export const pluginData = (stateDir: string, name: string) => join(stateDir, PLUGIN_DATA_DIR, name);
+
+/** A plugin's config entry on an instance: each setting's value, a path resolved inside it. */
+export function pluginEntry(
+  plugin: DevPlugin,
+  stateDir: string,
+): { enabled: true; config: Record<string, unknown> } {
+  const base = pluginData(stateDir, plugin.name);
+  const config: Record<string, unknown> = {};
+  for (const [key, { kind, value }] of Object.entries(plugin.settings)) {
+    if (kind !== "instance-path") {
+      config[key] = value;
+      continue;
+    }
+    const path = resolve(base, String(value));
+    const rel = relative(base, path);
+    if (rel.startsWith("..") || isAbsolute(rel)) {
+      throw new Error(`plugin ${plugin.name}: ${key} leaves the instance`);
+    }
+    config[key] = path;
+  }
+  return { enabled: true, config };
 }
 
 /** Plugins are for named instances only; the default instance never loads any. */
@@ -208,4 +388,9 @@ export function pluginSelectionProblem(instance: string | null, names: string[])
     seen.add(name);
   }
   return null;
+}
+
+/** The line printed every time a plugin is loaded. */
+export function trustedCodeNotice(plugin: { name: string; digest: string }): string {
+  return `Loading plugin ${plugin.name} (${plugin.digest}) as trusted code: it runs inside the gateway with your full access to files, processes and the network. The guard constrains the gateway's configuration and the tools bots are given, not what plugin code does. Load only plugins from this repository that you have read.`;
 }

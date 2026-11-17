@@ -91,10 +91,15 @@ import {
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
 import { contractProblems, matching, optional, type Contract } from "./contract.ts";
 import {
+  checkedCopy,
+  copyPlugin,
   loadDevPlugin,
+  pluginCopy,
+  pluginEntry,
   pluginSelectionProblem,
-  pluginsRoot,
+  trustedCodeNotice,
   type DevPlugin,
+  type PluginRule,
 } from "./dev-plugins.ts";
 import { SEED_CAPS, SEED_SCOPES, seedExample, verifyExample } from "./examples.ts";
 import { OperatorSession } from "./operator.ts";
@@ -346,9 +351,12 @@ export function devConfig(
         // Only the search half of the bundled Ollama plugin is used, on loopback.
         ollama: { config: { webSearch: { baseUrl: searchBaseUrl(ports) } } },
         // The project's own plugins named at start, each as its addition says.
-        ...Object.fromEntries(plugins.map((plugin) => [plugin.id, plugin.entry])),
+        ...Object.fromEntries(plugins.map((plugin) => [plugin.id, pluginEntry(plugin, stateDir)])),
       },
-      ...(plugins.length > 0 ? { load: { paths: plugins.map((plugin) => plugin.dir) } } : {}),
+      // Each loaded from the instance's own copy of what was checked.
+      ...(plugins.length > 0
+        ? { load: { paths: plugins.map((plugin) => pluginCopy(stateDir, plugin.name)) } }
+        : {}),
     },
   };
 }
@@ -356,20 +364,26 @@ export function devConfig(
 /** Plugin entries that belong to the development config itself. */
 export const RESERVED_PLUGIN_IDS = ["memory-core", "ollama"] as const;
 
-/** Load the checkout's own plugins named at start, each checked against the rule for plugins. */
-export function loadPlugins(
-  inst: { checkout: string; name: string | null },
-  names: string[],
-): DevPlugin[] {
-  const problem = pluginSelectionProblem(inst.name, names);
-  if (problem) throw new Error(problem);
-  return names.map((name) =>
-    loadDevPlugin(name, pluginsRoot(inst.checkout), {
-      denied: DENIED_TOOLS,
-      reserved: RESERVED_PLUGIN_IDS,
-    }),
-  );
-}
+/**
+ * Every tool the installed gateway provides itself (`tools.catalog` of
+ * OpenClaw 2026.10.6, plugins' tools included). A plugin may turn on only
+ * tools it provides, never one of these.
+ */
+export const GATEWAY_TOOLS = [
+  ...["ls", "read", "write", "edit", "apply_patch", "exec", "process", "code_execution"],
+  ...["secrets", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
+  ...["presence", "sessions", "sessions_list", "sessions_history", "sessions_search"],
+  ...["conversations_list", "conversations_send", "conversations_turn", "sessions_send"],
+  ...["sessions_spawn", "github_identity_status", "github_publish", "agents_wait"],
+  ...["sessions_yield", "subagents", "session_status", "suggest_task", "dismiss_task"],
+  ...["browser", "screen", "theme", "dashboard", "terminal", "portal", "canvas"],
+  ...["show_widget", "message", "heartbeat_respond", "automations", "gateway", "plugins"],
+  ...["openclaw", "nodes", "computer", "mobile_ui", "decision_evaluate", "agents_list"],
+  ...["get_goal", "create_goal", "update_goal", "progress_card", "ask_user"],
+  ...["skill_workshop", "skills_search", "skills_read", "view_image", "image_generate"],
+  ...["music_generate", "video_generate", "transcripts", "tts", "pdf", "dir_fetch"],
+  ...["dir_list", "file_fetch", "file_write", "node_inference", "intent", "talk_voice"],
+] as const;
 
 /** The scripted model server also answers web searches. */
 export function searchBaseUrl(ports: InstancePorts): string {
@@ -434,6 +448,22 @@ export const DENIED_TOOLS = [
   "skill_workshop",
 ] as const;
 
+/** What a plugin's contract addition is checked against. */
+export const PLUGIN_RULE: PluginRule = {
+  gatewayTools: [...GATEWAY_TOOLS, ...DENIED_TOOLS],
+  reserved: RESERVED_PLUGIN_IDS,
+};
+
+/** Check the checkout's own plugins named at start and take each into memory. */
+export function loadPlugins(
+  inst: { checkout: string; name: string | null },
+  names: string[],
+): DevPlugin[] {
+  const problem = pluginSelectionProblem(inst.name, names);
+  if (problem) throw new Error(problem);
+  return names.map((name) => loadDevPlugin(name, inst.checkout, PLUGIN_RULE));
+}
+
 /**
  * The development config contract (contract.ts): exactly the generated
  * config, with the generated token, plus the fields seeding writes into each
@@ -488,17 +518,22 @@ export function sandboxProblems(
   return contractProblems(config, devConfigContract(ports, stateDir, plugins));
 }
 
-/** The plugins this run of the instance was started with, recorded beside its run file. */
+/** The plugins this run of the instance was started with and their digests, beside its run file. */
 const pluginsFile = (inst: DevInstance) => join(inst.runDir, "plugins.json");
 
 function recordedPlugins(inst: DevInstance): DevPlugin[] {
   if (!existsSync(pluginsFile(inst))) return [];
-  const names = JSON.parse(readFileSync(pluginsFile(inst), "utf8")) as unknown;
-  if (!Array.isArray(names) || !names.every((n) => typeof n === "string")) {
-    throw new Error(`${pluginsFile(inst)} is not a list of plugin names`);
+  const recorded = JSON.parse(readFileSync(pluginsFile(inst), "utf8")) as unknown;
+  if (
+    !Array.isArray(recorded) ||
+    !recorded.every((p) => p && typeof p.name === "string" && typeof p.digest === "string")
+  ) {
+    throw new Error(`${pluginsFile(inst)} is not a list of plugins and their digests`);
   }
-  // Loaded and checked again, so a plugin changed since the start is noticed.
-  return loadPlugins(inst, names);
+  // The instance's copies, checked again against the digests recorded at start.
+  return (recorded as { name: string; digest: string }[]).map(({ name, digest }) =>
+    checkedCopy(name, digest, inst.stateDir, PLUGIN_RULE),
+  );
 }
 
 function assertSandboxed(
@@ -546,6 +581,9 @@ function writeFreshConfig(
   };
   mkdirSync(inst.runDir, { recursive: true });
   writeFileAtomic(inst.connectionFile, `${JSON.stringify(connection, null, 2)}\n`);
+  // The contract first: `config validate` loads plugins, so nothing runs
+  // before a config that breaks it is refused.
+  assertSandboxed(inst, ports, plugins);
   const validation = inst.runner.runSync(["config", "validate"]);
   if (validation.status !== 0) {
     throw new Error(`generated config is invalid:\n${validation.stdout}${validation.stderr}`);
@@ -743,9 +781,15 @@ export async function start(
     });
     runner.freshRunId = runId;
     try {
-      writeFileAtomic(pluginsFile(inst), `${JSON.stringify(plugins.map((p) => p.name))}\n`);
+      for (const plugin of plugins) {
+        console.log(trustedCodeNotice(plugin));
+        copyPlugin(plugin, inst.stateDir, PLUGIN_RULE);
+      }
+      writeFileAtomic(
+        pluginsFile(inst),
+        `${JSON.stringify(plugins.map(({ name, digest }) => ({ name, digest })))}\n`,
+      );
       writeFreshConfig(inst, ports, runId, plugins);
-      assertSandboxed(inst, ports, plugins);
       const providerLog = openSync(join(inst.runDir, "provider.log"), "w");
       spawnRecorded(inst, runId, "provider", () =>
         gatedSpawn(

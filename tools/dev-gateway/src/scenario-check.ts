@@ -38,7 +38,7 @@ import {
   type PlanContext,
 } from "./scenarios.ts";
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
-import { DENIED_TOOLS } from "./cli.ts";
+import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
 import { OFFERED_TOOLS_PATH } from "./fake-provider.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -2787,6 +2787,15 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         const row = tools.find((t) => t.id === tool);
         expect(!row || row.status !== "available", `${tool} is denied but reported available`);
       }
+      // The gateway's own tools, which no plugin may turn on, are its whole catalog.
+      const catalog = await h
+        .op("plain")
+        .request<{ groups?: { tools?: JsonRecord[] }[] }>("tools.catalog", { agentId: "main" });
+      same(
+        (catalog.groups ?? []).flatMap((g) => (g.tools ?? []).map((t) => String(t.id))).sort(),
+        [...GATEWAY_TOOLS].sort(),
+        "tools.catalog tool ids",
+      );
     },
   },
   {

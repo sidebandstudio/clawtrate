@@ -2,10 +2,25 @@
   "id": "clawtrate-hello",
   "name": "Clawtrate hello",
   "description": "A test fixture for the development gateway's plugin opening. It registers nothing.",
-  "activation": { "onStartup": true },
+  "activation": {
+    "onStartup": true
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": { "greeting": { "type": "string" }, "echoUrl": { "type": "string" } }
+    "properties": {
+      "loud": {
+        "type": "boolean"
+      },
+      "repeat": {
+        "type": "integer"
+      },
+      "echoUrl": {
+        "type": "string"
+      },
+      "cacheDir": {
+        "type": "string"
+      }
+    }
   }
 }
