@@ -1107,7 +1107,7 @@ test.describe("Messaged cards", () => {
     }
   });
 
-  test("F-308: Show full exchange shows every message between the two bots in this task, read-only, and returns to the card", async ({
+  test("with the task's whole history loaded, Show full exchange shows every message between the two bots in this task, read-only, and returns to the card", async ({
     page,
   }) => {
     await openFixture(page, "scene=messaged-replied", "light");
@@ -1132,6 +1132,55 @@ test.describe("Messaged cards", () => {
     await back.click();
     await expect(list).toBeHidden();
     await expect(card).toHaveAttribute("open", "");
+  });
+
+  test("with only part of the task's history loaded, the exchange is not called every message, and says what may be missing", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=messaged-replied", "light");
+    const key = "agent:otto:transcode-cache";
+    for (const partial of [{ hasMore: true }, { runsOmitted: 2 }]) {
+      await page.evaluate(
+        ({ key, partial }) => {
+          const fixture = (
+            window as unknown as {
+              clawtrateFixture: {
+                setState(change: (s: { transcripts: Record<string, object> }) => unknown): void;
+              };
+            }
+          ).clawtrateFixture;
+          fixture.setState((s) => ({
+            ...s,
+            transcripts: {
+              ...s.transcripts,
+              [key]: { ...s.transcripts[key], hasMore: false, runsOmitted: 0, ...partial },
+            },
+          }));
+        },
+        { key, partial },
+      );
+      const card = page.getByTestId("messaged-card").last();
+      if ((await card.getAttribute("open")) === null) await card.locator("summary").click();
+      const toggle = card.getByRole("button", {
+        name: "Show every message between Otto and Marlow in this task that is loaded here",
+        exact: true,
+      });
+      await expect(toggle).toHaveText("Show the loaded exchange");
+      await toggle.click();
+      await expect(
+        card.getByRole("list", { name: "Every message between Otto and Marlow in this task" }),
+      ).toHaveCount(0);
+      const list = card.getByRole("list", {
+        name: "Messages between Otto and Marlow in the part of this task loaded here",
+        exact: true,
+      });
+      await expect(list.locator(".exchange-text")).toHaveCount(4);
+      await expect(card.getByTestId("exchange-partial")).toHaveText(
+        "Only part of this task's history is loaded here, so earlier messages between Otto and Marlow may be missing.",
+      );
+      await card.getByRole("button", { name: "Show only this message" }).click();
+      await expect(card.getByTestId("exchange-partial")).toHaveCount(0);
+    }
   });
 
   test("F-434 F-469: a recipient's stop, wait and finish read on the sender's card as the recipient's run established them", async ({

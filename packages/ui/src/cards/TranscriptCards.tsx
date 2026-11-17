@@ -4,7 +4,7 @@
 // this folder: what goes where (placement.ts), what each says (model.ts) and
 // how each looks (cards.css).
 
-import type { Run, Transcript, TranscriptItem } from "@clawtrate/core";
+import { MAX_INTER_SESSION, type Run, type Transcript, type TranscriptItem } from "@clawtrate/core";
 import {
   createContext,
   useCallback,
@@ -251,6 +251,7 @@ function CardFor({ cardRef }: { cardRef: CardRef }) {
           card={card}
           read={cards.rawState(card.stepId)}
           related={related(env, cards.selected, card.recipient.sessionKey, card.recipient.agentId)}
+          partial={partialHistory(env.transcript)}
         />
       );
     }
@@ -262,7 +263,22 @@ function CardFor({ cardRef }: { cardRef: CardRef }) {
   }
 }
 
-/** Every message between this task's bot and one recipient in this task, oldest first. */
+/**
+ * Whether what this viewer holds of the task may leave out some of its
+ * messages: history has earlier pages, which the engine does not load
+ * (`hasMore`); runs or a run's steps were let go under the engine's bounds
+ * (`runsOmitted`, `omittedSteps`); or the incoming messages fill their bound.
+ */
+function partialHistory(transcript: Transcript): boolean {
+  return (
+    transcript.hasMore ||
+    transcript.runsOmitted > 0 ||
+    transcript.runs.some((run) => run.omittedSteps > 0) ||
+    transcript.interSession.length >= MAX_INTER_SESSION
+  );
+}
+
+/** Every message between this task's bot and one recipient that this task holds, oldest first. */
 function related(
   env: CardEnv,
   selected: ReturnType<typeof useCards>["selected"],

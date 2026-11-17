@@ -627,7 +627,7 @@ test.describe("Messaged cards' actions on a real gateway", () => {
     await expect(card(page, "messaged-card")).toHaveAttribute("open", "");
   });
 
-  test("F-308: two messages to Marlow in one task: Show full exchange shows both and the replies, read-only", async () => {
+  test("two messages to Marlow in one task, its whole history loaded: Show full exchange shows both and the replies, read-only", async () => {
     const t = await clientTask("pip", "message-twice");
     for (let i = 0; i < 2; i += 1) {
       const run = await clients.plain.send(t.key, "#message");
