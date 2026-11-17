@@ -313,9 +313,11 @@ test.describe("approval cards on a real gateway", () => {
     await expect(raw).toContainText("(exec.approval.resolved)");
     await shot(approval, "approval-allowed-once");
 
-    // The page reloaded: the host still holds the task, and the card as it ended.
+    // The page reloaded: the host let the task go and reads it again from history, which
+    // keeps no approval record; the gateway lists only pending requests.
     await reload(page, "Otto", title);
-    await expect(card(page, "approval-card").locator(".tag")).toHaveText("Allowed once");
+    await expect(transcript(page)).toContainText("The command ran once you approved it");
+    await expect(card(page, "approval-card")).toHaveCount(0);
     later.push({ bot: "Otto", title, reply: "The command ran once you approved it" });
   });
 
@@ -594,10 +596,10 @@ test.describe("tool-server calls on a real gateway", () => {
     await clients.plain.terminal(stop.runId);
     await expect(card(page, "t3-card")).toHaveCount(0);
     await expect(page.getByTestId("live-turn")).toHaveCount(0, { timeout: 15_000 });
-    // Read from history on the read-only page: the stopped call's result says it was aborted.
+    // Read from history on the read-only page: history keeps the call and no result for it.
     await openTask(reader, "Juniper", stop.title);
-    const step = await ordinaryStep(reader, "Aborted");
-    await expect(step.locator(".step-state")).toHaveText("failed");
+    const step = await ordinaryStep(reader, '"seconds": 3600');
+    await expect(step.locator(".step-state")).toHaveText("no result");
   });
 });
 
