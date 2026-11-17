@@ -610,7 +610,7 @@ await p.waitForTimeout(1100);
 check("M7 a drop during the release retires the sequence: no release assumed, no answer sent", await q(p, () =>
   window.CT.work.computer.control === "maybeheld" && document.querySelector("#q-library").dataset.state === "pending" &&
   ![...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You gave control back"))));
-check("M7 …and says control may remain until it expires", await q(p, () => document.querySelector(".computer-held").textContent === "The connection dropped. Control of Juniper's browser may remain with this device until it expires."));
+check("M7 …and says input has stopped and the gateway ends control when it observes the close", await q(p, () => document.querySelector(".computer-held").textContent === "The connection dropped. Input has stopped. The gateway ends control when it observes this connection close; check its state after reconnecting."));
 await q(p, () => window.app.setConnection("connected"));
 check("M7 on reconnect it reads the question and the browser again before offering anything", await q(p, () =>
   window.CT.work.computer.control === "checking" && !document.querySelector(".computer-banner") && !document.querySelector('#panel-computer [data-cmp="take"]')));
@@ -623,9 +623,9 @@ await p.close();
 p = await open(comp + "&computer=control");
 await p.waitForTimeout(50);
 await q(p, () => window.app.setConnection("reconnecting"));
-check("M7 a drop while holding: the view ends and the tab says control may remain until it expires", await q(p, () =>
+check("M7 a drop while holding: the view ends and the tab says the gateway ends control when it observes the close", await q(p, () =>
   !document.querySelector(".screen-view") && window.CT.work.computer.control === "maybeheld" && !document.querySelector('#panel-computer [data-cmp="take"]') &&
-  document.querySelector(".computer-held").textContent.startsWith("The connection dropped. Control of Juniper's browser may remain")));
+  document.querySelector(".computer-held").textContent.startsWith("The connection dropped. Input has stopped.")));
 await p.close();
 
 // The question closes during the release.
@@ -671,7 +671,16 @@ await p.click('[data-cmp="open"]');
 await p.click('.screen-view [data-cmp="take"]');
 await p.click('.screen-view [data-cmp="cancel-take"]');
 await p.waitForTimeout(1100);
-check("M6 Cancel while waiting: a grant that arrives later is given back at once and never shown", await q(p, () =>
+check("M6 Cancel while waiting withdraws the take with its generation: no grant, and nothing claims control", await q(p, () =>
+  window.CT.work.computer.control !== "granted" && window.CT.work.computer.withdrawals.join() === "g1" && window.CT.work.computer.lateReleased === 0 &&
+  !/You have control/.test(document.body.textContent) && ![...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You took control"))));
+await p.close();
+p = await open(comp + "&computer=watching&takerace=grant", { width: 1100, height: 760 });
+await p.click('[data-cmp="open"]');
+await p.click('.screen-view [data-cmp="take"]');
+await p.click('.screen-view [data-cmp="cancel-take"]');
+await p.waitForTimeout(1100);
+check("M6 a grant that wins the race against the withdrawal is given back at once and never shown", await q(p, () =>
   window.CT.work.computer.control !== "granted" && window.CT.work.computer.lateReleased === 1 && !/You have control/.test(document.body.textContent)));
 await p.close();
 p = await open(comp + "&computer=watching", { width: 1100, height: 760 });
@@ -681,8 +690,8 @@ await p.click('.screen-view [data-cmp="close-full"]');
 await p.click("#tab-files");
 await p.waitForTimeout(1100);
 await p.click("#tab-computer");
-check("M6 leaving while waiting: the late grant is given back, and nothing claims control", await q(p, () =>
-  window.CT.work.computer.control !== "granted" && window.CT.work.computer.lateReleased === 1 && !document.querySelector(".screen > svg") && !/You have control/.test(document.querySelector("#panel-computer").textContent)));
+check("M6 leaving while waiting withdraws the take, and nothing claims control", await q(p, () =>
+  window.CT.work.computer.control !== "granted" && window.CT.work.computer.withdrawals.length === 1 && window.CT.work.computer.lateReleased === 0 && !document.querySelector(".screen > svg") && !/You have control/.test(document.querySelector("#panel-computer").textContent)));
 await p.close();
 p = await open(comp + "&computer=control", { width: 1100, height: 760 });
 await p.waitForTimeout(50);

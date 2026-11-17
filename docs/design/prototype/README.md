@@ -42,7 +42,7 @@ Every setting can be given in the address, which is how the screenshots are take
 | `file`, `fileview` | A file to open in the reader, for example `file=notes/disk-2026-11-16.md&fileview=changes`; views are `preview`, `source`, `changes` (Work pane) |
 | `artifact`, `viewer` | An item the bot sent, opened in the pane or in the media viewer, for example `bot=juniper&task=j2&artifact=a-terms` or `viewer=a-usage` (Work pane) |
 | `artifactload`, `thumbs` | `failed`: the first opening of an item fails; the gateway's thumbnail for a large picture fails. `thumbs=original`: the thumbnail comes back as the original, over 2 MB (Work pane) |
-| `computer` | `noplugin`, `unconfigured`, `unused`, `closed`, `watching`, `full`, `draining`, `control`, `busy`, `conflict`, `ended`, `offline`, `nodeunknown`, `stuck`, `active`, `elsewhere`, `releasefail`, `releaseunknown`, `complexquestion`; with `firstwatch=1` for the one-time note (Work pane) |
+| `computer` | `noplugin`, `unconfigured`, `unused`, `closed`, `watching`, `full`, `draining`, `control`, `busy`, `conflict`, `ended`, `offline`, `nodeunknown`, `stuck`, `active`, `elsewhere`, `releasefail`, `releaseunknown`, `complexquestion`; with `firstwatch=1` for the one-time note, and `takerace=grant` for a grant that wins the race against a withdrawn take (Work pane) |
 | `checkout` | `1`: Changes adds the checkout's comparison (Work pane) |
 | `repo`, `taskroot` | `repo=1`: the task works in a repository the gateway keeps; `taskroot=worktree`: an ordinary folder of its own, not established as the bot's workspace (Work pane) |
 | `open` | `create` or `settings`, a dialog to open (bots) |
