@@ -5,8 +5,8 @@ Static pages for the design in `docs/design/`. Open `index.html` in a browser. T
 | Page | Shows |
 |---|---|
 | `connect.html` | The first screen. `?state=error` and `?state=busy` show a failed and a running attempt. |
-| `pairing.html` | Waiting for the gateway's owner to approve this device. |
-| `app.html` | The main view: bots with their tasks, a conversation, the Work pane. It runs on a small local model, so selecting, folding, the connection states and the Work pane all work. |
+| `pairing.html` | Waiting for the gateway's owner to approve this device. `?state=copied` and `?state=selected` show the copy button's two outcomes. |
+| `app.html` | The main view: bots with their tasks, a conversation, the Work pane. It runs on a small local model, so selecting, folding, pinning, the menus, sending, the connection states and the Work pane all work. Right-click a bot for its menu. |
 | `gallery.html` | Every conversation component in every state. |
 | `conversation.html` | One scripted turn, played inside the shell. |
 
@@ -24,25 +24,26 @@ Every setting can be given in the address, which is how the screenshots are take
 | `bot`, `task` | A bot and one of its tasks to open, for example `bot=juniper&task=j2` (app) |
 | `unfold`, `fold` | Bots to unfold or fold, by id (app) |
 | `showall` | A bot whose six-row cap is lifted (app) |
-| `rail` | `pinned` (app) |
+| `pin`, `pinopen` | Bots to pin, by id, and the pinned bot whose tasks show, for example `pin=pip,juniper,otto&pinopen=pip`; `rail=pinned` pins Pip and Juniper (app) |
+| `menu` | `new`, `gateway`, or `bot` with `menubot=<id>` (app) |
 | `panel` | `open` (app) |
 | `tab` | `details`, `files`, `computer` (app) |
 | `view` | `list`, `detail` (app, one-pane layout) |
 | `banner` | `reconnecting`, `offline`, `syncing`, `synced`, `failed` (app) |
-| `state` | `empty`, `loading`, `readonly`, `newtask`, `loaderror` (app); `error`, `busy` (connect); `copied` (pairing) |
+| `state` | `empty`, `loading`, `readonly`, `newtask`, `loaderror`, `nobots`, `discovering`, `zerotasks` (app); `error`, `busy` (connect); `copied`, `selected` (pairing) |
 | `section` | One section of the gallery, by id (gallery) |
 
 ## Files
 
 | File | What it is |
 |---|---|
-| `css/tokens.css` | The token set. A drop-in replacement for `packages/ui/src/styles/tokens.css`. |
+| `css/tokens.css` | The token set to copy into `packages/ui/src/styles/tokens.css`. Step 2 of the change list in `visual-language.md` names the four layout sizes that change later. |
 | `css/app.css` | The shell's styles, written against the shell's own markup and in the order of the change list in `visual-language.md`. |
 | `css/conversation.css` | The conversation components' styles. |
 | `css/prototype.css` | The control bar, the frame and the gallery's layout. Not product code. |
 | `js/icons.js` | The icon set and the bot characters, drawn for Clawtrate. |
 | `js/prototype.js` | The theme, width and motion controls. |
-| `js/app.js` | The local model behind `app.html`: bots, tasks, selection, folding, the connection, the Work pane. |
+| `js/app.js` | The local model behind `app.html`: bots, tasks, selection, folding, pins, menus, sending, the connection, the Work pane. |
 | `js/connect.js` | What the buttons on the connection screens do. |
 | `js/components.js`, `js/samples.js`, `js/behaviors.js` | The conversation components' markup, sample content and small behaviours. |
 | `js/gallery.js`, `js/run.js` | The gallery and the scripted run. |

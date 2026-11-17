@@ -50,18 +50,54 @@
 
   const copy = $("#copy-command");
   if (copy) {
-    copy.addEventListener("click", () => {
-      navigator.clipboard?.writeText($("#approve-command").textContent).catch(() => {});
-      copy.innerHTML = CT.icon("check");
-      $("#copy-status").textContent = "Copied";
-      setTimeout(() => {
+    // The status says what happened. "Copied." only after the clipboard took the
+    // command; otherwise the command is selected and the status says how to copy it.
+    const forced = CT.params.get("state");
+    const command = $("#approve-command");
+    const status = $("#copy-status");
+    let statusTimer = null;
+    const report = (copied) => {
+      clearTimeout(statusTimer);
+      if (copied) {
+        copy.innerHTML = CT.icon("check");
+        status.textContent = "Copied.";
+        statusTimer = setTimeout(() => {
+          copy.innerHTML = CT.icon("copy");
+          status.textContent = "";
+        }, 1500);
+      } else {
+        const range = document.createRange();
+        range.selectNodeContents(command);
+        const selection = getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
         copy.innerHTML = CT.icon("copy");
-        $("#copy-status").textContent = "";
-      }, 1600);
+        // The selection stays, so the status stays with it.
+        status.textContent = `Selected. Press ${/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘C" : "Ctrl+C"} to copy.`;
+      }
+    };
+    copy.addEventListener("click", async () => {
+      if (forced === "copied") return report(true);
+      if (forced === "selected") return report(false);
+      try {
+        await navigator.clipboard.writeText(command.textContent);
+        report(true);
+      } catch {
+        report(false);
+      }
     });
     const check = $("#check-button");
     const waiting = $("#waiting-text");
     let checks = 0;
+    // The host checks again by itself; the line counts down to the next check.
+    let seconds = 5;
+    let prefix = "Waiting for approval";
+    const tick = () => (waiting.textContent = `${prefix}, checking again in ${seconds}s`);
+    tick();
+    setInterval(() => {
+      seconds = seconds > 1 ? seconds - 1 : 5;
+      tick();
+    }, 1000);
     check.addEventListener("click", () => {
       check.disabled = true;
       check.textContent = "Checking…";
@@ -71,10 +107,12 @@
         if (checks > 1) return (location.href = "app.html" + keep);
         check.disabled = false;
         check.textContent = "Check now";
-        waiting.textContent = "Not approved yet. Still waiting";
+        prefix = "Not approved yet";
+        seconds = 5;
+        tick();
       }, 800);
     });
     $("#other-gateway").href = "connect.html" + keep;
-    if (CT.params.get("state") === "copied") copy.click();
+    if (forced === "copied" || forced === "selected") copy.click();
   }
 })();
