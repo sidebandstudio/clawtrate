@@ -393,6 +393,29 @@ test.describe("action cards", () => {
     await expect(line(running)).toBeInViewport();
   });
 
+  test("text written beside a tool call is one bubble before its card, never repeated as the streaming reply", async ({
+    page,
+  }) => {
+    await open(page, "actions-running");
+    const text = "Both logs are fine. Checking how full the disk is.";
+    const bubble = page.getByText(text, { exact: true });
+    await expect(bubble).toHaveCount(1);
+    // It sits directly before the card of the call it came with.
+    await expect(
+      page.locator(".msg", { hasText: text }).locator("xpath=following-sibling::*[1]"),
+    ).toHaveAttribute("data-call", "call_l3");
+    // The gateway's chat stream carries the same text while that message streams: still one bubble.
+    await setState(
+      page,
+      `const key = "agent:otto:disk-space";
+       const t = state.transcripts[key];
+       const runs = t.runs.map((run) => run.id === "run-live" ? { ...run, text: "Both logs are fine. Checking" } : run);
+       return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, runs } } };`,
+    );
+    await expect(page.getByText("Both logs are fine. Checking")).toHaveCount(1);
+    await expect(page.getByTestId("live-turn")).toHaveCount(0);
+  });
+
   test("F-432: an opened running action shows its output as the gateway streams it", async ({
     page,
   }) => {

@@ -1256,6 +1256,27 @@ function reasonOf(call: ActionCall): string {
   return e && typeof e !== "object" ? str(e) : "";
 }
 
+/**
+ * What went wrong, from a result's text: a tool that answers with a JSON body
+ * (its `error`, else its `message`) when history kept no `details`, else the
+ * text's first line.
+ */
+function textReason(text: string | null): string {
+  const t = str(text).trim();
+  if (t.startsWith("{")) {
+    try {
+      const body = rec(JSON.parse(t));
+      const said = str(body?.error) || str(body?.message);
+      if (said) return firstLine(said);
+    } catch {
+      // Not whole JSON: the gateway may have cut it. Its first line says nothing.
+      return "";
+    }
+    return "";
+  }
+  return firstLine(t);
+}
+
 // The line ----------------------------------------------------------------------------
 
 /** The mark at the right of a line, or the time. */
@@ -1454,7 +1475,7 @@ export function lineOf(call: ActionCall, ctx: ReadingContext = {}): ActionLine {
     mono = false;
   } else if (o.outcome === "failed") {
     // A failure's detail is what went wrong, never a count from a result it did not give.
-    const reason = (reasonOf(call) || firstLine(call.text)).slice(0, 120);
+    const reason = (reasonOf(call) || textReason(call.text)).slice(0, 120);
     detail = reason || (info.kind === "command" ? detail : "");
     mono = info.kind === "command" && !reason;
   }

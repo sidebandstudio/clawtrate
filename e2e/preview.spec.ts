@@ -1464,6 +1464,8 @@ test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five 
   await expect(status).toHaveAttribute("title", words);
   await expect(status).toHaveAccessibleName(`Otto, working: ${words}. Show the action.`);
   const live = await actionLines(page);
+  // The text written beside the slow call is one bubble, not repeated as a streaming reply.
+  await expect(page.getByText("I read six files in my workspace.", { exact: true })).toHaveCount(1);
   // The status line brings the running card into view and focuses its line, without opening it.
   await page.getByTestId("transcript").evaluate((element) => (element.scrollTop = 0));
   await status.click();

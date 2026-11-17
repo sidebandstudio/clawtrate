@@ -235,7 +235,12 @@ function runEntries(run: Run, cards: CardsFor, rest: CardRef[]): FeedEntry<FeedR
     if (before === -1) entries.push(entry);
     else entries.splice(before, 0, entry);
   }
-  if (run.text) entries.push({ type: "bubble", id: `reply:${run.id}`, ref: { t: "reply", run } });
+  // While a message with a tool call streams, the gateway's chat stream carries the same text
+  // the preamble item does: it is that bubble, not a reply, and is not drawn twice.
+  const text = run.text.trim();
+  const repeats = (run.preambles ?? []).some((p) => p.text.trim().startsWith(text));
+  if (text && !repeats)
+    entries.push({ type: "bubble", id: `reply:${run.id}`, ref: { t: "reply", run } });
   return entries;
 }
 

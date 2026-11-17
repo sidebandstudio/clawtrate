@@ -1479,3 +1479,20 @@ describe("a plan saved again", () => {
     expect(words({ ...plan, details: { revision: 3, steps: {} } })).toBe("Saved the plan");
   });
 });
+
+describe("a failure rebuilt from history without details", () => {
+  it("takes what went wrong from the result's JSON body, never its opening brace", () => {
+    const body = JSON.stringify(
+      { status: "error", tool: "read", error: "File not found: missing/old-notes.md." },
+      null,
+      2,
+    );
+    const c = call(
+      "read",
+      { path: "missing/old-notes.md" },
+      { isError: true, text: body, details: null, fromHistory: true },
+    );
+    expect(lineOf(c).detail).toBe("File not found: missing/old-notes.md.");
+    expect(lineOf({ ...c, text: '{"status": "error", "err' }).detail).toBe("");
+  });
+});
