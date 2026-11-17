@@ -279,6 +279,8 @@ test.describe("approval cards", () => {
       "The routine Weekly cleanup may run this command without asking.",
     );
     const days = form.getByLabel("Number of days");
+    // It starts from the lifetime the gateway gives the grant (`scope.expiresInDays`).
+    await expect(days).toHaveValue("7");
     for (const bad of ["0", "3651", "1.5"]) {
       await days.fill(bad);
       await expect(form.getByText("Between 1 and 3650 days.")).toBeVisible();
@@ -291,6 +293,23 @@ test.describe("approval cards", () => {
     expect((await sent(page)).at(-1)).toMatchObject({
       decision: "allow-always",
       expiresInDays: 30,
+    });
+  });
+
+  test("F-167: a routine's grant left as it starts lasts the gateway's default", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=approval-routine", "light");
+    await recordCommands(page);
+    const card = approvalCard(page);
+    await card.getByRole("button", { name: "Always allow…" }).click();
+    const form = card.getByRole("group", { name: "Always allow" });
+    await expect(form.getByLabel("Number of days")).toHaveValue("7");
+    await form.getByRole("button", { name: "Allow and save" }).click();
+    await expect(card.locator(".tag")).toHaveText("Always allowed");
+    expect((await sent(page)).at(-1)).toMatchObject({
+      decision: "allow-always",
+      expiresInDays: 7,
     });
   });
 

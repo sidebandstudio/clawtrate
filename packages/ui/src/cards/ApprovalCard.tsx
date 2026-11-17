@@ -267,7 +267,10 @@ function PendingApproval({
   const now = useMinuteClock();
   const [formOpen, setFormOpen] = useState(false);
   const [chosen, setChosen] = useState<ApprovalDecision | null>(null);
-  const [days, setDays] = useState("");
+  // The field starts from the gateway's default lifetime for the grant, when it sets one.
+  const [days, setDays] = useState(() =>
+    view.form.defaultDays === null ? "" : String(view.form.defaultDays),
+  );
   const [whole, setWhole] = useState<WholeText | null>(null);
   // Allow needs the whole text on screen: read, and its disclosure open.
   const [fullOpen, setFullOpen] = useState(false);

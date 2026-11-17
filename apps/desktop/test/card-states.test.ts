@@ -156,6 +156,17 @@ describe("approval cards from the engine's state", () => {
     expect(routine.form.sentence).toBe(
       "The routine Weekly cleanup may run this command without asking.",
     );
+    // The field starts from the gateway's default lifetime, when it is whole days from 1 to 3650.
+    expect(routine.form.defaultDays).toBe(7);
+    expect(ordinary.form.defaultDays).toBe(null);
+    const routineCard = approval("approval-routine").card;
+    const scope = routineCard.scope as Record<string, unknown>;
+    const withDays = (expiresInDays: unknown) =>
+      approvalView({ ...routineCard, scope: { ...scope, expiresInDays } }, bots, otto).form
+        .defaultDays;
+    expect(withDays(undefined)).toBe(null);
+    expect(withDays(3650)).toBe(3650);
+    for (const bad of [0, 3651, 1.5, "7", null]) expect(withDays(bad)).toBe(null);
   });
 
   it("F-163: sending, refused and unknown decisions; an unknown outcome offers only Deny", () => {

@@ -507,8 +507,9 @@ function build(
         b: waitingApproval(now, {
           scope: {
             kind: "standing-grant",
-            automation: { name: "Weekly cleanup" },
+            automation: "Weekly cleanup",
             command: COMMAND,
+            expiresInDays: 7,
           },
         }),
       };
@@ -586,8 +587,9 @@ function build(
         b: waitingApproval(now, {
           scope: {
             kind: "standing-grant",
-            automation: { name: "Weekly cleanup" },
+            automation: "Weekly cleanup",
             command: COMMAND,
+            expiresInDays: 7,
           },
         }).update(settle(resolution("allowed", "allow-always", ago(1)))),
       };

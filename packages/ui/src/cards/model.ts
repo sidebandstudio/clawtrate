@@ -53,17 +53,26 @@ export type Row = {
   list?: string[];
 };
 
-/** A routine's standing grant, as the request's `scope` names it. */
-function standingGrant(card: ApprovalCard): { routine: string | null } | null {
+/**
+ * A routine's standing grant, as the request's `scope` names it, with the
+ * gateway's default lifetime (`expiresInDays`, whole days from 1 to 3650)
+ * when it sets one; absent, the grant lasts until it is revoked.
+ */
+function standingGrant(
+  card: ApprovalCard,
+): { routine: string | null; defaultDays: number | null } | null {
   const scope = record(card.scope);
   if (scope?.kind !== "standing-grant") return null;
   const automation = record(scope.automation);
+  const days = scope.expiresInDays;
   return {
     routine:
       str(automation?.name) ??
       str(automation?.cronJobName) ??
       str(automation?.jobName) ??
       str(scope.automation),
+    defaultDays:
+      typeof days === "number" && Number.isInteger(days) && days >= 1 && days <= 3650 ? days : null,
   };
 }
 
@@ -108,8 +117,11 @@ export type ApprovalView = {
   /** Decisions the request offers, in the card's order. */
   once: boolean;
   always: boolean;
-  /** The form: the request's own fields and what the gateway keeps, in words. */
-  form: { rows: Row[]; sentence: string; days: boolean };
+  /**
+   * The form: the request's own fields and what the gateway keeps, in words.
+   * `defaultDays` is the lifetime the gateway gives the grant unless told otherwise.
+   */
+  form: { rows: Row[]; sentence: string; days: boolean; defaultDays: number | null };
   /** Whether the thing decided on is a command, for the outcome sentences. */
   noun: "command" | "action";
 };
@@ -215,7 +227,12 @@ export function approvalView(
     once: card.allowedDecisions.includes("allow-once"),
     always: card.allowedDecisions.includes("allow-always"),
     // A lifetime only where the gateway mints a dated grant, and never for a plugin request.
-    form: { rows: formRows, sentence, days: grant !== null && card.kind !== "plugin" },
+    form: {
+      rows: formRows,
+      sentence,
+      days: grant !== null && card.kind !== "plugin",
+      defaultDays: card.kind === "plugin" ? null : (grant?.defaultDays ?? null),
+    },
     noun: card.kind === "exec" ? "command" : "action",
   };
 }
