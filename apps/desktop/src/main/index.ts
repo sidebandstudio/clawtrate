@@ -7,12 +7,25 @@ import {
   parseBridgeCommand,
   type ClawtrateState,
   type HostInfo,
+  PendingSaves,
 } from "@clawtrate/core";
-import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, session, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeImage,
+  nativeTheme,
+  session,
+  shell,
+  type WebContents,
+} from "electron";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
+import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
 import {
   readDevConnection,
   selectInstance,
@@ -146,6 +159,51 @@ function lockDownSession(): void {
   ses.setPermissionCheckHandler((_contents, permission) => allowedPermission(permission));
 }
 
+/**
+ * Show the save dialog for the bytes `saves` holds under `ticket` and
+ * write exactly those bytes where the person chooses. They are released when
+ * the dialog is cancelled, when the write ends either way, and when the
+ * window or its page goes; a page that went has nothing written for it.
+ */
+async function saveHeld(
+  saves: PendingSaves,
+  ticket: number,
+  contents: WebContents,
+  name: string,
+): Promise<SaveResult> {
+  const drop = () => saves.release(ticket);
+  const navigated = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+    if (details.isMainFrame && !details.isSameDocument) drop();
+  };
+  contents.once("destroyed", drop);
+  contents.on("render-process-gone", drop);
+  contents.on("did-start-navigation", navigated);
+  try {
+    const owner = BrowserWindow.fromWebContents(contents);
+    const options = {
+      defaultPath: join(app.getPath("downloads"), name),
+      properties: ["createDirectory", "showOverwriteConfirmation"] as Array<
+        "createDirectory" | "showOverwriteConfirmation"
+      >,
+    };
+    const chosen = owner
+      ? await dialog.showSaveDialog(owner, options)
+      : await dialog.showSaveDialog(options);
+    const data = saves.get(ticket);
+    if (chosen.canceled || !chosen.filePath || !data) return { status: "cancelled" };
+    return await writeExactly(
+      { readFile, writeFile, rename, rm, stat },
+      chosen.filePath,
+      new Uint8Array(data),
+    );
+  } finally {
+    contents.removeListener("destroyed", drop);
+    contents.removeListener("render-process-gone", drop);
+    contents.removeListener("did-start-navigation", navigated);
+    drop();
+  }
+}
+
 /** The device key and tokens live here, readable by this user only. */
 function privateDataDir(): string {
   const dir = process.env.CLAWTRATE_DATA_DIR ?? join(app.getPath("userData"), "gateway");
@@ -205,6 +263,19 @@ async function main(): Promise<void> {
     const meta = { fileName: file?.name, mimeType: file?.type };
     store.check(meta, data.byteLength);
     return store.add(meta, data.byteLength, () => Buffer.from(data).toString("base64"));
+  });
+  // Saving a file the Work pane holds: its bytes arrive, never a path; the person picks
+  // where in the system's save dialog, starting in Downloads, and only that file is written.
+  // No more than the largest content a reader sends, and one dialog at a time: a page cannot
+  // make this process hold more (`PendingSaves`, counted as `saves` in docs/decisions.md).
+  const saves = new PendingSaves();
+  ipcMain.handle("clawtrate:save", (event, raw: unknown): Promise<SaveResult> => {
+    const file = raw as { name?: unknown; data?: unknown } | null;
+    const data = file?.data;
+    if (!(data instanceof ArrayBuffer)) throw new Error("invalid file");
+    // The bytes move out of the request, which Electron keeps until the answer: one copy, here.
+    const ticket = saves.hold(event.sender.id, data);
+    return saveHeld(saves, ticket, event.sender, safeFileName(file?.name));
   });
   // Unread activity on the dock (macOS, Linux) or the taskbar button (Windows).
   const dot = nativeImage.createFromBitmap(Buffer.from(dotBitmap(16, [10, 110, 92])), {

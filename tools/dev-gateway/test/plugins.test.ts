@@ -219,7 +219,13 @@ describe("the plugin opening", () => {
 
     it("accepts only the declared kinds", () => {
       expect(check(base)).toEqual([]);
-      expect(SETTING_KINDS).toEqual(["flag", "count", "loopback-url", "instance-path"]);
+      expect(SETTING_KINDS).toEqual([
+        "flag",
+        "count",
+        "loopback-url",
+        "instance-path",
+        "scripted-model-url",
+      ]);
       expect(
         check({
           ...base,
@@ -229,10 +235,35 @@ describe("the plugin opening", () => {
             v4: { kind: "loopback-url", value: "http://127.0.0.1:19500/x" },
             v6: { kind: "loopback-url", value: "ws://[::1]:19500/" },
             dir: { kind: "instance-path", value: "cache/db.sqlite" },
+            signin: { kind: "scripted-model-url", value: "/scripted/signin" },
           },
           tools: [{ name: "hello_tool", kind: "plugin-tool" }],
         }),
       ).toEqual([]);
+    });
+
+    it("gives a scripted-model-url only as a plain path on the instance's own scripted model", () => {
+      for (const value of [
+        "scripted/signin",
+        "/../signin",
+        "//example.com/x",
+        "/a b",
+        "/",
+        "http://127.0.0.1:19500/x",
+        "/x?y=1",
+      ]) {
+        refused(
+          { ...base, settings: { at: { kind: "scripted-model-url", value } } },
+          /setting at \(scripted-model-url\)/,
+        );
+      }
+      const addition = {
+        ...base,
+        settings: { at: { kind: "scripted-model-url", value: "/scripted/signin" } },
+      };
+      expect(check(addition)).toEqual([]);
+      const entry = pluginEntry({ ...plugin(), ...addition } as never, stateFolder(), 19230);
+      expect(entry.config.at).toBe("http://127.0.0.1:19230/scripted/signin");
     });
 
     it("refuses each of the reviewer's alternate forms, written raw or under any kind", () => {
@@ -258,7 +289,7 @@ describe("the plugin opening", () => {
               // A plain name ("example.com", "openai") is only ever a file in the instance.
               const state = stateFolder();
               const setting = key.replace("_", "");
-              const entry = pluginEntry({ ...plugin(), ...addition } as never, state);
+              const entry = pluginEntry({ ...plugin(), ...addition } as never, state, 19210);
               expect(entry.config[setting]).toBe(
                 join(state, "clawtrate-plugin-data", "hello-tool", value),
               );

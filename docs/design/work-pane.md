@@ -369,7 +369,7 @@ It never fetches on a timer. A list nobody is looking at is not fetched.
 
 **The freshness line** (`.files-fresh`), at the top of every list: "Checked 5:36 PM" (12, faint), and at its right a round quiet Refresh button named "Refresh the file list". While fetching, the line reads "Checking…" and the button shows the working mark.
 
-**Commands are not seen.** A shell command can change files without any file tool. When the task's run has run a command since the list was last fetched, the freshness line adds a second line: "Otto ran commands since then. Files they changed show after a refresh." It goes when the list is fetched. (F-448)
+**Commands are not seen.** A shell command can change files without any file tool. When the task's run has run a command since the list was last fetched, the freshness line adds a second line: "Otto ran commands since then. A refresh shows what they changed in the files listed here; a file only a command created isn't listed here, but is in Otto's workspace." It goes when the list is fetched. The gateway lists a task's files from its file tools, so a file that only a command created never joins that list; it is found in the bot's workspace. (F-448)
 
 **A file being written.** From a file tool's start, which names the path, until its result, the file's row shows the working mark and "Writing…". A file that does not exist yet appears at the top of Changed in this state. If that file is open in the reader:
 

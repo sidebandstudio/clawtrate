@@ -14,6 +14,7 @@ import {
   type SettlingRecord,
 } from "./approvals.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
+import { filePathsOf } from "./file-paths.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
 import {
   MAX_CLOSED_CARDS_PER_RUN,
@@ -174,7 +175,38 @@ export type Step = {
   raw: StepRaw | null;
   /** Length of the raw JSON, known once the step has finished. */
   rawSize: number | null;
+  /**
+   * For a file tool's call (`read`, `write`, `edit`, `apply_patch`): the paths
+   * its arguments name, as the gateway's file list reads them, and what its
+   * result's details said. Absent for every other step.
+   */
+  files?: StepFiles;
 };
+
+/**
+ * The files one file-tool call names. `changed` and `created` are the result's
+ * `details.changed` and `details.created` as sent; null until a result says.
+ */
+export type StepFiles = { paths: string[]; changed: boolean | null; created: boolean | null };
+
+function stepFiles(name: string | null, args: unknown): StepFiles | undefined {
+  const paths = filePathsOf(name, args);
+  return paths.length > 0 ? { paths, changed: null, created: null } : undefined;
+}
+
+/** A finished file step with what its result's details said. */
+function settleFiles(step: Step, details: RawRecord | null, isError: boolean): Step {
+  if (!step.files) return step;
+  const flag = (value: unknown) => (typeof value === "boolean" ? value : null);
+  return {
+    ...step,
+    files: {
+      ...step.files,
+      changed: isError ? false : flag(details?.changed),
+      created: isError ? false : flag(details?.created),
+    },
+  };
+}
 
 /**
  * How a run failed. `kind` is the gateway's own classification where it sends
@@ -1880,6 +1912,11 @@ function toolStepId(toolCallId: string): string {
   return `tool:${toolCallId}`;
 }
 
+/** Spread into a step: its file facts when it names files, nothing otherwise. */
+function withFiles(files: StepFiles | undefined): { files?: StepFiles } {
+  return files ? { files } : {};
+}
+
 function blankToolStep(toolCallId: string, name: string | null, ts: number | null): Step {
   return {
     id: toolStepId(toolCallId),
@@ -1933,6 +1970,7 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
             toolName: name ?? step.toolName,
             title: toolTitle(name ?? step.toolName),
             argsText: capText(prettyArgs(data.args)),
+            ...withFiles(stepFiles(name ?? step.toolName, data.args)),
           },
           ctx,
         ),
@@ -1966,7 +2004,7 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
         replaceable: data.replaceable === true,
         correction: replacing ? step.correction + 1 : step.correction,
       };
-      return upsertStep(current, settleRaw(finished, ctx));
+      return upsertStep(current, settleRaw(settleFiles(finished, details, isError), ctx));
     }
     default:
       return current;
@@ -2187,6 +2225,7 @@ export function runsFromHistory(
           run = upsertStep(run, {
             ...blankToolStep(toolCallId, name, at),
             argsText: capText(prettyArgs(block.arguments ?? block.input)),
+            ...withFiles(stepFiles(name, block.arguments ?? block.input)),
             truncated: meta(message).truncated === true,
           });
         }
@@ -2204,15 +2243,19 @@ export function runsFromHistory(
         run = upsertStep(
           run,
           settleRaw(
-            {
-              ...step,
-              status: isError ? "failed" : "done",
-              endedAt: at ?? step.startedAt,
-              result: capText(text),
-              error: isError ? capError(text || "The tool reported an error.") : null,
-              failureKind: isError ? str(asRecord(message.details)?.failureKind) : null,
-              truncated: step.truncated || meta(message).truncated === true,
-            },
+            settleFiles(
+              {
+                ...step,
+                status: isError ? "failed" : "done",
+                endedAt: at ?? step.startedAt,
+                result: capText(text),
+                error: isError ? capError(text || "The tool reported an error.") : null,
+                failureKind: isError ? str(asRecord(message.details)?.failureKind) : null,
+                truncated: step.truncated || meta(message).truncated === true,
+              },
+              asRecord(message.details),
+              isError,
+            ),
             ctx,
           ),
         );

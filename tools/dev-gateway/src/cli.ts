@@ -23,6 +23,7 @@
 // State is never reused: OpenClaw keeps credentials in SQLite stores that a
 // clean profile also has, so only a folder created empty by this start is safe.
 
+import { FILES_BOT, seedWorkspaceFiles } from "./seed-files.ts";
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -90,6 +91,15 @@ import {
 } from "./registry.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
 import { contractProblems, matching, optional, type Contract } from "./contract.ts";
+import { accountStoreProblems } from "./account-stores.ts";
+import {
+  ACCOUNT_PROVIDERS,
+  accountProfiles,
+  accountsConfig,
+  authContract,
+  saveAccountCommand,
+  SCRIPTED_ACCOUNTS,
+} from "./accounts.ts";
 import {
   checkedCopy,
   copyPlugin,
@@ -248,13 +258,21 @@ function botEntries(stateDir: string) {
   return entries;
 }
 
+/** What a start adds to the base config, beyond plugins. */
+export type StartOptions = {
+  /** The scripted provider accounts (accounts.ts); named instances only. */
+  accounts?: boolean;
+};
+
 /** The config the development gateway runs with. Written fresh by every start. */
 export function devConfig(
   token: string,
   ports: InstancePorts = DEFAULT_PORTS,
   stateDir: string = devStateDir(),
   plugins: DevPlugin[] = [],
+  options: StartOptions = {},
 ) {
+  const accounts = options.accounts ? accountsConfig(ports.providerPort, stateDir) : null;
   return {
     gateway: {
       mode: "local",
@@ -286,8 +304,13 @@ export function devConfig(
             },
           ],
         },
+        // The scripted provider accounts' providers, on the same scripted model.
+        ...accounts?.providers,
       },
     },
+    // Each scripted account's label; the credentials are in the account stores.
+    ...(accounts ? { auth: accounts.auth } : {}),
+    ...(accounts ? { logging: accounts.logging } : {}),
     agents: {
       defaults: {
         model: { primary: MODEL_REF },
@@ -355,7 +378,9 @@ export function devConfig(
         // Only the search half of the bundled Ollama plugin is used, on loopback.
         ollama: { config: { webSearch: { baseUrl: searchBaseUrl(ports) } } },
         // The project's own plugins named at start, each as its addition says.
-        ...Object.fromEntries(plugins.map((plugin) => [plugin.id, pluginEntry(plugin, stateDir)])),
+        ...Object.fromEntries(
+          plugins.map((plugin) => [plugin.id, pluginEntry(plugin, stateDir, ports.providerPort)]),
+        ),
       },
       // Each loaded from the instance's own copy of what was checked.
       ...(plugins.length > 0
@@ -456,6 +481,7 @@ export const DENIED_TOOLS = [
 export const PLUGIN_RULE: PluginRule = {
   gatewayTools: [...GATEWAY_TOOLS, ...DENIED_TOOLS],
   reserved: RESERVED_PLUGIN_IDS,
+  scriptedProviders: ACCOUNT_PROVIDERS,
 };
 
 /** Check the checkout's own plugins named at start and take each into memory. */
@@ -477,11 +503,14 @@ export function devConfigContract(
   ports: InstancePorts = DEFAULT_PORTS,
   stateDir: string = devStateDir(),
   plugins: DevPlugin[] = [],
+  options: StartOptions = {},
 ): Contract {
-  const contract = structuredClone(devConfig("", ports, stateDir, plugins)) as unknown as Record<
-    string,
-    Record<string, unknown>
-  >;
+  const contract = structuredClone(
+    devConfig("", ports, stateDir, plugins, options),
+  ) as unknown as Record<string, Record<string, unknown>>;
+  // With accounts, the gateway itself writes profile entries (labels, sign-ins,
+  // the CLI's saves): scripted accounts only, each of a closed shape.
+  if (options.accounts) (contract as Record<string, unknown>).auth = authContract();
   (contract.gateway!.auth as Record<string, unknown>).token = matching(
     "a token",
     (value) => typeof value === "string" && /^\S+$/.test(value),
@@ -518,8 +547,9 @@ export function sandboxProblems(
   ports?: InstancePorts,
   stateDir?: string,
   plugins: DevPlugin[] = [],
+  options: StartOptions = {},
 ): string[] {
-  return contractProblems(config, devConfigContract(ports, stateDir, plugins));
+  return contractProblems(config, devConfigContract(ports, stateDir, plugins, options));
 }
 
 /** The plugins this run of the instance was started with and their digests, beside its run file. */
@@ -540,10 +570,30 @@ function recordedPlugins(inst: DevInstance): DevPlugin[] {
   );
 }
 
+/** What this run of the instance was started with besides plugins, beside its run file. */
+const startOptionsFile = (inst: DevInstance) => join(inst.runDir, "start-options.json");
+
+export function recordedStartOptions(inst: { runDir: string }): StartOptions {
+  const path = join(inst.runDir, "start-options.json");
+  if (!existsSync(path)) return {};
+  const recorded = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (
+    recorded === null ||
+    typeof recorded !== "object" ||
+    Array.isArray(recorded) ||
+    Object.keys(recorded).some((key) => key !== "accounts") ||
+    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts)
+  ) {
+    throw new Error(`${path} is not a record of start options`);
+  }
+  return recorded as StartOptions;
+}
+
 function assertSandboxed(
   inst: DevInstance,
   ports: InstancePorts,
   plugins: DevPlugin[] = recordedPlugins(inst),
+  options: StartOptions = recordedStartOptions(inst),
 ): void {
   let config: unknown;
   try {
@@ -554,7 +604,7 @@ function assertSandboxed(
       { cause: error },
     );
   }
-  const problems = sandboxProblems(config, ports, inst.stateDir, plugins);
+  const problems = sandboxProblems(config, ports, inst.stateDir, plugins, options);
   if (problems.length > 0) {
     throw new Error(
       `the development gateway config is not sandboxed:\n  - ${problems.join("\n  - ")}\nRun \`pnpm dev-gateway reset${instanceFlag(inst)}\` to recreate it.`,
@@ -568,11 +618,12 @@ function writeFreshConfig(
   ports: InstancePorts,
   runId: string,
   plugins: DevPlugin[] = [],
+  options: StartOptions = {},
 ): DevConnection {
   const token = randomBytes(24).toString("base64url");
   writeFileSync(
     inst.configPath,
-    `${JSON.stringify(devConfig(token, ports, inst.stateDir, plugins), null, 2)}\n`,
+    `${JSON.stringify(devConfig(token, ports, inst.stateDir, plugins, options), null, 2)}\n`,
     {
       mode: 0o600,
     },
@@ -587,10 +638,32 @@ function writeFreshConfig(
   writeFileAtomic(inst.connectionFile, `${JSON.stringify(connection, null, 2)}\n`);
   // The contract first: `config validate` loads plugins, so nothing runs
   // before a config that breaks it is refused.
-  assertSandboxed(inst, ports, plugins);
+  assertSandboxed(inst, ports, plugins, options);
   const validation = inst.runner.runSync(["config", "validate"]);
   if (validation.status !== 0) {
     throw new Error(`generated config is invalid:\n${validation.stdout}${validation.stderr}`);
+  }
+  if (options.accounts) {
+    // Each account saved the way the gateway's own command line saves one,
+    // its made-up credential on stdin; the config must still keep the contract.
+    for (const account of SCRIPTED_ACCOUNTS) {
+      const { args, stdin } = saveAccountCommand(account);
+      const saved = inst.runner.runSync(args, { input: stdin });
+      if (saved.status !== 0) {
+        throw new Error(`could not save account ${account.id}:\n${saved.stdout}${saved.stderr}`);
+      }
+    }
+    // `paste-token` rewrites its profile entry without the label; put every
+    // label back as generated.
+    const written = JSON.parse(readFileSync(inst.configPath, "utf8")) as {
+      auth?: { profiles?: Record<string, Record<string, unknown>> };
+    };
+    for (const [id, entry] of Object.entries(accountProfiles())) {
+      const profile = written.auth?.profiles?.[id];
+      if (profile) profile.displayName = entry.displayName;
+    }
+    writeFileAtomic(inst.configPath, `${JSON.stringify(written, null, 2)}\n`);
+    assertSandboxed(inst, ports, plugins, options);
   }
   return connection;
 }
@@ -732,14 +805,24 @@ const RUN_ID_PATTERN = /^[0-9a-f]{48}$/;
  */
 export async function start(
   inst: DevInstance,
-  options: { seed?: boolean; runId?: string; plugins?: string[] } = {},
+  options: { seed?: boolean; runId?: string; plugins?: string[]; accounts?: boolean } = {},
 ): Promise<void> {
   assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
   const runId = options.runId ?? newRunId();
   if (!RUN_ID_PATTERN.test(runId)) throw new Error("--run-id must be 48 lowercase hex digits");
+  if (options.accounts && inst.name === null) {
+    throw new Error("the default instance never has scripted accounts; use --instance <name>");
+  }
+  const startOptions: StartOptions = options.accounts ? { accounts: true } : {};
   // Refused before anything changes: a name that is not this checkout's own
   // plugin, or whose addition breaks the rule for plugins.
   const plugins = loadPlugins(inst, options.plugins ?? []);
+  const signIns = plugins.filter((plugin) => plugin.providers.length > 0);
+  if (signIns.length > 0 && !options.accounts) {
+    throw new Error(
+      `plugin ${signIns[0]!.name} declares sign-ins for the scripted account providers; start with --with-accounts`,
+    );
+  }
   const runner = inst.runner;
   await withInstanceLock(inst, async () => {
     if (ownership(inst.stateDir) === "foreign") throw new ForeignStateError(inst.stateDir);
@@ -793,7 +876,8 @@ export async function start(
         pluginsFile(inst),
         `${JSON.stringify(plugins.map(({ name, digest }) => ({ name, digest })))}\n`,
       );
-      writeFreshConfig(inst, ports, runId, plugins);
+      writeFileAtomic(startOptionsFile(inst), `${JSON.stringify(startOptions)}\n`);
+      writeFreshConfig(inst, ports, runId, plugins, startOptions);
       const providerLog = openSync(join(inst.runDir, "provider.log"), "w");
       spawnRecorded(inst, runId, "provider", () =>
         gatedSpawn(
@@ -838,6 +922,11 @@ export async function start(
       `  scripted model  http://127.0.0.1:${ports.providerPort}/v1 (pid ${marker?.providerPid})`,
     );
     console.log(`  gateway         pid ${marker?.gatewayPid}, logs in ${inst.runDir}`);
+    // Pip's workspace holds a picture and a git checkout for the Work pane's Files tab,
+    // seeded or not: the scenario check reads the picture on an unseeded instance.
+    const filesWorkspace = join(inst.stateDir, "workspaces", FILES_BOT);
+    assertInside(filesWorkspace, inst.stateDir);
+    seedWorkspaceFiles(filesWorkspace);
     // Unseeded starts are for checks that need a running gateway, not its data.
     if (options.seed !== false) await seed(inst);
   });
@@ -1493,8 +1582,89 @@ export async function prune(
   return removed;
 }
 
+/** The instance's current config, read without following a link. */
+function readConfigForLock(inst: DevInstance): unknown {
+  const stat = lstatOrNull(inst.configPath);
+  if (!stat || stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`${inst.configPath} is not a plain file; nothing was run`);
+  }
+  try {
+    return JSON.parse(readFileSync(inst.configPath, "utf8")) as unknown;
+  } catch (error) {
+    throw new Error(`cannot read ${inst.configPath}: ${String(error)}; nothing was run`, {
+      cause: error,
+    });
+  }
+}
+
+const LOCK_BOT = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const LOCK_PROVIDER = /^[a-z][a-z0-9-]{0,63}$/;
+const LOCK_PROFILE = /^[a-z][a-z0-9-]{0,63}:[A-Za-z0-9._@+-]{1,128}$/;
+
+/**
+ * Set or clear a bot's stored one-account order for a provider, the "lock"
+ * of docs/design/bots.md section 10, by running the gateway's own command
+ * line (`openclaw models auth order set|clear`) on a named development
+ * instance this checkout started and whose gateway is running. Clawtrate the
+ * application never does this; the tool does, so that checks can. Returns
+ * the order the gateway reports for the bot afterwards.
+ */
+export async function lockOrder(
+  inst: DevInstance,
+  request: { bot: string; provider: string; profileId: string | null },
+): Promise<string[] | null> {
+  if (inst.name === null) {
+    throw new Error(
+      "lock and unlock act only on a named development instance; use --instance <name>",
+    );
+  }
+  if (!LOCK_BOT.test(request.bot)) throw new Error(`not a bot id: ${JSON.stringify(request.bot)}`);
+  if (!LOCK_PROVIDER.test(request.provider)) {
+    throw new Error(`not a provider id: ${JSON.stringify(request.provider)}`);
+  }
+  if (request.profileId !== null) {
+    if (
+      !LOCK_PROFILE.test(request.profileId) ||
+      !request.profileId.startsWith(`${request.provider}:`)
+    ) {
+      throw new Error(
+        `not an account of ${request.provider}: ${JSON.stringify(request.profileId)}`,
+      );
+    }
+  }
+  const refusal = inst.runner.refusal();
+  if (refusal) throw new Error(refusal);
+  // Before anything runs: the stores this command would read and write, as
+  // the instance's current config names them, are the instance's own.
+  const problems = accountStoreProblems(inst.stateDir, readConfigForLock(inst), request.bot);
+  if (problems.length > 0) {
+    throw new Error(
+      `refusing to ${request.profileId === null ? "unlock" : "lock"} ${request.bot} on ${label(inst)}:\n  - ${problems.join("\n  - ")}`,
+    );
+  }
+  if (!(await gatewayHealthy(inst))) {
+    throw new Error(
+      `${label(inst)} is not running. Run \`pnpm dev-gateway start${instanceFlag(inst)}\` first.`,
+    );
+  }
+  const base = ["models", "auth", "order"];
+  const where = ["--provider", request.provider, "--agent", request.bot];
+  await must(
+    inst,
+    request.profileId === null
+      ? [...base, "clear", ...where]
+      : [...base, "set", ...where, request.profileId],
+  );
+  const read = parseJsonOutput<{ order?: string[] | null }>(
+    await must(inst, [...base, "get", ...where, "--json"]),
+  );
+  return read.order ?? null;
+}
+
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-plugin <plugin>]...\n" +
+  "usage: pnpm dev-gateway <start|up|seed|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--with-plugin <plugin>]...\n" +
+  "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
+  "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -1506,6 +1676,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       "no-seed": { type: "boolean", default: false },
       "run-id": { type: "string" },
       "with-plugin": { type: "string", multiple: true },
+      "with-accounts": { type: "boolean", default: false },
+      agent: { type: "string" },
+      provider: { type: "string" },
     },
     allowPositionals: true,
     strict: true,
@@ -1523,7 +1696,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     else await prune();
     return;
   }
-  const known = ["start", "up", "stop", "seed", "reset", "status", "approve"];
+  const known = ["start", "up", "stop", "seed", "reset", "status", "approve", "lock", "unlock"];
   if (!command || !known.includes(command)) {
     console.log(USAGE);
     process.exitCode = command ? 1 : 0;
@@ -1538,6 +1711,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         seed: !values["no-seed"],
         ...(runId ? { runId } : {}),
         plugins: values["with-plugin"] ?? [],
+        accounts: values["with-accounts"],
       });
     case "stop":
       return stop(inst);
@@ -1550,6 +1724,26 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     case "approve":
       await approve(inst, rest[0]);
       return;
+    case "lock":
+    case "unlock": {
+      const profileId = command === "lock" ? rest[0] : null;
+      if (
+        !values.agent ||
+        !values.provider ||
+        (command === "lock" ? rest.length !== 1 : rest.length !== 0)
+      ) {
+        throw new Error(USAGE);
+      }
+      const order = await lockOrder(inst, {
+        bot: values.agent,
+        provider: values.provider,
+        profileId: profileId ?? null,
+      });
+      console.log(
+        `${values.agent}'s stored order for ${values.provider} on ${label(inst)}: ${order ? JSON.stringify(order) : "none"}`,
+      );
+      return;
+    }
   }
 }
 
