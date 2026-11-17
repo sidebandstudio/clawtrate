@@ -1491,11 +1491,9 @@ test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five 
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
   await openTask(page, "Pip", "Two days in the mountains");
   await expect(page.getByTestId("run-line").last()).toBeVisible({ timeout: 30_000 });
-  // Every card is the same, except that the gateway's history keeps no `details` for a
-  // tool-server result: without `mcpServer` and `mcpTool` the call is the general card (8.2).
-  expect(await actionLines(page)).toEqual(
-    ended.map((line) => (line === "Used coder, slow task" ? "Used coder slow task" : line)),
-  );
+  // Every card is the same. History keeps no `details` for a tool-server result, but the
+  // gateway's map of tool names (`tools.effective`) still names the server and tool.
+  expect(await actionLines(page)).toEqual(ended);
   expect(ended).toContain("Used coder, slow task");
 });
 
