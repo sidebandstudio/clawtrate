@@ -1025,6 +1025,7 @@ describe("question cards", () => {
         submitting: false,
         error: null,
         raw: record,
+        ordinary: true,
       },
     ]);
     // A question for a run not seen yet brings the run in, waiting.

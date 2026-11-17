@@ -276,6 +276,7 @@ export const QUESTION: Bound = flagged<QuestionCard>()({
   submitting: FLAG,
   error: text(MAX_ERROR_JSON_CHARS),
   raw: json(MAX_RECORD_CHARS),
+  ordinary: FLAG,
 });
 const execDetail = object<ExecApprovalDetail>()({
   command: text(MAX_COMMAND_CHARS),
