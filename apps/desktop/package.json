@@ -11,7 +11,9 @@
     "start": "electron-vite build && electron .",
     "build:web": "vite build --config vite.web.config.ts",
     "preview:web": "vite build --config vite.web.config.ts && node src/web-host/main.ts",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "fixture:build": "vite build --config vite.fixture.config.ts",
+    "fixture": "vite build --config vite.fixture.config.ts && vite preview --config vite.fixture.config.ts"
   },
   "dependencies": {
     "@clawtrate/core": "workspace:*",
