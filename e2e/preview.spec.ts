@@ -1,15 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { devGateway, FORBIDDEN_PORTS, listInstances, runningOthers } from "./global-setup.ts";
 
-const ROOT = join(import.meta.dirname, "..");
-
-function devGateway(...args: string[]): string {
-  return execFileSync(process.execPath, [join(ROOT, "tools/dev-gateway/src/cli.ts"), ...args], {
-    cwd: ROOT,
-    encoding: "utf8",
-  });
-}
+/** This run's own development gateway instance, created by global setup. */
+const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 
 async function openShell(page: Page) {
   await page.goto(process.env.CLAWTRATE_E2E_URL!);
@@ -47,6 +40,25 @@ async function openTask(page: Page, bot: string, task: string) {
 
 test.describe.configure({ mode: "serial" });
 
+test("runs on its own instance while another instance's gateway is listening", () => {
+  expect(INSTANCE, "global setup names this run's instance").toMatch(/^e2e-[0-9a-f]{8}$/);
+  const rows = listInstances();
+  const mine = rows.find((row) => row.name === INSTANCE)!;
+  expect(mine.gatewayRunning).toBe(true);
+  expect(mine.stateDir).toMatch(new RegExp(`\\.openclaw-clawtrate-dev-${INSTANCE}$`));
+  for (const port of [mine.gatewayPort, mine.providerPort]) {
+    expect(FORBIDDEN_PORTS).not.toContain(port);
+  }
+  expect(FORBIDDEN_PORTS).not.toContain(Number(new URL(process.env.CLAWTRATE_E2E_URL!).port));
+  // The sentinel, and anything else that was running, is up and has its own ports.
+  const sentinel = rows.find((row) => row.name === process.env.CLAWTRATE_E2E_SENTINEL);
+  expect(sentinel?.gatewayRunning).toBe(true);
+  for (const other of rows.filter((row) => row.gatewayRunning && row.name !== INSTANCE)) {
+    expect(other.gatewayPort).not.toBe(mine.gatewayPort);
+    expect(other.providerPort).not.toBe(mine.providerPort);
+  }
+});
+
 test("pairs with the development gateway and shows bots, tasks and a transcript", async ({
   page,
 }) => {
@@ -68,14 +80,16 @@ test("pairs with the development gateway and shows bots, tasks and a transcript"
   const pairing = page.locator(".panel");
   // The development gateway is approved with the dev tooling, never an unqualified
   // command that would address a default-profile gateway.
-  await expect(pairing.locator(".command code")).toHaveText(["pnpm dev-gateway approve"]);
+  await expect(pairing.locator(".command code")).toHaveText([
+    `pnpm dev-gateway approve --instance ${INSTANCE}`,
+  ]);
   await expect(pairing).not.toContainText("openclaw devices approve");
 
   // Copying works without the clipboard API.
   await pairing.getByRole("button", { name: "Copy approve command" }).click();
   await expect(pairing.locator(".copy-status")).toHaveText(/Copied\.|Press .+ to copy\./);
 
-  devGateway("approve");
+  devGateway(INSTANCE, "approve");
 
   // The pairing screen reconnects by itself once the request is approved.
   const bots = page.getByTestId("bot");
@@ -471,4 +485,13 @@ test("tool calls open to their arguments, result and error", async ({ page }) =>
   await failed.locator("summary").click();
   await expect(failed).toContainText("Error");
   await expect(failed).toContainText("Permission denied");
+});
+
+test("leaves every other instance's gateway as it found it", () => {
+  // Same processes on the same ports as before this run's instance started.
+  const before = JSON.parse(process.env.CLAWTRATE_E2E_OTHERS!) as string[];
+  expect(before.some((row) => row.startsWith(`${process.env.CLAWTRATE_E2E_SENTINEL} `))).toBe(true);
+  expect(runningOthers([INSTANCE], [process.env.CLAWTRATE_E2E_SENTINEL!])).toEqual(
+    expect.arrayContaining(before),
+  );
 });
