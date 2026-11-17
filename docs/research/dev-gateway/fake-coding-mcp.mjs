@@ -3,10 +3,15 @@
 // Minimal MCP server over stdio (newline-delimited JSON-RPC), no dependencies.
 // Tools: send_message({ threadId?, message }) -> { threadId, reply }
 //        list_threads() -> { threads }
+//        slow_task({ seconds }) -> replies after <seconds> (for steer, abort and
+//        "accepted but unfinished" tests); seconds is clamped to 0-3600
+//        received_notifications() -> the client notifications seen so far,
+//        for example notifications/cancelled after a stopped call
 
 import { createInterface } from "node:readline";
 
 const threads = new Map();
+const notifications = [];
 const tools = [
   {
     name: "send_message",
@@ -16,6 +21,16 @@ const tools = [
       properties: { threadId: { type: "string" }, message: { type: "string" } },
       required: ["message"],
     },
+  },
+  {
+    name: "slow_task",
+    description: "Wait the given number of seconds, then report done.",
+    inputSchema: { type: "object", properties: { seconds: { type: "number" } }, required: ["seconds"] },
+  },
+  {
+    name: "received_notifications",
+    description: "List the notifications this server has received from the client.",
+    inputSchema: { type: "object", properties: {} },
   },
   {
     name: "list_threads",
@@ -35,7 +50,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   const { id, method, params } = msg;
-  if (id === undefined) return; // notifications
+  if (id === undefined) {
+    notifications.push({ at: new Date().toISOString(), method, params });
+    return;
+  }
   if (method === "initialize") {
     return reply(id, {
       protocolVersion: params?.protocolVersion ?? "2025-06-18",
@@ -50,6 +68,18 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     if (params?.name === "list_threads") {
       const list = [...threads.entries()].map(([threadId, t]) => ({ threadId, messages: t.length }));
       return reply(id, { content: [{ type: "text", text: JSON.stringify({ threads: list }) }], structuredContent: { threads: list } });
+    }
+    if (params?.name === "received_notifications") {
+      const out = { notifications: notifications.slice(-20) };
+      return reply(id, { content: [{ type: "text", text: JSON.stringify(out) }], structuredContent: out });
+    }
+    if (params?.name === "slow_task") {
+      const seconds = Math.min(3600, Math.max(0, Number(args.seconds) || 0));
+      setTimeout(() => {
+        const out = { status: "done", seconds };
+        reply(id, { content: [{ type: "text", text: JSON.stringify(out) }], structuredContent: out });
+      }, seconds * 1000);
+      return;
     }
     if (params?.name === "send_message") {
       const threadId = args.threadId || `thread-${threads.size + 1}`;

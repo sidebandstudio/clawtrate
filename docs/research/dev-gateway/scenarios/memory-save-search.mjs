@@ -1,0 +1,14 @@
+import { connect, sleep } from "./probe-lib.mjs";
+const A = await connect({ name: "ME", scopes: ["operator.read", "operator.write"] });
+const r = (p, n = 900) => p.then((x) => "ok " + JSON.stringify(x).slice(0, n), (e) => `ERR ${e.gatewayCode ?? ""} ${e.message.slice(0, 250)}`);
+const s = await A.call("sessions.create", { agentId: "atlas", label: `mem ${Date.now()}` });
+await A.call("sessions.messages.subscribe", { key: s.key });
+const t0 = Date.now();
+await (await A.send(s.key, '#tool write {"path":"memory/2026-11-16.md","content":"# Notes\\nThe user prefers teal zeppelins.\\n"}')).done;
+console.log("events beyond agent/chat:", [...new Set(A.events.filter((e) => e.t >= t0 && !["agent", "chat", "tick", "health"].includes(e.event)).map((e) => e.event))].join(","));
+await (await A.send(s.key, '#tool write {"path":"MEMORY.md","content":"- Prefers teal zeppelins (2026-11-16)\\n"}')).done;
+await sleep(8000);
+console.log("memory.status:", await r(A.call("memory.status", { agentId: "atlas" }), 1200));
+console.log("memory.search:", await r(A.call("memory.search", { agentId: "atlas", query: "zeppelins" }), 1500));
+console.log("memory.search pixel:", await r(A.call("memory.search", { agentId: "pixel", query: "zeppelins" }), 300));
+await A.close();
