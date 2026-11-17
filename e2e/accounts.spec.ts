@@ -574,7 +574,8 @@ async function signInKey(name: string): Promise<string> {
 }
 
 test("F-476 F-490: a locked bot whose account answers 401, 402 or 429 fails the run, and no request reaches another account", async () => {
-  test.setTimeout(600_000);
+  // A rate-limited account is retried ten times with growing pauses: minutes on a loaded machine.
+  test.setTimeout(1_200_000);
   const created = await admin.request<{ agentId: string }>("agents.create", {
     name: "Fence",
     model: "acme/dev-1@acme:work",

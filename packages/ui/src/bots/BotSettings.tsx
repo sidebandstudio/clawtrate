@@ -94,12 +94,14 @@ export function BotSettings({
   const word = binding ? accountWord(binding) : null;
   const name = bot.name;
 
-  // The tab reads the accounts when it is first shown.
+  // The tab reads the accounts when it is first shown, and again, once, for a bot the
+  // last read did not have (one another client made since).
   const shown = visible;
+  const unread = accounts.status === "ready" && !accounts.bindings.some((b) => b.botId === bot.id);
   useEffect(() => {
-    if (shown && accounts.status === "idle")
+    if (shown && (accounts.status === "idle" || unread))
       void bridge.send({ type: "refreshAccounts" }).catch(() => {});
-  }, [shown, accounts.status, bridge]);
+  }, [shown, accounts.status, unread, bot.id, bridge]);
 
   // Another bot: back to the tab's first page.
   const [forBot, setForBot] = useState(bot.id);
