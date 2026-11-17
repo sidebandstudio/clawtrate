@@ -473,6 +473,8 @@ test.describe("question cards on a real gateway", () => {
     const { question } = await asked("Ask dismiss", "ask me a question");
     await question.getByRole("button", { name: "Dismiss Pip's question" }).click();
     await expect(question.locator(".answer")).toHaveText(["Dismissed"], { timeout: 30_000 });
+    // No answer was the last pending card's: the run goes on and ends.
+    await expect(page.getByTestId("live-turn")).toHaveCount(0, { timeout: 30_000 });
     await shot(question, "question-dismissed");
   });
 });
@@ -522,7 +524,7 @@ test.describe("Messaged cards on a real gateway", () => {
     // The reply arrives later in the same task, as a message from Marlow. Nothing in it names
     // the send it answers (its provenance names only Marlow's task), and this connection did
     // not start the send, so it never saw Marlow's run: the card stays Sent.
-    const incoming = page.getByTestId("incoming-line");
+    const incoming = page.getByTestId("incoming-line").or(page.getByTestId("received-card"));
     await expect(incoming).toHaveCount(1, { timeout: 60_000 });
     await expect(incoming).toContainText("Marlow");
     await expect(state(page)).toHaveText("Sent");
@@ -542,8 +544,110 @@ test.describe("Messaged cards on a real gateway", () => {
     await question.getByRole("radio", { name: /Town walk/ }).click();
     await expect(question).toHaveAttribute("data-state", "answered", { timeout: 30_000 });
     await openTask(page, "Pip", t.title);
-    await expect(page.getByTestId("incoming-line")).toHaveCount(1, { timeout: 60_000 });
+    await expect(
+      page.getByTestId("incoming-line").or(page.getByTestId("received-card")),
+    ).toHaveCount(1, { timeout: 60_000 });
     await expect(state(page)).toHaveText(/^(Sent|No reply yet)$/);
+  });
+});
+
+test.describe("Messaged cards sent from this app on a real gateway", () => {
+  // Sent by the host's own device, the recipient's run streams on the host's connection, so the
+  // card follows it: the gateway sends it only to the connection whose run made the send.
+  const seen = async (until: RegExp, timeoutMs = 60_000): Promise<string[]> => {
+    const state = card(page, "messaged-card").locator("summary .state");
+    const states: string[] = [];
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const now = (await state.count()) > 0 ? await state.innerText() : "";
+      if (now && states.at(-1) !== now) states.push(now);
+      if (until.test(now)) return states;
+      await page.waitForTimeout(250);
+    }
+    return states;
+  };
+
+  test("F-122 F-438 F-469: a slow recipient: Working while its run is seen, then No reply yet; its later reply arrives as a message from Marlow", async () => {
+    const { title } = await hostTask("pip", "Slow from here", "message your slow partner");
+    await openTask(page, "Pip", title);
+    const states = await seen(/^No reply yet$/);
+    expect(states).toContain("Working");
+    expect(states.at(-1)).toBe("No reply yet");
+    await shot(card(page, "messaged-card"), "messaged-no-reply-yet");
+    // Nothing in the late reply names this message: it arrives on its own, and the card stays.
+    await expect(
+      page.getByTestId("incoming-line").or(page.getByTestId("received-card")),
+    ).toHaveCount(1, { timeout: 30_000 });
+    await expect(card(page, "messaged-card").locator("summary .state")).toHaveText("No reply yet");
+  });
+
+  test("F-122 F-434: a recipient whose run is stopped while it works: Recipient stopped", async () => {
+    const { title } = await hostTask("pip", "Stopped from here", "message your slow partner");
+    await openTask(page, "Pip", title);
+    await seen(/^Working$/);
+    await clients.plain.request("chat.abort", { sessionKey: "agent:marlow:main" });
+    const states = await seen(/^Recipient stopped$/, 30_000);
+    expect(states.at(-1)).toBe("Recipient stopped");
+    await shot(card(page, "messaged-card"), "messaged-recipient-stopped");
+  });
+
+  test("F-122: a recipient that asks its own user: Recipient waiting, and after the answer its run goes on", async () => {
+    const { title } = await hostTask("pip", "Asks from here", "message your partner who asks");
+    await openTask(page, "Pip", title);
+    const states = await seen(/^Recipient waiting$/);
+    expect(states.at(-1)).toBe("Recipient waiting");
+    await shot(card(page, "messaged-card"), "messaged-recipient-waiting");
+    await openTask(page, "Marlow", "Notes for Pip");
+    const question = card(page, "question-card");
+    await expect(question).toHaveCount(1, { timeout: 30_000 });
+    await question.getByRole("radio", { name: /Lake loop/ }).click();
+    await expect(question).toHaveAttribute("data-state", "answered", { timeout: 30_000 });
+    await openTask(page, "Pip", title);
+    const after = await seen(/^(No reply yet|Replied)$/);
+    expect(after.at(-1)).toMatch(/^(No reply yet|Replied)$/);
+  });
+});
+
+test.describe("Messaged cards' actions on a real gateway", () => {
+  test("F-124: Open in Marlow goes to its Message from Pip card in Marlow's task; Open in Pip comes back with the card still open", async () => {
+    const t = await clientTask("pip", "message-open");
+    const run = await clients.plain.send(t.key, "#message");
+    await clients.plain.terminal(String(run.runId));
+    await openTask(page, "Pip", t.title);
+    const messaged = card(page, "messaged-card");
+    await messaged.locator("summary").click();
+    await messaged.getByRole("button", { name: "Open this message in Marlow's task" }).click();
+    await expect(page.locator(".title-pill")).toContainText("Notes for Pip");
+    // Marlow's task, at the Message from Pip card of the run this message started, open and focused.
+    const received = page.getByTestId("received-card").last();
+    await expect(received).toHaveAttribute("open", "");
+    await expect(received.locator("summary")).toBeFocused();
+    await shot(received, "received-card");
+    await received.getByRole("button", { name: "Open this message in Pip's task" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: t.title })).toBeVisible();
+    await expect(card(page, "messaged-card")).toHaveAttribute("open", "");
+  });
+
+  test("F-308: two messages to Marlow in one task: Show full exchange shows both and the replies, read-only", async () => {
+    const t = await clientTask("pip", "message-twice");
+    for (let i = 0; i < 2; i += 1) {
+      const run = await clients.plain.send(t.key, "#message");
+      await clients.plain.terminal(String(run.runId));
+    }
+    await openTask(page, "Pip", t.title);
+    const messaged = card(page, "messaged-card").last();
+    await messaged.locator("summary").click();
+    await messaged
+      .getByRole("button", { name: "Show every message between Pip and Marlow in this task" })
+      .click();
+    const list = messaged.getByRole("list", {
+      name: "Every message between Pip and Marlow in this task",
+    });
+    await expect(list.locator(".exchange-text")).toHaveCount(4);
+    await expect(list.getByRole("textbox")).toHaveCount(0);
+    await shot(messaged, "messaged-full-exchange");
+    await messaged.getByRole("button", { name: "Show only this message" }).click();
+    await expect(list).toHaveCount(0);
   });
 });
 
