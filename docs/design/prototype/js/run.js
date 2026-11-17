@@ -294,7 +294,7 @@
         phrase: state.phrase || "Thinking",
         elapsed: elapsed(),
         fresh,
-        steps: state.steps > 0,
+        steps: state.phase === "working",
         ...unseen,
         ...lost,
       }),
@@ -328,46 +328,27 @@
 
   // Steps ------------------------------------------------------------------------------
 
-  function activityLabel() {
-    const head = $("#run-activity > summary");
-    if (!head) return;
-    const running = state.run !== "idle";
-    $(".activity-label", head).textContent = running ? (state.offline ? "Last seen working" : "Working") : state.outcome || `Worked for ${duration()}`;
-    $(".activity-count", head).textContent = `${state.steps} ${state.steps === 1 ? "step" : "steps"}`;
-    const failed = $(".activity-failed", head);
-    if (state.failed && !failed) {
-      $(".chevron", head).insertAdjacentHTML("beforebegin", `<span aria-hidden="true">·</span><span class="activity-failed">${state.failed} failed</span>`);
-    }
-  }
+  // Action cards: one feed places them in order and folds actions of one kind in a
+  // row (conversation.md, section 7). Whether a card, a fold or a row is open, and
+  // in which view, is the viewer's, and the feed keeps it.
+  const feed = CT.feed({ insert: (html) => add(html), follow: () => follow(), instant: () => state.instant });
+  const C = S.calls;
 
-  function addStep(def) {
-    if (!$("#run-activity")) {
-      add(CT.activity({ id: "run-activity", state: "running", label: "Working", count: "0 steps", foot: CT.activityFoot({ model: "scripted/dev-1", effort: "low", run: "run_7f3a91c2" }) }));
-    }
+  function startAction(call) {
     state.steps += 1;
-    $("#run-activity .activity-steps").insertAdjacentHTML("beforeend", CT.step({ ...def, fresh: !state.instant }));
-    activityLabel();
-    follow();
+    feed.start(call);
   }
 
-  // Update a step in place. Whether it is open, which view it shows and where
-  // the keyboard focus is are the viewer's, and are kept.
-  function updateStep(id, def) {
-    const old = document.getElementById(id);
-    const open = old.open;
-    const raw = old.querySelector('[data-view-button="raw"]')?.getAttribute("aria-selected") === "true";
-    const hadFocus = old.contains(document.activeElement);
-    old.parentElement.outerHTML = CT.step({ id, ...def, open });
-    const next = document.getElementById(id);
-    if (raw) next.querySelector('[data-view-button="raw"]')?.click();
-    if (hadFocus) $("summary", next).focus({ preventScroll: true });
-    if (def.status === "failed") {
-      state.failed += 1;
-      $("#run-activity + .activity-failed-steps").insertAdjacentHTML("beforeend", CT.step({ ...def, id: `${id}-kept` }));
-    }
-    activityLabel();
-    follow();
+  function updateAction(id, patch) {
+    if (patch.status === "failed" && feed.get(id)?.status !== "failed") state.failed += 1;
+    feed.update(id, patch);
   }
+
+  // Anything shown between cards ends their column.
+  const between = (html) => {
+    feed.gap();
+    return add(html);
+  };
 
   // Streaming text: words arrive in small groups, as deltas would.
   async function stream(html, { md = true } = {}) {
@@ -451,10 +432,10 @@
       state.pending = state.pending.filter((id) => id !== "approval");
       state.run = "running";
       if (decision === "deny") {
-        updateStep("s-exec", { kind: "command", status: "skipped", title: "Didn't run mv", detail: "/srv/media/transcode-cache", statusText: "Denied", body: S.commandBody("denied") });
+        updateAction("s-exec", { status: "denied", body: S.commandBody("denied") });
         setStatus("thinking", "Thinking");
       } else {
-        updateStep("s-exec", { kind: "command", status: "running", title: "Running mv", detail: "/srv/media/transcode-cache", statusText: "", body: S.commandBody("running") });
+        updateAction("s-exec", { status: "running", body: S.commandBody("running") });
         setStatus("working", "Running mv");
       }
       renderComposer();
@@ -484,10 +465,10 @@
     },
     {
       label: "first-step",
-      caption: "The first step starts. One quiet line appears: Working · 1 step.",
+      caption: "The first action starts. Its card appears at once, in plain words, and the status line says the same: Reading backup-2026-11-15.log.",
       wait: 300,
       fn() {
-        addStep({ id: "s-read", kind: "read", status: "running", title: "Reading backup-2026-11-15.log", statusText: "", body: CT.stepBody({ state: "loading" }) });
+        startAction({ ...C.read, id: "s-read", status: "running", body: CT.stepBody({ state: "loading" }) });
         setStatus("working", "Reading backup-2026-11-15.log");
       },
     },
@@ -496,37 +477,38 @@
       wait: 700,
       sim: 1,
       fn() {
-        updateStep("s-read", { kind: "read", title: "Read backup-2026-11-15.log", detail: `${S.logLines} lines`, statusText: "0.6s", body: S.readBody() });
+        updateAction("s-read", { status: "done", body: S.readBody() });
         setStatus("thinking", "Thinking");
       },
     },
     {
       label: "open-block",
-      caption: "The viewer opens the line. It becomes a card of steps.",
+      caption: "The viewer opens the card: what it read and what came back. Raw is its second tab.",
       wait: 600,
       fn() {
-        $("#run-activity").open = true;
+        $("#s-read").open = true;
         follow();
       },
     },
     {
       label: "thought",
-      caption: "The bot's reasoning arrives as a step of its own, in order among the tool calls.",
+      caption: "The bot's reasoning arrives. It has no card and its text is not shown: it will sit, folded, inside the card it leads to.",
       wait: 500,
       sim: 4,
-      fn: () => addStep({ id: "s-thought", kind: "thought", title: "Thought", detail: "71 minutes instead of the usual 23. The transfer line is the odd one…", statusText: "4s", body: S.thoughtBody() }),
+      fn: () => (state.thought = { time: "4s", text: S.thoughtText }),
     },
     {
       label: "second-read",
       wait: 500,
       fn() {
-        addStep({ id: "s-read2", kind: "read", status: "running", title: "Reading backup-2026-11-08.log", statusText: "", body: CT.stepBody({ state: "loading" }) });
+        // A second read, with nothing shown between: the card becomes "Read 2 files".
+        startAction({ ...C.readFail, id: "s-read2", status: "running", isError: false, text: "", thought: state.thought, body: CT.stepBody({ state: "loading" }) });
         setStatus("working", "Reading backup-2026-11-08.log");
       },
     },
     {
       label: "step-open",
-      caption: "One step is opened mid-run. Nothing above it moves, and steps keep arriving below.",
+      caption: "The open card became a fold, and its first row is still open. Nothing above it moves, and actions keep arriving below.",
       wait: 400,
       demo: true,
       fn() {
@@ -536,11 +518,11 @@
     },
     {
       label: "read-failed",
-      caption: "A tool error becomes a failed step. The line now says 1 failed.",
+      caption: "A tool error. The fold's line says 1 failed and names it, without opening anything.",
       wait: 600,
       sim: 1,
       fn() {
-        updateStep("s-read2", { kind: "read", status: "failed", title: "Couldn't read backup-2026-11-08.log", detail: "No such file", statusText: "Failed", body: S.failedBody() });
+        updateAction("s-read2", { status: "failed", isError: true, text: C.readFail.text, body: S.failedBody() });
         setStatus("thinking", "Thinking");
       },
     },
@@ -548,20 +530,20 @@
       label: "list",
       wait: 400,
       fn() {
-        addStep({ id: "s-list", kind: "list", status: "running", title: "Looking through logs/archive", statusText: "", body: CT.stepBody({ state: "loading" }) });
-        setStatus("working", "Looking through logs/archive");
+        startAction({ ...C.list, id: "s-list", status: "running", body: CT.stepBody({ state: "loading" }) });
+        setStatus("working", "Looking in archive");
       },
     },
     {
       label: "raw",
-      caption: "The open step is switched to Raw: the exact call, result, timing and ids, each with its own copy button.",
+      caption: "The open row is switched to Raw: the exact call, result, timing and ids, each with its own copy button. A folder listing came between, so the next read is a card of its own.",
       wait: 400,
       sim: 1,
       demo: true,
       fn() {
-        updateStep("s-list", { kind: "list", title: "Looked through logs/archive", detail: "9 files", statusText: "0.2s", body: S.listBody() });
+        updateAction("s-list", { status: "done", text: "backup-2026-10-04.log.gz\nbackup-2026-10-11.log.gz\nbackup-2026-10-18.log.gz\nbackup-2026-10-25.log.gz\nbackup-2026-11-01.log.gz\nbackup-2026-11-08.log.gz\nprune-2026-10.log.gz\nprune-2026-11.log.gz\nREADME", body: S.listBody() });
         $('#s-read [data-view-button="raw"]')?.click();
-        addStep({ id: "s-read3", kind: "read", status: "running", title: "Reading backup-2026-11-08.log.gz", statusText: "", body: CT.stepBody({ state: "loading" }) });
+        startAction({ ...C.read, id: "s-read3", args: { path: "logs/archive/backup-2026-11-08.log.gz" }, text: "", status: "running", body: CT.stepBody({ state: "loading" }) });
         setStatus("working", "Reading backup-2026-11-08.log.gz");
       },
     },
@@ -570,8 +552,7 @@
       wait: 700,
       sim: 2,
       fn() {
-        updateStep("s-read3", { kind: "read", title: "Read backup-2026-11-08.log.gz", detail: "6 lines", statusText: "1.1s", body: S.read3Body() });
-        addStep({ id: "s-thought2", kind: "thought", title: "Thought", detail: "Last week moved 4.9 GB. This week 187 GB, and 182 of it is the transcode cache.", statusText: "3s", body: S.thought2Body() });
+        updateAction("s-read3", { status: "done", text: "02:14:02 backup: start profile=weekly\n02:14:02 backup: snapshot 2026-11-08\n02:14:07 scan: 6,204 files changed since parent\n02:36:44 transfer: done 4.9 GB in 22m 37s\n02:36:58 prune: kept 12 snapshots\n02:36:59 backup: finished ok", took: "1.1s", body: S.read3Body() });
         setStatus("thinking", "Thinking");
       },
     },
@@ -589,16 +570,16 @@
       label: "found",
       wait: 300,
       sim: 3,
-      fn: () => stream("Found it. The transcode cache was swept into the backup. I am asking Marlow for the log entry and calling T3 Code about the script.", { md: false }),
+      fn: () => (feed.gap(), stream("Found it. The transcode cache was swept into the backup. I am asking Marlow for the log entry and calling T3 Code about the script.", { md: false })),
     },
     {
       label: "message-sending",
-      caption: "Otto starts a message to Marlow. A card appears, and a step in the list. The start is the first thing the gateway reports; it is not proof the call was made.",
+      caption: "Otto starts a message to Marlow. Its card is the action card for the message, and the message appears nowhere else. The start is the first thing the gateway reports; it is not proof the call was made.",
       wait: 400,
       fn() {
         add(CT.messaged({ id: "m-marlow", target: "marlow", first: S.marlowFirst, state: "call-started", body: S.marlowBody("call-started") }));
         state.marlowCard = "call-started";
-        addStep({ id: "s-msg", kind: "message", status: "running", title: "Messaging Marlow", detail: "call started", statusText: "", body: S.messageStepBody("call-started") });
+        state.steps += 1;
         setStatus("working", "Messaging Marlow");
       },
     },
@@ -608,7 +589,6 @@
       wait: 500,
       fn() {
         setMarlow("call-started");
-        updateStep("s-msg", { kind: "message", status: "running", title: "Messaging Marlow", detail: "call started", statusText: "", body: S.messageStepBody("call-started") });
       },
     },
     {
@@ -619,7 +599,6 @@
       fn() {
         state.marlow = { state: "working", preview: "Reading the house log", time: "now", unread: false };
         setMarlow("working", true);
-        updateStep("s-msg", { kind: "message", status: "running", title: "Messaging Marlow", detail: "working", statusText: "", body: S.messageStepBody("working") });
         setStatus("working", "Waiting for Marlow");
         follow();
       },
@@ -632,7 +611,6 @@
       fn() {
         state.marlow = { state: "done", preview: "Nov 16. Last night's backup ran long: 71 minutes…", time: clockTime(), unread: true };
         setMarlow("replied");
-        updateStep("s-msg", { kind: "message", title: "Messaged Marlow", detail: "replied", statusText: "41s", body: S.messageStepBody("replied") });
         setStatus("thinking", "Thinking");
       },
     },
@@ -648,12 +626,12 @@
     },
     {
       label: "t3-sending",
-      caption: "Otto calls T3 Code. The card is drawn from Otto's own tool call.",
+      caption: "Otto calls T3 Code. The card is drawn from Otto's own tool call, and joins the column under Marlow's.",
       wait: 300,
       fn() {
         add(CT.messaged({ id: "m-t3", target: "t3code", first: S.t3First, state: "call-started", body: S.t3Body("call-started") }));
         state.t3 = "call-started";
-        addStep({ id: "s-t3", kind: "agent", status: "running", title: "Calling T3 Code", detail: "call started", statusText: "", body: S.agentStepBody("call-started") });
+        state.steps += 1;
         setStatus("working", "Calling T3 Code");
       },
     },
@@ -662,7 +640,6 @@
       wait: 400,
       fn() {
         setT3("call-started");
-        updateStep("s-t3", { kind: "agent", status: "running", title: "Calling T3 Code", detail: "call started", statusText: "", body: S.agentStepBody("call-started") });
       },
     },
     {
@@ -672,16 +649,15 @@
       sim: 1,
       fn() {
         setT3("call-made");
-        updateStep("s-t3", { kind: "agent", title: "Called T3 Code", detail: "call made", statusText: "0.8s", body: S.agentStepBody("call-made") });
         setStatus("thinking", "Thinking");
       },
     },
     {
       label: "review",
-      caption: "The gateway reviews the command before anyone is asked. The step carries the review.",
+      caption: "The gateway reviews the command before anyone is asked. The card carries the review: Reviewing mv.",
       wait: 600,
       fn() {
-        addStep({ id: "s-exec", kind: "command", status: "running", title: "Reviewing mv", detail: "/srv/media/transcode-cache", statusText: "", body: S.commandBody("review") });
+        startAction({ ...C.mv, id: "s-exec", status: "review", body: S.commandBody("review") });
         setStatus("working", "Reviewing a command");
       },
     },
@@ -694,15 +670,15 @@
       then: answered,
       thenCaption: "Answered. The card folds to one line that says what the gateway confirmed, and the run goes on.",
       fn() {
-        updateStep("s-exec", { kind: "command", status: "waiting", title: "Wants to run mv", detail: "/srv/media/transcode-cache", statusText: "Waiting for you", body: S.commandBody("waiting") });
+        updateAction("s-exec", { status: "waiting", readOnly: !canWrite(), body: S.commandBody("waiting") });
         state.run = "waiting";
         if (canWrite()) {
-          add(CT.approval({ id: "approval", ...S.approval }));
+          between(CT.approval({ id: "approval", ...S.approval }));
           state.pending.push("approval");
           setStatus("waiting", "Waiting for you");
         } else {
           // A read-only connection is not sent the request. It knows only that the run waits.
-          add(
+          between(
             `<div class="turn-note" id="unseen-wait">${CT.glyph("blocked")}<div><p><b>Otto is waiting for an approval or an answer.</b> This device can't see it on a read-only connection.</p>` +
               `<p>${CT.linkButton("Request access", { action: "request-access" })}</p></div></div>`,
           );
@@ -713,11 +689,11 @@
     },
     {
       label: "command-done",
-      caption: "The step, not the approval, says how the command ended.",
+      caption: "The card, not the approval, says how the command ended: Ran mv.",
       wait: 900,
       sim: 1,
       fn() {
-        if (decision !== "deny") updateStep("s-exec", { kind: "command", title: "Ran mv", detail: "exit 0", statusText: "1.2s", body: S.commandBody("done") });
+        if (decision !== "deny") updateAction("s-exec", { status: "done", text: "", details: { status: "completed", exitCode: 0 }, took: "1.2s", body: S.commandBody("done") });
         setStatus("thinking", "Thinking");
       },
     },
@@ -729,7 +705,7 @@
       gate: "question",
       skip: () => decision === "deny" || !canWrite(),
       fn() {
-        add(CT.question({ id: "question", bot: "otto", ...S.question, raw: S.questionRaw() }));
+        between(CT.question({ id: "question", bot: "otto", ...S.question, raw: S.questionRaw() }));
         state.pending.push("question");
         state.run = "waiting";
         setStatus("waiting", "Waiting for you");
@@ -741,8 +717,8 @@
       wait: 300,
       sim: 1,
       fn() {
-        addStep({ id: "s-write", kind: "write", status: "running", title: "Writing house-log.md", statusText: "", body: CT.stepBody({ state: "loading" }) });
-        setStatus("working", "Writing house-log.md");
+        startAction({ ...C.edit, id: "s-write", status: "running", body: CT.stepBody({ state: "loading" }) });
+        setStatus("working", "Editing house-log.md");
       },
     },
     {
@@ -750,14 +726,14 @@
       wait: 500,
       sim: 1,
       fn() {
-        updateStep("s-write", { kind: "write", title: "Wrote house-log.md", detail: "+4 lines", statusText: "0.3s", body: S.writeBody() });
+        updateAction("s-write", { status: "done", body: S.writeBody() });
         setStatus("thinking", "Thinking");
       },
     },
-    { label: "answer", caption: "The answer streams into its bubble.", wait: 300, sim: 6, fn: () => stream(decision === "deny" ? finalDenied : finalAllowed) },
+    { label: "answer", caption: "The answer streams into its bubble.", wait: 300, sim: 6, fn: () => (feed.gap(), stream(decision === "deny" ? finalDenied : finalAllowed)) },
     {
       label: "finished",
-      caption: "Finished. The status line leaves, the steps fold to one line, and the failed step stays in view.",
+      caption: "Finished. The status line leaves and the run line follows the run: how long it took and how many actions, with the failure counted. Nothing folds by itself.",
       wait: 300,
       fn: () => finish(),
     },
@@ -770,12 +746,10 @@
     state.outcome = outcome || `Worked for ${duration()}`;
     state.stopped = Boolean(outcome);
     state.lastPreview = outcome ? "Stopped. Completed steps are not undone." : "Found: the transcode cache was included in the backup.";
-    const block = $("#run-activity");
-    if (block) {
-      block.dataset.state = outcome ? "stopped" : "completed";
-      activityLabel();
-      // The steps fold once when the run ends, unless the viewer is reading one.
-      if (!block.querySelector(".step[open]") && !block.contains(document.activeElement)) block.open = false;
+    // The run line follows everything the run put in the transcript (section 7.7).
+    if (state.steps) {
+      feed.gap();
+      add(CT.runLine({ id: "run-line", label: state.outcome, actions: state.steps, failed: state.failed, model: "scripted/dev-1", effort: "low", run: "run_7f3a91c2" }));
     }
     const status = $(".status-line", inner);
     if (status && !state.instant && !document.documentElement.dataset.motion) {
@@ -835,11 +809,8 @@
     state.pending = [];
     // Nothing starts by itself after a stop: held and queued messages stay on the shelf, unsent.
     state.unsent.push(...state.held.splice(0), ...state.queued.splice(0));
-    $$('#run-activity .step[data-status="running"], #run-activity .step[data-status="waiting"]').forEach((step) => {
-      step.dataset.status = "skipped";
-      $(".step-status", step).textContent = "Stopped";
-      $(".step-node", step).innerHTML = CT.icon("tool");
-    });
+    // An action that was running or waiting when the stop was confirmed: Stopped.
+    feed.all().filter((c) => ["running", "review", "waiting"].includes(c.status)).forEach((c) => updateAction(c.id, { status: "stopped" }));
     const marlowRunning = state.marlow.state === "working";
     const marlowUnsure = state.marlowCard === "call-started";
     if (marlowRunning) {
@@ -856,7 +827,7 @@
       CT.turnNote({
         lead: CT.glyph("stopped"),
         html:
-          `<p><b>Stopped after ${duration()}.</b> Completed steps are not undone.</p><ul>` +
+          `<p><b>Stopped.</b> Completed actions are not undone.</p><ul>` +
           (marlowRunning ? "<li>Stopped with it: Marlow's run for this message.</li>" : "") +
           (marlowUnsure ? "<li>The message to Marlow may or may not have been delivered.</li>" : "") +
           (state.t3 === "call-made" ? "<li>The call to T3 Code was made. Work handed to T3 Code may continue there.</li>" : "") +
@@ -890,12 +861,11 @@
   // While the connection is lost, what stood for live work stops and is marked last seen.
   function applyLost(lost) {
     root.dataset.connection = lost ? "lost" : "live";
-    $$('#run-activity .step[data-status="running"] .step-status').forEach((node) => (node.textContent = lost ? "Last seen running" : ""));
+    feed.all().filter((c) => ["running", "review"].includes(c.status)).forEach((c) => feed.update(c.id, { lastSeen: lost }));
     $$(".messaged").forEach((card) => {
       const key = card.dataset.state;
       if (["call-started", "working"].includes(key)) $(":scope > summary .state", card).outerHTML = CT.state(key, lost);
     });
-    activityLabel();
   }
 
   function disconnect() {
@@ -1258,10 +1228,12 @@
     }
     if (action === "review") focusPending();
     if (action === "status") {
-      const block = $("#run-activity");
-      if (block) {
-        block.open = true;
-        (block.querySelector('.step[data-status="running"]') || block).scrollIntoView({ block: "nearest" });
+      // The running action's card comes into view, without opening it (section 7.8).
+      const live = feed.all().find((c) => ["running", "review"].includes(c.status));
+      const card = live && (feed.elementOf(live.id) || document.getElementById(live.id));
+      if (card) {
+        card.scrollIntoView({ block: "nearest" });
+        card.querySelector("summary")?.focus({ preventScroll: true });
       }
     }
     if (action === "send-menu") {
@@ -1460,16 +1432,10 @@
   inner.innerHTML =
     CT.stamp("Today 5:02 PM") +
     CT.msg({ role: "user", html: "Did last night's backup finish?" }) +
-    CT.activity({
-      state: "completed",
-      label: "Worked for 9s",
-      count: "2 steps",
-      steps:
-        CT.step({ kind: "list", title: "Looked through logs", detail: "31 files", statusText: "0.2s", body: CT.stepBody({ state: "loading" }) }) +
-        CT.step({ kind: "read", title: "Read backup-2026-11-15.log", detail: `${S.logLines} lines`, statusText: "0.6s", body: S.readBody() }),
-      foot: CT.activityFoot({ model: "scripted/dev-1", effort: "", run: "run_5c20e8aa" }),
-    }) +
+    CT.actionCard({ ...C.list, id: "h-list", args: { path: "logs" }, body: CT.stepBody({ state: "loading" }) }) +
+    CT.actionCard({ ...C.read, id: "h-read", body: S.readBody() }) +
     CT.msg({ html: "Yes. It finished at 3:25 AM, but it took 71 minutes. It usually takes about 23." }) +
+    CT.runLine({ label: "Worked for 9s", actions: 2, model: "scripted/dev-1", effort: "", run: "run_5c20e8aa" }) +
     CT.stamp("Today 5:24 PM");
   root.dataset.connection = "live";
   renderRail();

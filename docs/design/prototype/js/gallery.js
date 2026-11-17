@@ -8,7 +8,7 @@
 (function () {
   const CT = window.CT;
   const S = CT.samples;
-  const { glyph, presence, statusLine, step, activity, messaged, approval, approvalResolved } = CT;
+  const { glyph, presence, statusLine, messaged, approval, approvalResolved } = CT;
 
   const labelled = (items) =>
     `<div class="spec-row">${items.map(([html, label]) => `<figure>${html}<figcaption>${label}</figcaption></figure>`).join("")}</div>`;
@@ -16,32 +16,18 @@
   const sized = (px, html) => html.replace('class="presence"', `class="presence" style="--size:${px}px"`);
   const eight = ["idle", "thinking", "working", "waiting", "blocked", "done", "failed", "stopped"];
 
-  // Steps used in several specimens.
-  const stepRead = (extra = {}) =>
-    step({ kind: "read", title: "Read backup-2026-11-15.log", detail: `${S.logLines} lines`, statusText: "0.6s", body: S.readBody(), ...extra });
-  const stepThought = (extra = {}) =>
-    step({ kind: "thought", title: "Thought", detail: "71 minutes instead of the usual 23. The transfer line is the odd one…", statusText: "4s", body: S.thoughtBody(), ...extra });
-  const stepFailed = (extra = {}) =>
-    step({ kind: "read", status: "failed", title: "Couldn't read backup-2026-11-08.log", detail: "No such file", statusText: "Failed", body: S.failedBody(), ...extra });
-  const stepList = (extra = {}) => step({ kind: "list", title: "Looked through logs/archive", detail: "9 files", statusText: "0.2s", body: S.listBody(), ...extra });
-  const stepWrite = (extra = {}) => step({ kind: "write", title: "Wrote house-log.md", detail: "+4 lines", statusText: "0.3s", body: S.writeBody(), ...extra });
-  const stepRunning = (extra = {}) =>
-    step({ kind: "command", status: "running", title: "Running du", detail: "/srv/media/*", statusText: "0:03", body: S.liveBody(), ...extra });
-  const stepMessage = (extra = {}) => step({ kind: "message", title: "Messaged Marlow", detail: "replied", statusText: "41s", body: S.messageStepBody("replied"), ...extra });
-  const stepAgent = (extra = {}) => step({ kind: "agent", title: "Called T3 Code", detail: "call made", statusText: "0.8s", body: S.agentStepBody("call-made"), ...extra });
-  const stepWaiting = step({ kind: "command", status: "waiting", title: "Wants to run mv", detail: "/srv/media/transcode-cache", statusText: "Waiting for you", body: S.commandBody("waiting") });
-  const stepBlocked = (source, extra = {}) =>
-    step({
-      kind: "command",
-      status: "failed",
-      title: source === "review" ? "Blocked by review" : "Blocked by policy",
-      detail: "rm -rf /srv/media/transcode-cache",
-      statusText: "Not run",
-      body: S.blockedBody(source),
-      ...extra,
-    });
+  // Action cards, from the fixture calls in samples.js.
+  const C = S.calls;
+  const A = (c, patch = {}, opts = {}) => CT.actionCard({ ...c, ...patch }, opts);
+  const F = (calls, opts) => CT.foldCard(calls, opts);
+  const col = (...cards) => cards.join("");
+  const files = ["backup-2026-11-15.log", "house-log.md", "plan.md", "exclude.list", "weekly.sh", "notes.md"];
+  const reads = (k) => files.slice(0, k).map((f, i) => ({ ...C.read2, id: `call_7b${i}`, args: { path: `notes/${f}` }, took: `0.${i + 2}s` }));
+  // A T3 Code thread's card, drawn from its calls.
+  const key = CT.threadKey(C.t3Launch);
+  const T3 = (first, calls, opts = {}) => CT.t3Thread(calls, opts);
+  const stepBlocked = (source) => A({ ...C.rm, blockedBy: source === "review" ? "review" : "policy", body: S.blockedBody(source) }, {}, { open: true });
 
-  const foot = CT.activityFoot({ model: "scripted/dev-1", effort: "low", run: "run_7f3a91c2" });
   const first = S.marlowFirst;
 
   const stoppedNote = CT.turnNote({
@@ -206,145 +192,297 @@
       ],
     },
     {
-      id: "activity",
-      title: "The activity block and its steps",
-      note: "Folded, it is one quiet line. Open, the line heads a card of steps. Every step, of every kind, opens to a readable view and to what the gateway sent.",
+      id: "actions",
+      title: "What a bot did: action cards",
+      note: "Every action is one line in plain words: a verb, the kind's icon and what it acted on, one short fact, the state. Nothing needs opening to follow the run. Cards with nothing between them form one column. Open any card for what it acted on and what came back; Raw is its second tab.",
       specimens: [
-        { name: "Folded, running", html: activity({ state: "running", label: "Working", count: "3 steps", steps: stepRead() + stepThought() + stepRunning() }) },
-        { name: "Folded, finished", html: activity({ state: "completed", label: "Worked for 1m 12s", count: "9 steps", steps: stepRead() + stepThought() + stepList() + stepMessage() + stepAgent() + stepWrite(), foot }) },
         {
-          name: "Folded, finished with a failed step",
-          note: "A failed step never hides behind the summary.",
-          html: activity({ state: "completed", label: "Worked for 1m 12s", count: "9 steps", failed: 1, steps: stepRead() + stepFailed(), failedSteps: stepFailed() }),
+          name: "Every kind, done",
+          note: "Twenty-six kinds, in the order of the list in section 8, each with a result that its adapter reads as done. The two Messaged cards are members of the same family. The question shows as a card only on a read-only connection; with access it is the question card.",
+          html: col(
+            A(C.read), A(C.list), A(C.edit), A(C.memory), A(C.recall), A(C.command), A(C.terminalList), A(C.web), A(C.xsearch), A(C.page), A(C.browserClick), A(C.computerClick), A(C.phoneObserve), A(C.screen), A(C.routine),
+            messaged({ target: "marlow", first, state: "replied", body: S.marlowBody("replied") }),
+            A(C.tasks), A(C.helper), A(C.question, { readOnly: true }), A(C.plan), A(C.imageMade), A(C.pdf), A(C.channelSent), A(C.server),
+            T3(C.t3Launch, [C.t3Launch]),
+            A(C.general),
+          ),
         },
-        { name: "Folded, stopped", html: activity({ state: "stopped", label: "Stopped after 40s", count: "4 steps", steps: stepRead() + stepThought() }) },
-        { name: "Folded, failed", html: activity({ state: "failed", label: "Failed after 12s", count: "2 steps", failed: 1, steps: stepRead() + stepFailed(), failedSteps: stepFailed() }) },
-        { name: "Only reasoning", note: "A run with reasoning and no tool call still has steps.", html: activity({ state: "completed", label: "Thought for 8s", steps: stepThought() }) },
         {
-          name: "The connection is lost mid-run",
+          name: "Every kind, while it runs",
+          note: "An action that stays on the gateway: the working mark and the present tense. One whose effect leaves the gateway (a helper, media, a channel, a tool server, T3 Code): its noun and Call started, because a start proves nothing. The status line says the same words at the same moment.",
+          html: col(
+            ...[C.read, C.list, C.edit, C.memory, C.recall, C.command, C.terminalList, C.web, C.xsearch, C.page, C.browserClick, C.computerClick, C.phoneTap, C.screen, C.routine].map((c, i) => A(c, { status: "running", elapsed: i % 3 ? "" : "0:03" })),
+            messaged({ target: "marlow", first, state: "call-started", body: S.marlowBody("call-started") }),
+            ...[C.tasks, C.helper, C.plan, C.image, C.pdf, C.channel, C.server].map((c) => A(c, { status: "running" })),
+            T3(C.t3Launch, [{ ...C.t3Launch, status: "running" }]),
+            A(C.general, { status: "running" }),
+          ),
+        },
+        {
+          name: "Every kind, when it failed",
+          note: "\"Couldn't\" and the failed mark. A failed card stays where it is, in view.",
+          html: col(
+            ...[C.read, C.list, C.edit, C.memory, C.recall, C.command, C.terminalList, C.web, C.xsearch, C.page, C.browserClick, C.computerClick, C.phoneTap, C.screen, C.routine].map((c) => A(c, { status: "failed", isError: true, text: "The tool reported an error." })),
+            messaged({ target: "marlow", first, state: "failed", body: S.marlowBody("failed") }),
+            ...[C.tasks, C.helper, C.plan, C.imageMade, C.pdf, C.channel, C.server].map((c) => A(c, { status: "failed", isError: true, text: "The tool reported an error." })),
+            T3(C.t3Launch, [{ ...C.t3Launch, status: "failed", isError: true, details: { mcpServer: "t3code", mcpTool: "t3_thread_launch", structuredContent: { code: "provider_unavailable", message: "The project's provider is not signed in." } } }]),
+            A(C.general, { status: "failed", isError: true, text: "The tool reported an error." }),
+          ),
+        },
+        {
+          name: "A result is not always completed work",
+          note: "Each kind reads its result through an adapter, and every payload that carries its own status or code is read from it. Admitted, queued, not confirmed, suppressed, unavailable, refused, not found or unchanged work says so on its line, and never reads as done. A phone act that needs confirming did nothing; one that ran shows the device's own code (here a sample), because the gateway does not fix a done code.",
+          html: col(
+            A(C.image),
+            A(C.imageMade),
+            A(C.helper),
+            A(C.routineRun),
+            A(C.channel),
+            A(C.channelSent),
+            A(C.channelSuppressed),
+            A(C.message),
+            A(C.computerUnconfirmed),
+            A(C.recallPartial),
+            A(C.recallUnavailable),
+            A(C.xsearchUnavailable),
+            A(C.phoneConfirm),
+            A(C.phoneTap),
+            A(C.phoneStale),
+            A(C.recallGetError),
+            A(C.recallGetNone),
+            A(C.unchanged),
+            A(C.pending),
+            A(C.helperRefused),
+            A(C.routineRemoveNone),
+            A(C.turn),
+          ),
+        },
+        {
+          name: "One card in every state",
+          note: "Each state is one the gateway can establish. A start is never proof that a call was made; there is no sending state anywhere.",
+          html: col(
+            A(C.mv, { status: "running", elapsed: "0:02" }),
+            A(C.mv, { status: "review" }),
+            A(C.mv, { status: "waiting" }),
+            A(C.command),
+            A(C.exit1),
+            A(C.mv, { status: "failed", isError: true, text: "mv: cannot move: Permission denied" }),
+            A(C.timeout),
+            A(C.mv, { status: "denied", isError: true, text: "Exec denied (gateway id=a1, user-denied): mv" }),
+            A(C.rm),
+            A(C.rm, { blockedBy: "review" }),
+            A(C.mv, { status: "stopped" }),
+            A(C.channel, { status: "unknown" }),
+            A(C.channel, { status: "running" }),
+          ),
+        },
+        {
+          name: "Real operations, with their own words",
+          note: "A shared terminal is not a command; the screen tool changes the Control UI; a phone has its own actions; documents and images are counted; a goal checked is not a plan updated.",
+          html: col(A(C.terminalList), A(C.terminalInput), A(C.screen), A(C.phoneObserve), A(C.phoneConfirm), A(C.pdf), A(C.images), A(C.patch), A(C.goalGet), A(C.goalUpdate), A(C.routineRemove), A(C.nextCheck), A(C.voice)),
+        },
+        {
+          name: "Last seen, while the connection is lost",
+          note: "Nothing that stands for the gateway's work moves.",
           lost: true,
-          html: activity({
-            state: "running",
-            label: "Last seen working",
-            count: "3 steps",
-            open: true,
-            steps: stepRead() + stepThought() + step({ kind: "command", status: "running", title: "Running du", detail: "/srv/media/*", statusText: "Last seen running", body: S.liveBody() }),
-          }),
+          html: col(A(C.command, { status: "running", lastSeen: true }), CT.foldCard([C.read, { ...C.read2, status: "running", lastSeen: true }])),
         },
         {
-          name: "Open, running",
-          html: activity({ state: "running", label: "Working", count: "6 steps", failed: 1, open: true, steps: stepRead() + stepThought() + stepFailed() + stepList() + stepWaiting + stepRunning(), foot }),
+          name: "Text beside a tool call",
+          note: "It arrives as an item of kind preamble, not on the reply stream. It is the bot narrating, so it is a bubble, before the card of its call. It ends the column.",
+          html: CT.msg({ html: "Reading last night's log first." }) + A(C.read) + A(C.list) + CT.msg({ html: "Now last week's, to compare." }) + A(C.read2),
         },
         {
-          name: "A step open: readable",
-          note: "Long output shows eight whole lines, then the real count. Nothing is half faded.",
-          html: activity({ state: "running", label: "Working", count: "3 steps", open: true, steps: stepRead({ open: true }) + stepThought() + stepRunning() }),
+          name: "Opened: the readable view",
+          note: "Level 1. What it acted on and what came back. Long output shows eight whole lines, then the real count.",
+          html: A(C.read, {}, { open: true }),
         },
         {
-          name: "A step open: raw",
-          note: "The exact tool name, arguments, result, timing and identifiers. Each value has its own copy button, named for what it copies.",
-          html: activity({ state: "completed", label: "Worked for 1m 12s", count: "9 steps", open: true, steps: stepRead({ open: true, body: S.readBody("raw") }), foot }),
+          name: "Opened: Raw, one step further",
+          note: "Level 2. The exact tool name, arguments, result, timing and identifiers, as the gateway sent them.",
+          html: A(C.read, {}, { open: true, view: "raw" }),
         },
         {
-          name: "A running step open",
-          note: "Output appears as the gateway streams it.",
-          html: activity({ state: "running", label: "Working", count: "8 steps", open: true, steps: stepRunning({ open: true }) }),
+          name: "Opened: the reasoning that led to it",
+          note: "Reasoning has no card. It sits at the top of the card it led to, folded; opened, its text (level 2).",
+          html: A({ ...C.read2, thought: { ...S.reasonings.beforeRead2, open: true } }, {}, { open: true }),
         },
         {
-          name: "A thought open, and its raw event",
-          html: activity({ state: "completed", label: "Thought for 8s", open: true, steps: stepThought({ open: true }) + stepThought({ open: true, body: S.thoughtBody("raw") }) }),
-        },
-        { name: "A failed step open", html: activity({ state: "running", label: "Working", count: "3 steps", failed: 1, open: true, steps: stepFailed({ open: true }) }) },
-        {
-          name: "A folder listing and a file edit, open",
-          html: activity({ state: "completed", label: "Worked for 1m 12s", count: "9 steps", open: true, steps: stepList({ open: true }) + stepWrite({ open: true }) }),
+          name: "Opened while it runs",
+          note: "The output so far, as the gateway streams it.",
+          html: A(C.command, { status: "running", elapsed: "0:03", partial: "182G\t/srv/media/transcode-cache\n640G\t/srv/media/films\n" }, { open: true }),
         },
         {
-          name: "A message and a handoff as steps, open",
-          note: "The step shows what was sent and leads to its card. Raw is the same call the card shows.",
-          html: activity({ state: "completed", label: "Worked for 1m 12s", count: "9 steps", open: true, steps: stepMessage({ open: true }) + stepAgent({ open: true }) }),
+          name: "Kinds opened",
+          note: "Each kind's readable view: a search's results as links, a plan as a checklist with completed, in progress and pending steps, the media a result carries, admitted media, a browser action and its target, a routine with its time zone, an unavailable search and its reason, a queued message.",
+          html: col(A(C.web, {}, { open: true }), A(C.planUpdate, {}, { open: true }), A(C.imageMade, {}, { open: true }), A(C.image, {}, { open: true }), A(C.browserType, {}, { open: true }), A(C.routine, {}, { open: true }), A(C.recallUnavailable, {}, { open: true }), A(C.channel, {}, { open: true }), A(C.computerUnconfirmed, {}, { open: true }), A(C.phoneConfirm, {}, { open: true })),
         },
+        {
+          name: "On a read-only connection",
+          note: "The same cards, as full as anywhere: a client that subscribes to the session receives the tool events with their arguments and results. Only approvals and questions are not sent to it.",
+          html:
+            A(C.mv, { status: "waiting", readOnly: true }) +
+            CT.msg({ html: "Before I plan the day trip, one question." }) +
+            A(C.question, { status: "running", readOnly: true }) +
+            `<div class="turn-note">${glyph("blocked")}<div><p>This device can't answer it on a read-only connection.</p><p>${CT.linkButton("Request access")}</p></div></div>`,
+        },
+      ],
+    },
+    {
+      id: "folds",
+      title: "Actions of one kind in a row",
+      note: "Two or more actions of one kind, with nothing shown between them, are one card with a count. Reasoning between them does not break it; a bubble, a request card or another kind does. Files are counted once.",
+      specimens: [
+        { name: "Done", html: col(F(reads(6)), F([C.web, C.web2, { ...C.web, id: "call_7a90", args: { query: "heat pump noise at night" } }]), F([C.edit, C.create, C.patch]), F([C.browserOpen, C.browserClick, C.browserType, C.browserShot]), F([C.recall, { ...C.recall, id: "call_7a92", args: { query: "gas safety" } }]), F([C.plan, C.planUpdate, { ...C.planUpdate, id: "call_7a91" }]), F([C.t3Projects, C.t3Threads])) },
+        { name: "Counting files and actions", note: "Files are counted once, and the actions too when there are more of them.", html: col(F([C.read2, { ...C.read2, id: "call_7b11" }, { ...C.read, id: "call_7b12" }]), F([C.edit, { ...C.edit, id: "call_7b13" }, C.create])) },
+        { name: "One action running", note: "The count includes it; the detail says what it is doing.", html: F([...reads(2), { ...C.read2, id: "call_7a95", status: "running", elapsed: "0:02" }]) },
+        { name: "One action waiting for you", html: F([C.command, C.exit1, { ...C.mv, status: "waiting" }]) },
+        {
+          name: "A failure inside a fold",
+          note: "In view without opening anything: the line names the first problem and counts them. It is never drawn as a success.",
+          html: F([C.read, C.readFail, C.read2]),
+        },
+        {
+          name: "Mixed states: an earlier failure and a later approval",
+          note: "Two places, so neither hides the other: the detail names the failure, the right side says what is happening now.",
+          html: col(F([C.command, { ...C.mv, id: "call_7b20", status: "failed", isError: true, text: "mv: Permission denied" }, { ...C.mv, id: "call_7b21", status: "waiting" }]), F([C.read, C.readFail, { ...C.read2, id: "call_7b22", status: "running", elapsed: "0:04" }])),
+        },
+        {
+          name: "Outcomes short of Done in a fold",
+          note: "The plural is never more complete than its least-established member. Started alone has its own plural; Partial keeps the past verb; any other mix is neutral. Every outcome short of Done is counted, and there is no duration.",
+          html: col(F([C.image, { ...C.image, id: "call_7b30" }]), F([C.recallPartial, { ...C.recallPartial, id: "call_7b31", args: { query: "drains" } }]), F([C.image, C.imageMade]), F([C.computerClick, C.computerUnconfirmed])),
+        },
+        {
+          name: "Each operation folds under its own key and plural",
+          note: "Listing image models is not making images: its own key, its own plural.",
+          html: col(F([C.imageList, { ...C.imageList, id: "call_7b32" }]), A(C.imageMade)),
+        },
+        {
+          name: "Counting distinct documents and notes",
+          note: "Two calls over the same three PDFs are three PDFs, twice. Two writes of the same note are one note, twice.",
+          html: col(F([C.pdf, { ...C.pdf, id: "call_7b33" }]), F([{ ...C.memory, args: { path: "MEMORY.md", content: "Boiler: October." } }, { ...C.memory, id: "call_7b34", args: { path: "MEMORY.md", content: "Boiler: October, not winter." } }])),
+        },
+        {
+          name: "Stopped, unavailable, and a missing time",
+          note: "Every problem is named by kind. A duration is never a partial sum.",
+          html: col(F([{ ...C.read, status: "stopped" }, { ...C.read2, status: "stopped" }]), F([C.recall, { ...C.recallUnavailable, id: "call_7b23" }]), F([C.read2, { ...C.read, id: "call_7b24", took: undefined }])),
+        },
+        { name: "Opened", note: "Level 1: one row per action, in the singular. Each row opens to its own readable view and Raw.", html: F([C.read, C.readFail, C.read2], { open: true }) },
+        { name: "Opened, with one row opened on Raw", html: F([C.read, C.readFail, C.read2], { open: true, rows: { [C.read2.id]: { open: true, view: "raw" } } }) },
+        {
+          name: "Becoming a fold",
+          note: "The second read turns the card into a fold in place. Nothing moves; an open card opens the fold with its first row open in the same view.",
+          still: true,
+          html: A(C.read, {}, { open: true }) + `<p class="spec-then">The second read starts:</p>` + F([C.read, { ...C.read2, status: "running" }], { open: true, rows: { [C.read.id]: { open: true } } }),
+        },
+        {
+          name: "What breaks a fold",
+          note: "A bubble between two reads: two cards.",
+          html: A(C.read) + CT.msg({ html: "Now last week's, to compare." }) + A(C.read2),
+        },
+      ],
+    },
+    {
+      id: "general",
+      title: "The general card and tool servers",
+      note: "A tool with no kind of its own gets words from its name: split at underscores, hyphens, dots and capitals, in lower case. The detail is the first value among the gateway's own detail keys. A tool-server call is identified only by its result, or by the gateway's own name mapping.",
+      specimens: [
+        {
+          name: "Opaque names, in plain words",
+          note: "skills_search, getWeatherNow, github_publish.",
+          html: col(A(C.general), A(C.general2), A(C.general3)),
+        },
+        { name: "Opened", note: "The arguments as rows, the result, and the gateway's own title for the call.", html: A(C.general, {}, { open: true }) },
+        {
+          name: "A tool-server call, before and after its result",
+          note: "Until the result names its server and tool, the call is the general card with words from its effective name. Then it says which server it used.",
+          still: true,
+          html: A({ ...C.server, mcp: undefined }, { status: "running" }) + `<p class="spec-then">The result names the server and the tool:</p>` + A(C.server),
+        },
+      ],
+    },
+    {
+      id: "detail",
+      title: "How a command ended, and what an opened card shows",
+      specimens: [
         {
           name: "A command that exited with a non-zero code",
-          note: "Not a failed step. The code is shown plainly.",
-          html: activity({
-            state: "completed",
-            label: "Worked for 22s",
-            count: "4 steps",
-            open: true,
-            steps: step({ kind: "command", title: "Ran grep", detail: "exit 1", statusText: "0.1s", open: true, body: S.exitBody() }),
-          }),
+          note: "Not a failure. The code is shown plainly beside the command.",
+          html: A(C.exit1, {}, { open: true }),
         },
-        {
-          name: "A command that hit its own time limit",
-          note: "A failed step of its own kind. The run goes on.",
-          html: activity({
-            state: "running",
-            label: "Working",
-            count: "5 steps",
-            failed: 1,
-            open: true,
-            steps: step({ kind: "command", status: "failed", title: "rsync timed out", detail: "its 120s limit", statusText: "Timed out", open: true, body: S.timeoutBody("command") }),
-          }),
-        },
+        { name: "A command that hit its own time limit", note: "A failed card of its own kind. The run goes on.", html: A(C.timeout, {}, { open: true }) },
         {
           name: "A command cut off by the run's time limit",
-          html: activity({
-            state: "failed",
-            label: "Failed after 50m 00s",
-            count: "5 steps",
-            failed: 1,
-            open: true,
-            steps: step({ kind: "command", status: "failed", title: "rsync was cut off", detail: "the run's 50m limit", statusText: "Aborted", open: true, body: S.timeoutBody("run") }),
-          }),
+          html: A({ ...C.timeout, timedOut: false, cutOff: true, failWord: "Aborted", body: S.timeoutBody("run") }, {}, { open: true }),
         },
         {
           name: "Output the gateway cut",
           note: "The line gives the size actually received when it is plain text, and says only that it was cut when the result is structured. Copy copies what was received and says so.",
-          html: activity({
-            state: "completed",
-            label: "Worked for 22s",
-            count: "4 steps",
-            open: true,
-            steps:
-              step({ kind: "command", title: "Ran journalctl", detail: "exit 0", statusText: "0.9s", open: true, body: S.truncatedBody() }) +
-              step({ kind: "command", title: "Ran journalctl", detail: "exit 0", statusText: "0.9s", open: true, body: S.truncatedBody("raw") }),
-          }),
+          html: col(A({ ...C.command, args: { command: "journalctl -u transcoded --since yesterday", host: "media-box" }, body: S.truncatedBody() }, {}, { open: true }), A({ ...C.command, id: "call_7a92", args: { command: "journalctl -u transcoded --since yesterday", host: "media-box" }, body: S.truncatedBody("raw") }, {}, { open: true })),
         },
         {
-          name: "A step whose detail is loading, and one that could not load",
-          html: activity({
-            state: "completed",
-            label: "Worked for 9s",
-            count: "2 steps",
-            open: true,
-            steps:
-              step({ kind: "list", title: "Looked through logs", detail: "31 files", statusText: "0.2s", open: true, body: CT.stepBody({ state: "loading" }) }) +
-              step({ kind: "read", title: "Read backup-2026-11-15.log", detail: `${S.logLines} lines`, statusText: "0.6s", open: true, body: CT.stepBody({ state: "failed" }) }),
-          }),
+          name: "Detail loading, and detail that could not load",
+          html: col(A({ ...C.list, body: CT.stepBody({ state: "loading" }) }, {}, { open: true }), A({ ...C.read, body: CT.stepBody({ state: "failed" }) }, {}, { open: true })),
         },
         {
           name: "Raw that is not available",
           note: "One sentence says why. Nothing is invented to fill it.",
-          html: activity({
-            state: "completed",
-            label: "Worked for 9s",
-            count: "2 steps",
-            open: true,
-            steps:
-              step({ kind: "list", title: "Looked through logs", detail: "31 files", open: true, body: CT.stepBody({ view: "raw", readable: CT.note("31 entries."), raw: { state: "unavailable", reason: "This event is older than the history the gateway returned." } }) }) +
-              step({ kind: "read", title: "Read notes.md", detail: "12 lines", open: true, body: CT.stepBody({ view: "raw", readable: CT.note("12 lines."), raw: { state: "failed" } }) }),
-          }),
+          html: col(
+            A({ ...C.list, body: CT.stepBody({ view: "raw", readable: CT.note("5 entries."), raw: { state: "unavailable", reason: "This event is older than the history the gateway returned." } }) }, {}, { open: true }),
+            A({ ...C.read2, body: CT.stepBody({ view: "raw", readable: CT.note("12 lines."), raw: { state: "failed" } }) }, {}, { open: true }),
+          ),
         },
         {
-          name: "The automatic review: approved",
-          note: "Quiet. The row shows nothing extra; the open step has one line.",
-          html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", open: true, steps: step({ kind: "command", title: "Ran df", detail: "exit 0", statusText: "0.1s", open: true, body: S.reviewedBody() }) }),
+          name: "Rebuilt from history without the result's details",
+          note: "History keeps details for some tools only. The line shows what the text gives and leaves out what only details held.",
+          html: col(A({ ...C.web, details: undefined }), A({ ...C.read, text: "" })),
+        },
+        { name: "The automatic review: in progress", html: A({ ...C.mv, status: "review", body: S.commandBody("review") }, {}, { open: true }) },
+        { name: "The automatic review: approved", note: "Quiet. The line shows nothing extra; the opened card has one line.", html: A({ ...C.command, args: { command: "df -h /srv/media", host: "media-box" }, body: S.reviewedBody() }, {}, { open: true }) },
+      ],
+    },
+    {
+      id: "reasoning",
+      title: "Reasoning and the run line",
+      note: "Reasoning has no card: it belongs to what it led to. Its text is never on screen until opened. The run line follows a run that had actions; opened, it is the run's record.",
+      specimens: [
+        {
+          name: "Reasoning that led to the reply",
+          note: "One line over the reply, folded.",
+          html: CT.thought({ place: "reply", ...S.reasonings.beforeReply, raw: CT.thoughtRaw(S.reasonings.beforeReply.text) }) + CT.msg({ md: true, html: "<p>Usually yes, if the house holds its heat and the unit is sized for your coldest week.</p>" }),
         },
         {
-          name: "The automatic review: in progress",
-          html: activity({ state: "running", label: "Working", count: "4 steps", open: true, steps: step({ kind: "command", status: "running", title: "Reviewing mv", detail: "/srv/media/transcode-cache", open: true, body: S.commandBody("review") }) }),
+          name: "Opened",
+          html: CT.thought({ place: "reply", open: true, ...S.reasonings.beforeReply, raw: CT.thoughtRaw(S.reasonings.beforeReply.text) }) + CT.msg({ md: true, html: "<p>Usually yes, if the house holds its heat and the unit is sized for your coldest week.</p>" }),
         },
+        {
+          name: "A reply that was reasoning only",
+          note: "The gateway asks the model again twice, then ends the run as an error. The line stands above the error card.",
+          html:
+            CT.thought({ place: "reply", time: "12s", text: "I should check the insulation figures before answering." }) +
+            CT.turnError({ title: "Otto couldn't finish this turn", reason: "The model wrote only reasoning, three times, and no reply. Nothing ran.", requestId: "req_51d0aa21", raw: S.turnErrorRaw }) +
+            CT.runLine({ label: "Failed after 12s", actions: 0, model: "scripted/dev-1", effort: "low", run: "run_51d0aa21" }).replace(/<span aria-hidden="true">·<\/span><span class="run-count">0 actions<\/span>/, ""),
+        },
+        {
+          name: "The run line, every ending",
+          html: col(
+            CT.runLine({ label: "Worked for 1m 12s", actions: 14, model: "scripted/dev-1", effort: "low", run: "run_7f3a91c2" }),
+            CT.runLine({ label: "Worked for 1m 12s", actions: 14, failed: 1, model: "scripted/dev-1", effort: "low", run: "run_7f3a91c2" }),
+            CT.runLine({ label: "Stopped after 40s", actions: 4, model: "scripted/dev-1", effort: "low", run: "run_7f3a91c2" }),
+            CT.runLine({ label: "Failed after 12s", actions: 2, model: "scripted/dev-1", effort: "", run: "run_7f3a91c2" }),
+          ),
+        },
+        { name: "The run line, opened", note: "The model, the effort requested, and the run id.", html: CT.runLine({ label: "Worked for 1m 12s", actions: 14, model: "scripted/dev-1", effort: "low", run: "run_7f3a91c2", open: true }) },
+      ],
+    },
+    {
+      id: "runs",
+      title: "Three runs that test the cards",
+      note: "What a person sees with nothing opened. Each also plays inside the shell: conversation.html?scene=short, ?scene=long, ?scene=thought.",
+      specimens: [
+        { name: CT.scenes.short.title, html: CT.sceneHtml("short") },
+        { name: CT.scenes.long.title, note: "Forty actions read as sixteen lines in three columns, between the bot's own bubbles. The one failure is named on its line.", html: CT.sceneHtml("long") },
+        { name: CT.scenes.thought.title, note: "No card and no run line: a folded Thought line over the reply.", html: CT.sceneHtml("thought") },
       ],
     },
     {
@@ -428,6 +566,54 @@
         { name: "Open, delivery unknown", html: messaged({ target: "t3code", first: S.t3First, state: "delivery-unknown", open: true, body: S.t3Body("delivery-unknown") }) },
         { name: "Open, failed", html: messaged({ target: "t3code", first: S.t3First, state: "failed", open: true, body: S.t3Body("failed") }) },
         { name: "Open, not sent", html: messaged({ target: "t3code", first: S.t3First, state: "not-sent", open: true, body: S.t3Body("not-sent") }) },
+        {
+          name: "A tool-server call that becomes the T3 Code card",
+          note: "Recognized per call. Before its result names one of T3 Code's seven tools, it is the general card with words from its effective name. Then the same line, in the same place, becomes the T3 Code card, and whether it was open, which view, and focus carry over. Watch it live in conversation.html?scene=t3.",
+          still: true,
+          html:
+            A({ ...C.t3Launch, mcp: undefined, details: undefined, text: "" }, { status: "running", elapsed: "0:01" }) +
+            `<p class="spec-then">The result names t3_thread_launch, and the thread's id:</p>` +
+            T3(C.t3Launch, [C.t3Launch]),
+        },
+        {
+          name: "One thread, one card: every call on it, each with its own Raw",
+          note: "A wait that came right after the launch joined the card; a follow-up, a failed read and a stop, made later, are items here and keep their own lines below. Each item opens its own call's Raw.",
+          html: T3(C.t3Launch, [C.t3Launch, C.t3Wait, C.t3Send, C.t3ReadFail, C.t3Read, C.t3Stop], { open: true, items: { [C.t3Wait.id]: { raw: true } }, lines: [C.t3Send.id, C.t3ReadFail.id, C.t3Read.id, C.t3Stop.id] }),
+        },
+        {
+          name: "The thread's state, from its calls",
+          note: "An open call first (Call started, Checking), then what T3 Code last reported in a returned result, with its time, then the latest sending call. A failed read does not change it.",
+          html: col(
+            T3(C.t3Launch, [{ ...C.t3Launch, status: "running" }]),
+            T3(C.t3Launch, [C.t3Launch, { ...C.t3Wait, status: "running" }]),
+            T3(C.t3Launch, [C.t3Launch, C.t3Wait]),
+            T3(C.t3Launch, [C.t3Launch, C.t3Wait, C.t3ReadFail]),
+            T3(C.t3Launch, [C.t3Launch, C.t3Read]),
+            T3(C.t3Launch, [C.t3Launch, C.t3Read, C.t3Stop]),
+          ),
+        },
+        {
+          name: "A read whose last page holds a cut item",
+          note: "No more pages, but the reply's text was cut: the card says part of the reply only, and never that the end was read.",
+          html: T3(C.t3Launch, [C.t3Launch, C.t3ReadCut], { open: true }),
+        },
+        {
+          name: "Later calls leave a line where they happened",
+          note: "Nothing above the reader moves, so a call made later keeps its own line at its moment, and is also an item of the thread's card. Show the thread finds the card by the thread's identity, never by nearness.",
+          html:
+            T3(C.t3Launch, [C.t3Launch, C.t3Wait, C.t3Send, C.t3Read, C.t3Stop], { lines: [C.t3Send.id, C.t3Read.id, C.t3Stop.id] }) +
+            CT.msg({ html: "While that runs, I'll draft the house log entry." }) +
+            CT.t3Line(C.t3Send, { thread: key }) +
+            CT.msg({ html: "Checking whether T3 Code has finished." }) +
+            CT.t3Line(C.t3Read, { thread: key, open: true }) +
+            CT.msg({ html: "You asked me to stop the coding work." }) +
+            CT.t3Line(C.t3Stop, { thread: key }),
+        },
+        {
+          name: "Listing projects and threads",
+          note: "Ordinary lines in T3 Code's family. They fold with each other and never join a thread's card.",
+          html: F([C.t3Projects, C.t3Threads]),
+        },
       ],
     },
     {
@@ -523,7 +709,7 @@
         },
         {
           name: "Resolved and open: allowed once",
-          note: "The command can run. Whether it ran is on its step.",
+          note: "The command can run. Whether it ran is on its action card.",
           html: approvalResolved({ state: "once", line: S.approval.line, when: "5:25 PM", open: true, full: S.approval.full, raw: S.approvalRaw("allow-once") }),
         },
         {
@@ -550,17 +736,17 @@
       specimens: [
         {
           name: "The installed gateway: its policy refuses the command",
-          note: "A failed step. No card; nothing to approve.",
-          html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", failed: 1, open: true, steps: stepBlocked("gateway", { open: true }) }),
+          note: "A failed action card. No approval card; nothing to approve.",
+          html: stepBlocked("gateway"),
         },
         {
           name: "The installed gateway: its policy allows the command with no request",
-          note: "Full access with asking off, an allowlist entry, or a routine's grant. An ordinary step: no card and no review line.",
-          html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", open: true, steps: step({ kind: "command", title: "Ran mv", detail: "exit 0", statusText: "1.2s", open: true, body: S.allowedBody() }) }),
+          note: "Full access with asking off, an allowlist entry, or a routine's grant. An ordinary action card: no approval card and no review line.",
+          html: A({ ...C.mv, body: S.allowedBody(), details: { exitCode: 0 }, took: "1.2s" }, {}, { open: true }),
         },
         {
           name: "The installed gateway: the automatic review approved",
-          html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", open: true, steps: step({ kind: "command", title: "Ran df", detail: "exit 0", statusText: "0.1s", open: true, body: S.reviewedBody() }) }),
+          html: A({ ...C.command, args: { command: "df -h /srv/media", host: "media-box" }, body: S.reviewedBody(), took: "0.1s" }, {}, { open: true }),
         },
         {
           name: "The installed gateway: the automatic review denied, and the gateway then asks",
@@ -569,12 +755,12 @@
         },
         {
           name: "The installed gateway: the automatic review denied, and the gateway refuses",
-          note: "A failed step that stays in view under a folded block.",
-          html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", failed: 1, open: true, steps: stepBlocked("review", { open: true }) }),
+          note: "A failed action card, in view like every card.",
+          html: stepBlocked("review"),
         },
         {
           name: "With Clawtrate's rules plugin: a deny rule for this bot",
-          html: activity({ state: "completed", label: "Worked for 22s", count: "4 steps", failed: 1, open: true, steps: stepBlocked("bot", { open: true }) }),
+          html: stepBlocked("bot"),
         },
         {
           name: "With Clawtrate's rules plugin: an ask rule that outranks an allow",
@@ -822,7 +1008,7 @@
             { bot: "pip", state: "waiting", preview: "Waiting for you: a question", time: "2m" },
             { bot: "marlow", state: "failed", preview: "Couldn't finish: provider overloaded", time: "9m" },
             { bot: "otto", state: "blocked", preview: "Can't reach media-box", time: "4m" },
-            { bot: "pip", state: "done-failed", preview: "Finished with 1 failed step", time: "4:40 PM", unread: true, tone: "failed" },
+            { bot: "pip", state: "done-failed", preview: "Finished with 1 failed action", time: "4:40 PM", unread: true, tone: "failed" },
             { bot: "otto", state: "working", preview: "Reading backup-2026-11-15.log", time: "now" },
             { bot: "marlow", state: "thinking", preview: "Thinking", time: "now" },
             { bot: "juniper", state: "done", preview: "Verdict: usually worth it.", time: "5:02 PM", unread: true },
@@ -838,7 +1024,7 @@
           rail: true,
           still: true,
           html:
-            `<ul class="bot-list">${CT.botGroup({ bot: "otto", state: "done-failed", preview: "Finished with 1 failed step", time: "5:31 PM", unread: true, tone: "failed", open: true, tasks: CT.taskRow({ title: "Rotate the logs on rack-2", status: "running", time: "now" }) + CT.taskRow({ title: "Router firmware", status: "done-failed", time: "5:31 PM" }) })}</ul>` +
+            `<ul class="bot-list">${CT.botGroup({ bot: "otto", state: "done-failed", preview: "Finished with 1 failed action", time: "5:31 PM", unread: true, tone: "failed", open: true, tasks: CT.taskRow({ title: "Rotate the logs on rack-2", status: "running", time: "now" }) + CT.taskRow({ title: "Router firmware", status: "done-failed", time: "5:31 PM" }) })}</ul>` +
             `<p class="spec-then">After opening Router firmware:</p>` +
             `<ul class="bot-list">${CT.botGroup({ bot: "otto", state: "working", preview: "Rotating logs on rack-2", time: "now", open: true, tasks: CT.taskRow({ title: "Rotate the logs on rack-2", status: "running", time: "now" }) + CT.taskRow({ title: "Router firmware", status: "idle", time: "5:31 PM", current: true }) })}</ul>`,
         },

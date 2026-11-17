@@ -47,10 +47,11 @@ check('C11 Thinking shows at once with the avatar', await q(p, () => document.qu
 
 // B1 / D5: every step has detail, Raw everywhere, honest copy --------------------------------
 await to(p, 'approval');
-check('B1 every step has a body with two tabs', await q(p, () => [...document.querySelectorAll('#run-activity .step')].every((s) => s.querySelectorAll('[role="tab"]').length === 2 && s.querySelector('[data-view="readable"]').textContent.trim().length > 0)));
-check('B1 no step body is still loading after its step ended', await q(p, () => ![...document.querySelectorAll('#run-activity .step:not([data-status="running"])')].some((s) => s.querySelector('[aria-busy="true"]'))));
+// Every action of the run, a card or a row of a fold, opens to its two views.
+check('B1 every action has a body with two tabs', await q(p, () => [...document.querySelectorAll('#transcript-inner [data-testid="tool-call"]:not(#h-list):not(#h-read)')].every((s) => s.querySelectorAll('[role="tab"]').length === 2 && s.querySelector('[data-view="readable"]').textContent.trim().length > 0)));
+check('B1 no action body is still loading after its action ended', await q(p, () => ![...document.querySelectorAll('#transcript-inner [data-testid="tool-call"]:not([data-status="running"]):not(#h-list)')].some((s) => s.querySelector('[aria-busy="true"]'))));
 check('D2 tabs: one tab stop, panels named', await q(p, () => { const s = document.querySelector('#s-read'); const tabs = [...s.querySelectorAll('[role="tab"]')]; return tabs.filter((t) => t.tabIndex === 0).length === 1 && tabs.every((t) => document.getElementById(t.getAttribute('aria-controls'))?.getAttribute('aria-labelledby') === t.id); }));
-await q(p, () => { document.querySelector('#run-activity').open = true; document.querySelector('#s-read').open = true; });
+await q(p, () => { document.querySelector('#fold-s-read').open = true; document.querySelector('#s-read').open = true; });
 await p.click('#s-read [data-view-button="readable"]');
 await p.keyboard.press('ArrowRight');
 check('D2 ArrowRight moves to Raw and selects it', await q(p, () => document.activeElement.dataset.viewButton === 'raw' && !document.querySelector('#s-read [data-view="raw"]').hidden && document.querySelector('#s-read [data-view="readable"]').hidden));
@@ -58,7 +59,7 @@ await p.keyboard.press('Home');
 check('D2 Home goes back to Readable', await q(p, () => document.activeElement.dataset.viewButton === 'readable'));
 const lines = await q(p, () => { const btn = document.querySelector('#s-read [data-view="readable"] [data-action="unclip"]'); const n = Number(btn.dataset.lines); btn.click(); const pre = btn.closest('.code-more').previousElementSibling; return [n, pre.textContent.split('\n').length, pre.dataset.clipped, btn.textContent]; });
 check('D5 Show all N lines reveals N lines', lines[0] === lines[1] && lines[2] === 'false' && lines[3] === 'Show fewer', JSON.stringify(lines));
-check('D5 raw fixtures hold whole payloads, no ellipsis', await q(p, () => ![...document.querySelectorAll('#run-activity [data-view="raw"] .code-block')].some((c) => c.textContent.includes('…'))));
+check('D5 raw fixtures hold whole payloads, no ellipsis', await q(p, () => ![...document.querySelectorAll('#transcript-inner [data-view="raw"] .code-block')].some((c) => c.textContent.includes('…'))));
 for (const [sel, name] of [['#m-marlow', 'Messaged card'], ['#m-t3', 'T3 Code card'], ['#approval', 'approval']]) {
   await q(p, (s) => { const c = document.querySelector(s); if (c.tagName === 'DETAILS') c.open = true; }, sel);
   await p.click(`${sel} [data-action="raw"]`);
@@ -101,7 +102,7 @@ await p.focus('#approval [data-action="standing-open"]');
 await p.keyboard.press(`${mod}+Enter`);
 await p.waitForSelector('#approval[data-state="once"]');
 check('D2 Cmd+Enter in the card allows once, and focus lands on the resolved card', await q(p, () => document.querySelector('#approval').contains(document.activeElement)));
-check('D4 the step, not the card, says the command is running', await q(p, () => document.querySelector('#s-exec').textContent.includes('Running mv')));
+check('D4 the action card, not the approval, says the command is running', await q(p, () => document.querySelector('#s-exec > summary').textContent.includes('Running') && document.querySelector('#s-exec').dataset.status === 'running'));
 
 // Questions, the held message ------------------------------------------------------------------
 await to(p, 'question');
@@ -186,10 +187,10 @@ await p.close();
 // D5: copy copies what it says ------------------------------------------------------------------
 p = await open(run + '&chrome=0', { clip: true });
 await to(p, 'approval');
-await q(p, () => (document.querySelector('#run-activity').open = true));
-await p.click('#run-activity .activity-foot .copy');
-check('D5 the run id copy button copies the run id', (await q(p, () => navigator.clipboard.readText())) === 'run_7f3a91c2');
-await q(p, () => { document.querySelector('#s-read').open = true; document.querySelector('#s-read [data-view-button="raw"]').click(); });
+await q(p, () => (document.querySelector('.run-line').open = true));
+await p.click('.run-line .activity-foot .copy');
+check('D5 the run line copies the run id', (await q(p, () => navigator.clipboard.readText())) === 'run_5c20e8aa');
+await q(p, () => { document.querySelector('#fold-s-read').open = true; document.querySelector('#s-read').open = true; document.querySelector('#s-read [data-view-button="raw"]').click(); });
 await p.click('#s-read [data-view="raw"] [aria-label="Copy took time"]');
 check('D5 a timing value copies', (await q(p, () => navigator.clipboard.readText())) === '0.6 s');
 await p.click('#s-read [data-view="raw"] [aria-label="Copy arguments"]');
@@ -199,7 +200,7 @@ await p.close();
 p = await open(run + '&chrome=0');
 await p.addInitScript(() => {});
 await to(p, 'read-done');
-await q(p, () => { Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.reject(new Error('denied')) }, configurable: true }); document.querySelector('#run-activity').open = true; document.querySelector('#s-read').open = true; });
+await q(p, () => { Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.reject(new Error('denied')) }, configurable: true }); document.querySelector('#s-read').open = true; });
 await p.click('#s-read [data-view="readable"] .code-head .copy');
 check('D5 a failed copy claims nothing and selects the text', await q(p, () => new Promise((r) => setTimeout(() => r(document.querySelector('#s-read [data-view="readable"] .code-head .copy').dataset.copied === 'failed' && getSelection().toString().length > 100 && document.querySelector('#announcer').textContent.startsWith("Couldn't copy")), 60))));
 await p.close();
@@ -211,7 +212,7 @@ await q(p, () => demo.disconnect());
 await p.waitForTimeout(150);
 const moving = await q(p, () => document.getAnimations().filter((a) => a.playState === 'running' && a.effect?.target && !a.effect.target.closest('.status-strip, .rail-footer, .rail-status')).map((a) => a.animationName + ' ' + (a.effect.target.className || a.effect.pseudoElement)));
 check('B4 nothing that stands for work is moving', moving.length === 0, JSON.stringify(moving));
-check('B4 what is left is marked last seen', await q(p, () => document.querySelector('#m-marlow .state').textContent === 'Last seen working' && document.querySelector('#s-msg .step-status').textContent === 'Last seen running' && document.querySelector('#run-activity .activity-label').textContent === 'Last seen working' && document.querySelector('#rail-marlow .bot-preview').textContent.startsWith('Last seen:') && document.querySelector('.status-phrase').textContent.startsWith('Reconnecting. Last seen')));
+check('B4 what is left is marked last seen', await q(p, () => document.querySelector('#m-marlow .state').textContent === 'Last seen working' && document.querySelectorAll('#transcript-inner .run-line').length === 1 && document.querySelector('#rail-marlow .bot-preview').textContent.startsWith('Last seen:') && document.querySelector('.status-phrase').textContent.startsWith('Reconnecting. Last seen')));
 await p.click('.composer-input');
 await p.keyboard.type('Are you there?');
 await p.keyboard.press('Enter');
@@ -248,7 +249,7 @@ await p.close();
 p = await open(run + '&tier=read');
 check('C10 read-only: an access bar in the composer place, no Stop, no New', await q(p, () => !!document.querySelector('.access-bar') && !document.querySelector('.composer-input') && document.querySelector('#rail-new').hidden && document.querySelector('.access-bar').textContent.includes("aren't shown")));
 await to(p, 'approval');
-check('C10 read-only: live work shows, the approval card does not', await q(p, () => !document.querySelector('#approval') && !!document.querySelector('#unseen-wait') && document.querySelector('.status-phrase').textContent === 'Waiting for an answer' && document.querySelectorAll('#run-activity .step').length > 5));
+check('C10 read-only: live work shows, the approval card does not', await q(p, () => !document.querySelector('#approval') && !!document.querySelector('#unseen-wait') && document.querySelector('.status-phrase').textContent === 'Waiting for an answer' && document.querySelectorAll('#transcript-inner .action').length >= 4 && !!document.querySelector('#s-exec[data-status="waiting"]')));
 await p.click('.access-bar [data-action="request-access"]');
 await p.waitForSelector('.access-bar[data-state="requested"]');
 check('C10 requested: the request id and the command, both copyable, and the owner controls', await q(p, () => { const bar = document.querySelector('.access-bar'); return bar.textContent.includes('7c41d09e') && !!bar.querySelector('[aria-label="Copy approve command"]') && !!bar.querySelector('[aria-label="Copy request id"]') && !document.querySelector('#run-owner').hidden; }));
@@ -271,7 +272,7 @@ check('B5 phone: the status line is in view after the approval and its shelf row
 await p.click('#approval [data-action="standing-open"]');
 await p.waitForTimeout(100);
 check('B2 phone: Deny is in the form, full width, 48px, and in view', await q(p, () => { const d = document.querySelector('#approval .standing [data-decision="deny"]').getBoundingClientRect(); const t = document.querySelector('#transcript').getBoundingClientRect(); return d.height >= 48 && d.width > 250 && d.bottom <= t.bottom && d.top >= t.top; }));
-check('D6 touch: a copy button answers a tap 18px from its centre', await q(p, () => { document.querySelector('#run-activity').open = true; document.querySelector('#s-thought').open = true; const c = document.querySelector('#s-thought [data-view="raw"]'); document.querySelector('#s-thought [data-view-button="raw"]').click(); const btn = document.querySelector('#s-thought [data-view="raw"] .copy'); btn.scrollIntoView({ block: 'center' }); const r = btn.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2 + 18) === btn && r.width >= 32; }));
+check('D6 touch: a copy button answers a tap 18px from its centre', await q(p, () => { document.querySelector('#fold-s-read').open = true; document.querySelector('#s-read').open = true; document.querySelector('#s-read [data-view-button="raw"]').click(); const btn = document.querySelector('#s-read [data-view="raw"] .copy'); btn.scrollIntoView({ block: 'center' }); const r = btn.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2 + 18) === btn && r.width >= 32; }));
 await q(p, () => document.querySelector('#transcript').scrollTo(0, 1e6));
 await p.click('.composer-input');
 await p.keyboard.type('Wait');
@@ -293,7 +294,7 @@ check('gallery: every step and card specimen has Raw', await q(p, () => [...docu
 check('C3 the receiving cards have content when opened', await q(p, () => [...document.querySelectorAll('.messaged[data-target="otto"]')].every((c) => c.querySelector('.exchange-text'))));
 check('C4 a T3 card without a link has no Open thread', await q(p, () => { const cards = [...document.querySelectorAll('.messaged[data-target="t3code"][data-state="call-made"]')]; return cards.some((c) => c.querySelector('[data-action="open-thread"]')) && cards.some((c) => !c.querySelector('[data-action="open-thread"]') && !c.querySelector('.chips')); }));
 await p.click('.messaged[data-target="t3code"][open] [data-action="open-thread"]');
-check('C4 Open thread says where it goes and makes no request', await q(p, () => document.querySelector('#proto-toast').textContent.includes('t3code.example') && location.href.includes('gallery.html')));
+check('C4 Open thread says where it goes and makes no request', await q(p, () => document.querySelector('#proto-toast').textContent.includes('t3.example') && location.href.includes('gallery.html')));
 await p.click('#question .spec:first-of-type .option[data-letter="A"]');
 check('C7 a gallery question answers', await q(p, () => document.querySelector('#question .spec:first-of-type .request').dataset.state === 'answered'));
 check('C7 three questions: Send answers waits for all three', await q(p, () => { const card = [...document.querySelectorAll('.request[data-kind="question"]')].find((c) => c.querySelectorAll('.question').length === 3); const send = card.querySelector('[data-action="send-answers"]'); const was = send.disabled; card.querySelectorAll('.question')[1].querySelector('.option').click(); const mid = send.disabled; card.querySelectorAll('.question')[2].querySelector('.option').click(); return was && mid && !send.disabled && card.querySelector('.question-count').textContent === '3 of 3 answered'; }));

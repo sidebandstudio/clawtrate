@@ -47,6 +47,19 @@
     memory: '<path d="M4.5 2.75h7v10.5L8 10.75l-3.5 2.5V2.75Z"/>',
     tool: '<path d="M8 2.5 13.5 8 8 13.5 2.5 8 8 2.5Z"/>',
     queue: '<path d="M3 4.5h10M3 8h7M3 11.5h4"/>',
+
+    // Action kinds that have no icon above.
+    recall: '<path d="M4.5 2.75h7v4.5M4.5 2.75v10.5l2.5-1.8"/><circle cx="10.4" cy="10.4" r="2.1"/><path d="m11.9 11.9 1.6 1.6"/>',
+    window: '<rect x="2" y="3" width="12" height="10" rx="2"/><path d="M2 6.25h12M4.4 4.6h.05M6.1 4.6h.05"/>',
+    tasks: '<rect x="2.75" y="5" width="8.5" height="8.25" rx="1.75"/><path d="M5.25 2.75h6.25c.97 0 1.75.78 1.75 1.75v6.25"/>',
+    helpers: '<circle cx="5.75" cy="5.5" r="2"/><circle cx="11" cy="6.25" r="1.6"/><path d="M2.25 12.75c.35-2.1 1.75-3.35 3.5-3.35s3.15 1.25 3.5 3.35M10 9.6c1.75-.25 3.25.8 3.75 3.15"/>',
+    question: '<circle cx="8" cy="8" r="5.75"/><path d="M6.4 6.4a1.7 1.7 0 1 1 2.35 1.55c-.5.22-.75.6-.75 1.15M8 11.1v.05"/>',
+    plan: '<path d="m2.75 4.6 1.1 1.1 1.9-2.1M2.75 9.6l1.1 1.1 1.9-2.1M7.75 4.75h5.5M7.75 9.75h5.5"/>',
+    image: '<rect x="2.5" y="3" width="11" height="10" rx="2"/><circle cx="6" cy="6.5" r="1.1"/><path d="m2.5 11.25 3.25-3 2.5 2.25 1.75-1.5 3.5 3"/>',
+    film: '<rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="m6.75 6 3.25 2-3.25 2V6Z"/>',
+    note: '<path d="M6 11.75V3.5l6-1.25v8.25"/><circle cx="4.5" cy="11.75" r="1.5"/><circle cx="10.5" cy="10.5" r="1.5"/>',
+    wave: '<path d="M2.75 8h.5M5 5.75v4.5M7.25 3.5v9M9.5 5.25v5.5M11.75 7v2M13.25 8h.01"/>',
+    plug: '<path d="M6 2.75v2.5M10 2.75v2.5M4.25 5.25h7.5v2.5a3.75 3.75 0 0 1-7.5 0v-2.5ZM8 11.5v1.75"/>',
     "new-task": '<rect x="2.75" y="2.75" width="10.5" height="10.5" rx="2.25"/><path d="M8 5.75v4.5M5.75 8h4.5"/>',
 
     // The Work pane: files, media and the computer.
