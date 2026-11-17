@@ -318,18 +318,19 @@ test.describe("action cards", () => {
   }) => {
     await open(page, "actions-failed");
     const fold = cards(page).nth(0);
+    // The plural counts the reads that were done; the failed one is named and counted beside it.
     await expect(line(fold)).toHaveAccessibleName(
-      "Read 3 files, couldn't read backup-2026-11-08.log, 1 failed",
+      "Read 2 files, couldn't read backup-2026-11-08.log, 1 failed",
     );
     await expect(fold.locator(".action-detail")).toHaveAttribute("data-tone", "danger");
     // Two commands fold; the timed-out one is named on the fold's line.
     const commands = cards(page).nth(1);
-    await expect(line(commands)).toHaveAccessibleName("Ran 2 commands, timed out: rsync, 1 failed");
+    await expect(line(commands)).toHaveAccessibleName("Ran 1 command, timed out: rsync, 1 failed");
     await line(commands).click();
     const rows = commands.locator(".fold-rows .step > summary");
     // A non-zero exit is the command's answer, not a failure.
     await expect(rows.nth(0)).toHaveAccessibleName(
-      "Ran grep, grep -c transcode /etc/backup/exclude, exit 1, 0.1 seconds",
+      "Ran grep, grep -c transcode /etc/backup/exclude, exit 1, done",
     );
     await expect(rows.nth(1)).toHaveAccessibleName("Timed out: rsync, its 120s limit, timed out");
     await expect(line(cards(page).nth(2))).toHaveAccessibleName(
@@ -345,7 +346,7 @@ test.describe("action cards", () => {
     // A mixed fold: the first problem in row order, its count, and a waiting member waits.
     await open(page, "actions-mixed");
     await expect(line(cards(page).nth(0))).toHaveAccessibleName(
-      'Searched memory 3 times, couldn\'t search memory for "loft insulation", 1 unavailable, 1 partial',
+      'Searched memory 2 times, couldn\'t search memory for "loft insulation", 1 unavailable, 1 partial',
     );
     await expect(line(cards(page).nth(2))).toHaveAccessibleName(
       "Commands · 3 calls, 1 failed: couldn't run mv, waiting for you",
