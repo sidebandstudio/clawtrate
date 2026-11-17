@@ -4584,7 +4584,8 @@ export class ClawtrateClient {
   private listCreated(created: CreatedTask): string {
     const key = capId(created.key, MAX_ID_CHARS);
     if (!this.rows.has(key) && isTaskSession(created.row)) {
-      this.rows.set(key, SESSION_ROW(created.row));
+      // Within the same bound as a list read: the newest `MAX_LISTED_TASKS`, the oldest giving way.
+      this.rows = newestRows([...this.rows.values(), created.row]);
       this.publishTasks();
     }
     return created.key;
