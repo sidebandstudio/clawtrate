@@ -484,6 +484,70 @@ await q(p, () => demo.runTo("approval"));
 check("read-only: the same cards, and the waiting card says Waiting for approval", await q(p, () => document.querySelector("#s-exec .action-state").textContent === "Waiting for approval" && !!document.querySelector("#fold-s-read")));
 await p.close();
 
+// One reading for every kind, one function for every fold (7.3, 7.4, 11.3) -----------------------------------
+p = await open(gallery("actions"));
+const r3 = await q(p, () => {
+  const call = (id, name, args, details = {}, extra = {}) => ({ id, name, args, details, text: JSON.stringify(details), status: "done", started: 1000, ended: 2000, took: "1.0s", ...extra });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const look = (html) => {
+    host.innerHTML = html;
+    const el = host.firstElementChild;
+    return { line: line(el), status: el.dataset.status, time: el.querySelector(":scope > summary .action-time")?.textContent || "", body: el.innerText };
+  };
+  const single = (c) => ({ ...look(CT.actionCard(c)), outcome: CT.outcomeOf(c).outcome });
+  const r = {};
+  r.history = single(call("h", "sessions_history", { sessionKey: "agent:other:main" }, { status: "forbidden", error: "Session history visibility is restricted." }));
+  r.search = single(call("s", "sessions_search", { sessionKey: "agent:other:main", query: "boiler" }, { status: "forbidden", error: "Session search visibility is restricted." }));
+  r.goal = single(call("g", "update_goal", { status: "complete" }, { status: "error", error: "No active goal requires a status change.", nextAction: "Do not retry update_goal." }));
+  r.pdfs = single(call("p", "pdf", { pdfs: Array.from({ length: 11 }, (_, i) => `file-${i}.pdf`) }, { error: "too_many_pdfs", count: 11, max: 10 }, { text: "Too many PDFs: 11 provided, maximum is 10." }));
+  r.images = single(call("i", "view_image", { paths: Array.from({ length: 21 }, (_, i) => `image-${i}.png`) }, { error: "too_many_images", count: 21, max: 20 }, { text: "Too many images: 21 provided, maximum is 20." }));
+  r.general = [{ outcome: { code: "unknown" } }, { removed: false }, { effect: "unverifiable" }, { status: "forbidden", error: "policy refused" }, { status: "queued" }].map((d, i) => single(call(`x${i}`, "custom_tool", {}, d)));
+  const pending = (id, command) => call(id, "exec", { command }, { status: "approval-pending", approvalId: `approval-${id}` });
+  r.pendingFold = look(CT.foldCard([pending("e1", "echo hi"), pending("e2", "echo hello")]));
+  const feedOf = () => {
+    host.replaceChildren();
+    return CT.feed({ insert: (html) => (host.insertAdjacentHTML("beforeend", html), host.lastElementChild), instant: () => true });
+  };
+  let feed = feedOf();
+  for (const id of ["f1", "f2"]) {
+    feed.start({ id, name: "exec", args: { command: "echo hi" } });
+    feed.update(id, { status: "done", text: "Approval pending.", details: { status: "approval-pending", approvalId: `approval-${id}` }, took: "1.0s" });
+  }
+  r.pendingFeed = { ...look(host.firstElementChild.outerHTML), cards: host.children.length };
+  r.keys = ["automations", "cron"].map((name) => CT.kindOf(call(`k-${name}`, name, { action: "list" })).key);
+  feed = feedOf();
+  for (const name of ["automations", "cron"]) {
+    feed.start({ id: `r-${name}`, name, args: { action: "list" } });
+    feed.update(`r-${name}`, { status: "done", details: { jobs: [] }, took: "0.1s" });
+  }
+  r.routineCards = host.children.length;
+  const read = (items) => look(CT.t3Thread([call("t3-read", "tools__t3_thread_read", { threadId: "thread-a" }, { mcpServer: "coder", mcpTool: "t3_thread_read", structuredContent: { thread: { id: "thread-a", latestRunId: "run-a", status: "completed" }, items, hasMore: false } }, { mcp: { server: "coder", tool: "t3_thread_read" } })], { open: true })).body;
+  const said = { position: 1, itemId: "item-a", type: "assistant_message", runId: "run-a", text: "The whole reply", textTruncated: false };
+  r.readWhole = read([said]);
+  r.readOtherCut = read([said, { position: 2, itemId: "item-b", type: "user_message", runId: "run-a", text: "Part of what you", textTruncated: true, nextTextOffset: 16 }]);
+  r.readEarlierRunCut = read([{ ...said, runId: "run-0", textTruncated: true, nextTextOffset: 8 }, said]);
+  host.remove();
+  return r;
+});
+check("M1 a forbidden task read is Not run, in words", r3.history.outcome === "refused" && r3.history.status === "refused" && r3.history.line.startsWith("Didn't read") && r3.history.line.endsWith("Not run"), JSON.stringify(r3.history));
+check("M1 a forbidden task search is Not run, in words", r3.search.outcome === "refused" && r3.search.line.startsWith('Didn\'t search tasks for "boiler"') && r3.search.line.endsWith("Not run"), JSON.stringify(r3.search));
+check("M1 a goal update that returned status error is Failed, with the next step", r3.goal.outcome === "failed" && r3.goal.line.startsWith("Couldn't mark the goal complete") && r3.goal.line.endsWith("Failed"), JSON.stringify(r3.goal));
+check("M1 too many PDFs is Not run: Too many", r3.pdfs.outcome === "refused" && r3.pdfs.line.startsWith("Didn't read 11 PDFs") && r3.pdfs.line.endsWith("Too many"), JSON.stringify(r3.pdfs));
+check("M1 too many images is Not run: Too many", r3.images.outcome === "refused" && r3.images.line.startsWith("Didn't look at 21 images") && r3.images.line.endsWith("Too many"), JSON.stringify(r3.images));
+check(
+  "M1 the general card reads every field of 7.3: unknown outcome, removed false, unverifiable, forbidden, queued; none is Done",
+  r3.general.map((g) => g.outcome).join(",") === "made,notfound,unconfirmed,refused,queued" && ["Unknown", "Not found", "Not confirmed", "Not run", "Queued"].every((w, i) => r3.general[i].line.endsWith(w) && r3.general[i].status !== "done"),
+  JSON.stringify(r3.general.map((g) => [g.outcome, g.line])),
+);
+check("M3 two commands pending approval, folded directly: Waiting, the neutral plural, no duration", r3.pendingFold.status === "waiting" && r3.pendingFold.line.startsWith("Commands · 2 calls") && r3.pendingFold.line.endsWith("Waiting for you") && !r3.pendingFold.time && !/\d\.\ds/.test(r3.pendingFold.line), JSON.stringify(r3.pendingFold));
+check("M3 the same two through the feed: one fold, Waiting, no duration", r3.pendingFeed.cards === 1 && r3.pendingFeed.status === "waiting" && r3.pendingFeed.line.startsWith("Commands · 2 calls") && !r3.pendingFeed.time && !/\d\.\ds/.test(r3.pendingFeed.line), JSON.stringify(r3.pendingFeed));
+check("M3 automations list and cron list have different keys and stay two cards", r3.keys[0] !== r3.keys[1] && r3.routineCards === 2, JSON.stringify([r3.keys, r3.routineCards]));
+check("M4 a read with every item whole says Read to the end", r3.readWhole.includes("Read to the end."), r3.readWhole);
+check("M4 a cut user message of the run: no Read to the end, and says the run was cut", !r3.readOtherCut.includes("Read to the end") && r3.readOtherCut.includes("Part of the run only"), r3.readOtherCut);
+check("M4 a cut item of an earlier run does not count against this run's reply", r3.readEarlierRunCut.includes("Read to the end."), r3.readEarlierRunCut);
+await p.close();
+
 // Phone width -------------------------------------------------------------------------------------------------
 p = await open(scene("long", "&at=end&width=phone"), { w: 390, h: 844, touch: true });
 check("phone: the detail moves to a last line and is never dropped", await q(p, () => [...document.querySelectorAll("#transcript-inner .action > summary")].every((s) => { const d = s.querySelector(".action-detail"); return !d.textContent || (d.checkVisibility() && d.getBoundingClientRect().top >= s.querySelector(".action-sentence").getBoundingClientRect().bottom - 2); })));
