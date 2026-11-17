@@ -406,7 +406,8 @@
   color: var(--text);
 }
 
-.turn-error {
+/* Two classes: the card's own fill (cards/cards.css) must not win by load order. */
+.card.turn-error {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto;
   gap: 2px 10px;
