@@ -14,7 +14,7 @@
     "e2e": "playwright test",
     "fixture": "pnpm --filter @clawtrate/desktop fixture",
     "visual": "playwright test -c playwright.visual.config.ts",
-    "visual:update": "playwright test -c playwright.visual.config.ts --update-snapshots",
+    "visual:update": "playwright test -c playwright.visual.config.ts --update-snapshots=all",
     "desktop": "pnpm --filter @clawtrate/desktop start",
     "desktop:dev": "pnpm --filter @clawtrate/desktop dev",
     "preview:web": "pnpm --filter @clawtrate/desktop preview:web",
