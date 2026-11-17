@@ -10,7 +10,7 @@ A desktop and iOS client for [OpenClaw](https://github.com/openclaw/openclaw). C
 
 Clawtrate is an independent project and is not affiliated with OpenClaw or xAI.
 
-Status: early development. This first version is read-only. It pairs with a gateway, lists bots and their tasks, and shows each conversation with its reasoning and tool calls.
+Status: early development. This first version is read-only. It pairs with a gateway and shows your bots in one list, each drawn as its own character (or with the picture the gateway gives it), with its latest activity, whether it is working, and whether anything is unread. A bot with several tasks unfolds to show them under it. The open task reads as a conversation of bubbles; the bot's reasoning and tool calls are folded into one line per run and open to the full arguments and results. A Work pane beside the conversation shows the task's details, and becomes a drawer on narrower windows. The same interface works at phone width, one pane at a time. While the connection drops and returns, everything stays on screen and one small strip says what is happening.
 
 ## Quickstart
 
@@ -71,6 +71,17 @@ pnpm test
 pnpm exec playwright install chromium   # once
 pnpm e2e
 ```
+
+### Without a gateway: the fixture mode and the visual tests
+
+```bash
+pnpm fixture   # builds the interface on fixed sample data and serves it on 127.0.0.1:5341
+pnpm visual    # screenshot, legibility and behaviour tests against the fixture mode
+```
+
+The fixture mode is the real interface fed a fixed state through the same bridge the hosts use. It needs no gateway and makes no request of its own. Pick what it shows from the address: `?scene=` with `main`, `connect`, `connect-error`, `connecting`, `pairing`, `reconnecting`, `offline`, `catching-up`, `synced`, `sync-failed`, `refresh-failed`, `load-failed`, `loading`, `discovery-error`, `discovering`, `empty`, `partial` or `zero-tasks`; `&bot=otto&task=agent:otto:disk-space` to open a task; `&panel=open`; `&theme=dark`. It is a separate build, never part of the desktop app or the web preview.
+
+`pnpm visual` compares screenshots with the baselines in `visual/baselines/`, which are taken on macOS and only valid there. After an intended change, `pnpm visual:update` rewrites them; look at every changed image before committing it.
 
 `pnpm e2e` uses the development gateway. If none is running it starts one, then stops it again afterwards. It also starts a preview host with a fresh device identity, approves the pairing request it raises, and checks that the bots, a task list and a transcript render.
 

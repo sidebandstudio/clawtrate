@@ -86,7 +86,7 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
   - `discovery.mdns.mode: "off"`, `update.checkOnStart: false` and the memory plugin's dreaming job off.
 - **Enforcement.** `start` writes the config fresh and refuses to run if any of these guarantees is missing. `start` and `seed` both read the gateway's effective exec policy with `openclaw --dev approvals get` and fail unless every bot's effective exec security is `deny`. Unit tests cover the generated config.
 - **Processes.** `start` records its run id and the PIDs it spawned in `tools/dev-gateway/.run/state.json`, which is git-ignored, along with the logs and the connection file, and the same run id and PIDs in the state folder's marker. `stop` sends SIGTERM to those PIDs, waits up to 15 seconds, then sends SIGKILL, and does the same for any direct child the gateway left behind. The e2e teardown stops the preview host the same way after 10 seconds, and stops the gateway only if the test started it. Nothing is ever stopped by name.
-- **Ports.** Gateway 19001, scripted model 19091, web preview 5310, e2e preview host 5317 (loopback only).
+- **Ports.** Gateway 19001, scripted model 19091, web preview 5310, e2e preview host 5317 (loopback only), fixture mode 5341 (loopback only).
 
 ### Checked against the gateway research notes
 
@@ -107,9 +107,39 @@ The research notes (merged separately) recommend four things. This branch does a
 - **Where the mark appears.** Inside the app the mark appears only on the connection and pairing screens, at 56 px. The rail has no product name.
 - **Type.** One family, Figtree (`@fontsource-variable/figtree` 5.3.0), in two weights, with JetBrains Mono (`@fontsource-variable/jetbrains-mono` 5.3.0) for code. Both are under the SIL Open Font License 1.1, which allows bundling them in an MIT app as long as the fonts are not sold alone and their notice travels with them; the font packages carry it. The bundler includes the fonts from the packages, so the app loads no fonts from the network and no font file is committed. Instrument Sans and Instrument Serif are removed.
 
+## Interface: the visual language
+
+The shell follows `docs/design/visual-language.md`, built in the order of its section 14. What a later builder should know:
+
+- **One test for each layout switch, shared with the stylesheet.** `packages/ui/src/layout.ts` holds the two widths: one pane below 688 px of `.app`, and Work docked from 960 px of `.main-pane`. The stylesheet's container queries use the same numbers, and the code measures the same elements with a `ResizeObserver`, so the layout and the behaviour that depends on it (the drawer's dialog role, focus, `inert`) cannot disagree.
+- **Selection.** `packages/ui/src/selection.ts` keeps the selected bot, the remembered task for each bot (it wins over the most recent), the bots unfolded by hand and whether the open bot was folded by hand; the last two persist. A bot's row summarises all of its tasks with three independent signals (latest activity, unread, run state, failed before working).
+- **May this connection write?** `canWrite` in `packages/ui/src/access.ts` returns false: the client asks for `operator.read` and the bridge has no command that writes. Nothing that creates or sends is rendered; the composer is the read-only pill.
+- **The strip.** `packages/ui/src/StatusStrip.tsx` derives every state from what the shell already has. After a connection problem the shell is "dropped" until bots, tasks and the open task have loaded again, then "Synced" shows for four seconds. "Try again" for one task sends `closeSession` and then `openSession`.
+- **Following the end of a transcript.** The view follows new output while the reader is at the end. A scroll the reader did not make, such as content growing when fonts arrive, keeps following; only the reader moving up stops it. Width changes keep the first item in view in place.
+
+Where the build departs from the specification, and why:
+
+- **Task rows show no time.** The specification gives a task row its title and at most one mark, with the time in the accessible description; the prototype's screenshots show a time on each row. The specification was followed, so long titles have the row's full width. `F-425` asks for the time in the row; it is in the row's description and in Details, not visible.
+- **The title pill opens Work and does not close it**, as the specification says; the panel button toggles. Its name always ends "Show details."
+- **A failed discovery in the strip** reads "Could not load this gateway's bots and tasks", with the gateway's message as the explanation after the dot. The gateway's message alone can be long, and the first part of the strip never shortens.
+- **A task with no messages** says "Messages between you and <Bot> in this task will appear here." The specification's "Say what you need" invites typing, which a read-only connection cannot do.
+- **The development gateway's hint** ("127.0.0.1:19001, started with `pnpm dev-gateway up`") moved into the button's tooltip, so the connect screen has the one hint the design gives it.
+- **A connection error** is titled "Could not connect"; the error's code stays visible, small, under the sentence, for support.
+- **System messages** are centred event lines outside `.turn`, as before, so `transcript-turn` still counts user and assistant items only.
+- **The gateway's name** is its address (host and port): the gateway does not report a name.
+- **The task-title tooltip** shows on any focus, not only keyboard focus, so a test can focus a row and see it.
+- **Pins, sections, search, "+" and New task** are not rendered (section 14 says so). The `.pin*` and `.rail-section` rules, the composer's field and send button and the extra state marks were not brought over, and the rail's top is a 12 px drag band (40 px in the macOS app).
+
+## Fixture mode and visual tests
+
+- **Fixture mode.** `apps/desktop/src/fixture/` is a separate Vite entry (`apps/desktop/vite.fixture.config.ts`, output `out/fixture`) that renders the shared `App` through a `ClawtrateBridge` holding fixed state: five bots (one with a picture, one with one task, one with fourteen, a long name), a long transcript with reasoning and tool calls in every state, and scenes for pairing, reconnecting, catching up, synced, a task that failed to sync or load, an empty gateway and more. It cannot reach a packaged app: neither the Electron build nor the web preview's build refers to it, and `apps/desktop/test/fixture-isolation.test.ts` fails if one does. Its page sets `connect-src 'none'`, and a visual test checks that it requests nothing but its own files. `pnpm fixture` serves it on `127.0.0.1:5341`.
+- **Visual tests.** `pnpm visual` (`playwright.visual.config.ts`, tests in `visual/`) builds and serves the fixture and runs three things: screenshots of the connect, pairing and main views, Work closed and open, in light and dark at 1440, 1100 and 800 px and at phone width (390 × 844 with a touch pointer), plus the phone's bot list; a legibility audit over fourteen states in both themes at 1440 px and phone width that measures every rendered text node's size (at least 12 px) and its contrast against its composited background (at least 4.5:1), skipping only what is inert behind the drawer's scrim; and behaviour checks for the rail, the Work pane, the strip and the phone. The clock is fixed and the time zone is America/New_York, so times are stable.
+- **Tolerance.** A pixel differs when its colour moves more than Playwright's 0.2 threshold; a screenshot passes with at most 0.2% of pixels different. Animations are stopped and the caret hidden.
+- **The baselines are specific to macOS.** Font rasterising differs between operating systems, so the baselines live under `visual/baselines/darwin/` and only that platform can compare against them. They are not part of the CI workflow. They were approved by the builder's own review, not yet by the owner.
+
 ## Not done yet
 
-- The work panel is an empty frame; it will hold files, the plan and raw tool calls.
+- The Work pane shows the task's details; its Files and Computer tabs are empty states until those flows exist.
 - Read and unread is tracked per viewer in local storage. Marking a task read on the gateway needs a write scope.
 - The app does not page back through history beyond 200 rows.
 - There is no packaged Electron build or installer; `pnpm desktop` runs from source.
