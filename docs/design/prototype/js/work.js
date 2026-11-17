@@ -187,6 +187,32 @@
       tooLarge: true,
       source: null,
     },
+    // A script over 256 KiB: only the asset reader sends it, and only from an ordinary folder.
+    "tools/dashboard.js": {
+      folder: "tools",
+      size: 421888,
+      time: "5:32 PM",
+      full: "Today 5:32 PM",
+      type: "text/javascript",
+      kind: "text",
+      group: "read",
+      bigScript: true,
+      content: "// Disk dashboard for media-box (a sample, shortened here).\nexport function render(usage) {\n  return usage.map((row) => `${row.path}: ${row.gb} GB`).join(\"\\n\");\n}\n",
+      source: null,
+    },
+    // A picture over 1 MiB in the task's folder: the workspace reader sends it only when the
+    // task's folder is established as the bot's workspace.
+    "charts/rack-photo.jpg": {
+      folder: "charts",
+      size: 3250585,
+      time: "5:25 PM",
+      full: "Today 5:25 PM",
+      type: "image/jpeg",
+      kind: "image",
+      group: "read",
+      largeTaskPicture: true,
+      source: null,
+    },
     "AGENTS.md": {
       folder: "",
       size: 214,
@@ -707,12 +733,31 @@
     `</dl><p class="reader-why">${why}</p>`;
   CT.workFacts = facts;
 
+  // The task's kind of folder, from its row (work-pane.md, section 8). ?repo=1: a
+  // repository the gateway keeps. ?taskroot=worktree: an ordinary folder of its
+  // own, so it is not established as the bot's workspace.
+  const repoTask = () => params.get("repo") === "1";
+  const sameFolder = () => !repoTask() && params.get("taskroot") !== "worktree";
+  // The limit a file meets with the readers available to this task, or "" when one sends it.
+  function readerLimit(f, name) {
+    if (repoTask()) {
+      if (f.kind === "audio" || f.kind === "video")
+        return `This task works in a repository the gateway keeps. The gateway sends only text and pictures from it, so ${esc(name)} can't be played or downloaded here.`;
+      if ((f.kind === "text" || f.kind === "image") && f.size > 262144)
+        return `${esc(name)} is ${size(f.size)}. From a repository the gateway keeps, it sends text and pictures up to 256 KB, so it can't be shown or downloaded here.`;
+    }
+    if (f.largeTaskPicture && !sameFolder())
+      return `${esc(name)} is ${size(f.size)}. From this task's folder the gateway sends pictures up to 1 MB.`;
+    return "";
+  }
+
   function readerLevel(b, t, st, level) {
     const path = level.path;
     const f = files[path];
     const name = path.split("/").pop();
-    // Which read method sends it (work-pane.md, section 8); nothing sends the rest.
-    const sendable = ["text", "image", "audio", "video"].includes(f.kind) && !f.tooLarge;
+    // Which reader sends it (work-pane.md, section 8); nothing sends the rest.
+    const blocked = readerLimit(f, name);
+    const sendable = ["text", "image", "audio", "video"].includes(f.kind) && !f.tooLarge && !blocked;
     const actions =
       (sendable
         ? `<button type="button" class="icon-button" data-variant="quiet" data-files="download" aria-label="Download ${esc(name)}" title="Download">${icon("download")}</button>`
@@ -751,7 +796,8 @@
           : "";
 
     let body;
-    if (f.tooLarge && f.kind === "text") body = facts(f, name, `${esc(name)} is ${size(f.size)}. The gateway sends text up to 256 KB, so it can't be shown or downloaded here.`);
+    if (blocked) body = facts(f, name, blocked);
+    else if (f.tooLarge && f.kind === "text") body = facts(f, name, `${esc(name)} is ${size(f.size)}. The gateway sends text up to 256 KB, so it can't be shown or downloaded here.`);
     else if (f.tooLarge) body = facts(f, name, `${esc(name)} is ${size(f.size)}. The gateway sends recordings and videos from a task's folder up to 1 MB, so it can't be played or downloaded here.`);
     else if (f.kind === "binary") body = facts(f, name, `${esc(name)} isn't text or media. None of the gateway's file methods sends files like this, so it can't be shown or downloaded here.`);
     else if (f.kind === "audio")

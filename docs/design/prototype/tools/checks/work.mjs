@@ -72,7 +72,7 @@ await p.close();
 p = await open(files);
 check("F-152 files tab lists the task's changed and read files", await q(p, () => {
   const heads = [...document.querySelectorAll("#panel-files .files h3")].map((h) => h.textContent);
-  return heads.join() === "Changed,Read,Sent in chat" && document.querySelectorAll('#panel-files [data-open]').length === 7;
+  return heads.join() === "Changed,Read,Sent in chat" && document.querySelectorAll('#panel-files [data-open]').length === 9;
 }));
 check("F-321 a file changed by a file tool carries the run marker", await q(p, () =>
   document.querySelector('[data-open="notes/disk-2026-11-16.md"]').textContent.includes("Changed last run") &&
@@ -142,6 +142,26 @@ for (const [path, words, name] of [
     [...document.querySelectorAll(".reader-facts dt")].map((d) => d.textContent).join() === "Name,Size,Modified,Type,Folder", words));
   await p.close();
 }
+// M1: the three readers, the two kinds of task folder, and which file a path names.
+p = await open(`${files}&file=tools/dashboard.js`);
+check("M1 a script over 256 KiB in an ordinary task folder is read through the asset reader: shown, with Download and Copy", await q(p, () =>
+  !!document.querySelector(".code-view") && !!document.querySelector('[data-files="download"]') && !!document.querySelector('[data-files="copy"]')));
+await p.close();
+p = await open(`${files}&file=charts/rack-photo.jpg`);
+check("M1 a larger task picture uses the workspace reader when the task's folder is established as the workspace", await q(p, () => !!document.querySelector(".reader-image") && !!document.querySelector('[data-files="download"]')));
+await p.close();
+p = await open(`${files}&file=charts/rack-photo.jpg&taskroot=worktree`);
+check("M1 without that evidence the pane stays with the task's readers and names their limit", await q(p, () =>
+  !document.querySelector(".reader-image") && !document.querySelector('[data-files="download"]') && document.querySelector(".reader-why").textContent === "rack-photo.jpg is 3.1 MB. From this task's folder the gateway sends pictures up to 1 MB."));
+await p.close();
+p = await open(`${files}&file=notes/voice-memo.m4a&repo=1`);
+check("M1 a repository-backed task has no audio or video playback, at any size", await q(p, () =>
+  !document.querySelector("[data-play-file]") && !document.querySelector('[data-files="download"]') && document.querySelector(".reader-why").textContent.startsWith("This task works in a repository the gateway keeps. The gateway sends only text and pictures from it")));
+await p.close();
+p = await open(`${files}&file=tools/dashboard.js&repo=1`);
+check("M1 from a repository, text over 256 KiB can't be sent, even a script", await q(p, () =>
+  !document.querySelector(".code-view") && document.querySelector(".reader-why").textContent.includes("From a repository the gateway keeps, it sends text and pictures up to 256 KB")));
+await p.close();
 p = await open(`${files}&file=notes/voice-memo.m4a`);
 check("M1 a recording up to 1 MB in the task's folder plays in the pane and can be downloaded", await q(p, () => {
   document.querySelector("[data-play-file]").click();
@@ -220,11 +240,11 @@ p = await open(`${files}&files=error`);
 check("F-320 a failed listing shows the error and Try again", await q(p, () => document.querySelector("#panel-files [role=alert]").textContent.includes("Couldn't load this task's files")));
 await p.click('[data-files="retry"]');
 await p.waitForTimeout(800);
-check("F-320 a successful retry replaces the error with the listing", await q(p, () => !document.querySelector("#panel-files [role=alert]") && document.querySelectorAll("#panel-files [data-open]").length === 7));
+check("F-320 a successful retry replaces the error with the listing", await q(p, () => !document.querySelector("#panel-files [role=alert]") && document.querySelectorAll("#panel-files [data-open]").length === 9));
 await p.close();
 
 p = await open(`${files}&files=stale`);
-check("F-320 a failed refresh keeps the list under one line", await q(p, () => document.querySelector(".files-alert").textContent.startsWith("Couldn't refresh. Showing the list from") && document.querySelectorAll("#panel-files [data-open]").length === 7));
+check("F-320 a failed refresh keeps the list under one line", await q(p, () => document.querySelector(".files-alert").textContent.startsWith("Couldn't refresh. Showing the list from") && document.querySelectorAll("#panel-files [data-open]").length === 9));
 await p.close();
 
 p = await open(`${files}&files=loading&motion=reduce`);
@@ -239,7 +259,7 @@ await p.close();
 
 p = await open(`${files}&files=many`);
 await p.fill("#files-filter", "media-2026-10-0");
-check("many files: the filter narrows the list and says how many", await q(p, () => /^\d+ of 42 files$/.test(document.querySelector(".files-filter [role=status]").textContent) && document.activeElement.id === "files-filter"));
+check("many files: the filter narrows the list and says how many", await q(p, () => /^\d+ of 44 files$/.test(document.querySelector(".files-filter [role=status]").textContent) && document.activeElement.id === "files-filter"));
 await p.keyboard.press("Escape");
 check("Escape clears the filter", await q(p, () => document.querySelector("#files-filter").value === "" && !document.querySelector(".files-filter [role=status]")));
 await p.close();
