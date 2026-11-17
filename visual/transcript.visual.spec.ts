@@ -93,6 +93,45 @@ test("F-063: centred grey stamps separate blocks: before the first message and a
   // No time beside a message; its exact time is its tooltip.
   await expect(page.locator(".turn time")).toHaveCount(0);
   await expect(page.locator(".msg .bubble").first()).toHaveAttribute("title", /\d:\d\d/);
+
+  // The same day: the last reply comes exactly ten minutes after the message
+  // before it (no new stamp), then a minute more (a stamp before it).
+  const delayLast = (minutes: number) =>
+    page.evaluate((by) => {
+      type Item = { timestamp: number | null };
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (
+              change: (state: { transcripts: Record<string, { items: Item[] }> }) => object,
+            ) => void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const items = state.transcripts[key]!.items;
+        const before = items.at(-2)!.timestamp!;
+        const last = { ...items.at(-1)!, timestamp: before + by * 60_000 };
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: { ...state.transcripts[key]!, items: [...items.slice(0, -1), last] },
+          },
+        };
+      });
+    }, minutes);
+  await delayLast(10);
+  await expect(stamps).toHaveText(["Yesterday 2:40 PM", "Today 5:31 PM"]);
+  await delayLast(11);
+  await expect(stamps).toHaveText(["Yesterday 2:40 PM", "Today 5:31 PM", /^Today 5:4\d PM$/]);
+  // The new stamp sits between the two messages.
+  const [message, stamp] = await Promise.all([
+    rect(page.locator(".msg").nth(-2)),
+    rect(stamps.last()),
+  ]);
+  expect(stamp.y).toBeGreaterThan(message.y);
 });
 
 test("F-064: your messages are right-aligned round bubbles in the accent, and the appearance choice turns them neutral", async ({
