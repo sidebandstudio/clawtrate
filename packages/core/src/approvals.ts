@@ -14,7 +14,7 @@ import {
   type Step,
   type TaskActivity,
 } from "./runs.ts";
-import { APPROVAL } from "./state-bounds.ts";
+import { APPROVAL, MAX_SENT_DECISIONS, MAX_SETTLING_RECORDS } from "./state-bounds.ts";
 
 export type ApprovalKind = "exec" | "plugin" | "system-agent";
 export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
@@ -159,7 +159,42 @@ export type ApprovalCard = {
   cut?: string[];
   /** A resolution from this client is on its way, or the last one failed. */
   submitting: boolean;
+  /** The latest decision on its way while `submitting`; a Deny may still follow an allow. */
+  submittingDecision: ApprovalDecision | null;
+  /**
+   * The number of the latest attempt for this approval. Every decision sent
+   * and every read-back sent takes the next number; a response settles only
+   * the attempt it belongs to.
+   */
+  attempt: number;
+  /** Decisions on their way, by attempt: at most an allow and a Deny that followed it. */
+  inFlight: DecisionAttempt[];
+  /**
+   * The attempt number current when the latest unknown outcome was
+   * established. Only a read-back numbered above it, answered before any newer
+   * attempt began, can clear it. Null when no outcome is unknown.
+   */
+  unknownAt: number | null;
+  /** A Deny is among the decisions whose outcome is unknown: no Deny is sent again until read back. */
+  unknownDeny: boolean;
+  /** The attempt number of the latest read-back still on its way, or null. */
+  readingAt: number | null;
+  /** The decisions this client sent, newest last, as sent. */
+  sent: SentRequest[];
+  /** The records the gateway sent that settled it, by source; empty while pending or when none arrived. */
+  settledBy: SettlingRecord[];
   error: string | null;
+  /**
+   * What the last failed resolution from this client establishes. `refused`:
+   * the gateway answered with an error, so it did not apply that decision;
+   * it does not say the request is still open. `unknown`: no answer came
+   * after the decision was sent, so it may or may not have been applied, and
+   * no allow is accepted until the request's state has been read back
+   * (`checkApproval`). Null when nothing failed, or nothing was sent.
+   */
+  decisionError: "refused" | "unknown" | null;
+  /** A read-back after a refused decision found the request still pending. */
+  stillOpen: boolean;
   /** The record as received. */
   raw: unknown;
 };
@@ -170,6 +205,25 @@ export type ApprovalCard = {
  * others failed (`approvalSources` says which); an incomplete list is not "no
  * approvals".
  */
+/** One decision this client sent for an approval, and the attempt number it carries. */
+export type DecisionAttempt = { attempt: number; decision: ApprovalDecision };
+
+/**
+ * A record the gateway sent that settled a request, as it sent it, and where
+ * it came from: the event's name, or the method whose reply it is.
+ */
+export type SettlingRecord = { via: string; record: unknown };
+/** A request this client sent to settle a request: its method and its parameters, as sent. */
+export type SentRequest = { method: string; params: unknown };
+
+/** Add records to those kept: a newer record from the same source replaces the older one. */
+export function withRecords(kept: SettlingRecord[], added: SettlingRecord[]): SettlingRecord[] {
+  if (added.length === 0) return kept;
+  let out = kept;
+  for (const each of added) out = [...out.filter((one) => one.via !== each.via), each];
+  return out.slice(-MAX_SETTLING_RECORDS);
+}
+
 export type ApprovalAccess = "unavailable" | "loading" | "ready" | "partial" | "error";
 export type ApprovalSourceAccess = "unavailable" | "loading" | "ready" | "error";
 export const APPROVAL_KINDS: readonly ApprovalKind[] = ["exec", "plugin", "system-agent"];
@@ -257,7 +311,17 @@ function blank(id: string, kind: ApprovalKind, raw: unknown): ApprovalCard {
     decisionDigest: "",
     decisionCut: false,
     submitting: false,
+    submittingDecision: null,
+    attempt: 0,
+    inFlight: [],
+    unknownAt: null,
+    unknownDeny: false,
+    readingAt: null,
+    sent: [],
+    settledBy: [],
     error: null,
+    decisionError: null,
+    stillOpen: false,
     raw,
   };
 }
@@ -473,6 +537,8 @@ export type ApprovalResolution = {
   /** The session the request named (`request.sessionKey`, or a terminal snapshot's `source.sessionKey`). */
   sessionKey: string | null;
   runId: string | null;
+  /** The gateway's records of it, as sent, by source; none for this client's own inference. */
+  records: SettlingRecord[];
 };
 
 /**
@@ -522,11 +588,25 @@ export function parseApprovalResolved(
     lossy,
     sessionKey: str(request?.sessionKey),
     runId: str(request?.runId),
+    records: [{ via: `${EVENT_OF[kind]}`, record: value }],
   };
 }
 
-/** The outcome a terminal `ApprovalSnapshot` reports, as `approval.resolve` returns it. */
-export function resolutionFromSnapshot(value: unknown): ApprovalResolution | null {
+const EVENT_OF: Record<ApprovalKind, string> = {
+  exec: "exec.approval.resolved",
+  plugin: "plugin.approval.resolved",
+  "system-agent": "openclaw.approval.resolved",
+};
+
+/**
+ * The outcome a terminal `ApprovalSnapshot` reports, as `approval.resolve`
+ * returns it. `record` is what the gateway sent, kept as the evidence: the
+ * reply or read-back named by `via`.
+ */
+export function resolutionFromSnapshot(
+  value: unknown,
+  record?: SettlingRecord,
+): ApprovalResolution | null {
   const card = parseApprovalSnapshot(value);
   if (!card || card.status === "pending") return null;
   return {
@@ -542,6 +622,7 @@ export function resolutionFromSnapshot(value: unknown): ApprovalResolution | nul
     lossy: false,
     sessionKey: card.sessionKey,
     runId: null,
+    records: record ? [record] : [],
   };
 }
 
@@ -559,10 +640,12 @@ export function mergeResolution(
   known: ApprovalResolution | undefined,
   next: ApprovalResolution,
 ): ApprovalResolution {
-  if (!known || rank(next) > rank(known)) return next;
-  if (rank(next) < rank(known)) return known;
+  const records = withRecords(known?.records ?? [], next.records);
+  if (!known || rank(next) > rank(known)) return { ...next, records };
+  if (rank(next) < rank(known)) return { ...known, records };
   return {
     ...known,
+    records,
     applicationStatus: next.applicationStatus ?? known.applicationStatus,
     resolver: known.resolver ?? next.resolver,
     resolvedBy: known.resolvedBy ?? next.resolvedBy,
@@ -590,7 +673,17 @@ export function applyApprovalRequested(activity: TaskActivity, card: ApprovalCar
             ? { ...card.exec, ...pickSet(existing.exec) }
             : (existing.exec ?? card.exec),
         submitting: existing.submitting,
+        submittingDecision: existing.submittingDecision,
+        attempt: existing.attempt,
+        inFlight: existing.inFlight,
+        unknownAt: existing.unknownAt,
+        unknownDeny: existing.unknownDeny,
+        readingAt: existing.readingAt,
+        sent: existing.sent,
+        settledBy: existing.settledBy,
         error: existing.error,
+        decisionError: existing.decisionError,
+        stillOpen: existing.stillOpen,
         raw: existing.kind === card.kind && existing.raw ? existing.raw : card.raw,
         // Fields the earlier card set are kept, so its cut text may be what shows: the flag stays.
         decisionCut: existing.decisionCut || card.decisionCut,
@@ -665,6 +758,7 @@ export function applyApprovalResolved(
   const existing = activity.approvals.find((each) => each.id === resolution.id);
   if (!existing) return activity;
   let patch: Partial<ApprovalCard> | null = null;
+  const settledBy = withRecords(existing.settledBy, resolution.records);
   if (rank(resolution) > cardRank(existing)) {
     patch = {
       status: resolution.status,
@@ -677,7 +771,15 @@ export function applyApprovalResolved(
       inferred: !resolution.authoritative,
       outcomeUnknown: resolution.lossy,
       submitting: false,
+      submittingDecision: null,
+      inFlight: [],
+      unknownAt: null,
+      unknownDeny: false,
+      readingAt: null,
+      settledBy,
       error: null,
+      decisionError: null,
+      stillOpen: false,
     };
   } else if (
     cardRank(existing) === 2 &&
@@ -691,6 +793,10 @@ export function applyApprovalResolved(
       resolver: existing.resolver ?? resolution.resolver,
     };
   }
+  // A record from another source about a settled request is kept with it.
+  if (existing.status !== "pending" && settledBy !== existing.settledBy) {
+    patch = { ...patch, settledBy };
+  }
   if (!patch) return activity;
   const approvals = activity.approvals.map((each) =>
     each.id === resolution.id ? { ...each, ...patch } : each,
@@ -698,14 +804,309 @@ export function applyApprovalResolved(
   return normalizeApprovals({ ...activity, approvals });
 }
 
-export function markApproval(
+// Decision attempts ----------------------------------------------------------------
+
+/**
+ * What this client has on its way, or does not know, about one approval: the
+ * part of a card that belongs to the approval rather than to the task showing
+ * it. The client keeps it apart from the card for as long as the approval is
+ * not settled and anything is outstanding, so it survives the task's release,
+ * and every card showing the approval is drawn from it.
+ */
+export type ApprovalAttempts = Pick<
+  ApprovalCard,
+  | "attempt"
+  | "inFlight"
+  | "unknownAt"
+  | "unknownDeny"
+  | "readingAt"
+  | "decisionError"
+  | "stillOpen"
+  | "submitting"
+  | "submittingDecision"
+>;
+
+/** Nothing on its way and nothing unknown. */
+export const NO_ATTEMPTS: ApprovalAttempts = {
+  attempt: 0,
+  inFlight: [],
+  unknownAt: null,
+  unknownDeny: false,
+  readingAt: null,
+  decisionError: null,
+  stillOpen: false,
+  submitting: false,
+  submittingDecision: null,
+};
+
+/** A card's attempt state. */
+export function attemptsOf(card: ApprovalAttempts): ApprovalAttempts {
+  return {
+    attempt: card.attempt,
+    inFlight: card.inFlight,
+    unknownAt: card.unknownAt,
+    unknownDeny: card.unknownDeny,
+    readingAt: card.readingAt,
+    decisionError: card.decisionError,
+    stillOpen: card.stillOpen,
+    submitting: card.submitting,
+    submittingDecision: card.submittingDecision,
+  };
+}
+
+/** Whether a card already shows exactly this attempt state. */
+export function sameAttempts(card: ApprovalAttempts, attempts: ApprovalAttempts): boolean {
+  return (
+    card.attempt === attempts.attempt &&
+    card.inFlight === attempts.inFlight &&
+    card.unknownAt === attempts.unknownAt &&
+    card.unknownDeny === attempts.unknownDeny &&
+    card.readingAt === attempts.readingAt &&
+    card.decisionError === attempts.decisionError &&
+    card.stillOpen === attempts.stillOpen &&
+    card.submitting === attempts.submitting &&
+    card.submittingDecision === attempts.submittingDecision
+  );
+}
+
+/** Nothing outstanding: no decision on its way, no unknown outcome, no read-back on its way. */
+export function attemptsSettled(attempts: ApprovalAttempts): boolean {
+  return (
+    attempts.inFlight.length === 0 && attempts.unknownAt === null && attempts.readingAt === null
+  );
+}
+
+/**
+ * Why a decision may not be sent now, or null when it may. At most one
+ * decision is on its way, except that a Deny may follow an allow still on its
+ * way. No allow leaves while any outcome is unknown, and no Deny leaves again
+ * while an earlier Deny's outcome is unknown.
+ */
+export function decisionRefusal(
+  card: ApprovalAttempts & { status?: ApprovalStatus },
+  decision: ApprovalDecision,
+): string | null {
+  if (card.status !== undefined && card.status !== "pending")
+    return "That approval is no longer open.";
+  if (card.inFlight.length > 0) {
+    const denyAfterAllow =
+      decision === "deny" && card.inFlight.every((each) => each.decision !== "deny");
+    if (!denyAfterAllow) return "An answer to that approval is already on its way.";
+  }
+  if (decision !== "deny" && card.decisionError === "unknown") {
+    return "Whether the last decision was applied is not known yet; check the request again first.";
+  }
+  if (decision === "deny" && card.unknownDeny) {
+    return "Whether the last Deny was applied is not known yet; check the request again first.";
+  }
+  return null;
+}
+
+function patchApproval(
   activity: TaskActivity,
   id: string,
-  patch: Pick<ApprovalCard, "submitting" | "error">,
+  change: (card: ApprovalCard) => ApprovalCard,
 ): TaskActivity {
   return {
     ...activity,
-    approvals: activity.approvals.map((each) => (each.id === id ? { ...each, ...patch } : each)),
+    approvals: activity.approvals.map((each) => (each.id === id ? change(each) : each)),
+  };
+}
+
+/** What is on its way, as the card shows it. */
+function withInFlight<T extends ApprovalAttempts>(card: T, inFlight: DecisionAttempt[]): T {
+  return {
+    ...card,
+    inFlight,
+    submitting: inFlight.length > 0,
+    submittingDecision: inFlight.at(-1)?.decision ?? null,
+  };
+}
+
+/** Set the error a card shows, and nothing else. */
+export function patchError(activity: TaskActivity, id: string, error: string | null): TaskActivity {
+  return patchApproval(activity, id, (card) => ({ ...card, error }));
+}
+
+/** A decision is sent with attempt number `attempt`. An unknown outcome stays unknown. */
+export function startDecision<T extends ApprovalAttempts>(
+  card: T,
+  decision: ApprovalDecision,
+  attempt: number,
+): T {
+  return {
+    ...withInFlight({ ...card, attempt }, [...card.inFlight, { attempt, decision }]),
+    decisionError: card.decisionError === "unknown" ? "unknown" : null,
+    stillOpen: false,
+  };
+}
+
+/**
+ * A decision's own response. It settles only its attempt: an answer that the
+ * decision was refused, that its outcome is unknown, or that it never left.
+ * A settled approval only forgets the attempt.
+ */
+export function finishDecision<T extends ApprovalAttempts & { status?: ApprovalStatus }>(
+  card: T,
+  attempt: number,
+  outcome: "refused" | "unknown" | "not-sent" | "answered",
+): T {
+  const own = card.inFlight.find((each) => each.attempt === attempt);
+  const next = withInFlight(
+    card,
+    card.inFlight.filter((each) => each.attempt !== attempt),
+  );
+  if ((card.status !== undefined && card.status !== "pending") || outcome === "answered")
+    return next;
+  if (outcome === "unknown") {
+    return {
+      ...next,
+      decisionError: "unknown",
+      unknownAt: card.attempt,
+      unknownDeny: card.unknownDeny || own?.decision === "deny",
+      stillOpen: false,
+    };
+  }
+  if (outcome === "refused" && card.decisionError !== "unknown") {
+    return { ...next, decisionError: "refused", stillOpen: false };
+  }
+  // Refused while another outcome is unknown: the unknown one decides what may be sent.
+  return next;
+}
+
+/** A read-back is sent with attempt number `attempt`. */
+export function startReadback<T extends ApprovalAttempts>(card: T, attempt: number): T {
+  return { ...card, attempt, readingAt: attempt };
+}
+
+/** A read-back's answer arrived, or it failed: it is no longer on its way. */
+export function finishReadback<T extends ApprovalAttempts>(card: T, attempt: number): T {
+  return card.readingAt === attempt ? { ...card, readingAt: null } : card;
+}
+
+/**
+ * A read-back answered that the request is still pending. It applies only if
+ * no newer attempt began since it was sent; then it clears an unknown outcome
+ * established before it was sent, and marks a refusal still open. `stale`
+ * says it was dropped.
+ */
+export function readbackStillPending<T extends ApprovalAttempts & { status?: ApprovalStatus }>(
+  card: T,
+  attempt: number,
+): { card: T; stale: boolean; cleared: boolean } {
+  if ((card.status !== undefined && card.status !== "pending") || card.attempt !== attempt) {
+    return { card, stale: true, cleared: false };
+  }
+  if (card.unknownAt !== null && attempt > card.unknownAt) {
+    return {
+      stale: false,
+      cleared: true,
+      card: { ...card, decisionError: null, unknownAt: null, unknownDeny: false, stillOpen: false },
+    };
+  }
+  return {
+    stale: false,
+    cleared: false,
+    card: card.decisionError === "refused" ? { ...card, stillOpen: true } : card,
+  };
+}
+
+/**
+ * A task showing the approval opened again, or the approval was admitted
+ * anew, at attempt number `attempt`, while something was outstanding: a
+ * decision on its way or an unknown outcome. Until a read-back sent after
+ * this answers, the outcome is unknown; nothing read before it, and no list
+ * loaded while opening, clears it. A Deny on its way, or unknown, still
+ * holds the Deny guard.
+ */
+export function reopenAttempts<T extends ApprovalAttempts>(card: T, attempt: number): T {
+  if (attemptsSettled(card)) return card;
+  return {
+    ...card,
+    attempt,
+    decisionError: "unknown",
+    unknownAt: attempt,
+    unknownDeny: card.unknownDeny || card.inFlight.some((each) => each.decision === "deny"),
+    stillOpen: false,
+  };
+}
+
+// The same, on a task's card, as the fixture and the tests apply them.
+
+/** A decision is sent: it takes the next attempt number unless one is given. */
+export function beginDecision(
+  activity: TaskActivity,
+  id: string,
+  decision: ApprovalDecision,
+  attempt?: number,
+): { activity: TaskActivity; attempt: number } {
+  const card = activity.approvals.find((each) => each.id === id);
+  const number = attempt ?? (card?.attempt ?? 0) + 1;
+  return {
+    attempt: number,
+    activity: patchApproval(activity, id, (each) => ({
+      ...startDecision(each, decision, number),
+      error: null,
+    })),
+  };
+}
+
+/** A decision's own response, with the error the card shows. */
+export function endDecision(
+  activity: TaskActivity,
+  id: string,
+  attempt: number,
+  outcome: "refused" | "unknown" | "not-sent" | "answered",
+  error: string | null,
+): TaskActivity {
+  return patchApproval(activity, id, (card) => {
+    const next = finishDecision(card, attempt, outcome);
+    return card.status !== "pending" || outcome === "answered" ? next : { ...next, error };
+  });
+}
+
+/** A decision left this client: keep what was sent, newest last. */
+export function noteSent(activity: TaskActivity, id: string, sent: SentRequest): TaskActivity {
+  return patchApproval(activity, id, (card) => ({
+    ...card,
+    sent: [...card.sent, sent].slice(-MAX_SENT_DECISIONS),
+  }));
+}
+
+/** A read-back is sent: it takes the next attempt number unless one is given. */
+export function beginReadback(
+  activity: TaskActivity,
+  id: string,
+  attempt?: number,
+): { activity: TaskActivity; attempt: number } {
+  const card = activity.approvals.find((each) => each.id === id);
+  const number = attempt ?? (card?.attempt ?? 0) + 1;
+  return {
+    attempt: number,
+    activity: patchApproval(activity, id, (each) => startReadback(each, number)),
+  };
+}
+
+/** A read-back's answer arrived, or it failed. */
+export function endReadback(activity: TaskActivity, id: string, attempt: number): TaskActivity {
+  return patchApproval(activity, id, (each) => finishReadback(each, attempt));
+}
+
+/** A read-back answered still pending, on a task's card; a cleared outcome clears its error too. */
+export function readbackPending(
+  activity: TaskActivity,
+  id: string,
+  attempt: number,
+): { activity: TaskActivity; stale: boolean } {
+  const card = activity.approvals.find((each) => each.id === id);
+  if (!card) return { activity, stale: true };
+  const read = readbackStillPending(card, attempt);
+  if (read.stale) return { activity, stale: true };
+  return {
+    stale: false,
+    activity: patchApproval(activity, id, () =>
+      read.cleared ? { ...read.card, error: null } : read.card,
+    ),
   };
 }
 
@@ -727,6 +1128,7 @@ function inferredResolution(
     lossy: false,
     sessionKey: null,
     runId: null,
+    records: [],
   };
 }
 

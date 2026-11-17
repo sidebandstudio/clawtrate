@@ -12,6 +12,7 @@
     "typecheck": "pnpm -r --parallel typecheck && tsc -p tsconfig.json",
     "test": "vitest run",
     "e2e": "playwright test",
+    "scenarios": "node e2e/scenario-check.ts",
     "fixture": "pnpm --filter @clawtrate/desktop fixture",
     "visual": "playwright test -c playwright.visual.config.ts",
     "visual:update": "playwright test -c playwright.visual.config.ts --update-snapshots=changed",

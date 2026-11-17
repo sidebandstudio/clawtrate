@@ -6,10 +6,14 @@
 // characters (`bounds.ts`).
 
 import type {
+  ApprovalAttempts,
   ApprovalCard,
   ApprovalResolution,
   ApprovalResolver,
+  DecisionAttempt,
   ExecApprovalDetail,
+  SentRequest,
+  SettlingRecord,
   PluginApprovalDetail,
   SystemAgentApprovalDetail,
 } from "./approvals.ts";
@@ -143,6 +147,10 @@ export const MAX_QUESTION_OPTIONS = 8;
 export const MAX_ANSWERS_PER_QUESTION = 8;
 /** Pending approvals per task (also `MAX_PENDING_APPROVALS_PER_TASK`), settled ones kept. */
 export const MAX_PENDING_APPROVAL_COUNT = 16;
+/** Records the gateway sent that settled a request, kept per request: one per source (event, reply, read-back). */
+export const MAX_SETTLING_RECORDS = 3;
+/** Decisions this client sent, kept per approval: the newest. */
+export const MAX_SENT_DECISIONS = 4;
 export const MAX_SETTLED_APPROVAL_COUNT = 8;
 export const MAX_COMMAND_ARGS = 16;
 /** Recipient runs a task's sends name. */
@@ -264,6 +272,10 @@ const questionItem = object<QuestionItem>()({
   multiSelect: FLAG,
   allowsOther: FLAG,
 });
+/** A record the gateway sent that settled a request, and where it came from. */
+const settlingRecord = object<SettlingRecord>()({ via: NAME, record: json(MAX_RECORD_CHARS) });
+/** A request this client sent to settle one: its method and parameters. */
+const sentRequest = object<SentRequest>()({ method: NAME, params: json(MAX_RECORD_CHARS) });
 export const QUESTION: Bound = flagged<QuestionCard>()({
   id: ID,
   runId: ID,
@@ -279,6 +291,9 @@ export const QUESTION: Bound = flagged<QuestionCard>()({
   submitting: FLAG,
   error: text(MAX_ERROR_JSON_CHARS),
   raw: json(MAX_RECORD_CHARS),
+  ordinary: FLAG,
+  sent: sentRequest,
+  settledBy: list(MAX_SETTLING_RECORDS, settlingRecord),
 });
 const execDetail = object<ExecApprovalDetail>()({
   command: text(MAX_COMMAND_CHARS),
@@ -309,6 +324,7 @@ const systemAgentDetail = object<SystemAgentApprovalDetail>()({
   proposalHash: NAME,
 });
 const resolver = object<ApprovalResolver>()({ kind: ENUM, id: ID });
+const decisionAttempt = object<DecisionAttempt>()({ attempt: NUMBER, decision: ENUM });
 export const APPROVAL: Bound = flagged<ApprovalCard>()({
   id: ID,
   kind: ENUM,
@@ -340,7 +356,17 @@ export const APPROVAL: Bound = flagged<ApprovalCard>()({
   decisionDigest: NAME,
   decisionCut: FLAG,
   submitting: FLAG,
+  submittingDecision: ENUM,
+  attempt: NUMBER,
+  inFlight: list(2, decisionAttempt),
+  unknownAt: NUMBER,
+  unknownDeny: FLAG,
+  readingAt: NUMBER,
+  sent: list(MAX_SENT_DECISIONS, sentRequest),
+  settledBy: list(MAX_SETTLING_RECORDS, settlingRecord),
   error: text(MAX_ERROR_JSON_CHARS),
+  decisionError: ENUM,
+  stillOpen: FLAG,
   raw: json(MAX_RECORD_CHARS),
 });
 const toolResult = object<ToolResult>()({ isError: FLAG, text: text(MAX_ITEM_TOOL_CHARS) });
@@ -493,6 +519,19 @@ const retentionAlarm = object<ClawtrateState["retention"]>()({
   near: FLAG,
 });
 
+/** An approval's attempts the client keeps by id while any are outstanding (`MAX_APPROVAL_ATTEMPTS`). */
+export const APPROVAL_ATTEMPTS: Bound = object<ApprovalAttempts>()({
+  attempt: NUMBER,
+  inFlight: list(2, decisionAttempt),
+  unknownAt: NUMBER,
+  unknownDeny: FLAG,
+  readingAt: NUMBER,
+  decisionError: ENUM,
+  stillOpen: FLAG,
+  submitting: FLAG,
+  submittingDecision: ENUM,
+});
+
 /** An approval outcome the client keeps by id (`MAX_APPROVAL_OUTCOMES` of them). */
 export const APPROVAL_OUTCOME: Bound = object<ApprovalResolution>()({
   id: ID,
@@ -507,6 +546,7 @@ export const APPROVAL_OUTCOME: Bound = object<ApprovalResolution>()({
   lossy: FLAG,
   sessionKey: ID,
   runId: ID,
+  records: list(MAX_SETTLING_RECORDS, settlingRecord),
 });
 
 /** The session-row fields the task list reads; everything else in a row is not kept. */

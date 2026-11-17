@@ -1,0 +1,10 @@
+{
+  "plugin": "clawtrate-hello",
+  "settings": {
+    "loud": { "kind": "flag", "value": false },
+    "repeat": { "kind": "count", "value": 2 },
+    "echoUrl": { "kind": "loopback-url", "value": "http://127.0.0.1:9/echo" },
+    "cacheDir": { "kind": "instance-path", "value": "cache" }
+  },
+  "tools": [{ "name": "hello_tool", "kind": "plugin-tool" }]
+}
