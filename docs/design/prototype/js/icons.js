@@ -63,6 +63,8 @@
     play: '<path d="M5 3.5v9l7.25-4.5L5 3.5Z"/>',
     pause: '<path d="M5.5 3.5v9M10.5 3.5v9"/>',
     machine: '<rect x="2.5" y="2.75" width="11" height="4.25" rx="1.5"/><rect x="2.5" y="9" width="11" height="4.25" rx="1.5"/><path d="M5 4.9h.05M5 11.1h.05"/>',
+    keyboard: '<rect x="1.75" y="4" width="12.5" height="8" rx="1.75"/><path d="M4.5 6.5h.05M6.75 6.5h.05M9 6.5h.05M11.25 6.5h.05M5.5 9.5h5"/>',
+    minus: '<path d="M3.5 8h9"/>',
     plugin: '<path d="M6 2.75v2.5M10 2.75v2.5M4.25 5.25h7.5v2.5a3.75 3.75 0 0 1-7.5 0v-2.5ZM8 11.5v1.75"/>',
   };
 

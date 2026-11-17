@@ -1801,3 +1801,192 @@
   border-radius: var(--radius-md);
   background: var(--bg-bubble);
 }
+
+/* The phone's full view: the page zooms and pans on the device; the controls
+   sit in a dock at the foot, within a thumb's reach. */
+.screen-view[data-layout="phone"] .screen-bar {
+  gap: 6px;
+  padding: 0 8px 0 12px;
+}
+
+.screen-view[data-layout="phone"] .screen-bar .screen-pill {
+  flex: none;
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+.screen-view[data-layout="phone"] .screen-stage {
+  position: relative;
+  display: block;
+  padding: 0;
+  container-type: normal;
+}
+
+.screen-zoom {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
+.screen-view[data-layout="phone"] .screen-frame {
+  height: auto;
+  margin: 8px;
+  border-radius: var(--radius-sm);
+}
+
+.zoom-controls {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.zoom-controls .icon-button,
+.zoom-fit {
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  color: #fff;
+}
+
+.zoom-controls .icon-button:disabled {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.zoom-fit {
+  width: 52px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.keyboard-button {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 50px;
+  height: 50px;
+  background: rgba(0, 0, 0, 0.62);
+  box-shadow: none;
+  color: #fff;
+}
+
+.keyboard-button[aria-expanded="true"] {
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+}
+
+.control-help {
+  margin: 6px 12px 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.control-help summary {
+  min-height: 32px;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+
+.control-help p {
+  margin: 0 4px 6px;
+  line-height: 1.45;
+}
+
+.control-dock {
+  padding: 6px 12px 12px;
+}
+
+.control-dock .control-bar {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+}
+
+.control-dock .control-bar .spacer {
+  display: none;
+}
+
+.control-dock .control-bar .button {
+  width: 100%;
+  height: 48px;
+  font-size: var(--text-base);
+}
+
+.control-dock .control-bar > strong,
+.control-dock .control-bar > span {
+  text-align: center;
+}
+
+.control-dock > .control-note#control-note {
+  display: none;
+}
+
+.type-bar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px 12px;
+  background: var(--bg-raised);
+}
+
+.type-bar .input {
+  height: 44px;
+  font-size: var(--text-lg);
+}
+
+.screen-tabs-sheet {
+  position: absolute;
+  top: 56px;
+  right: 8px;
+  z-index: 3;
+  width: 260px;
+}
+
+.screen-tabs-sheet .menu-item span {
+  margin-left: auto;
+  color: var(--text-faint);
+}
+
+/* In the dock the mode is already in the top bar: the first answer is full
+   width, the others share one row. */
+.control-dock .control-bar[data-state="control"] {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.control-dock .control-bar[data-state="control"] > .icon,
+.control-dock .control-bar[data-state="control"] > strong {
+  display: none;
+}
+
+.control-dock .control-bar[data-state="control"] > .button[data-variant="primary"] {
+  grid-column: 1 / -1;
+}
+
+.control-dock .control-bar[data-state="control"] > .control-gone {
+  grid-column: 1 / -1;
+}
+
+.screen-view .keyboard-button,
+[data-input="touch"] .screen-view .keyboard-button {
+  width: 50px;
+  height: 50px;
+}
+
+[data-input="touch"] .zoom-controls .icon-button {
+  width: 44px;
+  height: 44px;
+}

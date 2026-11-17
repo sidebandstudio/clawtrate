@@ -717,7 +717,30 @@ The banner links a pending question of this task's bot to that bot's browser. It
 
 **In the conversation.** Control changes are event lines (`visual-language.md` section 8), from the gateway's control events: "You took control of Juniper's browser · 3:12 PM" and "You gave control back · 3:14 PM"; for another device, "Someone on another device took control of Juniper's browser". A call the bot's browser tool makes while the person has control, from any of its tasks, is refused by the gateway, and arrives as a blocked step, shown as `conversation.md` shows a call that was blocked; the family of plain-words cards decides its final wording.
 
-**Keyboard and names.** In the full view, Tab moves through the bar's controls only; the picture is one focusable region named "Juniper's browser, live" (and "…, you have control"). While in control and focused, typing goes to the page; Escape does not leave control, it moves focus to "Give back control", so that a reflex never hands back by accident and never sends Escape to the page either. ⌘↵ chooses the bar's primary button.
+**Input on the desktop.** A click on the picture is sent as a click at that point of the page, mapped from the picture's size to the page's own size in the frame's header. The scroll wheel scrolls the page. Typing is sent as text, as it is typed; there is no separate field on the desktop.
+
+### On the phone
+
+At phone width the full view is laid out for a thumb and a small screen, in the same tokens:
+
+```
+top bar      avatar · "Juniper's browser" · mode · tabs · Close
+page         the live picture, zoomable and pannable
+             [−] [Fit] [+]  zoom, bottom left           [⌨] keyboard, bottom right
+help         "What reaches the page" (folded)
+dock         the question's answers, full width · Give back control   (or: Take control)
+```
+
+- **Top bar**, 56 pt: the avatar, "Juniper's browser", the mode ("Watching" or "You have control"), and, when there are several tabs, a "2 tabs" pill that opens a sheet listing them; then Close. The page's title is in the tabs sheet, not in the bar.
+- **The page** takes every point between the bar and the dock. Watching, it opens fitted to the screen's width. **In control it opens at the page's own size**: one page pixel to one screen point (a page 1280 px wide is 1280 points wide, about 3.3 times the fitted size on a 390-point screen), centred on the last place the bot or the person acted. So the page's own fields and buttons are the size the page made them, 48 px fields are 48 points, and a finger can hit them.
+- **Zoom and pan are the device's alone.** Pinch zooms the picture, from fitted to four times fitted; two fingers drag to pan it. A "−", "Fit", "+" group (44-point buttons on a dark disc, at the page's bottom left) does the same for one hand and for VoiceOver. Neither is ever sent to the page.
+- **Gestures in control**: one finger tapping is a click at that point of the page; one finger dragging scrolls the page, and is sent as scrolling. So the page's scrolling and the picture's panning never mix: one finger acts on the page, two fingers move the view of it. Watching, one finger pans too, and nothing is sent.
+- **The keyboard**: a 44-point round button with the keyboard icon at the page's bottom right, shown in control. It opens a field above the system keyboard, "Type into the page", with "Done". Each character typed is sent as text as it is typed; the field shows what was typed so the person can see it, clears when it closes, and is never stored. Return in the field shows "Enter isn't sent to the page. Tap the page's button instead."
+- **What reaches the page** is folded into one line above the dock; tapping it opens the full text of section 18's line, unchanged.
+- **The dock**: in control, the question's answers as full-width 48-point buttons, the first primary, then "Give back control" (quiet, full width); with no question, "Give back control" is primary. Watching, "Take control" is the dock's one button. The hand-back steps, their messages and Cancel while waiting are the desktop's, in the dock.
+- When the app goes to the background, the view is covered before the system's snapshot (section 17), and control is given back as for any other way of leaving.
+
+**Keyboard and names.** In the full view, Tab moves through the bar's controls and the picture; the picture is one focusable region named "Juniper's browser, live" (and "…, you have control"). While in control and focused, typing goes to the page; Escape does not leave control, it moves focus to "Give back control", so that a reflex never hands back by accident and never sends Escape to the page either. ⌘↵ chooses the bar's primary button.
 
 **Motion.** The ring appears without animation. The working mark in "Waiting for Juniper…" turns; under reduced motion it holds still.
 

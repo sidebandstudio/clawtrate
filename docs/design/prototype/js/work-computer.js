@@ -405,6 +405,8 @@
     const tab = tabNow();
     const control = C.control === "granted";
     view.setAttribute("aria-label", `${b.name}'s browser`);
+    if ($(".app").clientWidth < 688) return renderPhone(view, b, tab, control, focusKey);
+    delete view.dataset.layout;
     view.innerHTML =
       `<div class="viewer-bar screen-bar"><span class="avatar" data-bot="juniper"></span><div class="viewer-title"><strong>${b.name}'s browser</strong>` +
       `<span>${esc(tab.title)} · ${tab.domain}</span>${control ? "" : `<span class="screen-mode">Watching</span>`}</div>` +
@@ -416,6 +418,70 @@
       `<span class="screen-hint" role="status" hidden></span></div></div>`;
     CT.hydrate(view);
     if (focusKey) $(`[data-cmp="${focusKey}"]`, view)?.focus();
+  }
+
+  // The phone's full view (work-pane.md, section 18, "On the phone"): the page
+  // zooms and pans on the device; in control it opens at the page's own size.
+  const PAGE_WIDTH = 1280;
+  function zoomLevels(fit) {
+    return [fit, fit * 2, PAGE_WIDTH, fit * 4].sort((x, y) => x - y);
+  }
+  function renderPhone(view, b, tab, control, focusKey) {
+    view.dataset.layout = "phone";
+    const zoomBox = $(".screen-zoom", view);
+    const keep = zoomBox ? { left: zoomBox.scrollLeft, top: zoomBox.scrollTop } : null;
+    const fit = Math.max(200, $(".app").clientWidth - 16);
+    const levels = zoomLevels(fit);
+    if (C.zoomFor !== (control ? "control" : "watch")) {
+      // Watching opens fitted; control opens at the page's own size, centred where the last action was.
+      C.zoomFor = control ? "control" : "watch";
+      C.zoom = control ? levels.indexOf(PAGE_WIDTH) : 0;
+      C.centre = true;
+    }
+    const width = levels[C.zoom];
+    const dock =
+      control || C.control === "draining" || C.control === "releasing" || C.control === "uncertain" || C.control === "answering" || C.outcome || ["busy", "conflict", "expired"].includes(C.control)
+        ? controlBar(b)
+        : readOnly()
+          ? ""
+          : `<div class="control-bar"><button type="button" class="button" data-variant="primary" data-cmp="take">${icon("hand")}Take control</button></div>`;
+    view.innerHTML =
+      `<div class="viewer-bar screen-bar"><span class="avatar" data-bot="juniper"></span><div class="viewer-title"><strong aria-label="${b.name}'s browser">${b.name}</strong>` +
+      `<span class="screen-mode">${control ? "You have control" : "Watching"}</span></div>` +
+      (tabs.length > 1 ? `<button type="button" class="screen-pill" data-cmp="tabs-sheet" aria-expanded="${Boolean(C.tabsOpen)}" aria-label="${tabs.length} tabs, showing ${esc(tab.title)}">${tabs.length} tabs</button>` : "") +
+      `<button type="button" class="icon-button" data-cmp="close-full" aria-label="Close the full view" title="Close">${icon("collapse")}</button></div>` +
+      (C.tabsOpen
+        ? `<ul class="menu screen-tabs-sheet" role="menu" aria-label="Tabs">${tabs.map((x) => `<li role="none"><button type="button" class="menu-item" role="menuitemradio" aria-checked="${x.id === C.tab}" data-cmp-tab="${x.id}">${esc(x.title)}<span>${x.domain}</span></button></li>`).join("")}</ul>`
+        : "") +
+      `<div class="screen-stage"><div class="screen-zoom" data-level="${C.zoom}">` +
+      `<div class="screen-frame" data-control="${control}" tabindex="0" role="application" style="width:${width}px" aria-label="${b.name}'s browser, live${control ? ", you have control" : ""}">${page()}` +
+      `<span class="screen-hint" role="status" hidden></span></div></div>` +
+      `<div class="zoom-controls" role="group" aria-label="Zoom"><button type="button" class="icon-button" data-cmp="zoom-out" aria-label="Zoom out"${C.zoom === 0 ? " disabled" : ""}>${icon("minus")}</button>` +
+      `<button type="button" class="zoom-fit" data-cmp="zoom-fit" aria-label="Fit the page to the screen">Fit</button>` +
+      `<button type="button" class="icon-button" data-cmp="zoom-in" aria-label="Zoom in"${C.zoom === levels.length - 1 ? " disabled" : ""}>${icon("plus")}</button></div>` +
+      (control ? `<button type="button" class="icon-button keyboard-button" data-cmp="keyboard" aria-label="Type into the page" aria-expanded="${Boolean(C.typing)}">${icon("keyboard")}</button>` : "") +
+      `</div>` +
+      (control
+        ? `<details class="control-help"><summary>What reaches the page</summary><p>Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${b.name}'s browser tool can't act here, in any of ${b.name}'s tasks. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p></details>`
+        : "") +
+      `<div class="control-dock">${dock}</div>` +
+      (control && C.typing
+        ? `<div class="type-bar"><label class="visually-hidden" for="type-input">Type into the page</label><input class="input" id="type-input" type="text" autocomplete="off" autocapitalize="off" placeholder="Type into the page" value="${esc(C.typedNow || "")}"><button type="button" class="button" data-size="sm" data-cmp="type-done">Done</button></div>`
+        : "");
+    CT.hydrate(view);
+    const box = $(".screen-zoom", view);
+    if (C.centre) {
+      // Centre on the last place acted on: the sign-in field, at (640, 300) of the page.
+      const scale = width / PAGE_WIDTH;
+      box.scrollLeft = Math.max(0, 640 * scale - box.clientWidth / 2);
+      box.scrollTop = Math.max(0, 300 * scale - box.clientHeight / 2);
+      C.centre = false;
+    } else if (keep) {
+      box.scrollLeft = keep.left;
+      box.scrollTop = keep.top;
+    }
+    if (focusKey) $(`[data-cmp="${focusKey}"]`, view)?.focus();
+    if (C.typing) $("#type-input", view)?.focus();
   }
 
   // Taking control. The gateway answers a take once, up to 15 s later, and has no
@@ -569,6 +635,7 @@
     const t = event.target;
     const tabButton = t.closest("[data-cmp-tab]");
     if (tabButton) {
+      C.tabsOpen = false;
       C.tab = tabButton.dataset.cmpTab;
       C.typed = "";
       rerenderComputer();
@@ -614,6 +681,28 @@
       return $('[data-cmp="take"]')?.focus();
     }
     if (cmp === "release") return release();
+    if (cmp === "zoom-in" || cmp === "zoom-out" || cmp === "zoom-fit") {
+      const levels = zoomLevels(Math.max(200, $(".app").clientWidth - 16));
+      C.zoom = cmp === "zoom-fit" ? 0 : Math.max(0, Math.min(levels.length - 1, C.zoom + (cmp === "zoom-in" ? 1 : -1)));
+      renderFull();
+      return $(`[data-cmp="${cmp}"]`, $(".screen-view"))?.focus();
+    }
+    if (cmp === "keyboard") {
+      C.typing = !C.typing;
+      C.typedNow = "";
+      return renderFull();
+    }
+    if (cmp === "type-done") {
+      C.typing = false;
+      C.typedNow = ""; // the field clears when it closes, and is never stored
+      renderFull();
+      return $('[data-cmp="keyboard"]', $(".screen-view"))?.focus();
+    }
+    if (cmp === "tabs-sheet") {
+      C.tabsOpen = !C.tabsOpen;
+      renderFull();
+      return C.tabsOpen ? $(".screen-tabs-sheet .menu-item", $(".screen-view"))?.focus() : null;
+    }
     if (cmp === "check-release") {
       // Renew with the generation: an unrenewed lease means control has ended.
       C.control = "none";
@@ -684,10 +773,29 @@
     $('[data-cmp="cancel-stop"]', box).focus();
   }
 
+  document.addEventListener("input", (event) => {
+    if (event.target.id !== "type-input" || C.control !== "granted") return;
+    const value = event.target.value;
+    const added = value.slice((C.typedNow || "").length);
+    C.typed += added; // sent as text, as it is typed
+    C.typedNow = value;
+    const frame = $(".screen-view .screen-frame svg");
+    if (frame) frame.outerHTML = page();
+  });
+
   document.addEventListener(
     "keydown",
     (event) => {
       const view = $(".screen-view");
+      if (view && event.target.id === "type-input" && event.key === "Enter") {
+        event.preventDefault();
+        const hint = $(".screen-hint", view);
+        hint.textContent = "Enter isn't sent to the page. Tap the page's button instead.";
+        hint.hidden = false;
+        clearTimeout(hint._t);
+        hint._t = setTimeout(() => (hint.hidden = true), 3000);
+        return;
+      }
       if (!view) return;
       const inFrame = event.target.closest?.(".screen-frame");
       if (event.key === "Escape") {

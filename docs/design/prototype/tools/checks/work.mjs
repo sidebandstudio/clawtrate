@@ -691,6 +691,45 @@ await p.waitForTimeout(50);
 check("phone: the full view fills the screen", await q(p, () => document.querySelector(".screen-view").getBoundingClientRect().width >= 389));
 await p.close();
 
+// M10: taking over on a phone.
+p = await open("&bot=juniper&task=j2&computer=full&width=phone", { width: 390, height: 844 });
+await p.waitForTimeout(100);
+check("M10 phone, watching: the page opens fitted to the screen's width", await q(p, () => {
+  const frame = document.querySelector(".screen-view .screen-frame").getBoundingClientRect();
+  return document.querySelector(".screen-view").dataset.layout === "phone" && frame.width <= 390 && frame.width > 300;
+}));
+check("M10 phone, watching: Take control is the dock's one button", await q(p, () => [...document.querySelectorAll(".control-dock .button")].map((x) => x.textContent).join() === "Take control"));
+await p.close();
+p = await open("&bot=juniper&task=j2&computer=control&width=phone", { width: 390, height: 844 });
+await p.waitForTimeout(100);
+check("M10 phone, in control: the page opens at its own size, so its 48px fields are 48 points", await q(p, () => document.querySelector(".screen-view .screen-frame").getBoundingClientRect().width === 1280));
+check("M10 it opens centred on the last place acted on, and can be panned", await q(p, () => {
+  const box = document.querySelector(".screen-zoom");
+  const before = box.scrollLeft;
+  box.scrollLeft += 120;
+  return before > 0 && box.scrollWidth > box.clientWidth && box.scrollLeft === before + 120;
+}));
+await p.click('[data-cmp="zoom-fit"]');
+check("M10 Fit shows the whole page; Zoom out is then disabled", await q(p, () => document.querySelector(".screen-view .screen-frame").getBoundingClientRect().width < 390 && document.querySelector('[data-cmp="zoom-out"]').disabled));
+await p.click('[data-cmp="zoom-in"]');
+check("M10 Zoom in enlarges the picture on the device, sending nothing", await q(p, () => document.querySelector(".screen-view .screen-frame").getBoundingClientRect().width > 600 && window.CT.work.computer.typed === ""));
+check("M10 zoom, keyboard and dock controls have 44-point hit areas or more", await q(p, () =>
+  [...document.querySelectorAll(".zoom-controls button, .keyboard-button, .control-dock .button")].every((x) => x.getBoundingClientRect().height >= 44 && x.getBoundingClientRect().width >= 44)));
+check("M10 the dock: the first answer full width, then Skip and Give back control", await q(p, () => {
+  const buttons = [...document.querySelectorAll(".control-dock .button")];
+  return buttons.map((x) => x.textContent).join() === "I'm done,Skip,Give back control" && buttons[0].getBoundingClientRect().width > buttons[1].getBoundingClientRect().width;
+}));
+check("M10 what reaches the page is folded into one line above the dock", await q(p, () => document.querySelector(".control-help summary").textContent === "What reaches the page" && !document.querySelector(".control-help").open));
+await p.click('[data-cmp="keyboard"]');
+check("M10 the keyboard button opens a field above the keyboard", await q(p, () => document.activeElement.id === "type-input"));
+await p.keyboard.type("4402");
+check("M10 each character is sent as text as it is typed", await q(p, () => window.CT.work.computer.typed === "4402" && document.querySelector(".screen-frame svg").textContent.includes("4402")));
+await p.keyboard.press("Enter");
+check("M10 Return isn't sent, and the view says so", await q(p, () => document.querySelector(".screen-hint").textContent.startsWith("Enter isn't sent to the page. Tap the page's button instead.")));
+await p.click('[data-cmp="type-done"]');
+check("M10 Done closes the field and clears it", await q(p, () => !document.querySelector("#type-input") && window.CT.work.computer.typedNow === "" && document.activeElement.dataset.cmp === "keyboard"));
+await p.close();
+
 await b.close();
 console.log(out.join("\n"));
 const failed = out.filter((l) => l.startsWith("FAIL") || l.startsWith("PAGEERROR")).length;
