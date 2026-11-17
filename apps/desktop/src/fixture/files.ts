@@ -3,7 +3,8 @@
 // gateway's limits produce. Everything is invented, and the picture is drawn
 // here. The address picks the state:
 //
-//   &files=loading|empty|error|stale|writing|commands|many|repo
+//   &files=loaded|loading|empty|error|stale|writing|commands|many|repo
+//                        (error: the first fetch fails; stale: every fetch after the first)
 //   &checkout=1          the task works in a git checkout
 //   &fileload=failed     the first opening of a file fails; Try again succeeds
 
@@ -455,7 +456,11 @@ export function fileAnswers(now: number, params: FileParams) {
         ? { kind: "repository", sameAsWorkspace: false }
         : { kind: "workspace", sameAsWorkspace: true },
     gitCheckout: params.checkout,
-    files: params.state === "empty" ? [] : files.map((file) => toTaskFile(file, now)),
+    // Scenes that are not about files show a task that has touched none.
+    files:
+      params.state === "empty" || params.state === null
+        ? []
+        : files.map((file) => toTaskFile(file, now)),
     omitted: 0,
     checkedAt,
   });
@@ -526,7 +531,9 @@ export function fileAnswers(now: number, params: FileParams) {
       case "listTaskFiles": {
         lists += 1;
         if (params.state === "loading") return forever;
-        if (params.state === "error") throw new Error("The gateway did not answer in time.");
+        // The first fetch fails; Try again succeeds.
+        if (params.state === "error" && lists === 1)
+          throw new Error("The gateway did not answer in time.");
         if (params.state === "stale" && lists > 1)
           throw new Error("The gateway did not answer in time.");
         return list(command.key);

@@ -87,11 +87,14 @@ export function Reader({
   const bodyRef = useRef<HTMLDivElement>(null);
 
   /** Read the file again; `then` hears whether its bytes changed. */
+  // The reader is keyed by its file: the source it was opened with is the one it reads.
+  const sourceRef = useRef(source);
   const load = useCallback(
     (then?: (changed: boolean | null) => void) => {
       generation.current += 1;
       const mine = generation.current;
       setLoading(true);
+      const source = sourceRef.current;
       const command =
         source.kind === "task"
           ? ({ type: "readTaskFile", key: source.key, path: source.path } as const)
@@ -129,13 +132,17 @@ export function Reader({
           }
         });
     },
-    [bridge, source],
+    [bridge],
   );
 
   // The reader is keyed by its file, so it starts empty; it reads once mounted.
   useEffect(() => {
-    queueMicrotask(() => load());
+    let live = true;
+    queueMicrotask(() => {
+      if (live) load();
+    });
     return () => {
+      live = false;
       generation.current += 1;
     };
   }, [load]);

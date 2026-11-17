@@ -12,9 +12,11 @@ type Fit = "normal" | "narrow" | "scroll";
 
 /** Scroll the row so `tab` is wholly in view, by the least distance. */
 function keepInView(bar: HTMLElement, tab: HTMLElement): void {
-  const left = tab.offsetLeft - bar.offsetLeft;
-  const right = left + tab.offsetWidth;
-  if (left < bar.scrollLeft) bar.scrollLeft = left;
+  // The row's own side padding comes into view with its first and last tab.
+  const style = getComputedStyle(bar);
+  const left = tab.offsetLeft - bar.offsetLeft - parseFloat(style.paddingLeft);
+  const right = tab.offsetLeft - bar.offsetLeft + tab.offsetWidth + parseFloat(style.paddingRight);
+  if (left < bar.scrollLeft) bar.scrollLeft = Math.max(0, left);
   else if (right > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = right - bar.clientWidth;
 }
 
@@ -64,8 +66,10 @@ export function TabBar<T extends string>({
       markClipped(bar);
     };
     fit();
+    // The row's width, and each tab's: a larger text size changes the tabs, not the row.
     const observer = new ResizeObserver(fit);
     observer.observe(bar);
+    for (const tab of bar.querySelectorAll(".tab")) observer.observe(tab);
     void document.fonts?.ready.then(fit);
     return () => observer.disconnect();
   }, [tabs]);

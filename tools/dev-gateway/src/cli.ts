@@ -837,6 +837,11 @@ export async function start(
       `  scripted model  http://127.0.0.1:${ports.providerPort}/v1 (pid ${marker?.providerPid})`,
     );
     console.log(`  gateway         pid ${marker?.gatewayPid}, logs in ${inst.runDir}`);
+    // Pip's workspace holds a picture and a git checkout for the Work pane's Files tab,
+    // seeded or not: the scenario check reads the picture on an unseeded instance.
+    const filesWorkspace = join(inst.stateDir, "workspaces", FILES_BOT);
+    assertInside(filesWorkspace, inst.stateDir);
+    seedWorkspaceFiles(filesWorkspace);
     // Unseeded starts are for checks that need a running gateway, not its data.
     if (options.seed !== false) await seed(inst);
   });
@@ -1286,11 +1291,6 @@ export async function seed(inst: DevInstance): Promise<void> {
   const agents = new Map(rows.map((row) => [row.id, row]));
   console.log("Seeding sample bots and conversations");
   for (const bot of SEED_BOTS) await configureBot(inst, bot, agents);
-  // Pip's workspace also holds a picture and a git checkout, for the Work pane's Files tab.
-  const filesWorkspace =
-    agents.get(FILES_BOT)?.workspace ?? join(inst.stateDir, "workspaces", FILES_BOT);
-  assertInside(filesWorkspace, inst.stateDir);
-  seedWorkspaceFiles(filesWorkspace);
   // Configuring the bots rewrote the config; it must still keep every guarantee.
   assertSandboxed(inst, instancePorts(inst));
   await assertExecDenied(inst);

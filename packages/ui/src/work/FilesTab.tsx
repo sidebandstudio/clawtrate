@@ -146,18 +146,28 @@ export function FilesTab({
     ]);
   }, [request]);
 
-  // After a level changes: its scroll back, and focus where it belongs.
-  useLayoutEffect(() => {
-    const el = scroller();
-    if (el) el.scrollTop = scrolls.current[levelKey(level)] ?? 0;
+  // After a level changes: its scroll back, and focus where it belongs. A
+  // folder's rows arrive after it mounts, so it asks again once they render.
+  const settleLevel = useCallback(() => {
     const target = focusNext.current;
-    focusNext.current = null;
-    if (target === "heading") headingRef.current?.focus({ preventScroll: true });
-    else if (target)
-      rootRef.current
-        ?.querySelector<HTMLElement>(`[data-row="${CSS.escape(target.row)}"]`)
-        ?.focus({ preventScroll: true });
+    if (target === "heading") {
+      focusNext.current = null;
+      headingRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    const el = scroller();
+    const saved = scrolls.current[levelKey(level)] ?? 0;
+    if (el && el.scrollHeight - el.clientHeight >= saved) el.scrollTop = saved;
+    if (!target) return;
+    const row = rootRef.current?.querySelector<HTMLElement>(
+      `[data-row="${CSS.escape(target.row)}"]`,
+    );
+    if (row) {
+      focusNext.current = null;
+      row.focus({ preventScroll: true });
+    }
   }, [level]);
+  useLayoutEffect(settleLevel, [settleLevel]);
 
   // Escape goes Back while docked; ⌘[ goes Back anywhere in Files.
   const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -215,6 +225,7 @@ export function FilesTab({
           now={now}
           backLabel={backLabel(stack)}
           headingRef={headingRef}
+          onRows={settleLevel}
           onBack={back}
           onOpen={(entry) =>
             entry.kind === "directory"
@@ -558,6 +569,7 @@ function FolderLevel({
   now,
   backLabel,
   headingRef,
+  onRows,
   onBack,
   onOpen,
 }: {
@@ -570,10 +582,16 @@ function FolderLevel({
   now: number;
   backLabel: string;
   headingRef: React.RefObject<HTMLHeadingElement | null>;
+  /** Called once the folder's rows have rendered: focus and scroll can go back to them. */
+  onRows: () => void;
   onBack: () => void;
   onOpen: (entry: WorkspaceEntry) => void;
 }) {
   const folder = useWorkspaceFolder(bridge, botId, path, online);
+  const rowsAt = folder.checkedAt;
+  useEffect(() => {
+    if (rowsAt !== null) onRows();
+  }, [rowsAt, onRows]);
   const [sort, setSortState] = useState<Sort>(() =>
     readPreference(`workspaceSort.${botId}`) === "modified" ? "modified" : "name",
   );

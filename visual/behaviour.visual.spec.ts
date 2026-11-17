@@ -175,7 +175,7 @@ test.describe("the Work pane", () => {
     await expect(page.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("tabpanel")).toContainText("No files yet");
     await page.keyboard.press("End");
-    await expect(page.getByRole("tab", { name: "Computer" })).toBeFocused();
+    await expect(page.getByRole("tab", { name: "Settings" })).toBeFocused();
     await page.keyboard.press("ArrowRight");
     await expect(page.getByRole("tab", { name: "Details" })).toBeFocused();
   });
