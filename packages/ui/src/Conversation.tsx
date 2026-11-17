@@ -1,5 +1,5 @@
 import type { Bot, Task, Transcript, TranscriptBlock, TranscriptItem } from "@clawtrate/core";
-import { Fragment, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Avatar } from "./Avatar.tsx";
 import { clockTime, fullDate, summarizeArguments } from "./format.ts";
 import { ArrowDownIcon, BackIcon, ChevronIcon, EyeIcon, PanelIcon } from "./icons.tsx";
@@ -211,6 +211,8 @@ export function Conversation({
   panelOpen,
   onTogglePanel,
   onBack,
+  toggleRef,
+  inert = false,
 }: {
   task: Task | null;
   bot: Bot | undefined;
@@ -218,10 +220,13 @@ export function Conversation({
   panelOpen: boolean;
   onTogglePanel: () => void;
   onBack: () => void;
+  toggleRef?: RefObject<HTMLButtonElement | null>;
+  /** Set while the Work drawer covers the conversation, so focus cannot land behind it. */
+  inert?: boolean;
 }) {
   const itemCount = transcript?.items.length ?? 0;
   return (
-    <section className="conversation" aria-label="Conversation">
+    <section className="conversation" aria-label="Conversation" inert={inert}>
       <header className="pane-header conversation-header">
         <button
           type="button"
@@ -243,6 +248,7 @@ export function Conversation({
           )}
         </div>
         <button
+          ref={toggleRef}
           type="button"
           className="icon-button"
           aria-pressed={panelOpen}

@@ -122,6 +122,52 @@ test("the conversation keeps its width and the work panel becomes a drawer", asy
   await expect(page.getByTestId("task-list")).toBeHidden();
 });
 
+test("the overlay drawer takes keyboard focus and gives it back", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await openShell(page);
+  await openTask(page, "Otto", "Disk almost full on the media box");
+  if ((await page.locator(".shell").getAttribute("data-panel")) === "open") {
+    await page.keyboard.press("Escape");
+  }
+
+  // Open by keyboard: focus moves into the drawer.
+  await page.getByRole("button", { name: "Show work panel" }).focus();
+  await page.keyboard.press("Enter");
+  const close = page.getByRole("button", { name: "Close work panel" }).last();
+  await expect(close).toBeFocused();
+
+  // Tabbing never lands on anything the drawer covers.
+  for (let i = 0; i < 6; i += 1) {
+    await page.keyboard.press("Tab");
+    const placement = await page.evaluate(() => {
+      const active = document.activeElement as HTMLElement | null;
+      if (!active || active === document.body) return { inConversation: false, covered: false };
+      const rect = active.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return {
+        inConversation: active.closest(".conversation") !== null,
+        covered: rect.width > 0 && hit !== null && hit !== active && !active.contains(hit),
+      };
+    });
+    expect(placement, `focus after ${i + 1} tabs`).toEqual({
+      inConversation: false,
+      covered: false,
+    });
+  }
+
+  // Escape closes it and focus returns to the toggle.
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".shell")).toHaveAttribute("data-panel", "closed");
+  await expect(page.getByRole("button", { name: "Show work panel" })).toBeFocused();
+
+  // The wide inline pane is ordinary page content: opening it keeps focus on the toggle.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("button", { name: "Show work panel" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "Hide work panel" })).toBeFocused();
+  await page.keyboard.press("Escape");
+});
+
 test("the compact rail names every bot", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 600 });
   await openShell(page);

@@ -1,5 +1,13 @@
 import type { Bot, ClawtrateState, ConnectionState, DiscoveryState, Task } from "@clawtrate/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type RefObject,
+} from "react";
 import logoUrl from "./assets/logo-mark.png";
 import { Avatar } from "./Avatar.tsx";
 import { useCommand } from "./bridge.tsx";
@@ -235,7 +243,15 @@ function TaskList({
   );
 }
 
-function WorkPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+function WorkPanel({
+  open,
+  onClose,
+  closeRef,
+}: {
+  open: boolean;
+  onClose: () => void;
+  closeRef: RefObject<HTMLButtonElement | null>;
+}) {
   return (
     <aside className="work-panel" aria-label="Work" aria-hidden={!open} data-testid="work-panel">
       <header className="pane-header">
@@ -245,6 +261,7 @@ function WorkPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
         <button
           type="button"
           className="icon-button"
+          ref={closeRef}
           onClick={onClose}
           aria-label="Close work panel"
           title="Close (Esc)"
@@ -300,6 +317,24 @@ function StatusStrip({
 }
 
 const SEEN_KEY = "seen";
+
+/** Matches the stylesheet: below this width Work is a drawer over the conversation. */
+const OVERLAY_QUERY = "(max-width: 1319px)";
+
+function useMediaQuery(query: string): boolean {
+  return useSyncExternalStore(
+    useCallback(
+      (onChange: () => void) => {
+        const media = globalThis.matchMedia?.(query);
+        media?.addEventListener("change", onChange);
+        return () => media?.removeEventListener("change", onChange);
+      },
+      [query],
+    ),
+    () => globalThis.matchMedia?.(query).matches ?? false,
+    () => false,
+  );
+}
 
 /** Remembers the last task opened for each bot and what this viewer has read. */
 function useSelection(state: ClawtrateState) {
@@ -397,6 +432,20 @@ export function Shell({ state }: { state: ClawtrateState }) {
     return () => void send({ type: "closeSession", key: taskKey });
   }, [taskKey, send]);
 
+  // As an overlay, Work takes keyboard focus while open and hands it back to the
+  // toggle when it closes; the conversation it covers is inert meanwhile. The
+  // wide inline pane is ordinary page content and moves no focus.
+  const overlay = useMediaQuery(OVERLAY_QUERY);
+  const drawerOpen = panelOpen && overlay;
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const drawerWasOpen = useRef(false);
+  useEffect(() => {
+    if (drawerOpen) closeRef.current?.focus();
+    else if (drawerWasOpen.current) toggleRef.current?.focus();
+    drawerWasOpen.current = drawerOpen;
+  }, [drawerOpen]);
+
   const showStrip = state.connection.status !== "connected" || state.discovery.status === "error";
 
   return (
@@ -431,6 +480,8 @@ export function Shell({ state }: { state: ClawtrateState }) {
           panelOpen={panelOpen}
           onTogglePanel={togglePanel}
           onBack={() => setView("list")}
+          toggleRef={toggleRef}
+          inert={drawerOpen}
         />
         <button
           type="button"
@@ -439,7 +490,7 @@ export function Shell({ state }: { state: ClawtrateState }) {
           tabIndex={-1}
           onClick={() => setPanel(false)}
         />
-        <WorkPanel open={panelOpen} onClose={() => setPanel(false)} />
+        <WorkPanel open={panelOpen} onClose={() => setPanel(false)} closeRef={closeRef} />
       </div>
     </div>
   );
