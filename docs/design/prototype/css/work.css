@@ -1790,3 +1790,7 @@
   font-size: var(--text-xs);
   color: var(--text-faint);
 }
+
+.control-gone {
+  color: var(--text-muted);
+}

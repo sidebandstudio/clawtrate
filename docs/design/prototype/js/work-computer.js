@@ -32,9 +32,9 @@
     configured: mode !== "unconfigured",
     used: mode !== "unused",
     open: mode !== "closed",
-    view: ["watching", "full", "draining", "control", "busy", "conflict", "stuck"].includes(mode) ? "live" : mode === "ended" ? "ended" : "idle",
-    full: ["full", "draining", "control", "busy", "conflict"].includes(mode),
-    control: { draining: "draining", control: "granted", busy: "busy", conflict: "conflict", stuck: "busy" }[mode] || "none",
+    view: ["watching", "full", "draining", "control", "busy", "conflict", "stuck", "releasefail", "releaseunknown", "complexquestion"].includes(mode) ? "live" : mode === "ended" ? "ended" : "idle",
+    full: ["full", "draining", "control", "busy", "conflict", "releasefail", "releaseunknown", "complexquestion"].includes(mode),
+    control: { draining: "draining", control: "granted", busy: "busy", conflict: "conflict", stuck: "busy", releasefail: "granted", releaseunknown: "granted", complexquestion: "granted" }[mode] || "none",
     busyCount: mode === "stuck" ? 3 : 0,
     tab: "t1",
     noteSeen: params.get("firstwatch") !== "1",
@@ -45,6 +45,12 @@
     events: mode === "control" ? [`You took control of Juniper's browser · ${NOW}`] : [],
     nodeOffline: mode === "offline",
     stopped: false,
+    viewSession: 0,
+    elsewhere: mode === "elsewhere", // another device holds control: every reader sees the gateway's control event
+    takeSession: 0,
+    disposed: [],
+    lateReleased: 0,
+    outcome: "",
   };
   let lastTask = null;
 
@@ -112,7 +118,7 @@
       return (
         `<div class="screen" data-state="blocked"><div class="screen-blank">${icon("eye")}<p>Watching needs a connection that can send. This device is read-only.</p>` +
         `<button type="button" class="button" data-size="sm" data-cmp="request">Request access</button></div></div>` +
-        (C.control === "granted" ? `<p class="screen-caption">Someone on another device has control of ${name}'s browser.</p>` : "")
+        (C.elsewhere ? `<p class="screen-caption">Someone on another device has control of ${name}'s browser.</p>` : "")
       );
     }
     if (!C.open) {
@@ -257,7 +263,7 @@
       return;
     }
     // A view ends when the task or bot changes.
-    if (lastTask && lastTask !== t.id && C.view === "live") endView("idle");
+    if (lastTask && lastTask !== t.id && viewing()) endView("idle");
     lastTask = t.id;
     const isJ = t.id === "j2";
     // Only Juniper's research task has used a browser in these fixtures.
@@ -300,23 +306,35 @@
     if (C.full) renderFull();
   };
 
+  // A view from start to end (work-pane.md, section 17): every Watch has its own
+  // number, and an answer for a view that has ended is disposed of, not shown.
   function watch() {
+    if (readOnly()) return;
     C.noteSeen = true;
+    const id = ++C.viewSession;
     C.view = "connecting";
     rerenderComputer();
     setTimeout(() => {
-      if (C.view !== "connecting") return;
+      if (id !== C.viewSession || C.view !== "connecting") {
+        C.disposed.push("ticket"); // the ticket arrives late: never used, the stream never opened
+        return;
+      }
       C.view = "live";
       rerenderComputer();
       $('[data-cmp="open"]')?.focus();
     }, 500);
   }
 
+  // Anything that ends a view: control is given back first, a pending take is
+  // abandoned, and the view's number moves on so late answers are dropped.
   function endView(to = "idle") {
-    if (C.control === "granted") release(false);
+    if (C.control === "draining") abandonTake();
+    if (C.control === "granted" || C.control === "uncertain") giveBack({ quiet: true });
+    C.viewSession++;
     C.view = to;
     if (C.full) closeFull(false);
   }
+  const viewing = () => C.view === "live" || C.view === "connecting";
 
   // The full view.
   let fullOpener = null;
@@ -336,27 +354,42 @@
     }
   }
 
+  // Which questions the bar can answer: one question, one answer, two to four options.
+  const simpleQuestion = () => C.question && mode !== "complexquestion";
+
   function controlBar(b) {
     const name = b.name;
-    if (C.control === "draining")
-      return `<div class="control-bar" role="status">${glyph("working")}<span>Waiting for ${name} to finish what it's doing in the browser…</span><span class="spacer"></span><button type="button" class="button" data-size="sm" data-cmp="cancel-take">Cancel</button></div>`;
-    if (C.control === "busy")
-      return `<div class="control-bar" role="alert"><span>${name} is still acting in this browser. Try again in a moment.</span><span class="spacer"></span><button type="button" class="button" data-size="sm" data-cmp="take">Try again</button></div>`;
-    if (C.control === "conflict") return `<div class="control-bar" role="status"><span>Someone on another device has control of ${name}'s browser.</span></div>`;
-    if (C.control === "expired")
-      return `<div class="control-bar" role="alert"><span>Your control ended. The gateway stopped hearing from this device.</span><span class="spacer"></span><button type="button" class="button" data-size="sm" data-cmp="take">Take control</button></div>`;
+    const bar = (state, html, role = "status") => `<div class="control-bar"${state ? ` data-state="${state}"` : ""} role="${role}">${html}</div>`;
+    const btn = (label, cmp, variant = "", extra = "") => `<button type="button" class="button" data-size="sm"${variant ? ` data-variant="${variant}"` : ""} data-cmp="${cmp}" ${extra}>${label}</button>`;
+    if (C.control === "draining") return bar("", `${glyph("working")}<span>Waiting for ${name} to finish what it's doing in the browser…</span><span class="spacer"></span>${btn("Cancel", "cancel-take")}`);
+    if (C.control === "busy") return bar("", `<span>${name} is still acting in this browser. Try again in a moment.</span><span class="spacer"></span>${btn("Try again", "take")}`, "alert");
+    if (C.control === "conflict") return bar("", `<span>Someone on another device has control of ${name}'s browser.</span>`);
+    if (C.control === "expired") return bar("", `<span>Your control ended. The gateway stopped hearing from this device.</span><span class="spacer"></span>${btn("Take control", "take")}`, "alert");
+    if (C.control === "releasing") return bar("", `${glyph("working")}<span>Giving control back…</span>`);
+    if (C.control === "uncertain") return bar("", `<span>No answer from the gateway. You may still have control.</span><span class="spacer"></span>${btn("Check again", "check-release")}`, "alert");
+    if (C.control === "answering") return bar("", `${glyph("working")}<span>Sending your answer…</span>`);
+    if (C.outcome) return bar("", `<span>${C.outcome}</span>${C.outcomeAction ? `<span class="spacer"></span>${btn("Show the question", "show-question")}` : ""}`, "status");
     if (C.control !== "granted") return "";
-    const answers = C.question
-      ? ["I'm done", "Skip"].map((label, i) => `<button type="button" class="button" data-size="sm"${i === 0 ? ' data-variant="primary"' : ""} data-cmp="answer" data-answer="${i}">${label}</button>`).join("")
-      : "";
+    let answers = "";
+    if (simpleQuestion()) answers = ["I'm done", "Skip"].map((label, i) => btn(label, "answer", i === 0 ? "primary" : "", `data-answer="${i}"`)).join("");
+    else if (C.question) answers = btn("Give back control and answer", "answer-in-chat", "primary");
+    const gone = C.questionGone ? `<span class="control-gone">${C.questionGone}</span>` : "";
     return (
-      `<div class="control-bar" data-state="control">${icon("hand")}<strong>You have control</strong><span class="spacer"></span>${answers}` +
-      `<button type="button" class="button" data-size="sm"${C.question ? ' data-variant="quiet"' : ' data-variant="primary"'} data-cmp="release">Give back control</button></div>` +
+      bar("control", `${icon("hand")}<strong>You have control</strong>${gone}<span class="spacer"></span>${answers}${btn("Give back control", "release", C.question ? "quiet" : "primary")}`) +
+      (C.releaseFailed ? `<p class="control-note" role="alert">Couldn't give control back. You still have control. ${CT.linkButton("Try again", { attrs: 'data-cmp="release"' })}</p>` : "") +
       `<p class="control-note" id="control-note">Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${name}'s browser tool can't act here, in any of ${name}'s tasks. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p>`
     );
   }
 
   function renderFull() {
+    // A read-only connection never receives the view: no full view, no control.
+    if (readOnly()) {
+      C.full = false;
+      C.control = "none";
+      $(".screen-view")?.remove();
+      $(".shell").inert = false;
+      return;
+    }
     const b = window.app.bots.find((x) => x.id === "juniper");
     let view = $(".screen-view");
     const focusKey = document.activeElement?.dataset?.cmp;
@@ -385,46 +418,98 @@
     if (focusKey) $(`[data-cmp="${focusKey}"]`, view)?.focus();
   }
 
-  // Taking control and handing back.
-  let drainTimer = null;
+  // Taking control. The gateway answers a take once, up to 15 s later, and has no
+  // way to withdraw it; an answer to an abandoned request is disposed of.
   function take() {
+    if (readOnly()) return;
     if (!C.full) openFull();
+    const id = ++C.takeSession;
     C.control = "draining";
+    C.outcome = "";
     renderFull();
     $('[data-cmp="cancel-take"]')?.focus();
-    drainTimer = setTimeout(() => {
-      if (mode === "busy" || mode === "stuck") {
-        C.control = "busy";
-        C.busyCount += 1;
-      } else if (mode === "conflict") C.control = "conflict";
-      else {
-        C.control = "granted";
-        C.events.push(`You took control of Juniper's browser · ${NOW}`);
-        eventLine(`You took control of Juniper's browser · ${NOW}`);
-        CT.announce("You have control of Juniper's browser");
-      }
-      rerenderComputer();
-      ($('[data-cmp="answer"]') || $('[data-cmp="release"]') || $('[data-cmp="take"]'))?.focus();
-    }, 900);
+    setTimeout(() => arrive(id), 900);
   }
-  function release(announce = true) {
+  function abandonTake() {
+    C.takeSession++;
     C.control = "none";
-    C.released = C.question;
-    eventLine(`You gave control back · 3:14 PM`);
-    if (announce) CT.announce("Control given back to Juniper");
+  }
+  function arrive(id) {
+    const result = mode === "busy" || mode === "stuck" ? "busy" : mode === "conflict" ? "conflict" : "granted";
+    if (id !== C.takeSession || C.control !== "draining") {
+      // Abandoned: a late grant is given back at once, with nothing shown but the
+      // gateway's own record in the conversation.
+      if (result === "granted") {
+        C.lateReleased += 1;
+        eventLine(`You took control of Juniper's browser · ${NOW}`);
+        eventLine(`You gave control back · ${NOW}`);
+      }
+      return;
+    }
+    if (result === "busy") {
+      C.control = "busy";
+      C.busyCount += 1;
+    } else if (result === "conflict") C.control = "conflict";
+    else {
+      C.control = "granted";
+      C.events.push(`You took control of Juniper's browser · ${NOW}`);
+      eventLine(`You took control of Juniper's browser · ${NOW}`);
+      CT.announce("You have control of Juniper's browser");
+    }
     rerenderComputer();
-    $('[data-cmp="take"]', $(".screen-view") || document)?.focus();
+    ($('[data-cmp="answer"]') || $('[data-cmp="answer-in-chat"]') || $('[data-cmp="release"]') || $('[data-cmp="take"]'))?.focus();
+  }
+
+  // Handing back, in order: control first, confirmed; then the answer.
+  function giveBack({ quiet = false, then } = {}) {
+    C.control = "releasing";
+    C.releaseFailed = false;
+    if (!quiet) rerenderComputer();
+    const outcome = mode === "releasefail" && !C.retried ? "refused" : mode === "releaseunknown" && !C.retried ? "unknown" : "ok";
+    const finish = () => {
+      if (outcome === "refused") {
+        C.control = "granted";
+        C.releaseFailed = true;
+      } else if (outcome === "unknown") C.control = "uncertain";
+      else {
+        C.control = "none";
+        C.released = C.question;
+        eventLine(`You gave control back · 3:14 PM`);
+        if (!quiet) CT.announce("Control given back to Juniper");
+      }
+      if (!quiet) rerenderComputer();
+      if (outcome === "ok" && then) return then(); // the next step owns focus
+      if (!quiet) ($('[data-cmp="check-release"]') || $('[data-cmp="release"]') || $('[data-cmp="take"]', $(".screen-view") || document) || $('[data-cmp="close-full"]'))?.focus();
+    };
+    if (quiet) finish();
+    else setTimeout(finish, 400);
+  }
+  function release() {
+    C.retried = C.releaseFailed || C.control === "uncertain";
+    giveBack();
   }
   function answer(i) {
-    const card = $("#q-library");
-    const option = card && $$(".option", card)[i];
-    C.question = false;
-    C.control = "none";
-    eventLine(`You gave control back · 3:14 PM`);
-    option?.click(); // the question card answers as it always does
-    CT.announce("Answer sent, and control given back to Juniper");
-    rerenderComputer();
-    $('[data-cmp="close-full"]')?.focus();
+    giveBack({
+      then: () => {
+        C.control = "answering";
+        rerenderComputer();
+        setTimeout(() => {
+          C.control = "none";
+          if (mode === "answerfail") {
+            C.outcome = "Couldn't send your answer. Control is back with Juniper; answer in the chat.";
+            C.outcomeAction = true;
+          } else {
+            const option = $$(".option", $("#q-library") || document)[i];
+            C.question = false;
+            option?.click(); // the question card answers as it always does
+            C.outcome = "Answer sent. Juniper can carry on.";
+            CT.announce("Answer sent, and control given back to Juniper");
+          }
+          rerenderComputer();
+          $('[data-cmp="close-full"]')?.focus();
+        }, 400);
+      },
+    });
   }
 
   function eventLine(text) {
@@ -516,16 +601,36 @@
     if (cmp === "open") return openFull();
     if (cmp === "close-full") return closeFull();
     if (cmp === "take") {
-      if (!C.view || C.view !== "live") C.view = "live";
+      if (readOnly()) return;
+      if (C.view !== "live") {
+        C.viewSession++;
+        C.view = "live";
+      }
       return take();
     }
     if (cmp === "cancel-take") {
-      clearTimeout(drainTimer);
-      C.control = "none";
+      abandonTake();
       rerenderComputer();
       return $('[data-cmp="take"]')?.focus();
     }
     if (cmp === "release") return release();
+    if (cmp === "check-release") {
+      // Renew with the generation: an unrenewed lease means control has ended.
+      C.control = "none";
+      C.outcome = "Your control has ended. Juniper's browser is free.";
+      eventLine(`You gave control back · 3:14 PM`);
+      rerenderComputer();
+      return $('[data-cmp="close-full"]')?.focus();
+    }
+    if (cmp === "answer-in-chat")
+      return giveBack({
+        then: () => {
+          closeFull(false);
+          rerenderComputer();
+          const card = $("#q-library");
+          if (card) W.reveal(card, card);
+        },
+      });
     if (cmp === "answer") return answer(+t.closest("[data-answer]").dataset.answer);
     if (cmp === "show-question") {
       const card = $("#q-library");
@@ -633,7 +738,7 @@
   const prevTab = W.tabChanged;
   W.tabChanged = (name) => {
     prevTab?.(name);
-    if (name !== "computer" && C.view === "live" && !C.full) {
+    if (name !== "computer" && viewing() && !C.full) {
       endView("idle");
       rerenderComputer();
     } else if (name === "computer" && C.showLive && C.view === "idle" && W.current()?.id === "j2") watch();
@@ -641,19 +746,20 @@
   const prevPanel = W.panelChanged;
   W.panelChanged = (open) => {
     prevPanel?.(open);
-    if (!open && C.view === "live" && !C.full) {
+    if (!open && viewing() && !C.full) {
       endView("idle");
       setTimeout(rerenderComputer);
     }
   };
   W.connectionChanged = (name) => {
-    if (name !== "connected" && name !== "synced" && C.view === "live") {
+    if (name !== "connected" && name !== "synced" && viewing()) {
+      if (C.control === "granted") C.control = "none"; // the device can't give it back; the lease ends at the gateway
       endView("dropped");
       rerenderComputer();
     }
   };
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden && C.view === "live") {
+    if (document.hidden && viewing()) {
       endView("idle");
       rerenderComputer();
     }
@@ -685,6 +791,12 @@
   const prevReady = W.ready;
   W.ready = (a) => {
     prevReady?.(a);
+    // A read-only connection never receives the view, whatever the address asks for.
+    if (readOnly()) {
+      C.full = false;
+      C.control = "none";
+      C.view = "idle";
+    }
     if (C.full) setTimeout(() => renderFull());
   };
 

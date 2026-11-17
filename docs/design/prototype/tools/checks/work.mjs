@@ -481,14 +481,93 @@ await p.focus(".screen-frame");
 await p.keyboard.press("Escape");
 check("Escape in control never hands back: it moves to Give back control", await q(p, () => document.activeElement.dataset.cmp === "release" && window.CT.work.computer.control === "granted"));
 await p.click('.control-bar [data-answer="0"]');
-check("F-145 an answer answers the question and gives control back", await q(p, () =>
-  window.CT.work.computer.control === "none" && document.querySelector("#q-library").dataset.state !== "pending" && [...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You gave control back"))));
+check("M7 an answer first gives control back, and says so; nothing is answered yet", await q(p, () =>
+  document.querySelector(".control-bar").textContent === "Giving control back…" && document.querySelector("#q-library").dataset.state === "pending"));
+await p.waitForTimeout(500);
+check("M7 once the release is confirmed, the answer is sent", await q(p, () => document.querySelector(".control-bar").textContent === "Sending your answer…" && window.CT.work.computer.control === "answering"));
+await p.waitForTimeout(500);
+check("F-145 then the question is answered and control is back with the bot", await q(p, () =>
+  window.CT.work.computer.control === "none" && document.querySelector("#q-library").dataset.state !== "pending" &&
+  document.querySelector(".control-bar").textContent === "Answer sent. Juniper can carry on." &&
+  [...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You gave control back"))));
 await p.close();
 
 p = await open(comp + "&computer=control");
 await p.waitForTimeout(50);
 await p.click('.screen-view [data-cmp="release"]');
+await p.waitForTimeout(500);
 check("F-145 Give back control alone leaves the bot waiting", await q(p, () => document.querySelector(".computer-banner strong").textContent === "Juniper is still waiting for you" && document.querySelector("#q-library").dataset.state === "pending"));
+await p.close();
+
+// M7: the release's other answers, and other question shapes.
+p = await open(comp + "&computer=releasefail");
+await p.waitForTimeout(50);
+await p.click('.screen-view .control-bar [data-answer="0"]');
+await p.waitForTimeout(500);
+check("M7 a refused release keeps control, says so, and sends no answer", await q(p, () =>
+  window.CT.work.computer.control === "granted" && document.querySelector(".screen-view [role=alert]").textContent.startsWith("Couldn't give control back. You still have control.") && document.querySelector("#q-library").dataset.state === "pending"));
+await p.close();
+p = await open(comp + "&computer=releaseunknown");
+await p.waitForTimeout(50);
+await p.click('.screen-view [data-cmp="release"]');
+await p.waitForTimeout(500);
+check("M7 no answer to the release: nothing is claimed, and Check again is offered", await q(p, () =>
+  window.CT.work.computer.control === "uncertain" && document.querySelector(".control-bar").textContent.startsWith("No answer from the gateway. You may still have control.") && !document.querySelector(".control-bar").textContent.includes("You have control")));
+await p.close();
+p = await open(comp + "&computer=complexquestion");
+await p.waitForTimeout(50);
+check("M7 a question the bar can't answer offers Give back control and answer instead", await q(p, () => !document.querySelector('.control-bar [data-answer]') && !!document.querySelector('.control-bar [data-cmp="answer-in-chat"]')));
+await p.click('.control-bar [data-cmp="answer-in-chat"]');
+await p.waitForTimeout(500);
+check("…which gives control back first, then shows the question card", await q(p, () => window.CT.work.computer.control === "none" && !document.querySelector(".screen-view") && document.activeElement.id === "q-library"));
+await p.close();
+
+// M6: cancelling and leaving, and answers that arrive late.
+p = await open(comp, { width: 1100, height: 760 });
+await p.click('[data-cmp="watch"]');
+await p.click("#tab-files");
+await p.waitForTimeout(700);
+check("M6 leaving while the view connects: nothing goes live, and the late ticket is disposed of", await q(p, () => window.CT.work.computer.view !== "live" && window.CT.work.computer.disposed.includes("ticket")));
+await p.click("#tab-computer");
+check("…coming back shows Watch, not the browser", await q(p, () => !!document.querySelector('[data-cmp="watch"]') && !document.querySelector(".screen > svg")));
+await p.close();
+p = await open(comp + "&computer=watching", { width: 1100, height: 760 });
+await p.click('[data-cmp="open"]');
+await p.click('.screen-view [data-cmp="take"]');
+await p.click('.screen-view [data-cmp="cancel-take"]');
+await p.waitForTimeout(1100);
+check("M6 Cancel while waiting: a grant that arrives later is given back at once and never shown", await q(p, () =>
+  window.CT.work.computer.control !== "granted" && window.CT.work.computer.lateReleased === 1 && !/You have control/.test(document.body.textContent)));
+await p.close();
+p = await open(comp + "&computer=watching", { width: 1100, height: 760 });
+await p.click('[data-cmp="open"]');
+await p.click('.screen-view [data-cmp="take"]');
+await p.click('.screen-view [data-cmp="close-full"]');
+await p.click("#tab-files");
+await p.waitForTimeout(1100);
+await p.click("#tab-computer");
+check("M6 leaving while waiting: the late grant is given back, and nothing claims control", await q(p, () =>
+  window.CT.work.computer.control !== "granted" && window.CT.work.computer.lateReleased === 1 && !document.querySelector(".screen > svg") && !/You have control/.test(document.querySelector("#panel-computer").textContent)));
+await p.close();
+p = await open(comp + "&computer=control", { width: 1100, height: 760 });
+await p.waitForTimeout(50);
+await p.click('.screen-view [data-cmp="close-full"]');
+check("M6 closing the full view keeps control, with Give back control in the tile", await q(p, () => window.CT.work.computer.control === "granted" && !!document.querySelector('#panel-computer [data-cmp="release"]')));
+await p.click("#tab-files");
+check("M6 leaving the tab while in control gives control back first", await q(p, () =>
+  window.CT.work.computer.control === "none" && window.CT.work.computer.view === "idle" && [...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You gave control back"))));
+await p.close();
+
+// Read-only: no view at all, but the control state, files and artifacts.
+p = await open(comp + "&state=readonly&computer=control");
+await p.waitForTimeout(100);
+check("read-only: no full view, no picture and no control, whatever the address asks", await q(p, () =>
+  !document.querySelector(".screen-view") && !document.querySelector(".screen > svg") && window.CT.work.computer.control === "none" && !/You have control/.test(document.body.textContent)));
+await p.close();
+p = await open(comp + "&state=readonly&computer=elsewhere");
+check("read-only: the control state still shows, from the gateway's events", await q(p, () => document.querySelector("#panel-computer").textContent.includes("Someone on another device has control of Juniper's browser.")));
+await p.click("#tab-files");
+check("read-only: files and artifacts still show", await q(p, () => document.querySelectorAll("#panel-files [data-open-artifact]").length === 7));
 await p.close();
 
 for (const [m, words, name] of [
