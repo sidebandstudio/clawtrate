@@ -123,6 +123,11 @@ export async function startHostRuntime(options: {
    * the gateway stopped is never reconnected to.
    */
   recheckDevGateway?: () => DevGatewayConnection | null;
+  /**
+   * Pin the connection to the read tier: the host asks for `operator.read`
+   * alone, never asks for more access, and tells the interface so.
+   */
+  readOnly?: boolean;
 }): Promise<HostRuntime> {
   if (options.devOnly && !options.devGateway) {
     throw new Error(
@@ -157,6 +162,7 @@ export async function startHostRuntime(options: {
         // Other gateways the user chose deliberately, unless this host is development-only.
         return !options.devOnly;
       },
+      ...(options.readOnly ? { readOnly: true } : {}),
     },
   );
   const devOnly = options.devOnly ? dev : null;
@@ -174,6 +180,7 @@ export async function startHostRuntime(options: {
       kind: options.kind,
       version: APP_VERSION,
       devGateway: devGateway ? { url: devGateway.url } : null,
+      ...(options.readOnly ? { readOnly: true } : {}),
     },
     // Files viewers add before sending, held in this process until a message takes them.
     policy: {
