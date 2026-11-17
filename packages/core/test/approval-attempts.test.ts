@@ -42,7 +42,7 @@ const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 const decisions = (gateway: FakeGateway) =>
   gateway.calls("exec.approval.resolve").map((each) => (each as { decision: string }).decision);
 
-describe("decision attempts", () => {
+describe("F-163: decision attempts", () => {
   it("a refused Allow does not release the Deny still on its way", async () => {
     const gateway = grantingGateway();
     gateway.handlers["exec.approval.list"] = () => [item];
@@ -217,7 +217,7 @@ type Read = { sentAt: number; answer: (value: unknown) => void; fail: (error: un
 const SEQUENCES = 150;
 const STEPS = 16;
 
-describe("decision attempts over interleavings", () => {
+describe("F-163: decision attempts over interleavings", () => {
   it(`hold over ${SEQUENCES} seeded interleavings of ${STEPS} steps`, async () => {
     for (let seed = 1; seed <= SEQUENCES; seed += 1) {
       await interleaving(seed);
