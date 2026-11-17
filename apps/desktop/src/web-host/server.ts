@@ -32,6 +32,12 @@ export const SNAPSHOT_SOFT_BUFFER_BYTES = 1024 * 1024;
 export const SNAPSHOT_HARD_BUFFER_BYTES = 16 * 1024 * 1024;
 /** How often a held-back snapshot is retried. */
 const SNAPSHOT_RETRY_MS = 50;
+/**
+ * How long one upload may take from its headers to its last byte. Its room is
+ * held meanwhile, so a body that never ends gives it back at this deadline
+ * and is answered 408; nothing of it is kept.
+ */
+export const UPLOAD_DEADLINE_MS = 60_000;
 
 type ViewerSocket = {
   readonly readyState: number;
@@ -137,6 +143,24 @@ function sameOrigin(req: IncomingMessage): boolean {
   }
 }
 
+/**
+ * The upload path's origin policy, stricter than the bridge's. A browser
+ * sends `Origin` with every POST, so one without it is refused, and the
+ * origin must be exactly this plain-HTTP listener's own: same scheme, host and
+ * port. The host terminates no TLS, so an `https` origin is not its own.
+ */
+export function uploadOriginAllowed(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  const host = req.headers.host;
+  if (!origin || !host) return false;
+  try {
+    const url = new URL(origin);
+    return url.protocol === "http:" && url.host === host && url.origin === origin;
+  } catch {
+    return false;
+  }
+}
+
 export type WebHostOptions = {
   runtime: HostRuntime;
   staticDir: string;
@@ -144,10 +168,13 @@ export type WebHostOptions = {
   port: number;
   /** null disables the access check (only allowed against the development gateway). */
   accessToken: string | null;
+  /** `UPLOAD_DEADLINE_MS` unless a test shortens it. */
+  uploadDeadlineMs?: number;
 };
 
 export function startWebHost(options: WebHostOptions) {
   const { runtime, accessToken } = options;
+  const uploadDeadlineMs = options.uploadDeadlineMs ?? UPLOAD_DEADLINE_MS;
   const staticRoot = resolve(options.staticDir);
 
   const authorized = (req: IncomingMessage, url: URL): "ok" | "redirect" | "denied" => {
@@ -188,11 +215,15 @@ export function startWebHost(options: WebHostOptions) {
         res.writeHead(200, { ...SECURITY_HEADERS, "content-type": "text/plain" }).end("ok");
         return;
       }
-      const access = authorized(req, url);
       if (url.pathname === ATTACHMENTS_PATH) {
-        await receiveAttachment(req, res, url, access !== "denied" && sameOrigin(req));
+        // Only the cookie admits an upload; the access link's token only establishes the cookie.
+        const fromCookie = readCookie(req, ACCESS_COOKIE);
+        const credential =
+          accessToken === null || (fromCookie !== null && safeEqual(fromCookie, accessToken));
+        await receiveAttachment(req, res, url, credential && uploadOriginAllowed(req));
         return;
       }
+      const access = authorized(req, url);
       if (access === "denied") {
         res.writeHead(401, { ...SECURITY_HEADERS, "content-type": "text/html; charset=utf-8" });
         res.end(
@@ -222,9 +253,11 @@ export function startWebHost(options: WebHostOptions) {
 
   /**
    * `POST /attachments?name=<file name>&type=<mime type>` with the raw file as
-   * the body. Needs the access cookie and a same-origin request, like the
-   * bridge. The declared length is checked against the gateway's ceiling for
-   * that type before any byte is read, and the count is enforced while reading.
+   * the body. Needs the access cookie (a token in the URL is not accepted
+   * here) and this listener's exact origin (`uploadOriginAllowed`). The
+   * declared length is checked against the gateway's ceiling for that type
+   * before any byte is read, the count is enforced while reading, and the
+   * whole body must arrive within the upload deadline.
    */
   const receiveAttachment = async (
     req: IncomingMessage,
@@ -262,12 +295,23 @@ export function startWebHost(options: WebHostOptions) {
       const status = error instanceof AttachmentTooLargeError ? 413 : 400;
       return refuse(status, error instanceof Error ? error.message : String(error));
     }
-    const chunks: Buffer[] = [];
+    let chunks: Buffer[] = [];
     let received = 0;
     let overflow = false;
+    let late = false;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
       await new Promise<void>((resolveRead, rejectRead) => {
+        deadline = setTimeout(() => {
+          late = true;
+          chunks = [];
+          reservation.release();
+          reply(408, { error: "The file did not arrive in time." }, true);
+          req.destroy();
+          resolveRead();
+        }, uploadDeadlineMs);
         req.on("data", (chunk: Buffer) => {
+          if (late) return;
           received += chunk.length;
           if (received > declared) {
             overflow = true;
@@ -278,12 +322,16 @@ export function startWebHost(options: WebHostOptions) {
           chunks.push(chunk);
         });
         req.on("end", () => resolveRead());
-        req.on("error", (error) => (overflow ? resolveRead() : rejectRead(error)));
+        req.on("close", () => resolveRead());
+        req.on("error", (error) => (overflow || late ? resolveRead() : rejectRead(error)));
       });
     } catch (error) {
       reservation.release();
       throw error;
+    } finally {
+      clearTimeout(deadline);
     }
+    if (late) return;
     if (overflow || received !== declared) {
       reservation.release();
       if (!res.headersSent) reply(400, { error: "The body does not match its declared length." });

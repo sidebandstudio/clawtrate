@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { HostRuntime } from "../src/host/runtime.ts";
-import { ACCESS_COOKIE, startWebHost } from "../src/web-host/server.ts";
+import { ACCESS_COOKIE, startWebHost, UPLOAD_DEADLINE_MS } from "../src/web-host/server.ts";
 
 const TOKEN = "test-access-token";
 let host: ReturnType<typeof startWebHost>;
@@ -35,6 +35,7 @@ beforeAll(async () => {
       get state() {
         return state.get();
       },
+      withdraw: () => {},
     } as unknown as ClawtrateClient,
     info: { kind: "web", version: "test", devGateway: null },
     policy: { attachments: store },
@@ -104,6 +105,40 @@ describe("web host file uploads (F-074, F-285)", () => {
     ).toBe(401);
   });
 
+  it("refuses, and keeps nothing, without the cookie, without an origin, from https, or with only the link's token", async () => {
+    const data = Buffer.from("x");
+    const before = store.available();
+    const port = new URL(base).port;
+    const cases: Array<[string, Record<string, string>, string]> = [
+      ["cookie, no origin", { cookie, "content-length": "1" }, ""],
+      [
+        "cookie, https origin on the http listener",
+        { cookie, origin: `https://127.0.0.1:${port}`, "content-length": "1" },
+        "",
+      ],
+      [
+        "link token, right origin, no cookie",
+        { origin: base, "content-length": "1" },
+        `&token=${TOKEN}`,
+      ],
+      [
+        "cookie, origin with a path",
+        { cookie, origin: `${base}/attachments`, "content-length": "1" },
+        "",
+      ],
+      [
+        "cookie, same host on another port",
+        { cookie, origin: `http://127.0.0.1:${Number(port) + 1}`, "content-length": "1" },
+        "",
+      ],
+    ];
+    for (const [name, headers, query] of cases) {
+      const result = await upload(`name=a.txt&type=text%2Fplain${query}`, headers, data);
+      expect([name, result.status]).toEqual([name, 401]);
+    }
+    expect(store.available()).toBe(before);
+  });
+
   it("refuses an oversized image from its declared length, before reading the body", async () => {
     const result = await upload(
       "name=big.png&type=image%2Fpng",
@@ -130,5 +165,73 @@ describe("web host file uploads (F-074, F-285)", () => {
       Buffer.from("x"),
     );
     expect(result.status).toBe(400);
+  });
+});
+
+describe(`an upload must arrive within its deadline (UPLOAD_DEADLINE_MS = ${UPLOAD_DEADLINE_MS})`, () => {
+  const DEADLINE = 400;
+  let slowHost: ReturnType<typeof startWebHost>;
+  let slowBase: string;
+  let slowStore: AttachmentStore;
+
+  beforeAll(async () => {
+    const staticDir = mkdtempSync(join(tmpdir(), "clawtrate-static-"));
+    writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Clawtrate</title>");
+    const state = createStore(initialState);
+    let id = 0;
+    slowStore = new AttachmentStore({ newId: () => `slow-${(id += 1)}` });
+    slowHost = startWebHost({
+      runtime: {
+        client: {
+          store: state,
+          get state() {
+            return state.get();
+          },
+          withdraw: () => {},
+        } as unknown as ClawtrateClient,
+        info: { kind: "web", version: "test", devGateway: null },
+        policy: { attachments: slowStore },
+      },
+      staticDir,
+      host: "127.0.0.1",
+      port: 0,
+      accessToken: TOKEN,
+      uploadDeadlineMs: DEADLINE,
+    });
+    await new Promise((resolve) => slowHost.server.once("listening", resolve));
+    slowBase = `http://127.0.0.1:${(slowHost.server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(() => slowHost.close());
+
+  /** Send half the body, then the rest after `restAfterMs`, or never. */
+  function slowUpload(restAfterMs: number | null): Promise<number> {
+    return new Promise((resolve) => {
+      const req = request(
+        `${slowBase}/attachments?name=slow.txt&type=text%2Fplain`,
+        { method: "POST", headers: { cookie, origin: slowBase, "content-length": "10" } },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on("error", () => resolve(0));
+      req.write("12345");
+      if (restAfterMs !== null) setTimeout(() => req.end("67890"), restAfterMs);
+    });
+  }
+
+  it("keeps a file whose body finishes before the deadline", async () => {
+    expect(await slowUpload(DEADLINE / 4)).toBe(200);
+  });
+
+  it("answers 408 at the deadline for a body that never ends, keeps nothing and gives its room back", async () => {
+    const before = slowStore.available();
+    const started = Date.now();
+    expect(await slowUpload(null)).toBe(408);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(DEADLINE - 20);
+    expect(slowStore.available()).toBe(before);
+    const health = await fetch(`${slowBase}/healthz`);
+    expect(health.status).toBe(200);
   });
 });
