@@ -160,7 +160,7 @@ check("FM-01 the bot is created with no fixed account, in its own state", await 
 await p.evaluate(() => { window.app.setPanel(true); document.querySelector("#tab-settings").click(); });
 check("FM-01 its settings say the gateway chooses, not No account", (await text(p, '#panel-settings [data-bs="account"]')).includes("Gateway chooses") && !(await text(p, "#panel-settings")).includes("No account"));
 await p.click('#panel-settings [data-bs="account"]');
-check("FM-01 its account page says what that means and how to bind it", (await text(p, "#panel-settings")).includes("The gateway chooses. Viral has no fixed account: the gateway picks one of OpenAI's accounts for each run") && !!(await p.evaluate(() => [...document.querySelectorAll('#panel-settings [data-bs="change"]')].find((b) => b.textContent === "Bind to an account"))));
+check("FM-01 its account page says what that means and how to bind it", (await text(p, "#panel-settings")).includes("The gateway chooses. Viral has no fixed account: for each run the gateway picks one of OpenAI's accounts that its account order allows.") && !!(await p.evaluate(() => [...document.querySelectorAll('#panel-settings [data-bs="change"]')].find((b) => b.textContent === "Bind to an account"))));
 await p.close();
 p = await open("open=create&step=account&name=Viral&defacct=openai:work");
 check("FM-01 when the default model names an account, it is chosen, and the step says why", await p.evaluate(() => document.querySelector('[data-b-choose="openai:work"]').getAttribute("aria-checked") === "true" && document.querySelector("#create-dialog").textContent.includes("Chosen because the gateway's default model names it.")));
@@ -298,6 +298,25 @@ check("FM-02 locked to the old account: the new one leads and the old one is sti
 await p.click('#panel-settings [data-bs="save-change"]');
 check("FM-02 after saving, the lock is out of date, said as the gateway runs it, with the new command", (await pane(p)).includes("The lock is out of date. Otto runs on OpenAI · Home first, but the gateway's order for Otto still lists only OpenAI · Work, so when OpenAI · Home fails the gateway tries OpenAI · Work.") && (await text(p, "#panel-settings .command-line code")).endsWith("--agent otto openai:home"));
 check("FM-02 the account row says Lock out of date", await p.evaluate(() => { document.querySelector('#panel-settings [data-bs="main"]').click(); return document.querySelector('#panel-settings [data-bs="account"]').textContent.includes("Lock out of date"); }));
+await p.close();
+
+// R2-01: changing a bound bot and a locked bot to "Let the gateway choose".
+p = await open("bot=marlow&panel=open&tab=settings&bview=change");
+check("R2-01 Change account offers Let the gateway choose, last in the one radio group, naming the bot's own model", await p.evaluate(() => { const r = [...document.querySelectorAll('#panel-settings [role="radiogroup"] [role="radio"]')]; const last = r[r.length - 1]; return last.dataset.bChoose === "__gateway" && last.textContent.includes("as its account order allows, with Marlow's own model, gpt-5.5"); }));
+await p.click('#panel-settings [data-b-choose="__gateway"]');
+await p.click('#panel-settings [data-bs="save-change"]');
+check("R2-01 a bound bot moved to it: Gateway chooses, its own model without an account, and no retained order to report", await p.evaluate(() => { const b = window.bots.binding.marlow; const t = document.querySelector("#panel-settings").textContent; return b.mode === "gateway" && b.account === null && b.model === "gpt-5.5" && t.includes("The gateway chooses.") && !t.includes("still has an order"); }));
+check("R2-01 the task's grey line says so", (await text(p, "#transcript")).includes("Marlow now has no fixed account, from the next run."));
+await p.close();
+p = await open("bot=otto&panel=open&tab=settings&bview=change");
+await p.click('#panel-settings [data-b-choose="__gateway"]');
+check("R2-01 a locked bot: before saving, the view says the stored order keeps it on its account", (await pane(p)).includes("Otto is locked to OpenAI · Work. The gateway keeps an order for Otto that names only OpenAI · Work, and goes on using that account alone until its owner clears the order on the gateway's machine."));
+await p.click('#panel-settings [data-bs="save-change"]');
+check("R2-01 after saving: Gateway chooses, with the retained order and the command to clear it", (await pane(p)).includes("The gateway still has an order for Otto that names only OpenAI · Work, so it keeps using that account alone.") && (await p.evaluate(() => [...document.querySelectorAll("#panel-settings .command-line code")].some((c) => c.textContent === "openclaw models auth order clear --provider openai --agent otto"))));
+check("R2-01 the account row reads Gateway chooses", (await p.evaluate(() => { document.querySelector('#panel-settings [data-bs="main"]').click(); return document.querySelector('#panel-settings [data-bs="account"]').textContent; })).includes("Gateway chooses"));
+await p.evaluate(() => { delete window.botSettings.GW.order.otto; });
+await p.click('#panel-settings [data-bs="account"]');
+check("R2-01 the line goes when the page's own read finds the order gone", !(await pane(p)).includes("still has an order"));
 await p.close();
 
 // FM-03: what the page shows when its evidence of the lock is old, unreadable or gone.

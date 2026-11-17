@@ -68,6 +68,13 @@
   }
   function readOrder(id, reason) {
     const b = binding[id];
+    if (b && !b.account && b.mode === "gateway") {
+      // With no pin, a stored order alone decides: show it until a read finds it gone.
+      const order = GW.order[id];
+      b.retained = !GW.fail && order && order.length === 1 ? order[0] : GW.fail ? b.retained : null;
+      if (reason !== "silent") render();
+      return;
+    }
     if (!b?.account) return;
     const before = lockState(id);
     const e = b.evidence || {};
@@ -174,7 +181,7 @@
     const b = binding[id];
     const a = acct(b.account);
     const name = esc(botName(id));
-    const provider = a ? a.provider : b.mode === "gateway" ? D.DEFAULT_MODEL.provider : null;
+    const provider = a ? a.provider : b.mode === "gateway" ? b.gwProvider || D.DEFAULT_MODEL.provider : null;
     // Tools from the gateway's inventory for the bot's latest task, by plugin:
     // xAI's are offered with an xAI model, or for any model where switched on.
     const bot = app.bots.find((x) => x.id === id);
@@ -222,10 +229,20 @@
     const s = lockState(id);
     let html = sub("Account", "main");
     if (!a) {
-      const who = esc(providerName(D.DEFAULT_MODEL.provider));
+      const prov = b.gwProvider || D.DEFAULT_MODEL.provider;
+      const who = esc(providerName(prov));
+      const kept = acct(b.retained);
+      const clear = `openclaw models auth order clear --provider ${prov} --agent ${id}`;
       html += b.removed
         ? note(`<p><b>No account.</b> ${name}'s account was disconnected. Clawtrate won't start ${name} until you choose one.</p>`, "warn")
-        : note(`<p><b>The gateway chooses.</b> ${name} has no fixed account: the gateway picks one of ${who}'s accounts for each run, so its runs can use any of them. ${name} keeps its own model and no fallbacks.</p>`, "", icon("approval"));
+        : note(`<p><b>The gateway chooses.</b> ${name} has no fixed account: for each run the gateway picks one of ${who}'s accounts that its account order allows. ${name} keeps its own model and no fallbacks.</p>`, "", icon("approval")) +
+          (kept
+            ? note(
+                `<p>The gateway still has an order for ${name} that names only ${esc(acctName(kept))}, so it keeps using that account alone. To let the gateway choose among ${who}'s accounts, the gateway's owner can clear it on the gateway's machine:</p>` +
+                  `<div class="command-line"><code>${cmd(clear)}</code>${copy("clear command", clear)}</div>`,
+                "warn",
+              )
+            : "");
       return html + (isAdmin() ? `<div class="b-actions" style="margin-top:14px">${button(b.removed ? "Choose an account" : "Bind to an account", 'data-bs="change" data-size="sm"', "primary")}</div>` : "");
     }
     const [tone, word] = stateOf(a);
@@ -320,13 +337,24 @@
     const b = binding[id];
     const name = esc(botName(id));
     const was = acct(b.account);
-    const pick = acct(S.pick || b.account);
+    const provider = was ? was.provider : b.gwProvider || D.DEFAULT_MODEL.provider;
+    const toGateway = S.pick === D.GATEWAY || (!S.pick && b.mode === "gateway");
+    const pick = toGateway ? null : acct(S.pick || b.account);
     let html =
       sub("Change account", "account") +
       `<p class="b-lead" style="text-align:left">Choose the account ${name} runs on.</p>` +
-      D.accountGroups({ group: ` role="radiogroup" aria-label="Accounts for ${name}"`, row: (x) => D.accountRow(x, { choose: true, checked: pick && x.id === pick.id }) });
-    let ready = Boolean(pick) && (!was || pick.id !== was.id);
-    if (ready) {
+      `<div role="radiogroup" aria-label="Accounts for ${name}">` +
+      D.accountGroups({ row: (x) => D.accountRow(x, { choose: true, checked: Boolean(pick) && x.id === pick.id }) }, D.accounts().filter((x) => !x.owner || x.owner === id)) +
+      D.gatewayRow(toGateway, provider, { name: botName(id), model: b.model || D.DEFAULT_MODEL.model }) +
+      `</div>`;
+    let ready = toGateway ? b.mode !== "gateway" : Boolean(pick) && (!was || pick.id !== was.id);
+    // Moving to "Let the gateway choose": the bot keeps its own model without an account.
+    if (toGateway && ready) {
+      if (was && lockState(id) === "locked")
+        html += note(`<p>${name} is locked to ${esc(acctName(was))}. The gateway keeps an order for ${name} that names only ${esc(acctName(was))}, and goes on using that account alone until its owner clears the order on the gateway's machine. Account shows the command.</p>`, "warn");
+      if (b.running && was) html += note(`<p>A run in progress finishes on ${esc(acctName(was))}. From the next run ${name} has no fixed account.</p>`, "", icon("clock"));
+    }
+    if (ready && !toGateway) {
       const needModel = !MODELS[pick.provider].includes(b.model);
       if (needModel) {
         html +=
@@ -514,6 +542,25 @@
       render(true);
       announce("Fallbacks removed");
     }
+    if (action === "save-change" && S.pick === D.GATEWAY) {
+      // The bot's own model without an account suffix, and fallbacks: [], in one write.
+      const was = acct(b.account);
+      b.gwProvider = was ? was.provider : b.gwProvider;
+      b.account = null;
+      b.mode = "gateway";
+      b.removed = false;
+      b.watching = false;
+      delete b.failed;
+      clearNotice(id);
+      eventLine(id, `${botName(id)} now has no fixed account${b.running && was ? `. The run in progress finishes on ${acctName(was)}.` : ", from the next run."}`);
+      S.view = "account";
+      S.pick = null;
+      app.openTask(id, app.model.selectedTask);
+      readOrder(id, "silent");
+      render(true);
+      announce(`${botName(id)} now has no fixed account`);
+      return;
+    }
     if (action === "save-change") {
       const was = acct(b.account);
       const pick = acct(S.pick);
@@ -521,6 +568,7 @@
       else if (!MODELS[pick.provider].includes(b.model)) b.model = MODELS[pick.provider][0];
       b.watching = false;
       b.account = pick.id;
+      b.mode = "account";
       b.removed = false;
       b.inherits = false;
       delete b.failed;

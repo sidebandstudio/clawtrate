@@ -234,11 +234,13 @@
   }
 
   // "Let the gateway choose": last in the group, set apart, in words.
-  function gatewayRow(checked, provider = DEFAULT_MODEL.provider) {
+  // For an existing bot, own = its model: the row then names that model, not the default.
+  function gatewayRow(checked, provider = DEFAULT_MODEL.provider, own = null) {
     const who = esc(providerName(provider));
+    const model = own ? `${esc(own.name)}'s own model, ${esc(own.model)}` : `its default model, ${esc(DEFAULT_MODEL.model)}`;
     const line = shared().some((a) => a.provider === provider)
-      ? `No fixed account. The gateway picks one of ${who}'s accounts for each run, with its default model, ${esc(DEFAULT_MODEL.model)}.`
-      : `No fixed account. The gateway uses what it has for ${who}, with its default model, ${esc(DEFAULT_MODEL.model)}.`;
+      ? `No fixed account. The gateway picks one of ${who}'s accounts for each run, as its account order allows, with ${model}.`
+      : `No fixed account. The gateway uses what it has for ${who}, with ${model}.`;
     return (
       `<ul class="b-choices b-gw"><li><button type="button" class="b-choice" role="radio" aria-checked="${checked}" tabindex="-1" data-b-choose="${GATEWAY}"${isAdmin() ? "" : ' aria-disabled="true"'}>` +
       `<span class="b-choice-text"><span class="b-choice-title">Let the gateway choose</span><span class="b-choice-sub b-wrap">${line}</span></span>${icon("check", "icon b-tick")}</button></li></ul>`
