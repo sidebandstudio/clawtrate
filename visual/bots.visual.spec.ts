@@ -429,3 +429,58 @@ test("F-426: a bot row shows the most urgent state of its tasks; opening a done-
   await page.getByRole("list", { name: "Otto's tasks" }).getByText("Router firmware").click();
   await expect(otto).toHaveAccessibleName(/^Otto, working,/);
 });
+
+test("F-023: the shell gives the host the number of unread tasks for the dock badge", async ({
+  page,
+}) => {
+  const badge = () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { clawtrateFixture: { badge: number | null } }).clawtrateFixture
+          .badge,
+    );
+  await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+  // Unread: Juniper's e-book apps, Otto's backup check and Pip's week.
+  await expect.poll(badge).toBe(3);
+  // Opening one reads it; it stays read after it is left.
+  await page.getByRole("list", { name: "Otto's tasks" }).getByText("Weekly backup check").click();
+  await expect.poll(badge).toBe(2);
+  await page.getByRole("list", { name: "Otto's tasks" }).getByText("Router firmware").click();
+  await expect.poll(badge).toBe(2);
+  // New activity in a read task makes it unread again.
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: {
+          setState(
+            f: (s: {
+              tasksByBot: Record<
+                string,
+                Array<{ key: string; updatedAt: number; unread: boolean }>
+              >;
+            }) => unknown,
+          ): void;
+        };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      tasksByBot: {
+        ...state.tasksByBot,
+        otto: state.tasksByBot.otto!.map((t) =>
+          t.key === "agent:otto:backup-check"
+            ? { ...t, unread: true, updatedAt: t.updatedAt + 60_000 }
+            : t,
+        ),
+      },
+    }));
+  });
+  await expect.poll(badge).toBe(3);
+  // Disconnecting clears it.
+  await page
+    .getByRole("button", { name: /Open the gateway menu\.$/ })
+    .last()
+    .click();
+  await page.getByRole("menuitem", { name: "Disconnect" }).click();
+  await expect.poll(badge).toBe(0);
+});

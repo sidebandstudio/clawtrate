@@ -302,6 +302,8 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   /** Every command the interface sent, for tests that check what was asked of the host. */
   sent: BridgeCommand[];
+  /** The last unread count the interface gave for the dock badge. */
+  badge: number | null;
 } {
   const now = Date.now();
   const { initial, steps } = scene(name, now);
@@ -358,5 +360,6 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
     send: apply,
     setState: (change) => set(change(state)),
     sent,
+    badge: null,
   };
 }

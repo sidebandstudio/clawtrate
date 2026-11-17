@@ -32,7 +32,14 @@ function useInputAndMotion() {
  * delivered anything, the shell stays mounted through reconnects, keeping
  * scroll position and open details, with a status strip on top.
  */
-export function App({ info }: { info: HostInfo }) {
+export function App({
+  info,
+  onUnreadCount,
+}: {
+  info: HostInfo;
+  /** The host's dock or taskbar badge: called with the number of unread tasks. */
+  onUnreadCount?: ((count: number) => void) | undefined;
+}) {
   const state = useClawtrateState();
   useInputAndMotion();
   // The theme applies on every screen; the gateway menu in the shell changes it.
@@ -40,7 +47,7 @@ export function App({ info }: { info: HostInfo }) {
   return (
     <div className="app">
       {screenFor(state) === "shell" ? (
-        <Shell state={state} theme={theme} onTheme={setTheme} />
+        <Shell state={state} theme={theme} onTheme={setTheme} onUnreadCount={onUnreadCount} />
       ) : (
         <ConnectScreen connection={state.connection} info={info} />
       )}

@@ -1,5 +1,5 @@
 // Exposes a narrow, typed IPC surface to the renderer. No Node or Electron
-// objects cross the bridge, only plain data and three functions.
+// objects cross the bridge, only plain data and four functions.
 
 import type { BridgeCommand, ClawtrateState, HostInfo } from "@clawtrate/core";
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
@@ -9,6 +9,8 @@ export type DesktopHostApi = {
   hello(): Promise<{ info: HostInfo; state: ClawtrateState }>;
   send(command: BridgeCommand): Promise<void>;
   onState(listener: (state: ClawtrateState) => void): () => void;
+  /** The number of unread tasks, for the dock or taskbar badge. */
+  setBadge(count: number): void;
 };
 
 const api: DesktopHostApi = {
@@ -20,6 +22,7 @@ const api: DesktopHostApi = {
     ipcRenderer.on("clawtrate:state", handler);
     return () => ipcRenderer.removeListener("clawtrate:state", handler);
   },
+  setBadge: (count) => ipcRenderer.send("clawtrate:badge", count),
 };
 
 contextBridge.exposeInMainWorld("clawtrateHost", api);

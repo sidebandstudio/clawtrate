@@ -64,7 +64,7 @@ Object.assign(window, { clawtrateFixture: bridge });
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BridgeProvider bridge={bridge}>
-      <App info={bridge.info} />
+      <App info={bridge.info} onUnreadCount={(count) => (bridge.badge = count)} />
     </BridgeProvider>
   </StrictMode>,
 );

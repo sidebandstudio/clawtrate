@@ -7,6 +7,7 @@ import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
 import { readPreference, writePreference, type ThemeChoice } from "./preferences.ts";
 import { Rail } from "./Rail.tsx";
 import { useSelection } from "./selection.ts";
+import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
 import { WorkPanel } from "./WorkPanel.tsx";
 
@@ -25,10 +26,12 @@ export function Shell({
   state,
   theme,
   onTheme,
+  onUnreadCount,
 }: {
   state: ClawtrateState;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
+  onUnreadCount?: ((count: number) => void) | undefined;
 }) {
   const send = useCommand();
   const selection = useSelection(state);
@@ -91,6 +94,13 @@ export function Shell({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePanel, drawerOpen, setPanel]);
+
+  // The dock or taskbar badge counts unread tasks, other than the one on screen.
+  const unread = unreadCount(state.tasksByBot, selection.seen, task?.key ?? null);
+  useEffect(() => {
+    onUnreadCount?.(unread);
+  }, [unread, onUnreadCount]);
+  useEffect(() => () => onUnreadCount?.(0), [onUnreadCount]);
 
   // Keep exactly the selected task's transcript open on the host.
   const taskKey = task?.key ?? null;
