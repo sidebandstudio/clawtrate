@@ -694,6 +694,41 @@ test.describe("action cards", () => {
     await expect(row).toHaveAttribute("open", "");
   });
 
+  test("F-293: while one card is open, other cards keep updating and new ones keep arriving; it stays open and nothing above it moves", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await open(page, "actions-becoming-fold");
+    // An earlier card, opened: the read of AGENTS.md.
+    const opened = cards(page).filter({
+      has: page.locator(':scope > summary[aria-label^="Read AGENTS.md"]'),
+    });
+    await line(opened).click();
+    await expect(opened).toHaveAttribute("open", "");
+    const top = (await line(opened).boundingBox())!.y;
+    // The run's later read arrives: the last card changes into a fold below it.
+    const fold = page.locator(".transcript details.card.action[data-fold]");
+    await expect(fold).toHaveCount(1, { timeout: 5000 });
+    await expect(line(fold)).toHaveAccessibleName(/^Read 2 files/);
+    // A card below changes too: the running command's output grows.
+    await setState(
+      page,
+      `const key = "agent:otto:disk-space"; const t = state.transcripts[key];
+       const runs = t.runs.map((r) => ({ ...r, steps: r.steps.map((s) => s.toolCallId === "call_l3"
+         ? { ...s, output: { text: (s.output?.text ?? "") + "40G /srv/media/photos", totalChars: 999 } } : s) }));
+       return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, runs } } };`,
+    );
+    await settle(page);
+    await expect(opened).toHaveAttribute("open", "");
+    await expect(opened.getByRole("tab", { name: "Readable" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect((await line(opened).boundingBox())!.y).toBe(top);
+    // Only the card that was opened is open.
+    await expect(page.locator(".transcript details.card.action[open]")).toHaveCount(1);
+  });
+
   test("an open card becomes a fold with its first row open in its view; focus stays on the same control; nothing above moves", async ({
     page,
   }) => {

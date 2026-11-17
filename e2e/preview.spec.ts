@@ -1434,11 +1434,10 @@ test("F-468: a real question holds a message typed while it is pending, and answ
 
 /** The action cards' and folds' lines in a transcript, in order. */
 const actionLines = (page: Page) =>
-  page
-    .locator(".transcript details.card.action > summary")
-    .evaluateAll((nodes) =>
-      nodes.map((node) => node.getAttribute("aria-label")!.replace(/, [0-9.]+ seconds$/, "")),
-    );
+  page.locator(".transcript details.card.action > summary").evaluateAll((nodes) =>
+    // A duration is said only where the gateway reported it; history does not, so it says "done".
+    nodes.map((node) => node.getAttribute("aria-label")!.replace(/, ([0-9.]+ seconds|done)$/, "")),
+  );
 
 // These runs go to a task no other check sends to, so nothing another check leaves behind
 // (a stopped run, a refused send) changes them.
@@ -1495,6 +1494,44 @@ test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five 
   // gateway's map of tool names (`tools.effective`) still names the server and tool.
   expect(await actionLines(page)).toEqual(ended);
   expect(ended).toContain("Used coder, slow task");
+});
+
+test("F-488 F-090: a real run of 42 actions shows all 42, live and after the page reads its history again", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await openShell(page);
+  await openTask(page, "Pip", "Two days in the mountains");
+  await composer(page).fill(`Read it all. ${Array(7).fill("#read-six").join(" ")}`);
+  await page.keyboard.press("Enter");
+  const status = page.getByTestId("status-line");
+  await expect(status).toHaveCount(0, { timeout: 120_000 });
+  const run = page.getByTestId("run-line").last();
+  await expect(run.locator("summary")).toHaveAccessibleName(/^Worked for \d+s · 42 actions$/);
+  /** The reads after the last message of this check, counted through their folds. */
+  const reads = () =>
+    page.getByTestId("transcript").evaluate((element) => {
+      const nodes = [...element.querySelectorAll(".bubble, details.card.action")];
+      const start = nodes.findLastIndex((node) => node.textContent?.includes("Read it all."));
+      return nodes
+        .slice(start + 1)
+        .filter((node) => node.matches("details.card.action[data-kind='read']"))
+        .reduce((n, node) => n + Number((node as HTMLElement).dataset.fold ?? 1), 0);
+    });
+  expect(await reads()).toBe(42);
+
+  await page.reload();
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  await openTask(page, "Pip", "Two days in the mountains");
+  await expect(page.getByText("Read it all.", { exact: false }).last()).toBeVisible({
+    timeout: 30_000,
+  });
+  // Drawn from the engine's record: every action, none dropped at an item's bound.
+  await expect.poll(reads, { timeout: 30_000 }).toBe(42);
+  // The run line counts the same 42; a duration only where the gateway's lifecycle reported it.
+  await expect(page.getByTestId("run-line").last().locator("summary")).toHaveAccessibleName(
+    /^Worked( for \d+s)? · 42 actions$/,
+  );
 });
 
 test("F-092 F-294: a real step that fails shows its failure on its own line, and the run line counts it", async ({
