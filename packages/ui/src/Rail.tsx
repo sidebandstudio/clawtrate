@@ -285,14 +285,16 @@ function TaskRows({
           </button>
         </li>
       )}
-      <ArchivedGroup
-        bot={bot}
-        tasks={tasks}
-        open={archived.open}
-        onToggle={archived.onToggle}
-        onMenu={archived.onMenu}
-        now={now}
-      />
+      {actions && (
+        <ArchivedGroup
+          bot={bot}
+          tasks={tasks}
+          open={archived.open}
+          onToggle={archived.onToggle}
+          onMenu={archived.onMenu}
+          now={now}
+        />
+      )}
     </ul>
   );
 }
@@ -1025,7 +1027,7 @@ export function Rail({
             { kind: "rule" as const },
           ]
         : []),
-      ...(!hidden
+      ...(!hidden && roster.editable
         ? [
             {
               kind: "item" as const,
@@ -1033,14 +1035,17 @@ export function Rail({
               icon: <PinIcon />,
               onSelect: after(() => {
                 if (pinned) selection.release([bot.id]);
-                void runner.run(pinned ? `unpin ${bot.name}` : `pin ${bot.name}`, () =>
-                  roster.togglePin(bot.id),
-                );
+                // On the gateway's arrangement the row moves once the change is made: focus follows it then.
+                void runner.run(pinned ? `unpin ${bot.name}` : `pin ${bot.name}`, async () => {
+                  await roster.togglePin(bot.id);
+                  setRefocus({ bot: bot.id });
+                });
               }),
             },
           ]
         : []),
-      ...(!hidden && !pinned && roster.editable
+      // Sections are the gateway's to keep: offered only on a connection that writes.
+      ...(!hidden && !pinned && interactive && roster.editable
         ? [
             {
               kind: "item" as const,
@@ -1053,7 +1058,7 @@ export function Rail({
             },
           ]
         : []),
-      ...(manual && !matches && listIndex > 0
+      ...(manual && !matches && listIndex > 0 && roster.editable
         ? [
             {
               kind: "item" as const,
@@ -1063,7 +1068,11 @@ export function Rail({
             },
           ]
         : []),
-      ...(manual && !matches && listIndex !== -1 && listIndex < arranged.list.length - 1
+      ...(manual &&
+      !matches &&
+      listIndex !== -1 &&
+      listIndex < arranged.list.length - 1 &&
+      roster.editable
         ? [
             {
               kind: "item" as const,
@@ -1139,24 +1148,34 @@ export function Rail({
           ]
         : []),
       { kind: "rule" },
-      hidden
-        ? {
-            kind: "item",
-            label: "Show in sidebar",
-            icon: <EyeIcon />,
-            onSelect: after(() => roster.setHidden(bot.id, false)),
-          }
-        : {
-            kind: "item",
-            label: "Hide from sidebar",
-            icon: <HideIcon />,
-            // The row goes into the folded section, so focus goes to its toggle.
-            onSelect: after(() => {
-              selection.release([bot.id]);
-              void runner.run(`hide ${bot.name}`, () => roster.setHidden(bot.id, true));
-              setAnnouncement(`${bot.name} is hidden. Hidden bots keep working.`);
-            }),
-          },
+      !roster.editable
+        ? { kind: "rule" }
+        : hidden
+          ? {
+              kind: "item",
+              label: "Show in sidebar",
+              icon: <EyeIcon />,
+              onSelect: after(() => {
+                void runner.run(`show ${bot.name}`, async () => {
+                  await roster.setHidden(bot.id, false);
+                  setRefocus({ bot: bot.id });
+                });
+              }),
+            }
+          : {
+              kind: "item",
+              label: "Hide from sidebar",
+              icon: <HideIcon />,
+              // The row goes into the folded section, so focus goes to its toggle.
+              onSelect: after(() => {
+                selection.release([bot.id]);
+                void runner.run(`hide ${bot.name}`, async () => {
+                  await roster.setHidden(bot.id, true);
+                  setRefocus({ bot: bot.id });
+                });
+                setAnnouncement(`${bot.name} is hidden. Hidden bots keep working.`);
+              }),
+            },
       ...(interactive && only
         ? [
             { kind: "rule" as const },
@@ -1203,7 +1222,10 @@ export function Rail({
           label: section.name,
           icon: <SectionIcon />,
           onSelect: () => {
-            void runner.run(`move ${bot.name}`, () => roster.moveToSection(bot.id, section.name));
+            void runner.run(`move ${bot.name}`, async () => {
+              await roster.moveToSection(bot.id, section.name);
+              setRefocus({ bot: bot.id });
+            });
             done(`Moved ${bot.name} to ${section.name}.`);
           },
         })),
@@ -1236,7 +1258,10 @@ export function Rail({
               label: `Remove from ${current}`,
               icon: <CloseIcon />,
               onSelect: () => {
-                void runner.run(`move ${bot.name}`, () => roster.moveToSection(bot.id, null));
+                void runner.run(`move ${bot.name}`, async () => {
+                  await roster.moveToSection(bot.id, null);
+                  setRefocus({ bot: bot.id });
+                });
                 done(`${bot.name} is no longer in ${current}.`);
               },
             },
@@ -1390,7 +1415,7 @@ export function Rail({
     openBotMenu(bot.id, event.currentTarget, event.clientX, event.clientY);
   };
 
-  const draggable = manual && !matches;
+  const draggable = manual && !matches && roster.editable;
   const dragProps = (bot: Bot, inList: boolean) =>
     draggable && inList
       ? {
@@ -1493,7 +1518,7 @@ export function Rail({
             <ChevronIcon />
           </button>
         )}
-        {(open || (place !== "search" && archivedOpen.has(bot.id))) && (
+        {(open || (place !== "search" && interactive && archivedOpen.has(bot.id))) && (
           <TaskRows
             bot={bot}
             tasks={tasks}

@@ -129,12 +129,14 @@ describe("each gateway's arrangement", () => {
       hidden: [],
       sort: "recent",
       manual: [],
+      sections: [],
     });
     expect(readRoster("gateway:a1", "address:ws://127.0.0.1:18789")).toEqual({
       pinned: [],
       hidden: [],
       sort: "recent",
       manual: [],
+      sections: [],
     });
     expect(readRoster("address:ws://127.0.0.1:18789")).toMatchObject({ pinned: [], hidden: [] });
     // The old state is not read into any gateway, and is left where it is.

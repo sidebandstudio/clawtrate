@@ -3062,3 +3062,7 @@ textarea {
 .settings-repair p {
   margin: 0 0 8px;
 }
+
+.settings-repair-actions {
+  margin-top: var(--space-3);
+}

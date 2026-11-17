@@ -240,16 +240,6 @@ export function Settings({
             </div>
           )}
           <div className="settings-actions">
-            {canRePair && (
-              <button
-                type="button"
-                className="button"
-                data-variant="primary"
-                onClick={() => void send({ type: "requestAccess" }).catch(() => {})}
-              >
-                Re-pair
-              </button>
-            )}
             {canReconnect && (
               <button
                 type="button"
@@ -283,6 +273,18 @@ export function Settings({
               </button>
             )}
           </div>
+          {canRePair && (
+            <div className="settings-repair-actions">
+              <button
+                type="button"
+                className="button"
+                data-size="sm"
+                onClick={() => void send({ type: "requestAccess" }).catch(() => {})}
+              >
+                Re-pair
+              </button>
+            </div>
+          )}
           {connection.gatewayUrl && (
             <p className="settings-note">
               {gatewayLabel(connection.gatewayUrl)} keeps this device's pairing while it is

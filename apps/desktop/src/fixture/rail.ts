@@ -113,7 +113,7 @@ export function railScene(name: RailScene, base: ClawtrateState, now: number): C
         ...task,
         status: "stopped",
       }));
-      state = changeTask(state, "pip", "agent:pip:errands", (task) => ({
+      state = changeTask(state, "quartermaster", "agent:quartermaster:errands", (task) => ({
         ...task,
         status: "queued",
       }));
