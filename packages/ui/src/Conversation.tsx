@@ -133,33 +133,30 @@ const NEAR_BOTTOM_PX = 96;
 
 /**
  * The reader's place survives a change of width: opening, closing, docking or
- * undocking Work, or resizing the window. A reader at the end stays at the
- * end; otherwise the first item in view stays where it was while the text
- * reflows around it.
+ * undocking Work, or resizing the window, and late reflows such as fonts
+ * arriving. A reader following the end stays at the end; otherwise the first
+ * item in view stays where it was while the text reflows around it.
  */
-function useHoldPlace(scroller: RefObject<HTMLDivElement | null>) {
+function useHoldPlace(
+  scroller: RefObject<HTMLDivElement | null>,
+  following: RefObject<boolean>,
+  toEnd: () => void,
+) {
   useLayoutEffect(() => {
     const element = scroller.current;
     if (!element) return;
-    let place: { atEnd: boolean; anchor: Element | null; offset: number } = {
-      atEnd: true,
-      anchor: null,
-      offset: 0,
-    };
+    let place: { anchor: Element | null; offset: number } = { anchor: null, offset: 0 };
     let width = element.clientWidth;
     const record = () => {
       const top = element.getBoundingClientRect().top;
-      const atEnd =
-        element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX;
       const anchor =
         [...element.querySelectorAll(".transcript-inner > *")].find(
           (node) => node.getBoundingClientRect().bottom > top + 1,
         ) ?? null;
-      place = { atEnd, anchor, offset: anchor ? anchor.getBoundingClientRect().top - top : 0 };
+      place = { anchor, offset: anchor ? anchor.getBoundingClientRect().top - top : 0 };
     };
-    // Watching the content too covers late reflows, such as fonts arriving.
     const observer = new ResizeObserver(() => {
-      if (place.atEnd) element.scrollTop = element.scrollHeight;
+      if (following.current) toEnd();
       else if (element.clientWidth !== width && place.anchor?.isConnected) {
         const top = element.getBoundingClientRect().top;
         element.scrollTop += place.anchor.getBoundingClientRect().top - top - place.offset;
@@ -175,7 +172,7 @@ function useHoldPlace(scroller: RefObject<HTMLDivElement | null>) {
       observer.disconnect();
       element.removeEventListener("scroll", record);
     };
-  }, [scroller]);
+  }, [scroller, following, toEnd]);
 }
 
 /**
@@ -202,28 +199,45 @@ function TranscriptView({
   const [now] = useState(() => Date.now());
   const newActivity = !atEnd && contentSize !== seenSize;
 
+  // Whether the view follows the end, and where it last put the end. A scroll
+  // the reader did not make (the content grew under a followed end) keeps
+  // following; only the reader moving up stops it.
+  const following = useRef(true);
+  const followTop = useRef<number | null>(null);
+  const toEnd = useCallback(() => {
+    const element = scroller.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+    followTop.current = element.scrollTop;
+  }, []);
+
   const onScroll = useCallback(() => {
     const element = scroller.current;
     if (!element) return;
-    const near = element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX;
+    const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+    const kept =
+      following.current && followTop.current !== null && element.scrollTop >= followTop.current - 1;
+    const near = kept || distance < NEAR_BOTTOM_PX;
+    if (kept && distance > 1) toEnd();
+    else followTop.current = near ? element.scrollTop : null;
+    following.current = near;
     setAtEnd(near);
     if (near) setSeenSize(contentSize);
-  }, [contentSize]);
+  }, [contentSize, toEnd]);
 
   const jumpToLatest = useCallback(() => {
-    const element = scroller.current;
-    if (element) element.scrollTop = element.scrollHeight;
+    following.current = true;
+    toEnd();
     setAtEnd(true);
     setSeenSize(contentSize);
-  }, [contentSize]);
+  }, [contentSize, toEnd]);
 
   // Follow new output while the reader is at the end.
   useLayoutEffect(() => {
-    const element = scroller.current;
-    if (atEnd && element) element.scrollTop = element.scrollHeight;
-  }, [contentSize, atEnd]);
+    if (atEnd) toEnd();
+  }, [contentSize, atEnd, toEnd]);
 
-  useHoldPlace(scroller);
+  useHoldPlace(scroller, following, toEnd);
 
   // A centred stamp before the first message, and wherever more than ten
   // minutes pass or the day changes.
