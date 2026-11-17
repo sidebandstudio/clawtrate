@@ -89,6 +89,7 @@ import {
   type InstancePorts,
 } from "./registry.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
+import { contractProblems, matching, optional, type Contract } from "./contract.ts";
 import { SEED_CAPS, SEED_SCOPES, seedExample, verifyExample } from "./examples.ts";
 import { OperatorSession } from "./operator.ts";
 import {
@@ -306,8 +307,12 @@ export function devConfig(
         // web_fetch cannot be limited to loopback, so it is off.
         fetch: { enabled: false },
       },
-      // Tools that reach the network, drive a browser or another device, or
-      // send through a channel are not offered to any bot.
+      // The only tools any bot is offered: those the scenarios use. A tool
+      // the gateway adds later is off until it is listed here.
+      allow: [...ALLOWED_TOOLS],
+      // Denied as well, so a change to the allowlist cannot bring them back:
+      // tools that reach the network, manage the gateway or its installation,
+      // drive a browser or another device, or send through a channel.
       deny: [...DENIED_TOOLS],
     },
     // The stand-in coding agent: a local command server, no network, run in
@@ -348,7 +353,25 @@ export function searchBaseUrl(ports: InstancePorts): string {
  * send through a chat channel (message, conversations_send, conversations_turn),
  * or publish (github_publish).
  */
+export const ALLOWED_TOOLS = [
+  "read",
+  "write",
+  "edit",
+  "ls",
+  "exec",
+  "web_search",
+  "ask_user",
+  "sessions_send",
+  "sessions_list",
+  "progress_card",
+  "automations",
+  `${CODING_AGENT_SERVER}__*`,
+] as const;
+
 export const DENIED_TOOLS = [
+  "gateway",
+  "plugins",
+  "openclaw",
   "web_fetch",
   "x_search",
   "code_execution",
@@ -373,177 +396,56 @@ export const DENIED_TOOLS = [
   "github_publish",
 ] as const;
 
-type JsonRecord = Record<string, unknown>;
-const at = (value: unknown, ...path: string[]): unknown =>
-  path.reduce<unknown>((node, key) => (node as JsonRecord | undefined)?.[key], value);
-
 /**
- * The only MCP server is the stand-in coding agent: a local command from this
- * checkout, run in the instance's own folder, with no URL, headers or extra
- * environment.
+ * The development config contract (contract.ts): exactly the generated
+ * config, with the generated token, plus the fields seeding writes into each
+ * bot's entry (its identity), and nothing else.
  */
-function mcpProblems(mcp: unknown, stateDir?: string): string[] {
-  const servers = (at(mcp, "servers") as JsonRecord | undefined) ?? {};
-  const names = Object.keys(servers);
-  if (names.length !== 1 || names[0] !== CODING_AGENT_SERVER) {
-    return [`mcp.servers must contain only "${CODING_AGENT_SERVER}"`];
-  }
-  const server = servers[CODING_AGENT_SERVER] as JsonRecord;
-  const problems: string[] = [];
-  const extra = Object.keys(server).filter(
-    (key) => !["transport", "command", "args", "cwd"].includes(key),
+export function devConfigContract(
+  ports: InstancePorts = DEFAULT_PORTS,
+  stateDir: string = devStateDir(),
+): Contract {
+  const contract = structuredClone(devConfig("", ports, stateDir)) as unknown as Record<
+    string,
+    Record<string, unknown>
+  >;
+  (contract.gateway!.auth as Record<string, unknown>).token = matching(
+    "a token",
+    (value) => typeof value === "string" && /^\S+$/.test(value),
   );
-  if (extra.length > 0)
-    problems.push(`the ${CODING_AGENT_SERVER} MCP server may not set ${extra.join(", ")}`);
-  if (server.transport !== "stdio")
-    problems.push(`the ${CODING_AGENT_SERVER} MCP server must use stdio`);
-  if (
-    server.command !== process.execPath ||
-    JSON.stringify(server.args) !== JSON.stringify([CODING_AGENT_SCRIPT])
-  ) {
-    problems.push(`the ${CODING_AGENT_SERVER} MCP server must run the stand-in coding agent`);
+  const entries = (contract.agents!.entries as Record<string, Record<string, unknown>>) ?? {};
+  for (const bot of SEED_BOTS) {
+    // `agents set-identity` during the seed.
+    entries[bot.id]!.identity = optional({ name: bot.name, emoji: bot.emoji, theme: bot.theme });
   }
-  if (stateDir !== undefined && server.cwd !== stateDir) {
-    problems.push(`the ${CODING_AGENT_SERVER} MCP server must run in the instance's folder`);
-  }
-  return problems;
+  // The CLI stamps the version that last wrote the config, and the migrations
+  // it considers applied, whenever it writes it.
+  (contract as Record<string, unknown>).meta = optional({
+    lastTouchedVersion: optional("2026.10.6"),
+    lastTouchedAt: optional(matching("a time stamp", (value) => typeof value === "string")),
+    migrations: optional({
+      modelPolicyAllowlist: optional(true),
+      utilityModelSeparation: optional(true),
+    }),
+  });
+  return contract as unknown as Contract;
 }
 
 /**
- * What the tools may reach: files only in the bot's workspace, web search only
- * at the scripted server on loopback, no web fetch, and every tool in
- * DENIED_TOOLS denied with nothing that could add it back.
- */
-function toolReachProblems(config: unknown, ports?: InstancePorts): string[] {
-  const problems: string[] = [];
-  if (at(config, "tools", "fs", "workspaceOnly") !== true)
-    problems.push("tools.fs.workspaceOnly must be true");
-  if (at(config, "tools", "web", "fetch", "enabled") !== false)
-    problems.push("tools.web.fetch.enabled must be false");
-  const search = (at(config, "tools", "web", "search") as JsonRecord | undefined) ?? {};
-  if (
-    JSON.stringify(Object.keys(search).sort()) !== JSON.stringify(["enabled", "provider"]) ||
-    search.provider !== "ollama"
-  ) {
-    problems.push('tools.web.search must be exactly { enabled, provider: "ollama" }');
-  }
-  const searchUrl = at(config, "plugins", "entries", "ollama", "config", "webSearch", "baseUrl");
-  const ollama = at(config, "plugins", "entries", "ollama") as JsonRecord | undefined;
-  if (
-    typeof searchUrl !== "string" ||
-    !/^http:\/\/127\.0\.0\.1:\d+$/.test(searchUrl) ||
-    (ports !== undefined && searchUrl !== searchBaseUrl(ports)) ||
-    JSON.stringify(Object.keys(ollama ?? {})) !== JSON.stringify(["config"]) ||
-    JSON.stringify(Object.keys(rec(ollama?.config))) !== JSON.stringify(["webSearch"]) ||
-    JSON.stringify(Object.keys(rec(rec(ollama?.config).webSearch))) !== JSON.stringify(["baseUrl"])
-  ) {
-    problems.push("web search must go only to the scripted server on loopback");
-  }
-  const denied = at(config, "tools", "deny");
-  const missing = DENIED_TOOLS.filter((tool) => !Array.isArray(denied) || !denied.includes(tool));
-  if (missing.length > 0) problems.push(`tools.deny must include ${missing.join(", ")}`);
-  for (const key of ["allow", "alsoAllow", "profile", "byProvider", "toolsBySender"]) {
-    if (at(config, "tools", key) !== undefined) problems.push(`tools.${key} must not be set`);
-  }
-  const loads = at(config, "plugins", "load");
-  if (loads !== undefined) problems.push("plugins.load must not be set");
-  return problems;
-}
-
-const rec = (value: unknown): JsonRecord =>
-  value !== null && typeof value === "object" ? (value as JsonRecord) : {};
-
-/**
- * The guarantees the development gateway must keep: only the scripted model,
- * no memory-search embeddings, a shell only for the shell bot and only with
- * approval, messages only between the messaging pair, and only the stand-in
- * MCP server. Returns what is wrong.
+ * The guarantees the development gateway must keep, as one closed contract:
+ * only the scripted model; token auth on loopback with explicit pairing;
+ * every workspace inside the instance; no memory-search embeddings; a shell
+ * only for the shell bot and only with approval; messages only between the
+ * messaging pair; only the stand-in MCP server; file tools in the workspace;
+ * web search only to the scripted server; only the allowed tools; and no other
+ * key at all. Returns what is wrong, one line per difference, with its path.
  */
 export function sandboxProblems(
   config: unknown,
   ports?: InstancePorts,
   stateDir?: string,
 ): string[] {
-  const problems: string[] = [];
-  if (ports) {
-    if (at(config, "gateway", "port") !== ports.gatewayPort)
-      problems.push(`gateway.port must be this instance's ${ports.gatewayPort}`);
-    if (
-      at(config, "models", "providers", PROVIDER_ID, "baseUrl") !==
-      `http://127.0.0.1:${ports.providerPort}/v1`
-    )
-      problems.push(`the scripted provider must be this instance's port ${ports.providerPort}`);
-  }
-  if (at(config, "models", "mode") !== "replace") problems.push('models.mode must be "replace"');
-  const providers = Object.keys(
-    (at(config, "models", "providers") as JsonRecord | undefined) ?? {},
-  );
-  if (providers.length !== 1 || providers[0] !== PROVIDER_ID) {
-    problems.push(`models.providers must contain only "${PROVIDER_ID}"`);
-  }
-  const baseUrl = at(config, "models", "providers", PROVIDER_ID, "baseUrl");
-  if (typeof baseUrl !== "string" || !baseUrl.startsWith("http://127.0.0.1:")) {
-    problems.push("the scripted provider must be on loopback");
-  }
-  if (at(config, "memory", "search", "enabled") !== false)
-    problems.push("memory.search.enabled must be false");
-  if (at(config, "tools", "exec", "mode") !== "deny")
-    problems.push('tools.exec.mode must be "deny"');
-  if (at(config, "tools", "exec", "security") !== "deny")
-    if (
-      at(config, "tools", "exec", "security") !== undefined ||
-      at(config, "tools", "exec", "ask") !== undefined
-    ) {
-      // A legacy security/ask pair would replace the mode instead of deriving from it.
-      problems.push("tools.exec must set only mode, not security or ask");
-    }
-  const globalExec = (at(config, "tools", "exec") as JsonRecord | undefined) ?? {};
-  const extraExec = Object.keys(globalExec).filter(
-    (key) => !["mode", "security", "ask"].includes(key),
-  );
-  if (extraExec.length > 0)
-    problems.push(`tools.exec must set only mode (found ${extraExec.join(", ")})`);
-  for (const [id, entry] of Object.entries(
-    (at(config, "agents", "entries") as JsonRecord | undefined) ?? {},
-  )) {
-    const exec = at(entry, "tools", "exec") as JsonRecord | undefined;
-    if (id === SHELL_BOT) {
-      // The shell bot asks about every command; nothing may make it run without asking.
-      if (exec !== undefined && JSON.stringify(exec) !== JSON.stringify({ mode: "ask" })) {
-        problems.push(`agents.entries.${id}.tools.exec must be exactly { mode: "ask" }`);
-      }
-    } else if (exec !== undefined) {
-      problems.push(`agents.entries.${id}.tools.exec overrides the global exec policy`);
-    }
-    const extraTools = Object.keys((at(entry, "tools") as JsonRecord | undefined) ?? {}).filter(
-      (key) => key !== "exec" && key !== "agentToAgent",
-    );
-    if (extraTools.length > 0) {
-      problems.push(
-        `agents.entries.${id}.tools may set only exec and agentToAgent (found ${extraTools.join(", ")})`,
-      );
-    }
-    const send = at(entry, "tools", "agentToAgent", "send");
-    const partner = messagingPartner(id);
-    if (send !== undefined && (!Array.isArray(send) || send.some((target) => target !== partner))) {
-      problems.push(`agents.entries.${id} may message only ${partner ?? "no other bot"}`);
-    }
-    if (at(entry, "memory", "search", "enabled") === true) {
-      problems.push(`agents.entries.${id}.memory.search re-enables memory search`);
-    }
-  }
-  const allow = at(config, "tools", "agentToAgent", "allow");
-  if (
-    !Array.isArray(allow) ||
-    JSON.stringify([...(allow as string[])].sort()) !== JSON.stringify([...MESSAGING_PAIR].sort())
-  ) {
-    problems.push(`tools.agentToAgent.allow must be exactly ${MESSAGING_PAIR.join(" and ")}`);
-  }
-  problems.push(...mcpProblems(at(config, "mcp"), stateDir));
-  problems.push(...toolReachProblems(config, ports));
-  if (at(config, "gateway", "bind") !== "loopback")
-    problems.push('gateway.bind must be "loopback"');
-  return problems;
+  return contractProblems(config, devConfigContract(ports, stateDir));
 }
 
 function assertSandboxed(inst: DevInstance, ports: InstancePorts): void {

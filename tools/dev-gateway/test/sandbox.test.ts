@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ALLOWED_TOOLS,
   CODING_AGENT_SCRIPT,
   checkHistory,
   checkTurnOutcome,
@@ -15,7 +16,23 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 describe("development gateway config", () => {
   const config = devConfig("test-token");
 
-  it("passes every sandbox guarantee", () => {
+  /** The problems of a copy of the config with one value set (or removed, for undefined) at a path. */
+  const changed = (path: string, value: unknown) => {
+    const copy = clone(config) as unknown as Record<string, unknown>;
+    const keys = path.split(".");
+    let node = copy;
+    for (const key of keys.slice(0, -1)) {
+      node[key] ??= {};
+      node = node[key] as Record<string, unknown>;
+    }
+    if (value === undefined) delete node[keys.at(-1)!];
+    else node[keys.at(-1)!] = value;
+    return sandboxProblems(copy);
+  };
+  const refused = (path: string, value: unknown, problem: RegExp) =>
+    expect(changed(path, value)).toEqual(expect.arrayContaining([expect.stringMatching(problem)]));
+
+  it("matches its own contract exactly", () => {
     expect(sandboxProblems(config)).toEqual([]);
   });
 
@@ -23,51 +40,114 @@ describe("development gateway config", () => {
     expect(config.models.mode).toBe("replace");
     expect(Object.keys(config.models.providers)).toEqual(["scripted"]);
     expect(config.models.providers.scripted.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
+    refused("models.mode", "merge", /^models\.mode must be "replace"/);
+    refused(
+      "models.providers.hosted",
+      { baseUrl: "https://api.example.com/v1" },
+      /^models\.providers\.hosted is not allowed$/,
+    );
+    refused(
+      "models.providers.scripted.baseUrl",
+      "https://api.example.com/v1",
+      /^models\.providers\.scripted\.baseUrl must be/,
+    );
+  });
+
+  // The cases an independent review found the earlier guard accepted.
+  it("refuses a workspace outside the instance", () => {
+    refused(
+      "agents.entries.main.workspace",
+      "/tmp/elsewhere",
+      /^agents\.entries\.main\.workspace must be/,
+    );
+    refused(
+      "agents.defaults.workspace",
+      "/tmp/elsewhere",
+      /^agents\.defaults\.workspace is not allowed$/,
+    );
+  });
+
+  it("refuses a real model, as primary, per bot or as a fallback", () => {
+    refused(
+      "agents.entries.main.model",
+      "openai/gpt-5",
+      /^agents\.entries\.main\.model is not allowed$/,
+    );
+    refused(
+      "agents.defaults.model.primary",
+      "anthropic/claude",
+      /^agents\.defaults\.model\.primary must be "scripted\/dev-1"/,
+    );
+    refused(
+      "agents.defaults.model.fallbacks",
+      ["openai/gpt-5"],
+      /^agents\.defaults\.model\.fallbacks is not allowed$/,
+    );
+  });
+
+  it("refuses weaker gateway auth or automatic pairing", () => {
+    refused("gateway.auth.mode", "none", /^gateway\.auth\.mode must be "token"/);
+    refused("gateway.auth.token", undefined, /^gateway\.auth\.token is required$/);
+    refused(
+      "gateway.nodes.pairing.autoApproveLocal",
+      true,
+      /^gateway\.nodes\.pairing\.autoApproveLocal must be false/,
+    );
+    refused("gateway.bind", "lan", /^gateway\.bind must be "loopback"/);
+  });
+
+  it("refuses importing the login shell's environment", () => {
+    refused("env", { shellEnv: { enabled: true } }, /^env is not allowed$/);
+  });
+
+  it("refuses another plugin entry or a plugin load path", () => {
+    refused(
+      "plugins.entries.searxng",
+      { enabled: true },
+      /^plugins\.entries\.searxng is not allowed$/,
+    );
+    refused("plugins.load", { paths: ["/x"] }, /^plugins\.load is not allowed$/);
+  });
+
+  it("refuses any key the contract does not name, wherever it is", () => {
+    refused("somethingNew", true, /^somethingNew is not allowed$/);
+    refused("tools.web.search.maxResults", 5, /^tools\.web\.search\.maxResults is not allowed$/);
+    refused(
+      "agents.entries.otto.tools.exec.safeBins",
+      ["cat"],
+      /^agents\.entries\.otto\.tools\.exec\.safeBins is not allowed$/,
+    );
   });
 
   it("turns memory-search embeddings off", () => {
     expect(config.memory.search).toEqual({ enabled: false, provider: "none" });
-    const broken = clone(config) as Record<string, unknown>;
-    delete broken.memory;
-    expect(sandboxProblems(broken)).toContain("memory.search.enabled must be false");
-  });
-
-  it("denies exec globally and rejects per-bot overrides", () => {
-    expect(config.tools.exec).toEqual({ mode: "deny" });
-    const noPolicy = clone(config);
-    noPolicy.tools.exec = {} as typeof noPolicy.tools.exec;
-    expect(sandboxProblems(noPolicy)).toContain('tools.exec.mode must be "deny"');
-    const override = {
-      ...clone(config),
-      agents: { ...config.agents, entries: { marlow: { tools: { exec: { security: "full" } } } } },
-    };
-    expect(sandboxProblems(override)).toContain(
-      "agents.entries.marlow.tools.exec overrides the global exec policy",
+    refused("memory", undefined, /^memory is required$/);
+    refused("memory.search.enabled", true, /^memory\.search\.enabled must be false/);
+    refused(
+      "agents.entries.pip.memory",
+      { search: { enabled: true } },
+      /^agents\.entries\.pip\.memory is not allowed$/,
     );
   });
 
-  it("lets only the shell bot ask before each command, and nothing more", () => {
+  it("denies exec globally and lets only the shell bot ask before each command", () => {
+    expect(config.tools.exec).toEqual({ mode: "deny" });
     const entries = config.agents.entries as Record<string, { tools: Record<string, unknown> }>;
     expect(entries.otto!.tools.exec).toEqual({ mode: "ask" });
     for (const id of ["main", "marlow", "pip"]) expect(entries[id]!.tools.exec).toBeUndefined();
-    for (const exec of [
+    refused("tools.exec.mode", "full", /^tools\.exec\.mode must be "deny"/);
+    refused(
+      "agents.entries.marlow.tools.exec",
       { mode: "full" },
-      { mode: "auto" },
-      { mode: "allowlist" },
-      { mode: "ask", safeBins: ["cat"] },
-      { security: "full", ask: "off" },
-    ]) {
-      const loose = clone(config) as typeof config;
-      (
-        loose.agents.entries as Record<string, { tools: Record<string, unknown> }>
-      ).otto!.tools.exec = exec;
-      expect(sandboxProblems(loose)).toContain(
-        'agents.entries.otto.tools.exec must be exactly { mode: "ask" }',
+      /^agents\.entries\.marlow\.tools\.exec is not allowed$/,
+    );
+    for (const mode of ["full", "auto", "allowlist"]) {
+      refused(
+        "agents.entries.otto.tools.exec.mode",
+        mode,
+        /^agents\.entries\.otto\.tools\.exec\.mode must be "ask"/,
       );
     }
-    const extra = clone(config) as typeof config;
-    (extra.tools.exec as Record<string, unknown>).safeBins = ["cat"];
-    expect(sandboxProblems(extra)).toContain("tools.exec must set only mode (found safeBins)");
   });
 
   it("lets only the messaging pair message each other", () => {
@@ -76,20 +156,36 @@ describe("development gateway config", () => {
     expect(entries.marlow!.tools.agentToAgent).toEqual({ send: ["pip"] });
     expect(entries.pip!.tools.agentToAgent).toEqual({ send: ["marlow"] });
     expect(entries.main!.tools.agentToAgent).toEqual({ send: [] });
-    expect(entries.otto!.tools.agentToAgent).toEqual({ send: [] });
-    const wider = clone(config) as typeof config;
-    (wider.tools.agentToAgent as { allow: string[] }).allow = ["*"];
-    expect(sandboxProblems(wider)).toContain(
-      "tools.agentToAgent.allow must be exactly marlow and pip",
+    refused("tools.agentToAgent.allow", ["*"], /^tools\.agentToAgent\.allow must be exactly/);
+    refused(
+      "agents.entries.main.tools.agentToAgent.send",
+      ["pip"],
+      /^agents\.entries\.main\.tools\.agentToAgent\.send must be exactly \[\]/,
     );
-    const outward = clone(config) as typeof config;
-    (
-      outward.agents.entries as Record<string, { tools: Record<string, unknown> }>
-    ).main!.tools.agentToAgent = { send: ["pip"] };
-    expect(sandboxProblems(outward)).toContain("agents.entries.main may message only no other bot");
+    refused(
+      "agents.entries.marlow.tools.agentToAgent",
+      undefined,
+      /^agents\.entries\.marlow\.tools\.agentToAgent is required$/,
+    );
   });
 
-  it("keeps file tools in the workspace, search on loopback and network tools denied", () => {
+  it("offers only the allowed tools and denies the self-management and network ones", () => {
+    expect(config.tools.allow).toEqual([...ALLOWED_TOOLS]);
+    for (const tool of ["gateway", "plugins", "openclaw", "web_fetch", "browser", "message"]) {
+      expect(config.tools.deny).toContain(tool);
+    }
+    refused("tools.allow", [...ALLOWED_TOOLS, "browser"], /^tools\.allow must be exactly/);
+    refused("tools.deny", ["web_fetch"], /^tools\.deny must be exactly/);
+    refused("tools.alsoAllow", ["browser"], /^tools\.alsoAllow is not allowed$/);
+    refused("tools.profile", "full", /^tools\.profile is not allowed$/);
+    refused(
+      "agents.entries.pip.tools.allow",
+      ["browser"],
+      /^agents\.entries\.pip\.tools\.allow is not allowed$/,
+    );
+  });
+
+  it("keeps file tools in the workspace and search on the scripted server", () => {
     expect(config.tools.fs).toEqual({ workspaceOnly: true });
     expect(config.tools.web).toEqual({
       search: { enabled: true, provider: "ollama" },
@@ -98,43 +194,17 @@ describe("development gateway config", () => {
     expect(config.plugins.entries.ollama).toEqual({
       config: { webSearch: { baseUrl: "http://127.0.0.1:19091" } },
     });
-    for (const tool of ["web_fetch", "browser", "message", "nodes", "tts"]) {
-      expect(config.tools.deny).toContain(tool);
-    }
-    /** The problems of a copy of the config with one value set at a path. */
-    const broken = (path: string, value: unknown) => {
-      const copy = clone(config) as unknown as Record<string, unknown>;
-      const keys = path.split(".");
-      let node = copy;
-      for (const key of keys.slice(0, -1)) {
-        node[key] ??= {};
-        node = node[key] as Record<string, unknown>;
-      }
-      node[keys.at(-1)!] = value;
-      return sandboxProblems(copy);
-    };
-    expect(broken("tools.fs.workspaceOnly", false)).toContain(
-      "tools.fs.workspaceOnly must be true",
-    );
-    expect(broken("tools.web.fetch.enabled", true)).toContain(
-      "tools.web.fetch.enabled must be false",
-    );
-    expect(broken("tools.web.search.provider", "brave")).toContain(
-      'tools.web.search must be exactly { enabled, provider: "ollama" }',
-    );
+    refused("tools.fs.workspaceOnly", false, /^tools\.fs\.workspaceOnly must be true/);
+    refused("tools.web.fetch.enabled", true, /^tools\.web\.fetch\.enabled must be false/);
+    refused("tools.web.search.provider", "brave", /^tools\.web\.search\.provider must be "ollama"/);
     for (const url of ["https://ollama.com", "http://ollama-host:11434"]) {
-      expect(broken("plugins.entries.ollama.config.webSearch.baseUrl", url)).toContain(
-        "web search must go only to the scripted server on loopback",
+      refused(
+        "plugins.entries.ollama.config.webSearch.baseUrl",
+        url,
+        /^plugins\.entries\.ollama\.config\.webSearch\.baseUrl must be/,
       );
     }
-    expect(broken("plugins.entries.ollama.config.webSearch.apiKey", "x")).toContain(
-      "web search must go only to the scripted server on loopback",
-    );
-    expect(broken("tools.deny", ["web_fetch"])).toEqual(
-      expect.arrayContaining([expect.stringMatching(/^tools.deny must include .*browser/)]),
-    );
-    expect(broken("tools.alsoAllow", ["browser"])).toContain("tools.alsoAllow must not be set");
-    expect(broken("plugins.load", { paths: ["/x"] })).toContain("plugins.load must not be set");
+    refused("plugins.entries.ollama.config.webSearch.apiKey", "x", /apiKey is not allowed$/);
   });
 
   it("runs only the stand-in coding agent as a local MCP server", () => {
@@ -142,26 +212,27 @@ describe("development gateway config", () => {
     expect(server.transport).toBe("stdio");
     expect(server.args).toEqual([CODING_AGENT_SCRIPT]);
     expect(sandboxProblems(config, undefined, server.cwd)).toEqual([]);
-    expect(sandboxProblems(config, undefined, "/elsewhere")).toContain(
-      "the coder MCP server must run in the instance's folder",
+    expect(sandboxProblems(config, undefined, "/elsewhere")).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^mcp\.servers\.coder\.cwd must be/)]),
     );
-    const remote = clone(config) as Record<string, unknown> & typeof config;
-    (remote.mcp.servers as Record<string, unknown>).hosted = { url: "https://mcp.example.com" };
-    expect(sandboxProblems(remote)).toContain('mcp.servers must contain only "coder"');
-    const env = clone(config) as typeof config;
-    (env.mcp.servers.coder as Record<string, unknown>).env = { TOKEN: "x" };
-    expect(sandboxProblems(env)).toContain("the coder MCP server may not set env");
+    refused(
+      "mcp.servers.hosted",
+      { url: "https://mcp.example.com" },
+      /^mcp\.servers\.hosted is not allowed$/,
+    );
+    refused("mcp.servers.coder.env", { TOKEN: "x" }, /^mcp\.servers\.coder\.env is not allowed$/);
+    refused("mcp.servers.coder.command", "/bin/sh", /^mcp\.servers\.coder\.command must be/);
   });
 
-  it("requires explicit pairing approval and a loopback bind", () => {
-    expect(config.gateway.nodes.pairing.autoApproveLocal).toBe(false);
-    expect(config.gateway.bind).toBe("loopback");
-  });
-
-  it("rejects an extra provider", () => {
-    const extra = clone(config) as { models: { providers: Record<string, unknown> } };
-    extra.models.providers.hosted = { baseUrl: "https://api.example.com/v1" };
-    expect(sandboxProblems(extra)).toContain('models.providers must contain only "scripted"');
+  it("accepts what the seed writes and nothing more", () => {
+    const seeded = clone(config) as unknown as Record<string, Record<string, unknown>>;
+    seeded.meta = { lastTouchedVersion: "2026.10.6", migrations: { modelPolicyAllowlist: true } };
+    const entries = seeded.agents!.entries as Record<string, Record<string, unknown>>;
+    for (const bot of SEED_BOTS)
+      entries[bot.id]!.identity = { name: bot.name, emoji: bot.emoji, theme: bot.theme };
+    expect(sandboxProblems(seeded)).toEqual([]);
+    entries.otto!.identity = { name: "Otto", emoji: "⚙️", theme: "operations", avatar: "x.png" };
+    expect(sandboxProblems(seeded)).toEqual(["agents.entries.otto.identity.avatar is not allowed"]);
   });
 });
 
