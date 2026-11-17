@@ -8,7 +8,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { devGateway } from "../e2e/global-setup.ts";
+import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
+import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
 import { appEnv, packagedExecutable } from "./global-setup.ts";
 import {
@@ -245,6 +247,51 @@ test("pairs with its own development gateway instance and shows the seeded bots"
     .filter({ hasText: "Disk almost full on the media box" })
     .click();
   await expect(page.getByTestId("transcript-turn")).toHaveCount(4);
+});
+
+/** The label macOS shows on the app's dock icon, as Launch Services reports it; null for none. */
+function dockBadge(pid: number): string | null {
+  const out = execFileSync("lsappinfo", ["info", "-only", "StatusLabel", String(pid)], {
+    encoding: "utf8",
+  });
+  return /"label"="([^"]*)"/.exec(out)?.[1] ?? null;
+}
+
+/** A gateway method with this run's instance's own operator credentials. */
+async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
+  const result = await openInstance(INSTANCE).runner.run([
+    "gateway",
+    "call",
+    method,
+    "--params",
+    JSON.stringify(params),
+    "--json",
+  ]);
+  if (result.status !== 0) throw new Error(`${method} failed:\n${result.stdout}${result.stderr}`);
+  return parseJsonOutput<T>(result.stdout);
+}
+
+test("F-023: the dock badge counts the unread tasks the gateway reports, and follows them", async () => {
+  test.skip(WINDOWS, NO_GATEWAY);
+  // The tasks the gateway calls unread, but the one on screen, which this device has read.
+  const open = "agent:otto:disk-space";
+  const unread = async () =>
+    (
+      await gatewayCall<{ sessions: Array<{ key: string; unread?: boolean }> }>("sessions.list", {
+        limit: 200,
+        excludeCron: true,
+        excludeSubagents: true,
+      })
+    ).sessions.filter((row) => row.unread === true && row.key !== open);
+  const before = await unread();
+  expect(before.length, "the seed leaves unread tasks").toBeGreaterThan(1);
+  await expect.poll(() => dockBadge(APP_PID), { timeout: 20_000 }).toBe(String(before.length));
+  // One read on the gateway, by another client: the badge takes one away; unread again, it comes back.
+  const [first] = before;
+  await gatewayCall("sessions.patch", { key: first!.key, unread: false });
+  await expect.poll(() => dockBadge(APP_PID), { timeout: 20_000 }).toBe(String(before.length - 1));
+  await gatewayCall("sessions.patch", { key: first!.key, unread: true });
+  await expect.poll(() => dockBadge(APP_PID), { timeout: 20_000 }).toBe(String(before.length));
 });
 
 test("keeps the device key and tokens in its own data folder, readable by the user only", () => {
