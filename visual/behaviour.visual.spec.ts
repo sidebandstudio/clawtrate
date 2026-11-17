@@ -374,3 +374,66 @@ for (const width of [320, 390]) {
     }
   });
 }
+
+/** The focused element, and whether it can be seen. */
+async function focused(page: Page) {
+  return page.evaluate(() => {
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body) return { tag: "BODY", text: "", visible: false };
+    const rect = active.getBoundingClientRect();
+    return {
+      tag: active.tagName,
+      text: (active.getAttribute("aria-label") ?? active.textContent ?? "").trim(),
+      visible: rect.width > 0 && rect.height > 0 && active.getClientRects().length > 0,
+    };
+  });
+}
+
+test.describe("focus across the phone's two panes", () => {
+  test.use(contextFor(PHONE, "light"));
+
+  test("Back puts focus on the row that opened the conversation, and a task puts it on its heading", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    await page.getByRole("button", { name: "Back to bots" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".conversation")).toBeHidden();
+    expect(await focused(page)).toMatchObject({
+      tag: "BUTTON",
+      text: "Disk almost full on the media box",
+      visible: true,
+    });
+
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".conversation")).toBeVisible();
+    expect(await focused(page)).toMatchObject({
+      tag: "H1",
+      text: "Weekly backup check",
+      visible: true,
+    });
+  });
+});
+
+test.describe("focus when Work closes", () => {
+  test.use(contextFor(WIDE, "light"));
+
+  test("closing the docked pane returns focus to the control that opened it", async ({ page }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed`, "light");
+    // Opened from the title pill, closed from inside the pane.
+    await page.locator(".title-pill").focus();
+    await page.keyboard.press("Enter");
+    const close = page.getByRole("button", { name: "Close work panel" }).last();
+    await close.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("work-panel")).toHaveCount(0);
+    await expect(page.locator(".title-pill")).toBeFocused();
+
+    // Opened by the address, so with no opener: focus goes to the Work toggle.
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=open`, "light");
+    await page.getByRole("button", { name: "Close work panel" }).last().focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("button", { name: "Show work panel" })).toBeFocused();
+  });
+});

@@ -279,7 +279,9 @@ function TranscriptView({
         data-testid="transcript"
       >
         <div className="transcript-inner">
-          <h1 className="task-line">{task.title}</h1>
+          <h1 className="task-line" tabIndex={-1}>
+            {task.title}
+          </h1>
           {note}
           {rows}
           {transcript.live && (
@@ -332,7 +334,7 @@ function EmptyState({
         <div className="empty" aria-busy={busy || undefined}>
           <div>
             {bot && <Avatar bot={bot} />}
-            <h1>{title}</h1>
+            <h1 tabIndex={-1}>{title}</h1>
             {body && <p>{body}</p>}
             {children && <div className="empty-actions">{children}</div>}
           </div>
@@ -431,7 +433,9 @@ export function Conversation({
       <div className="transcript-wrap">
         <div className="transcript" data-testid="transcript">
           <div className="transcript-inner" aria-busy="true" aria-label="Loading conversation">
-            <h1 className="task-line">{task.title}</h1>
+            <h1 className="task-line" tabIndex={-1}>
+              {task.title}
+            </h1>
             <div className="skeleton" data-side="end" style={{ width: "46%", marginTop: 22 }} />
             <div className="skeleton" style={{ width: "62%", height: 88, marginTop: 16 }} />
             <div className="skeleton" style={{ width: "38%" }} />

@@ -10,6 +10,17 @@ import { useSelection } from "./selection.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
 import { WorkPanel } from "./WorkPanel.tsx";
 
+/** A control that can take focus now: in the page, shown, and not behind the drawer. */
+function canFocus(element: HTMLElement | null): element is HTMLElement {
+  return (
+    element !== null &&
+    element !== document.body &&
+    element.isConnected &&
+    !element.closest("[inert]") &&
+    element.getClientRects().length > 0
+  );
+}
+
 export function Shell({
   state,
   theme,
@@ -41,7 +52,10 @@ export function Shell({
   const drawerOpen = panelOpen && overlay;
 
   const setPanel = useCallback((open: boolean) => {
-    if (open) openerRef.current = document.activeElement as HTMLElement | null;
+    if (open) {
+      const active = document.activeElement as HTMLElement | null;
+      openerRef.current = canFocus(active) ? active : null;
+    }
     setPanelOpen(open);
     writePreference("panel", open ? "open" : "closed");
   }, []);
@@ -87,10 +101,12 @@ export function Shell({
   }, [taskKey, send]);
 
   // The one place that moves focus for Work. As a drawer it takes focus, unless
-  // focus is already inside it; when the drawer closes, focus returns to the
-  // control that opened it. Docking or undocking an open pane moves nothing
-  // except off what has just become inert.
+  // focus is already inside it. When the pane closes, focus that was inside it
+  // (a drawer's, or a docked pane's that went with it) returns to the control
+  // that opened it, or else to the Work toggle. Docking or undocking an open
+  // pane moves nothing except off what has just become inert.
   const drawerWasOpen = useRef(false);
+  const panelWasOpen = useRef(panelOpen);
   useEffect(() => {
     // Right after a resize the last measurement can lag a frame behind, so
     // focus is decided from the pane's width as it is now.
@@ -98,15 +114,46 @@ export function Shell({
     const drawerNow = panelOpen && (main ? main.clientWidth < DOCK_FROM : drawerOpen);
     if (drawerNow) {
       if (!panelRef.current?.contains(document.activeElement)) closeRef.current?.focus();
-    } else if (drawerWasOpen.current && !panelOpen) {
-      const opener = openerRef.current;
-      (opener && opener.isConnected && !opener.closest("[inert]")
-        ? opener
-        : toggleRef.current
-      )?.focus();
+    } else if (!panelOpen && panelWasOpen.current) {
+      const active = document.activeElement;
+      if (drawerWasOpen.current || !active || active === document.body) {
+        const opener = openerRef.current;
+        (canFocus(opener) ? opener : toggleRef.current)?.focus();
+      }
     }
     drawerWasOpen.current = drawerNow;
+    panelWasOpen.current = panelOpen;
   }, [drawerOpen, panelOpen, mainWidth]);
+
+  // One pane at a time: moving between the list and a conversation hides the
+  // control that was used, so focus goes to the destination. Into a
+  // conversation, its heading; back to the list, the row that opened it.
+  const navigatedTo = useRef<"list" | "detail" | null>(null);
+  const openDetail = useCallback(() => {
+    if (onePane) navigatedTo.current = "detail";
+    setView("detail");
+  }, [onePane]);
+  const backToList = useCallback(() => {
+    navigatedTo.current = "list";
+    setView("list");
+  }, []);
+  useEffect(() => {
+    const target = navigatedTo.current;
+    if (!target) return;
+    navigatedTo.current = null;
+    if (target === "detail") {
+      const conversation = mainRef.current?.querySelector(".conversation");
+      const heading = conversation?.querySelector<HTMLElement>("h1");
+      (heading ?? conversation?.querySelector<HTMLElement>(".back-button"))?.focus();
+    } else {
+      const rail = shellRef.current?.querySelector(".rail");
+      (
+        rail?.querySelector<HTMLElement>('.task[aria-current="true"]') ??
+        rail?.querySelector<HTMLElement>('.bot[aria-current="true"]') ??
+        rail?.querySelector<HTMLElement>(".bot")
+      )?.focus();
+    }
+  }, [view, taskKey]);
 
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
@@ -136,7 +183,7 @@ export function Shell({
         catchingUp={catchingUp}
         selection={selection}
         onePane={onePane}
-        onOpen={() => setView("detail")}
+        onOpen={openDetail}
         theme={theme}
         onTheme={onTheme}
         inert={drawerOpen}
@@ -151,7 +198,7 @@ export function Shell({
           panelOpen={panelOpen}
           onTogglePanel={togglePanel}
           onOpenPanel={() => setPanel(true)}
-          onBack={() => setView("list")}
+          onBack={backToList}
           onReload={reload}
           strip={
             strip && (
