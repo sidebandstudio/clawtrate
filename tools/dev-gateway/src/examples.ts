@@ -77,10 +77,10 @@ function assistantBlocks(rows: HistoryRow[]) {
   };
 }
 
-/** A value as an example expects it: exactly, by a pattern, or "number" for any number. */
+/** A value as an example expects it: exactly, by a pattern, or "count" for a whole number of at least 0. */
 function matches(value: unknown, expected: unknown): boolean {
   if (expected instanceof RegExp) return typeof value === "string" && expected.test(value);
-  if (expected === "number") return typeof value === "number";
+  if (expected === "count") return Number.isSafeInteger(value) && (value as number) >= 0;
   return JSON.stringify(value) === JSON.stringify(expected);
 }
 
@@ -95,8 +95,12 @@ export function resultProblems(rows: HistoryRow[], expected: ExampleResult[]): s
     const where = `result ${i + 1} (${want.toolName})`;
     if (!row) continue;
     if (row.toolName !== want.toolName) problems.push(`${where} is from ${String(row.toolName)}`);
-    if (Boolean(row.isError) !== want.isError)
-      problems.push(`${where} has isError ${String(row.isError)}`);
+    // A boolean, as the history's tool result schema requires: missing or any
+    // other type is wrong, not read as false or true.
+    if (row.isError !== want.isError)
+      problems.push(
+        `${where} has isError ${JSON.stringify(row.isError)}, expected ${want.isError}`,
+      );
     const blocks = Array.isArray(row.content) ? (row.content as JsonRecord[]) : [];
     const texts = blocks.map((b) => (b.type === "text" ? String(b.text) : `<${String(b.type)}>`));
     if (

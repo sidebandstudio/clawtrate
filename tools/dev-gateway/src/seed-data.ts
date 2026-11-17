@@ -535,7 +535,7 @@ export type ScenarioExample = {
   /**
    * Each tool result as `chat.history` keeps it, in order: its error flag, its
    * text blocks (a string exactly, a pattern where the home folder, a run id
-   * or a thread number varies) and its details (exactly, a pattern or "number"
+   * or a thread number varies) and its details (exactly, a pattern or "count"
    * per key, or undefined when history keeps none).
    */
   results: ExampleResult[];
@@ -688,7 +688,7 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
         isError: false,
         // Otto's starting files and the changes/ folder its disk-space task wrote.
         content: ["AGENTS.md\nBOOTSTRAP.md\nIDENTITY.md\nSOUL.md\nUSER.md\nchanges"],
-        details: { exitCode: 0, durationMs: "number", cwd: /\/workspaces\/otto$/ },
+        details: { exitCode: 0, durationMs: "count", cwd: /\/workspaces\/otto$/ },
       },
     ],
   },

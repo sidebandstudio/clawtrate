@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { checkExampleHistory, checkRecipientExchange, scriptedSteps } from "../src/examples.ts";
+import {
+  checkExampleHistory,
+  checkRecipientExchange,
+  resultProblems,
+  scriptedSteps,
+} from "../src/examples.ts";
 import { SCENARIO_EXAMPLES, type ScenarioExample } from "../src/seed-data.ts";
 
 const example = (slug: string): ScenarioExample => SCENARIO_EXAMPLES.find((e) => e.slug === slug)!;
@@ -72,6 +77,41 @@ describe("the seeded examples' verifier", () => {
     expect(checkExampleHistory(wrong, example("show-your-work"))).toEqual([
       expect.stringMatching(/^result 1 \(ls\) text differs from the script/),
     ]);
+  });
+
+  it("takes a result's error flag only as a boolean", () => {
+    for (const flag of ["true", "", "false", 0, null]) {
+      const rows = clone(showYourWork());
+      (rows[2] as Record<string, unknown>).isError = flag;
+      expect(checkExampleHistory(rows, example("show-your-work"))).toEqual([
+        expect.stringMatching(/^result 1 \(ls\) has isError .*, expected false$/),
+      ]);
+    }
+    const missing = clone(showYourWork());
+    delete (missing[2] as Record<string, unknown>).isError;
+    expect(checkExampleHistory(missing, example("show-your-work"))).toEqual([
+      "result 1 (ls) has isError undefined, expected false",
+    ]);
+  });
+
+  it("takes a command's duration only as a whole number of at least 0", () => {
+    const expected = example("list-workspace").results;
+    const row = (durationMs: unknown) => [
+      {
+        role: "toolResult",
+        toolName: "exec",
+        isError: false,
+        content: [{ type: "text", text: expected[0]!.content[0] as string }],
+        details: { exitCode: 0, durationMs, cwd: "/state/workspaces/otto" },
+      },
+    ];
+    expect(resultProblems(row(12), expected)).toEqual([]);
+    expect(resultProblems(row(0), expected)).toEqual([]);
+    for (const bad of [-1, 1.5, "12", null, Number.NaN]) {
+      expect(resultProblems(row(bad), expected)).toEqual([
+        "result 1 (exec) details.durationMs differs",
+      ]);
+    }
   });
 
   it("refuses other arguments, a missing result or an empty one", () => {
