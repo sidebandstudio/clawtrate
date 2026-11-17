@@ -482,6 +482,26 @@ test.describe("action cards", () => {
     await expect(line(running)).toBeInViewport();
   });
 
+  test("F-082 F-087: while a Messaged or T3 Code card's call runs, the status line says that card's words and brings the card into view", async ({
+    page,
+  }) => {
+    for (const [scene, testId, words] of [
+      ["messaged-started", "messaged-card", "Messaging Marlow"],
+      ["t3-started", "t3-card", "Messaging T3 Code"],
+    ] as const) {
+      await openFixture(page, `scene=${scene}`, "light");
+      const status = page.getByTestId("status-line");
+      await expect(status.getByTestId("status-phrase")).toHaveText(words);
+      const card = page.getByTestId(testId);
+      await expect(card.locator(":scope > summary")).toHaveAccessibleName(/^Messaged /);
+      await transcript(page).evaluate((element) => (element.scrollTop = 0));
+      await status.click();
+      await expect(card.locator(":scope > summary")).toBeFocused();
+      await expect(card).not.toHaveAttribute("open", "");
+      await expect(card).toBeInViewport();
+    }
+  });
+
   test("text written beside a tool call is one bubble before its card, never repeated as the streaming reply", async ({
     page,
   }) => {

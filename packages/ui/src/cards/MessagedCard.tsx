@@ -11,9 +11,9 @@ import type {
   Run,
   StepRaw,
 } from "@clawtrate/core";
-import { useLayoutEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { Avatar } from "../Avatar.tsx";
-import { useCardEnv, useStepHandover } from "./context.tsx";
+import { controlName, useCardEnv, useStepHandover } from "./context.tsx";
 import {
   botMessageKey,
   botMessageNote,
@@ -278,6 +278,7 @@ export function BotMessageCardView({
     <details
       className="card messaged"
       data-target="bot"
+      data-call={card.toolCallId ?? undefined}
       data-state={key}
       data-connection={lost ? "lost" : undefined}
       id={domId}
@@ -412,10 +413,24 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
     return state?.from === "step" ? state : undefined;
   });
   // Kept for the ordinary step this call becomes again if its result names another tool.
-  const note = (element: HTMLDetailsElement, focused: boolean) =>
-    card.toolCallId &&
-    handover?.note(card.toolCallId, { open: element.open, focused, from: "card" });
   const raw = useRawDisclosure(read.load, handed?.open === true);
+  const note = (element: HTMLDetailsElement, focused: boolean, target?: Element | null) =>
+    card.toolCallId &&
+    handover?.note(card.toolCallId, {
+      open: element.open,
+      focused,
+      from: "card",
+      raw: raw.open,
+      control: focused ? controlName(target ?? document.activeElement, element) : null,
+    });
+  // Opening or closing Raw is part of how the reader left the card.
+  useEffect(() => {
+    const element = document.getElementById(cardDomId({ kind: "t3-code", id: card.id }));
+    if (element instanceof HTMLDetailsElement)
+      note(element, element.contains(document.activeElement));
+    // Only when Raw opens or closes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [raw.open]);
   const run = env.runOf(card.runId);
   const step = run?.steps.find((each) => each.id === card.stepId);
   const key = mcpKey(card, env.transcript.approvals, step?.status === "waiting");
@@ -485,6 +500,7 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
     <details
       className="card messaged"
       data-target="t3code"
+      data-call={card.toolCallId ?? undefined}
       data-state={key}
       data-connection={lost ? "lost" : undefined}
       id={domId}
@@ -492,10 +508,11 @@ export function T3CodeCardView({ card, read }: { card: McpCallCard; read: StepRa
       onToggle={(event) =>
         note(event.currentTarget, event.currentTarget.contains(document.activeElement))
       }
-      onFocus={(event) => note(event.currentTarget, true)}
-      onBlur={(event) =>
-        note(event.currentTarget, event.currentTarget.contains(event.relatedTarget as Node | null))
-      }
+      onFocus={(event) => note(event.currentTarget, true, event.target)}
+      onBlur={(event) => {
+        const next = event.relatedTarget as Element | null;
+        note(event.currentTarget, event.currentTarget.contains(next), next);
+      }}
     >
       <summary aria-label={`Messaged T3 Code: ${first} ${word}.`} title={first}>
         <span className="messaged-verb">Messaged</span>

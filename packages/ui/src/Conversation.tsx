@@ -13,13 +13,14 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
   type RefObject,
 } from "react";
 import { AccessBar } from "./AccessBar.tsx";
-import { useCommand } from "./bridge.tsx";
+import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { Avatar, Presence } from "./Avatar.tsx";
 import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from "./cards/index.ts";
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
@@ -70,8 +71,14 @@ function TaskContext({ task }: { task: Task }) {
 
 const STAMP_GAP_MS = 10 * 60_000;
 
-/** What the reading of an action needs beyond each call; the same for every task. */
-const READING: ReadingContext = {};
+/** What the reading of an action needs beyond each call: the bots' names, as the cards name them. */
+function useReading(): ReadingContext {
+  const bots = useClawtrateState().bots;
+  return useMemo(
+    () => ({ botName: (id: string) => bots.find((each) => each.id === id)?.name ?? null }),
+    [bots],
+  );
+}
 
 /** How close to the end counts as "reading the latest", in pixels. */
 const NEAR_BOTTOM_PX = 96;
@@ -199,7 +206,8 @@ function TranscriptView({
   note: ReactNode;
   liveOptions: LiveOptions;
 }) {
-  const live = buildLive(bot, task, transcript, liveOptions);
+  const reading = useReading();
+  const live = buildLive(bot, task, transcript, { ...liveOptions, reading });
   const scroller = useRef<HTMLDivElement>(null);
   const itemCount = transcript.items.length;
   const contentSize = `${itemCount}:${live.signature}`;
@@ -341,7 +349,7 @@ function TranscriptView({
               engineRuns={live.engineRuns}
               lost={!liveOptions.connected}
               readOnly={!liveOptions.interactive}
-              ctx={READING}
+              ctx={reading}
             >
               <h1 className="task-line" tabIndex={-1}>
                 {task.title}
@@ -455,6 +463,8 @@ function heldByEngine(run: Run, transcript: Transcript): boolean {
 }
 
 type LiveOptions = {
+  /** What the reading needs beyond each call, as the cards read it. */
+  reading?: ReadingContext;
   connected: boolean;
   interactive: boolean;
   /** Ask for the interactive tier; null where the host never asks (pinned read-only). */

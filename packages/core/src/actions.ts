@@ -1321,7 +1321,20 @@ function wordsOf(call: ActionCall, kind: ActionKind, ctx: ReadingContext): Words
       };
     }
     case "message":
-    case "t3":
+    case "t3": {
+      // The Messaged cards' own words: the status line says what the card says (sections 5, 10, 11).
+      const agent = /^agent:([^:]+):/.exec(str(a.sessionKey))?.[1] ?? null;
+      const who =
+        kind === "t3"
+          ? OBJECTS.t3Code
+          : agent
+            ? (ctx.botName?.(agent) ?? agent)
+            : str(a.label) || OBJECTS.anotherBot;
+      return {
+        ...three(VERBS.message, who, firstLine(a.message ?? a.prompt)),
+        noun: [NOUNS.messaging, who],
+      };
+    }
     case "tool": {
       const w = nameWords(call.name);
       return {

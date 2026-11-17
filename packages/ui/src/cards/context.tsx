@@ -16,7 +16,22 @@ import { createContext, useContext, useEffect, useState } from "react";
  * How the reader left a call's ordinary step or its T3 Code card (`from`):
  * open or closed, and whether focus was in it.
  */
-export type StepState = { open: boolean; focused: boolean; from: "step" | "card" };
+export type StepState = {
+  open: boolean;
+  focused: boolean;
+  from: "step" | "card";
+  /** The card's Raw view was open. */
+  raw?: boolean;
+  /** The control inside that had focus, by its accessible name; null for the line itself. */
+  control?: string | null;
+};
+
+/** A focused control's accessible name, for the drawing that takes over to focus its counterpart. */
+export function controlName(element: Element | null, within: Element): string | null {
+  if (!element || element === within || !within.contains(element)) return null;
+  if (element.matches(":scope > summary")) return null;
+  return element.getAttribute("aria-label") ?? element.textContent?.trim() ?? null;
+}
 
 /**
  * A call drawn one way hands the other its state when the evidence changes:

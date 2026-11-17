@@ -616,10 +616,27 @@ export function ActionGroup({ members, revision }: { members: FeedMember[]; revi
     if (state?.from !== "card" || !(state.open || state.focused) || !details) return;
     if (state.open) {
       writeView(env.taskKey, viewKeys.call(first), true);
+      // The card's Raw view becomes the action's Raw tab.
+      if (state.raw) writeView(env.taskKey, viewKeys.view(first), "raw");
       details.open = true;
     }
-    if (state.focused)
-      details.querySelector<HTMLElement>(":scope > summary")?.focus({ preventScroll: true });
+    if (!state.focused) return;
+    // Focus goes to the same control as on the card, once the view it is in is drawn.
+    const control = state.control ?? null;
+    const focus = () => {
+      const named = control
+        ? [...details.querySelectorAll<HTMLElement>("button, [role=tab], a, summary")].find(
+            (each) =>
+              each.offsetParent !== null &&
+              (each.getAttribute("aria-label") ?? each.textContent?.trim()) === control,
+          )
+        : undefined;
+      (named ?? details.querySelector<HTMLElement>(":scope > summary"))?.focus({
+        preventScroll: true,
+      });
+    };
+    if (control) requestAnimationFrame(() => requestAnimationFrame(focus));
+    else focus();
     // Once, as it is drawn.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -71,6 +71,7 @@ export const VERBS = {
   makePlan: v("Making", "Made", "Couldn't save"),
   savePlan: v("Saving", "Saved", "Couldn't save"),
   clearPlan: v("Clearing", "Cleared", "Couldn't clear"),
+  message: v("Messaging", "Messaged", "Couldn't message"),
   make: v("Making", "Made", "Couldn't make"),
   send: v("Sending", "Message on", "Couldn't send on"),
 } as const;
@@ -79,6 +80,8 @@ export type VerbId = keyof typeof VERBS;
 
 /** Objects the reading names in words rather than taking from the call. */
 export const OBJECTS = {
+  t3Code: "T3 Code",
+  anotherBot: "another bot",
   memory: "memory",
   aCommand: "a command",
   code: "code",
@@ -187,6 +190,8 @@ export const FORMS = {
 /** Nouns: a call whose effect leaves the gateway, while open or when its result proves nothing more. */
 export const NOUNS = {
   helper: "Helper",
+  /** The Messaged cards' words while a call is open (sections 10 and 11). */
+  messaging: "Messaging",
   forATask: "for a task",
   waitFor: "Wait for",
   stopFor: "Stop for",

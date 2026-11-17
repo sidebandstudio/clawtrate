@@ -81,11 +81,11 @@ export type StatusLineView = {
 export function statusLineFor(
   run: Run,
   transcript: Transcript,
-  options: { connected: boolean; interactive: boolean },
+  options: { connected: boolean; interactive: boolean; reading?: ReadingContext | undefined },
 ): StatusLineView {
   let view: StatusLineView;
   // Read as the cards read it: with what the gateway said of the task's tools and workspace.
-  const ctx: ReadingContext = readingContextOf(transcript);
+  const ctx: ReadingContext = { ...options.reading, ...readingContextOf(transcript) };
   const call = phraseCallOf(run, ctx);
   if (run.state === "stopping") {
     view = {

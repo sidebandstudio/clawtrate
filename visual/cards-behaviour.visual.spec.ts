@@ -1499,6 +1499,25 @@ test.describe("Messaged T3 Code cards", () => {
     await expect(step.locator("summary")).toBeFocused();
   });
 
+  test("F-132 F-134: a T3 Code card read on Raw, with focus on Copy arguments, becomes the ordinary action on its Raw tab with focus on its Copy arguments", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=t3-approval", "light");
+    await historyStep(page, true);
+    const card = page.getByTestId("t3-card");
+    await card.locator("summary").click();
+    await card.getByRole("button", { name: "Raw" }).click();
+    const copy = card.getByRole("button", { name: "Copy arguments" });
+    await copy.focus();
+    await expect(copy).toBeFocused();
+    await resultNaming(page, "t3_project_list_v2");
+    await expect(card).toHaveCount(0);
+    const step = page.getByTestId("tool-call");
+    await expect(step).toHaveAttribute("open", "");
+    await expect(step.getByRole("tab", { name: "Raw" })).toHaveAttribute("aria-selected", "true");
+    await expect(step.getByRole("button", { name: "Copy arguments" })).toBeFocused();
+  });
+
   test("a closed step or card that has focus hands focus over as it is replaced, and stays closed", async ({
     page,
   }) => {

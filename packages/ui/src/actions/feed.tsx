@@ -681,7 +681,10 @@ export function runCalls(run: Run) {
  * a card was found.
  */
 export function showAction(callId: string, root: ParentNode = document): boolean {
-  const element = root.querySelector<HTMLElement>(`#${CSS.escape(actionDomId(callId))}`);
+  // An action card or row, else the Messaged or T3 Code card the call is drawn as.
+  const element =
+    root.querySelector<HTMLElement>(`#${CSS.escape(actionDomId(callId))}`) ??
+    root.querySelector<HTMLElement>(`.card.messaged[data-call="${CSS.escape(callId)}"]`);
   if (!element) return false;
   const fold = element.closest<HTMLDetailsElement>(".action[data-fold]");
   const line = fold && !fold.open ? fold : element;
