@@ -48,6 +48,24 @@
     tool: '<path d="M8 2.5 13.5 8 8 13.5 2.5 8 8 2.5Z"/>',
     queue: '<path d="M3 4.5h10M3 8h7M3 11.5h4"/>',
     "new-task": '<rect x="2.75" y="2.75" width="10.5" height="10.5" rx="2.25"/><path d="M8 5.75v4.5M5.75 8h4.5"/>',
+
+    // The Work pane: files, media and the computer.
+    download: '<path d="M8 2.75v7.5M4.75 7 8 10.25 11.25 7M3 13.25h10"/>',
+    image: '<rect x="2.5" y="3" width="11" height="10" rx="2"/><circle cx="6" cy="6.5" r="1.1"/><path d="m3 11.5 3.25-3 2.5 2.25 1.75-1.5 2.5 2.25"/>',
+    audio: '<path d="M6.25 11.5V4l6-1.25v7.5"/><circle cx="4.75" cy="11.5" r="1.5"/><circle cx="10.75" cy="10.25" r="1.5"/>',
+    video: '<rect x="2.25" y="4" width="8.25" height="8" rx="1.75"/><path d="m10.5 7 3.25-1.75v5.5L10.5 9"/>',
+    link: '<path d="M6.75 9.25a2.5 2.5 0 0 0 3.5 0l2-2a2.5 2.5 0 0 0-3.5-3.5l-.6.6M9.25 6.75a2.5 2.5 0 0 0-3.5 0l-2 2a2.5 2.5 0 0 0 3.5 3.5l.6-.6"/>',
+    page: '<rect x="3" y="2.5" width="10" height="11" rx="2"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/>',
+    expand: '<path d="M9.5 2.75h3.75V6.5M6.5 13.25H2.75V9.5M13.25 2.75 9 7M2.75 13.25 7 9"/>',
+    collapse: '<path d="M13 6.75H9.25V3M3 9.25h3.75V13M9.25 6.75l4-4M6.75 9.25l-4 4"/>',
+    hand: '<path d="M5.5 8.5V4.25a1 1 0 0 1 2 0v3.5M7.5 7.5V3.25a1 1 0 0 1 2 0V7.5M9.5 7.5V4.25a1 1 0 0 1 2 0v5c0 2.5-1.6 4.25-4 4.25-1.6 0-2.6-.75-3.5-2L2.75 9.25a1 1 0 0 1 1.5-1.25L5.5 9.25"/>',
+    more: '<circle cx="3.75" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.25" cy="8" r=".6"/>',
+    play: '<path d="M5 3.5v9l7.25-4.5L5 3.5Z"/>',
+    pause: '<path d="M5.5 3.5v9M10.5 3.5v9"/>',
+    machine: '<rect x="2.5" y="2.75" width="11" height="4.25" rx="1.5"/><rect x="2.5" y="9" width="11" height="4.25" rx="1.5"/><path d="M5 4.9h.05M5 11.1h.05"/>',
+    keyboard: '<rect x="1.75" y="4" width="12.5" height="8" rx="1.75"/><path d="M4.5 6.5h.05M6.75 6.5h.05M9 6.5h.05M11.25 6.5h.05M5.5 9.5h5"/>',
+    minus: '<path d="M3.5 8h9"/>',
+    plugin: '<path d="M6 2.75v2.5M10 2.75v2.5M4.25 5.25h7.5v2.5a3.75 3.75 0 0 1-7.5 0v-2.5ZM8 11.5v1.75"/>',
   };
 
   // Body shapes, on a 40px grid.

@@ -10,6 +10,7 @@ Static pages for the design in `docs/design/`. Open `index.html` in a browser. T
 | `gallery.html` | Every conversation component in every state. Steps and cards work as they do in the app: they open, Raw opens, copy copies, approvals and questions resolve. The composer, the access bar and the rail rows are pictures of each state there. |
 | `bots.html` | The app with what `bots.md` adds: "New bot" in the "+" menu (⌘N) with its Account step, connecting an account (inside New bot and in Settings), Settings from the gateway menu (⌘,), a bot's Settings tab in the Work pane with its account and lock, and T3 Code. The prototype bar's "Sign-in approved", "Expire", "Refuse" and "Drop connection" end a sign-in that is waiting, and "T3 approved" signs the gateway in to T3 Code. |
 | `conversation.html` | One scripted turn, played inside the shell: Play, Step, Drop the connection and Restart are in the bar. The approval and the question pause it until you answer; Stop, steer, queue, hold and the send menu work at any point. "Start read-only" plays it on a read-only connection, with the access bar and the request for access. |
+| `work.html` | The app with the Work pane's contents, specified in `docs/design/work-pane.md`: a task's files and the bot's workspace, the reader and its changes, the way from a step to its file and back; the cards for what a bot sends, their menu, and the media viewer; and the bot's computer: watching its browser, taking control and handing it back, the machine and its state (Juniper's task "Library e-book apps compared" has every kind of card and the browser). The bar has the events the pane reacts to ("Otto edits the notes", "The write finishes", "Otto runs a command", "Juniper closes its tab", "The lease ends"). Open Otto's task "Disk almost full on the media box", then the Work pane. |
 
 The dark bar at the top is prototype chrome, not part of the product. It switches the theme, the width of the frame the app sits in (full, 1100, 800, phone) and reduced motion.
 
@@ -35,6 +36,14 @@ Every setting can be given in the address, which is how the screenshots are take
 | `section` | One section of the gallery, by id (gallery) |
 | `tier` | `read`, to start the scripted run on a read-only connection (scripted run) |
 | `stopfail` | `1`, to make the first Stop request fail (scripted run) |
+| `files` | `loading`, `empty`, `error`, `stale`, `writing`, `commands`, `many` (Work pane) |
+| `folder` | A workspace folder to open: `/`, `notes`, `logs` (Work pane) |
+| `file`, `fileview` | A file to open in the reader, for example `file=notes/disk-2026-11-16.md&fileview=changes`; views are `preview`, `source`, `changes` (Work pane) |
+| `artifact`, `viewer` | An item the bot sent, opened in the pane or in the media viewer, for example `bot=juniper&task=j2&artifact=a-terms` or `viewer=a-usage` (Work pane) |
+| `artifactload`, `thumbs` | `failed`: the first opening of an item fails; the gateway's thumbnail for a large picture fails. `thumbs=original`: the thumbnail comes back as the original, over 2 MB (Work pane) |
+| `computer` | `noplugin`, `unconfigured`, `unused`, `closed`, `watching`, `full`, `draining`, `control`, `busy`, `conflict`, `ended`, `offline`, `nodeunknown`, `stuck`, `active`, `elsewhere`, `releasefail`, `releaseunknown`, `complexquestion`; with `firstwatch=1` for the one-time note (Work pane) |
+| `checkout` | `1`: Changes adds the checkout's comparison (Work pane) |
+| `repo`, `taskroot` | `repo=1`: the task works in a repository the gateway keeps; `taskroot=worktree`: an ordinary folder of its own, not established as the bot's workspace (Work pane) |
 | `open` | `create` or `settings`, a dialog to open (bots) |
 | `step` | `look`, `account`, `connect` (bots, New bot) |
 | `section`, `account` | A Settings section, `accounts` or `integrations`, and an account's page by its id, for example `account=openai:work` (bots) |
@@ -49,6 +58,8 @@ Every setting can be given in the address, which is how the screenshots are take
 | `served`, `fail`, `differs`, `running`, `long`, `bstate` | `served=1`: Marlow's last run was served by another account; `fail=quota` or `signedout`: Otto's last run failed on its account; `differs=1`: Pip's model has fallbacks; `running=1`: the open bot has a run in progress; `long=1`: a long account label; `bstate=loading` or `error` (bots) |
 | `t3`, `t3server`, `t3obs`, `t3signin`, `t3origin`, `t3listing`, `t3plugin`, `t3found`, `t3withheld`, `t3catalog`, `t3write` | `t3=on` turns the integration on for this person; `t3server=none`; `t3obs=none`, `saved`, `worked`, `refused`: what Clawtrate last observed of the gateway's sign-in; `t3signin=starting`, `waiting`, `failed`, `expired`, `cancelled`: the app-started sign-in; `t3origin=1` when this connection can start it; `t3listing=notconnected` or `stale`; `t3plugin=0` without Clawtrate's plugin; `t3found=1` a bot with the tools that was not turned on; `t3withheld=1` a bot turned on whose tools the gateway withholds; `t3catalog=loading` or `error`; `t3write=refused`, `timeout` or `partial`: how the next gateway write ends (bots) |
 
+`work.html` takes every parameter `app.html` takes; `work-pane.md`, section 22, lists its own.
+
 ## Checks
 
 The pages' behaviour is checked in a headless browser, from disk, with no server and no network. From the repository root, after `pnpm install` and, once, `pnpm exec playwright install chromium`:
@@ -56,10 +67,11 @@ The pages' behaviour is checked in a headless browser, from disk, with no server
 ```
 node docs/design/prototype/tools/checks/shell.mjs
 node docs/design/prototype/tools/checks/conversation.mjs
+node docs/design/prototype/tools/checks/work.mjs
 node docs/design/prototype/tools/checks/bots.mjs
 ```
 
-Each prints one line for every check, `ok` or `FAIL`, then a count, and exits with a failure when any check fails. `shell.mjs` covers the rail, tasks, pins, menus, the Work pane, the status strip and the pairing screen. `bots.mjs` covers `bots.html`: creating a bot with its account, every stage of the three kinds of sign-in, the API key path, labels, the request for admin access, Settings and its Accounts section, a bot's settings with bound and locked accounts, changing an account, the served line, failures on an account, T3 Code on and off, and the phone width. `conversation.mjs` plays the scripted run through its visible controls and covers steps and Raw, copy, the Messaged cards, approvals and their form, questions, held and queued messages, Stop, a lost connection, the read-only tier, the phone width and the gallery.
+Each prints one line for every check, `ok` or `FAIL`, then a count, and exits with a failure when any check fails. `shell.mjs` covers the rail, tasks, pins, menus, the Work pane, the status strip and the pairing screen. `bots.mjs` covers `bots.html`: creating a bot with its account, every stage of the three kinds of sign-in, the API key path, labels, the request for admin access, Settings and its Accounts section, a bot's settings with bound and locked accounts, changing an account, the served line, failures on an account, T3 Code on and off, and the phone width. `conversation.mjs` plays the scripted run through its visible controls and covers steps and Raw, copy, the Messaged cards, approvals and their form, questions, held and queued messages, Stop, a lost connection, the read-only tier, the phone width and the gallery. `work.mjs` covers the Work pane: the Files tab and the workspace, the reader, downloads, the states the gateway's limits produce, the way between steps and files, the cards, their menu and the viewer, watching and control, every state where watching is not available, the machine, and its keyboard paths.
 
 ## Files
 
@@ -76,9 +88,10 @@ Each prints one line for every check, `ok` or `FAIL`, then a count, and exits wi
 | `js/connect.js` | What the buttons on the connection screens do. |
 | `js/components.js`, `js/samples.js`, `js/behaviors.js` | The conversation components' markup, their sample content, and their behaviour: the two views of a step, Raw, copy, the approval form, question cards and the keyboard paths. |
 | `js/gallery.js`, `js/run.js` | The gallery and the scripted run. |
+| `css/work.css`, `js/work.js`, `js/work-artifacts.js`, `js/work-computer.js` | The Work pane's contents and their local model: files in `work.js`, artifacts and media in `work-artifacts.js`, the computer in `work-computer.js`. The browser page shown in the computer view is drawn here; its site is invented. `work.js` extends `app.js` through `CT.appExtension`, a set of optional hooks that `app.html` does not use. |
 | `js/bots.js`, `js/bot-settings.js`, `js/t3.js` | The screens of `bots.md` on top of `app.js`, one file per part: New bot, connecting accounts and Settings; a bot's settings with its account and lock, the served line and failures; T3 Code. Accounts, sign-ins and models are local fixtures. |
 | `tools/make-local-fonts.mjs` | Builds the ignored local font stylesheet. |
-| `tools/checks/` | Headless checks of the pages' behaviour: `shell.mjs` for the app and pairing pages, `conversation.mjs` for the scripted run and the gallery, `bots.mjs` for the bots page. |
+| `tools/checks/` | Headless checks of the pages' behaviour: `shell.mjs` for the app and pairing pages, `conversation.mjs` for the scripted run and the gallery, `work.mjs` for the Work pane, `bots.mjs` for the bots page. |
 
 ## Fonts
 
