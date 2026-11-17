@@ -28,8 +28,10 @@ export function macSigningRequested(env: Env): boolean {
 /**
  * Electron fuses, flipped in the binary at package time. The packaged app has
  * no use for Node's own entry points, so they are off. Loading only from the
- * app archive, checked against the hash in Info.plist, is turned on for macOS
- * only, where electron-builder writes that hash and the check is tested here.
+ * app archive, checked against its hash, is turned on for the two platforms
+ * that are built: electron-builder writes the hash into Info.plist on macOS
+ * and into the executable's resources on Windows. docs/decisions.md says how
+ * both fuses were shown to work on Windows.
  */
 export function fuses(platform: string): FuseV1Config {
   return {
@@ -37,7 +39,7 @@ export function fuses(platform: string): FuseV1Config {
     [FuseV1Options.RunAsNode]: false,
     [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
     [FuseV1Options.EnableNodeCliInspectArguments]: false,
-    ...(platform === "darwin"
+    ...(platform === "darwin" || platform === "win32"
       ? {
           [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
           [FuseV1Options.OnlyLoadAppFromAsar]: true,

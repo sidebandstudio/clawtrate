@@ -1,7 +1,8 @@
 // Starts the packaged app for the launch check and returns the teardown that
 // quits it and removes everything this run created.
 //
-// The app is the one `pnpm package:mac` built, never the source tree. It runs
+// The app is the one `pnpm package:mac` or `pnpm package:win` built, never the
+// source tree. It runs
 // with a temporary data folder (`--user-data-dir`, which also holds its device
 // key and tokens), so it never reads or writes the data folder of a Clawtrate
 // someone uses on this machine; the teardown checks that folder did not change.
@@ -18,6 +19,10 @@
 // touches. Other builders' instances come and go on a shared machine; a change
 // to them is printed as a note, not counted as a failure, since a snapshot
 // cannot show this run caused it.
+//
+// On Windows no development gateway runs, so the run starts no instances and
+// keeps no run record: it launches the app, the tests that need a gateway are
+// skipped, and the teardown asks the app to close and checks it did.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -34,10 +39,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
 import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { FORBIDDEN_PORTS, listInstances, runningOthers } from "../e2e/global-setup.ts";
+import { askToClose, forceEnd, windowsProcesses } from "./windows.ts";
 import {
   cleanUp,
   recoverDeadRuns,
@@ -50,17 +56,33 @@ const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
 const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
 
-/** The packaged app for this machine's architecture. */
+/** The packaged app for this machine: the macOS bundle for its architecture, or the unpacked Windows folder. */
 export function packagedApp(): string {
+  if (process.platform === "win32") return join(ROOT, "apps/desktop/dist/win-unpacked");
   const folder = process.arch === "arm64" ? "mac-arm64" : "mac";
   return join(ROOT, "apps/desktop/dist", folder, "Clawtrate.app");
 }
 
+/** The executable inside the packaged app. */
+export function packagedExecutable(app: string): string {
+  return process.platform === "win32"
+    ? join(app, "Clawtrate.exe")
+    : join(app, "Contents/MacOS/Clawtrate");
+}
+
 /** Where a Clawtrate that someone uses on this machine keeps its data. Never written. */
-const REAL_DATA = [
-  join(homedir(), "Library/Application Support/Clawtrate"),
-  join(homedir(), "Library/Caches/Clawtrate"),
-];
+function realData(): string[] {
+  if (process.platform === "win32") {
+    return [
+      join(process.env.APPDATA ?? join(homedir(), "AppData/Roaming"), "Clawtrate"),
+      join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData/Local"), "Clawtrate"),
+    ];
+  }
+  return [
+    join(homedir(), "Library/Application Support/Clawtrate"),
+    join(homedir(), "Library/Caches/Clawtrate"),
+  ];
+}
 
 /** Every entry under the given folders with its size and modification time, kept in memory only. */
 function fingerprint(paths: string[]): string {
@@ -188,6 +210,11 @@ function preferencesKeeper(app: string) {
 
 /** The processes whose command line names `dir`: the app and its helpers, which all carry its data folder. */
 export function processesUsing(dir: string): number[] {
+  if (process.platform === "win32") {
+    return windowsProcesses()
+      .filter(({ pid, command }) => command.includes(dir) && pid !== process.pid)
+      .map(({ pid }) => pid);
+  }
   const out = execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" });
   return out
     .split("\n")
@@ -203,7 +230,7 @@ function cliEnv(): NodeJS.ProcessEnv {
 }
 
 /** The app's environment: nothing that could point it at a development gateway or change Electron. */
-function appEnv(): NodeJS.ProcessEnv {
+export function appEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(process.env).filter(
       ([key]) => !/^(CLAWTRATE_|ELECTRON_|NODE_OPTIONS$|OPENCLAW_)/.test(key),
@@ -212,7 +239,8 @@ function appEnv(): NodeJS.ProcessEnv {
 }
 
 export default async function globalSetup() {
-  if (process.platform !== "darwin") throw new Error("the launch check runs on macOS");
+  if (process.platform === "win32") return windowsSetup();
+  if (process.platform !== "darwin") throw new Error("the launch check runs on macOS and Windows");
   const app = packagedApp();
   if (!existsSync(app)) throw new Error(`${app} does not exist. Run \`pnpm package:mac\` first.`);
   // Saved before anything runs; put back by every way this run ends.
@@ -274,6 +302,7 @@ export default async function globalSetup() {
       : "absent";
   };
   let sentinelBefore: string | null = null;
+  const REAL_DATA = realData();
   const realBefore = fingerprint(REAL_DATA);
   const listenersBefore = protectedListeners();
   const othersBefore = runningOthers([name, sentinel]);
@@ -357,7 +386,7 @@ export default async function globalSetup() {
     saveRecord(RECORDS, record);
     const gated = gatedSpawn(
       spawn,
-      join(app, "Contents/MacOS/Clawtrate"),
+      packagedExecutable(app),
       [`--user-data-dir=${userData}`, "--remote-debugging-port=0"],
       { cwd: dir, env: appEnv(), stdio: ["ignore", "ignore", "inherit"] },
     );
@@ -372,19 +401,101 @@ export default async function globalSetup() {
     saveRecord(RECORDS, record);
     gated.release();
 
-    // Chromium writes the port it chose into the data folder.
-    const portFile = join(userData, "DevToolsActivePort");
-    const deadline = Date.now() + 30_000;
-    while (!existsSync(portFile)) {
-      if (appProcess.exitCode !== null)
-        throw new Error(`the app exited with ${appProcess.exitCode}`);
-      if (Date.now() > deadline) throw new Error("the app did not open its debugging port");
-      await sleep(200);
+    const port = await debuggingPort(userData, appProcess);
+    process.env.CLAWTRATE_PACKAGED_CDP = `http://127.0.0.1:${port}`;
+    process.env.CLAWTRATE_PACKAGED_APP = app;
+    process.env.CLAWTRATE_PACKAGED_USER_DATA = userData;
+    process.env.CLAWTRATE_PACKAGED_PID = String(appProcess.pid);
+  } catch (error) {
+    await teardown().catch((problem: unknown) => console.error(String(problem)));
+    throw error;
+  }
+  return teardown;
+}
+
+/** Waits for Chromium to write the debugging port it chose into the data folder, and reads it. */
+async function debuggingPort(userData: string, app: ChildProcess): Promise<number> {
+  const portFile = join(userData, "DevToolsActivePort");
+  const deadline = Date.now() + 30_000;
+  while (!existsSync(portFile)) {
+    if (app.exitCode !== null) throw new Error(`the app exited with ${app.exitCode}`);
+    if (Date.now() > deadline) throw new Error("the app did not open its debugging port");
+    await sleep(200);
+  }
+  const port = Number(readFileSync(portFile, "utf8").split("\n")[0]);
+  if (!Number.isInteger(port) || port <= 0 || FORBIDDEN_PORTS.includes(port)) {
+    throw new Error(`unexpected debugging port ${port}`);
+  }
+  return port;
+}
+
+/**
+ * The Windows run: the packaged app alone, with a temporary data folder. No
+ * development gateway runs on Windows, so there are no instances, no run
+ * record and no listeners to protect. The app is asked to close the way
+ * Windows asks at sign-out (a close message to its windows), and the run
+ * fails if it or a helper is still running 15 seconds later; anything left
+ * is then ended by PID so the machine is not left with it.
+ */
+async function windowsSetup() {
+  const app = packagedApp();
+  const exe = packagedExecutable(app);
+  if (!existsSync(exe)) throw new Error(`${exe} does not exist. Run \`pnpm package:win\` first.`);
+  const REAL_DATA = realData();
+  const realBefore = fingerprint(REAL_DATA);
+  const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+  const userData = join(dir, "user-data");
+  mkdirSync(userData);
+  let appProcess: ChildProcess | null = null;
+
+  /** Ends whatever is left of the app by PID and removes the folder. Synchronous, for the exit handler too. */
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    for (const pid of processesUsing(userData)) forceEnd(pid);
+    if (appProcess?.pid && appProcess.exitCode === null) forceEnd(appProcess.pid);
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  };
+  process.on("exit", finish);
+
+  const teardown = async () => {
+    const problems: string[] = [];
+    if (appProcess && (appProcess.exitCode !== null || appProcess.signalCode !== null)) {
+      // The app must still be running when it is asked to close. One that ended by
+      // itself, cleanly or not, did not "stay up and close when asked".
+      problems.push(
+        `the app exited before it was asked to close, with ${appProcess.exitCode ?? appProcess.signalCode}`,
+      );
+    } else if (appProcess) {
+      const exited = new Promise((resolve) => appProcess!.once("exit", resolve));
+      const refused = askToClose(appProcess.pid!);
+      if (refused) problems.push(`asking the app to close failed: ${refused}`);
+      else if ((await Promise.race([exited, sleep(15_000).then(() => "timeout")])) === "timeout") {
+        problems.push(`the app (pid ${appProcess.pid}) did not quit within 15 seconds`);
+      } else if (appProcess.exitCode !== 0) {
+        problems.push(`the app exited with ${appProcess.exitCode ?? appProcess.signalCode}`);
+      }
     }
-    const port = Number(readFileSync(portFile, "utf8").split("\n")[0]);
-    if (!Number.isInteger(port) || port <= 0 || FORBIDDEN_PORTS.includes(port)) {
-      throw new Error(`unexpected debugging port ${port}`);
+    for (let i = 0; i < 50 && processesUsing(userData).length > 0; i += 1) await sleep(200);
+    const left = processesUsing(userData);
+    if (left.length > 0) problems.push(`app processes still running: ${left.join(", ")}`);
+    finish();
+    if (existsSync(dir)) problems.push(`${dir} could not be removed`);
+    if (fingerprint(REAL_DATA) !== realBefore) {
+      problems.push("the data folder of this machine's own Clawtrate changed");
     }
+    if (problems.length > 0) throw new Error(problems.join("\n"));
+    console.log(`Closed the packaged app and removed ${dir}`);
+  };
+
+  try {
+    appProcess = spawn(exe, [`--user-data-dir=${userData}`, "--remote-debugging-port=0"], {
+      cwd: dirname(userData),
+      env: appEnv(),
+      stdio: ["ignore", "ignore", "inherit"],
+    });
+    const port = await debuggingPort(userData, appProcess);
     process.env.CLAWTRATE_PACKAGED_CDP = `http://127.0.0.1:${port}`;
     process.env.CLAWTRATE_PACKAGED_APP = app;
     process.env.CLAWTRATE_PACKAGED_USER_DATA = userData;
