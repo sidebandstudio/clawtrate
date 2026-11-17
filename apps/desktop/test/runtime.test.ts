@@ -283,7 +283,11 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
         devOnly: true,
         recheckDevGateway: proven.read,
       });
-      expect(runtime.info.devGateway).toEqual({ url: proven.url });
+      // With how a command reaches that instance, for the commands the interface shows.
+      expect(runtime.info.devGateway).toEqual({
+        url: proven.url,
+        cli: instance === null ? "openclaw --dev" : "openclaw --profile clawtrate-dev-alpha",
+      });
       expect(runtime.policy.devGateway).toEqual({ url: proven.url, token: "t" });
       const before = attempts;
       // Any other gateway, including the default instance's for a named one.
