@@ -85,6 +85,7 @@
         link("app.html", "App") +
         link("gallery.html", "Components") +
         link("conversation.html", "Scripted run") +
+        link("work.html", "Work pane") +
         `<span class="gap"></span><span id="proto-extra"></span>` +
         seg("Theme", "theme", [["light", "Light"], ["dark", "Dark"]]) +
         seg("Width", "width", [["full", "Full"], ["1100", "1100"], ["800", "800"], ["phone", "Phone"]]) +

@@ -141,6 +141,10 @@
   ];
   if (state0 === "nobots" || state0 === "discovering") bots = [];
   if (state0 === "zerotasks") bots.find((b) => b.id === "marlow").tasks = [];
+  // A page built on this one (work.html) may add its own fixtures and fill the
+  // Work pane's Files and Computer tabs. app.html has no extension.
+  const ext = CT.appExtension || {};
+  ext.fixtures?.(bots, task);
 
   // The model ------------------------------------------------------------------------
 
@@ -402,6 +406,7 @@
     pill.setAttribute("aria-label", t ? `${b.name}, ${t.title}. Show details.` : `${b.name}. Show details.`);
     pill.title = t ? t.title : "";
     CT.hydrate(pill);
+    ext.header?.(b, t);
   }
 
   const emptyState = (b, title, text, actions = "") =>
@@ -512,8 +517,11 @@
         `<div><dt>Last activity</dt><dd>${t.at > 0 ? "Today, " : ""}${t.when}</dd></div></dl>` +
         `<section class="work-section"><h3>Routines</h3><p class="work-note">None yet. Ask ${b.name} to do something on a schedule.</p></section>`
       : `<p class="work-note">No task is open. Pick one of ${b.name}'s tasks to see its details.</p>`;
-    $("#files-empty").textContent = `Files ${b.name} reads or writes in this task appear here.`;
-    $("#computer-empty").textContent = `When ${b.name} uses a browser or a desktop, you can watch it here.`;
+    if (ext.panel) ext.panel(b, t);
+    else {
+      $("#files-empty").textContent = `Files ${b.name} reads or writes in this task appear here.`;
+      $("#computer-empty").textContent = `When ${b.name} uses a browser or a desktop, you can watch it here.`;
+    }
     setTab(model.tab);
   }
 
@@ -525,7 +533,8 @@
       tab.tabIndex = on ? 0 : -1; // one tab stop; arrows move between tabs
       if (on && focus) tab.focus();
     });
-    $$('[role="tabpanel"]').forEach((p) => (p.hidden = p.id !== `panel-${name}`));
+    $$('.work-sections > [role="tabpanel"]').forEach((p) => (p.hidden = p.id !== `panel-${name}`));
+    ext.tabChanged?.(name);
   }
 
   // Opening or closing the pane keeps the reader's place: the bottom stays the
@@ -572,6 +581,7 @@
     const button = $("#panel-button");
     button.setAttribute("aria-pressed", String(open));
     button.setAttribute("aria-label", open ? "Hide work panel" : "Show work panel");
+    ext.panelChanged?.(open);
     const closedModal = !open && wasModal;
     applyModality();
     if (closedModal) (opener && document.contains(opener) ? opener : button).focus(); // a drawer gives focus back
@@ -618,6 +628,7 @@
         `${c.more ? `<span>· ${c.more}</span>` : ""}</span>${c.action ? `<button type="button" data-action="retry">${c.action}</button>` : ""}`;
     }
     renderComposer();
+    ext.connectionChanged?.(name);
     if (name === "syncing") connectionTimer = setTimeout(() => arrive(), 900);
     if (name === "synced") connectionTimer = setTimeout(() => setConnection("connected"), 4000); // leaves after 4 seconds
   }
@@ -1012,5 +1023,6 @@
     });
   }
 
-  window.app = { model, bots, setConnection, setPanel, openTask, selectBot, toggleFold, togglePin, newTask, send };
+  window.app = { model, bots, setConnection, setPanel, setTab, openTask, selectBot, toggleFold, togglePin, newTask, send, holdPlace, overlaying };
+  ext.ready?.(window.app);
 })();

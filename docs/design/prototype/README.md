@@ -9,6 +9,7 @@ Static pages for the design in `docs/design/`. Open `index.html` in a browser. T
 | `app.html` | The main view: bots with their tasks, a conversation, the Work pane. It runs on a small local model, so selecting, folding, pinning, the menus, sending, the connection states and the Work pane all work. Right-click a bot for its menu. |
 | `gallery.html` | Every conversation component in every state. Steps and cards work as they do in the app: they open, Raw opens, copy copies, approvals and questions resolve. The composer, the access bar and the rail rows are pictures of each state there. |
 | `conversation.html` | One scripted turn, played inside the shell: Play, Step, Drop the connection and Restart are in the bar. The approval and the question pause it until you answer; Stop, steer, queue, hold and the send menu work at any point. "Start read-only" plays it on a read-only connection, with the access bar and the request for access. |
+| `work.html` | The app with the Work pane's contents, specified in `docs/design/work-pane.md`: a task's files and the bot's workspace, the reader and its changes, the way from a step to its file and back. The bar has the events the pane reacts to ("Otto edits the notes", "The write finishes", "Otto runs a command"). Open Otto's task "Disk almost full on the media box", then the Work pane. |
 
 The dark bar at the top is prototype chrome, not part of the product. It switches the theme, the width of the frame the app sits in (full, 1100, 800, phone) and reduced motion.
 
@@ -34,6 +35,11 @@ Every setting can be given in the address, which is how the screenshots are take
 | `section` | One section of the gallery, by id (gallery) |
 | `tier` | `read`, to start the scripted run on a read-only connection (scripted run) |
 | `stopfail` | `1`, to make the first Stop request fail (scripted run) |
+| `files` | `loading`, `empty`, `error`, `stale`, `writing`, `commands`, `many` (Work pane) |
+| `folder` | A workspace folder to open: `/`, `notes`, `logs` (Work pane) |
+| `file`, `fileview` | A file to open in the reader, for example `file=notes/disk-2026-11-16.md&fileview=changes`; views are `preview`, `source`, `changes` (Work pane) |
+
+`work.html` takes every parameter `app.html` takes; `work-pane.md`, section 22, lists its own.
 
 ## Checks
 
@@ -42,9 +48,10 @@ The pages' behaviour is checked in a headless browser, from disk, with no server
 ```
 node docs/design/prototype/tools/checks/shell.mjs
 node docs/design/prototype/tools/checks/conversation.mjs
+node docs/design/prototype/tools/checks/work.mjs
 ```
 
-Each prints one line for every check, `ok` or `FAIL`, then a count, and exits with a failure when any check fails. `shell.mjs` covers the rail, tasks, pins, menus, the Work pane, the status strip and the pairing screen. `conversation.mjs` plays the scripted run through its visible controls and covers steps and Raw, copy, the Messaged cards, approvals and their form, questions, held and queued messages, Stop, a lost connection, the read-only tier, the phone width and the gallery.
+Each prints one line for every check, `ok` or `FAIL`, then a count, and exits with a failure when any check fails. `shell.mjs` covers the rail, tasks, pins, menus, the Work pane, the status strip and the pairing screen. `conversation.mjs` plays the scripted run through its visible controls and covers steps and Raw, copy, the Messaged cards, approvals and their form, questions, held and queued messages, Stop, a lost connection, the read-only tier, the phone width and the gallery. `work.mjs` covers the Work pane: the Files tab and the workspace, the reader, downloads, the states the gateway's limits produce, the way between steps and files, and its keyboard paths.
 
 ## Files
 
@@ -60,8 +67,9 @@ Each prints one line for every check, `ok` or `FAIL`, then a count, and exits wi
 | `js/connect.js` | What the buttons on the connection screens do. |
 | `js/components.js`, `js/samples.js`, `js/behaviors.js` | The conversation components' markup, their sample content, and their behaviour: the two views of a step, Raw, copy, the approval form, question cards and the keyboard paths. |
 | `js/gallery.js`, `js/run.js` | The gallery and the scripted run. |
+| `css/work.css`, `js/work.js` | The Work pane's contents and their local model. `work.js` extends `app.js` through `CT.appExtension`, a set of optional hooks that `app.html` does not use. |
 | `tools/make-local-fonts.mjs` | Builds the ignored local font stylesheet. |
-| `tools/checks/` | Headless checks of the pages' behaviour: `shell.mjs` for the app and pairing pages, `conversation.mjs` for the scripted run and the gallery. |
+| `tools/checks/` | Headless checks of the pages' behaviour: `shell.mjs` for the app and pairing pages, `conversation.mjs` for the scripted run and the gallery, `work.mjs` for the Work pane. |
 
 ## Fonts
 
