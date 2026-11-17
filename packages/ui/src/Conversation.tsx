@@ -596,7 +596,7 @@ export function Conversation({
           <div className="composer-inner">
             <div className="composer-box">
               <EyeIcon />
-              <span>Read-only connection. Sending messages arrives in a later version.</span>
+              <span>Read-only connection. You can view conversations.</span>
             </div>
           </div>
         </footer>
