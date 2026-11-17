@@ -210,13 +210,16 @@ function PendingApproval({
   const phase = decisionPhase(card);
   const sendable = sendableDecisions(card, whole !== null);
   const name = env.bot?.name ?? "The bot";
-  const readOnly = env.connected && !env.connection.canApprove;
+  // Without approval access nothing here decides: no button, no shortcut, no command.
+  const mayDecide = env.connection.canApprove;
+  const readOnly = env.connected && !mayDecide;
 
   const daysValue = days.trim() === "" ? null : Number(days);
   const daysInvalid =
     daysValue !== null && (!Number.isInteger(daysValue) || daysValue < 1 || daysValue > 3650);
 
   const decide = (decision: ApprovalDecision) => {
+    if (!mayDecide) return;
     // A second decision while one is on its way is only ever Deny, which the gateway may still take.
     if (!sendable.has(decision) || (card.submitting && decision !== "deny")) return;
     if (card.submitting && chosen === "deny") return;
@@ -266,7 +269,7 @@ function PendingApproval({
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       event.stopPropagation();
-      if (phase !== "choose") return;
+      if (phase !== "choose" || !mayDecide) return;
       if (formOpen) {
         if (!daysInvalid) decide("allow-always");
       } else if (view.once) decide("allow-once");

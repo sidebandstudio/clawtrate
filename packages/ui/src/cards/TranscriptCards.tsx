@@ -31,7 +31,7 @@ import {
   takeArrival,
   takeReturnPoint,
 } from "./MessagedCard.tsx";
-import { nameOf } from "./model.ts";
+import { mayDispatch, nameOf } from "./model.ts";
 import { Announcer } from "./parts.tsx";
 import { cardDomId, codingCalls, oldestPending, placeCards, type CardRef } from "./placement.ts";
 import { QuestionCardView } from "./QuestionCard.tsx";
@@ -92,8 +92,15 @@ export function CardScope({
       transcript,
       connection: state.connection,
       connected: state.connection.status === "connected",
-      invoke: (command) => bridge.invoke(command),
-      send: (command) => bridge.send(command),
+      // The one place cards send commands: a decision or an answer this connection may not give never leaves.
+      invoke: (command) =>
+        mayDispatch(command, state.connection)
+          ? bridge.invoke(command)
+          : Promise.reject(new Error("This connection may not do that.")),
+      send: (command) =>
+        mayDispatch(command, state.connection)
+          ? bridge.send(command)
+          : Promise.reject(new Error("This connection may not do that.")),
       runOf,
       transcripts: state.transcripts,
       openTask,

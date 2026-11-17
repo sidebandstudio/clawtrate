@@ -662,3 +662,23 @@ export function recipientName(
 export function firstLineOf(text: string | null): string {
   return text ? (text.split("\n").find((line) => line.trim()) ?? "").trim() : "";
 }
+
+/**
+ * Whether a card may send this command on this connection. Deciding on an
+ * approval needs approval access, answering a question needs question
+ * access; checked where the command is sent, whatever control asked for it.
+ */
+export function mayDispatch(
+  command: { type: string },
+  connection: { canApprove: boolean; canAnswer: boolean },
+): boolean {
+  switch (command.type) {
+    case "resolveApproval":
+      return connection.canApprove;
+    case "answerQuestion":
+    case "dismissQuestion":
+      return connection.canAnswer;
+    default:
+      return true;
+  }
+}
