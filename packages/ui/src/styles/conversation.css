@@ -313,8 +313,10 @@
   animation: breathe var(--loop-caret) var(--ease-in-out) infinite;
 }
 
-.bubble .md + .stream-caret {
-  margin-left: 0;
+/* The caret follows the last character: the reply's last paragraph runs inline with it. */
+.bubble:has(> .stream-caret) > .md,
+.bubble:has(> .stream-caret) > .md > p:last-child {
+  display: inline;
 }
 
 .msg-caption {
