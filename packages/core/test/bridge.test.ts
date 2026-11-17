@@ -25,6 +25,86 @@ describe("parseBridgeCommand", () => {
   });
 });
 
+describe("parseBridgeCommand for the live conversation", () => {
+  const key = "agent:otto:disk-space";
+
+  it("accepts the conversation commands and normalizes their fields", () => {
+    expect(parseBridgeCommand({ type: "requestAccess", scopes: ["operator.admin"] })).toEqual({
+      type: "requestAccess",
+    });
+    expect(parseBridgeCommand({ type: "sendMessage", key, text: "hi", mode: "steer" })).toEqual({
+      type: "sendMessage",
+      key,
+      text: "hi",
+      mode: "auto",
+    });
+    expect(
+      parseBridgeCommand({ type: "sendMessage", key, text: "hi", mode: "queue" }),
+    ).toMatchObject({
+      mode: "queue",
+    });
+    expect(parseBridgeCommand({ type: "retryMessage", key, messageId: "m-1" })).toEqual({
+      type: "retryMessage",
+      key,
+      messageId: "m-1",
+    });
+    expect(parseBridgeCommand({ type: "createTask", botId: "otto", text: "go" })).toEqual({
+      type: "createTask",
+      botId: "otto",
+      text: "go",
+      label: null,
+    });
+    expect(parseBridgeCommand({ type: "stopRun", key, runId: "run-1" })).toEqual({
+      type: "stopRun",
+      key,
+      runId: "run-1",
+    });
+    expect(
+      parseBridgeCommand({
+        type: "answerQuestion",
+        key,
+        questionId: "ask_1",
+        answers: { color: ["Blue"] },
+      }),
+    ).toEqual({ type: "answerQuestion", key, questionId: "ask_1", answers: { color: ["Blue"] } });
+    expect(parseBridgeCommand({ type: "dismissQuestion", key, questionId: "ask_1" })).toEqual({
+      type: "dismissQuestion",
+      key,
+      questionId: "ask_1",
+    });
+    expect(parseBridgeCommand({ type: "readStepRaw", key, stepId: "tool:call_1" })).toEqual({
+      type: "readStepRaw",
+      key,
+      stepId: "tool:call_1",
+    });
+  });
+
+  it("rejects malformed conversation commands", () => {
+    expect(() => parseBridgeCommand({ type: "sendMessage", key, text: 5 })).toThrow("invalid text");
+    expect(() =>
+      parseBridgeCommand({ type: "sendMessage", key, text: "x".repeat(32_001) }),
+    ).toThrow("invalid text");
+    expect(() => parseBridgeCommand({ type: "sendMessage", key: "../x", text: "hi" })).toThrow();
+    expect(() => parseBridgeCommand({ type: "retryMessage", key, messageId: "a b" })).toThrow();
+    expect(() => parseBridgeCommand({ type: "createTask", botId: "a/b", text: "go" })).toThrow();
+    expect(() =>
+      parseBridgeCommand({ type: "createTask", botId: "otto", text: "go", label: "x".repeat(513) }),
+    ).toThrow("invalid label");
+    for (const answers of [
+      {},
+      [],
+      { Color: ["Blue"] },
+      { color: [] },
+      { color: [1] },
+      { a: ["1"], b: ["1"], c: ["1"], d: ["1"] },
+    ]) {
+      expect(() =>
+        parseBridgeCommand({ type: "answerQuestion", key, questionId: "ask_1", answers }),
+      ).toThrow("invalid answers");
+    }
+  });
+});
+
 describe("bridge session policy", () => {
   const calls: unknown[] = [];
   const client = {

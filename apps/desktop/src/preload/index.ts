@@ -7,7 +7,8 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 export type DesktopHostApi = {
   platform: string;
   hello(): Promise<{ info: HostInfo; state: ClawtrateState }>;
-  send(command: BridgeCommand): Promise<void>;
+  /** Resolves with the command's answer (see `BridgeResultFor`). */
+  send(command: BridgeCommand): Promise<unknown>;
   onState(listener: (state: ClawtrateState) => void): () => void;
 };
 

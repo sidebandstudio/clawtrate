@@ -66,6 +66,8 @@ describe("requested scopes (B1)", () => {
     expect(JSON.parse(storage.data.get(tokenKey(URL_A))!)).toEqual({
       token: "issued-token",
       grantedScopes: ["operator.read", "operator.write"],
+      // Granted at pairing is not the same as meant to hold: the client still holds read only.
+      heldScopes: ["operator.read"],
     });
     gateway.dropAll();
     await until(() => gateway.connects.length === 2);

@@ -129,8 +129,15 @@ export class FakeGateway {
   };
 
   /** Deliver an event to every open socket. */
-  emit(event: string, payload: unknown): void {
-    for (const socket of this.sockets) socket.push({ type: "event", event, payload });
+  emit(event: string, payload: unknown, frameSeq?: number): void {
+    for (const socket of this.sockets) {
+      socket.push({
+        type: "event",
+        event,
+        payload,
+        ...(frameSeq !== undefined ? { seq: frameSeq } : {}),
+      });
+    }
   }
 
   /** Drop every open connection, as a gateway restart would. */
@@ -184,4 +191,15 @@ export const tokenKey = (url: string) => `deviceToken:${encodeURIComponent(url)}
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(() => resolve(), ms));
+}
+
+/** A promise a test settles by hand, for gateway calls that wait. */
+export function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }

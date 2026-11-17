@@ -1,4 +1,6 @@
 import type {
+  BridgeCommand,
+  BridgeResultFor,
   BridgeClientMessage,
   BridgeServerMessage,
   ClawtrateBridge,
@@ -6,7 +8,7 @@ import type {
   HostInfo,
 } from "@clawtrate/core";
 
-type Pending = { resolve: () => void; reject: (error: Error) => void };
+type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
 /**
  * Bridge over a WebSocket to the web preview host. The host keeps the gateway
@@ -45,7 +47,7 @@ export function createWebBridge(): Promise<ClawtrateBridge> {
         } else {
           const waiter = pending.get(message.id);
           pending.delete(message.id);
-          if (message.ok) waiter?.resolve();
+          if (message.ok) waiter?.resolve(message.value);
           else waiter?.reject(new Error(message.error));
         }
       };
@@ -73,6 +75,18 @@ export function createWebBridge(): Promise<ClawtrateBridge> {
       };
     };
 
+    const call = (command: BridgeCommand) =>
+      new Promise<unknown>((resolve, reject) => {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          reject(new Error("Not connected to the preview host"));
+          return;
+        }
+        const id = String((counter += 1));
+        pending.set(id, { resolve, reject });
+        const message: BridgeClientMessage = { type: "command", id, command };
+        socket.send(JSON.stringify(message));
+      });
+
     const bridge = (hostInfo: HostInfo): ClawtrateBridge => ({
       info: hostInfo,
       getState: () => state!,
@@ -80,18 +94,10 @@ export function createWebBridge(): Promise<ClawtrateBridge> {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
-      send(command) {
-        return new Promise<void>((resolve, reject) => {
-          if (!socket || socket.readyState !== WebSocket.OPEN) {
-            reject(new Error("Not connected to the preview host"));
-            return;
-          }
-          const id = String((counter += 1));
-          pending.set(id, { resolve, reject });
-          const message: BridgeClientMessage = { type: "command", id, command };
-          socket.send(JSON.stringify(message));
-        });
+      async send(command) {
+        await call(command);
       },
+      invoke: (command) => call(command) as Promise<BridgeResultFor<typeof command>>,
     });
 
     open();

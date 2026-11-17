@@ -199,7 +199,12 @@ export function startWebHost(options: WebHostOptions) {
         id = message.id;
         const command = parseBridgeCommand(message.command);
         session.apply(command).then(
-          () => send({ type: "result", id, ok: true }),
+          (value) =>
+            send(
+              value === undefined
+                ? { type: "result", id, ok: true }
+                : { type: "result", id, ok: true, value },
+            ),
           (error: unknown) =>
             send({
               type: "result",

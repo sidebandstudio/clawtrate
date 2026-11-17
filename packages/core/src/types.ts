@@ -1,5 +1,7 @@
 // View models the interface renders. Gateway payloads are mapped into these in
-// mapping.ts; nothing outside core needs to know the wire shapes.
+// mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
+
+import type { TaskActivity } from "./runs.ts";
 
 export type ConnectionStatus =
   /** No gateway configured yet. */
@@ -26,12 +28,45 @@ export type PairingRequest = {
 
 export type ConnectionError = { code: string; message: string; hint: string | null };
 
+export type ScopeUpgradeStatus =
+  | "idle"
+  /** `device.scopes.requestUpgrade` is on its way. */
+  | "requesting"
+  /** The gateway holds a pending request; its owner has to approve it. */
+  | "pending"
+  /** Approved; the client reconnected with the new grant. */
+  | "approved"
+  | "rejected"
+  | "expired"
+  /** The request failed, or was approved without the scope it asked for. */
+  | "error";
+
+/** Stepping up from `operator.read` to `operator.write`. */
+export type ScopeUpgradeState = {
+  status: ScopeUpgradeStatus;
+  /** The scopes asked for. */
+  scopes: string[];
+  requestId: string | null;
+  /** What the person approving runs, chosen by the host as for pairing. */
+  approveCommand: string | null;
+  approveNote: string | null;
+  error: string | null;
+};
+
 export type ConnectionState = {
   status: ConnectionStatus;
   gatewayUrl: string | null;
   serverVersion: string | null;
   protocol: number | null;
+  /** Scopes the gateway granted this connection (`hello-ok.auth.scopes`). */
   scopes: string[];
+  /** Scopes this client asks for on every connect. Never more than it means to hold. */
+  requestedScopes: string[];
+  /** True while the connection holds `operator.write`, so sending and stopping work. */
+  canWrite: boolean;
+  /** True while the connection holds `operator.questions`, so question cards can be answered. */
+  canAnswer: boolean;
+  upgrade: ScopeUpgradeState;
   deviceId: string | null;
   pairing: PairingRequest | null;
   error: ConnectionError | null;
@@ -88,13 +123,17 @@ export type TranscriptItem = {
   model: string | null;
 };
 
-export type Transcript = {
+/** One open task: its durable transcript plus its live runs and outgoing messages. */
+export type Transcript = TaskActivity & {
   sessionKey: string;
   status: "loading" | "ready" | "error";
   items: TranscriptItem[];
   error: string | null;
   hasMore: boolean;
-  /** Text of a run that is streaming right now, before it lands in history. */
+  /**
+   * Text of the task's active run, before it lands in history. Derived from
+   * `runs`; kept for views that only draw one streaming bubble.
+   */
   live: { runId: string; text: string } | null;
 };
 
@@ -115,12 +154,25 @@ export type ClawtrateState = {
   transcripts: Record<string, Transcript>;
 };
 
+export const initialScopeUpgrade: ScopeUpgradeState = {
+  status: "idle",
+  scopes: [],
+  requestId: null,
+  approveCommand: null,
+  approveNote: null,
+  error: null,
+};
+
 export const initialConnectionState: ConnectionState = {
   status: "idle",
   gatewayUrl: null,
   serverVersion: null,
   protocol: null,
   scopes: [],
+  requestedScopes: [],
+  canWrite: false,
+  canAnswer: false,
+  upgrade: initialScopeUpgrade,
   deviceId: null,
   pairing: null,
   error: null,

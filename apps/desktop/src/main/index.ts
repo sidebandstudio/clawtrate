@@ -109,7 +109,8 @@ async function main(): Promise<void> {
       });
       session = created;
     }
-    await session.apply(parseBridgeCommand(raw));
+    // Only the command's plain-data answer crosses back to the renderer.
+    return session.apply(parseBridgeCommand(raw));
   });
   batchSnapshots(client.store.subscribe, (state) => {
     window?.webContents.send("clawtrate:state", state);
