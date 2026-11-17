@@ -775,6 +775,32 @@ export function Conversation({
     if (news.length > 0) setAnnouncement(news.at(-1)!);
   }
 
+  // A control that held focus and has gone (a failed message's Resend or
+  // Delete, the status line when its run ends) leaves focus on nothing: it
+  // moves to the message field, or else to the transcript.
+  const lastFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (!section) return;
+    const onFocus = (event: FocusEvent) => {
+      lastFocus.current = event.target as HTMLElement;
+    };
+    section.addEventListener("focusin", onFocus);
+    return () => section.removeEventListener("focusin", onFocus);
+  }, []);
+  useLayoutEffect(() => {
+    const gone = lastFocus.current;
+    if (!gone || gone.isConnected) return;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    lastFocus.current = null;
+    const section = sectionRef.current;
+    (
+      section?.querySelector<HTMLElement>(".composer-input") ??
+      section?.querySelector<HTMLElement>("[data-testid=transcript]")
+    )?.focus();
+  });
+
   // ⌘J goes to what needs you.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

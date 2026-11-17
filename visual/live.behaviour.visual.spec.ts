@@ -841,6 +841,30 @@ test.describe("keyboard", () => {
     await expect(page.getByRole("button", { name: "Dismiss this error" })).toBeFocused();
   });
 
+  test("F-075 F-089: focus moves to the field when a failed message's Delete or Resend, or the status line, goes", async ({
+    page,
+  }) => {
+    await open(page, "send-failed");
+    await page.getByTestId("outgoing").getByRole("button", { name: "Delete" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("outgoing")).toHaveCount(0);
+    await expect(field(page)).toBeFocused();
+
+    await open(page, "send-failed");
+    await page.getByTestId("outgoing").getByRole("button", { name: "Resend" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("outgoing").getByRole("button", { name: "Resend" })).toHaveCount(
+      0,
+    );
+    await expect(field(page)).toBeFocused();
+
+    await open(page, "run-working");
+    await page.getByTestId("status-line").focus();
+    await setRun(page, { state: "completed", textComplete: true, endedAt: Date.now() });
+    await expect(page.getByTestId("status-line")).toHaveCount(0);
+    await expect(field(page)).toBeFocused();
+  });
+
   test("F-282 F-072: with no run, Shift+F10 on Send opens its menu: Send and Start as new task", async ({
     page,
   }) => {
