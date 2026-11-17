@@ -30,7 +30,7 @@ A builder may change this layout when it has a reason. Record the reason in `doc
 
 ## Rules
 
-- Develop only against the development gateway: `openclaw --dev`, state in `~/.openclaw-dev`, port 19001. Never run `openclaw` without `--dev` or `--profile`. Never read or write `~/.openclaw`.
+- Develop only against development gateway instances started by `pnpm dev-gateway`. The default instance is `openclaw --dev`, state in `~/.openclaw-dev`, port 19001. A named instance (`--instance <name>` or `CLAWTRATE_DEV_INSTANCE`) is `openclaw --profile clawtrate-dev-<name>`, state in `~/.openclaw-clawtrate-dev-<name>`, on free ports the tool chooses and records. Use a named instance when another checkout may be running the default one. `pnpm e2e` always creates its own instance. Never run `openclaw` without `--dev` or `--profile clawtrate-dev-<name>`, never against the default profile, and never read or write `~/.openclaw`.
 - Never copy credentials from another OpenClaw profile. The development gateway uses the scripted fake model provider in `tools/dev-gateway`.
 - Build on the official `@openclaw/gateway-client` and `@openclaw/gateway-protocol` packages, pinned to an exact version, tested against the gateway version named in `docs/decisions.md`.
 - Request the smallest operator scopes a feature needs. A read-only connection must stay useful.
