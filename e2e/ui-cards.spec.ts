@@ -161,7 +161,10 @@ async function openTask(on: Page, bot: string, title: string): Promise<void> {
   if ((await rows.filter({ hasText: title }).count()) === 0 && (await showAll.count()) > 0)
     await showAll.click();
   await rows.filter({ hasText: title }).first().click({ timeout: 20_000 });
-  await expect(on.getByRole("heading", { level: 1, name: title })).toBeVisible();
+  // The task's history read decides the heading: seconds on a loaded machine.
+  await expect(on.getByRole("heading", { level: 1, name: title })).toBeVisible({
+    timeout: 20_000,
+  });
 }
 
 /** A new task the test clients follow, named for what it checks; its title is the key's last part. */

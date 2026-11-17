@@ -108,7 +108,10 @@ async function openTask(page: Page, bot: string, task: string) {
       await showAll.click();
     await rows.filter({ hasText: task }).first().click({ timeout: 20_000 });
   }
-  await expect(page.getByRole("heading", { level: 1, name: task })).toBeVisible();
+  // The task's history read decides the heading: seconds on a loaded machine.
+  await expect(page.getByRole("heading", { level: 1, name: task })).toBeVisible({
+    timeout: 20_000,
+  });
 }
 
 /**
@@ -136,7 +139,14 @@ async function ownTask(page: Page, label: string): Promise<{ key: string; title:
       { timeout: 30_000 },
     )
     .toBeGreaterThan(0);
-  await openTask(page, "Otto", title);
+  await page
+    .getByRole("list", { name: "Otto's tasks" })
+    .getByTestId("task")
+    .filter({ hasText: title })
+    .first()
+    .click();
+  // A task with no message yet has no title heading ("Nothing here yet"); its title pill names it.
+  await expect(page.getByRole("button", { name: `Otto, ${title}. Show details.` })).toBeVisible();
   return { key, title };
 }
 

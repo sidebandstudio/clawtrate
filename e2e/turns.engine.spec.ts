@@ -2,6 +2,8 @@
 // interface: the orders of events and answers that a person cannot time by
 // hand, made exact. Each check pairs a client of its own, uses tasks of its
 // own, waits for the gateway to be idle in them before it ends, and unpairs.
+// Named to run after the preview and scenario checks (files run in name order):
+// the tasks it makes would change the seeded counts those read.
 
 import { expect, test } from "@playwright/test";
 import { randomBytes } from "node:crypto";
