@@ -124,6 +124,11 @@ export type FileLimit =
   | { code: "media-in-repository"; media: "audio" | "video" }
   /** A recording or video in the bot's workspace, not established as this task's folder. */
   | { code: "media-outside-task"; media: "audio" | "video" }
+  /**
+   * A picture of a type no reader its place allows sends: the reader looked at
+   * it and refused it for its type, not its size.
+   */
+  | { code: "picture-type-not-sent"; mimeType: string | null; where: "task" | "repository" }
   /** A picture over the limit of the reader its place allows. */
   | {
       code: "picture-too-large";
@@ -220,7 +225,9 @@ export function largePictureStep(file: PlanFile, folder: TaskFolder): ReadStep {
  * What `sessions.files.get` sent instead of content, and where that leads:
  * `unsupported` for a picture of another type goes to the picture readers,
  * for audio or video to the asset reader (not from a repository), and for
- * anything else ends as "not text or media".
+ * anything else ends as "not text or media". `file.size` is the size the
+ * reader's answer gave. A repository has no other picture reader: a picture
+ * there within the preview limit was refused for its type, not its size.
  */
 export function afterUnsupported(
   file: PlanFile,
@@ -228,7 +235,11 @@ export function afterUnsupported(
   mimeType: string | null,
 ): ReadStep {
   const type = mimeType?.toLowerCase() ?? "";
-  if (type.startsWith("image/")) return largePictureStep(file, folder);
+  if (type.startsWith("image/")) {
+    if (folder.kind === "repository" && !over(file.size, PREVIEW_MAX_BYTES))
+      return { stop: { code: "picture-type-not-sent", mimeType, where: "repository" } };
+    return largePictureStep(file, folder);
+  }
   const av = type.startsWith("audio/")
     ? "audio"
     : type.startsWith("video/")
@@ -243,6 +254,28 @@ export function afterUnsupported(
     return { reader: "sessions.files.assets" };
   }
   return { stop: { code: "not-text-or-media", mimeType } };
+}
+
+/**
+ * Where `sessions.files.get`'s refusal as too large leads, from the refusal's
+ * own facts: its `size` and `limit`. A picture goes on to the picture
+ * readers; a stylesheet or script (which the asset reader admits by its
+ * extension) to the asset reader of an ordinary folder, up to its limit; a
+ * document cannot be shown at any size; anything else is text over the
+ * reader's limit.
+ */
+export function afterTooLarge(file: PlanFile, folder: TaskFolder, limit: number): ReadStep {
+  const guess = guessKind(file.name);
+  const av = media(guess);
+  if (guess === "picture") return largePictureStep(file, folder);
+  if (av) return planTaskRead(file, folder);
+  if (guess === "document") return { stop: { code: "not-text-or-media", mimeType: null } };
+  if (guess === "script" && folder.kind !== "repository") {
+    if (over(file.size, ASSET_MAX_BYTES))
+      return { stop: { code: "script-too-large", size: file.size, limit: ASSET_MAX_BYTES } };
+    return { reader: "sessions.files.assets" };
+  }
+  return { stop: { code: "text-too-large", size: file.size, limit } };
 }
 
 /**
@@ -789,7 +822,9 @@ async function readAsset(
     return {
       status: "cannot-show",
       facts,
-      limit: { code: "not-text-or-media", mimeType: facts.mimeType },
+      limit: facts.mimeType?.toLowerCase().startsWith("image/")
+        ? { code: "picture-type-not-sent", mimeType: facts.mimeType, where: "task" }
+        : { code: "not-text-or-media", mimeType: facts.mimeType },
     };
   if (error) return { status: "cannot-show", facts, limit: { code: "refused", message: error } };
   const mimeType = str(asset?.mimeType);
@@ -831,14 +866,18 @@ async function readFromWorkspace(
       };
     if (refusal.type === "workspace_file_too_large") {
       const size = refusal.size ?? facts.size;
-      const limit = refusal.limit ?? PREVIEW_MAX_BYTES;
+      // The limit the reader applied says which it met: its picture limit, or its text limit.
+      const picture =
+        refusal.limit !== null
+          ? refusal.limit > PREVIEW_MAX_BYTES
+          : guessKind(facts.name) === "picture";
+      const limit = refusal.limit ?? (picture ? WORKSPACE_PICTURE_MAX_BYTES : PREVIEW_MAX_BYTES);
       return {
         status: "cannot-show",
         facts: { ...facts, size },
-        limit:
-          guessKind(facts.name) === "picture"
-            ? { code: "picture-too-large", size, limit, where: "workspace" }
-            : { code: "text-too-large", size, limit },
+        limit: picture
+          ? { code: "picture-too-large", size, limit, where: "workspace" }
+          : { code: "text-too-large", size, limit },
       };
     }
     throw error;
@@ -935,15 +974,18 @@ async function readTaskFileOnce(
       const refusal = refusalOf(error);
       if (refusal.type === "session_file_not_found") return { status: "missing", facts };
       if (refusal.type === "session_file_too_large") {
+        // What follows comes from this refusal's own size and limit, not from the list's.
         const size = refusal.size ?? facts.size;
-        const next = { ...plan, size };
-        // Within the limits a picture reader allows, a large picture goes on to it.
-        if (guessKind(facts.name) === "picture") return follow(largePictureStep(next, list.folder));
-        return {
-          status: "cannot-show",
-          facts: { ...facts, size },
-          limit: { code: "text-too-large", size, limit: refusal.limit ?? PREVIEW_MAX_BYTES },
-        };
+        const sized = { ...facts, size };
+        const step = afterTooLarge(
+          { ...plan, size },
+          list.folder,
+          refusal.limit ?? PREVIEW_MAX_BYTES,
+        );
+        if ("stop" in step) return { status: "cannot-show", facts: sized, limit: step.stop };
+        if (step.reader === "sessions.files.assets") return readAsset(ctx, key, sized, rootPath);
+        if (step.reader === "agents.workspace.get") return fromWorkspace(sized);
+        return { status: "failed", message: refusal.message };
       }
       throw error;
     }

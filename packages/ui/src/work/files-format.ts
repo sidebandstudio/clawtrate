@@ -47,6 +47,10 @@ export function limitSentence(name: string, limit: FileLimit, bot: string): stri
       return `This task works in a repository the gateway keeps. The gateway sends only text and pictures from it, so ${name} can't be played or downloaded here.`;
     case "media-outside-task":
       return `This ${what(limit.media)} is in ${bot}'s workspace, outside this task's folder. The gateway sends ${what(limit.media)}s only from a task's folder, so it can't be played here.`;
+    case "picture-type-not-sent":
+      return limit.where === "repository"
+        ? `${name} is a picture${ofType(limit.mimeType)} the gateway doesn't send from a repository it keeps, so it can't be shown or downloaded here.`
+        : `${name} is a picture${ofType(limit.mimeType)} the gateway doesn't send from a task's folder, so it can't be shown or downloaded here.`;
     case "picture-too-large":
       return limit.where === "workspace"
         ? `${sized(name, limit.size)}The gateway sends pictures from the workspace up to ${formatSize(limit.limit)}.`
@@ -56,6 +60,10 @@ export function limitSentence(name: string, limit: FileLimit, bot: string): stri
     case "refused":
       return `The gateway didn't send ${name}: ${limit.message}`;
   }
+}
+
+function ofType(mimeType: string | null): string {
+  return mimeType ? ` of a type (${mimeType})` : " of a type";
 }
 
 function sized(name: string, size: number | null): string {

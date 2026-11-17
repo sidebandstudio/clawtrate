@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { fromBase64, sha256Hex, toBase64, utf8Bytes } from "../src/bytes.ts";
 import {
+  afterTooLarge,
   afterUnsupported,
   ASSET_MAX_BYTES,
   chunkBytesFor,
@@ -183,6 +184,43 @@ describe("which reader may address a task's file", () => {
     );
   });
 
+  it("F-449: a small picture of a type a repository's reader refused is described by its type, not as too large", () => {
+    const tiny = { name: "tiny.bmp", size: 58, workspacePath: "tiny.bmp" };
+    expect(afterUnsupported(tiny, REPOSITORY, "image/bmp")).toEqual({
+      stop: { code: "picture-type-not-sent", mimeType: "image/bmp", where: "repository" },
+    });
+    expect(afterUnsupported({ ...tiny, size: 300_000 }, REPOSITORY, "image/bmp")).toEqual({
+      stop: {
+        code: "picture-too-large",
+        size: 300_000,
+        limit: PREVIEW_MAX_BYTES,
+        where: "repository",
+      },
+    });
+  });
+
+  it("F-449: a refusal as too large leads on from its own size and limit", () => {
+    const script = { name: "bundle.js", size: 300_010, workspacePath: "bundle.js" };
+    expect(afterTooLarge(script, WORKSPACE, PREVIEW_MAX_BYTES)).toEqual({
+      reader: "sessions.files.assets",
+    });
+    expect(afterTooLarge(script, SPAWNED, PREVIEW_MAX_BYTES)).toEqual({
+      reader: "sessions.files.assets",
+    });
+    expect(afterTooLarge({ ...script, size: 2 * MiB }, SPAWNED, PREVIEW_MAX_BYTES)).toEqual({
+      stop: { code: "script-too-large", size: 2 * MiB, limit: ASSET_MAX_BYTES },
+    });
+    expect(afterTooLarge(script, REPOSITORY, PREVIEW_MAX_BYTES)).toEqual({
+      stop: { code: "text-too-large", size: 300_010, limit: PREVIEW_MAX_BYTES },
+    });
+    expect(
+      afterTooLarge({ name: "report.pdf", size: null, workspacePath: null }, WORKSPACE, 262_144),
+    ).toEqual({ stop: { code: "not-text-or-media", mimeType: null } });
+    expect(
+      afterTooLarge({ name: "server.log", size: 400_000, workspacePath: null }, WORKSPACE, 262_144),
+    ).toEqual({ stop: { code: "text-too-large", size: 400_000, limit: 262_144 } });
+  });
+
   it("F-152: in the workspace browser, media only through an open task whose folder is that workspace", () => {
     const memo = { name: "voice-memo.m4a", size: 800_000 };
     expect(planWorkspaceRead(memo, null)).toEqual({
@@ -297,6 +335,46 @@ describe("reading through the gateway", () => {
       status: "cannot-show",
       limit: { code: "text-too-large", size: 3_565_158, limit: 262_144 },
     });
+  });
+
+  it("F-449: a script the list showed small that the task reader refuses as too large comes from the asset reader", async () => {
+    const bytes = utf8Bytes(`// script\n${"x".repeat(300_000)}`);
+    const g = gateway({
+      ...listing([entry("bundle.js", 12)], { spawnedCwd: `${ROOT}/site` }),
+      "sessions.files.get": () =>
+        refusal("session_file_too_large", { size: bytes.length, maxPreviewBytes: 262_144 }),
+      "sessions.files.assets": {
+        assets: [{ ref: "bundle.js", mimeType: "text/javascript", content: toBase64(bytes) }],
+      },
+    });
+    const read = await readTaskFile(context(g.request), KEY, "otto", "bundle.js");
+    expect(read).toMatchObject({
+      status: "content",
+      reader: "sessions.files.assets",
+      kind: "text",
+      bytes: bytes.length,
+      facts: { size: bytes.length },
+    });
+    expect(contentBytes(read)).toEqual(bytes);
+  });
+
+  it("F-449: the workspace reader's refusal names the limit it applied: its picture limit or its text limit", async () => {
+    const g = gateway({
+      "agents.workspace.get": (p: Record<string, unknown>) =>
+        p.path === "scan"
+          ? refusal("workspace_file_too_large", { size: 6 * MiB, maxBytes: 5_242_880 })
+          : refusal("workspace_file_too_large", { size: 300_000, maxBytes: 262_144 }),
+    });
+    expect(await readWorkspaceFile(context(g.request), "otto", "scan", 10, null)).toMatchObject({
+      status: "cannot-show",
+      limit: { code: "picture-too-large", size: 6 * MiB, limit: 5_242_880, where: "workspace" },
+    });
+    expect(await readWorkspaceFile(context(g.request), "otto", "fake.png", 10, null)).toMatchObject(
+      {
+        status: "cannot-show",
+        limit: { code: "text-too-large", size: 300_000, limit: 262_144 },
+      },
+    );
   });
 
   it("F-319: a large picture in a spawned workspace never reaches the workspace reader", async () => {

@@ -46,6 +46,15 @@ describe("sizes and names", () => {
         "Otto",
       ),
     ).toBe("photo.heic is 7.2 MB. The gateway sends pictures from the workspace up to 5 MB.");
+    expect(
+      limitSentence(
+        "tiny.bmp",
+        { code: "picture-type-not-sent", mimeType: "image/bmp", where: "repository" },
+        "Otto",
+      ),
+    ).toBe(
+      "tiny.bmp is a picture of a type (image/bmp) the gateway doesn't send from a repository it keeps, so it can't be shown or downloaded here.",
+    );
     expect(limitSentence("memo.m4a", { code: "media-outside-task", media: "audio" }, "Otto")).toBe(
       "This recording is in Otto's workspace, outside this task's folder. The gateway sends recordings only from a task's folder, so it can't be played here.",
     );
