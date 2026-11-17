@@ -339,6 +339,10 @@ export function devConfig(
         },
       },
     },
+    // No "Recent session creations" notice queued in a bot's main task for
+    // every new task: the gateway's next turn there, which nobody sent, would
+    // carry it. (Scheduled heartbeats are already off with the scheduler.)
+    session: { notifyOnCreate: false },
     // Routines can be created and removed, but the scheduler never runs one,
     // so no job can run a turn, a script or a delivery (webhooks included).
     cron: { enabled: false, triggers: { enabled: false } },

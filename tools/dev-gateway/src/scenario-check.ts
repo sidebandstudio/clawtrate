@@ -39,7 +39,7 @@ import {
 } from "./scenarios.ts";
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
 import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
-import { OFFERED_TOOLS_PATH } from "./fake-provider.ts";
+import { OFFERED_TOOLS_PATH, QUIET_TURNS_PATH } from "./fake-provider.ts";
 
 type JsonRecord = Record<string, unknown>;
 const rec = (value: unknown): JsonRecord =>
@@ -396,6 +396,8 @@ export type Harness = {
   ownerRun(botId: string, key: string, message: string): Promise<RunView>;
   /** The tool names the scripted model received in the session's latest request. */
   offeredTools(key: string): Promise<string[] | null>;
+  /** How many turns the gateway started itself in the session, answered quietly. */
+  quietTurns(key: string): Promise<number>;
 };
 
 /** What one kind of tool call looks like on the wire, for "What the scenario check observed". */
@@ -2799,6 +2801,80 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
+    name: "a turn the gateway starts itself is answered quietly",
+    covers: [],
+    run: async (h) => {
+      const key = await h.session("main", "woken");
+      const first = await h.run("plain", key, "#text");
+      first.expectCalls([]);
+      first.expectEnd("final", scriptedFinalText("#text"));
+      const op = h.op("plain");
+      // Each row of the task's history, by role, content and id (the
+      // transcript's generation hash changes when a turn is recorded).
+      const history = async () =>
+        (
+          (await op.request<{ messages?: JsonRecord[] }>("chat.history", { sessionKey: key }))
+            .messages ?? []
+        ).map((row) => [row.role, row.content, rec(row.__openclaw).id]);
+      const before = await history();
+      expect((await h.quietTurns(key)) === 0, "a quiet turn before the wake");
+      const from = op.lastSeq;
+      // What the gateway does on its own, from a heartbeat or a queued system
+      // event, started deliberately: a wake with a system event for the task.
+      same(
+        await op.request("wake", {
+          mode: "now",
+          text: "A system event from the scenario check",
+          sessionKey: key,
+        }),
+        { ok: true },
+        "wake response",
+      );
+      // The gateway's turn: a run marked as a heartbeat.
+      const began = await op.waitFor(
+        "the gateway's own turn after the wake",
+        (e) =>
+          e.event === "agent" &&
+          rec(e.payload).sessionKey === key &&
+          rec(e.payload).isHeartbeat === true,
+        30_000,
+        from,
+      );
+      const woken = new RunView(op, String(rec(began.payload).runId), key, from);
+      await op.terminal(woken.runId);
+      await sleep(300);
+      same(await h.quietTurns(key), 1, "turns the scripted model answered quietly");
+      // Answered with the gateway's "nothing to say": a run with lifecycle
+      // events only, ended silent, a final with no message, and nothing added
+      // to the task's history.
+      woken.expectCalls([]);
+      woken.expectEnd("final", null);
+      same(rec(woken.terminal).message, undefined, "the final message of the gateway's turn");
+      same(
+        woken.agent().map((e) => [rec(e.payload).stream, rec(e.payload).isHeartbeat]),
+        woken.agent().map(() => ["lifecycle", true]),
+        "the gateway's turn's agent events",
+      );
+      const ended = woken.agent("lifecycle").find((e) => woken.data(e).phase === "end");
+      expect(ended, "the gateway's turn has no lifecycle end");
+      same(woken.data(ended).terminalReply, { disposition: "silent" }, "how the turn ended");
+      same(
+        op.events
+          .filter(
+            (e) =>
+              e.seq > from && e.event === "session.message" && rec(e.payload).sessionKey === key,
+          )
+          .map((e) => e.event),
+        [],
+        "messages in the task after the wake",
+      );
+      same(await history(), before, "the task's history after the wake");
+      h.observe(
+        "A wake with a system event runs a turn the gateway writes itself: the heartbeat prompt, then the event as a runtime context block. Its agent events are lifecycle only and marked isHeartbeat. Answered with NO_REPLY, it ends with terminalReply.disposition silent and a chat final without a message, and adds nothing to the task's history.",
+      );
+    },
+  },
+  {
     name: "who receives a run's tool payloads",
     covers: ["#read"],
     run: async (h) => {
@@ -3067,6 +3143,13 @@ export function createHarness(
         `${providerUrl}${OFFERED_TOOLS_PATH}?session=${encodeURIComponent(key)}`,
       );
       return ((await response.json()) as { tools: string[] | null }).tools;
+    },
+    async quietTurns(key: string) {
+      expect(providerUrl, "this harness does not know the scripted server");
+      const response = await fetch(
+        `${providerUrl}${QUIET_TURNS_PATH}?session=${encodeURIComponent(key)}`,
+      );
+      return ((await response.json()) as { count: number }).count;
     },
     async ownerRun(botId: string, key: string, message: string) {
       expect(ownerAgent, "this harness cannot start a run as the owner");

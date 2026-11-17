@@ -92,6 +92,26 @@ const isReprompt = (message: ChatMessage) =>
   message.role === "user" &&
   normalizePrompt(messageText(message)).startsWith(VISIBLE_ANSWER_REPROMPT);
 
+/** The reply the gateway treats as "nothing to say" (OpenClaw's SILENT_REPLY_TOKEN). */
+export const SILENT_REPLY = "NO_REPLY";
+
+/**
+ * Prompts the gateway writes itself, not a person: the heartbeat prompt
+ * (OpenClaw's HEARTBEAT_CONTEXT_PROMPT, which a wake also uses), the prompt
+ * of a turn that is only runtime context (RUNTIME_EVENT_USER_PROMPT), and a
+ * runtime context block that reaches the model as the prompt itself. A
+ * person's text cannot start with the last: the gateway escapes that header
+ * in user text.
+ */
+export const GATEWAY_TURN_PROMPTS = [
+  "Follow the heartbeat monitor scratch context when provided.",
+  "Continue the OpenClaw runtime event.",
+  "OpenClaw runtime context:",
+] as const;
+
+export const isGatewayTurn = (prompt: string) =>
+  GATEWAY_TURN_PROMPTS.some((start) => prompt.startsWith(start));
+
 export function planReply(messages: ChatMessage[], tools: Set<string>): ReplyStep[] {
   let lastUserIndex = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -158,6 +178,10 @@ export function planReply(messages: ChatMessage[], tools: Set<string>): ReplySte
     const name = SEED_BOTS.find((bot) => bot.id === from)?.name ?? from;
     return [{ kind: "text", text: `${name}'s reply arrived. It is shown above.` }];
   }
+
+  // A turn the gateway started itself (a heartbeat, a wake, a queued system
+  // event) gets the gateway's own "nothing to say" answer, never the fallback.
+  if (isGatewayTurn(prompt)) return [{ kind: "text", text: SILENT_REPLY }];
 
   // Unscripted prompts get a short, stable answer so manual testing still works.
   return [

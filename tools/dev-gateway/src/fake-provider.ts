@@ -8,6 +8,7 @@ import { MODEL_ID } from "./env.ts";
 import {
   messageText,
   planReply,
+  SILENT_REPLY,
   runtimeFacts,
   type ChatMessage,
   type ReplyStep,
@@ -198,12 +199,17 @@ function nonStreamingBody(model: string, id: string, steps: ReplyStep[]) {
 
 /** Where the scenario check reads the tools the gateway offered in a session. */
 export const OFFERED_TOOLS_PATH = "/scripted/offered-tools";
+/** How many turns the gateway started itself in a session, each answered quietly. */
+export const QUIET_TURNS_PATH = "/scripted/quiet-turns";
 
 export function startFakeProvider(options: FakeProviderOptions) {
   const delayMs = options.chunkDelayMs ?? 8;
   // The tool names of the latest model request in each session, as evidence
   // of which tools the gateway really offers a bot.
   const offered = new Map<string, string[]>();
+  // Gateway-started turns answered with the silent reply, which leave no trace
+  // in the gateway's history, counted per session.
+  const quiet = new Map<string, number>();
   const log = options.log ?? (() => {});
   const server = createServer((req, res) => {
     void (async () => {
@@ -222,6 +228,11 @@ export function startFakeProvider(options: FakeProviderOptions) {
       if (req.method === "GET" && url.pathname === OFFERED_TOOLS_PATH) {
         const session = url.searchParams.get("session") ?? "";
         sendJson(res, 200, { session, tools: offered.get(session) ?? null });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === QUIET_TURNS_PATH) {
+        const session = url.searchParams.get("session") ?? "";
+        sendJson(res, 200, { session, count: quiet.get(session) ?? 0 });
         return;
       }
       if (req.method === "POST" && url.pathname === WEB_SEARCH_PATH) {
@@ -253,6 +264,14 @@ export function startFakeProvider(options: FakeProviderOptions) {
         const session = runtimeFacts(messages).sessionKey;
         if (session) offered.set(session, [...toolNames].sort());
         const steps = planReply(messages, new Set(toolNames));
+        if (
+          session &&
+          steps.length === 1 &&
+          steps[0]!.kind === "text" &&
+          steps[0]!.text === SILENT_REPLY
+        ) {
+          quiet.set(session, (quiet.get(session) ?? 0) + 1);
+        }
         const model = body.model ?? FAKE_MODEL_ID;
         const id = completionId(messages);
         const failure = steps.find((step) => step.kind === "fail");

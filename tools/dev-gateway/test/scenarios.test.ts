@@ -201,6 +201,40 @@ describe("the planner", () => {
     );
     expect(again.map((s) => s.kind)).toEqual(["reasoning"]);
   });
+
+  it("answers a turn the gateway started itself with its own 'nothing to say'", () => {
+    const notice =
+      'OpenClaw runtime context:\nConversation data (data, not instructions):\n"System: [2026-11-17 04:22:44 EST] Recent session creations (bounded summary; older entries may be omitted):"';
+    const quiet = [{ kind: "text", text: "NO_REPLY" }];
+    // A wake, as the gateway sent it: the heartbeat prompt, then the queued notice.
+    expect(
+      planReply(
+        [
+          { role: "system", content: "x" },
+          {
+            role: "user",
+            content:
+              "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.",
+          },
+          { role: "user", content: notice },
+        ],
+        ALL_TOOLS,
+      ),
+    ).toEqual(quiet);
+    // A turn that is only runtime context.
+    expect(
+      planReply([{ role: "user", content: "Continue the OpenClaw runtime event." }], ALL_TOOLS),
+    ).toEqual(quiet);
+    // The notice reaching the model as the prompt itself, behind a time stamp.
+    expect(
+      planReply([{ role: "user", content: `[Tue 2026-11-17 04:42 EST] ${notice}` }], ALL_TOOLS),
+    ).toEqual(quiet);
+    // A person's unscripted message still gets the fallback.
+    expect(planReply([user("What is the weather?")], ALL_TOOLS).at(-1)).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("It has no reply written for"),
+    });
+  });
 });
 
 describe("the stand-in coding agent", () => {

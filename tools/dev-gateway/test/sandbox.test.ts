@@ -119,6 +119,12 @@ describe("development gateway config", () => {
     );
   });
 
+  it("queues no new-session notice in a bot's main task", () => {
+    expect(config.session).toEqual({ notifyOnCreate: false });
+    refused("session.notifyOnCreate", true, /^session\.notifyOnCreate must be false/);
+    refused("session", undefined, /^session is required$/);
+  });
+
   it("turns memory-search embeddings off", () => {
     expect(config.memory.search).toEqual({ enabled: false, provider: "none" });
     refused("memory", undefined, /^memory is required$/);
