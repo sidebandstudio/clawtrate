@@ -759,6 +759,11 @@ export class ClawtrateClient {
     connected: () => this.state.connection.status === "connected",
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
     refreshBots: () => this.refreshBots(),
+    createMainTask: async (botId) => {
+      const generation = this.generation;
+      await this.request("sessions.create", { key: `agent:${botId}:main`, agentId: botId, label: "Main" });
+      if (generation === this.generation) await this.refreshSessions(generation);
+    },
     now: () => this.now(),
     randomId: () => this.randomId(),
     log: (message) => this.log("warn", message),

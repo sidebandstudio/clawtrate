@@ -189,9 +189,19 @@ export function AccountRow({
   now: number;
   onOpen: () => void;
 }) {
+  const line = accountLine(account, accounts, bots, now);
+  const name = [accountName(account, accounts.labels), line.kind, line.state?.word, line.users]
+    .filter(Boolean)
+    .join(", ");
   return (
     <li>
-      <button type="button" className="b-choice" data-account={account.id} onClick={onOpen}>
+      <button
+        type="button"
+        className="b-choice"
+        data-account={account.id}
+        aria-label={`${name}. Open.`}
+        onClick={onOpen}
+      >
         <AccountText account={account} accounts={accounts} bots={bots} now={now} />
         <ChevronIcon />
       </button>

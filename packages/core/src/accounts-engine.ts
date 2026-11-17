@@ -64,6 +64,8 @@ export type AccountsContext = {
   admin(): boolean;
   /** Read the bot list again (`agents.list`). */
   refreshBots(): Promise<void>;
+  /** Give a new bot its first, empty task, "Main" (bots.md section 3), and read the task list. */
+  createMainTask(botId: string): Promise<void>;
   now(): number;
   randomId(): string;
   log(message: string): void;
@@ -936,6 +938,9 @@ export class AccountsEngine {
     );
     await this.writeModel(botId, ref, input.effort, true);
     await ctx.refreshBots().catch(() => undefined);
+    await ctx
+      .createMainTask(botId)
+      .catch((error: unknown) => ctx.log(`could not give ${botId} its first task: ${errorText(error)}`));
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
     ctx.update((a) => ({

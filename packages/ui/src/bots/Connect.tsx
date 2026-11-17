@@ -72,11 +72,16 @@ export function useConnect({
 }): ConnectView {
   const bridge = useBridge();
   const admin = connection.canAdmin;
+  // Done: the sign-in that finished is let go, so the component opens afresh next time.
+  const finish = (account: string | null) => {
+    void bridge.send({ type: "dismissSignIn" }).catch(() => {});
+    onDone(account);
+  };
   const signIn = accounts.signIn;
   const [where, setWhere] = useState<Where>(() =>
     startWith && connection.canAdmin
       ? { view: "flow", method: startWith }
-      : signIn
+      : signIn && isSignInActive(signIn)
         ? { view: "flow", method: signIn.method }
         : { view: "methods" },
   );
@@ -289,7 +294,7 @@ export function useConnect({
                   {keyError}
                 </p>
               )}
-              {kp?.hasKey && (
+              {kp?.hasKey && !kp.method && (
                 <Note tone="warn">
                   <p>
                     This replaces the {providerName(keyProvider)} key your gateway already has. Bots
@@ -352,7 +357,7 @@ export function useConnect({
             className="button"
             data-variant="primary"
             data-size="lg"
-            onClick={() => onDone(null)}
+            onClick={() => finish(null)}
           >
             Done
           </button>
@@ -376,14 +381,14 @@ export function useConnect({
     const locks = signIn?.result?.locks ?? [];
     const done = async () => {
       if (!typed) {
-        onDone(where.account);
+        finish(where.account);
         return;
       }
       setSaving(true);
       try {
         await bridge.invoke({ type: "setAccountLabel", profileId: where.account, label: typed });
         announce("Label saved");
-        onDone(where.account);
+        finish(where.account);
       } catch (error) {
         setLabelError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -801,7 +806,7 @@ export function useConnect({
         data-size="lg"
         disabled={!current.result}
         onClick={() =>
-          added ? setWhere({ view: "label", account: added, byKey: current.byKey }) : onDone(null)
+          added ? setWhere({ view: "label", account: added, byKey: current.byKey }) : finish(null)
         }
       >
         Continue
