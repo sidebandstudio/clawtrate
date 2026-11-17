@@ -560,15 +560,28 @@ function CodeView({ text, wrap }: { text: string; wrap: boolean }) {
 function MediaView({ shown, name }: { shown: Shown; name: string }) {
   // A data: address: the pages' policies admit it for pictures and media, and it needs no revoking.
   const url = useMemo(() => `data:${shown.mimeType};base64,${toBase64(shown.data)}`, [shown]);
+  // The reader sent it; this device could not draw or play it. Download still saves it.
+  const [broken, setBroken] = useState(false);
+  if (broken)
+    return (
+      <p className="reader-why" data-testid="reader-unrendered">
+        {`${name} arrived from the gateway, but this device can't ${
+          shown.kind === "image"
+            ? "display this picture"
+            : `play this ${shown.kind === "audio" ? "recording" : "video"}`
+        }. It is ${shown.mimeType}, ${formatSize(shown.bytes)}; Download saves it as it is.`}
+      </p>
+    );
+  const fail = () => setBroken(true);
   if (shown.kind === "image")
     return (
       <div className="reader-image">
-        <img src={url} alt={name} />
+        <img src={url} alt={name} onError={fail} />
       </div>
     );
   if (shown.kind === "audio")
-    return <audio className="reader-audio" controls src={url} aria-label={name} />;
-  return <video className="reader-video" controls src={url} aria-label={name} />;
+    return <audio className="reader-audio" controls src={url} aria-label={name} onError={fail} />;
+  return <video className="reader-video" controls src={url} aria-label={name} onError={fail} />;
 }
 
 /** A unified patch, signs in the gutter so colour is never the only cue. */

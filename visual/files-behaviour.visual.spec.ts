@@ -195,11 +195,22 @@ test.describe("the Files tab", () => {
     expect((await lists()) - listsBefore).toBeLessThanOrEqual(2);
   });
 
-  test("F-448: when commands ran since the list was checked, the tab says so", async ({ page }) => {
+  test("F-448: when commands ran since the list was checked, the tab says so; a refresh shows what they changed", async ({
+    page,
+  }) => {
     await openFixture(page, `${FILES}&files=commands`, "light");
-    await expect(page.getByTestId("files-fresh")).toContainText(
+    const fresh = page.getByTestId("files-fresh");
+    await expect(fresh).toContainText(
       "Otto ran commands since then. Files they changed show after a refresh.",
     );
+    await expect(row(page, "after-cleanup.md")).toHaveCount(0);
+    await page.getByRole("button", { name: "Refresh the file list" }).click();
+    // What the command made, and what it removed, once the list is fetched again.
+    await expect(row(page, "after-cleanup.md")).toBeVisible();
+    await expect(row(page, "media-box.md")).toHaveAccessibleName(/, missing$/);
+    await expect(row(page, "media-box.md").locator("em")).toHaveText(" · Missing");
+    // The notice goes when the list is fetched.
+    await expect(fresh).not.toContainText("ran commands");
   });
 
   test("F-320: a failed listing shows its reason and Try again; a successful retry shows the list", async ({
@@ -265,6 +276,18 @@ test.describe("the Files tab", () => {
     );
   });
 
+  test("F-449: a picture that arrived but this device can't display says so, apart from what can't be fetched, and keeps Download", async ({
+    page,
+  }) => {
+    await openFixture(page, `${FILES}&files=loaded`, "light");
+    await openRow(page, "scan.heic");
+    await expect(page.getByTestId("reader-unrendered")).toHaveText(
+      "scan.heic arrived from the gateway, but this device can't display this picture. It is image/heic, 2 KB; Download saves it as it is.",
+    );
+    await expect(page.getByTestId("reader-cannot")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Download scan.heic" })).toBeVisible();
+  });
+
   test("F-449: in a repository-backed task a video says the repository sends only text and pictures", async ({
     page,
   }) => {
@@ -302,6 +325,45 @@ test.describe("the Files tab", () => {
     ]);
     expect(second.suggestedFilename()).toBe("media-box.md");
     expect(readFileSync((await second.path())!, "utf8")).toBe(`${text.join("\n")}\n`);
+  });
+
+  test("F-152: a recording and a video the task's asset reader supplies play in the pane", async ({
+    page,
+  }) => {
+    await openFixture(page, `${FILES}&files=loaded`, "light");
+    await openRow(page, "voice-memo.wav");
+    const audio = page.locator("audio.reader-audio");
+    await expect(audio).toHaveAttribute("controls", "");
+    expect(
+      await audio.evaluate(
+        (el: HTMLAudioElement) =>
+          new Promise<number>((resolve, reject) => {
+            if (el.readyState >= 1) resolve(el.duration);
+            el.addEventListener("loadedmetadata", () => resolve(el.duration), { once: true });
+            el.addEventListener("error", () => reject(new Error("the recording did not load")), {
+              once: true,
+            });
+          }),
+      ),
+    ).toBeCloseTo(0.5, 1);
+    await page.getByRole("button", { name: "Back to this task's files" }).click();
+    await openRow(page, "rack-clip.webm");
+    const video = page.locator("video.reader-video");
+    const size = await video.evaluate(
+      (el: HTMLVideoElement) =>
+        new Promise<[number, number]>((resolve, reject) => {
+          const done = () => resolve([el.videoWidth, el.duration]);
+          if (el.readyState >= 1) done();
+          el.addEventListener("loadedmetadata", done, { once: true });
+          el.addEventListener("error", () => reject(new Error("the video did not load")), {
+            once: true,
+          });
+        }),
+    );
+    expect(size[0]).toBe(64);
+    expect(size[1]).toBeGreaterThan(0);
+    // Download is offered for content the reader supplied.
+    await expect(page.getByRole("button", { name: "Download rack-clip.webm" })).toBeVisible();
   });
 
   test("F-152: markdown opens on Preview, and the views switch with the arrow keys", async ({

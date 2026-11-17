@@ -175,6 +175,40 @@ export function chartPicture(): Uint8Array {
   });
 }
 
+/** Half a second of a 440 Hz tone, as 8 kHz mono 16-bit WAV. */
+export function toneRecording(): Uint8Array {
+  const rate = 8000;
+  const samples = rate / 2;
+  const out = new Uint8Array(44 + samples * 2);
+  const view = new DataView(out.buffer);
+  const text = (at: number, value: string) =>
+    [...value].forEach((char, i) => view.setUint8(at + i, char.charCodeAt(0)));
+  text(0, "RIFF");
+  view.setUint32(4, 36 + samples * 2, true);
+  text(8, "WAVE");
+  text(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  text(36, "data");
+  view.setUint32(40, samples * 2, true);
+  for (let i = 0; i < samples; i += 1)
+    view.setInt16(44 + i * 2, Math.round(Math.sin((2 * Math.PI * 440 * i) / rate) * 8000), true);
+  return out;
+}
+
+/** One second of a solid blue 64 x 36 frame, VP8 in WebM, made for this fixture with ffmpeg's colour source. */
+const CLIP_WEBM =
+  "GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAKwEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHGTbuMU6uEElTDZ1OsggEiTbuMU6uEHFO7a1OsggKa7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmoCrXsYMPQkBNgIRMYXZmV0GETGF2ZkSJiECPQAAAAAAAFlSua9euAQAAAAAAAE7XgQFzxYgAAAAAAAAAAZyBACK1nIN1bmSIgQCGhVZfVlA4g4EBI+ODhAX14QDgkLCBQLqBJJqBAlWwhFW5gQFV7oEA7AEAAAAAAAACAAASVMNn0HNzzWPAi2PFiAAAAAAAAAABZ8iYRaOHRU5DT0RFUkSHi0xhdmMgbGlidnB4Z8ihRaOIRFVSQVRJT05Eh5MwMDowMDowMS4wMDAwMDAwMDAAH0O2dUEd54EAo8GBAACAkAMAnQEqQAAkAABHCIWFiIWEiAICAnWqA/gD+gIHO3nizzMeXgD+99Sf/5lzWg97/zLz/9uQ8vwqf/tsIKOWgQBkANEBAAEQEAAYABhYL/QACIwAAKOWgQDIANEBAAEQEAAYABhYL/QACIwAAKOWgQEsANEBAAEQEAAYABhYL/QACIwAAKOWgQGQANEBAAEQEAAYABhYL/QACIwAAKOWgQH0ANEBAAEQEAAYABhYL/QACIwAAKOWgQJYANEBAAEQEAAYABhYL/QACIwAAKOVgQK8ALEBAAEQEBRgAGFgv9AAIjAAo5aBAyAA0QEAARAQABgAGFgv9AAIjAAAo5aBA4QA0QEAARAQABgAGFgv9AAIjAAAHFO7a5G7j7OBALeK94EB8YIBd/CBAw==";
+
+export function blueClip(): Uint8Array {
+  return Uint8Array.from(atob(CLIP_WEBM), (char) => char.charCodeAt(0));
+}
+
 // The task's files and the workspace ----------------------------------------
 
 type FixtureFile = {
@@ -209,6 +243,28 @@ function taskFiles(now: number, params: FileParams): FixtureFile[] {
     },
     { path: "charts/usage.png", kind: "modified", ago: 3, content: picture, mimeType: "image/png" },
     { path: "AGENTS.md", kind: "read", ago: 60 * 24 * 3, text: AGENTS, mimeType: "text/markdown" },
+    {
+      path: "notes/voice-memo.wav",
+      kind: "read",
+      ago: 40,
+      content: toneRecording(),
+      mimeType: "audio/wav",
+    },
+    {
+      path: "notes/rack-clip.webm",
+      kind: "read",
+      ago: 45,
+      content: blueClip(),
+      mimeType: "video/webm",
+    },
+    // A picture the reader sends that this device cannot draw: bytes that are not a picture.
+    {
+      path: "charts/scan.heic",
+      kind: "read",
+      ago: 50,
+      content: Uint8Array.from({ length: 2048 }, (_, i) => (i * 7) & 255),
+      mimeType: "image/heic",
+    },
     {
       path: "inventory.md",
       kind: "read",
@@ -456,13 +512,31 @@ export function fileAnswers(now: number, params: FileParams) {
         ? { kind: "repository", sameAsWorkspace: false }
         : { kind: "workspace", sameAsWorkspace: true },
     gitCheckout: params.checkout,
-    // Scenes that are not about files show a task that has touched none.
+    // Scenes that are not about files show a task that has touched none. In the commands
+    // scene, a refresh finds what the command did: a new file, and one it removed.
     files:
       params.state === "empty" || params.state === null
         ? []
-        : files.map((file) => toTaskFile(file, now)),
+        : params.state === "commands" && lists > 1
+          ? [
+              {
+                path: "notes/after-cleanup.md",
+                workspacePath: "notes/after-cleanup.md",
+                name: "after-cleanup.md",
+                kind: "modified",
+                missing: false,
+                size: 96,
+                updatedAt: now - 10_000,
+              },
+              ...files.map((file) =>
+                file.path === "notes/media-box.md"
+                  ? { ...toTaskFile(file, now), missing: true }
+                  : toTaskFile(file, now),
+              ),
+            ]
+          : files.map((file) => toTaskFile(file, now)),
     omitted: 0,
-    checkedAt,
+    checkedAt: params.state === "commands" && lists > 1 ? Date.now() : checkedAt,
   });
   const read = (path: string, workspace: boolean): FileRead => {
     const file = files.find((each) => each.path === path) ?? null;
@@ -493,12 +567,19 @@ export function fileAnswers(now: number, params: FileParams) {
     };
     if (file.limit) return { status: "cannot-show", facts, limit: file.limit };
     const bytes = file.content ?? utf8Bytes(file.text ?? "");
-    const image = file.mimeType?.startsWith("image/") === true;
+    const media = file.mimeType?.split("/")[0];
+    const kind = media === "image" || media === "audio" || media === "video" ? media : "text";
     return {
       status: "content",
       facts,
-      reader: workspace ? "agents.workspace.get" : "sessions.files.get",
-      kind: image ? "image" : "text",
+      // Recordings and videos come only from the task's asset reader.
+      reader:
+        kind === "audio" || kind === "video"
+          ? "sessions.files.assets"
+          : workspace
+            ? "agents.workspace.get"
+            : "sessions.files.get",
+      kind,
       mimeType: file.mimeType ?? "text/plain",
       bytes: bytes.length,
       hash: sha256Hex(bytes),
