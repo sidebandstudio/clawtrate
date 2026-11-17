@@ -1,8 +1,14 @@
-// Step identities are stable and state rebuilt from history equals state
-// from the live stream: a reasoning segment restarted after a fresh opening is
-// a new segment, ids never repeat when retention drops older steps, and live,
-// rebuilt and resynced-twice state agree field by field for a run with
-// reasoning, tools, a question and an approval, while it streams and after.
+// Reasoning identity (ruling 2) and live/history equivalence (ruling 3).
+//
+// Promised: a segment never overwrites another, whatever its length, since
+// continuation is decided from the whole earlier text's length and digest; a
+// step id is never used twice in a task for the life of the client; and ids
+// are stable while the task stays open, across live streaming and any number
+// of resyncs of the same window. Not promised: that a reasoning step keeps its
+// id after the task is closed and reopened from a different window of history.
+// So live state, a fresh rebuild and two resyncs are compared on the same
+// steps in the same order with the same gateway-established fields and raw
+// contents; ids are compared within a session only.
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { applyApprovalRequested, normalizeApprovals, parseExecApproval } from "../src/approvals.ts";
@@ -16,13 +22,19 @@ import {
   retainActivity,
   runsFromHistory,
   type EngineContext,
-  type Run,
+  type StepRaw,
   type TaskActivity,
 } from "../src/runs.ts";
-import { agentEvent, KEY, questionRecord } from "./client-harness.ts";
+import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
+import { until } from "./fake-gateway.ts";
 
 let raw: RawTable;
-const ctx = (table = raw): EngineContext => ({ sessionKey: KEY, now: 5_000, raw: table });
+const ctx = (table = raw, ids?: { next(): number }): EngineContext => ({
+  sessionKey: KEY,
+  now: 5_000,
+  raw: table,
+  ...(ids ? { ids } : {}),
+});
 beforeEach(() => {
   raw = new RawTable();
 });
@@ -30,178 +42,254 @@ beforeEach(() => {
 const thinking = (seq: number, text: string, runId = "r") =>
   agentEvent(runId, seq, "thinking", { text, delta: text });
 
-function feed(activity: TaskActivity, events: Array<ReturnType<typeof agentEvent>>, table = raw) {
+function feed(
+  activity: TaskActivity,
+  events: Array<ReturnType<typeof agentEvent>>,
+  table = raw,
+  ids?: { next(): number },
+) {
   let next = activity;
   for (const event of events) {
-    next = retainActivity(normalizeApprovals(applyAgentEvent(next, event, ctx(table)).activity));
+    next = retainActivity(
+      normalizeApprovals(applyAgentEvent(next, event, ctx(table, ids)).activity),
+    );
   }
   return next;
 }
 
-const shape = (run: Run | undefined) =>
-  run?.steps.map((step) => [step.id, step.status, step.output?.text ?? null]);
-
-const thinkingRow = (text: string, seq = 1, extra: unknown[] = []) => ({
+const thinkingRow = (text: string, seq = 1, extra: unknown[] = [], runId = "r") => ({
   role: "assistant",
   content: [{ type: "thinking", thinking: text }, ...extra],
-  __openclaw: { id: `a${seq}`, seq, runId: "r" },
+  __openclaw: { id: `a${seq}`, seq, runId },
 });
 
-describe("a fresh opening, then a reasoning frame that does not extend the persisted one (B1)", () => {
-  it("starts a new segment, as the live view does, and leaves the persisted one done", () => {
+/** What the gateway establishes about a raw payload, live (an event) or from history (a row). */
+function rawFacts(entry: StepRaw | null) {
+  if (!entry) return null;
+  const call = (entry.call ?? null) as Record<string, unknown> | null;
+  const result = (entry.result ?? null) as Record<string, unknown> | null;
+  const data = (call?.data ?? call) as Record<string, unknown> | null;
+  const text = (value: unknown) =>
+    Array.isArray(value)
+      ? value.map((part) => (part as { text?: string }).text ?? "").join("")
+      : typeof value === "string"
+        ? value
+        : null;
+  const resultBody = (result?.result ?? result) as Record<string, unknown> | null;
+  return {
+    thinking: call?.type === "thinking" ? call.thinking : (data?.text ?? null),
+    name: data?.name ?? null,
+    args: data?.args ?? data?.arguments ?? null,
+    result: result ? { isError: result.isError === true, text: text(resultBody?.content) } : null,
+  };
+}
+
+/** The steps' gateway-established fields and raw contents, in order; source tags, timestamps and ids left out. */
+function facts(activity: TaskActivity, table: RawTable) {
+  return activity.runs.map((run) => ({
+    id: run.id,
+    state: run.state,
+    outcomeKnown: run.outcomeKnown,
+    steps: run.steps.map((step) => ({
+      kind: step.kind,
+      status: step.status,
+      title: step.title,
+      toolName: step.toolName,
+      toolCallId: step.toolCallId,
+      argsText: step.argsText,
+      output: step.kind === "reasoning" ? step.output : null,
+      result: step.result,
+      error: step.error,
+      approvalId: step.approvalId,
+      continuation: step.continuation,
+      raw: rawFacts(table.get(KEY, step.id)),
+    })),
+  }));
+}
+
+const ids = (activity: TaskActivity) => activity.runs.flatMap((run) => run.steps.map((s) => s.id));
+
+/** The same history read again: rebuilt aside, merged by run and step id, raw payloads carried over. */
+function resync(
+  activity: TaskActivity,
+  rows: unknown[],
+  inFlight: Record<string, unknown> | null,
+  table: RawTable,
+) {
+  const scratch = new RawTable();
+  const merge = mergeHistoryRuns(
+    activity.runs,
+    runsFromHistory(rows, inFlight, ctx(scratch)),
+    ctx(table),
+  );
+  for (const [stepId, source] of merge.fromHistory) {
+    const payload = scratch.get(KEY, source);
+    if (payload) table.set(KEY, stepId, payload);
+  }
+  return retainActivity(normalizeApprovals({ ...activity, runs: merge.runs }));
+}
+
+describe("a restart is a new segment however long the earlier one (A4, B1)", () => {
+  it("short: a fresh opening then a frame that does not extend it", () => {
     const fresh = runsFromHistory([thinkingRow("abc")], { runId: "r" }, ctx());
     const after = feed({ ...emptyActivity, runs: fresh }, [thinking(3, "xyz")]);
     const liveTable = new RawTable();
     const live = feed(emptyActivity, [thinking(1, "abc"), thinking(3, "xyz")], liveTable);
-    expect(shape(after.runs[0])).toEqual(shape(live.runs[0]));
-    expect(shape(after.runs[0])).toEqual([
-      ["reasoning:r:0", "done", "abc"],
-      ["reasoning:r:1", "running", "xyz"],
-    ]);
-    // Each segment's raw lookup is its own: the persisted block, then the new frame.
-    expect(raw.get(KEY, "reasoning:r:0")!.call).toMatchObject({
-      type: "thinking",
-      thinking: "abc",
-    });
-    expect(raw.get(KEY, "reasoning:r:1")!.call).toMatchObject({ data: { text: "xyz" } });
-  });
-
-  it("continues the segment when the frame extends it, and a resync twice changes nothing", () => {
-    const fresh = runsFromHistory([thinkingRow("abc")], { runId: "r" }, ctx());
-    const after = feed({ ...emptyActivity, runs: fresh }, [thinking(3, "abcd")]);
-    expect(shape(after.runs[0])).toEqual([["reasoning:r:0", "running", "abcd"]]);
-    const once = mergeHistoryRuns(
-      after.runs,
-      runsFromHistory([thinkingRow("abc")], { runId: "r" }, ctx(new RawTable())),
-      ctx(),
-    ).runs;
-    const twice = mergeHistoryRuns(
-      once,
-      runsFromHistory([thinkingRow("abc")], { runId: "r" }, ctx(new RawTable())),
-      ctx(),
-    ).runs;
-    expect(shape(once[0])).toEqual(shape(after.runs[0]));
-    expect(twice).toEqual(once);
-    // The next restart after the resync is still a new segment.
-    const restarted = feed({ ...emptyActivity, runs: twice }, [thinking(4, "xyz")]);
-    expect(shape(restarted.runs[0])).toEqual([
-      ["reasoning:r:0", "done", "abcd"],
-      ["reasoning:r:1", "running", "xyz"],
+    expect(facts(after, raw)).toEqual(facts(live, liveTable));
+    expect(after.runs[0]!.steps.map((step) => [step.status, step.output?.text])).toEqual([
+      ["done", "abc"],
+      ["running", "xyz"],
     ]);
   });
 
-  it("a segment whose text was not kept is not assumed to continue on a cumulative frame", () => {
-    const fresh = runsFromHistory([thinkingRow("abc")], { runId: "r" }, ctx());
-    const stubbed: Run = {
-      ...fresh[0]!,
-      steps: [{ ...fresh[0]!.steps[0]!, output: null, bodyOmitted: true }],
+  const prefix = "p".repeat(16_000);
+  const before = `${prefix}abc`;
+  const restarted = `${prefix}xyz`;
+
+  it("past the displayed prefix: live keeps the earlier segment and its raw call", () => {
+    const live = feed(emptyActivity, [thinking(1, before), thinking(2, restarted)]);
+    const steps = live.runs[0]!.steps;
+    expect(steps.map((step) => [step.id, step.status])).toEqual([
+      ["reasoning:r:0", "done"],
+      ["reasoning:r:1", "running"],
+    ]);
+    expect((raw.get(KEY, "reasoning:r:0")!.call as { data: { text: string } }).data.text).toBe(
+      before,
+    );
+    expect((raw.get(KEY, "reasoning:r:1")!.call as { data: { text: string } }).data.text).toBe(
+      restarted,
+    );
+    expect(steps[0]!.continuation).toMatchObject({ length: before.length });
+  });
+
+  it("past the displayed prefix: live, a fresh opening and a rebuild of both rows agree", () => {
+    const liveTable = new RawTable();
+    const live = feed(emptyActivity, [thinking(1, before), thinking(2, restarted)], liveTable);
+    const fresh = feed(
+      { ...emptyActivity, runs: runsFromHistory([thinkingRow(before)], { runId: "r" }, ctx()) },
+      [thinking(2, restarted)],
+    );
+    const historyTable = new RawTable();
+    const history = {
+      ...emptyActivity,
+      runs: runsFromHistory(
+        [thinkingRow(before, 1), thinkingRow(restarted, 2)],
+        { runId: "r" },
+        ctx(historyTable),
+      ),
     };
-    const after = feed({ ...emptyActivity, runs: [stubbed] }, [thinking(3, "xyz")]);
-    expect(after.runs[0]!.steps.map((step) => step.id)).toEqual(["reasoning:r:0", "reasoning:r:1"]);
+    expect(facts(fresh, raw).map((run) => run.steps.map((step) => step.status))).toEqual([
+      ["done", "running"],
+    ]);
+    // The same segments, in order, with the same whole-text evidence and raw text.
+    const segments = (activity: TaskActivity, table: RawTable) =>
+      facts(activity, table)[0]!.steps.map((step) => ({
+        continuation: step.continuation,
+        thinking: step.raw?.thinking,
+      }));
+    expect(segments(fresh, raw)).toEqual(segments(live, liveTable));
+    expect(segments(history, historyTable)).toEqual(segments(live, liveTable));
+  });
+
+  it("past the displayed prefix: a frame that extends it continues the one segment", () => {
+    const live = feed(emptyActivity, [thinking(1, before), thinking(2, `${before}d`)]);
+    expect(live.runs[0]!.steps).toHaveLength(1);
+    expect(live.runs[0]!.steps[0]!.continuation).toMatchObject({ length: before.length + 1 });
+  });
+
+  it("a segment with no evidence is never assumed to continue on a cumulative frame", () => {
+    const fresh = runsFromHistory([thinkingRow("abc")], { runId: "r" }, ctx());
+    const unknown = {
+      ...fresh[0]!,
+      steps: [{ ...fresh[0]!.steps[0]!, continuation: null }],
+    };
+    const after = feed({ ...emptyActivity, runs: [unknown] }, [thinking(3, "abcd")]);
+    expect(after.runs[0]!.steps).toHaveLength(2);
   });
 });
 
-describe("reasoning ids never repeat when retention drops older steps (B2)", () => {
-  function segments(count: number, withTool = false) {
+describe("a step id is never used twice (B2)", () => {
+  function segments(count: number, allocator?: { next(): number }) {
     const events: Array<ReturnType<typeof agentEvent>> = [];
     let seq = 0;
     for (let i = 0; i < count; i += 1) {
       events.push(thinking((seq += 1), `segment${i}`));
-      if (withTool && i % 2 === 0) {
-        events.push(
-          agentEvent("r", (seq += 1), "tool", { phase: "start", name: "ls", toolCallId: `t${i}` }),
-        );
-        events.push(
-          agentEvent("r", (seq += 1), "tool", {
-            phase: "result",
-            name: "ls",
-            toolCallId: `t${i}`,
-            result: { content: [{ type: "text", text: "ok" }] },
-          }),
-        );
-      }
       events.push(agentEvent("r", (seq += 1), "lifecycle", { phase: "model" }));
     }
-    return feed(emptyActivity, events);
+    return feed(emptyActivity, events, raw, allocator);
   }
 
   it.each([MAX_STEPS_PER_RUN, MAX_STEPS_PER_RUN + 1, MAX_STEPS_PER_RUN + 2])(
-    "after %i segments: unique ids, the right omission count and each raw lookup its own",
+    "after %i segments, retention drops the oldest without renumbering any",
     (count) => {
       const run = segments(count).runs[0]!;
-      const ids = run.steps.map((step) => step.id);
-      expect(new Set(ids).size).toBe(ids.length);
-      expect(run.steps).toHaveLength(MAX_STEPS_PER_RUN);
+      const all = run.steps.map((step) => step.id);
+      expect(new Set(all).size).toBe(all.length);
       expect(run.omittedSteps).toBe(count - MAX_STEPS_PER_RUN);
-      expect(ids.at(-1)).toBe(`reasoning:r:${count - 1}`);
-      expect(run.steps.at(-1)!.output!.text).toBe(`segment${count - 1}`);
+      expect(all.at(-1)).toBe(`reasoning:r:${count - 1}`);
       expect(raw.get(KEY, `reasoning:r:${count - 1}`)!.call).toMatchObject({
         data: { text: `segment${count - 1}` },
       });
-      expect(run.nextReasoning).toBe(count);
     },
   );
 
-  it("with tool steps between segments", () => {
-    const run = segments(200, true).runs[0]!;
-    const ids = run.steps.map((step) => step.id);
-    expect(new Set(ids).size).toBe(ids.length);
-    expect(run.steps.length + run.omittedSteps).toBe(300);
-    expect(ids.at(-1)).toBe("reasoning:r:199");
-  });
-
-  it("a history page that cut a run's start names its segments by row, not by a position it cannot know", () => {
-    const rows = [thinkingRow("late", 41)];
-    const cut = runsFromHistory(rows, null, ctx(), { startCut: true })[0]!;
-    expect(cut.steps.map((step) => step.id)).toEqual(["reasoning:r:@41.0"]);
-    const whole = runsFromHistory(
-      [{ role: "user", content: "go", __openclaw: { id: "u1", seq: 40 } }, ...rows],
-      null,
-      ctx(),
-      { startCut: true },
-    )[0]!;
-    expect(whole.steps.map((step) => step.id)).toEqual(["reasoning:r:0"]);
+  it("through the client: a reopen from a cut history page reuses no id, and the next segment takes a new one", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: "r" } });
+    const { client, transcript } = await openTask({ gateway });
+    const seen = new Set<string>();
+    const note = () => {
+      for (const id of ids(transcript())) seen.add(id);
+    };
+    let seq = 0;
+    for (let i = 0; i < 3; i += 1) {
+      gateway.emit("agent", agentEvent("r", (seq += 1), "thinking", { text: `segment-${i}` }));
+      if (i < 2)
+        gateway.emit("agent", agentEvent("r", (seq += 1), "lifecycle", { phase: "model" }));
+    }
+    await until(() => transcript().runs[0]?.steps.length === 3);
+    note();
+    const live = ids(transcript());
+    // Resyncs of the same window keep every id.
+    for (let i = 0; i < 2; i += 1) {
+      const before = gateway.calls("chat.history").length;
+      gateway.emit("session.message", { sessionKey: KEY });
+      await until(() => gateway.calls("chat.history").length === before + 1);
+      await until(() => transcript().status === "ready");
+    }
+    expect(ids(transcript())).toEqual(live);
+    // Closed and reopened from a page whose start is cut: only the last segment's row remains.
+    client.closeSession(KEY);
+    gateway.handlers["chat.history"] = () => ({
+      messages: [thinkingRow("segment-2", 41)],
+      inFlightRun: { runId: "r" },
+      hasMore: true,
+    });
+    client.openSession(KEY);
+    await until(() => transcript()?.status === "ready" && transcript().runs.length === 1);
+    const reopened = ids(transcript());
+    expect(reopened).toEqual(["reasoning:r:ha41.0"]);
+    for (const id of reopened) expect(live).not.toContain(id);
+    note();
+    // The next segment takes an id never used in this task.
+    gateway.emit("agent", agentEvent("r", (seq += 1), "lifecycle", { phase: "model" }));
+    gateway.emit("agent", agentEvent("r", seq + 1, "thinking", { text: "segment-3" }));
+    await until(() => transcript().runs[0]!.steps.length === 2);
+    const next = transcript().runs[0]!.steps.at(-1)!.id;
+    expect(seen.has(next)).toBe(false);
+    expect(client.stepRaw(KEY, next)!.call).toMatchObject({ data: { text: "segment-3" } });
+    // A resync of this window keeps them too.
+    const after = ids(transcript());
+    const reads = gateway.calls("chat.history").length;
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => gateway.calls("chat.history").length === reads + 1);
+    await until(() => transcript().status === "ready");
+    expect(ids(transcript())).toEqual(after);
+    client.stop();
   });
 });
 
-/** Everything a view shows of a task that the gateway's events and its history both establish. */
-function view(activity: TaskActivity, table: RawTable) {
-  return {
-    runs: activity.runs.map((run) => ({
-      id: run.id,
-      state: run.state,
-      outcomeKnown: run.outcomeKnown,
-      omittedSteps: run.omittedSteps,
-      nextReasoning: run.nextReasoning,
-      pendingCards: run.pendingCards.map((card) => [card.id, card.kind]),
-      steps: run.steps.map((step) => ({
-        id: step.id,
-        kind: step.kind,
-        status: step.status,
-        title: step.title,
-        toolName: step.toolName,
-        toolCallId: step.toolCallId,
-        argsText: step.argsText,
-        output: step.kind === "reasoning" ? step.output : null,
-        result: step.result,
-        error: step.error,
-        approvalId: step.approvalId,
-        bodyOmitted: step.bodyOmitted,
-        correction: step.correction,
-        rawAvailable: table.get(KEY, step.id) !== null,
-      })),
-    })),
-    questions: activity.questions.map((question) => [question.id, question.status, question.runId]),
-    approvals: activity.approvals.map((approval) => [
-      approval.id,
-      approval.status,
-      approval.stepId,
-      approval.runEnded,
-    ]),
-  };
-}
-
-describe("live, rebuilt and resynced twice agree field by field (A6, ruling 3)", () => {
+describe("live, fresh rebuild and two resyncs agree on what is promised (A6, ruling 3)", () => {
   const approval = parseExecApproval({
     id: "ap-1",
     request: {
@@ -215,24 +303,27 @@ describe("live, rebuilt and resynced twice agree field by field (A6, ruling 3)",
     expiresAtMs: 9_000_000_000_000,
   })!;
   const question = questionRecord("ask_1", "r");
+  const prefix = "q".repeat(16_000);
   const args = (id: string) => ({ path: id });
-  const live = [
+  const toolResult = (id: string) => ({
+    phase: "result",
+    name: "ls",
+    toolCallId: id,
+    isError: false,
+    result: { content: [{ type: "text", text: "ok" }], details: {} },
+  });
+  const liveEvents = [
     agentEvent("r", 1, "lifecycle", { phase: "start" }),
     thinking(2, "first"),
     agentEvent("r", 3, "tool", { phase: "start", name: "ls", toolCallId: "c1", args: args("c1") }),
-    agentEvent("r", 4, "tool", {
-      phase: "result",
-      name: "ls",
-      toolCallId: "c1",
-      isError: false,
-      result: { content: [{ type: "text", text: "ok" }], details: {} },
-    }),
+    agentEvent("r", 4, "tool", toolResult("c1")),
     agentEvent("r", 5, "lifecycle", { phase: "model" }),
-    thinking(6, "second"),
-    agentEvent("r", 7, "tool", { phase: "start", name: "rm", toolCallId: "c2", args: args("c2") }),
-    agentEvent("r", 8, "lifecycle", { phase: "model" }),
-    // A restarted reasoning segment while the call waits on its approval.
-    thinking(9, "third"),
+    // A long segment, then a restart that shares its displayed prefix.
+    thinking(6, `${prefix}second`),
+    thinking(7, `${prefix}restart`),
+    agentEvent("r", 8, "tool", { phase: "start", name: "rm", toolCallId: "c2", args: args("c2") }),
+    agentEvent("r", 9, "lifecycle", { phase: "model" }),
+    thinking(10, "fourth"),
   ];
   const rows = [
     { role: "user", content: "Clean up", __openclaw: { id: "u0", seq: 0 } },
@@ -254,74 +345,131 @@ describe("live, rebuilt and resynced twice agree field by field (A6, ruling 3)",
     {
       role: "assistant",
       content: [
-        { type: "thinking", thinking: "second" },
+        { type: "thinking", thinking: `${prefix}second` },
+        { type: "thinking", thinking: `${prefix}restart` },
         { type: "toolCall", id: "c2", name: "rm", arguments: args("c2") },
       ],
       __openclaw: { id: "a2", seq: 3, runId: "r" },
     },
-    {
-      role: "assistant",
-      content: [{ type: "thinking", thinking: "third" }],
-      __openclaw: { id: "a3", seq: 4, runId: "r" },
-    },
+    thinkingRow("fourth", 4),
   ];
-  // The snapshot repeats the tool events, as the gateway's progress snapshot does.
-  const snapshot = { runId: "r", events: live.filter((event) => event.stream === "tool") };
-
+  const snapshot = { runId: "r", events: liveEvents.filter((event) => event.stream === "tool") };
   const withCards = (activity: TaskActivity, table: RawTable) =>
     normalizeApprovals(
       applyApprovalRequested(applyQuestionRequested(activity, question, ctx(table)), approval),
     );
-
-  function liveState() {
-    const table = new RawTable();
-    return { table, activity: withCards(feed(emptyActivity, live, table), table) };
-  }
-  function rebuilt() {
-    const table = new RawTable();
-    const runs = runsFromHistory(rows, snapshot, ctx(table));
-    return { table, activity: withCards({ ...emptyActivity, runs }, table) };
-  }
-  function resync(activity: TaskActivity, table: RawTable) {
-    const scratch = new RawTable();
-    const merge = mergeHistoryRuns(
-      activity.runs,
-      runsFromHistory(rows, snapshot, ctx(scratch)),
-      ctx(table),
-    );
-    for (const stepId of merge.fromHistory) {
-      const payload = scratch.get(KEY, stepId);
-      if (payload) table.set(KEY, stepId, payload);
-    }
-    return retainActivity(normalizeApprovals({ ...activity, runs: merge.runs }));
-  }
-
-  it("while reasoning still streams", () => {
-    const a = liveState();
-    const b = rebuilt();
-    const once = resync(a.activity, a.table);
-    const twice = resync(once, a.table);
-    const rebuiltOnce = resync(b.activity, b.table);
-    expect(view(b.activity, b.table)).toEqual(view(a.activity, a.table));
-    expect(view(once, a.table)).toEqual(view(a.activity, a.table));
-    expect(view(twice, a.table)).toEqual(view(once, a.table));
-    expect(view(rebuiltOnce, b.table)).toEqual(view(b.activity, b.table));
-    expect(view(a.activity, a.table).runs[0]!.steps.map((step) => [step.id, step.status])).toEqual([
-      ["reasoning:r:0", "done"],
-      ["tool:c1", "done"],
-      ["reasoning:r:1", "done"],
-      ["tool:c2", "waiting"],
-      ["reasoning:r:2", "running"],
-    ]);
-    // Events delivered again after the resync change nothing.
-    expect(view(feed(twice, live, a.table), a.table)).toEqual(view(twice, a.table));
-    // The next frame continues the streaming segment in both.
-    const nextLive = feed(twice, [thinking(10, "third, more")], a.table);
-    const nextRebuilt = feed(rebuiltOnce, [thinking(10, "third, more")], b.table);
-    expect(view(nextRebuilt, b.table)).toEqual(view(nextLive, a.table));
+  const cards = (activity: TaskActivity) => ({
+    questions: activity.questions.map((each) => [each.id, each.status, each.runId]),
+    approvals: activity.approvals.map((each) => [each.id, each.status, each.stepId]),
   });
 
-  it("after retention dropped the oldest steps", () => {
+  it("while reasoning still streams, and after the next frame", () => {
+    let n = 0;
+    const allocator = { next: () => n++ };
+    const liveTable = new RawTable();
+    const live = withCards(feed(emptyActivity, liveEvents, liveTable, allocator), liveTable);
+    const freshTable = new RawTable();
+    const fresh = withCards(
+      { ...emptyActivity, runs: runsFromHistory(rows, snapshot, ctx(freshTable)) },
+      freshTable,
+    );
+    const liveOnce = resync(live, rows, snapshot, liveTable);
+    const liveTwice = resync(liveOnce, rows, snapshot, liveTable);
+    const freshOnce = resync(fresh, rows, snapshot, freshTable);
+    const freshTwice = resync(freshOnce, rows, snapshot, freshTable);
+    // The same steps, in order, with the same established fields and raw contents.
+    for (const [activity, table] of [
+      [fresh, freshTable],
+      [liveOnce, liveTable],
+      [liveTwice, liveTable],
+      [freshOnce, freshTable],
+      [freshTwice, freshTable],
+    ] as const) {
+      expect(facts(activity, table)).toEqual(facts(live, liveTable));
+      expect(cards(activity)).toEqual(cards(live));
+    }
+    expect(live.runs[0]!.steps.map((step) => [step.kind, step.status])).toEqual([
+      ["reasoning", "done"],
+      ["tool", "done"],
+      ["reasoning", "done"],
+      ["reasoning", "done"],
+      ["tool", "waiting"],
+      ["reasoning", "running"],
+    ]);
+    // Ids are stable within a session.
+    expect(ids(liveTwice)).toEqual(ids(live));
+    expect(ids(freshTwice)).toEqual(ids(fresh));
+    // The next frame continues the streaming segment in both sessions alike.
+    const nextLive = feed(liveTwice, [thinking(11, "fourth, more")], liveTable, allocator);
+    const nextFresh = feed(freshTwice, [thinking(11, "fourth, more")], freshTable, allocator);
+    expect(facts(nextFresh, freshTable)).toEqual(facts(nextLive, liveTable));
+    expect(ids(nextLive)).toEqual(ids(live));
+  });
+
+  it("once the run has finished, history's copy settles both sessions alike, ids kept within each", () => {
+    const finishedRows = [
+      ...rows.slice(0, -1),
+      {
+        role: "toolResult",
+        toolCallId: "c2",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        __openclaw: { id: "t2", seq: 4, runId: "r" },
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "fourth" },
+          { type: "text", text: "Done" },
+        ],
+        stopReason: "stop",
+        __openclaw: { id: "a4", seq: 5, runId: "r" },
+      },
+    ];
+    let n = 0;
+    const allocator = { next: () => n++ };
+    const liveTable = new RawTable();
+    const live = feed(
+      emptyActivity,
+      [
+        ...liveEvents,
+        agentEvent("r", 11, "tool", { ...toolResult("c2"), name: "rm" }),
+        agentEvent("r", 12, "assistant", { text: "Done" }),
+        agentEvent("r", 13, "lifecycle", { phase: "end" }),
+      ],
+      liveTable,
+      allocator,
+    );
+    const liveIds = ids(live);
+    const once = resync(live, finishedRows, null, liveTable);
+    const twice = resync(once, finishedRows, null, liveTable);
+    const freshTable = new RawTable();
+    const fresh = {
+      ...emptyActivity,
+      runs: runsFromHistory(finishedRows, null, ctx(freshTable)),
+    };
+    const freshTwice = resync(
+      resync(fresh, finishedRows, null, freshTable),
+      finishedRows,
+      null,
+      freshTable,
+    );
+    expect(ids(once)).toEqual(liveIds);
+    expect(ids(twice)).toEqual(liveIds);
+    expect(ids(freshTwice)).toEqual(ids(fresh));
+    const settled = (activity: TaskActivity, table: RawTable) =>
+      facts(activity, table).map((run) => ({
+        ...run,
+        steps: run.steps.map((step) => ({
+          ...step,
+          raw: step.raw && { ...step.raw, thinking: null },
+        })),
+      }));
+    expect(settled(twice, liveTable)).toEqual(settled(freshTwice, freshTable));
+    expect(twice.runs[0]).toMatchObject({ state: "completed", outcomeKnown: true });
+  });
+
+  it("after retention dropped the oldest steps, a resync drops the same ones again", () => {
     const many = [
       agentEvent("r", 1, "lifecycle", { phase: "start" }),
       ...Array.from({ length: MAX_STEPS_PER_RUN + 4 }, (_, i) => [
@@ -331,13 +479,7 @@ describe("live, rebuilt and resynced twice agree field by field (A6, ruling 3)",
           toolCallId: `m${i}`,
           args: args(`m${i}`),
         }),
-        agentEvent("r", 3 + i * 2, "tool", {
-          phase: "result",
-          name: "ls",
-          toolCallId: `m${i}`,
-          isError: false,
-          result: { content: [{ type: "text", text: "ok" }], details: {} },
-        }),
+        agentEvent("r", 3 + i * 2, "tool", toolResult(`m${i}`)),
       ]).flat(),
     ];
     const manyRows = [
@@ -359,28 +501,16 @@ describe("live, rebuilt and resynced twice agree field by field (A6, ruling 3)",
     ];
     const table = new RawTable();
     const streamed = feed(emptyActivity, many, table);
+    const once = resync(streamed, manyRows, { runId: "r" }, table);
+    const twice = resync(once, manyRows, { runId: "r" }, table);
     const fresh = retainActivity({
       ...emptyActivity,
       runs: runsFromHistory(manyRows, { runId: "r" }, ctx(new RawTable())),
     });
-    const merge = (activity: TaskActivity) =>
-      retainActivity({
-        ...activity,
-        runs: mergeHistoryRuns(
-          activity.runs,
-          runsFromHistory(manyRows, { runId: "r" }, ctx(new RawTable())),
-          ctx(table),
-        ).runs,
-      });
-    const once = merge(streamed);
-    const twice = merge(once);
-    const ids = (activity: TaskActivity) => activity.runs[0]!.steps.map((step) => step.id);
     expect(streamed.runs[0]!.omittedSteps).toBe(4);
-    expect(ids(once)).toEqual(ids(streamed));
-    expect(once.runs[0]!.omittedSteps).toBe(4);
-    expect(ids(twice)).toEqual(ids(once));
-    expect(twice.runs[0]!.omittedSteps).toBe(4);
-    expect(ids(fresh)).toEqual(ids(streamed));
-    expect(fresh.runs[0]!.omittedSteps).toBe(4);
+    for (const each of [once, twice, fresh]) {
+      expect(ids(each)).toEqual(ids(streamed));
+      expect(each.runs[0]!.omittedSteps).toBe(4);
+    }
   });
 });

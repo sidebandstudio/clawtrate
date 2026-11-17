@@ -9,7 +9,7 @@ import {
 } from "./attachments.ts";
 import { MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { StepRaw } from "./runs.ts";
-import type { ClawtrateState } from "./types.ts";
+import type { ClawtrateState, TranscriptItem } from "./types.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -41,16 +41,29 @@ export type BridgeCommand =
   | { type: "stopRun"; key: string; runId: string }
   | { type: "answerQuestion"; key: string; questionId: string; answers: Record<string, string[]> }
   | { type: "dismissQuestion"; key: string; questionId: string }
-  /** Allow once, deny, or a standing allow; `expiresInDays` only with `allow-always`. */
+  /**
+   * Allow once, deny, or a standing allow; `expiresInDays` only with
+   * `allow-always`. An approval whose text was cut is allowed only with the
+   * `shownDigest` `readApprovalText` returned with its whole text.
+   */
   | {
       type: "resolveApproval";
       key: string;
       approvalId: string;
       decision: "allow-once" | "allow-always" | "deny";
       expiresInDays: number | null;
+      shownDigest?: string | null;
     }
+  /** The whole text an approval asks about, read again and not kept. */
+  | { type: "readApprovalText"; key: string; approvalId: string }
+  /** A history item whole, read again and not kept. */
+  | { type: "readHistoryItem"; key: string; itemId: string }
   /** The exact raw call and result behind a step card, however large. */
-  | { type: "readStepRaw"; key: string; stepId: string };
+  | { type: "readStepRaw"; key: string; stepId: string }
+  /** Ask again, with its own key, for a task creation the gateway refused. */
+  | { type: "retryCreation"; creationId: string }
+  /** Forget a task creation that failed, settled or cannot be established. */
+  | { type: "dismissCreation"; creationId: string };
 
 /** What each command answers with. */
 export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
@@ -59,7 +72,13 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
     ? { key: string }
     : C extends { type: "readStepRaw" }
       ? StepRaw | null
-      : void;
+      : C extends { type: "readApprovalText" }
+        ? { text: Record<string, string | string[] | null>; digest: string }
+        : C extends { type: "readHistoryItem" }
+          ? TranscriptItem | null
+          : C extends { type: "retryCreation" }
+            ? { key: string }
+            : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -101,7 +120,7 @@ const SESSION_KEY_PATTERN = /^[\w:.@+-]{1,512}$/;
  */
 export const MAX_OPAQUE_ID_CHARS = 512;
 /** Tasks one viewer may hold open at once. */
-export const MAX_VIEWER_OPEN_TASKS = 32;
+export const MAX_VIEWER_OPEN_TASKS = 4;
 /** Commands one viewer may have in flight at once. */
 export const MAX_VIEWER_PENDING_COMMANDS = 16;
 const BOT_ID_PATTERN = /^[\w.-]{1,128}$/;
@@ -262,14 +281,38 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       ) {
         throw new Error("invalid duration");
       }
+      const shown = command.shownDigest;
+      if (
+        shown !== undefined &&
+        shown !== null &&
+        (typeof shown !== "string" || shown.length > 128)
+      ) {
+        throw new Error("invalid digest");
+      }
       return {
         type: "resolveApproval",
         key: sessionKey(command.key),
         approvalId: id(command.approvalId, "approval id"),
         decision,
         expiresInDays: days ?? null,
+        shownDigest: shown ?? null,
       };
     }
+    case "readApprovalText":
+      return {
+        type: "readApprovalText",
+        key: sessionKey(command.key),
+        approvalId: id(command.approvalId, "approval id"),
+      };
+    case "readHistoryItem":
+      return {
+        type: "readHistoryItem",
+        key: sessionKey(command.key),
+        itemId: id(command.itemId, "item id"),
+      };
+    case "retryCreation":
+    case "dismissCreation":
+      return { type: command.type, creationId: id(command.creationId, "creation id") };
     case "readStepRaw":
       return {
         type: "readStepRaw",
@@ -299,6 +342,8 @@ export type BridgePolicy = {
  */
 export type BridgeSession = {
   apply<C extends BridgeCommand>(command: C): Promise<BridgeResultFor<C>>;
+  /** The tasks this viewer has open: what its snapshots carry. */
+  openTasks(): ReadonlySet<string>;
   dispose(): void;
 };
 
@@ -409,7 +454,29 @@ export function createBridgeSession(
         return client.resolveApproval(mine(command.key), command.approvalId, command.decision, {
           expiresInDays: command.expiresInDays,
           owner,
+          shownDigest: command.shownDigest ?? null,
         });
+      case "readApprovalText":
+        return client.readApprovalText(mine(command.key), command.approvalId);
+      case "readHistoryItem":
+        return client.readHistoryItem(mine(command.key), command.itemId);
+      case "retryCreation": {
+        if (open.size + creating >= MAX_VIEWER_OPEN_TASKS) {
+          throw new Error(`A view can hold ${MAX_VIEWER_OPEN_TASKS} tasks open at once.`);
+        }
+        creating += 1;
+        let key: string;
+        try {
+          key = await client.retryCreation(command.creationId, { owner });
+        } finally {
+          creating -= 1;
+        }
+        if (disposed || open.has(key)) client.closeSession(key);
+        else open.add(key);
+        return { key };
+      }
+      case "dismissCreation":
+        return client.dismissCreation(command.creationId);
       case "readStepRaw":
         return client.stepRaw(mine(command.key), command.stepId);
     }
@@ -426,6 +493,7 @@ export function createBridgeSession(
         inFlight -= 1;
       }) as Promise<BridgeResultFor<C>>;
     },
+    openTasks: () => open,
     dispose() {
       if (disposed) return;
       disposed = true;

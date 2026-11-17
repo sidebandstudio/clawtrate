@@ -41,6 +41,8 @@ export type InterSessionMessage = {
   senderLabel: string | null;
   senderAgentId: string | null;
   timestamp: number | null;
+  /** Paths of fields cut to their bound. */
+  cut?: string[];
 };
 
 export type BotMessageState =

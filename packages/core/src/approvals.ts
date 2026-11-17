@@ -3,6 +3,7 @@
 // An approval that names its tool call is that step's own waiting status; one
 // that names no step is its own card. Everything here needs `operator.approvals`.
 
+import { digestKey, digestOf } from "./bounds.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import {
   findRun,
@@ -137,11 +138,16 @@ export type ApprovalCard = {
   /** The approval's `scope` (message send, payment, external post, standing grant), as sent. */
   scope: unknown;
   /**
-   * The approval's record and analysis were not kept because its task or the
-   * host reached its retention budget. What identifies it is kept, and it can
-   * be denied; allowing it waits until it is read again in full.
+   * A digest of the whole text the reviewer decides on (exec: command, argv
+   * and directory; plugin: title, description and detail; system-agent:
+   * title, description and command), taken before anything was cut to its
+   * bound. When any of that text was cut (`cut`), the card can only be
+   * denied until the full text has been read (`readApprovalText`) and the
+   * allow names this digest.
    */
-  detailOmitted: boolean;
+  decisionDigest: string;
+  /** Paths of fields cut to their bound. */
+  cut?: string[];
   /** A resolution from this client is on its way, or the last one failed. */
   submitting: boolean;
   error: string | null;
@@ -239,7 +245,7 @@ function blank(id: string, kind: ApprovalKind, raw: unknown): ApprovalCard {
     plugin: null,
     systemAgent: null,
     scope: null,
-    detailOmitted: false,
+    decisionDigest: "",
     submitting: false,
     error: null,
     raw,
@@ -259,7 +265,7 @@ export function parseExecApproval(value: unknown): ApprovalCard | null {
   const argv = Array.isArray(request.commandArgv)
     ? request.commandArgv.filter((part): part is string => typeof part === "string")
     : null;
-  return {
+  return withDecisionDigest({
     ...blank(id, "exec", value),
     sessionKey: str(request.sessionKey),
     agentId: str(request.agentId),
@@ -284,7 +290,7 @@ export function parseExecApproval(value: unknown): ApprovalCard | null {
       runsOn: str(request.nodeId) || str(request.host) === "node" ? "node" : "gateway",
       systemRunPlan: request.systemRunPlan ?? null,
     },
-  };
+  });
 }
 
 /**
@@ -297,7 +303,7 @@ export function parsePluginApproval(value: unknown): ApprovalCard | null {
   const id = str(record?.id);
   const request = asRecord(record?.request);
   if (!record || !id || !request) return null;
-  return {
+  return withDecisionDigest({
     ...blank(id, "plugin", value),
     sessionKey: str(request.sessionKey),
     agentId: str(request.agentId),
@@ -317,7 +323,7 @@ export function parsePluginApproval(value: unknown): ApprovalCard | null {
       pluginId: str(request.pluginId),
       toolName: str(request.toolName),
     },
-  };
+  });
 }
 
 /**
@@ -333,7 +339,7 @@ export function parseSystemAgentApproval(value: unknown): ApprovalCard | null {
   const request = asRecord(record?.request);
   if (!record || !id || !request) return null;
   if (record.approvalKind !== undefined && record.approvalKind !== "system-agent") return null;
-  return {
+  return withDecisionDigest({
     ...blank(id, "system-agent", value),
     sessionKey: str(request.sessionKey),
     agentId: str(request.agentId),
@@ -347,7 +353,7 @@ export function parseSystemAgentApproval(value: unknown): ApprovalCard | null {
       command: str(request.command),
       proposalHash: str(request.proposalHash),
     },
-  };
+  });
 }
 
 function resolverOf(value: unknown): ApprovalResolver | null {
@@ -436,7 +442,7 @@ export function parseApprovalSnapshot(
     card.resolvedAt = num(record.resolvedAtMs);
     card.resolver = resolverOf(record.resolver);
   }
-  return card;
+  return withDecisionDigest(card);
 }
 
 /** The outcome an `*.approval.resolved` event or a resolve call reports. */
@@ -582,6 +588,37 @@ export function applyApprovalRequested(activity: TaskActivity, card: ApprovalCar
     ? activity.approvals.map((each) => (each.id === card.id ? merged : each))
     : [...activity.approvals, merged];
   return normalizeApprovals({ ...activity, approvals });
+}
+
+/**
+ * The whole text a reviewer decides on, as the request gives it: what an exec
+ * approval will run and where, what a plugin approval describes, what change
+ * a system-agent approval makes. Read in full by `readApprovalText`.
+ */
+export function decisionText(card: ApprovalCard): Record<string, string | string[] | null> {
+  if (card.exec) {
+    return { command: card.exec.command, commandArgv: card.exec.commandArgv, cwd: card.exec.cwd };
+  }
+  if (card.plugin) {
+    return {
+      title: card.plugin.title,
+      description: card.plugin.description,
+      detail: card.plugin.detail,
+    };
+  }
+  if (card.systemAgent) {
+    return {
+      title: card.systemAgent.title,
+      description: card.systemAgent.description,
+      command: card.systemAgent.command,
+    };
+  }
+  return {};
+}
+
+/** A card with the digest of its whole decision text, taken before anything is cut. */
+function withDecisionDigest(card: ApprovalCard): ApprovalCard {
+  return { ...card, decisionDigest: digestKey(digestOf(JSON.stringify(decisionText(card)))) };
 }
 
 /** The fields an earlier, fuller record had set. */

@@ -17,13 +17,16 @@ export class GatewayError extends Error {
   }
 }
 
+/** When this fake gateway "process" started; its hellos report their uptime from it. */
+const fakeStartedAt = Date.now();
+
 export function helloOk(scopes: string[] = ["operator.read"], deviceToken?: string) {
   return {
     type: "hello-ok",
     protocol: 4,
     server: { version: "test", connId: "conn-1" },
     features: { methods: [], events: [] },
-    snapshot: {},
+    snapshot: { uptimeMs: Date.now() - fakeStartedAt },
     auth: { role: "operator", scopes, ...(deviceToken ? { deviceToken } : {}) },
     policy: { maxPayload: 26_214_400, maxBufferedBytes: 52_428_800, tickIntervalMs: 15_000 },
   };

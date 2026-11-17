@@ -124,8 +124,7 @@ export async function startHostRuntime(options: {
     // Files viewers add before sending, held in this process until a message takes them.
     policy: {
       devGateway: options.devGateway,
-      // Waiting files count in the same host budget as everything the client keeps.
-      attachments: new AttachmentStore({ newId: randomUUID, ledger: client.ledger }),
+      attachments: new AttachmentStore({ newId: randomUUID }),
     },
   };
 }

@@ -7,6 +7,7 @@ import {
   applyAgentEvent,
   emptyActivity,
   MAX_RAW_BYTES,
+  MAX_RAW_ENTRY_CHARS,
   MAX_RUNS_PER_TASK,
   MAX_SETTLED_APPROVALS,
   mergeHistoryRuns,
@@ -264,14 +265,31 @@ describe("bounded retention", () => {
       call: "y".repeat(n),
       result: null,
     });
-    const size = JSON.stringify(entry(0)).length;
-    table.set(KEY, "a", entry(MAX_RAW_BYTES / 2 - size));
-    table.set(KEY, "b", entry(MAX_RAW_BYTES / 2 - size));
-    expect(table.get(KEY, "a")).not.toBeNull();
-    table.set(KEY, "c", entry(1));
-    expect(table.get(KEY, "a")).toBeNull();
-    expect(table.get(KEY, "b")).not.toBeNull();
-    expect(table.get(KEY, "c")).not.toBeNull();
+    const overhead = JSON.stringify(entry(0)).length;
+    const full = entry(MAX_RAW_ENTRY_CHARS - overhead);
+    const count = MAX_RAW_BYTES / MAX_RAW_ENTRY_CHARS;
+    for (let i = 0; i < count; i += 1) table.set(KEY, `s${i}`, full);
+    expect(table.total).toBe(MAX_RAW_BYTES);
+    expect(table.get(KEY, "s0")).not.toBeNull();
+    table.set(KEY, "one-more", entry(1));
+    expect(table.get(KEY, "s0")).toBeNull();
+    expect(table.get(KEY, "s1")).not.toBeNull();
+    expect(table.get(KEY, "one-more")).not.toBeNull();
+  });
+
+  it(`keeps a raw payload of MAX_RAW_ENTRY_CHARS (${MAX_RAW_ENTRY_CHARS}) and not one past it`, () => {
+    const table = new RawTable();
+    const entry = (n: number) => ({
+      source: "live" as const,
+      runId: "r",
+      call: "y".repeat(n),
+      result: null,
+    });
+    const overhead = JSON.stringify(entry(0)).length;
+    table.set(KEY, "at", entry(MAX_RAW_ENTRY_CHARS - overhead));
+    table.set(KEY, "past", entry(MAX_RAW_ENTRY_CHARS - overhead + 1));
+    expect(table.get(KEY, "at")).not.toBeNull();
+    expect(table.get(KEY, "past")).toBeNull();
   });
 
   it("keeps no stream baseline for tasks nobody has open", async () => {

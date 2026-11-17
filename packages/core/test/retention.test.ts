@@ -16,7 +16,6 @@ import {
   type OutgoingAttachment,
 } from "../src/client.ts";
 import {
-  activitySize,
   applyAgentEvent,
   emptyActivity,
   MAX_STEPS_PER_RUN,
@@ -148,15 +147,20 @@ describe("operations a viewer leaves waiting for access (A5, B2)", () => {
     gateway.handlers["sessions.create"] = () => ({ key: "agent:otto:new", runId: "r" });
     for (let cycle = 0; cycle < 5; cycle += 1) {
       const viewer = createBridgeSession(client);
-      const creations = Array.from({ length: 16 }, () =>
+      // As many creations as the viewer may hold.
+      const creations = Array.from({ length: MAX_VIEWER_OPEN_TASKS }, (_, i) =>
         viewer
-          .apply({ type: "createTask", botId: "otto", text: "New", label: null })
+          .apply({ type: "createTask", botId: "otto", text: `New ${i}`, label: null })
           .catch((error: Error) => error.message),
       );
-      await until(() => client.pendingAccessWaiters === 16);
+      await until(() => client.pendingAccessWaiters === MAX_VIEWER_OPEN_TASKS);
       viewer.dispose();
       expect(client.pendingAccessWaiters).toBe(0);
-      expect(await Promise.all(creations)).toEqual(Array(16).fill("The request was withdrawn."));
+      expect(await Promise.all(creations)).toEqual(
+        Array(MAX_VIEWER_OPEN_TASKS).fill("The request was withdrawn."),
+      );
+      // Nothing was asked of the gateway, so no creation is kept.
+      expect(client.state.creations).toEqual([]);
     }
     await sleep(20);
     expect(gateway.calls("sessions.create")).toEqual([]);
@@ -292,17 +296,5 @@ describe("steps and activity a task keeps (A6)", () => {
     expect(past.runs[0]!.omittedSteps).toBe(1);
     expect(past.runs[0]!.steps[0]!.id).toBe("tool:c2");
     expect(retainActivity(past)).toBe(past);
-  });
-
-  it("keeps a task within its budget, dropping the oldest finished steps first and counting them", () => {
-    const activity = runWithTools(40, "x".repeat(10_000));
-    const size = activitySize(activity);
-    expect(retainActivity(activity, size)).toBe(activity);
-    const trimmed = retainActivity(activity, size - 1);
-    expect(trimmed.runs[0]!.steps).toHaveLength(39);
-    expect(trimmed.runs[0]!.omittedSteps).toBe(1);
-    expect(trimmed.runs[0]!.steps[0]!.id).toBe("tool:c2");
-    expect(activitySize(trimmed)).toBeLessThanOrEqual(size - 1);
-    expect(retainActivity(trimmed, size - 1)).toBe(trimmed);
   });
 });

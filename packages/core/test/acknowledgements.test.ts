@@ -69,15 +69,17 @@ describe("an acknowledgement without a run id", () => {
 });
 
 describe(`a send nobody answers fails at the request deadline (REQUEST_TIMEOUT_MS = ${REQUEST_TIMEOUT_MS})`, () => {
-  it("is failed with its outcome unknown, and goes out once more with the same key on retry", async () => {
+  it("is unknown, then unconfirmed once history lacks it, and goes out once more with the same key only on retry", async () => {
     const gateway = grantingGateway();
     let answer = false;
     gateway.handlers["chat.send"] = () => (answer ? { runId: "run-9" } : new Promise(() => {}));
     const { client, transcript } = await openTask({ gateway, client: { requestTimeoutMs: 150 } });
     const id = client.sendMessage(KEY, "anyone there?");
-    await until(() => transcript().outbox[0]?.status === "failed");
+    await until(() => transcript().outbox[0]?.status === "checking");
     // Not refused by the gateway, so no "couldn't start" run: the optimistic run is gone.
     expect(transcript().runs).toEqual([]);
+    await until(() => transcript().outbox[0]?.status === "unconfirmed");
+    expect(gateway.calls("chat.send")).toHaveLength(1);
     answer = true;
     client.retryMessage(KEY, id);
     await until(() => transcript().outbox[0]?.status === "sent");

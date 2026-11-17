@@ -3,8 +3,6 @@
 
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun } from "./cards.ts";
-import type { HostRetention, TaskRetention } from "./retention.ts";
-import { MAX_HOST_RETAINED } from "./retention.ts";
 import type { TaskActivity } from "./runs.ts";
 
 export type ConnectionStatus =
@@ -91,6 +89,8 @@ export type Bot = {
   theme: string | null;
   model: string | null;
   isDefault: boolean;
+  /** Paths of fields cut to their bound (an avatar too large to keep is dropped). */
+  cut?: string[];
 };
 
 export type TaskStatus = "running" | "done" | "failed" | "idle";
@@ -104,6 +104,8 @@ export type Task = {
   updatedAt: number | null;
   status: TaskStatus;
   unread: boolean;
+  /** Paths of fields cut to their bound. */
+  cut?: string[];
 };
 
 export type ToolResult = { isError: boolean; text: string };
@@ -127,6 +129,8 @@ export type TranscriptItem = {
   timestamp: number | null;
   blocks: TranscriptBlock[];
   model: string | null;
+  /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
+  cut?: string[];
 };
 
 /** One open task: its durable transcript plus its live runs and outgoing messages. */
@@ -145,8 +149,8 @@ export type Transcript = TaskActivity & {
   linkedRuns: Record<string, LinkedRun>;
   /** Messages from other sessions in this task's history (inter-session provenance). */
   interSession: InterSessionMessage[];
-  /** What this task keeps against its budget, and whether anything was refused or reduced. */
-  retention: TaskRetention;
+  /** Paths of fields cut to their bound that no item beneath records itself. */
+  cut?: string[];
 };
 
 /** Loading bots and tasks after each connect, separate from the socket's own state. */
@@ -173,8 +177,49 @@ export type ClawtrateState = {
   unroutedApprovals: ApprovalCard[];
   /** Pending approvals not kept because `unroutedApprovals` was full; a list read brings them back. */
   unroutedApprovalsOmitted: number;
-  /** What the host keeps against its budget. */
-  retention: HostRetention;
+  /** Task creations this client has asked for and not yet seen settled (`TaskCreation`). */
+  creations: TaskCreation[];
+  /**
+   * A secondary alarm: roughly what the state takes, against the arithmetic
+   * bound of `state-bounds.ts`. The bound holds by construction; `near` only
+   * says it is being approached.
+   */
+  retention: { estimated: number; bound: number; near: boolean };
+  /** Paths of fields cut to their bound that nothing beneath records itself. */
+  cut?: string[];
+};
+
+/**
+ * A task creation the user asked for. Kept from before `sessions.create` is
+ * sent until the gateway's answer is known, so a request that times out is
+ * neither lost nor sent twice: it is checked again with the same idempotency
+ * key, which the gateway answers with the original outcome.
+ */
+export type TaskCreation = {
+  /** Also the `idempotencyKey`. */
+  id: string;
+  botId: string;
+  text: string;
+  label: string | null;
+  /**
+   * `creating` while the request is out; `checking` when the answer did not
+   * come and the gateway is being asked again with the same key; `failed`
+   * when the gateway refused it (retry or dismiss); `unknown` when the
+   * gateway's record of the key may have expired, so nothing establishes
+   * whether it happened (dismiss only); `created` once the task exists.
+   */
+  status: "creating" | "checking" | "failed" | "unknown" | "created";
+  /** When it was last asked of the gateway; its key is asked again only within `CREATION_KEY_WINDOW_MS` of it. */
+  createdAt: number;
+  error: string | null;
+  /** The new task, once created. */
+  key: string | null;
+  /**
+   * When the gateway process the request went to started, from its hello
+   * (`snapshot.uptimeMs`); null if it did not say. The key is asked again only
+   * of that same process: a restarted gateway has forgotten it.
+   */
+  gatewayStartedAt: number | null;
 };
 
 export const initialScopeUpgrade: ScopeUpgradeState = {
@@ -218,5 +263,6 @@ export const initialState: ClawtrateState = {
   transcripts: {},
   unroutedApprovals: [],
   unroutedApprovalsOmitted: 0,
-  retention: { used: 0, limit: MAX_HOST_RETAINED, full: false },
+  creations: [],
+  retention: { estimated: 0, bound: 0, near: false },
 };

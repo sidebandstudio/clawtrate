@@ -5,10 +5,10 @@
 import {
   AttachmentTooLargeError,
   batchSnapshots,
-  HostFullError,
-  type HostLedger,
+  type HostInfo,
   type AttachmentReservation,
   MAX_BRIDGE_FRAME_BYTES,
+  MAX_VIEWER_PENDING_COMMANDS,
   type ClawtrateState,
   createBridgeSession,
   parseBridgeCommand,
@@ -25,14 +25,30 @@ import type { HostRuntime } from "../host/runtime.ts";
 export const ACCESS_COOKIE = "clawtrate_access";
 export const ATTACHMENTS_PATH = "/attachments";
 /** Bridge sockets served at once. */
-export const MAX_WEB_VIEWERS = 32;
+export const MAX_WEB_VIEWERS = 8;
 /** Longest command id a viewer may use; it is echoed back in the result. */
 export const MAX_COMMAND_ID_CHARS = 64;
-/** While a viewer's socket buffers more than this, state snapshots wait and only the latest is sent. */
-export const SNAPSHOT_SOFT_BUFFER_BYTES = 1024 * 1024;
-/** A viewer buffering more than this is too slow to keep: its socket is closed. */
-export const SNAPSHOT_HARD_BUFFER_BYTES = 16 * 1024 * 1024;
-/** How often a held-back snapshot is retried. */
+/**
+ * Viewers that may hold a written snapshot their socket has not yet accepted,
+ * at once. Each holds at most one; the rest wait, keeping only a reference to
+ * the newest state, never a copy.
+ */
+export const MAX_SNAPSHOTS_IN_FLIGHT = 2;
+/** A viewer whose socket does not accept its snapshot within this is dropped. */
+export const SNAPSHOT_DRAIN_TIMEOUT_MS = 30_000;
+/**
+ * Longest command result written to a viewer, in JSON characters. A longer
+ * one is answered with an error instead, so a full value read on demand
+ * (`readApprovalText`, `readHistoryItem`) that is longer stays unread.
+ */
+export const MAX_RESULT_CHARS = 262_144;
+/**
+ * Results a viewer may leave unaccepted: written since its socket last had
+ * nothing buffered. One more closes it. This is its command slots, so a
+ * viewer that keeps its slots busy and never reads holds at most this many.
+ */
+export const MAX_UNACCEPTED_RESULTS = MAX_VIEWER_PENDING_COMMANDS;
+/** How often a waiting snapshot, and a draining socket, are looked at again. */
 const SNAPSHOT_RETRY_MS = 50;
 /**
  * How long one upload may take from its headers to its last byte. Its room is
@@ -47,52 +63,129 @@ type ViewerSocket = {
   readonly bufferedAmount: number;
   send(data: string): void;
   close(code?: number, reason?: string): void;
+  /** Drops the connection and what is buffered on it at once (`ws` has it; a close would wait to flush). */
+  terminate?(): void;
 };
 
+/** The snapshots written to viewers' sockets and not yet accepted, shared by every viewer of one host. */
+export type SnapshotGate = { holders: Set<object>; max: number };
+
+export function createSnapshotGate(max = MAX_SNAPSHOTS_IN_FLIGHT): SnapshotGate {
+  return { holders: new Set(), max };
+}
+
 /**
- * Sending to one viewer within bounded memory. Results and the hello always go
- * out; state snapshots wait while the socket is backed up, and only the latest
- * is kept. A viewer that backs up past the hard bound is closed.
+ * Sending to one viewer within a fixed bound. A snapshot is written only once
+ * the socket has accepted the one before (`bufferedAmount` back to 0), and
+ * only while fewer than `gate.max` viewers hold one unaccepted; until then
+ * the viewer keeps a reference to the newest state, so no older snapshot is
+ * held once a newer one exists. A socket that does not accept its snapshot
+ * within `SNAPSHOT_DRAIN_TIMEOUT_MS` is dropped, with what it left buffered. A command result is at most
+ * `MAX_RESULT_CHARS`, and a socket left with more than `MAX_UNACCEPTED_RESULTS`
+ * of them unaccepted is dropped.
  */
-export function createViewerChannel(ws: ViewerSocket, ledger?: HostLedger) {
-  let latest: ClawtrateState | null = null;
+export function createViewerChannel(
+  ws: ViewerSocket,
+  gate: SnapshotGate = createSnapshotGate(),
+  view: (state: ClawtrateState) => ClawtrateState = (state) => state,
+  drainTimeoutMs = SNAPSHOT_DRAIN_TIMEOUT_MS,
+) {
+  const self = {};
+  let latest: { state: ClawtrateState; hello: HostInfo | null } | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  // What this viewer's socket buffers is part of what the host keeps.
-  const untrack = ledger?.track("viewer", () => ws.bufferedAmount) ?? (() => {});
+  let writtenAt = 0;
+  let stopped = false;
+  let unacceptedResults = 0;
+  /** A viewer that does not read is dropped with what it left buffered, not left to flush. */
   const tooSlow = () => {
-    if (ws.bufferedAmount <= SNAPSHOT_HARD_BUFFER_BYTES) return false;
-    ws.close(1013, "viewer too slow");
-    return true;
+    if (ws.terminate) ws.terminate();
+    else ws.close(1013, "viewer too slow");
   };
   const write = (message: BridgeServerMessage) => {
-    if (ws.readyState !== ws.OPEN || tooSlow()) return;
+    if (stopped || ws.readyState !== ws.OPEN) return;
     ws.send(JSON.stringify(message));
+  };
+  const sendResult = (message: BridgeServerMessage) => {
+    if (stopped || ws.readyState !== ws.OPEN || message.type !== "result") return;
+    if (ws.bufferedAmount === 0) unacceptedResults = 0;
+    if (unacceptedResults >= MAX_UNACCEPTED_RESULTS) {
+      tooSlow();
+      return;
+    }
+    let text = JSON.stringify(message);
+    if (text.length > MAX_RESULT_CHARS) {
+      text = JSON.stringify({
+        type: "result",
+        id: message.id,
+        ok: false,
+        error: "result too large",
+      });
+    }
+    unacceptedResults += 1;
+    ws.send(text);
+  };
+  const schedule = () => {
+    if (!timer && !stopped) timer = setTimeout(flush, SNAPSHOT_RETRY_MS);
   };
   const flush = () => {
     timer = null;
-    if (!latest || ws.readyState !== ws.OPEN || tooSlow()) return;
-    // Held back while the socket is backed up, or while the host is at its budget.
-    if (ws.bufferedAmount > SNAPSHOT_SOFT_BUFFER_BYTES || (ledger && !ledger.admits(0))) {
-      timer = setTimeout(flush, SNAPSHOT_RETRY_MS);
+    if (stopped || ws.readyState !== ws.OPEN) return;
+    if (gate.holders.has(self)) {
+      if (ws.bufferedAmount > 0) {
+        if (Date.now() - writtenAt > drainTimeoutMs) {
+          tooSlow();
+          return;
+        }
+        schedule();
+        return;
+      }
+      gate.holders.delete(self);
+    }
+    if (!latest) return;
+    if (ws.bufferedAmount > 0 || gate.holders.size >= gate.max) {
+      schedule();
       return;
     }
-    const state = latest;
+    const { state, hello } = latest;
     latest = null;
-    write({ type: "state", state });
+    gate.holders.add(self);
+    writtenAt = Date.now();
+    write(
+      hello
+        ? { type: "hello", info: hello, state: view(state) }
+        : { type: "state", state: view(state) },
+    );
+    schedule();
   };
   return {
-    send: write,
+    send: sendResult,
+    sendHello(info: HostInfo, state: ClawtrateState) {
+      latest = { state, hello: info };
+      flush();
+    },
     sendState(state: ClawtrateState) {
-      latest = state;
+      // A hello not yet written carries the newest state instead.
+      latest = { state, hello: latest?.hello ?? null };
       if (!timer) flush();
     },
     stop() {
+      stopped = true;
       if (timer) clearTimeout(timer);
       timer = null;
       latest = null;
-      untrack();
+      gate.holders.delete(self);
     },
   };
+}
+
+/** A viewer's snapshot: the shared state with only the tasks that viewer has open. */
+export function viewerState(state: ClawtrateState, open: ReadonlySet<string>): ClawtrateState {
+  const transcripts: ClawtrateState["transcripts"] = {};
+  for (const key of open) {
+    const transcript = state.transcripts[key];
+    if (transcript) transcripts[key] = transcript;
+  }
+  return { ...state, transcripts };
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -176,6 +269,8 @@ export type WebHostOptions = {
   accessToken: string | null;
   /** `UPLOAD_DEADLINE_MS` unless a test shortens it. */
   uploadDeadlineMs?: number;
+  /** `SNAPSHOT_DRAIN_TIMEOUT_MS` unless a test shortens it. */
+  snapshotDrainTimeoutMs?: number;
 };
 
 export function startWebHost(options: WebHostOptions) {
@@ -298,8 +393,7 @@ export function startWebHost(options: WebHostOptions) {
     try {
       reservation = store.reserve(meta, declared);
     } catch (error) {
-      const status =
-        error instanceof AttachmentTooLargeError ? 413 : error instanceof HostFullError ? 507 : 400;
+      const status = error instanceof AttachmentTooLargeError ? 413 : 400;
       return refuse(status, error instanceof Error ? error.message : String(error));
     }
     let chunks: Buffer[] = [];
@@ -358,6 +452,7 @@ export function startWebHost(options: WebHostOptions) {
   };
 
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_BRIDGE_FRAME_BYTES });
+  const gate = createSnapshotGate();
 
   const refuseUpgrade = (socket: Duplex, status: "400 Bad Request" | "401 Unauthorized") => {
     socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
@@ -387,24 +482,19 @@ export function startWebHost(options: WebHostOptions) {
       ws.close(1013, "too many viewers");
       return;
     }
-    const ledger = runtime.client.ledger as HostLedger | undefined;
-    const hello = JSON.stringify({
-      type: "hello",
-      info: runtime.info,
-      state: runtime.client.state,
-    });
-    // A new viewer's first snapshot is retention too: refused, visibly, when the host has no room for it.
-    if (ledger && !ledger.admits(hello.length)) {
-      ws.close(1013, "host is holding as much as it can");
-      return;
-    }
-    const channel = createViewerChannel(ws, ledger);
-    ws.send(hello);
+    // Each tab is its own viewer: its open transcripts are released when it goes away.
+    const session = createBridgeSession(runtime.client, runtime.policy);
+    // Its snapshots carry only the tasks it has open; they go out through the host's snapshot gate.
+    const channel = createViewerChannel(
+      ws,
+      gate,
+      (state) => viewerState(state, session.openTasks()),
+      options.snapshotDrainTimeoutMs ?? SNAPSHOT_DRAIN_TIMEOUT_MS,
+    );
+    channel.sendHello(runtime.info, runtime.client.state);
     const stop = batchSnapshots(runtime.client.store.subscribe, (state) =>
       channel.sendState(state),
     );
-    // Each tab is its own viewer: its open transcripts are released when it goes away.
-    const session = createBridgeSession(runtime.client, runtime.policy);
     let ended = false;
     /**
      * Release everything this viewer held. Each step runs even if another

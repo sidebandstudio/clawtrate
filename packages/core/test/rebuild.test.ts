@@ -29,10 +29,13 @@ function feed(activity: TaskActivity, ...events: Array<ReturnType<typeof agentEv
   return next;
 }
 
-/** What a view shows of a run's steps. */
+/**
+ * What a view shows of a run's steps. Reasoning ids are compared within a
+ * session only: a fresh rebuild names segments in the history namespace.
+ */
 const shape = (run: Run | undefined) =>
   run?.steps.map((step) => ({
-    id: step.id,
+    id: step.kind === "reasoning" ? "reasoning" : step.id,
     kind: step.kind,
     status: step.status,
     text: step.output?.text ?? step.result?.text ?? null,
@@ -48,7 +51,7 @@ describe("a fresh opening during a reasoning segment (C6)", () => {
   it("keeps the streaming segment open, so the next cumulative frame continues it", () => {
     const fresh = runsFromHistory([thinkingRow("abc", 2)], { runId: "run-1" }, ctx());
     expect(shape(fresh[0])).toEqual([
-      { id: "reasoning:run-1:0", kind: "reasoning", status: "running", text: "abc" },
+      { id: "reasoning", kind: "reasoning", status: "running", text: "abc" },
     ]);
     const after = feed(
       { ...emptyActivity, runs: fresh },
@@ -63,10 +66,11 @@ describe("a fresh opening during a reasoning segment (C6)", () => {
     );
     expect(shape(after.runs[0])).toEqual(shape(live.runs[0]));
     expect(shape(after.runs[0])).toEqual([
-      { id: "reasoning:run-1:0", kind: "reasoning", status: "running", text: "abcd" },
+      { id: "reasoning", kind: "reasoning", status: "running", text: "abcd" },
     ]);
     // The raw lookup follows the segment: the latest frame.
-    expect(raw.get(KEY, "reasoning:run-1:0")!.call).toMatchObject({ data: { text: "abcd" } });
+    expect(after.runs[0]!.steps[0]!.id).toBe("reasoning:run-1:ha2.0");
+    expect(raw.get(KEY, "reasoning:run-1:ha2.0")!.call).toMatchObject({ data: { text: "abcd" } });
   });
 
   it("closes the segment when the rows already moved past it, as the live view does", () => {
@@ -81,8 +85,8 @@ describe("a fresh opening during a reasoning segment (C6)", () => {
       agentEvent("run-1", 5, "thinking", { text: "next", delta: "next" }),
     );
     expect(after.runs[0]!.steps.map((step) => [step.id, step.status])).toEqual([
-      ["reasoning:run-1:0", "done"],
-      ["reasoning:run-1:1", "running"],
+      ["reasoning:run-1:ha2.0", "done"],
+      ["reasoning:run-1:0", "running"],
     ]);
   });
 
@@ -97,12 +101,12 @@ describe("a fresh opening during a reasoning segment (C6)", () => {
     });
     const { client, transcript } = await openTask({ gateway });
     expect(transcript().runs[0]!.steps.map((step) => [step.id, step.status])).toEqual([
-      ["reasoning:run-1:0", "running"],
+      ["reasoning:run-1:ha2.0", "running"],
     ]);
     gateway.emit("agent", agentEvent("run-1", 5, "thinking", { text: "abcd", delta: "d" }));
     await until(() => transcript().runs[0]!.steps[0]!.output?.text === "abcd");
     expect(transcript().runs[0]!.steps).toHaveLength(1);
-    expect(client.stepRaw(KEY, "reasoning:run-1:0")!.call).toMatchObject({
+    expect(client.stepRaw(KEY, "reasoning:run-1:ha2.0")!.call).toMatchObject({
       data: { text: "abcd" },
     });
     // A resync while it streams keeps it one open segment.
@@ -111,8 +115,9 @@ describe("a fresh opening during a reasoning segment (C6)", () => {
     await until(() => transcript().status === "ready");
     gateway.emit("agent", agentEvent("run-1", 6, "thinking", { text: "abcde", delta: "e" }));
     await until(() => transcript().runs[0]!.steps[0]!.output?.text === "abcde");
+    // Stable while the task stays open: the same id across the resync and the next frame.
     expect(transcript().runs[0]!.steps.map((step) => [step.id, step.status])).toEqual([
-      ["reasoning:run-1:0", "running"],
+      ["reasoning:run-1:ha2.0", "running"],
     ]);
     client.stop();
   });
@@ -176,9 +181,9 @@ describe("the in-flight snapshot joins the persisted rows (D2)", () => {
   it("shows the current step after the persisted iterations, without repeating any", () => {
     const fresh = runsFromHistory(rows, snapshot, ctx());
     expect(fresh[0]!.steps.map((step) => [step.id, step.status])).toEqual([
-      ["reasoning:run-1:0", "done"],
+      ["reasoning:run-1:ha2.0", "done"],
       ["tool:old-1", "done"],
-      ["reasoning:run-1:1", "done"],
+      ["reasoning:run-1:ha4.0", "done"],
       ["tool:old-2", "done"],
       ["tool:new", "running"],
     ]);
@@ -198,9 +203,9 @@ describe("the in-flight snapshot joins the persisted rows (D2)", () => {
     gateway.handlers["chat.history"] = () => ({ messages: rows, inFlightRun: snapshot });
     const { client, transcript } = await openTask({ gateway });
     expect(transcript().runs[0]!.steps.map((step) => step.id)).toEqual([
-      "reasoning:run-1:0",
+      "reasoning:run-1:ha2.0",
       "tool:old-1",
-      "reasoning:run-1:1",
+      "reasoning:run-1:ha4.0",
       "tool:old-2",
       "tool:new",
     ]);
@@ -281,15 +286,19 @@ describe("live and history agree on a finished multi-iteration run (D4 of the fi
     const fresh = runsFromHistory(historyRows, null, ctx());
     expect(shape(merge.runs[0])).toEqual(shape(fresh[0]));
     expect(shape(fresh[0])).toEqual([
-      { id: "reasoning:run-1:0", kind: "reasoning", status: "done", text: "first" },
+      { id: "reasoning", kind: "reasoning", status: "done", text: "first" },
       { id: "tool:c1", kind: "tool", status: "done", text: "ok" },
-      { id: "reasoning:run-1:1", kind: "reasoning", status: "done", text: "second" },
+      { id: "reasoning", kind: "reasoning", status: "done", text: "second" },
       { id: "tool:c2", kind: "tool", status: "failed", text: "denied" },
     ]);
     expect(merge.runs[0]).toMatchObject({ state: "completed", outcomeKnown: true });
     expect(fresh[0]).toMatchObject({ state: "completed", outcomeKnown: true });
     // Every step the merge took from history brings its raw payload; none is missing.
-    expect([...merge.fromHistory].sort()).toEqual(["reasoning:run-1:0", "reasoning:run-1:1"]);
+    // The history segments took the ids of the live ones with the same text.
+    expect([...merge.fromHistory.keys()].sort()).toEqual([
+      "reasoning:run-1:0",
+      "reasoning:run-1:1",
+    ]);
     const twice = mergeHistoryRuns(merge.runs, runsFromHistory(historyRows, null, ctx()), ctx());
     expect(twice.runs).toEqual(merge.runs);
   });

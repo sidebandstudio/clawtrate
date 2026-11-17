@@ -10,6 +10,7 @@ import {
   type ClawtrateClient,
   type WebSocketLike,
 } from "@clawtrate/core";
+import { once } from "node:events";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -21,8 +22,12 @@ import type { HostRuntime } from "../src/host/runtime.ts";
 import {
   ACCESS_COOKIE,
   createViewerChannel,
-  SNAPSHOT_HARD_BUFFER_BYTES,
-  SNAPSHOT_SOFT_BUFFER_BYTES,
+  MAX_RESULT_CHARS,
+  MAX_SNAPSHOTS_IN_FLIGHT,
+  MAX_UNACCEPTED_RESULTS,
+  SNAPSHOT_DRAIN_TIMEOUT_MS,
+  createSnapshotGate,
+  viewerState,
   startWebHost,
 } from "../src/web-host/server.ts";
 
@@ -32,7 +37,10 @@ afterEach(async () => {
   for (const host of hosts.splice(0)) await host.close();
 });
 
-async function host(policy: HostRuntime["policy"] = {}) {
+async function host(
+  policy: HostRuntime["policy"] = {},
+  options: { snapshotDrainTimeoutMs?: number } = {},
+) {
   const staticDir = mkdtempSync(join(tmpdir(), "clawtrate-static-"));
   writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Clawtrate</title>");
   const state = createStore(initialState);
@@ -58,11 +66,12 @@ async function host(policy: HostRuntime["policy"] = {}) {
     host: "127.0.0.1",
     port: 0,
     accessToken: TOKEN,
+    ...options,
   });
   hosts.push(started);
   await new Promise((resolve) => started.server.once("listening", resolve));
   const base = `http://127.0.0.1:${(started.server.address() as AddressInfo).port}`;
-  return { base, interest };
+  return { base, interest, store: state };
 }
 
 const until = async (check: () => boolean, ms = 3_000) => {
@@ -108,8 +117,8 @@ describe("browser reconnect (F-104)", () => {
   });
 });
 
-describe("slow viewers", () => {
-  const fakeSocket = (buffered: number) => {
+describe("slow viewers (one snapshot per viewer beyond what its socket accepted)", () => {
+  const fakeSocket = (buffered = 0) => {
     const sent: string[] = [];
     const closed: number[] = [];
     return {
@@ -119,37 +128,141 @@ describe("slow viewers", () => {
         readyState: 1,
         OPEN: 1,
         bufferedAmount: buffered,
-        send: (data: string) => sent.push(data),
+        send(data: string) {
+          sent.push(data);
+          this.bufferedAmount += data.length;
+        },
         close: (code?: number) => closed.push(code ?? 0),
       },
     };
   };
+  const state = (marker: string) => ({
+    ...initialState,
+    discovery: { ...initialState.discovery, error: marker },
+  });
+  const markers = (sent: string[]) =>
+    sent.map((each) => (JSON.parse(each) as { state: typeof initialState }).state.discovery.error);
 
-  it(`sends snapshots at SNAPSHOT_SOFT_BUFFER_BYTES and holds them just past it, keeping only the latest`, async () => {
-    const at = fakeSocket(SNAPSHOT_SOFT_BUFFER_BYTES);
-    createViewerChannel(at.socket).sendState(initialState);
-    expect(at.sent).toHaveLength(1);
-
-    const past = fakeSocket(SNAPSHOT_SOFT_BUFFER_BYTES + 1);
-    const channel = createViewerChannel(past.socket);
-    channel.sendState(initialState);
-    channel.sendState({ ...initialState, bots: [] });
-    expect(past.sent).toHaveLength(0);
-    past.socket.bufferedAmount = 0;
-    await until(() => past.sent.length === 1);
+  it("writes the next snapshot only once the socket accepted the last, and then only the newest", async () => {
+    const viewer = fakeSocket();
+    const channel = createViewerChannel(viewer.socket, createSnapshotGate());
+    channel.sendState(state("first"));
+    channel.sendState(state("second"));
+    channel.sendState(state("third"));
+    expect(markers(viewer.sent)).toEqual(["first"]);
+    viewer.socket.bufferedAmount = 0;
+    await until(() => viewer.sent.length === 2);
     await new Promise((resolve) => setTimeout(resolve, 120));
-    expect(past.sent).toHaveLength(1);
+    expect(markers(viewer.sent)).toEqual(["first", "third"]);
     channel.stop();
   });
 
-  it(`keeps a viewer at SNAPSHOT_HARD_BUFFER_BYTES and closes one past it`, () => {
-    const at = fakeSocket(SNAPSHOT_HARD_BUFFER_BYTES);
-    createViewerChannel(at.socket).send({ type: "result", id: "1", ok: true });
-    expect(at.closed).toEqual([]);
-    const past = fakeSocket(SNAPSHOT_HARD_BUFFER_BYTES + 1);
-    createViewerChannel(past.socket).send({ type: "result", id: "1", ok: true });
-    expect(past.closed).toEqual([1013]);
-    expect(past.sent).toEqual([]);
+  it(`lets MAX_SNAPSHOTS_IN_FLIGHT (${MAX_SNAPSHOTS_IN_FLIGHT}) viewers hold an unaccepted snapshot, and makes one more wait`, async () => {
+    const gate = createSnapshotGate();
+    const viewers = Array.from({ length: MAX_SNAPSHOTS_IN_FLIGHT + 1 }, () => fakeSocket());
+    const channels = viewers.map((viewer) => createViewerChannel(viewer.socket, gate));
+    channels.forEach((channel) => channel.sendState(state("s")));
+    expect(viewers.map((viewer) => viewer.sent.length)).toEqual([
+      ...Array(MAX_SNAPSHOTS_IN_FLIGHT).fill(1),
+      0,
+    ]);
+    viewers[0]!.socket.bufferedAmount = 0;
+    await until(() => viewers.at(-1)!.sent.length === 1);
+    channels.forEach((channel) => channel.stop());
+  });
+
+  it(`closes a viewer whose socket does not accept its snapshot within the drain time (SNAPSHOT_DRAIN_TIMEOUT_MS = ${SNAPSHOT_DRAIN_TIMEOUT_MS})`, async () => {
+    const drain = 200;
+    const kept = fakeSocket();
+    const keptChannel = createViewerChannel(kept.socket, createSnapshotGate(), undefined, drain);
+    keptChannel.sendState(state("s"));
+    await new Promise((resolve) => setTimeout(resolve, drain / 2));
+    kept.socket.bufferedAmount = 0;
+    await new Promise((resolve) => setTimeout(resolve, drain));
+    expect(kept.closed).toEqual([]);
+    const slow = fakeSocket();
+    const slowChannel = createViewerChannel(slow.socket, createSnapshotGate(), undefined, drain);
+    slowChannel.sendState(state("s"));
+    await until(() => slow.closed.length === 1);
+    expect(slow.closed).toEqual([1013]);
+    keptChannel.stop();
+    slowChannel.stop();
+  });
+
+  it(`answers a result longer than MAX_RESULT_CHARS (${MAX_RESULT_CHARS}) with an error`, () => {
+    const viewer = fakeSocket();
+    const channel = createViewerChannel(viewer.socket, createSnapshotGate());
+    channel.send({ type: "result", id: "c1", ok: true, value: "r".repeat(MAX_RESULT_CHARS) });
+    channel.send({ type: "result", id: "c2", ok: true, value: "r".repeat(100) });
+    const [long, short] = viewer.sent.map((each) => JSON.parse(each) as Record<string, unknown>);
+    expect(long).toEqual({ type: "result", id: "c1", ok: false, error: "result too large" });
+    expect(short).toMatchObject({ id: "c2", ok: true });
+    expect(viewer.sent.every((each) => each.length <= MAX_RESULT_CHARS)).toBe(true);
+    channel.stop();
+  });
+
+  it(`drops a viewer that leaves more than MAX_UNACCEPTED_RESULTS (${MAX_UNACCEPTED_RESULTS}) results unaccepted`, () => {
+    const viewer = fakeSocket();
+    const channel = createViewerChannel(viewer.socket, createSnapshotGate());
+    for (let i = 0; i < MAX_UNACCEPTED_RESULTS; i += 1) {
+      channel.send({ type: "result", id: `c${i}`, ok: true });
+    }
+    expect(viewer.closed).toEqual([]);
+    channel.send({ type: "result", id: "one-more", ok: true });
+    expect(viewer.closed).toEqual([1013]);
+    expect(viewer.sent).toHaveLength(MAX_UNACCEPTED_RESULTS);
+    // Accepted results free their room.
+    const reading = fakeSocket();
+    const readingChannel = createViewerChannel(reading.socket, createSnapshotGate());
+    for (let i = 0; i < MAX_UNACCEPTED_RESULTS * 3; i += 1) {
+      readingChannel.send({ type: "result", id: `c${i}`, ok: true });
+      reading.socket.bufferedAmount = 0;
+    }
+    expect(reading.closed).toEqual([]);
+    channel.stop();
+    readingChannel.stop();
+  });
+
+  it("holds at most one unaccepted snapshot for a real paused viewer, and drops it after the drain time", async () => {
+    const drain = 400;
+    const { base, store } = await host({}, { snapshotDrainTimeoutMs: drain });
+    // What the host writes to its sockets, counted where it writes them.
+    const written: string[] = [];
+    const send = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (this: WebSocket, data: unknown, ...rest: unknown[]) {
+      if (typeof data === "string" && data.startsWith('{"type":"state"')) written.push(data);
+      return (send as (...args: unknown[]) => void).call(this, data, ...rest);
+    } as typeof send;
+    const socket = new WebSocket(`${base.replace("http", "ws")}/bridge`, {
+      headers: { cookie: `${ACCESS_COOKIE}=${TOKEN}`, origin: base },
+    });
+    try {
+      await once(socket, "message");
+      // The viewer stops reading.
+      (socket as unknown as { _socket: { pause(): void } })._socket.pause();
+      const big = "x".repeat(8 * 1024 * 1024);
+      for (let i = 0; i < 10; i += 1) {
+        store.update(() => state(`${i}:${big}`));
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // One written and not accepted; the newer ones wait as one reference, not as copies.
+      expect(written).toHaveLength(1);
+      const closed = once(socket, "close");
+      await new Promise((resolve) => setTimeout(resolve, drain + 200));
+      (socket as unknown as { _socket: { resume(): void } })._socket.resume();
+      await closed;
+      expect(written).toHaveLength(1);
+    } finally {
+      WebSocket.prototype.send = send;
+      socket.terminate();
+    }
+  }, 15_000);
+
+  it("sends each viewer only the tasks it has open", () => {
+    const transcripts = { a: { sessionKey: "a" }, b: { sessionKey: "b" } } as never;
+    const shown = viewerState({ ...initialState, transcripts }, new Set(["b"]));
+    expect(Object.keys(shown.transcripts)).toEqual(["b"]);
   });
 });
 

@@ -6,7 +6,6 @@
 // arrive (per image, per file) and again for the whole frame when sending.
 
 import type { OutgoingAttachment } from "./client.ts";
-import { base64Length, type HostLedger } from "./retention.ts";
 
 /** Decoded image ceiling `chat.send` enforces (6 MiB). */
 export const MAX_IMAGE_BYTES = 6_291_456;
@@ -17,7 +16,7 @@ export const MAX_ATTACHMENTS_PER_MESSAGE = 20;
 /** Most files the host keeps waiting at once, counting ones still arriving. */
 export const MAX_PENDING_ATTACHMENTS = 64;
 /** Bytes the host keeps waiting at once, counting ones still arriving. */
-export const MAX_PENDING_ATTACHMENT_BYTES = 128 * 1024 * 1024;
+export const MAX_PENDING_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 /** How long an added file waits for a message. */
 export const ATTACHMENT_TTL_MS = 15 * 60_000;
 
@@ -37,14 +36,6 @@ export class AttachmentTooLargeError extends Error {
     );
     this.name = "AttachmentTooLargeError";
     this.limit = limit;
-  }
-}
-
-/** The host's retention budget has no room for this file. */
-export class HostFullError extends Error {
-  constructor() {
-    super("The host is holding as much as it can; send or delete waiting messages first.");
-    this.name = "HostFullError";
   }
 }
 
@@ -93,7 +84,6 @@ export class AttachmentStore {
     now: () => number;
     ttlMs: number;
     maxTotalBytes: number;
-    ledger: HostLedger | null;
   };
 
   constructor(options: {
@@ -101,25 +91,13 @@ export class AttachmentStore {
     now?: () => number;
     ttlMs?: number;
     maxTotalBytes?: number;
-    /** The host's budget: files waiting or arriving count in it, and none is taken past it. */
-    ledger?: HostLedger;
   }) {
     this.options = {
       newId: options.newId,
       now: options.now ?? (() => Date.now()),
       ttlMs: options.ttlMs ?? ATTACHMENT_TTL_MS,
       maxTotalBytes: options.maxTotalBytes ?? MAX_PENDING_ATTACHMENT_BYTES,
-      ledger: options.ledger ?? null,
     };
-    this.options.ledger?.track("uploads", () => this.held());
-  }
-
-  /** What the store holds as the host keeps it: base64 of every file waiting or arriving. */
-  held(): number {
-    let total = 0;
-    for (const entry of this.entries.values()) total += entry.attachment.content.length;
-    for (const bytes of this.reserved.values()) total += base64Length(bytes);
-    return total;
   }
 
   /** Room left for new files, after dropping expired ones and counting files still arriving. */
@@ -148,9 +126,6 @@ export class AttachmentStore {
       this.entries.size + this.reserved.size >= MAX_PENDING_ATTACHMENTS
     ) {
       throw new Error("Too many files are waiting to be sent.");
-    }
-    if (this.options.ledger && !this.options.ledger.admits(base64Length(sizeBytes))) {
-      throw new HostFullError();
     }
     return valid;
   }

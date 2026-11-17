@@ -835,7 +835,11 @@ describe("rebuilding from history (F-107, F-093)", () => {
       anchorItemId: "u1:0",
       model: "dev-1",
     });
-    expect(rebuilt!.steps.map(view)).toEqual(live.steps.map(view));
+    // The same steps in the same order; a rebuilt reasoning segment's id is in the history namespace.
+    const withoutReasoningId = (step: Parameters<typeof view>[0]) =>
+      step.kind === "reasoning" ? { ...view(step), id: null } : view(step);
+    expect(rebuilt!.steps.map(withoutReasoningId)).toEqual(live.steps.map(withoutReasoningId));
+    expect(rebuilt!.steps[0]!.id).toBe("reasoning:run-1:ha1.0");
     expect(rebuilt!.steps[1]!.raw).toEqual({
       source: "history",
       runId: "run-1",
@@ -910,10 +914,11 @@ describe("rebuilding from history (F-107, F-093)", () => {
       ctx(),
     ).runs;
     expect(merged[0]!.state).toBe("completed");
+    // The segment seen live keeps its id; the one lost in the gap is named by its history row.
     expect(merged[0]!.steps.map((step) => step.id)).toEqual([
       "reasoning:run-1:0",
       "tool:call_1",
-      "reasoning:run-1:1",
+      "reasoning:run-1:ha2.0",
     ]);
   });
 
