@@ -501,7 +501,12 @@ export function refusalOf(error: unknown): {
 
 /** Transfers held at once, across every viewer. */
 export const MAX_FILE_TRANSFERS = 4;
-/** A transfer not read for this long is dropped. */
+/**
+ * A transfer not read for this long is dropped by the next transfer that
+ * starts or the next chunk read, whichever comes first. Expiry is checked
+ * then, not on a timer, so an idle transfer stays until one of those; the
+ * count and size bounds hold either way.
+ */
 export const FILE_TRANSFER_TTL_MS = 60_000;
 /**
  * The largest chunk, in bytes (a host with no channel limit, such as the
@@ -533,8 +538,9 @@ type Transfer = {
 /**
  * Content on its way to a viewer: at most `MAX_FILE_TRANSFERS` at once, each
  * at most `MAX_TRANSFER_BYTES`, each dropped when its last chunk is read,
- * when its viewer releases it or goes away, or `FILE_TRANSFER_TTL_MS` after
- * it was last read. Nothing else of a file's content is kept.
+ * when its viewer releases it or goes away, or, once it has gone
+ * `FILE_TRANSFER_TTL_MS` without a read, by the next transfer that starts or
+ * chunk read (not on a timer). Nothing else of a file's content is kept.
  */
 export class FileTransfers {
   private readonly held = new Map<string, Transfer>();

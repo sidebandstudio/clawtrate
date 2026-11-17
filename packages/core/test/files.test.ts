@@ -746,6 +746,19 @@ describe("content on its way to a viewer", () => {
     expect(saves.size).toBe(1);
   });
 
+  it("an idle transfer is dropped past its time by the next transfer or chunk read, not on a timer", () => {
+    let now = 0;
+    const transfers = new FileTransfers(() => now);
+    const owner = {};
+    const big = new Uint8Array(chunkBytesFor(100_000) * 2);
+    const id = transfers.start(owner, big, 100_000).id!;
+    now += FILE_TRANSFER_TTL_MS + 1;
+    // Nothing has asked since: it is still held, and still counts against the four.
+    expect(transfers.size).toBe(1);
+    expect(() => transfers.chunk(owner, id, 1)).toThrow(/ended/);
+    expect(transfers.size).toBe(0);
+  });
+
   it("base64, UTF-8 and SHA-256 give the standard answers", () => {
     const bytes = Uint8Array.from({ length: 1000 }, (_, i) => (i * 13) & 255);
     expect(fromBase64(toBase64(bytes))).toEqual(bytes);
