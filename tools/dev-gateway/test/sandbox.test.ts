@@ -78,7 +78,7 @@ describe("development gateway config", () => {
     expect(entries.main!.tools.agentToAgent).toEqual({ send: [] });
     expect(entries.otto!.tools.agentToAgent).toEqual({ send: [] });
     const wider = clone(config) as typeof config;
-    wider.tools.agentToAgent.allow = ["*"];
+    (wider.tools.agentToAgent as { allow: string[] }).allow = ["*"];
     expect(sandboxProblems(wider)).toContain(
       "tools.agentToAgent.allow must be exactly marlow and pip",
     );
