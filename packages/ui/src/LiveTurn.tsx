@@ -5,7 +5,7 @@
 // by a one-line placeholder; their cards are built separately.
 
 import type { Bot, OutgoingMessage, Run, Transcript } from "@clawtrate/core";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "./bridge.tsx";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
 import { endingOf } from "./live.ts";
@@ -215,6 +215,19 @@ export function RunEnding({
 }) {
   const bridge = useBridge();
   const [dismissed, setDismissed] = useState(false);
+  // Dismiss and the line swap places; focus follows to what replaced it.
+  const moved = useRef(false);
+  const lineRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!moved.current) return;
+    moved.current = false;
+    (dismissed ? lineRef : closeRef).current?.focus();
+  }, [dismissed]);
+  const toggle = (next: boolean) => {
+    moved.current = true;
+    setDismissed(next);
+  };
   const ending = endingOf(run);
   if (!ending) return null;
   if (ending.kind === "stopped") {
@@ -257,10 +270,11 @@ export function RunEnding({
   if (dismissed) {
     return (
       <button
+        ref={lineRef}
         type="button"
         className="event-line turn-error-line"
         data-testid="turn-error-line"
-        onClick={() => setDismissed(false)}
+        onClick={() => toggle(false)}
       >
         {title}
       </button>
@@ -272,12 +286,13 @@ export function RunEnding({
       <WarnIcon />
       <p className="turn-error-title">{title}</p>
       <button
+        ref={closeRef}
         type="button"
         className="icon-button"
         data-variant="quiet"
         aria-label="Dismiss this error"
         title="Dismiss this error"
-        onClick={() => setDismissed(true)}
+        onClick={() => toggle(true)}
       >
         <CloseIcon />
       </button>

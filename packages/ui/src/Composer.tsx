@@ -306,6 +306,16 @@ export function Composer({
     addFiles(event.dataTransfer.files);
   };
 
+  /**
+   * Run an action whose control then goes away (Stop, a row's buttons, a
+   * notice's Dismiss): focus moves to the field instead of being lost.
+   */
+  const act = (action: () => unknown) => {
+    const result = action();
+    if (result instanceof Promise) result.catch(() => {});
+    focusRef.current?.focus();
+  };
+
   // Rows on the shelf, oldest first, newest at the bottom.
   const rows: ReactNode[] = [];
   const run = transcript?.runs.find((each) => each.id === runId) ?? null;
@@ -329,7 +339,7 @@ export function Composer({
             className="button"
             data-size="sm"
             onClick={() => {
-              void bridge.send({ type: "cancelQueued", key: taskKey, messageId: message.id });
+              act(() => bridge.send({ type: "cancelQueued", key: taskKey, messageId: message.id }));
               // Unsent words are never lost: an existing draft keeps its place above them.
               setText(text.trim() ? `${text}\n${message.text}` : message.text);
               focusRef.current?.focus();
@@ -345,7 +355,9 @@ export function Composer({
               className="button"
               data-size="sm"
               onClick={() =>
-                void bridge.send({ type: "sendQueuedNow", key: taskKey, messageId: message.id })
+                act(() =>
+                  bridge.send({ type: "sendQueuedNow", key: taskKey, messageId: message.id }),
+                )
               }
             >
               Send now
@@ -358,7 +370,7 @@ export function Composer({
           data-size="sm"
           data-variant="quiet"
           onClick={() =>
-            void bridge.send({ type: "cancelQueued", key: taskKey, messageId: message.id })
+            act(() => bridge.send({ type: "cancelQueued", key: taskKey, messageId: message.id }))
           }
         >
           Cancel
@@ -398,7 +410,7 @@ export function Composer({
           data-variant="quiet"
           aria-label="Dismiss"
           title="Dismiss"
-          onClick={() => onDismissNotice(notice.id)}
+          onClick={() => act(() => onDismissNotice(notice.id))}
         >
           <CloseIcon />
         </button>
@@ -408,7 +420,7 @@ export function Composer({
   if (notices.length > 1) {
     rows.push(
       <div className="shelf-clear" key="clear-all">
-        <button type="button" className="link-button" onClick={onClearNotices}>
+        <button type="button" className="link-button" onClick={() => act(onClearNotices)}>
           Clear all
         </button>
       </div>,
@@ -567,7 +579,7 @@ export function Composer({
                 aria-label={`Stop ${bot.name}`}
                 title={`Stop ${bot.name} (⌘.)`}
                 data-testid="stop"
-                onClick={() => stop(view.stoppable!)}
+                onClick={() => act(() => stop(view.stoppable!))}
               />
             )}
             <button
