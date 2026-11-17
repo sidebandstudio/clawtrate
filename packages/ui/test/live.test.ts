@@ -106,6 +106,7 @@ const message = (change: Partial<OutgoingMessage>): OutgoingMessage => ({
   status: "sent",
   runId: null,
   messageSeq: null,
+  leftAt: null,
   createdAt: NOW,
   error: null,
   attachments: [],

@@ -335,6 +335,13 @@ export type OutgoingMessage = {
   runId: string | null;
   /** `chat.send`'s `messageSeq`, when the gateway returned one. */
   messageSeq: number | null;
+  /**
+   * When its `chat.send` frame was handed to the connection, for the attempt
+   * under way; null while it waits in this client, in the task's delivery
+   * chain or for access. The one record of whether it has left: a confirmed
+   * Stop parks every message that has not, whatever its status says.
+   */
+  leftAt: number | null;
   createdAt: number;
   error: string | null;
   /** Files sent with it, without their content. */
@@ -2533,19 +2540,28 @@ function lastEnded(runs: readonly Run[]): Run | undefined {
   return last;
 }
 
+/** Whether a message is unsent work this client still holds: its frame has not left. */
+function notLeft(message: OutgoingMessage): boolean {
+  if (message.status === "queued" || message.status === "held") return true;
+  return (
+    (message.status === "sending" || message.status === "awaiting-access") &&
+    message.leftAt === null
+  );
+}
+
 /**
  * After a confirmed Stop nothing starts by itself (conversation.md §15–16):
- * with no run active and the last one stopped, every queued or held message
- * becomes `not-sent`, and queued runs are cancelled. Messages sent after the
- * stop never queue, since no run is active, so this applies only to work
- * left from before it.
+ * with no run active and the last one stopped, every message whose frame has
+ * not left (`leftAt`) becomes `not-sent`, whatever its status said: queued,
+ * held, or released and still waiting in the delivery chain. Queued runs are
+ * cancelled. A message whose frame left is not touched; it settles as the
+ * gateway answers it. Messages sent after the stop start a run of their own,
+ * so this applies only to work left from before it.
  */
 export function parkAfterStop(activity: TaskActivity, now: number): TaskActivity {
   if (activity.runs.some((run) => isActive(run.state))) return activity;
   if (lastEnded(activity.runs)?.state !== "stopped") return activity;
-  const parked = activity.outbox.filter(
-    (message) => message.status === "queued" || message.status === "held",
-  );
+  const parked = activity.outbox.filter(notLeft);
   if (parked.length === 0) return activity;
   let next = activity;
   for (const message of parked) {

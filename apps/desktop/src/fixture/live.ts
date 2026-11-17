@@ -97,6 +97,7 @@ function message(
     status: "sent",
     runId: "run-live",
     messageSeq: null,
+    leftAt: null,
     createdAt: at,
     error: null,
     attachments: [],

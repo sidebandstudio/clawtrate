@@ -1213,6 +1213,7 @@ export class ClawtrateClient {
       status: held ? "held" : resolved === "queue" ? "queued" : "sending",
       runId: resolved === "steer" ? active!.id : null,
       messageSeq: null,
+      leftAt: null,
       createdAt: this.now(),
       error: null,
       attachments: attachments.map((attachment) => ({
@@ -1590,6 +1591,8 @@ export class ClawtrateClient {
       status: runError ? "failed" : "sent",
       runId,
       messageSeq: typeof result?.messageSeq === "number" ? result.messageSeq : null,
+      // It went out with the task's creation.
+      leftAt: now,
       createdAt: now,
       error: runError ? String(runError.message ?? "The run did not start.") : null,
       attachments: [],
@@ -1853,7 +1856,12 @@ export class ClawtrateClient {
         this.attachmentContent.get(messageId)?.files ?? [],
       );
       this.checkSize(params);
-      result = asRecord(await this.request("chat.send", params));
+      const sent = this.request("chat.send", params);
+      // The frame has left: from here a Stop no longer parks it.
+      this.updateActivity(key, (activity) =>
+        updateMessage(activity, messageId, { leftAt: this.now() }),
+      );
+      result = asRecord(await sent);
     } catch (error) {
       this.noteMissingScope(error);
       if (
@@ -3222,6 +3230,10 @@ export class ClawtrateClient {
    * so messages reach the gateway in the order the user sent them.
    */
   private enqueueDelivery(key: string, messageId: string): void {
+    // A new attempt: until its frame leaves, a confirmed Stop parks it.
+    if (this.outgoing(key, messageId)?.leftAt != null) {
+      this.updateActivity(key, (activity) => updateMessage(activity, messageId, { leftAt: null }));
+    }
     if (!this.state.connection.canWrite && this.outgoing(key, messageId)?.status === "sending") {
       this.updateActivity(key, (activity) =>
         updateMessage(activity, messageId, { status: "awaiting-access" }),

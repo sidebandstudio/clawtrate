@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
 import {
   emptyActivity,
+  isActive,
   reconcileOutbox,
   startLocalRun,
   type OutgoingMessage,
@@ -250,6 +251,37 @@ describe("after a confirmed Stop nothing starts by itself (F-468)", () => {
     client.stop();
   });
 
+  it("parks a released message still waiting behind an unanswered send; the one whose frame left settles", async () => {
+    const { client, gateway, transcript } = await openTask();
+    const firstAnswer = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => firstAnswer.promise;
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    start(gateway);
+    gateway.emit("question.requested", questionRecord("ask_1", "run-x"));
+    await until(() => transcript().runs[0]?.state === "waiting");
+    client.sendMessage(KEY, "one");
+    client.sendMessage(KEY, "two");
+    // Dismissing releases both as steers; "one" goes out, "two" waits behind it.
+    await client.dismissQuestion(KEY, "ask_1");
+    await until(() => sentTexts(gateway).length === 1);
+    const waiting = transcript().outbox.find((m) => m.text === "two")!;
+    expect(waiting).toMatchObject({ status: "sending", leftAt: null });
+    expect(transcript().outbox.find((m) => m.text === "one")!.leftAt).not.toBeNull();
+    await client.stopRun(KEY, "run-x");
+    gateway.emit("chat", { runId: "run-x", sessionKey: KEY, seq: 20, state: "aborted" });
+    await until(() => transcript().runs[0]?.state === "stopped");
+    expect(transcript().outbox.find((m) => m.text === "two")).toMatchObject({
+      status: "not-sent",
+      runId: null,
+    });
+    firstAnswer.resolve({ runId: "steer-one", status: "started" });
+    await sleep(50);
+    expect(sentTexts(gateway)).toEqual(["one"]);
+    expect(transcript().outbox.find((m) => m.text === "two")!.status).toBe("not-sent");
+    expect(transcript().runs.filter((run) => isActive(run.state))).toEqual([]);
+    client.stop();
+  });
+
   it("still starts queued messages when the run finished before the stop took effect", async () => {
     const { client, gateway, transcript } = await openTask();
     gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: false, runIds: [] });
@@ -372,6 +404,7 @@ describe("reconciling sent messages with history (F-075, F-107)", () => {
     status: "sent",
     runId: null,
     messageSeq: null,
+    leftAt: null,
     createdAt: 3_000,
     error: null,
     attachments: [],

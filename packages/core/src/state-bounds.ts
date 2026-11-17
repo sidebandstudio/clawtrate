@@ -254,6 +254,7 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   status: ENUM,
   runId: ID,
   messageSeq: NUMBER,
+  leftAt: NUMBER,
   createdAt: NUMBER,
   error: text(MAX_ERROR_JSON_CHARS),
   attachments: list(MAX_FILES_PER_MESSAGE, attachmentInfo),
