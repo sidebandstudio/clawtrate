@@ -115,6 +115,31 @@ test("F-015: the primary bot's avatar carries a small round badge with a star at
     expect(badge.x + badge.width / 2).toBeGreaterThan(avatar.x + avatar.width * 0.75);
     expect(badge.y + badge.height / 2).toBeGreaterThan(avatar.y + avatar.height * 0.75);
     await expect(star.locator("svg path")).toHaveCount(1);
+    // The shape is a five-pointed star: walking its outline, the distance from
+    // its centre peaks five times, and the dips between are deep.
+    const shape = await star.locator("svg path").evaluate((path: SVGPathElement) => {
+      const length = path.getTotalLength();
+      const points = Array.from({ length: 400 }, (_, i) =>
+        path.getPointAtLength((length * i) / 400),
+      );
+      // The centre of the outline, which for a regular star is its own centre.
+      const cx = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+      const cy = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+      const radii = points.map((point) => Math.hypot(point.x - cx, point.y - cy));
+      const max = Math.max(...radii);
+      const peaks = radii.filter((r, i) => {
+        const before = radii[(i + radii.length - 1) % radii.length]!;
+        const after = radii[(i + 1) % radii.length]!;
+        return r > 0.9 * max && r >= before && r > after;
+      }).length;
+      return { peaks, depth: Math.min(...radii) / max };
+    });
+    expect(shape.peaks).toBe(5);
+    expect(shape.depth).toBeLessThan(0.6);
+    // Drawn in a colour that stands out from the badge.
+    expect(await style(star.locator("svg"), "color")).not.toBe(
+      await style(star, "background-color"),
+    );
   };
   await check();
   // The same on a pinned tile.

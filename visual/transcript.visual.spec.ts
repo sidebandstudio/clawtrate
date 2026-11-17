@@ -190,6 +190,39 @@ test("F-065: the bot's messages are left grey bubbles stacked with small gaps, n
   expect((await rect(disk)).width).toBeLessThanOrEqual(640);
 });
 
+test("F-065: markdown renders inside the bot's bubble: bold, emphasis, links, inline code, headings, lists and code blocks", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${JUNIPER_EBOOKS}`, "light");
+  const reply = page.locator('.msg[data-role="assistant"] .bubble').last();
+  await expect(reply.locator("strong")).toHaveText("Libby by OverDrive");
+  expect(Number(await style(reply.locator("strong"), "font-weight"))).toBeGreaterThan(
+    Number(await style(reply.locator("p").first(), "font-weight")),
+  );
+  await expect(reply.locator("em")).toHaveText("the easiest of the three");
+  expect(await style(reply.locator("em"), "font-style")).toBe("italic");
+  const link = reply.getByRole("link", { name: "the library's help page" });
+  await expect(link).toHaveAttribute("href", "https://example.org/library/help");
+  // Links leave the app.
+  await expect(link).toHaveAttribute("target", "_blank");
+  await expect(reply.locator("code")).toHaveText("Add a library");
+  expect(await style(reply.locator("code"), "font-family")).toMatch(/mono/i);
+  // No markdown syntax is left showing.
+  await expect(reply).not.toContainText("**");
+  await expect(reply).not.toContainText("](");
+  await expect(reply).not.toContainText("`");
+
+  // Otto's report: headings, a numbered and a bulleted list, and a code block.
+  await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+  const bubbles = page.locator('.msg[data-role="assistant"] .bubble');
+  await expect(bubbles.locator("h3")).toHaveText(["Found", "Changed", "Left"]);
+  await expect(bubbles.locator("ol > li")).toHaveCount(3);
+  await expect(bubbles.locator("ul > li")).toHaveCount(2);
+  await expect(bubbles.locator("pre code")).toHaveText(
+    "mv /var/lib/transcode-cache.old /var/lib/transcode-cache",
+  );
+});
+
 test("F-065: on a narrow column a wide table scrolls inside its bubble", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openFixture(page, `scene=main&${PIP_WEEK}`, "light");
