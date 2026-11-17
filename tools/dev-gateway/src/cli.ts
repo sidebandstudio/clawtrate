@@ -90,6 +90,7 @@ import {
 } from "./registry.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
 import { contractProblems, matching, optional, type Contract } from "./contract.ts";
+import { accountStoreProblems } from "./account-stores.ts";
 import {
   ACCOUNT_PROVIDERS,
   accountProfiles,
@@ -1572,6 +1573,21 @@ export async function prune(
   return removed;
 }
 
+/** The instance's current config, read without following a link. */
+function readConfigForLock(inst: DevInstance): unknown {
+  const stat = lstatOrNull(inst.configPath);
+  if (!stat || stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`${inst.configPath} is not a plain file; nothing was run`);
+  }
+  try {
+    return JSON.parse(readFileSync(inst.configPath, "utf8")) as unknown;
+  } catch (error) {
+    throw new Error(`cannot read ${inst.configPath}: ${String(error)}; nothing was run`, {
+      cause: error,
+    });
+  }
+}
+
 const LOCK_BOT = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const LOCK_PROVIDER = /^[a-z][a-z0-9-]{0,63}$/;
 const LOCK_PROFILE = /^[a-z][a-z0-9-]{0,63}:[A-Za-z0-9._@+-]{1,128}$/;
@@ -1609,6 +1625,14 @@ export async function lockOrder(
   }
   const refusal = inst.runner.refusal();
   if (refusal) throw new Error(refusal);
+  // Before anything runs: the stores this command would read and write, as
+  // the instance's current config names them, are the instance's own.
+  const problems = accountStoreProblems(inst.stateDir, readConfigForLock(inst), request.bot);
+  if (problems.length > 0) {
+    throw new Error(
+      `refusing to ${request.profileId === null ? "unlock" : "lock"} ${request.bot} on ${label(inst)}:\n  - ${problems.join("\n  - ")}`,
+    );
+  }
   if (!(await gatewayHealthy(inst))) {
     throw new Error(
       `${label(inst)} is not running. Run \`pnpm dev-gateway start${instanceFlag(inst)}\` first.`,

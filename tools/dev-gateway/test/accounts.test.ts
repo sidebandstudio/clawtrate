@@ -1,8 +1,17 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { accountStoreProblems } from "../src/account-stores.ts";
 import {
   accountOfCredential,
   accountProfiles,
@@ -278,6 +287,118 @@ describe("the lock subcommand", () => {
     ] as const) {
       await expect(lockOrder(inst, request)).rejects.toThrow(why);
     }
+  });
+
+  /**
+   * A named instance whose guard lets OpenClaw run (a stub runner that
+   * records every command instead of running it), with `agents.entries` as
+   * given in its config.
+   */
+  function lockable(entries: Record<string, unknown>) {
+    const home = temp();
+    const stateDir = join(home, ".openclaw-clawtrate-dev-locks");
+    mkdirSync(join(stateDir, "agents", "main", "agent"), { recursive: true });
+    writeFileSync(join(stateDir, "openclaw.json"), JSON.stringify({ agents: { entries } }));
+    const runner = {
+      refusal: () => null,
+      gatewayPort: () => 19240,
+      run: vi.fn(async (_args: string[]) => ({
+        status: 0,
+        stdout: '{"order":["acme:work"]}',
+        stderr: "",
+      })),
+    };
+    const inst = openInstance("locks", {
+      home,
+      runRoot: join(home, "run"),
+      runner: runner as never,
+      listening: async () => true,
+    });
+    return { inst, runner, stateDir, home };
+  }
+  const lockWork = (inst: ReturnType<typeof openInstance>, bot = "main") =>
+    lockOrder(inst, { bot, provider: "acme", profileId: "acme:work" });
+
+  it("refuses, running nothing, when the config puts a store outside the instance", async () => {
+    const outside = temp();
+    const { inst, runner } = lockable({ main: { agentDir: outside } });
+    await expect(lockWork(inst)).rejects.toThrow(
+      /refusing to lock main.*outside the instance's state folder/s,
+    );
+    await expect(
+      lockOrder(inst, { bot: "otto", provider: "acme", profileId: null }),
+    ).rejects.toThrow(/refusing to unlock otto.*agents\.entries\.main\.agentDir/s);
+    expect(runner.run).not.toHaveBeenCalled();
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  it("refuses a store reached through a link, or a store file that is a link", async () => {
+    const outside = temp();
+    const linked = lockable({});
+    symlinkSync(outside, join(linked.stateDir, "agents", "otto"));
+    await expect(lockWork(linked.inst, "otto")).rejects.toThrow(/passes through a link/);
+    const fileLink = lockable({});
+    symlinkSync(
+      join(outside, "store"),
+      join(fileLink.stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+    );
+    await expect(lockWork(fileLink.inst)).rejects.toThrow(/not a plain file/);
+    expect([...linked.runner.run.mock.calls, ...fileLink.runner.run.mock.calls]).toEqual([]);
+  });
+
+  it("runs the gateway's command line when every store is the instance's own", async () => {
+    const { inst, runner, stateDir } = lockable({
+      otto: { agentDir: "" },
+      pip: {},
+    });
+    // An empty agentDir is not a path; one inside the instance is fine.
+    await expect(lockWork(inst)).rejects.toThrow(/agents\.entries\.otto\.agentDir/);
+    writeFileSync(
+      join(stateDir, "openclaw.json"),
+      JSON.stringify({
+        agents: { entries: { otto: { agentDir: join(stateDir, "agents", "otto", "agent") } } },
+      }),
+    );
+    expect(await lockWork(inst, "otto")).toEqual(["acme:work"]);
+    expect(runner.run.mock.calls.map(([args]) => args.slice(0, 4).join(" "))).toEqual([
+      "gateway call health --json",
+      "models auth order set",
+      "models auth order get",
+    ]);
+  });
+
+  it("names every store a config can point a command at", () => {
+    const state = temp();
+    expect(accountStoreProblems(state, {}, "otto")).toEqual([]);
+    for (const [config, problem] of [
+      [
+        { agents: { entries: { otto: { agentDir: "~/elsewhere" } } } },
+        /not an absolute, plain path/,
+      ],
+      [
+        { agents: { entries: { otto: { agentDir: `${state}/agents/../../x` } } } },
+        /not an absolute, plain path/,
+      ],
+      [
+        { agents: { entries: { otto: { agentDir: state } } } },
+        /outside the instance's state folder/,
+      ],
+      [{ agents: { entries: { otto: { agentDir: ["x"] } } } }, /is not a path/],
+      [
+        { agents: { defaults: { agentDir: `${state}/a` } } },
+        /agents\.defaults may not name an agentDir/,
+      ],
+      [{ agents: [] }, /agents is not an object/],
+      [[], /the config is not an object/],
+    ] as const) {
+      expect(accountStoreProblems(state, config, "otto"), JSON.stringify(config)).toEqual(
+        expect.arrayContaining([expect.stringMatching(problem)]),
+      );
+    }
+    // Another bot's outside folder is refused too, whichever bot is locked.
+    expect(
+      accountStoreProblems(state, { agents: { entries: { pip: { agentDir: temp() } } } }, "otto"),
+    ).toHaveLength(1);
   });
 
   it("refuses a named instance this checkout has not started, spawning nothing", async () => {
