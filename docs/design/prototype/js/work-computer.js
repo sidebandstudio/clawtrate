@@ -116,13 +116,13 @@
     }
     if (readOnly()) {
       return (
-        `<div class="screen" data-state="blocked"><div class="screen-blank">${icon("eye")}<p>Watching needs a connection that can send. This device is read-only.</p>` +
+        `<div class="screen" data-theme="dark" data-state="blocked"><div class="screen-blank">${icon("eye")}<p>Watching needs a connection that can send. This device is read-only.</p>` +
         `<button type="button" class="button" data-size="sm" data-cmp="request">Request access</button></div></div>` +
         (C.elsewhere ? `<p class="screen-caption">Someone on another device has control of ${name}'s browser.</p>` : "")
       );
     }
     if (!C.open) {
-      return `<div class="screen" data-state="closed"><div class="screen-blank">${icon("screen")}<p>${name}'s browser has no tabs open. If ${name} opens one, it appears here.</p></div></div>`;
+      return `<div class="screen" data-theme="dark" data-state="closed"><div class="screen-blank">${icon("screen")}<p>${name}'s browser has no tabs open. If ${name} opens one, it appears here.</p></div></div>`;
     }
     const tab = tabNow();
     const note =
@@ -133,21 +133,21 @@
     let tile;
     if (C.view === "live") {
       tile =
-        `<div class="screen" data-state="live" role="img" aria-label="${name}'s browser, live: ${esc(tab.title)}">${page()}` +
+        `<div class="screen" data-theme="dark" data-state="live" role="img" aria-label="${name}'s browser, live: ${esc(tab.title)}">${page()}` +
         `<span class="screen-live">Live</span>` +
         `<span class="screen-actions"><button type="button" class="icon-button" data-cmp="open" aria-label="Open ${name}'s browser full window" title="Open">${icon("expand")}</button>` +
         `<button type="button" class="icon-button" data-cmp="stop" aria-label="Stop watching" title="Stop watching">${icon("x")}</button></span></div>`;
     } else if (C.view === "connecting") {
-      tile = `<div class="screen" data-state="connecting" aria-busy="true"><div class="screen-blank">${glyph("working")}<p>Connecting to ${name}'s browser…</p></div></div>`;
+      tile = `<div class="screen" data-theme="dark" data-state="connecting" aria-busy="true"><div class="screen-blank">${glyph("working")}<p>Connecting to ${name}'s browser…</p></div></div>`;
     } else if (C.view === "ended" || C.view === "closed-tab" || C.view === "dropped") {
       const words =
         C.view === "closed-tab" ? `${name} closed this tab.` : C.view === "dropped" ? "The view ended when the connection dropped." : "The view ended. The gateway stopped sending it.";
       tile =
-        `<div class="screen" data-state="ended"><div class="screen-blank"><p>${words}</p>` +
+        `<div class="screen" data-theme="dark" data-state="ended"><div class="screen-blank"><p>${words}</p>` +
         `<button type="button" class="screen-watch" data-cmp="watch">${icon("eye")}Watch again</button></div></div>`;
     } else {
       tile =
-        `<div class="screen" data-state="idle"><div class="screen-blank">${icon("screen")}` +
+        `<div class="screen" data-theme="dark" data-state="idle"><div class="screen-blank">${icon("screen")}` +
         `<button type="button" class="screen-watch" data-cmp="watch" aria-label="Watch ${name}'s browser">${icon("eye")}Watch</button></div></div>`;
     }
     return (

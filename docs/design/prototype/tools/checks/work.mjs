@@ -691,6 +691,17 @@ await p.waitForTimeout(50);
 check("phone: the full view fills the screen", await q(p, () => document.querySelector(".screen-view").getBoundingClientRect().width >= 389));
 await p.close();
 
+// A long name shortens before its extension, which stays in view.
+p = await open(`${files}&folder=logs`, { width: 1100, height: 760 });
+check("a long file name keeps its extension in view", await q(p, () => {
+  const row = document.querySelector('[data-open="logs/media-0002.log"] .file-name');
+  row.querySelector(".fn-base").textContent = "media-server-transcode-output-for-the-weekend-batch-0002";
+  const ext = row.querySelector(".fn-ext").getBoundingClientRect();
+  const box = row.getBoundingClientRect();
+  return ext.right <= box.right + 1 && ext.width > 10 && row.querySelector(".fn-base").scrollWidth > row.querySelector(".fn-base").clientWidth;
+}));
+await p.close();
+
 // M10: taking over on a phone.
 p = await open("&bot=juniper&task=j2&computer=full&width=phone", { width: 390, height: 844 });
 await p.waitForTimeout(100);

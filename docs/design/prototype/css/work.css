@@ -1219,15 +1219,16 @@
 }
 
 /* The tile: nothing is drawn until the person asks to watch. Dark in either
-   theme, like the viewer, so a page appears on the ground it will be watched on. */
+   theme, like the viewer, so a page appears on the ground it will be watched on.
+   The tile carries data-theme="dark", so these are the dark theme's tokens. */
 .screen {
   position: relative;
   display: grid;
   aspect-ratio: 16 / 9;
   overflow: hidden;
   border-radius: var(--radius-md);
-  background: #1a1b1d;
-  color: #f3f3f2;
+  background: var(--bg-inset);
+  color: var(--text);
 }
 
 .screen > svg {
@@ -1242,19 +1243,19 @@
   gap: 10px;
   padding: 16px;
   text-align: center;
-  color: #b4b6b9;
+  color: var(--text-muted);
 }
 
 .screen-blank p {
   max-width: 34ch;
   margin: 0;
   font-size: var(--text-sm);
-  color: #f3f3f2;
+  color: var(--text);
 }
 
 .screen-blank .button {
-  background: #2a2c30;
-  color: #f3f3f2;
+  background: var(--bg-bubble);
+  color: var(--text);
 }
 
 .screen-watch {
@@ -1265,10 +1266,10 @@
   padding: 0 16px;
   border: 0;
   border-radius: var(--radius-pill);
-  background: #f3f3f2;
+  background: var(--bg-inverse);
   font-size: var(--text-md);
   font-weight: var(--weight-medium);
-  color: #111213;
+  color: var(--text-inverse);
   cursor: pointer;
 }
 
@@ -1989,4 +1990,23 @@
 [data-input="touch"] .zoom-controls .icon-button {
   width: 44px;
   height: 44px;
+}
+
+/* A long name shortens before its extension; the extension stays in view. */
+.file-name,
+.artifact-name {
+  display: flex;
+  min-width: 0;
+}
+
+.fn-base {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.fn-ext {
+  flex: none;
+  white-space: nowrap;
 }

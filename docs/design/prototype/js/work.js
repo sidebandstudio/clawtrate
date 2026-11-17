@@ -33,8 +33,14 @@
     }
     return `${n < 10 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
   };
-  // A long name is cut in the middle, so its extension stays.
-  const middle = (name, max = 34) => (name.length <= max ? name : `${name.slice(0, max - 13)}…${name.slice(-12)}`);
+  // A long name shortens before its extension, which always stays in view: the
+  // name part takes an ellipsis in the space the row measures, the extension never.
+  const middle = (name) => {
+    const dot = name.lastIndexOf(".");
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : "";
+    return `<span class="fn-base">${esc(base)}</span><span class="fn-ext">${esc(ext)}</span>`;
+  };
   const lines = (text) => text.replace(/\n$/, "").split("\n");
 
   // Fixtures: Otto's disk task -------------------------------------------------------------
@@ -444,7 +450,7 @@
     return (
       `<li><button type="button" class="file-row" data-open="${esc(path)}" data-key="f:${esc(path)}" title="${esc(name)}" aria-label="${esc(spoken)}">` +
       `<span class="file-icon">${m?.writing ? glyph("working") : icon(kindIcon(f))}</span>` +
-      `<span class="file-name">${esc(middle(name))}</span><time class="file-time">${f.time}</time>` +
+      `<span class="file-name">${middle(name)}</span><time class="file-time">${f.time}</time>` +
       `<span class="file-sub">${sub}</span></button></li>`
     );
   }

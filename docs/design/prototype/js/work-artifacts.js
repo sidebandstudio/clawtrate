@@ -104,10 +104,10 @@
       `<div class="artifact" data-kind="${a.kind}" id="card-${id}" data-artifact="${id}">` +
       (a.kind === "audio"
         ? `<button type="button" class="artifact-play" data-play="${id}" aria-label="Play ${esc(a.name)}, ${a.duration}" aria-pressed="false">${tile}</button>` +
-          `<button type="button" class="artifact-main" data-open-artifact="${id}" aria-label="${esc(spoken)}"><span class="artifact-text"><span class="artifact-name">${esc(W.middle(a.name))}</span>` +
+          `<button type="button" class="artifact-main" data-open-artifact="${id}" aria-label="${esc(spoken)}"><span class="artifact-text"><span class="artifact-name">${W.middle(a.name)}</span>` +
           `<span class="artifact-sub" id="sub-${id}">${sub(a)}</span></span></button>`
         : `<button type="button" class="artifact-main" data-open-artifact="${id}" aria-label="${esc(spoken)}">${tile}<span class="artifact-text">` +
-          `<span class="artifact-name">${esc(W.middle(a.name))}</span><span class="artifact-sub">${sub(a)}</span></span></button>`) +
+          `<span class="artifact-name">${W.middle(a.name)}</span><span class="artifact-sub">${sub(a)}</span></span></button>`) +
       more(id, a.name) +
       `</div>`
     );
@@ -190,7 +190,7 @@
           const thumb = a.art && !a.thumbnail ? `<span class="file-icon file-thumb">${fill(a.art())}</span>` : `<span class="file-icon">${icon(a.kind === "image" ? "image" : a.kind === "video" ? "video" : a.kind === "audio" ? "audio" : a.icon || "file")}</span>`;
           return (
             `<li><button type="button" class="file-row" data-open-artifact="${id}" data-key="a:${id}" aria-label="${esc(`${a.name}, sent ${a.time}${a.size ? `, ${W.size(a.size)}` : ""}`)}">` +
-            `${thumb}<span class="file-name">${esc(W.middle(a.name))}</span><time class="file-time">${a.time}</time>` +
+            `${thumb}<span class="file-name">${W.middle(a.name)}</span><time class="file-time">${a.time}</time>` +
             `<span class="file-sub">Sent ${a.time}${a.size ? ` · ${W.size(a.size)}` : ""}</span></button></li>`
           );
         })
