@@ -30,11 +30,14 @@ export function Shell({
   info,
   theme,
   onTheme,
+  onCaughtUp,
 }: {
   state: ClawtrateState;
   info: HostInfo;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
+  /** Whether the open task has caught up since the latest connect: until then work is last seen. */
+  onCaughtUp?: (caughtUp: boolean) => void;
 }) {
   const send = useCommand();
   const interactive = canWrite(state.connection, info);
@@ -194,6 +197,12 @@ export function Shell({
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
   const phase = useSyncPhase(state, taskKey);
+  // Connected is not caught up: until bots, tasks and the open task have
+  // loaded again after a drop, what is on screen is last seen.
+  const caughtUp = state.connection.status === "connected" && phase !== "dropped";
+  useEffect(() => {
+    onCaughtUp?.(caughtUp);
+  }, [caughtUp, onCaughtUp]);
   // Access arriving reconnects with the new grant: "Access granted" is the
   // news then, unless something failed.
   const connectionStrip = stripFor(state, phase, taskKey);
@@ -264,6 +273,7 @@ export function Shell({
           info={info}
           granted={granted}
           online={state.connection.status === "connected"}
+          caughtUp={caughtUp}
           toggleRef={toggleRef}
           inert={drawerOpen}
         />

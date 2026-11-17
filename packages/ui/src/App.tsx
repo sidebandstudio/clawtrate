@@ -1,5 +1,5 @@
 import type { HostInfo } from "@clawtrate/core";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useClawtrateState } from "./bridge.tsx";
 import { ConnectScreen } from "./ConnectScreen.tsx";
 import { readPreference, useTheme } from "./preferences.ts";
@@ -38,12 +38,20 @@ export function App({ info }: { info: HostInfo }) {
   // The theme applies on every screen; the gateway menu in the shell changes it.
   const [theme, setTheme] = useTheme();
   // One flag for the whole window: while the connection is anything but
-  // connected, nothing that stands for the gateway's work moves.
-  const lost = state.connection.status !== "connected";
+  // connected, and after a reconnect until the open task has caught up,
+  // nothing that stands for the gateway's work moves; it is last seen.
+  const [caughtUp, setCaughtUp] = useState(true);
+  const lost = state.connection.status !== "connected" || !caughtUp;
   return (
     <div className="app" data-connection={lost ? "lost" : undefined}>
       {screenFor(state) === "shell" ? (
-        <Shell state={state} info={info} theme={theme} onTheme={setTheme} />
+        <Shell
+          state={state}
+          info={info}
+          theme={theme}
+          onTheme={setTheme}
+          onCaughtUp={setCaughtUp}
+        />
       ) : (
         <ConnectScreen connection={state.connection} info={info} />
       )}

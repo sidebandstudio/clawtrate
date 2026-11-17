@@ -683,6 +683,7 @@ export function Conversation({
   connection,
   info,
   online,
+  caughtUp,
   inert = false,
   granted,
 }: {
@@ -708,6 +709,8 @@ export function Conversation({
   info: HostInfo;
   /** The gateway is connected, so a task without a transcript can load. */
   online: boolean;
+  /** Connected and caught up since the latest connect: until then live work is last seen. */
+  caughtUp: boolean;
   /** Set while the Work drawer covers the conversation, so focus cannot land behind it. */
   inert?: boolean;
   /** Access arrived a moment ago. */
@@ -912,7 +915,7 @@ export function Conversation({
         bot={bot}
         transcript={transcript}
         liveOptions={{
-          connected: online,
+          connected: caughtUp,
           interactive,
           onRequestAccess: info.readOnly
             ? null
@@ -995,7 +998,7 @@ export function Conversation({
           gateway={connection.gatewayUrl}
           taskKey={task.key}
           transcript={transcript}
-          connected={online}
+          connected={caughtUp}
           notices={[
             ...stopNotices.map((notice) => ({
               ...notice,

@@ -1076,6 +1076,75 @@ test.describe("errors and resync", () => {
     await expect(page.getByTestId("status-strip")).toContainText("Reconnecting");
   });
 
+  test("F-104: back on the connection but not yet caught up, live work stays last seen until the task reloads", async ({
+    page,
+  }) => {
+    await open(page, "run-working");
+    const set = (patch: "drop" | "hello" | "loaded") =>
+      page.evaluate((step) => {
+        const fixture = (
+          window as unknown as {
+            clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+          }
+        ).clawtrateFixture;
+        fixture.setState((state) => {
+          const key = "agent:otto:disk-space";
+          if (step === "drop")
+            return {
+              ...state,
+              connection: {
+                ...state.connection,
+                status: "reconnecting",
+                retryAt: Date.now() + 4000,
+              },
+            };
+          if (step === "hello")
+            return {
+              ...state,
+              connection: {
+                ...state.connection,
+                status: "connected",
+                retryAt: null,
+                connectedAt: Date.now() + 5,
+              },
+              discovery: { ...state.discovery, status: "loading" },
+            };
+          return {
+            ...state,
+            discovery: { ...state.discovery, status: "ready" },
+            transcripts: {
+              ...state.transcripts,
+              [key]: { ...state.transcripts[key]!, loadedAt: Date.now() + 10 },
+            },
+          };
+        });
+      }, patch);
+    await set("drop");
+    await expect(page.locator(".app")).toHaveAttribute("data-connection", "lost");
+    await set("hello");
+    await expect(page.getByTestId("status-strip")).toContainText("catching up");
+    // Connected is not caught up: nothing moves, the line and the composer stay as they were.
+    await expect(page.locator(".app")).toHaveAttribute("data-connection", "lost");
+    await expect(page.getByTestId("status-phrase")).toHaveText(
+      "Reconnecting. Last seen reading backup-2026-11-15.log",
+    );
+    await expect(page.locator(".status-elapsed")).toHaveCount(0);
+    await expect(field(page)).toHaveAttribute(
+      "placeholder",
+      "Offline. Messages send when you reconnect.",
+    );
+    expect(
+      await page
+        .locator(".status-line .presence")
+        .evaluate((el) => getComputedStyle(el, "::before").animationName),
+    ).toBe("none");
+    await set("loaded");
+    await expect(page.getByTestId("status-strip")).toContainText("Synced");
+    await expect(page.locator(".app")).not.toHaveAttribute("data-connection", "lost");
+    await expect(page.getByTestId("status-phrase")).toHaveText("Reading backup-2026-11-15.log");
+    await expect(field(page)).toHaveAttribute("placeholder", "Steer Otto");
+  });
+
   test("F-107: after a reconnect the conversation catches up without showing a message twice", async ({
     page,
   }) => {
