@@ -933,11 +933,34 @@ export class ClawtrateClient {
     if (this.state.connection.status === "connected") {
       this.request("sessions.messages.unsubscribe", { key }).catch(() => {});
     }
+    this.keepLinkedRuns(key);
     this.store.update((state) => {
       const transcripts = { ...state.transcripts };
       delete transcripts[key];
       return { ...state, transcripts };
     });
+  }
+
+  /**
+   * A task let go that holds a run another followed task's send names (a
+   * recipient's run, while its sender's task is open): that run goes on being
+   * followed as a session nobody has open, so the sender's card keeps it and
+   * sees how it ends, rather than forgetting it and reading Sent again.
+   */
+  private keepLinkedRuns(key: string): void {
+    const leaving = this.state.transcripts[key];
+    if (!leaving) return;
+    const linked = new Set(
+      Object.values(this.state.transcripts)
+        .filter((transcript) => transcript.sessionKey !== key)
+        .flatMap((transcript) => Object.keys(transcript.linkedRuns)),
+    );
+    const kept = leaving.runs.filter((run) => linked.has(run.id));
+    if (kept.length === 0) return;
+    this.updateForeign(key, (activity) => ({
+      ...activity,
+      runs: [...activity.runs.filter((run) => !linked.has(run.id)), ...kept],
+    }));
   }
 
   /** How many viewers hold a transcript open. */
@@ -3371,6 +3394,24 @@ export class ClawtrateClient {
     this.dropRawOfRemovedSteps(key, current, next);
     this.setTranscript(key, () => withLive({ ...current, ...next }));
     this.afterActivity(key);
+    this.refreshLinkersOf(key, current.runs, next.runs);
+  }
+
+  /**
+   * A run in this task changed state, and another task's send names it (a
+   * recipient whose task is open beside its sender's): that task's card
+   * follows it now, not at its own next change.
+   */
+  private refreshLinkersOf(key: string, before: Run[], after: Run[]): void {
+    const changed = after.filter(
+      (run) => findRun({ ...emptyActivity, runs: before }, run.id)?.state !== run.state,
+    );
+    if (changed.length === 0) return;
+    for (const transcript of Object.values(this.state.transcripts)) {
+      if (transcript.sessionKey === key) continue;
+      if (changed.some((run) => transcript.linkedRuns[run.id]))
+        this.refreshLinkedRuns(transcript.sessionKey);
+    }
   }
 
   /**

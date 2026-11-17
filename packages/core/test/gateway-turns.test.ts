@@ -224,3 +224,56 @@ describe("a deleted session nobody had open", () => {
     client.stop();
   });
 });
+
+describe("a recipient's task let go while its sender's task is open", () => {
+  const PEER = "agent:marlow:main";
+
+  it("F-122: keeps following the recipient's run, so the sender's card sees it wait and end", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = (params) =>
+      (params as { sessionKey: string }).sessionKey === PEER
+        ? { messages: [], inFlightRun: { runId: "peer-r" } }
+        : { messages: [] };
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit(
+      "agent",
+      agentEvent("sender-r", 1, "tool", {
+        phase: "start",
+        name: "sessions_send",
+        toolCallId: "send-c",
+        args: { sessionKey: PEER, message: "A message" },
+      }),
+    );
+    gateway.emit(
+      "agent",
+      agentEvent("sender-r", 2, "tool", {
+        phase: "result",
+        name: "sessions_send",
+        toolCallId: "send-c",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "{}" }],
+          details: { status: "accepted", sessionKey: PEER, runId: "peer-r" },
+        },
+      }),
+    );
+    gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    // The recipient asks its own user: its run, waiting on that question, is carried into its
+    // task when the person opens it there. They answer there and go back: the task is let go.
+    gateway.emit("question.requested", questionRecord("peer-q", "peer-r", PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "waiting");
+    client.openSession(PEER);
+    await until(() => client.state.transcripts[PEER]?.status === "ready");
+    gateway.emit("question.resolved", { id: "peer-q", status: "answered" });
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    client.closeSession(PEER);
+    await until(() => client.state.transcripts[PEER] === undefined);
+    gateway.emit("agent", agentEvent("sender-r", 3, "lifecycle", { phase: "end" }));
+    await until(() => transcript().runs[0]?.state === "completed");
+    expect(transcript().linkedRuns["peer-r"]?.state).toBe("running");
+    gateway.emit("agent", agentEvent("peer-r", 2, "lifecycle", { phase: "end" }, PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "completed");
+    client.stop();
+  });
+});
