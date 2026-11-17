@@ -589,6 +589,49 @@ test.describe("steering, queueing and holding", () => {
     await expect(page.getByTestId("outgoing").filter({ hasText: "Then send me" })).toHaveCount(0);
   });
 
+  test("F-468: after a confirmed Stop a queued message stays on the shelf, Not sent, until Send or Remove", async ({
+    page,
+  }) => {
+    await open(page, "run-working");
+    await field(page).fill("Then send me a summary.");
+    await page.keyboard.press("Alt+Enter");
+    await expect(page.getByTestId("shelf-row")).toContainText("Queued");
+    await page.getByRole("button", { name: "Stop Otto" }).click();
+    await expect(page.getByTestId("stop-note")).toBeVisible();
+    // Nothing starts by itself.
+    const row = page.getByTestId("shelf-row");
+    await expect(row).toContainText("Not sent");
+    await expect(row).toContainText("Then send me a summary.");
+    await expect(page.getByTestId("status-line")).toHaveCount(0);
+    await expect(page.getByTestId("outgoing").filter({ hasText: "Then send me" })).toHaveCount(0);
+    await row.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByTestId("shelf-row")).toHaveCount(0);
+    await expect(page.getByTestId("outgoing").filter({ hasText: "Then send me" })).toHaveCount(1);
+    await expect(page.getByTestId("status-line")).toBeVisible();
+
+    await open(page, "stopped-not-sent");
+    await page.getByTestId("shelf-row").getByRole("button", { name: "Remove" }).click();
+    await expect(page.getByTestId("shelf-row")).toHaveCount(0);
+    await expect(field(page)).toBeFocused();
+  });
+
+  test("F-061: a queued message the gateway refused to start stays on the shelf: Couldn't start, Try again, Delete", async ({
+    page,
+  }) => {
+    await open(page, "queued-refused");
+    const row = page.getByTestId("shelf-row");
+    await expect(row).toHaveAttribute("data-tone", "danger");
+    await expect(row).toContainText("Couldn't start");
+    await expect(row).toContainText("the session's budget is used up");
+    await expect(page.getByTestId("outgoing")).toHaveCount(0);
+    await row.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByTestId("shelf-row")).toHaveCount(0);
+    await expect(page.getByTestId("outgoing")).toHaveCount(1);
+    await open(page, "queued-refused");
+    await page.getByTestId("shelf-row").getByRole("button", { name: "Delete" }).click();
+    await expect(page.getByTestId("shelf-row")).toHaveCount(0);
+  });
+
   test("F-421: a message sent while the run is stopping is queued, with no Send now", async ({
     page,
   }) => {

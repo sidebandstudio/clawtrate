@@ -132,6 +132,16 @@ export const LIVE_VIEWS: Array<{
     ready: (page) => expect(page.getByTestId("outgoing")).toContainText("Failed to send"),
   },
   {
+    scene: "stopped-not-sent",
+    rows: "F-468",
+    ready: (page) => expect(page.getByTestId("shelf-row")).toContainText("Not sent"),
+  },
+  {
+    scene: "queued-refused",
+    rows: "F-061",
+    ready: (page) => expect(page.getByTestId("shelf-row")).toContainText("Couldn't start"),
+  },
+  {
     scene: "send-unknown",
     rows: "F-075",
     ready: (page) =>

@@ -14,6 +14,7 @@ import { useBridge } from "./bridge.tsx";
 import { ArrowUpIcon, ChevronIcon, CloseIcon, FileIcon, PlusIcon } from "./icons.tsx";
 import {
   composerFor,
+  couldNotStart,
   questionPending,
   sendName,
   shelfMessages,
@@ -349,6 +350,70 @@ export function Composer({
   const run = transcript?.runs.find((each) => each.id === runId) ?? null;
   const asking = run && transcript ? questionPending(transcript, run) : false;
   for (const message of shelfMessages(transcript)) {
+    const send = (type: "retryMessage" | "deleteMessage" | "cancelQueued" | "sendQueuedNow") =>
+      act(() => bridge.send({ type, key: taskKey, messageId: message.id }));
+    if (message.status === "not-sent") {
+      rows.push(
+        <div className="shelf-row" key={message.id} data-kind="not-sent" data-testid="shelf-row">
+          <span className="glyph" data-state="stopped" aria-hidden="true" />
+          <span className="shelf-text">
+            <b>Not sent</b> <span>{message.text}</span>
+          </span>
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            onClick={() => send("retryMessage")}
+          >
+            Send
+          </button>
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            data-variant="quiet"
+            onClick={() => send("deleteMessage")}
+          >
+            Remove
+          </button>
+        </div>,
+      );
+      continue;
+    }
+    if (couldNotStart(message)) {
+      rows.push(
+        <div
+          className="shelf-row"
+          key={message.id}
+          data-kind="could-not-start"
+          data-tone="danger"
+          data-testid="shelf-row"
+        >
+          <span className="shelf-text" title={message.error ?? undefined}>
+            <b>Couldn't start</b> {message.error && <span>{message.error}</span>}{" "}
+            <span>{message.text}</span>
+          </span>
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            onClick={() => send("retryMessage")}
+          >
+            Try again
+          </button>
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            data-variant="quiet"
+            onClick={() => send("deleteMessage")}
+          >
+            Delete
+          </button>
+        </div>,
+      );
+      continue;
+    }
     const held = message.status === "held";
     rows.push(
       <div

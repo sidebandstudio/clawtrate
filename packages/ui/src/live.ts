@@ -301,21 +301,36 @@ export function sendName(mode: SendMode): string {
   }
 }
 
+/** A queued message the gateway refused to start: it stays on the shelf, "Couldn't start". */
+export function couldNotStart(message: OutgoingMessage): boolean {
+  return message.status === "failed" && message.mode === "queue";
+}
+
 /** Messages shown as your bubbles at the foot of the transcript, in the order sent. */
 export function outgoingBubbles(transcript: Transcript): OutgoingMessage[] {
   return transcript.outbox.filter(
     (message) =>
       message.status !== "queued" &&
       message.status !== "held" &&
+      message.status !== "not-sent" &&
       message.status !== "cancelled" &&
-      message.status !== "handled",
+      message.status !== "handled" &&
+      !couldNotStart(message),
   );
 }
 
-/** Rows on the shelf above the pill, oldest first. */
+/**
+ * Rows on the shelf above the pill, oldest first: queued and held messages,
+ * those left after a confirmed Stop, and queued ones the gateway refused to
+ * start. None of them is in the transcript, because none was sent.
+ */
 export function shelfMessages(transcript: Transcript | undefined): OutgoingMessage[] {
   return (transcript?.outbox ?? []).filter(
-    (message) => message.status === "queued" || message.status === "held",
+    (message) =>
+      message.status === "queued" ||
+      message.status === "held" ||
+      message.status === "not-sent" ||
+      couldNotStart(message),
   );
 }
 

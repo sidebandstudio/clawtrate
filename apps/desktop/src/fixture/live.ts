@@ -41,6 +41,8 @@ export const LIVE_SCENES = [
   "stop-failed",
   "send-failed",
   "send-unknown",
+  "stopped-not-sent",
+  "queued-refused",
   "offline-send",
 ] as const;
 
@@ -436,6 +438,44 @@ export function liveScene(
         })),
         steps: [],
       };
+    case "stopped-not-sent":
+      return {
+        initial: withRun(
+          base,
+          now,
+          {
+            state: "stopped",
+            stopRequestedAt: now - 3 * SECOND,
+            endedAt: now - 2 * SECOND,
+            text: REPLY,
+          },
+          {
+            outbox: [
+              message("msg-3", "Then send me a summary.", now - 3 * SECOND, {
+                mode: "queue",
+                status: "not-sent",
+                runId: null,
+              }),
+            ],
+          },
+        ),
+        steps: [],
+      };
+    case "queued-refused":
+      return {
+        initial: withTranscript(interactive(base), (transcript) => ({
+          ...transcript,
+          outbox: [
+            message("msg-3", "Then send me a summary.", now - 10 * SECOND, {
+              mode: "queue",
+              status: "failed",
+              runId: null,
+              error: "The gateway refused to start it: the session's budget is used up.",
+            }),
+          ],
+        })),
+        steps: [],
+      };
     case "send-unknown":
       return {
         initial: withTranscript(interactive(base), (transcript) => ({
@@ -573,6 +613,14 @@ export function liveCommand(
             runs: transcript.runs.map((each) =>
               each.id === command.runId && each.state === "stopping"
                 ? { ...each, state: "stopped", endedAt: Date.now() }
+                : each.state === "queued"
+                  ? { ...each, state: "cancelled" }
+                  : each,
+            ),
+            // As the engine does: nothing starts by itself after a confirmed Stop.
+            outbox: transcript.outbox.map((each) =>
+              each.status === "queued" || each.status === "held"
+                ? { ...each, status: "not-sent", runId: null }
                 : each,
             ),
           })),
@@ -651,8 +699,22 @@ export function liveCommand(
       update((transcript) => ({
         ...transcript,
         outbox: transcript.outbox.map((each) =>
-          each.id === command.messageId ? { ...each, status: "sending", error: null } : each,
+          each.id === command.messageId
+            ? { ...each, status: "sending", error: null, runId: command.messageId }
+            : each,
         ),
+        runs: transcript.runs.some((each) =>
+          ["running", "waiting", "stopping"].includes(each.state),
+        )
+          ? transcript.runs
+          : [
+              ...transcript.runs,
+              newRun(
+                command.messageId,
+                { state: "running", origin: "local", messageId: command.messageId },
+                now,
+              ),
+            ],
       }));
       return Promise.resolve();
     case "deleteMessage":
