@@ -304,4 +304,21 @@ describe("reconciling sent messages with history (F-075, F-107)", () => {
     ];
     expect(reconcileOutbox(activity, rows).outbox.map((m) => m.id)).toEqual(["m4"]);
   });
+
+  it("F-075 F-107: matches the user row the gateway keys as the send's key with :user appended", () => {
+    const activity: TaskActivity = {
+      ...emptyActivity,
+      outbox: [message("m1"), message("m2", { messageSeq: 7 })],
+    };
+    const rows = [
+      { role: "user", content: "hi", __openclaw: { id: "u1", seq: 6, idempotencyKey: "m1:user" } },
+      { role: "user", content: "hi", idempotencyKey: "m2:user", __openclaw: { id: "u2", seq: 7 } },
+      // Any other suffix is another key.
+      { role: "user", content: "hi", __openclaw: { id: "u3", seq: 8, idempotencyKey: "m3:other" } },
+    ];
+    const next = reconcileOutbox(activity, rows);
+    expect(next.outbox).toEqual([]);
+    const third = reconcileOutbox({ ...emptyActivity, outbox: [message("m3")] }, rows);
+    expect(third.outbox.map((m) => m.id)).toEqual(["m3"]);
+  });
 });
