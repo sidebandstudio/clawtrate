@@ -679,7 +679,8 @@ describe("instances side by side", () => {
 
     const alphaInst = testInstance(home, runRoot, "alpha");
     await stop(alphaInst);
-    expect(childFor(alphaGateway.pid).signalCode).not.toBeNull();
+    await exited(childFor(alphaGateway.pid));
+    expect(childFor(alphaGateway.pid).signalCode).toBe("SIGTERM");
     await reset(alphaInst);
     expect(existsSync(alpha.stateDir)).toBe(false);
 

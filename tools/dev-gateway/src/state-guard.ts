@@ -131,9 +131,13 @@ export type Identify = (pid: number) => string | null;
 
 export const processIdentity: Identify = (pid) => {
   if (!validPid(pid)) return null;
-  const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" });
-  const identity = result.status === 0 ? result.stdout.trim() : "";
-  return identity === "" ? null : identity;
+  const result = spawnSync("ps", ["-o", "stat=", "-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8",
+  });
+  const match = result.status === 0 ? /^\s*(\S+)\s+(.+?)\s*$/.exec(result.stdout) : null;
+  // A zombie has exited; only its parent has not collected it yet.
+  if (!match || match[1]!.startsWith("Z")) return null;
+  return match[2]!;
 };
 
 /** "none": not recorded. "unknown": recorded but not identifiable, so treated as running. */

@@ -133,6 +133,7 @@ function readRecord(path: string): RunRecord | null {
 }
 
 const alive = (proc: Proc) => processIdentity(proc.pid) === proc.identity;
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 /**
  * Remove everything a run record lists, synchronously, so it also works from a
@@ -257,7 +258,13 @@ export default async function globalSetup() {
     if (cleaned) return cleaned;
     // A dev-gateway command still running is ended first; the reset below
     // waits for the instance's lock, which that command holds until it exits.
-    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const command = { pid: child.pid!, identity: processIdentity(child.pid!) ?? "" };
+      child.kill("SIGTERM");
+      // Wait, synchronously, until it has exited: the reset must not see it running.
+      const deadline = Date.now() + 15_000;
+      while (alive(command) && Date.now() < deadline) sleepSync(100);
+    }
     cleaned = cleanUp(record);
     return cleaned;
   };
