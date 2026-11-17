@@ -561,3 +561,38 @@ test.describe("a task row's time", () => {
     }
   });
 });
+
+test.describe("the strip at twice the pixel density", () => {
+  test.use({ ...contextFor(PHONE, "light"), deviceScaleFactor: 2 });
+
+  test("the state is not shortened while the explanation can give way", async ({ page }) => {
+    await openFixture(page, `scene=offline&${OTTO_DISK}`, "light");
+    await page.evaluate(() =>
+      (
+        window as unknown as {
+          clawtrateFixture: { setState(f: (s: { connection: object }) => object): void };
+        }
+      ).clawtrateFixture.setState((s) => ({
+        ...s,
+        connection: {
+          ...s.connection,
+          error: {
+            code: "GATEWAY_NOT_ALLOWED",
+            message: "This host is not allowed to connect to ws://127.0.0.1:19580.",
+            hint: null,
+          },
+        },
+      })),
+    );
+    const state = page.getByTestId("status-strip").locator("strong");
+    await expect(state).toContainText("Can't reach the gateway");
+    // Fractional widths: the shown text fits its box, so no ellipsis is drawn.
+    const fit = await state.evaluate((e) => {
+      const shown = [...e.children].find((c) => getComputedStyle(c).display !== "none")!;
+      const range = document.createRange();
+      range.selectNodeContents(shown);
+      return { text: range.getBoundingClientRect().width, box: e.getBoundingClientRect().width };
+    });
+    expect(fit.text).toBeLessThanOrEqual(fit.box + 0.01);
+  });
+});

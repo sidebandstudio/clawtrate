@@ -1527,8 +1527,11 @@ textarea {
   cursor: pointer;
 }
 
+/* The state keeps its full width until it alone is wider than the space; only
+   then does it shorten. */
 .status-strip-text strong {
-  flex: 0 1 auto;
+  flex: none;
+  max-width: 100%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
