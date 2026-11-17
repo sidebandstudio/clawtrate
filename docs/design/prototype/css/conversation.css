@@ -2459,3 +2459,455 @@ dl.standing-grid {
   opacity: 1;
   cursor: default;
 }
+
+/* Action cards ----------------------------------------------------------------------
+   One line per action, in the Messaged card's form: a verb, the kind's icon and
+   what it acted on, one short fact, the state. Actions of one kind in a row fold
+   into one card with a count. Cards with nothing between them form a column:
+   2 px apart, their touching corners 6 px. (conversation.md, section 7) */
+
+.action > summary {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto 12px;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px 0 14px;
+  border-radius: inherit;
+  font-size: var(--text-md);
+}
+
+.action > summary:hover {
+  background: var(--bg-hover);
+}
+
+.action-sentence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.action-verb {
+  flex: none;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.action-what {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.action-what > .icon,
+.action-what > .glyph {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--text-faint);
+}
+
+.action-what > .glyph {
+  width: 12px;
+  height: 12px;
+  margin: 2px;
+}
+
+.action-object {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.action-detail {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.action-detail > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.action-detail .mono {
+  font-size: var(--text-xs);
+}
+
+.action-detail[data-tone="danger"] {
+  color: var(--danger);
+}
+
+/* A non-zero exit code is the command's answer, not a failure: plain text. */
+.action-exit {
+  flex: none;
+  color: var(--text);
+}
+
+.action-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.action-time,
+.action-elapsed {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+.action[data-status="running"] .action-what > .glyph {
+  color: var(--accent);
+}
+
+.action:is([data-status="failed"], [data-status="blocked"]):not([data-fold]) > summary .action-verb,
+.action:is([data-status="failed"], [data-status="blocked"]):not([data-fold]) > summary .action-object {
+  color: var(--danger);
+}
+
+.action-detail[data-tone="muted"] {
+  color: var(--text-muted);
+}
+
+/* A T3 Code thread's card: its calls, each with its own Raw. */
+.t3-count {
+  color: var(--text-faint);
+}
+
+.t3-item .exchange-meta {
+  flex-wrap: wrap;
+}
+
+.t3-item .exchange-meta .state {
+  margin-left: auto;
+}
+
+.t3-item .card-actions {
+  padding: 2px 0 0;
+}
+
+.t3-item .exchange-note {
+  margin-top: 4px;
+}
+
+.action-plan li[data-status="pending"] {
+  color: var(--text-muted);
+}
+
+.action[data-fresh="true"] {
+  animation: rise var(--dur-base) var(--ease-out) both;
+}
+
+/* A column of cards. */
+:is(.action, .messaged) + :is(.action, .messaged) {
+  margin-top: 2px;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+}
+
+:is(.action, .messaged):has(+ :is(.action, .messaged)) {
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+.msg + :is(.action, .messaged),
+:is(.action, .messaged) + .msg,
+.thought[data-place="reply"] + .msg {
+  margin-top: 8px;
+}
+
+.messaged > summary {
+  border-radius: inherit;
+}
+
+.action-body {
+  animation: fade-in var(--dur-quick) linear both;
+}
+
+.action:not([data-fold]) > .action-body > .step-body {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+.action-thought {
+  padding: 0 10px 2px 8px;
+}
+
+.fold-rows > li > .step > .action-thought {
+  padding-left: 30px;
+}
+
+/* An opened fold: one row per action, the shell's step rows. */
+.fold-rows {
+  margin: 0;
+  padding: 0 4px 6px;
+  list-style: none;
+}
+
+/* "Thought for 4s": inside a card, or over a reply. Folded, always, until opened. */
+.thought {
+  width: fit-content;
+  max-width: 100%;
+}
+
+.thought[open] {
+  width: 100%;
+}
+
+.thought > summary.event-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  margin: 0;
+  padding: 0 10px 0 6px;
+  border-radius: var(--radius-pill);
+}
+
+.thought > summary.event-line:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.thought[data-place="reply"] {
+  margin-top: 6px;
+}
+
+.thought[data-place="reply"] + .msg {
+  margin-top: 4px;
+}
+
+.thought-body {
+  padding: 2px 6px 10px;
+  animation: fade-in var(--dur-quick) linear both;
+}
+
+.thought-body .step-thought + .step-thought {
+  margin-top: 8px;
+}
+
+.thought-body .card-actions {
+  padding: 6px 0 0;
+}
+
+/* The run line: after the run, a summary. Opened, the run's record. */
+.run-line {
+  margin-top: 6px;
+}
+
+.run-line > summary.event-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  margin: 0;
+  padding: 0 10px 0 6px;
+  border-radius: var(--radius-pill);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-line > summary.event-line:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.run-failed {
+  color: var(--danger);
+}
+
+.run-line > .activity-foot {
+  margin: 2px 0 4px;
+  padding: 0 6px;
+}
+
+/* Readable views particular to a kind. */
+.action-links {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+}
+
+.action-links li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-height: 26px;
+}
+
+.action-links a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.action-links span {
+  color: var(--text-faint);
+}
+
+.action-plan {
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-md);
+}
+
+.action-plan li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+}
+
+.action-plan li[data-done="true"] {
+  color: var(--text-muted);
+}
+
+.plan-dot {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--text-faint);
+  border-radius: 50%;
+}
+
+/* The T3 Code card: a line of its own for a later call, and a joining call. */
+.messaged[data-line] .messaged-verb {
+  white-space: nowrap;
+}
+
+.messaged[data-joining="true"] {
+  animation: close-up var(--dur-base) var(--ease-out) both;
+}
+
+@keyframes close-up {
+  to {
+    height: 0;
+    margin-top: 0;
+    opacity: 0;
+  }
+}
+
+.messaged[data-changed="true"] > summary > * {
+  animation: fade-in var(--dur-base) linear both;
+}
+
+/* Scenes in the scripted page: the three test runs. */
+.scene-note {
+  margin: 0 0 8px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+@container conversation (max-width: 560px) {
+  /* The verb and the object are one sentence that wraps over at most two lines, so
+     the object stays readable in every state; the detail is the last line. */
+  .action > summary {
+    grid-template-columns: minmax(0, 1fr) auto 12px;
+    align-items: start;
+    gap: 0 8px;
+    padding-top: 9px;
+    padding-bottom: 9px;
+  }
+
+  .action-sentence {
+    display: -webkit-box;
+    grid-column: 1;
+    grid-row: 1;
+    overflow: hidden;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-height: 1.45;
+  }
+
+  .action-sentence .action-what {
+    display: inline;
+  }
+
+  .action-sentence .action-what > .icon,
+  .action-sentence .action-what > .agent-mark,
+  .action-sentence .action-what > .glyph {
+    display: inline-block;
+    margin: 0 4px 0 0;
+    vertical-align: -2px;
+  }
+
+  .action-sentence .action-what > .agent-mark {
+    display: inline-grid;
+    vertical-align: -4px;
+  }
+
+  .action-object {
+    overflow: visible;
+    overflow-wrap: break-word;
+    white-space: normal;
+  }
+
+  .action-state {
+    grid-column: 2;
+    grid-row: 1;
+    min-height: 20px;
+  }
+
+  .action > summary > .chevron {
+    grid-column: 3;
+    grid-row: 1;
+    margin-top: 4px;
+  }
+
+  .action-detail {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin-top: 2px;
+  }
+
+  .action-detail:empty {
+    display: none;
+  }
+
+  .action:not([data-fold]) > .action-body > .step-body {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+}
+
+[data-input="touch"] .action > summary,
+[data-input="touch"] .thought > summary,
+[data-input="touch"] .run-line > summary {
+  min-height: var(--tap-min);
+}
+
+[data-input="touch"] .action > summary {
+  font-size: var(--text-base);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .action[data-fresh="true"],
+  .action-body,
+  .thought-body,
+  .messaged[data-joining="true"],
+  .messaged[data-changed="true"] > summary > * {
+    animation: none;
+  }
+}
+
+[data-motion="reduce"] .action[data-fresh="true"],
+[data-motion="reduce"] .action-body,
+[data-motion="reduce"] .thought-body,
+[data-motion="reduce"] .messaged[data-joining="true"],
+[data-motion="reduce"] .messaged[data-changed="true"] > summary > * {
+  animation: none;
+}

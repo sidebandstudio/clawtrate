@@ -550,6 +550,36 @@ test("the drawer is modal, and focus follows it across the docking width", async
   await page.getByRole("button", { name: "Hide work panel" }).click();
 });
 
+/** A run the engine would hold, for injected state: running, started elsewhere. */
+const INJECTED_RUN = {
+  id: "injected",
+  bound: true,
+  state: "running",
+  origin: "gateway",
+  messageId: null,
+  anchorItemId: null,
+  phase: null,
+  model: null,
+  textSource: "chat",
+  textItemId: null,
+  textComplete: false,
+  steps: [],
+  pendingCards: [],
+  suspendedCards: [],
+  closedCards: [],
+  endedAt: null,
+  error: null,
+  stopRequestedAt: null,
+  finishedBeforeStop: false,
+  stopError: null,
+  lastSeq: null,
+  ending: null,
+  outcomeKnown: true,
+  attemptErrors: [],
+  omittedSteps: 0,
+  nextReasoning: 0,
+};
+
 /** Proxy the bridge socket so a test can inject host state into the page. */
 async function proxyBridge(page: Page) {
   let lastState: Record<string, unknown> | null = null;
@@ -590,8 +620,12 @@ test("a streamed reply does not pull a reader away from older messages", async (
   const key = "agent:otto:disk-space";
   bridge.freeze();
   bridge.inject((state) => {
-    const transcripts = state.transcripts as Record<string, Record<string, unknown>>;
-    transcripts[key]!.live = { runId: "injected", text: "Checking the disk again." };
+    const transcripts = state.transcripts as Record<string, { runs: unknown[] }>;
+    transcripts[key]!.runs.push({
+      ...INJECTED_RUN,
+      text: "Checking the disk again.",
+      startedAt: Date.now(),
+    });
     return state;
   });
   await expect(page.getByTestId("live-turn")).toHaveCount(1);
@@ -1020,11 +1054,386 @@ test("F-263: a real gateway's protocol mismatch names the protocol it speaks", a
   expect(protocolMismatch(reply.error?.details)).toEqual({ gateway: 4, client: 4 });
 });
 
-test("leaves every other instance's gateway as it found it", () => {
-  // Same processes on the same ports as before this run's instance started.
-  const before = JSON.parse(process.env.CLAWTRATE_E2E_OTHERS!) as string[];
-  expect(before.some((row) => row.startsWith(`${process.env.CLAWTRATE_E2E_SENTINEL} `))).toBe(true);
-  expect(runningOthers([INSTANCE], [process.env.CLAWTRATE_E2E_SENTINEL!])).toEqual(
-    expect.arrayContaining(before),
+// The live conversation against this run's real development gateway. The
+// scripted model answers a message sent from the app with a short reply and
+// a reasoning segment; it cannot yet stream slowly, ask or need approval.
+
+/** Pending device requests on this run's gateway, newest last. */
+async function pendingRequests(): Promise<string[]> {
+  const listed = parseJsonOutput<{ pending?: Array<{ requestId: string }> }>(
+    await openclaw(["devices", "list", "--json"]),
   );
+  return (listed.pending ?? []).map((request) => request.requestId);
+}
+
+/** Record, on every change, what the live turn and the status line show. */
+async function watchRun(page: Page) {
+  await page.evaluate(() => {
+    const seen: Array<Record<string, unknown>> = [];
+    (window as unknown as { __seen: unknown }).__seen = seen;
+    new MutationObserver(() => {
+      const live = document.querySelector("[data-testid=live-turn] .bubble");
+      seen.push({
+        at: performance.now(),
+        live: live?.textContent ?? null,
+        caret: !!live?.querySelector(".stream-caret"),
+        busy: live?.getAttribute("aria-busy") ?? null,
+        status: !!document.querySelector("[data-testid=status-line]"),
+        phrase: document.querySelector("[data-testid=status-phrase]")?.textContent ?? null,
+        steer: [...document.querySelectorAll("[data-testid=outgoing] .msg-caption")].some(
+          (caption) => caption.textContent === "Steer",
+        ),
+      });
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+  return () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __seen: Array<Record<string, unknown>> }).__seen as Array<{
+          at: number;
+          live: string | null;
+          caret: boolean;
+          busy: string | null;
+          status: boolean;
+          phrase: string | null;
+          steer: boolean;
+        }>,
+    );
+}
+
+const composer = (page: Page) => page.getByTestId("composer-input");
+
+test("F-456: a refused request leaves the read tier as it was; an approved one gives the composer", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Disk almost full on the media box");
+  const bar = page.getByRole("region", { name: "Access" });
+  await expect(bar).toContainText("Read-only.");
+  await expect(composer(page)).toHaveCount(0);
+
+  // Asked only when the person chooses to; the owner refuses it on the gateway's machine.
+  expect(await pendingRequests()).toEqual([]);
+  await bar.getByRole("button", { name: "Request access" }).click();
+  await expect(bar).toContainText("Waiting for the gateway's owner.");
+  await expect(bar.locator(".command code")).toHaveText(
+    `pnpm dev-gateway approve --instance ${INSTANCE}`,
+  );
+  const [refused] = await pendingRequests();
+  expect(refused).toBeTruthy();
+  await expect(bar).toContainText(`Request ${refused!.slice(0, 8)}`);
+  await openclaw(["devices", "reject", refused!]);
+  await expect(bar).toContainText(
+    "The request was denied. Nothing changed. This device can still read.",
+  );
+  // The old authorization stays: the conversation still reads.
+  await expect(page.getByTestId("transcript-turn").first()).toBeVisible();
+
+  // Asked again and approved: the composer takes the bar's place.
+  await bar.getByRole("button", { name: "Request again" }).click();
+  await expect(bar).toContainText("Waiting for the gateway's owner.");
+  devGateway(INSTANCE, "approve");
+  await expect(composer(page)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("region", { name: "Access" })).toHaveCount(0);
+  await expect(page.getByTestId("status-strip")).toContainText("Access granted");
+  const gateway = page.getByRole("button", { name: /, connected\. Open the gateway menu\.$/ });
+  await expect(gateway).toBeVisible();
+});
+
+test("F-081 F-082 F-083 F-085 F-089 F-095 F-433: a sent message shows the status line within a second, its reply streams in, and the line leaves when the run completes", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  const seen = await watchRun(page);
+  // A reply that streams for a few seconds, so it is on screen while the run goes on.
+  await composer(page).fill("How full is the backup disk this week? #stream 3");
+  const sent = Date.now();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible({ timeout: 1000 });
+  expect(Date.now() - sent).toBeLessThan(1000);
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+
+  const samples = await seen();
+  // The phrase was never empty, never named the bot, and started at Thinking.
+  const phrases = samples.flatMap((sample) => (sample.phrase === null ? [] : [sample.phrase]));
+  expect(phrases[0]).toBe("Thinking");
+  expect(phrases.every((phrase) => phrase.trim().length > 0 && !/Otto/.test(phrase))).toBe(true);
+  // The reply was on screen, streaming with its caret, while the run was still going.
+  expect(
+    samples.some(
+      (sample) => sample.live && sample.caret && sample.busy === "true" && sample.status,
+    ),
+  ).toBe(true);
+  // Once complete, history holds the message and its reply once each.
+  await expect(
+    page.getByText("How full is the backup disk this week? #stream 3", { exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    page
+      .getByTestId("transcript-turn")
+      .filter({ hasText: "Here is a long answer, streamed slowly." }),
+  ).toHaveCount(1);
+  await expect(page.getByTestId("outgoing")).toHaveCount(0);
+  await expect(page.getByTestId("live-turn")).toHaveCount(0);
+});
+
+test("F-097: Stop during a real run is offered beside Send, and the gateway's confirmation ends the run as stopped", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  await composer(page).fill("Check the backup disk once more, slowly. #slow 15");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Steer this turn" })).toBeVisible();
+  await page.getByRole("button", { name: "Stop Otto" }).click();
+  await expect(page.getByTestId("stop-note").last()).toContainText(
+    "Completed steps are not undone.",
+    { timeout: 30_000 },
+  );
+  await expect(page.getByTestId("stop-note").last()).toContainText(/^Stopped/);
+  await expect(page.getByTestId("status-line")).toHaveCount(0);
+  // "Stopping…" shows until the gateway confirms; on loopback the
+  // confirmation can land in the same snapshot, so it is checked in the fixture.
+});
+
+test("F-097: a typed /stop stops the run, and the note does not say it came from elsewhere", async ({
+  page,
+}) => {
+  await openShell(page);
+  // A task of its own: on this gateway a typed /stop can bring back a turn stopped earlier in the same task.
+  await openTask(page, "Otto", "List the workspace (approved)");
+  await composer(page).fill("Look through every backup set again. #slow 15");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await composer(page).fill("/stop");
+  await page.keyboard.press("Enter");
+  const note = page.getByTestId("stop-note").last();
+  await expect(note).toContainText("Completed steps are not undone.", { timeout: 30_000 });
+  await expect(note).not.toContainText("another device");
+  await expect(page.getByTestId("status-line")).toHaveCount(0);
+});
+
+test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Certificate renewal warning");
+  await composer(page).fill("Which certificate is it? #stream 3");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await composer(page).fill("And when does it renew?");
+  await page.keyboard.press("Alt+Enter");
+  const row = page.getByTestId("shelf-row");
+  await expect(row).toContainText("Queued");
+  await expect(row).toContainText("And when does it renew?");
+  await expect(row).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  const turns = page.getByTestId("transcript-turn");
+  await expect(turns.filter({ hasText: "And when does it renew?" })).toHaveCount(2);
+  // In the order sent: the queued message came after the first one's reply.
+  const order = await turns.evaluateAll((all) => all.map((turn) => turn.textContent ?? ""));
+  const first = order.findIndex((text) => text.includes("Which certificate is it?"));
+  const queued = order.findIndex((text) => text === "And when does it renew?");
+  expect(first).toBeGreaterThan(-1);
+  expect(queued).toBeGreaterThan(first + 1);
+});
+
+test("F-096: a message sent while the run works is steered into it and captioned Steer once accepted", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  const seen = await watchRun(page);
+  await composer(page).fill("Start on the backup report. #slow-tool 5");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await composer(page).fill("Only the photos set, please.");
+  await expect(page.getByRole("button", { name: "How to send: Steer" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  expect((await seen()).some((sample) => sample.steer)).toBe(true);
+  // The gateway took it into the run; on screen it stays, as its bubble until history settles it.
+  await expect
+    .poll(() => gatewayHasMessage("agent:otto:backup-check", "Only the photos set, please."), {
+      timeout: 30_000,
+    })
+    .toBe(true);
+  await expect(
+    page.locator(".transcript").getByText("Only the photos set, please.", { exact: true }),
+  ).not.toHaveCount(0);
+  await expect.poll(() => gatewayIdle("agent:otto:backup-check"), { timeout: 30_000 }).toBe(true);
+});
+
+test("F-058: two tasks of one bot run at the same time", async ({ page }) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Disk almost full on the media box");
+  await composer(page).fill("First of two at once. #stream 5");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await openTask(page, "Otto", "Certificate renewal warning");
+  await composer(page).fill("Second of two at once.");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  await openTask(page, "Otto", "Disk almost full on the media box");
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  // The gateway's own record: the second task's message arrived before the
+  // first task's reply to its own message was recorded.
+  type Row = { role: string; content?: unknown; __openclaw?: { recordTimestampMs?: number } };
+  const rows = async (key: string) =>
+    (await gatewayCall<{ messages: Row[] }>("chat.history", { sessionKey: key, limit: 40 }))
+      .messages;
+  const at = (row: Row | undefined) => row?.__openclaw?.recordTimestampMs ?? Number.NaN;
+  const said = (row: Row, text: string) => JSON.stringify(row.content ?? "").includes(text);
+  /** The first reply recorded after the user's row that says `text`. */
+  const replyTo = (list: Row[], text: string) => {
+    const asked = list.findLastIndex((row) => row.role === "user" && said(row, text));
+    return asked < 0 ? undefined : list.slice(asked + 1).find((row) => row.role === "assistant");
+  };
+  let firstReplied = Number.NaN;
+  await expect
+    .poll(
+      async () => (firstReplied = at(replyTo(await rows("agent:otto:disk-space"), "First of two"))),
+      {
+        timeout: 30_000,
+      },
+    )
+    .not.toBeNaN();
+  const second = await rows("agent:otto:cert-renewal");
+  const secondAsked = at(
+    second.findLast((row) => row.role === "user" && said(row, "Second of two")),
+  );
+  expect(secondAsked).toBeLessThan(firstReplied);
+  await expect(
+    page.getByTestId("transcript-turn").filter({ hasText: "First of two at once." }),
+  ).toHaveCount(1);
+  await expect(
+    page
+      .getByTestId("transcript-turn")
+      .filter({ hasText: "Here is a long answer, streamed slowly." }),
+  ).not.toHaveCount(0);
+});
+
+test("F-282: Start as new task runs the message in a new task under the same bot", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  const tasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
+  const before = await tasks.count();
+  await composer(page).fill("Plan the next restore test.");
+  await page.keyboard.press("ControlOrMeta+Shift+Enter");
+  await expect(page.getByTestId("announcer")).toHaveText("Started as a new task");
+  await expect(composer(page)).toHaveValue("");
+  await expect(page.getByRole("heading", { level: 1, name: "Weekly backup check" })).toBeVisible();
+  await expect(tasks).toHaveCount(before + 1, { timeout: 20_000 });
+  // The new task holds the message, and the bot ran it there.
+  const titles = await tasks.allTextContents();
+  const known = ["Weekly backup check", "Certificate renewal warning", "Disk almost full"];
+  const fresh = titles.findIndex((title) => !known.some((each) => title.includes(each)));
+  expect(fresh).toBeGreaterThan(-1);
+  await tasks.nth(fresh).click();
+  const turns = page.getByTestId("transcript-turn");
+  await expect(turns.filter({ hasText: "Plan the next restore test." }).first()).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.locator(".transcript")).toContainText(
+    "This is the scripted development model",
+    {
+      timeout: 20_000,
+    },
+  );
+});
+
+/** Whether the gateway has nothing in flight or waiting in a task, so a check leaves it as it found it. */
+async function gatewayIdle(key: string): Promise<boolean> {
+  const history = await gatewayCall<{
+    inFlightRun?: unknown;
+    pendingInputs?: { items?: unknown[] };
+  }>("chat.history", { sessionKey: key, limit: 1 });
+  return !history.inFlightRun && (history.pendingInputs?.items ?? []).length === 0;
+}
+
+/** Whether the gateway's history of a task holds a message of yours with this text. */
+async function gatewayHasMessage(key: string, text: string): Promise<boolean> {
+  const history = await gatewayCall<{ messages: Array<{ role: string; content?: unknown }> }>(
+    "chat.history",
+    { sessionKey: key, limit: 40 },
+  );
+  return history.messages.some(
+    (row) => row.role === "user" && JSON.stringify(row.content ?? "").includes(text),
+  );
+}
+
+test("F-468: a message queued behind a slow reply stays Not sent after a confirmed Stop, and no run starts", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Weekly backup check");
+  // The scripted model's slow reply: still going when Stop is pressed, whatever the machine.
+  await composer(page).fill("#slow 15");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  await composer(page).fill("Then send me a summary of the stop test.");
+  await page.keyboard.press("Alt+Enter");
+  const row = page
+    .getByTestId("shelf-row")
+    .filter({ hasText: "Then send me a summary of the stop test." });
+  await expect(row).toContainText("Queued");
+  await page.getByRole("button", { name: "Stop Otto" }).click();
+  const note = page.getByTestId("stop-note").last();
+  await expect(note).toContainText("Completed steps are not undone.", { timeout: 30_000 });
+  await expect(note).toContainText(/^Stopped/);
+  // The engine decides when the stop is confirmed: the message stays, not sent, until asked.
+  await expect(row).toContainText("Not sent");
+  await expect(row.getByRole("button", { name: "Send" })).toBeVisible();
+  await expect(page.getByTestId("status-line")).toHaveCount(0);
+  expect(
+    await gatewayHasMessage("agent:otto:backup-check", "Then send me a summary of the stop test."),
+  ).toBe(false);
+  // Removed, it never reaches the gateway.
+  await row.getByRole("button", { name: "Remove" }).click();
+  await expect(row).toHaveCount(0);
+  await expect.poll(() => gatewayIdle("agent:otto:backup-check"), { timeout: 30_000 }).toBe(true);
+});
+
+test("F-468: a real question holds a message typed while it is pending, and answering releases it", async ({
+  page,
+}) => {
+  await openShell(page);
+  await openTask(page, "Otto", "Disk almost full on the media box");
+  await composer(page).fill("#ask");
+  await page.keyboard.press("Enter");
+  const card = page.getByTestId("question-card");
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("status-phrase")).toHaveText("Waiting for you");
+  const text = "Also keep anything from this month, as asked.";
+  await composer(page).fill(text);
+  await page.keyboard.press("Enter");
+  const row = page.getByTestId("shelf-row").filter({ hasText: text });
+  await expect(row).toContainText("Held until you answer");
+  await expect(row.getByRole("button", { name: "Send now" })).toHaveCount(0);
+  await expect(page.getByTestId("needs-you")).toContainText("Otto asked you a question");
+  expect(await gatewayHasMessage("agent:otto:disk-space", text)).toBe(false);
+  // Answering the question, the last one pending, releases the held message.
+  await card.locator(".option").first().click();
+  await expect(row).toHaveCount(0, { timeout: 30_000 });
+  await expect
+    .poll(() => gatewayHasMessage("agent:otto:disk-space", text), { timeout: 30_000 })
+    .toBe(true);
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByTestId("transcript-turn").filter({ hasText: text })).not.toHaveCount(0);
+});
+
+test("leaves every other instance's gateway as it found it", () => {
+  // Same processes on the same ports as before this run's instance started: the default
+  // instance and this run's sentinel. Another named instance belongs to other work on the
+  // machine and may stop or restart meanwhile.
+  const sentinel = process.env.CLAWTRATE_E2E_SENTINEL!;
+  const before = (JSON.parse(process.env.CLAWTRATE_E2E_OTHERS!) as string[]).filter(
+    (row) => row.startsWith("(default) ") || row.startsWith(`${sentinel} `),
+  );
+  expect(before.some((row) => row.startsWith(`${sentinel} `))).toBe(true);
+  expect(runningOthers([INSTANCE], [sentinel])).toEqual(expect.arrayContaining(before));
 });

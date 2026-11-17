@@ -426,15 +426,15 @@
   S.t3Sent =
     "In backup-scripts, add /srv/media/transcode-cache to the exclude list in weekly.sh. Also add a check that fails the run when an excluded path shows up in the transfer list.";
   S.t3First = "In backup-scripts, add the cache to the exclude list in weekly.sh.";
-  S.t3Link = "https://t3code.example/threads/18";
-  const t3Returned = "Accepted. Thread 18 in backup-scripts.";
+  S.t3Link = "https://t3.example/threads/env-home/mcp:6f0c2b1e-9d4a-4c31-b8f7-2a5e0d91c4aa";
+  const t3Returned = "Thread started in backup-scripts; its first run: Running.";
 
   // link: the result carries a link. fields: the arguments carry target fields.
   // stopped: the bot was stopped after the call was made. checked: a later call named this one.
   S.t3Body = (state, { link = true, fields = true, stopped = false, checked = false } = {}) => {
     const made = state === "call-made";
-    const args = { text: S.t3Sent, ...(fields ? { project: "backup-scripts", branch: "main" } : {}) };
-    const result = { status: "accepted", thread: 18, ...(link ? { url: S.t3Link } : {}) };
+    const args = { message: S.t3Sent, title: "Exclude the transcode cache", ...(fields ? { projectId: "backup-scripts", workspaceStrategy: { type: "worktree", baseRef: "main", branch: "main" } } : { scratch: true }) };
+    const result = { threadId: "mcp:6f0c2b1e-9d4a-4c31-b8f7-2a5e0d91c4aa", ...(link ? { link: S.t3Link } : {}), projectId: "backup-scripts", runId: "run_t3_1", status: "running" };
     return (
       CT.exchange([
         {
@@ -466,9 +466,9 @@
             `<a class="link-button" href="#" data-href="${S.t3Link}" data-action="open-thread" aria-label="Open the T3 Code thread in your browser">Open thread${CT.icon("external")}</a>`
           : "",
         {
-          tool: "t3code__send_message",
+          tool: "t3code__t3_thread_launch",
           args: json(args),
-          result: made ? toolResult(json(result)) : "",
+          result: made ? json({ content: [{ type: "text", text: `structuredContent:\n${JSON.stringify(result)}` }], details: { mcpServer: "t3code", mcpTool: "t3_thread_launch", structuredContent: result }, isError: false }) : "",
           error: state === "failed" ? "connect ECONNREFUSED: the coding agent's server did not answer" : "",
           running: state === "call-started" || state === "approval",
           timing: made || state === "failed" ? timing("5:25:41 PM", "5:25:42 PM", "0.8 s") : timing("5:25:41 PM"),
@@ -478,6 +478,8 @@
     );
   };
 
+  S.t3Followup = "Also add a test for the guard, and open a pull request with both changes.";
+
   S.messageStepBody = (state) =>
     CT.stepBody({
       readable:
@@ -485,22 +487,6 @@
         CT.codeBlock({ label: "Sent", copy: "sent text", text: S.marlowSent }) +
         `<p class="exchange-note">${CT.linkButton("Show the card", { action: "show-card", attrs: 'data-card="m-marlow"' })}</p>`,
       raw: S.marlowRaw(state),
-    });
-
-  S.agentStepBody = (state) =>
-    CT.stepBody({
-      readable:
-        CT.fields([["To", "T3 Code"], ["Project", "backup-scripts"], ["Branch", "main"], ["State", CT.stateWords[state]]]) +
-        CT.codeBlock({ label: "Sent", copy: "sent text", text: S.t3Sent }) +
-        `<p class="exchange-note">${CT.linkButton("Show the card", { action: "show-card", attrs: 'data-card="m-t3"' })}</p>`,
-      raw: {
-        tool: "t3code__send_message",
-        args: json({ text: S.t3Sent, project: "backup-scripts", branch: "main" }),
-        result: state === "call-made" ? toolResult(json({ status: "accepted", thread: 18, url: S.t3Link })) : "",
-        running: state !== "call-made",
-        timing: state === "call-made" ? timing("5:25:41 PM", "5:25:42 PM", "0.8 s") : timing("5:25:41 PM"),
-        ids: S.ids("call_01HXK9T"),
-      },
     });
 
   // Approvals -----------------------------------------------------------------------
@@ -608,6 +594,254 @@
       ],
     ],
     ids: [["Question", "qst_90a2"], ["Run", "run_7f3a91c2"], ["Session", "agent:otto:weekly-backup-check"]],
+  };
+
+  // Action cards: one fixture call per kind ----------------------------------------------
+  //
+  // The shapes of `args` and `details` follow what a development gateway recorded
+  // for each family (docs/decisions.md, "What each kind of tool call looks like").
+  // Families that cannot run there (web pages, posts on X, memory search, the
+  // browser, the computer, media, channels, helpers) use samples in the app's own
+  // shape, and their open points say so. Every name and text here is invented.
+
+  const at = (s) => `5:2${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} PM`;
+  let tick = 0;
+  const call = (id, name, args, more = {}) => {
+    tick += 3;
+    return { id, name, args, started: at(tick), ended: at(tick + 1), took: "0.4s", ...more };
+  };
+  const diff = (path, added, removed = []) =>
+    [`--- a/${path}`, `+++ b/${path}`, "@@ -1,3 +1,6 @@", ...removed.map((l) => `-${l}`), ...added.map((l) => `+${l}`)].join("\n");
+  const notes = "# House log\n\n## Nov 9\n\nSmoke alarms tested; all four fine.\n\n## Nov 2\n\nGutters cleared before the storm.";
+  const plan = (doneCount) =>
+    ["Read last night's backup log", "Compare it with last week's", "Move the cache out of the backup", "Write the house log entry"].map((step, i) => ({ step, status: i < doneCount ? "completed" : i === doneCount ? "in_progress" : "pending" }));
+
+  // Results go through each kind's adapter (kinds.js): a result without an error flag
+  // is "done" only when it carries what the kind's adapter needs.
+  const xc = (text) => `<<<EXTERNAL_UNTRUSTED_CONTENT source="web_fetch">>>\n${text}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>`;
+  const t3sc = (sc) => `structuredContent:\n${JSON.stringify(Object.fromEntries(Object.entries(sc).sort(([a], [b]) => a.localeCompare(b))))}`;
+  S.t3Thread = "mcp:6f0c2b1e-9d4a-4c31-b8f7-2a5e0d91c4aa";
+  S.t3ThreadLink = `https://t3.example/threads/env-home/${S.t3Thread}`;
+  const t3 = (id, tool, args, sc, more = {}) =>
+    call(id, `t3code__${tool}`, args, {
+      mcp: { server: "t3code", tool },
+      details: { mcpServer: "t3code", mcpTool: tool, structuredContent: sc },
+      text: t3sc(sc),
+      ...more,
+    });
+
+  S.calls = {
+    read: call("call_7a01", "read", { path: "logs/backup-2026-11-15.log" }, { text: S.log, details: { kind: "file", content: "" }, took: "0.6s" }),
+    read2: call("call_7a02", "read", { path: "notes/house-log.md" }, { text: notes, took: "0.2s" }),
+    readFail: call("call_7a03", "read", { path: "logs/backup-2026-11-08.log" }, { status: "failed", isError: true, text: "ENOENT: no such file or directory, open 'logs/backup-2026-11-08.log'", took: "0.1s" }),
+    list: call("call_7a04", "ls", { path: "logs/archive" }, { text: "backup-2026-10-25.log.gz\nbackup-2026-11-01.log.gz\nbackup-2026-11-08.log.gz\nprune-2026-11.log.gz\nREADME", details: { content: "backup-2026-10-25.log.gz\n…" }, took: "0.2s" }),
+    edit: call("call_7a05", "edit", { path: "notes/house-log.md", edits: [{ oldText: "# House log\n", newText: "# House log\n\n## Nov 16\n\nThe backup ran long: 71 minutes, not 23.\nThe transcode cache was moved out of it." }] }, {
+      text: "Edited notes/house-log.md.",
+      details: { changed: true, diff: diff("notes/house-log.md", ["", "## Nov 16", "", "The backup ran long: 71 minutes, not 23.", "The transcode cache was moved out of it."]), firstChangedLine: 2, patch: "" },
+      took: "0.3s",
+    }),
+    create: call("call_7a06", "write", { path: "notes/backup-exclude.md", content: "transcode-cache/\nthumbnails/\n" }, {
+      text: "Wrote 2 lines to notes/backup-exclude.md.",
+      details: { changed: true, created: true, diff: diff("notes/backup-exclude.md", ["transcode-cache/", "thumbnails/"]), firstChangedLine: 1, patch: "" },
+      took: "0.2s",
+    }),
+    patch: call("call_7a07", "apply_patch", { input: "*** Begin Patch\n*** Update File: scripts/weekly.sh\n@@\n-EXCLUDE=\n+EXCLUDE=transcode-cache\n*** Add File: scripts/exclude.list\n+transcode-cache\n*** Update File: test/exclude.bats\n@@\n+@test \"cache is excluded\" { run ./weekly.sh --dry-run; }\n*** End Patch" }, {
+      text: "Applied 3 changes.",
+      details: { changed: true, diff: diff("scripts/weekly.sh", ["EXCLUDE=transcode-cache", "transcode-cache", "@test \"cache is excluded\""], ["EXCLUDE="]) },
+      took: "0.2s",
+    }),
+    memory: call("call_7a08", "write", { path: "memory/2026-11-17.md", content: "Dana wants the boiler serviced in October, never once the heating season starts." }, {
+      text: "Wrote 1 line to memory/2026-11-17.md.",
+      details: { changed: true, created: true, diff: diff("memory/2026-11-17.md", ["Dana wants the boiler serviced in October, never once the heating season starts."]), firstChangedLine: 1, patch: "" },
+      took: "0.1s",
+    }),
+    recall: call("call_7a09", "memory_search", { query: "boiler service" }, {
+      text: "2 results.",
+      details: { results: [{ path: "memory/2026-11-12.md", snippet: "The boiler was last serviced in October 2025.", score: 0.82 }, { path: "memory/2026-10-03.md", snippet: "Engineer: ask for the annual gas safety record.", score: 0.61 }] },
+      took: "0.3s",
+    }),
+    recallGet: call("call_7a10", "memory_get", { path: "memory/2026-11-12.md" }, {
+      text: "The boiler was last serviced in October 2025. The engineer left the record in the blue folder.",
+      details: { path: "memory/2026-11-12.md", status: "ok", text: "The boiler was last serviced in October 2025. The engineer left the record in the blue folder." },
+      took: "0.1s",
+    }),
+    recallGetError: call("call_7a69", "memory_get", { path: "memory/missing.md" }, { text: '{"status":"error"}', details: { path: "memory/missing.md", text: "", status: "error", code: "MEMORY_READ_FAILED", error: "The memory store did not answer." }, took: "0.1s" }),
+    recallGetNone: call("call_7a70", "memory_get", { path: "memory/2026-01-01.md" }, { text: '{"status":"not_found"}', details: { path: "memory/2026-01-01.md", text: "", status: "not_found" }, took: "0.1s" }),
+    recallPartial: call("call_7a50", "memory_search", { query: "gutters" }, { text: "1 result.", details: { results: [{ path: "memory/2026-09-30.md", snippet: "Gutters cleared before the storm.", score: 0.7 }], partial: true }, took: "5.0s" }),
+    recallUnavailable: call("call_7a51", "memory_search", { query: "loft insulation" }, {
+      text: "Memory search is unavailable.",
+      details: { results: [], disabled: true, unavailable: true, warning: "Memory search is unavailable for this bot", action: "Enable memory search for this bot, then retry." },
+      took: "0.1s",
+    }),
+    command: call("call_7a11", "exec", { command: "du -sh /srv/media/*", workdir: "/srv/media", host: "media-box" }, {
+      commandBearing: true,
+      text: "182G\t/srv/media/transcode-cache\n640G\t/srv/media/films\n211G\t/srv/media/series",
+      details: { status: "completed", exitCode: 0, exitSignal: null, exitReason: "exit", durationMs: 1200, aggregated: "", noOutputTimedOut: false, cwd: "/srv/media" },
+      took: "1.2s",
+    }),
+    exit1: call("call_7a12", "exec", { command: "grep -c transcode /etc/backup/exclude", workdir: "/srv/media", host: "media-box" }, {
+      commandBearing: true,
+      text: "0\n\n(Command exited with code 1)",
+      details: { status: "completed", exitCode: 1, exitSignal: null, exitReason: "exit", durationMs: 100, aggregated: "", noOutputTimedOut: false, cwd: "/srv/media" },
+      took: "0.1s",
+    }),
+    timeout: call("call_7a13", "exec", { command: "rsync -a /srv/media/ nas:/backups/media-box/", host: "media-box", timeoutSeconds: 120 }, {
+      commandBearing: true,
+      status: "failed",
+      failWord: "Timed out",
+      timedOut: true,
+      isError: true,
+      text: "Command timed out after 120 seconds.",
+      details: { status: "failed", timedOut: true, failureKind: "overall-timeout" },
+      took: "120s",
+    }),
+    unchanged: call("call_7a71", "write", { path: "notes/backup-exclude.md", content: "transcode-cache/\nthumbnails/\n" }, { text: "No changes.", details: { changed: false, created: false, diff: "", firstChangedLine: null, patch: "" }, took: "0.1s" }),
+    pending: call("call_7a72", "exec", { command: "mv /srv/media/old /srv/scratch/old", workdir: "/srv/media", host: "media-box" }, { commandBearing: true, text: "Approval pending.", details: { status: "approval-pending", approvalId: "apr_6c", expiresAtMs: 1794880000000, host: "media-box", command: "mv /srv/media/old /srv/scratch/old" }, took: "0.2s" }),
+    mv: call("call_7a14", "exec", { command: S.command, workdir: "/srv/media", host: "media-box" }, { commandBearing: true, details: { status: "completed", exitCode: 0 } }),
+    rm: call("call_7a15", "exec", { command: "rm -rf /srv/media/transcode-cache", host: "media-box" }, { commandBearing: true, status: "blocked", text: "exec denied: host=media-box security=deny", details: { status: "failed" } }),
+    terminalList: call("call_7a52", "terminal", { action: "list" }, { text: '{"sessions":[{"sessionId":"term-2","title":"zsh"}]}', details: { sessions: [{ sessionId: "term-2", title: "zsh" }] }, took: "0.1s" }),
+    terminalInput: call("call_7a53", "terminal", { action: "input", sessionId: "term-2" }, { text: "ok", took: "0.3s" }),
+    web: call("call_7a16", "web_search", { query: "cold climate heat pump performance", count: 5 }, {
+      text: "5 results for cold climate heat pump performance.",
+      details: {
+        kind: "web_search_results",
+        provider: "scripted",
+        query: "cold climate heat pump performance",
+        count: 5,
+        tookMs: 2100,
+        results: [
+          { title: "Heat pumps below freezing: what the field data says", url: "https://energy.example.org/cold-climate" },
+          { title: "A winter with an air-source heat pump", url: "https://blog.example.net/winter-heat-pump" },
+          { title: "Rated output at −15 °C, model by model", url: "https://ratings.example.com/low-temp" },
+          { title: "Backup heat: when it switches on", url: "https://help.example.org/backup-heat" },
+          { title: "Ask a heating engineer", url: "https://forum.example.net/t/heat-pump-cold" },
+        ],
+      },
+      took: "2.1s",
+    }),
+    web2: call("call_7a17", "web_search", { query: "heat pump rebate 2026", count: 5 }, { text: "3 results.", details: { kind: "web_search_results", provider: "scripted", query: "heat pump rebate 2026", count: 3, tookMs: 1700, results: [{ title: "Rebates for 2026", url: "https://grants.example.org/2026" }, { title: "How to apply", url: "https://grants.example.org/apply" }, { title: "Installer list", url: "https://grants.example.org/installers" }] }, took: "1.7s" }),
+    xsearch: call("call_7a18", "x_search", { query: "heat pump rebate 2026 experiences" }, {
+      text: "Posts mention a six-week wait for the rebate and a required installer certificate.",
+      details: { query: "heat pump rebate 2026 experiences", provider: "xai", tookMs: 3400, content: "Posts mention a six-week wait…", citations: ["https://x.example/a/1", "https://x.example/b/2", "https://x.example/c/3", "https://x.example/d/4"] },
+      took: "3.4s",
+    }),
+    xsearchUnavailable: call("call_7a54", "x_search", { query: "heat pump rebate 2026 experiences" }, {
+      text: '{"error":"missing_xai_api_key"}',
+      details: { error: "missing_xai_api_key", message: "x_search needs xAI credentials. Sign in on the gateway, then retry." },
+      took: "0.0s",
+    }),
+    page: call("call_7a19", "web_fetch", { url: "https://energy.example.org/cold-climate", extractMode: "text" }, {
+      text: xc("Heat pumps below freezing\n\nField data from 40 homes shows output holding to about 80% at −10 °C…"),
+      details: { title: xc("Heat pumps below freezing"), finalUrl: "https://energy.example.org/cold-climate", status: 200, text: "Field data from 40 homes…", truncated: false },
+      took: "0.9s",
+    }),
+    browserOpen: call("call_7a20", "browser", { action: "open", targetUrl: "https://shop.example/basket" }, { text: "Opened tab 2.", took: "1.4s" }),
+    browserClick: call("call_7a21", "browser", { action: "act", request: { kind: "click", ref: "e14", text: "Add to basket" } }, { page: "shop.example", text: "Clicked e14.", took: "0.6s" }),
+    browserType: call("call_7a22", "browser", { action: "act", request: { kind: "type", ref: "e20", text: "AB1 2CD" } }, { page: "shop.example", text: "Typed into e20.", took: "0.4s" }),
+    browserShot: call("call_7a23", "browser", { action: "screenshot" }, { page: "shop.example", text: "Screenshot saved.", took: "0.8s" }),
+    computerShot: call("call_7a24", "computer", { action: "screenshot", node: "study-mac" }, { text: "Screenshot taken.", details: { frameId: "f12" }, took: "0.7s" }),
+    computerClick: call("call_7a25", "computer", { action: "left_click", coordinate: [412, 220], node: "study-mac" }, { text: "Clicked.", details: { result: { ok: true, effect: "confirmed" } }, took: "0.3s" }),
+    computerUnconfirmed: call("call_7a26", "computer", { action: "left_click", coordinate: [140, 88], node: "study-mac" }, { text: "Clicked; no change was observed.", details: { result: { ok: true, effect: "suspected_noop" }, followUpObservation: { frameId: "f14" } }, took: "0.4s" }),
+    phoneObserve: call("call_7a55", "mobile_ui", { action: "observe", node: "dana-phone" }, { text: "Snapshot s4.", details: { snapshotId: "s4" }, took: "0.8s" }),
+    // An act that needs confirming returns this before anything is done; the later call
+    // with confirmed: true is the action, and its outcome code comes from the device.
+    phoneConfirm: call("call_7a56", "mobile_ui", { action: "act", node: "dana-phone", snapshotId: "s4", mobileAction: { type: "tap", ref: "n12" } }, {
+      text: '{"code":"confirmation_required"}',
+      details: { code: "confirmation_required", package: "com.example.shop", target: "Pay now", proposedEffect: "make a purchase, payment, or subscription change" },
+      took: "0.2s",
+    }),
+    phoneTap: call("call_7a67", "mobile_ui", { action: "act", node: "dana-phone", snapshotId: "s5", mobileAction: { type: "tap", ref: "n12" }, confirmed: true }, {
+      text: '{"outcome":{"code":"performed"}}',
+      details: { outcome: { code: "performed", message: null }, snapshot: { snapshotId: "s6" } },
+      took: "0.5s",
+    }),
+    phoneStale: call("call_7a68", "mobile_ui", { action: "act", node: "dana-phone", snapshotId: "s6", mobileAction: { type: "tap", ref: "n40" }, confirmed: true }, {
+      text: '{"outcome":{"code":"target_stale"}}',
+      details: { outcome: { code: "target_stale", message: "The element moved." }, requiresReobserve: true, snapshot: { snapshotId: "s7" } },
+      took: "0.4s",
+    }),
+    screen: call("call_7a57", "screen", { action: "desktop_show", environmentId: "env-1" }, { text: "Shown.", took: "0.2s" }),
+    routine: call("call_7a27", "automations", { action: "add", job: { name: "Weekly cleanup", schedule: { kind: "cron", expr: "0 9 * * 1", tz: "Europe/London" }, sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: "Clear the transcode cache in /srv/scratch." } } }, { text: "Created routine Weekly cleanup.", details: { id: "job_3f2a", name: "Weekly cleanup", enabled: true }, took: "0.2s" }),
+    routineRemove: call("call_7a28", "automations", { action: "remove", id: "job_1b07", name: "Old reminder" }, { text: "Removed.", details: { ok: true, removed: true }, took: "0.1s" }),
+    routineRemoveNone: call("call_7a73", "automations", { action: "remove", jobId: "job_9z", name: "Old reminder" }, { text: '{"ok":true,"removed":false}', details: { ok: true, removed: false }, took: "0.1s" }),
+    nextCheck: call("call_7a74", "automations", { action: "next_check", in: "30m" }, { text: '{"ok":true,"delayMs":1800000}', details: { ok: true, delayMs: 1800000 }, took: "0.0s" }),
+    routineList: call("call_7a75", "automations", { action: "list" }, { text: "2 jobs.", details: { jobs: [] }, took: "0.1s" }),
+    routineRuns: call("call_7a76", "automations", { action: "runs", jobId: "job_3f2a" }, { text: "3 runs.", details: { runs: [] }, took: "0.1s" }),
+    routineRun: call("call_7a58", "automations", { action: "run", id: "job_3f2a", name: "Weekly cleanup" }, { text: "Not finished yet.", details: { enqueued: true, runId: "cron_run_7", note: "Not finished yet: it is still running, or it runs after this turn." }, took: "0.4s" }),
+    tasks: call("call_7a29", "sessions_list", { limit: 5 }, { text: "5 sessions.", details: { count: 5, sessions: [], hasMore: false, nextOffset: 5, limitApplied: 5 }, took: "0.1s" }),
+    history: call("call_7a30", "sessions_history", { sessionKey: "agent:marlow:main", limit: 20 }, { botName: "Marlow", taskTitle: "House log tone", text: "20 messages.", took: "0.2s" }),
+    helper: call("call_7a31", "sessions_spawn", { label: "Price check", task: "Find the current price of the three heat pumps on the shortlist and report back in a table." }, {
+      text: "Accepted.",
+      details: { status: "accepted", childSessionKey: "agent:otto:subagent:price-check", runId: "run_c41e", mode: "run" },
+      took: "0.3s",
+    }),
+    helperRefused: call("call_7a77", "sessions_spawn", { label: "Price check", task: "Find the current prices." }, { text: '{"status":"forbidden"}', details: { ok: false, status: "forbidden", error: "This bot may not start helpers." }, took: "0.1s" }),
+    wait: call("call_7a32", "agents_wait", { ids: ["sub_1", "sub_2"], timeoutSeconds: 300 }, { text: "Both finished.", took: "48s" }),
+    question: call("call_7a33", "ask_user", { questions: [{ question: "Which route should I plan for Saturday?" }], timeoutSeconds: 900 }, { text: "Route: The coast road", took: "1m 12s" }),
+    plan: call("call_7a34", "progress_card", { plan: plan(0) }, { text: "Saved the plan.", details: { revision: 1, steps: {} }, took: "0.1s" }),
+    planUpdate: call("call_7a35", "progress_card", { plan: plan(2) }, { update: true, text: "Saved the plan.", details: { revision: 3, steps: {} }, took: "0.1s" }),
+    goalGet: call("call_7a59", "get_goal", {}, { text: "Goal: cut the weekly backup back under 30 minutes.", took: "0.1s" }),
+    goalUpdate: call("call_7a60", "update_goal", { status: "complete" }, { text: "Updated.", took: "0.1s" }),
+    image: call("call_7a36", "image_generate", { action: "generate", prompt: "A small house in snow with a heat pump outside, flat illustration", count: 1 }, {
+      text: "Background task started for image generation (task_91a2).",
+      details: { async: true, status: "started", taskId: "task_91a2", runId: "tool:image_generate:91a2", task: { taskId: "task_91a2", runId: "tool:image_generate:91a2" } },
+      took: "0.4s",
+    }),
+    imageList: call("call_7a78", "image_generate", { action: "list" }, { text: "2 providers.", details: { providers: [] }, took: "0.3s" }),
+    imageMade: call("call_7a61", "image_generate", { action: "generate", prompt: "The same house, at dusk", count: 2 }, {
+      text: "Made 2 images.",
+      details: { count: 2, media: { mediaUrls: ["media/house-dusk-1.png", "media/house-dusk-2.png"] }, paths: ["media/house-dusk-1.png", "media/house-dusk-2.png"] },
+      took: "11.2s",
+    }),
+    voice: call("call_7a37", "tts", { text: "Your boiler service is booked for the third of October." }, { text: "Made 1 clip.", details: { audioPath: "media/reminder.mp3", media: { mediaUrl: "media/reminder.mp3" } }, took: "2.2s" }),
+    pdf: call("call_7a62", "pdf", { pdfs: ["house/epc-2023.pdf", "house/quote-2024.pdf", "house/survey.pdf"], prompt: "What rating and what heating does each one give?" }, { text: "EPC 2023: D (61), gas boiler…", took: "6.1s" }),
+    images: call("call_7a63", "view_image", { paths: ["photos/loft-1.jpg", "photos/loft-2.jpg"], prompt: "How deep is the insulation?" }, { text: "About 100 mm in both.", took: "3.0s" }),
+    channel: call("call_7a38", "conversations_send", { conversationRef: "conv_51c2a7d90b3e4f6a8c1d2e3f4a5b6c7d", message: "The backup is fixed. Tonight's run should take about 20 minutes." }, {
+      text: '{"status":"queued"}',
+      details: { status: "queued", conversationRef: "conv_51c2a7d90b3e4f6a8c1d2e3f4a5b6c7d", channel: "Telegram", queueId: "q_88" },
+      took: "0.6s",
+    }),
+    channelSent: call("call_7a64", "conversations_send", { conversationRef: "conv_51c2a7d90b3e4f6a8c1d2e3f4a5b6c7d", message: "Survey booked for Dec 2." }, { text: '{"status":"sent"}', details: { status: "sent", conversationRef: "conv_51c2a7d90b3e4f6a8c1d2e3f4a5b6c7d", channel: "Telegram", messageId: "m_302" }, took: "0.5s" }),
+    channelSuppressed: call("call_7a65", "conversations_send", { conversationRef: "conv_51c2a7d90b3e4f6a8c1d2e3f4a5b6c7d", message: "Reminder: survey tomorrow." }, { text: '{"status":"suppressed"}', details: { status: "suppressed", conversationRef: "conv_51c2a7d90b3e4f6a8c1d2e3f4a5b6c7d", channel: "Telegram" }, took: "0.2s" }),
+    turn: call("call_7a79", "conversations_turn", { conversationRef: "conv_51c2a7d90b3e4f6a8c1d2e3f4a5b6c7d", message: "Is Thursday still fine for the survey?", timeoutSeconds: 120 }, {
+      text: '{"status":"replied"}',
+      details: { status: "replied", conversationRef: "conv_51c2a7d90b3e4f6a8c1d2e3f4a5b6c7d", channel: "Telegram", messageId: "m_311", correlationPersisted: true, reply: { conversationRef: "conv_51c2a7d90b3e4f6a8c1d2e3f4a5b6c7d", messageId: "m_312", text: "Yes, Thursday works.", timestamp: 1794880100000 } },
+      took: "41s",
+    }),
+    message: call("call_7a66", "message", { action: "send", channel: "Telegram", target: "Dana", message: "Heat pump survey booked for Dec 2." }, { text: "ok", took: "0.6s" }),
+    server: call("call_7a39", "linear__create_issue", { title: "Exclude the transcode cache from the weekly backup", team: "Home" }, { mcp: { server: "linear", tool: "create_issue" }, text: "structuredContent:\n{\"id\":\"HOME-42\"}\n\nCreated HOME-42.", details: { mcpServer: "linear", mcpTool: "create_issue", structuredContent: { id: "HOME-42" } }, took: "0.9s" }),
+    general: call("call_7a40", "skills_search", { query: "invoice" }, { builtin: true, title: "Skill Search", text: "2 skills match.", took: "0.4s" }),
+    general2: call("call_7a41", "getWeatherNow", { location: "Leeds" }, { text: "4 °C, light rain.", took: "0.5s" }),
+    general3: call("call_7a42", "github_publish", { title: "Backup exclude list", path: "notes/backup-exclude.md" }, { builtin: true, title: "GitHub Publish", text: "Published.", took: "1.8s" }),
+
+    // T3 Code, with its own tool names and result shapes (section 11.1).
+    t3Launch: t3("call_01HXK9T", "t3_thread_launch", { projectId: "proj_backup", title: "Exclude the transcode cache", message: S.t3Sent, workspaceStrategy: { type: "worktree", baseRef: "main", branch: "exclude-cache" } }, { threadId: S.t3Thread, link: S.t3ThreadLink, projectId: "proj_backup", modelSelection: { instanceId: "coder", model: "coder-large" }, runId: "run_t3_1", status: "running" }, { took: "0.8s" }),
+    t3Wait: t3("call_01HXKA2", "t3_thread_wait", { threadId: S.t3Thread, timeoutMs: 50000 }, { threadId: S.t3Thread, runId: "run_t3_1", status: "running", timedOut: true }, { took: "50s" }),
+    t3Send: t3("call_01HXM2A", "t3_thread_send", { threadId: S.t3Thread, message: S.t3Followup }, { threadId: S.t3Thread, link: S.t3ThreadLink, messageId: "msg_2", runId: "run_t3_1", status: "running", delivery: "steered" }, { took: "0.5s" }),
+    t3ReadFail: t3("call_01HXM7D", "t3_thread_read", { threadId: S.t3Thread }, { code: "orchestration_error", message: "The thread store did not answer." }, { status: "failed", isError: true, took: "0.3s" }),
+    t3Read: t3("call_01HXM7C", "t3_thread_read", { threadId: S.t3Thread, runLimit: 1 }, {
+      thread: { threadId: S.t3Thread, title: "Exclude the transcode cache", link: S.t3ThreadLink, status: "completed", latestRunId: "run_t3_1", activeRunId: null, settled: true },
+      recentRuns: [{ runId: "run_t3_1", status: "completed" }],
+      items: [{ position: 7, itemId: "it_7", runId: "run_t3_1", type: "assistant_message", text: "Added the exclude and a guard to weekly.sh, with a test for the guard. Opened a pull request with both changes." }],
+      nextPosition: null,
+      hasMore: false,
+    }, { took: "0.6s" }),
+    t3ReadCut: t3("call_01HXM8E", "t3_thread_read", { threadId: S.t3Thread }, {
+      thread: { threadId: S.t3Thread, title: "Exclude the transcode cache", link: S.t3ThreadLink, status: "completed", latestRunId: "run_t3_1", activeRunId: null, settled: true },
+      recentRuns: [{ runId: "run_t3_1", status: "completed" }],
+      items: [{ position: 7, itemId: "it_7", runId: "run_t3_1", type: "assistant_message", text: "Added the exclude", textTruncated: true, nextTextOffset: 19 }],
+      nextPosition: null,
+      hasMore: false,
+    }, { took: "0.4s" }),
+    t3Stop: t3("call_01HXM9F", "t3_thread_interrupt", { threadId: S.t3Thread, stop: true }, { threadId: S.t3Thread, runId: "run_t3_1", status: "interrupt_requested" }, { took: "0.4s" }),
+    t3Projects: t3("call_01HXL01", "t3_project_list", { limit: 20 }, { projects: [{ id: "proj_backup", title: "backup-scripts" }, { id: "proj_site", title: "house-site" }, { id: "proj_recipes", title: "recipes" }, { id: "proj_notes", title: "notes" }], nextCursor: null }),
+    t3Threads: t3("call_01HXL02", "t3_thread_list", { projectId: "proj_backup" }, { projectId: "proj_backup", currentThreadId: null, threads: [{ threadId: S.t3Thread, title: "Exclude the transcode cache", status: "running" }, { threadId: "mcp:22c1", title: "Faster prune", status: "completed" }], nextCursor: null, total: 2 }),
+  };
+
+  // A run's reasoning, attached to the action it led to.
+  S.reasonings = {
+    beforeRead2: { time: "4s", text: "71 minutes instead of the usual 23. The transfer line is the odd one: 187 GB, where a normal week moves about 5. I should compare with last week's log before I blame the network." },
+    beforeReply: { time: "8s", text: "The user asks whether a heat pump is worth it in a cold, damp town. I know the general answer: it depends on insulation and the size of the unit.\n\nThe honest reply is a short yes-if, with the two things to check first." },
   };
 
   S.turnErrorRaw = {

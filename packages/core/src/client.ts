@@ -101,6 +101,7 @@ import {
   cachedSize,
   isTerminal,
   markUnconfirmed,
+  parkAfterStop,
   markQuestion,
   mergeHistoryRuns,
   queueLocalRun,
@@ -116,6 +117,7 @@ import {
   settleVanishedRuns,
   retainActivity,
   startLocalRun,
+  questionPending,
   startQueuedRun,
   updateMessage,
   type CaughtUp,
@@ -344,6 +346,12 @@ export type ClientOptions = {
    * tasks followed at once (`MAX_TRACKED_TASKS`).
    */
   limits?: { trackedTasks?: number };
+  /**
+   * Pin the connection to the read tier: every connect asks for
+   * `operator.read` alone, whatever the stored token holds, and access is
+   * never requested, so every write fails at once.
+   */
+  readOnly?: boolean;
 };
 
 /** A file sent with a message, as `chat.send` takes it: base64 content. */
@@ -505,19 +513,6 @@ export class GatewayNotAllowedError extends Error {
     super(`This host is not allowed to connect to ${url}.`);
     this.name = "GatewayNotAllowedError";
   }
-}
-
-/**
- * Whether the run has a question pending, by the question records as well as
- * the run's cards, so a plain message is never sent while the gateway would
- * take it as the answer.
- */
-function questionPending(activity: TaskActivity, run: Run): boolean {
-  return (
-    activity.questions.some(
-      (question) => question.status === "pending" && question.runId === run.id,
-    ) || [...run.pendingCards, ...run.suspendedCards].some((card) => card.kind === "question")
-  );
 }
 
 /**
@@ -926,6 +921,8 @@ export class ClawtrateClient {
    * reconnects asking for exactly what was granted of that set.
    */
   async requestAccess(): Promise<void> {
+    if (this.options.readOnly)
+      throw new Error("This host only reads; it does not ask for more access.");
     if (INTERACTIVE_SCOPES.every((scope) => this.holds(scope))) return;
     if (!this.settings) throw new Error("Connect to a gateway first.");
     this.upgradeWanted = true;
@@ -1205,14 +1202,18 @@ export class ClawtrateClient {
       : active.state === "stopping" || options.mode === "queue"
         ? "queue"
         : "steer";
-    const held = resolved === "steer" && questionPending(transcript, active!);
+    // A pending question holds every outgoing message in the task, however it
+    // was sent; it is released when the last pending question settles.
+    const held =
+      active !== undefined && active.state !== "stopping" && questionPending(transcript, active);
     const message: OutgoingMessage = {
       id: this.randomId(),
       text: body,
       mode: resolved,
-      status: resolved === "queue" ? "queued" : held ? "held" : "sending",
+      status: held ? "held" : resolved === "queue" ? "queued" : "sending",
       runId: resolved === "steer" ? active!.id : null,
       messageSeq: null,
+      leftAt: null,
       createdAt: this.now(),
       error: null,
       attachments: attachments.map((attachment) => ({
@@ -1228,7 +1229,7 @@ export class ClawtrateClient {
     this.updateActivity(key, (activity) => {
       const withMessage = { ...activity, outbox: [...activity.outbox, message] };
       if (resolved === "new") return startLocalRun(withMessage, message, this.now());
-      if (resolved === "queue") return queueLocalRun(withMessage, message, this.now());
+      if (resolved === "queue" && !held) return queueLocalRun(withMessage, message, this.now());
       return withMessage;
     });
     if (message.status === "sending") this.enqueueDelivery(key, message.id);
@@ -1305,17 +1306,36 @@ export class ClawtrateClient {
   }
 
   /**
-   * Send a failed or unconfirmed message again, with the same idempotency key,
+   * Send a failed, unconfirmed or unknown message again, with the same idempotency key,
    * so the gateway delivers it at most once. It already counts against the
    * outbox bounds, so a retry is never refused for room.
    */
   retryMessage(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);
-    if (!message || (message.status !== "failed" && message.status !== "unconfirmed")) return;
+    if (
+      !message ||
+      (message.status !== "failed" &&
+        message.status !== "unconfirmed" &&
+        message.status !== "unknown" &&
+        message.status !== "not-sent")
+    )
+      return;
     const transcript = this.state.transcripts[key]!;
     const active = activeRun(transcript);
-    const mode = !active ? "new" : active.state === "stopping" ? "queue" : "steer";
-    const held = mode === "steer" && questionPending(transcript, active!);
+    // A message that came from the queue keeps that origin through every attempt, until
+    // it starts or is removed: it starts now with no run active, and otherwise waits
+    // behind the active run, so a refusal still reads "Couldn't start" on the shelf.
+    const fromQueue = message.mode === "queue";
+    const mode = fromQueue
+      ? "queue"
+      : !active
+        ? "new"
+        : active.state === "stopping"
+          ? "queue"
+          : "steer";
+    const held =
+      active !== undefined && active.state !== "stopping" && questionPending(transcript, active);
+    const status = held ? "held" : mode === "queue" && active ? "queued" : "sending";
     this.updateActivity(key, (activity) => {
       // A run the gateway refused never started; the retry is a new attempt.
       const cleared = {
@@ -1326,16 +1346,16 @@ export class ClawtrateClient {
       };
       const next = updateMessage(cleared, messageId, {
         mode,
-        status: mode === "queue" ? "queued" : held ? "held" : "sending",
+        status,
         error: null,
         runId: mode === "steer" ? active!.id : null,
       });
       const updated = next.outbox.find((each) => each.id === messageId)!;
-      if (mode === "new") return startLocalRun(next, updated, this.now());
-      if (mode === "queue") return queueLocalRun(next, updated, this.now());
+      if (status === "sending" && !active) return startLocalRun(next, updated, this.now());
+      if (status === "queued") return queueLocalRun(next, updated, this.now());
       return next;
     });
-    if (mode !== "queue" && !held) this.enqueueDelivery(key, messageId);
+    if (status === "sending") this.enqueueDelivery(key, messageId);
   }
 
   /** Remove a failed, cancelled or unconfirmed message, and the run that never started with it. */
@@ -1346,6 +1366,8 @@ export class ClawtrateClient {
       (message.status !== "failed" &&
         message.status !== "cancelled" &&
         message.status !== "unconfirmed" &&
+        message.status !== "unknown" &&
+        message.status !== "not-sent" &&
         message.status !== "handled")
     )
       return;
@@ -1358,10 +1380,10 @@ export class ClawtrateClient {
     }));
   }
 
-  /** "Cancel" on a queued message's chip: it never runs. */
+  /** "Cancel" on a queued or held message's row: it is never sent. */
   cancelQueued(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);
-    if (!message || message.status !== "queued") return;
+    if (!message || (message.status !== "queued" && message.status !== "held")) return;
     // A cancelled message is never sent: its files are not kept.
     this.dropAttachments(messageId);
     this.updateActivity(key, (activity) =>
@@ -1369,6 +1391,55 @@ export class ClawtrateClient {
         status: "cancelled",
       }),
     );
+  }
+
+  /**
+   * "Edit" on a held or queued message's row: the message is taken back,
+   * never sent, and its words and files are handed to the caller as one
+   * record, to go back into the composer. The files leave this client's
+   * keeping at once.
+   */
+  /**
+   * What `takeBack` would give back, changing nothing: a host checks there is
+   * room for the files before any of it happens. Throws as `takeBack` does.
+   */
+  peekTakeBack(
+    key: string,
+    messageId: string,
+  ): { text: string; attachments: OutgoingAttachment[] } {
+    const message = this.outgoing(key, messageId);
+    if (!message || (message.status !== "queued" && message.status !== "held"))
+      throw new Error("That message can no longer be edited.");
+    const files = this.attachmentContent.get(messageId)?.files ?? [];
+    if (message.attachments.length > 0 && files.length === 0)
+      throw new Error("Its files are no longer held; attach them again.");
+    return { text: message.text, attachments: [...files] };
+  }
+
+  takeBack(key: string, messageId: string): { text: string; attachments: OutgoingAttachment[] } {
+    const { text, attachments: files } = this.peekTakeBack(key, messageId);
+    this.dropAttachments(messageId);
+    this.updateActivity(key, (activity) =>
+      updateMessage(cancelQueuedRun(activity, messageId, this.now()), messageId, {
+        status: "cancelled",
+      }),
+    );
+    return { text, attachments: files };
+  }
+
+  /**
+   * "Try again" on a turn that failed: the same words and files, sent now as
+   * a new message with its own key. The files must still be held for the
+   * message (until history holds it); otherwise it is refused, never sent
+   * without them.
+   */
+  sendAgain(key: string, messageId: string): string {
+    const message = this.outgoing(key, messageId);
+    if (!message) throw new Error("That message is no longer held here.");
+    const files = this.attachmentContent.get(messageId)?.files ?? [];
+    if (message.attachments.length > 0 && files.length === 0)
+      throw new Error("Its files are no longer held; attach them again.");
+    return this.sendMessage(key, message.text, { attachments: [...files] });
   }
 
   /** "Send now" on a queued message's chip: a steer into the running or waiting run. */
@@ -1543,6 +1614,8 @@ export class ClawtrateClient {
       status: runError ? "failed" : "sent",
       runId,
       messageSeq: typeof result?.messageSeq === "number" ? result.messageSeq : null,
+      // It went out with the task's creation.
+      leftAt: now,
       createdAt: now,
       error: runError ? String(runError.message ?? "The run did not start.") : null,
       attachments: [],
@@ -1806,7 +1879,12 @@ export class ClawtrateClient {
         this.attachmentContent.get(messageId)?.files ?? [],
       );
       this.checkSize(params);
-      result = asRecord(await this.request("chat.send", params));
+      const sent = this.request("chat.send", params);
+      // The frame has left: from here a Stop no longer parks it.
+      this.updateActivity(key, (activity) =>
+        updateMessage(activity, messageId, { leftAt: this.now() }),
+      );
+      result = asRecord(await sent);
     } catch (error) {
       this.noteMissingScope(error);
       if (
@@ -3113,16 +3191,42 @@ export class ClawtrateClient {
         );
       }
     }
+    // After a confirmed Stop nothing starts by itself: what was held or queued stays, not sent.
+    if (parkAfterStop(transcript, this.now()) !== transcript) {
+      this.updateActivity(key, (activity) => parkAfterStop(activity, this.now()));
+      return;
+    }
     const active = activeRun(transcript);
     const held = transcript.outbox
       .filter((message) => message.status === "held")
       .map((message) => message.id);
     if (held.length > 0 && !(active && questionPending(transcript, active))) {
-      // The question is settled: claim every held message at once, then deliver them in order.
-      this.updateActivity(key, (activity) =>
-        held.reduce((next, id) => updateMessage(next, id, { status: "sending" }), activity),
-      );
-      for (const id of held) this.enqueueDelivery(key, id);
+      // The question is settled: release every held message at once, in the
+      // order sent, each as a message sent now would go. Into a running run
+      // as a steer, unless it was queued; queued while the run stops; and
+      // once the run has ended, queued, so each starts a run of its own.
+      const steered: string[] = [];
+      this.updateActivity(key, (activity) => {
+        let next = activity;
+        const now = activeRun(activity);
+        for (const id of held) {
+          const message = next.outbox.find((each) => each.id === id);
+          if (!message || message.status !== "held") continue;
+          if (now && now.state !== "stopping" && message.mode !== "queue") {
+            next = updateMessage(next, id, { status: "sending", mode: "steer", runId: now.id });
+            steered.push(id);
+          } else {
+            next = updateMessage(next, id, { status: "queued", mode: "queue", runId: null });
+            next = queueLocalRun(
+              next,
+              next.outbox.find((each) => each.id === id)!,
+              this.now(),
+            );
+          }
+        }
+        return next;
+      });
+      for (const id of steered) this.enqueueDelivery(key, id);
     }
     const current = this.state.transcripts[key];
     if (!current) return;
@@ -3131,9 +3235,10 @@ export class ClawtrateClient {
       : current.runs.find((run) => run.state === "queued");
     if (next) {
       this.updateActivity(key, (activity) =>
+        // It keeps `mode: "queue"`: if the gateway refuses to start it, the
+        // shelf says "Couldn't start" rather than a send failing.
         updateMessage(startQueuedRun(activity, next.id, this.now()), next.id, {
           status: "sending",
-          mode: "new",
         }),
       );
       this.enqueueDelivery(key, next.id);
@@ -3148,6 +3253,10 @@ export class ClawtrateClient {
    * so messages reach the gateway in the order the user sent them.
    */
   private enqueueDelivery(key: string, messageId: string): void {
+    // A new attempt: until its frame leaves, a confirmed Stop parks it.
+    if (this.outgoing(key, messageId)?.leftAt != null) {
+      this.updateActivity(key, (activity) => updateMessage(activity, messageId, { leftAt: null }));
+    }
     if (!this.state.connection.canWrite && this.outgoing(key, messageId)?.status === "sending") {
       this.updateActivity(key, (activity) =>
         updateMessage(activity, messageId, { status: "awaiting-access" }),
@@ -3266,7 +3375,8 @@ export class ClawtrateClient {
         gatewayUrl: settings.url,
         deviceId: identity.deviceId,
         paired,
-        requestedScopes: stored ? [...stored.heldScopes] : [...READ_SCOPES],
+        requestedScopes:
+          stored && !this.options.readOnly ? [...stored.heldScopes] : [...READ_SCOPES],
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
         serverVersion: sameGateway ? state.connection.serverVersion : null,
         gatewayId: sameGateway ? state.connection.gatewayId : null,
@@ -3337,7 +3447,7 @@ export class ClawtrateClient {
         // Once paired, the device token is the credential; the bootstrap token is no longer sent.
         const bootstrap = token ? null : settings.token;
         // Exactly the scopes this client means to hold, never what the token happens to allow.
-        const requested = token ? token.heldScopes : [...READ_SCOPES];
+        const requested = token && !this.options.readOnly ? token.heldScopes : [...READ_SCOPES];
         const plan = await lifecycle.buildPlan({
           client,
           role: "operator",
@@ -4221,7 +4331,11 @@ export class ClawtrateClient {
       // scopes this client means to hold, so a broader grant is never asked for.
       load: async ({ deviceId, role }) => {
         const record = await this.loadToken(url, deviceId, role);
-        return record ? { token: record.token, scopes: [...record.heldScopes] } : null;
+        if (!record) return null;
+        return {
+          token: record.token,
+          scopes: this.options.readOnly ? [...READ_SCOPES] : [...record.heldScopes],
+        };
       },
       store: async ({ deviceId, role, token, scopes }) => {
         if (!current()) return;

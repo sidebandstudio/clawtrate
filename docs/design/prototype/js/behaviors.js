@@ -563,4 +563,26 @@
       clearTimeout(holdTimer);
     }),
   );
+
+  // A later T3 Code call's line leads to its thread's card, and back, by identity
+  // (conversation.md, section 11.4): the thread's key and the call's id, never nearness.
+  document.addEventListener("click", (event) => {
+    const toThread = event.target.closest('[data-action="show-thread"]');
+    const toLine = event.target.closest('[data-action="show-where"]');
+    if (!toThread && !toLine) return;
+    const scope = (toThread || toLine).closest(".spec-box, #transcript-inner") || document;
+    if (toThread) {
+      const card = [...scope.querySelectorAll(".messaged[data-thread]:not([data-line])")].find((c) => c.dataset.thread === toThread.dataset.thread);
+      if (!card) return;
+      card.open = true;
+      const head = card.querySelector(`.t3-item[data-call="${CSS.escape(toThread.dataset.call)}"] .exchange-meta`) || card.querySelector(":scope > summary");
+      head.scrollIntoView({ block: "nearest" });
+      head.focus({ preventScroll: true });
+    } else {
+      const line = scope.querySelector(`.messaged[data-line][data-call="${CSS.escape(toLine.dataset.call)}"]`);
+      if (!line) return;
+      line.scrollIntoView({ block: "nearest" });
+      line.querySelector(":scope > summary").focus({ preventScroll: true });
+    }
+  });
 })();

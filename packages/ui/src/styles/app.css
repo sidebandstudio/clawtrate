@@ -1551,10 +1551,6 @@ textarea {
   background: color-mix(in srgb, var(--bubble-user-text) 16%, transparent);
 }
 
-.thinking {
-  color: var(--text-muted);
-}
-
 /* "Choose a task" belongs to the one-pane layout. */
 .choose-task {
   display: none;

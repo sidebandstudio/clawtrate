@@ -1,4 +1,4 @@
-import type { ClawtrateState } from "@clawtrate/core";
+import type { ClawtrateState, HostInfo } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -15,6 +15,7 @@ import { Rail } from "./Rail.tsx";
 import { useSelection } from "./selection.ts";
 import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
+import { ShortcutList } from "./Shortcuts.tsx";
 import { WorkPanel } from "./WorkPanel.tsx";
 
 /** A control that can take focus now: in the page, shown, and not behind the drawer. */
@@ -28,8 +29,12 @@ function canFocus(element: HTMLElement | null): element is HTMLElement {
   );
 }
 
+/** How long "Access granted" stays on the strip. */
+export const GRANTED_FOR_MS = 4000;
+
 export function Shell({
   state,
+  info,
   theme,
   onTheme,
   bubbles,
@@ -37,8 +42,10 @@ export function Shell({
   onUnreadCount,
   onOpenSettings,
   inert = false,
+  onCaughtUp,
 }: {
   state: ClawtrateState;
+  info: HostInfo;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
   bubbles: BubbleChoice;
@@ -47,8 +54,36 @@ export function Shell({
   onOpenSettings: () => void;
   /** Set while Settings covers the shell. */
   inert?: boolean;
+  /** Whether the open task has caught up since the latest connect: until then work is last seen. */
+  onCaughtUp?: (caughtUp: boolean) => void;
 }) {
   const send = useCommand();
+  const interactive = canWrite(state.connection, info);
+
+  // When access arrives, the strip says so for four seconds; the conversation announces it.
+  const connectedNow = state.connection.status === "connected";
+  const [tier, setTier] = useState(interactive);
+  const [granted, setGranted] = useState(false);
+  if (connectedNow && interactive !== tier) {
+    setTier(interactive);
+    if (interactive && state.connection.upgrade.status === "approved") setGranted(true);
+  }
+  useEffect(() => {
+    if (!granted) return;
+    // Focus that was in the access bar moves to the composer's field.
+    if (accessHadFocus.current) document.querySelector<HTMLElement>(".composer-input")?.focus();
+    const timer = setTimeout(() => setGranted(false), GRANTED_FOR_MS);
+    return () => clearTimeout(timer);
+  }, [granted]);
+  const accessHadFocus = useRef(false);
+  useEffect(() => {
+    const onFocus = () => {
+      accessHadFocus.current = !!document.activeElement?.closest(".access-bar");
+    };
+    document.addEventListener("focusin", onFocus);
+    return () => document.removeEventListener("focusin", onFocus);
+  }, []);
+
   const selection = useSelection(state);
   const { bot, task } = selection;
   const [panelOpen, setPanelOpen] = useState(() => readPreference("panel") === "open");
@@ -79,9 +114,13 @@ export function Shell({
   }, []);
   const togglePanel = useCallback(() => setPanel(!panelOpen), [panelOpen, setPanel]);
 
+  const [shortcuts, setShortcuts] = useState(false);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "\\") {
+      if ((event.metaKey || event.ctrlKey) && event.key === "/") {
+        event.preventDefault();
+        setShortcuts((open) => !open);
+      } else if ((event.metaKey || event.ctrlKey) && event.key === "\\") {
         event.preventDefault();
         togglePanel();
       } else if (event.key === "Escape" && drawerOpen) {
@@ -184,7 +223,25 @@ export function Shell({
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
   const phase = useSyncPhase(state, taskKey);
-  const strip = stripFor(state, phase, taskKey);
+  // Connected is not caught up: until bots, tasks and the open task have
+  // loaded again after a drop, what is on screen is last seen.
+  const caughtUp = state.connection.status === "connected" && phase !== "dropped";
+  useEffect(() => {
+    onCaughtUp?.(caughtUp);
+  }, [caughtUp, onCaughtUp]);
+  // Access arriving reconnects with the new grant: "Access granted" is the
+  // news then, unless something failed.
+  const connectionStrip = stripFor(state, phase, taskKey);
+  const strip =
+    granted && connectionStrip?.tone !== "danger"
+      ? {
+          tone: "ok" as const,
+          text: "Access granted",
+          more: "you can send, stop and answer",
+          action: null,
+          countdown: false,
+        }
+      : connectionStrip;
   const catchingUp =
     phase === "dropped" && state.connection.status === "connected" && strip?.tone === "warn";
   const reload = useCallback(() => {
@@ -243,8 +300,12 @@ export function Shell({
               )
             }
             refreshNote={phase !== "dropped" && refreshFailed(transcript)}
-            readOnly={!canWrite(state.connection)}
+            interactive={interactive}
+            connection={state.connection}
+            info={info}
+            granted={granted}
             online={state.connection.status === "connected"}
+            caughtUp={caughtUp}
             toggleRef={toggleRef}
             inert={drawerOpen || inert}
           />
@@ -267,6 +328,7 @@ export function Shell({
           />
         )}
       </div>
+      {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
     </div>
   );
 }
