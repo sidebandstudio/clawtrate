@@ -224,7 +224,6 @@ test("F-152: a task started in a git checkout compares its file with the last co
 });
 
 test("on a phone the Files tab is the pane's sheet", async ({ page }) => {
-  test.skip(!SHOTS, "screenshots only");
   await page.setViewportSize({ width: 390, height: 844 });
   await openShell(page);
   await openTask(page, "Otto", WRITE_TASK);
