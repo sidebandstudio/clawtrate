@@ -131,11 +131,44 @@ const STAMP_GAP_MS = 10 * 60_000;
 /** How close to the end counts as "reading the latest", in pixels. */
 const NEAR_BOTTOM_PX = 96;
 
+/** Blocks of readable text in a transcript; the place is held in the finest one. */
+const TEXT_BLOCKS =
+  ".task-line, .stamp, .event-line, .steps > summary, .step > summary, .thinking, " +
+  ".bubble :is(p, li, h1, h2, h3, h4, h5, h6, pre, td, th, blockquote)";
+
+type Caret = { node: Node; offset: number };
+
+/** The text position under a point, from whichever caret API the engine has. */
+function caretAt(x: number, y: number): Caret | null {
+  const doc = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  if (typeof doc.caretPositionFromPoint === "function") {
+    const position = doc.caretPositionFromPoint(x, y);
+    return position ? { node: position.offsetNode, offset: position.offset } : null;
+  }
+  const range = doc.caretRangeFromPoint?.(x, y);
+  return range ? { node: range.startContainer, offset: range.startOffset } : null;
+}
+
+/** Where a text position is drawn now, or null when it no longer is. */
+function caretTop(caret: Caret): number | null {
+  if (!caret.node.isConnected || caret.node.nodeType !== Node.TEXT_NODE) return null;
+  const length = caret.node.textContent?.length ?? 0;
+  const range = document.createRange();
+  range.setStart(caret.node, Math.min(caret.offset, length));
+  range.setEnd(caret.node, Math.min(caret.offset + 1, length));
+  const rect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+  return rect.height > 0 ? rect.top : null;
+}
+
 /**
  * The reader's place survives a change of width: opening, closing, docking or
  * undocking Work, or resizing the window, and late reflows such as fonts
- * arriving. A reader following the end stays at the end; otherwise the first
- * item in view stays where it was while the text reflows around it.
+ * arriving. A reader following the end stays at the end. Otherwise the text
+ * at the reading line, just under the protected band at the top, stays where
+ * it was while the lines reflow around it: the exact character when the
+ * engine can say which, or else the start of its paragraph, list item or row.
  */
 function useHoldPlace(
   scroller: RefObject<HTMLDivElement | null>,
@@ -145,21 +178,48 @@ function useHoldPlace(
   useLayoutEffect(() => {
     const element = scroller.current;
     if (!element) return;
-    let place: { anchor: Element | null; offset: number } = { anchor: null, offset: 0 };
+    let place: { block: Element; caret: Caret | null; top: number } | null = null;
     let width = element.clientWidth;
-    const record = () => {
-      const top = element.getBoundingClientRect().top;
-      const anchor =
-        [...element.querySelectorAll(".transcript-inner > *")].find(
-          (node) => node.getBoundingClientRect().bottom > top + 1,
-        ) ?? null;
-      place = { anchor, offset: anchor ? anchor.getBoundingClientRect().top - top : 0 };
+
+    /** Where the reading line is, and where a held place is drawn, relative to the scroller. */
+    const frame = () => {
+      const box = element.getBoundingClientRect();
+      const inner = element.firstElementChild;
+      const band = inner ? Number.parseFloat(getComputedStyle(inner).paddingTop) || 0 : 0;
+      return { top: box.top, line: box.top + band };
     };
+    const drawnAt = (held: NonNullable<typeof place>) =>
+      (held.caret ? caretTop(held.caret) : null) ??
+      (held.block.isConnected ? held.block.getBoundingClientRect().top : null);
+
+    const record = () => {
+      const { top, line } = frame();
+      // The finest block at or below the line that is drawn: the rows of a folded
+      // group are laid out but hidden, so they cannot hold a place.
+      const block = [...element.querySelectorAll(TEXT_BLOCKS)].find(
+        (node) =>
+          !node.querySelector(TEXT_BLOCKS) &&
+          node.checkVisibility() &&
+          node.getBoundingClientRect().bottom > line + 1,
+      );
+      if (!block) {
+        place = null;
+        return;
+      }
+      const rect = block.getBoundingClientRect();
+      const found = caretAt(rect.left + 2, Math.max(line + 2, rect.top + 2));
+      const caret = found && block.contains(found.node) ? found : null;
+      const held = { block, caret, top: 0 };
+      held.top = (drawnAt(held) ?? rect.top) - top;
+      place = held;
+    };
+
+    // Watching the content too covers late reflows, such as fonts arriving.
     const observer = new ResizeObserver(() => {
       if (following.current) toEnd();
-      else if (element.clientWidth !== width && place.anchor?.isConnected) {
-        const top = element.getBoundingClientRect().top;
-        element.scrollTop += place.anchor.getBoundingClientRect().top - top - place.offset;
+      else if (element.clientWidth !== width && place) {
+        const now = drawnAt(place);
+        if (now !== null) element.scrollTop += now - frame().top - place.top;
       }
       width = element.clientWidth;
       record();

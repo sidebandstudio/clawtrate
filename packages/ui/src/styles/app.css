@@ -891,6 +891,9 @@ textarea {
   --clear: calc(var(--header-height) + 6px);
   flex: 1;
   overflow-y: auto;
+  /* The reader's place is held in code (useHoldPlace), so the browser's own
+     scroll anchoring would correct the same reflow twice. */
+  overflow-anchor: none;
   scroll-padding-bottom: var(--space-8);
   -webkit-mask-image: linear-gradient(
     to bottom,

@@ -174,26 +174,86 @@ test.describe("the Work pane", () => {
     await expect(page.getByRole("tab", { name: "Details" })).toBeFocused();
   });
 
-  test("toggling it keeps the reader's place", async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed`, "light");
+  // The reader is mid-transcript, above the follow threshold, with the text at
+  // the reading line (100px down, just under the protected band) marked. Then
+  // the reading width changes and the replies reflow. The marked character
+  // must stay where it was.
+  const readFrom = async (page: Page, scrollTop: number) => {
     const transcript = page.getByTestId("transcript");
-    await transcript.evaluate((element) => (element.scrollTop = 300));
+    await transcript.evaluate((e, top) => (e.scrollTop = top), scrollTop);
     await settle(page);
-    const anchor = () =>
-      transcript.evaluate((element) => {
-        const top = element.getBoundingClientRect().top;
-        const first = [...element.querySelectorAll(".transcript-inner > *")].find(
-          (node) => node.getBoundingClientRect().bottom > top + 1,
-        )!;
-        return { text: first.textContent?.slice(0, 30), top: first.getBoundingClientRect().top };
-      });
-    const before = await anchor();
+    expect(
+      await transcript.evaluate((e) => e.scrollHeight - e.scrollTop - e.clientHeight),
+      "the reader is above the follow threshold",
+    ).toBeGreaterThan(96);
+    return transcript.evaluate((scroller) => {
+      const box = scroller.getBoundingClientRect();
+      const column = scroller.querySelector(".transcript-inner")!.getBoundingClientRect();
+      const caret = document.caretRangeFromPoint(column.left + 40, box.top + 100)!;
+      const length = caret.startContainer.textContent?.length ?? 0;
+      const at = Math.max(0, Math.min(caret.startOffset, length - 1));
+      const mark = document.createRange();
+      mark.setStart(caret.startContainer, at);
+      mark.setEnd(caret.startContainer, Math.min(at + 1, length));
+      (window as unknown as { readingMark: Range }).readingMark = mark;
+      return { text: mark.toString(), top: mark.getBoundingClientRect().top - box.top };
+    });
+  };
+  const readingMarkTop = (page: Page) =>
+    page.getByTestId("transcript").evaluate((scroller) => {
+      const mark = (window as unknown as { readingMark: Range }).readingMark;
+      return mark.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    });
+
+  test("resizing across the docking width with Work open keeps the text at the reading line", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=open`, "light");
+    const before = await readFrom(page, 450);
+    expect(before.text.trim()).not.toBe("");
+    for (const width of [1240, 1100, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await settle(page);
+      expect(
+        Math.abs((await readingMarkTop(page)) - before.top),
+        `text at the reading line, ${width}px`,
+      ).toBeLessThanOrEqual(2);
+    }
+  });
+
+  test("opening and closing Work at the docking width keeps the text at the reading line", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1240, height: 900 });
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed`, "light");
+    const before = await readFrom(page, 400);
+    const width = await page.locator(".transcript-inner").evaluate((e) => e.clientWidth);
     await page.getByRole("button", { name: "Show work panel" }).click();
     await settle(page);
-    const after = await anchor();
-    expect(after.text).toBe(before.text);
-    expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(2);
+    // The reading width did change, so the replies reflowed.
+    expect(await page.locator(".transcript-inner").evaluate((e) => e.clientWidth)).toBeLessThan(
+      width,
+    );
+    expect(Math.abs((await readingMarkTop(page)) - before.top)).toBeLessThanOrEqual(2);
+    await page.getByRole("button", { name: "Hide work panel" }).click();
+    await settle(page);
+    expect(Math.abs((await readingMarkTop(page)) - before.top)).toBeLessThanOrEqual(2);
+  });
+
+  test("a reader following the end stays at the end when the width changes", async ({ page }) => {
+    await page.setViewportSize({ width: 1240, height: 900 });
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed`, "light");
+    const transcript = page.getByTestId("transcript");
+    const atEnd = () =>
+      transcript.evaluate((e) => e.scrollHeight - e.scrollTop - e.clientHeight < 2);
+    expect(await atEnd()).toBe(true);
+    await page.getByRole("button", { name: "Show work panel" }).click();
+    await settle(page);
+    expect(await atEnd()).toBe(true);
+    await page.setViewportSize({ width: 1100, height: 900 });
+    await settle(page);
+    expect(await atEnd()).toBe(true);
   });
 });
 
