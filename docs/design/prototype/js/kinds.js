@@ -1200,12 +1200,19 @@
     let reply = "";
     if (op === "read" && Array.isArray(sc.items)) {
       // Two dimensions: more pages (hasMore), and an item whose text was cut (textTruncated).
+      // The cut check covers every item of the run, of any type; the words come from its assistant items.
       const run = sc.thread?.latestRunId;
-      const items = sc.items.filter((i) => i.runId === run && i.type === "assistant_message");
+      const ofRun = sc.items.filter((i) => i.runId === run);
+      const items = ofRun.filter((i) => i.type === "assistant_message");
       const said = items.map((i) => i.text).join("\n\n");
       const cut = items.some((i) => i.textTruncated);
+      const otherCut = !cut && ofRun.some((i) => i.textTruncated);
       if (said) {
-        const how = [sc.hasMore ? "First page only: the reply may continue." : "", cut ? "Part of the reply only: its text was cut, and the rest was not read." : ""].filter(Boolean);
+        const how = [
+          sc.hasMore ? "First page only: the reply may continue." : "",
+          cut ? "Part of the reply only: its text was cut, and the rest was not read." : "",
+          otherCut ? "Part of the run only: an item's text was cut, and the rest was not read." : "",
+        ].filter(Boolean);
         reply = `<div class="exchange-text"><p>${esc(said)}</p></div>` + (how.length ? how.map((h) => CT.note(h)).join("") : CT.note("Read to the end."));
       }
     }
