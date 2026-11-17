@@ -4,6 +4,7 @@ export * from "./host.ts";
 export * from "./mapping.ts";
 export * from "./runs.ts";
 export * from "./approvals.ts";
+export * from "./approval-refusals.ts";
 export * from "./cards.ts";
 export * from "./attachments.ts";
 export { worstCase, type Bound, type Digest } from "./bounds.ts";

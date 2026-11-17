@@ -3,14 +3,39 @@
 // everything in memory, and never opens a socket or makes a request.
 
 import {
+  applyApprovalResolved,
+  applyQuestionResolved,
+  beginDecision,
+  beginReadback,
+  decisionRefusal,
+  decisionText,
+  endDecision,
+  endReadback,
   initialState,
+  noteSent,
+  readbackPending,
+  resolveRequest,
+  markQuestion,
   PAIRING_ENDED,
+  type ApprovalCard,
   type BridgeCommand,
+  type BridgeResultFor,
   type ClawtrateBridge,
   type ClawtrateState,
   type ConnectionState,
   type HostInfo,
+  type TaskActivity,
+  type Transcript,
 } from "@clawtrate/core";
+import {
+  CARD_SCENES,
+  cardScene,
+  isCardScene,
+  questionEvent,
+  wholeApproval,
+  type CardSceneName,
+  type DecisionMode,
+} from "./cards.ts";
 import {
   FAILING_TASK,
   OPEN_TASK,
@@ -66,7 +91,7 @@ export const SCENES = [
   ...LIVE_SCENES,
 ] as const;
 
-export type SceneName = (typeof SCENES)[number];
+export type SceneName = (typeof SCENES)[number] | CardSceneName;
 
 type Step = { after: number; change: (state: ClawtrateState) => ClawtrateState };
 
@@ -195,6 +220,7 @@ function failTranscript(state: ClawtrateState, key: string, keepItems: boolean):
 /** The scene's first state, and the changes that follow it. */
 function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: Step[] } {
   const base = loaded(now);
+  if (isCardScene(name)) return { initial: cardScene(name, now).change(base), steps: [] };
   switch (name) {
     case "main":
       return { initial: base, steps: [] };
@@ -363,7 +389,55 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
 }
 
 export function isScene(value: string | null): value is SceneName {
-  return value !== null && (SCENES as readonly string[]).includes(value);
+  return value !== null && [...SCENES, ...CARD_SCENES].includes(value as SceneName);
+}
+
+/** Change one task's live state, as the engine would. */
+function inTask(
+  state: ClawtrateState,
+  key: string,
+  change: (activity: TaskActivity) => TaskActivity,
+): ClawtrateState {
+  const transcript = state.transcripts[key];
+  if (!transcript) return state;
+  return {
+    ...state,
+    transcripts: {
+      ...state.transcripts,
+      [key]: { ...transcript, ...change(transcript) } as Transcript,
+    },
+  };
+}
+
+/** A read-back that found the request still pending, as the engine applies it. */
+function readBack(activity: TaskActivity, approvalId: string): TaskActivity {
+  const card = activity.approvals.find((each) => each.id === approvalId);
+  if (!card || card.status !== "pending" || card.decisionError === null) return activity;
+  const begun = beginReadback(activity, approvalId);
+  const read = readbackPending(begun.activity, approvalId, begun.attempt);
+  return endReadback(read.activity, approvalId, begun.attempt);
+}
+
+/** The strings the gateway would report for an answer: each chosen option's value or label. */
+function answerStrings(
+  transcript: Transcript | undefined,
+  questionId: string,
+  answers: Record<string, Array<string | { option: number }>>,
+): Record<string, string[]> {
+  const card = transcript?.questions.find((each) => each.id === questionId);
+  return Object.fromEntries(
+    Object.entries(answers).map(([id, list]) => {
+      const item = card?.questions.find((each) => each.id === id);
+      return [
+        id,
+        list.map((answer) => {
+          if (typeof answer === "string") return answer;
+          const option = item?.options.find((each) => each.index === answer.option);
+          return option?.value ?? option?.label ?? String(answer.option);
+        }),
+      ];
+    }),
+  );
 }
 
 export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
@@ -384,6 +458,12 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
   for (const step of steps) setTimeout(() => set(step.change(state)), step.after);
   let pairingChecks = 0;
   const sent: BridgeCommand[] = [];
+  // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
+  const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
+  const later = (ms: number, change: (state: ClawtrateState) => ClawtrateState) =>
+    setTimeout(() => set(change(state)), ms);
+  const approval = (key: string, id: string): ApprovalCard | undefined =>
+    state.transcripts[key]?.approvals.find((each) => each.id === id);
 
   // Files are named and counted, never kept.
   const files = new Map<string, { fileName: string; mimeType: string; sizeBytes: number }>();
@@ -449,7 +529,182 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
       }
       case "openSession":
       case "closeSession":
+      case "requestAccess":
         return;
+      case "resolveApproval": {
+        const { key, approvalId, decision } = command;
+        const card = approval(key, approvalId);
+        if (!card || card.status !== "pending") throw new Error("That approval is no longer open.");
+        // As the engine: the same rule for what may leave, and the same numbered attempts.
+        const refusal = decisionRefusal(card, decision);
+        if (refusal) throw new Error(refusal);
+        if (
+          decision !== "deny" &&
+          card.decisionCut &&
+          command.shownDigest !== card.decisionDigest
+        ) {
+          throw new Error("This approval's text was cut; read it whole before allowing it.");
+        }
+        let attempt = 0;
+        const sent = resolveRequest(card, decision, command.expiresInDays ?? null);
+        set(
+          inTask(state, key, (a) => {
+            const begun = beginDecision(a, approvalId, decision);
+            attempt = begun.attempt;
+            return noteSent(begun.activity, approvalId, sent);
+          }),
+        );
+        const mode = decision === "deny" ? "apply" : decisions;
+        if (mode === "apply") {
+          later(400, (s) =>
+            inTask(s, key, (a) =>
+              endDecision(
+                applyApprovalResolved(a, {
+                  id: approvalId,
+                  status: decision === "deny" ? "denied" : "allowed",
+                  decision,
+                  reason: "user",
+                  resolvedAt: Date.now(),
+                  resolvedBy: null,
+                  resolver: null,
+                  applicationStatus: null,
+                  authoritative: true,
+                  lossy: false,
+                  sessionKey: key,
+                  runId: card.runId,
+                  // The gateway's reply and its event, as it sends them.
+                  records: [
+                    { via: sent.method, record: { ok: true } },
+                    {
+                      via:
+                        card.kind === "plugin"
+                          ? "plugin.approval.resolved"
+                          : "exec.approval.resolved",
+                      record: {
+                        id: approvalId,
+                        decision,
+                        resolvedBy: null,
+                        ts: Date.now(),
+                        request: (card.raw as { request?: unknown } | null)?.request ?? null,
+                      },
+                    },
+                  ],
+                }),
+                approvalId,
+                attempt,
+                "answered",
+                null,
+              ),
+            ),
+          );
+        } else if (mode === "refuse") {
+          later(400, (s) =>
+            inTask(s, key, (a) =>
+              endDecision(
+                a,
+                approvalId,
+                attempt,
+                "refused",
+                "allow-always is unavailable for this command",
+              ),
+            ),
+          );
+          // The read-back the engine sends after a refusal: still pending.
+          later(800, (s) => inTask(s, key, (a) => readBack(a, approvalId)));
+        } else {
+          later(400, (s) =>
+            inTask(s, key, (a) =>
+              endDecision(
+                a,
+                approvalId,
+                attempt,
+                "unknown",
+                "The gateway did not answer within 60 seconds.",
+              ),
+            ),
+          );
+        }
+        return;
+      }
+      case "checkApproval": {
+        // Read back: still pending on the gateway, so the unanswered decision was not applied.
+        const { key, approvalId } = command;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        set(inTask(state, key, (a) => readBack(a, approvalId)));
+        return;
+      }
+      case "answerQuestion": {
+        const { key, questionId } = command;
+        const answers = answerStrings(state.transcripts[key], questionId, command.answers);
+        set(
+          inTask(state, key, (a) =>
+            markQuestion(a, questionId, {
+              submitting: true,
+              error: null,
+              sent: {
+                method: "question.resolve",
+                params: { id: questionId, answers: { answers } },
+              },
+            }),
+          ),
+        );
+        later(300, (s) =>
+          inTask(s, key, (a) =>
+            questionEvent({ id: questionId, status: "answered", answers: { answers } })(
+              applyQuestionResolved(
+                a,
+                { id: questionId, status: "answered", answers: { answers } },
+                { via: "question.resolve", record: { status: "answered", answers: { answers } } },
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+      case "dismissQuestion": {
+        const { key, questionId } = command;
+        set(
+          inTask(state, key, (a) =>
+            markQuestion(a, questionId, {
+              submitting: true,
+              error: null,
+              sent: { method: "question.resolve", params: { id: questionId, cancel: true } },
+            }),
+          ),
+        );
+        later(300, (s) =>
+          inTask(s, key, (a) =>
+            questionEvent({ id: questionId, status: "cancelled" })(
+              applyQuestionResolved(
+                a,
+                { id: questionId, status: "cancelled" },
+                { via: "question.resolve", record: { status: "cancelled" } },
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+    }
+  }
+
+  async function answer<C extends BridgeCommand>(command: C): Promise<BridgeResultFor<C>> {
+    switch (command.type) {
+      case "readApprovalText": {
+        const whole = wholeApproval(name, now, command.approvalId);
+        if (!whole) throw new Error("That approval is no longer open.");
+        return { text: decisionText(whole), digest: whole.decisionDigest } as BridgeResultFor<C>;
+      }
+      case "readStepRaw": {
+        const transcript = state.transcripts[command.key];
+        const step = transcript?.runs
+          .flatMap((run) => run.steps)
+          .find((each) => each.id === command.stepId);
+        return (step?.raw ? { status: "available", raw: step.raw } : null) as BridgeResultFor<C>;
+      }
+      default:
+        // The live scenes answer their own commands (takeBackMessage, sendAgain, sendMessage).
+        return (await apply(command)) as BridgeResultFor<C>;
     }
   }
 
@@ -463,12 +718,7 @@ export function createFixtureBridge(name: SceneName): ClawtrateBridge & {
     send: async (command) => {
       await apply(command);
     },
-    invoke: async (command) => {
-      const answer = await apply(command);
-      if (answer === undefined && command.type !== "openSession" && command.type !== "closeSession")
-        throw new Error(`the fixture does not answer ${command.type}`);
-      return answer as never;
-    },
+    invoke: answer,
     attach: async (file) => {
       const info = {
         id: `file-${files.size + 1}`,

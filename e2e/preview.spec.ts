@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { protocolMismatch } from "../packages/core/src/connect-errors.ts";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
-import { NARRATING_PROMPT, SLOW_PROMPT } from "../tools/dev-gateway/src/seed-data.ts";
+import { SCENARIO_EXAMPLES, SEED_BOTS } from "../tools/dev-gateway/src/seed-data.ts";
 import {
   devGateway,
   FORBIDDEN_PORTS,
@@ -15,6 +15,14 @@ import {
   startHost,
   stopChild,
 } from "./global-setup.ts";
+
+/** A bot's tasks after the seed: its seeded tasks and the live examples seeded with it. */
+function seededTaskCount(botId: string): number {
+  return new Set([
+    ...SEED_BOTS.find((bot) => bot.id === botId)!.tasks.map((task) => task.slug),
+    ...SCENARIO_EXAMPLES.filter((example) => example.botId === botId).map((e) => e.slug),
+  ]).size;
+}
 
 /** This run's own development gateway instance, created by global setup. */
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -193,8 +201,10 @@ test("F-002 F-003 F-009: pairs with the development gateway in steps, says when 
 
   await openBot(page, "Otto");
   const tasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
-  await expect(tasks).toHaveCount(3);
+  // The three scripted tasks and the seeded approval example.
+  await expect(tasks).toHaveCount(4);
   await expect(tasks).toContainText([
+    "List the workspace (approved)",
     "Certificate renewal warning",
     "Weekly backup check",
     "Disk almost full on the media box",
@@ -284,7 +294,7 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
   await openBot(page, "Otto");
   const ottoTasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
   await expect(ottoTasks.locator(".task-time")).toHaveText(
-    Array(3).fill(/^(\d{1,2}:\d{2}\s[AP]M|Yesterday)$/),
+    Array(seededTaskCount("otto")).fill(/^(\d{1,2}:\d{2}\s[AP]M|Yesterday)$/),
   );
   await botRow(page, "Pip").focus();
   await page.keyboard.press("ArrowRight");
@@ -455,7 +465,7 @@ test("the rail names every bot", async ({ page }) => {
   const ottoTasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
   await ottoTasks.filter({ hasText: "Disk almost full on the media box" }).focus();
   await expect(page.getByTestId("rail-tooltip")).toHaveText("Disk almost full on the media box");
-  await expect(ottoTasks.locator(".task-time")).toHaveCount(3);
+  await expect(ottoTasks.locator(".task-time")).toHaveCount(4);
   await expect(ottoTasks.first().locator(".task-time")).not.toHaveText("");
   // A title that fits shows no tooltip. Beside its time it fits the 280px rail.
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -810,7 +820,9 @@ test("F-017 F-020: a run started on the gateway shows its bot working, then the 
   await expect(botRow(page, "Marlow").locator(".bot-preview")).toContainText(
     "This is the scripted development model",
   );
-  await expect(botRow(page, "Marlow")).toHaveAccessibleName(/^Marlow, 2 tasks/);
+  await expect(botRow(page, "Marlow")).toHaveAccessibleName(
+    new RegExp(`^Marlow, ${seededTaskCount("marlow")} tasks`),
+  );
 });
 
 test("F-323: work goes on after the page is closed, and reopening shows where it got to", async ({
@@ -818,6 +830,8 @@ test("F-323: work goes on after the page is closed, and reopening shows where it
 }) => {
   await openShell(page);
   await openTask(page, "Pip", "Saturday errands route");
+  // Counted once the transcript has loaded; count() does not wait for it.
+  await expect(page.getByTestId("transcript-turn").first()).toBeVisible();
   const before = await page.getByTestId("transcript-turn").count();
   const context = page.context();
   // Ask the gateway for a run, and leave the preview while it works.
@@ -909,14 +923,16 @@ test("F-088: a gateway run that narrates between its tool calls shows each narra
     "--session-key",
     "agent:pip:weeknight-meals",
     "--message",
-    NARRATING_PROMPT,
+    // Composed directives: a round ends after each tool call, and the text
+    // after it opens the next, so the reply narrates between its two calls.
+    "#text #list #write",
     "--thinking",
     "low",
     "--json",
   ]);
   await openTask(page, "Pip", "Five weeknight dinners");
   const turn = page.getByTestId("transcript-turn").last();
-  await expect(turn).toContainText("Thursday evening is free.");
+  await expect(turn).toContainText("I wrote notes/scratch.md.");
   const parts = await turn
     .locator(':scope > .msg[data-role="assistant"], :scope > .steps')
     .evaluateAll((nodes) =>
@@ -927,11 +943,11 @@ test("F-088: a gateway run that narrates between its tool calls shows each narra
       ),
     );
   expect(parts).toEqual([
-    "On it. Reading your weekend list first.",
+    "Here is a plain reply, streamed in small pieces with no reasoning first.",
     "[Used 1 tool]",
-    "Read it. Noting the free evening in a list next.",
+    "Those are the files in my workspace.",
     "[Used 1 tool]",
-    "Thursday evening is free. I wrote it down in lists/free-evening.md.",
+    "I wrote notes/scratch.md.",
   ]);
   await expect(turn.locator('.msg[data-role="assistant"] .bubble')).toHaveCount(3);
 });
@@ -964,7 +980,8 @@ test("F-323: a client quit while a run is in progress, and opened again, shows t
       "--session-key",
       "agent:pip:weekend-trip",
       "--message",
-      SLOW_PROMPT,
+      // About eleven seconds of slowly streamed text, with no reasoning first.
+      "#stream 8",
       "--thinking",
       "low",
       "--json",
@@ -982,11 +999,11 @@ test("F-323: a client quit while a run is in progress, and opened again, shows t
     await openTask(page, "Pip", "Two days in the mountains");
     // The reply so far, still being written.
     const live = page.getByTestId("live-turn");
-    await expect(live).toContainText("Here is the whole packing list");
-    await expect(live).not.toContainText("That is everything.");
+    await expect(live).toContainText("Here is a long answer, streamed slowly.");
+    await expect(live).not.toContainText("part 32 of 32.");
     await run;
     // Then the finished reply, and the bot is no longer working.
-    await expect(page.getByTestId("transcript-turn").last()).toContainText("That is everything.", {
+    await expect(page.getByTestId("transcript-turn").last()).toContainText("part 32 of 32.", {
       timeout: 15_000,
     });
     await expect(live).toHaveCount(0);

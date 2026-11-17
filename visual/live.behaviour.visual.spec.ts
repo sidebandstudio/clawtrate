@@ -493,7 +493,9 @@ test.describe("the status line", () => {
                       id: "which",
                       header: "Which",
                       question: "Which disk first?",
-                      options: [],
+                      options: [
+                        { index: 0, label: "The media disk", description: null, value: null },
+                      ],
                       optionsOmitted: 0,
                       multiSelect: false,
                       allowsOther: true,
@@ -505,6 +507,9 @@ test.describe("the status line", () => {
                   submitting: false,
                   error: null,
                   raw: null,
+                  ordinary: true,
+                  sent: null,
+                  settledBy: [],
                 },
               ],
             },
@@ -513,16 +518,17 @@ test.describe("the status line", () => {
       });
     });
     await expect(page.getByTestId("needs-you")).toContainText("Otto asked you a question");
-    // In the transcript too, in the order they arrived.
-    await expect(page.locator(".card-placeholder[data-pending]")).toHaveText([
-      "Question: Which disk first?",
-      "Approval: pending",
-    ]);
+    // In the transcript too, the real cards in the order they arrived.
+    const cards = page.locator('.transcript .card.request[data-pending="true"]');
+    await expect(cards).toHaveCount(2);
+    await expect(cards.nth(0)).toHaveAttribute("data-kind", "question");
+    await expect(cards.nth(1)).toHaveAttribute("data-kind", "approval");
+    const firstOption = page.getByTestId("question-card").locator('.option[tabindex="0"]');
     await page.getByTestId("needs-you").getByRole("button", { name: "Review" }).click();
-    await expect(page.locator('[data-placeholder="question"]')).toBeFocused();
+    await expect(firstOption).toBeFocused();
     await page.getByTestId("transcript").focus();
     await page.keyboard.press("ControlOrMeta+j");
-    await expect(page.locator('[data-placeholder="question"]')).toBeFocused();
+    await expect(firstOption).toBeFocused();
   });
 
   test("F-089: the status line stays while replies and cards arrive and leaves only when the run ends", async ({

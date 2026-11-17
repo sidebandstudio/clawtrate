@@ -3,8 +3,13 @@
 // on Otto's "Disk almost full on the media box" task. Invented content only.
 
 import {
+  admitApproval,
+  applyQuestionRequested,
+  emptyActivity,
   INTERACTIVE_SCOPES,
   newRun,
+  parseExecApproval,
+  RawTable,
   type ApprovalCard,
   type BridgeCommand,
   type ClawtrateState,
@@ -170,43 +175,56 @@ function withRun(
 const readStep = (now: number, change: Partial<Step> = {}) =>
   toolStep("call-read-1", "read", { path: "/var/log/backup/backup-2026-11-15.log" }, now, change);
 
+/** The approval the waiting run asked for, read from a gateway-shaped record as the engine reads it. */
 function approval(now: number): ApprovalCard {
-  return {
-    id: "approval-1",
-    kind: "exec",
-    status: "pending",
-    runId: "run-live",
-    createdAt: now - 5 * SECOND,
-    allowedDecisions: ["allow-once", "deny"],
-  } as unknown as ApprovalCard;
+  return admitApproval(
+    parseExecApproval({
+      id: "approval-1",
+      request: {
+        command: "rm -rf /srv/media/cache/thumbs",
+        commandArgv: ["rm", "-rf", "/srv/media/cache/thumbs"],
+        cwd: "/srv/media",
+        host: "node",
+        nodeId: "media-box",
+        security: "allowlist",
+        ask: "on-miss",
+        agentId: "otto",
+        sessionKey: OPEN_TASK,
+        runId: "run-live",
+        toolCallId: "call-exec-1",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      createdAtMs: now - 5 * SECOND,
+      expiresAtMs: now + 25 * 60 * SECOND,
+    })!,
+  );
 }
 
+/** The question the waiting run asked, admitted from a gateway-shaped record as the engine admits it. */
 function question(now: number): QuestionCard {
-  return {
+  const record = {
     id: "question-1",
     runId: "run-live",
+    sessionKey: OPEN_TASK,
+    agentId: "otto",
     status: "pending",
     questions: [
       {
-        id: "keep",
+        questionId: "keep",
         header: "Old backups",
         question: "Which old backups should I keep?",
-        options: [
-          { index: 0, label: "The last two weeks", description: null, value: null },
-          { index: 1, label: "Only the monthly ones", description: null, value: null },
-        ],
-        optionsOmitted: 0,
-        multiSelect: false,
-        allowsOther: true,
+        options: [{ label: "The last two weeks" }, { label: "Only the monthly ones" }],
+        isOther: true,
       },
     ],
-    createdAt: now - 5 * SECOND,
-    expiresAt: null,
-    answers: null,
-    submitting: false,
-    error: null,
-    raw: null,
+    createdAtMs: now - 5 * SECOND,
+    expiresAtMs: now + 10 * 60 * SECOND,
   };
+  return applyQuestionRequested(emptyActivity, record, {
+    sessionKey: OPEN_TASK,
+    now,
+    raw: new RawTable(),
+  }).questions[0]!;
 }
 
 /** The scene's state, from the loaded fixture state. */

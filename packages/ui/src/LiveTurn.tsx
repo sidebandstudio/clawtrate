@@ -1,8 +1,8 @@
 // The parts of a turn that the engine holds before history does: your
 // messages until the gateway's history has them, the run's streaming reply,
-// and how a run ended (conversation.md, sections 6, 16 and 17). Steps,
-// approvals, questions and messages between bots each have a place here held
-// by a one-line placeholder; their cards are built separately.
+// and how a run ended (conversation.md, sections 6, 16 and 17). A run's steps
+// have a place here held by a one-line placeholder; its approvals, questions
+// and messages between bots are the cards' own (./cards).
 
 import {
   isTerminal,
@@ -17,27 +17,10 @@ import { CloseIcon, WarnIcon } from "./icons.tsx";
 import { endingOf } from "./live.ts";
 import { Markdown } from "./Markdown.tsx";
 
-/** A plain one-line stand-in for a card built elsewhere: it names what it is. */
-export function Placeholder({
-  kind,
-  children,
-  pending = false,
-  since = null,
-}: {
-  kind: "activity" | "approval" | "question" | "messaged";
-  children: ReactNode;
-  pending?: boolean;
-  /** When the card arrived, so Review can go to the oldest. */
-  since?: number | null;
-}) {
+/** A plain one-line stand-in for a run's steps, built elsewhere: it names what it is. */
+export function Placeholder({ kind, children }: { kind: "activity"; children: ReactNode }) {
   return (
-    <p
-      className="card-placeholder"
-      data-placeholder={kind}
-      data-pending={pending || undefined}
-      data-since={since ?? undefined}
-      tabIndex={pending ? -1 : undefined}
-    >
+    <p className="card-placeholder" data-placeholder={kind}>
       {children}
     </p>
   );
@@ -140,55 +123,15 @@ export function OutgoingBubble({
   );
 }
 
-/** One placeholder line for each card a run holds, in the order the run made them. */
-export function RunCards({ run, transcript }: { run: Run; transcript: Transcript }) {
-  const lines: ReactNode[] = [];
+/** A run's steps while the engine holds it, as one placeholder line. */
+export function RunActivity({ run }: { run: Run }) {
   const steps = run.steps.length;
-  if (steps > 0) {
-    lines.push(
-      <Placeholder kind="activity" key="activity">
-        Activity: {steps} {steps === 1 ? "step" : "steps"}
-      </Placeholder>,
-    );
-  }
-  for (const step of run.steps) {
-    if (step.toolName === "sessions_send") {
-      lines.push(
-        <Placeholder kind="messaged" key={step.id}>
-          Message to another bot
-        </Placeholder>,
-      );
-    }
-  }
-  // Approvals and questions in the order they arrived, mixed.
-  const cards = [
-    ...transcript.approvals
-      .filter((approval) => approval.runId === run.id)
-      .map((approval) => ({
-        id: approval.id,
-        at: approval.createdAt,
-        node: (pending: boolean, since: number | null) => (
-          <Placeholder kind="approval" key={approval.id} pending={pending} since={since}>
-            Approval: {approval.status}
-          </Placeholder>
-        ),
-        pending: approval.status === "pending",
-      })),
-    ...transcript.questions
-      .filter((question) => question.runId === run.id)
-      .map((question) => ({
-        id: question.id,
-        at: question.createdAt,
-        node: (pending: boolean, since: number | null) => (
-          <Placeholder kind="question" key={question.id} pending={pending} since={since}>
-            Question: {question.questions[0]?.question ?? question.status}
-          </Placeholder>
-        ),
-        pending: question.status === "pending",
-      })),
-  ].sort((a, b) => (a.at ?? Number.POSITIVE_INFINITY) - (b.at ?? Number.POSITIVE_INFINITY));
-  for (const card of cards) lines.push(card.node(card.pending, card.at));
-  return <>{lines}</>;
+  if (steps === 0) return null;
+  return (
+    <Placeholder kind="activity">
+      Activity: {steps} {steps === 1 ? "step" : "steps"}
+    </Placeholder>
+  );
 }
 
 /**

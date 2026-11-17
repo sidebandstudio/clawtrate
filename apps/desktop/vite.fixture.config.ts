@@ -4,7 +4,7 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-/** 5341, or `CLAWTRATE_FIXTURE_PORT` when another checkout's visual run holds it. */
+/** 5341 unless `CLAWTRATE_FIXTURE_PORT` names another, so two checkouts can run the visual tests at once. */
 export const FIXTURE_PORT = Number(process.env.CLAWTRATE_FIXTURE_PORT ?? 5341);
 
 export default defineConfig({

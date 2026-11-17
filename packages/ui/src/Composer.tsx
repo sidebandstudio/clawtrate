@@ -263,7 +263,6 @@ export function Composer({
           stop(view.stoppable);
         }
       } else if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
-        if (target?.closest("[data-answers-mod-enter]")) return;
         if (target === focusRef.current) return;
         event.preventDefault();
         void sendAs(view.mode);

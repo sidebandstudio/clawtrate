@@ -4,11 +4,14 @@
 // docs/research/grok-bot-flows.md §5.6. Every function here is pure apart from
 // the raw table, which keeps the exact gateway payloads off the state snapshots.
 
-import type {
-  ApprovalAccess,
-  ApprovalCard,
-  ApprovalKind,
-  ApprovalSourceAccess,
+import {
+  withRecords,
+  type ApprovalAccess,
+  type ApprovalCard,
+  type ApprovalKind,
+  type ApprovalSourceAccess,
+  type SentRequest,
+  type SettlingRecord,
 } from "./approvals.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
@@ -396,6 +399,17 @@ export type QuestionCard = {
   error: string | null;
   /** The `question.requested` record as received. */
   raw: unknown;
+  /**
+   * Every question in the record is an ordinary ask-user question
+   * (`isOrdinaryQuestionRecord`), decided on the whole record when the card
+   * was admitted, before anything was cut. Only such a card is answerable as
+   * options and text; any other is shown readable.
+   */
+  ordinary: boolean;
+  /** The answer or dismissal this client sent (`question.resolve`), as sent. */
+  sent: SentRequest | null;
+  /** The records the gateway sent that settled it, by source: `question.resolved`, the reply. */
+  settledBy: SettlingRecord[];
   /** Paths of fields cut to their bound. A cut option label is answered with its full text, read again. */
   cut?: string[];
 };
@@ -1059,6 +1073,57 @@ function mapQuestionItems(value: unknown): QuestionItem[] {
   });
 }
 
+/** Question fields the ordinary ask-user card has no way to show or answer (`QuestionSchema`). */
+const UNORDINARY_QUESTION_FIELDS = [
+  "url",
+  "presentation",
+  "resource",
+  "answerFormat",
+  "defaultAnswers",
+  "isSecret",
+  "secretStore",
+  "secretStoreExisting",
+] as const;
+
+/**
+ * Whether a question record holds only ordinary ask-user questions: one to
+ * three questions, each with two to four options that are a label and
+ * optionally a description and nothing else, and none of a link, a form
+ * presentation, a resource, a lines format, an empty-answer allowance,
+ * default answers or a secret. Such a record is answerable on the ordinary
+ * card; any other is shown readable and is not answerable there.
+ */
+export function isOrdinaryQuestionRecord(record: RawRecord): boolean {
+  const questions = record.questions;
+  if (!Array.isArray(questions) || questions.length < 1 || questions.length > 3) return false;
+  return questions.every((entry) => {
+    const question = asRecord(entry);
+    if (!question || !str(question.questionId)) return false;
+    // `false` for a flag, or an empty default list, asks for nothing.
+    const plain = UNORDINARY_QUESTION_FIELDS.every(
+      (field) =>
+        question[field] === undefined ||
+        question[field] === false ||
+        (field === "defaultAnswers" &&
+          Array.isArray(question[field]) &&
+          (question[field] as unknown[]).length === 0),
+    );
+    if (!plain || question.allowEmpty === true) return false;
+    const options = question.options;
+    if (!Array.isArray(options) || options.length < 2 || options.length > 4) return false;
+    return options.every((each) => {
+      const option = asRecord(each);
+      if (!option || !str(option.label)) return false;
+      return Object.keys(option).every(
+        (key) =>
+          key === "label" ||
+          (key === "description" &&
+            (option.description === undefined || typeof option.description === "string")),
+      );
+    });
+  });
+}
+
 function readAnswers(value: unknown): Record<string, string[]> | null {
   const answers = asRecord(asRecord(value)?.answers);
   if (!answers) return null;
@@ -1107,6 +1172,9 @@ export function applyQuestionRequested(
     submitting: existing?.submitting ?? false,
     error: existing?.error ?? null,
     raw: record,
+    ordinary: isOrdinaryQuestionRecord(record),
+    sent: existing?.sent ?? null,
+    settledBy: [],
   };
   let next: TaskActivity = {
     ...activity,
@@ -1157,7 +1225,15 @@ function closeCard(run: Run, cardId: string, reason: CardCloseReason): Run {
  * `running` once no other card is pending. A question cancelled by Stop is
  * already closed as cancelled on its run.
  */
-export function applyQuestionResolved(activity: TaskActivity, payload: RawRecord): TaskActivity {
+/**
+ * A question settled. `record` is what the gateway sent that says so, kept
+ * as the evidence; an outcome this client applied from its own answer has none.
+ */
+export function applyQuestionResolved(
+  activity: TaskActivity,
+  payload: RawRecord,
+  record?: SettlingRecord,
+): TaskActivity {
   const id = str(payload.id);
   const question = id ? activity.questions.find((each) => each.id === id) : undefined;
   if (!id || !question) return activity;
@@ -1183,6 +1259,7 @@ export function applyQuestionResolved(activity: TaskActivity, payload: RawRecord
             answers: readAnswers(payload.answers) ?? each.answers,
             submitting: false,
             error: null,
+            settledBy: record ? withRecords(each.settledBy, [record]) : each.settledBy,
           }
         : each,
     ),
@@ -1214,7 +1291,7 @@ export function settleQuestionsOfEndedRuns(activity: TaskActivity): TaskActivity
 export function markQuestion(
   activity: TaskActivity,
   id: string,
-  patch: Pick<QuestionCard, "submitting" | "error">,
+  patch: Pick<QuestionCard, "submitting" | "error"> & Partial<Pick<QuestionCard, "sent">>,
 ): TaskActivity {
   return {
     ...activity,

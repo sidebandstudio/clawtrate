@@ -3,8 +3,10 @@
 // translucent fills composited over their real parents. Text behind the Work
 // drawer's scrim is inert and deliberately concealed, so it is not measured.
 import { expect, test, type Page } from "@playwright/test";
+import { CARD_SCENES } from "../apps/desktop/src/fixture/cards.ts";
 import {
   contextFor,
+  FIXTURE_PORT,
   openFixture,
   OTTO_DISK,
   settle,
@@ -208,6 +210,18 @@ SCENES.push({
   },
 });
 
+/** Every card scene, with every card, full request and Raw panel open. */
+const openCards = async (page: Page) => {
+  await page.locator(".app").waitFor();
+  await page.evaluate(() => {
+    for (const details of document.querySelectorAll(".transcript details")) {
+      (details as HTMLDetailsElement).open = true;
+    }
+  });
+  const raws = page.locator('.transcript .card-actions button:text-is("Raw")');
+  for (let i = 0; i < (await raws.count()); i += 1) await raws.nth(i).click();
+};
+
 // Every width the screenshots are taken at: 1440, 1100, 800 and the phone.
 for (const size of SIZES) {
   for (const theme of THEMES) {
@@ -218,6 +232,33 @@ for (const size of SIZES) {
           await openFixture(page, scene.query, theme);
           await settle(page);
           await scene.prepare?.(page);
+          await settle(page);
+          const findings = await page.evaluate(audit);
+          expect(findings.length, "some text was measured").toBeGreaterThan(0);
+          expect(
+            findings.filter((f) => f.size < 12),
+            "text below 12px",
+          ).toEqual([]);
+          expect(
+            findings.filter((f) => f.ratio < 4.5),
+            "text below 4.5:1",
+          ).toEqual([]);
+        });
+      }
+    });
+  }
+}
+
+// The cards, at the desktop and the phone width they are shot at.
+for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
+  for (const theme of THEMES) {
+    test.describe(`legibility of cards ${size.name} ${theme}`, () => {
+      test.use(contextFor(size, theme));
+      for (const scene of CARD_SCENES) {
+        test(`F-471: legibility, card ${scene}`, async ({ page }) => {
+          await openFixture(page, `scene=${scene}`, theme);
+          await settle(page);
+          await openCards(page);
           await settle(page);
           const findings = await page.evaluate(audit);
           expect(findings.length, "some text was measured").toBeGreaterThan(0);
@@ -258,8 +299,9 @@ test("the fixture mode makes no request beyond its own files", async ({ page }) 
   const foreign: string[] = [];
   page.on("request", (request) => {
     const url = request.url();
-    const own = `http://127.0.0.1:${process.env.CLAWTRATE_FIXTURE_PORT ?? 5341}/`;
-    if (!url.startsWith(own) && !url.startsWith("data:")) foreign.push(url);
+    if (!url.startsWith(`http://127.0.0.1:${FIXTURE_PORT}/`) && !url.startsWith("data:")) {
+      foreign.push(url);
+    }
   });
   page.on("websocket", (socket) => foreign.push(socket.url()));
   for (const query of ["scene=connect", "scene=pairing", `scene=synced&${OTTO_DISK}&panel=open`]) {

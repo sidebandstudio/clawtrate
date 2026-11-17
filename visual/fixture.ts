@@ -1,5 +1,8 @@
 import { expect, type Page } from "@playwright/test";
 
+/** Where the fixture is served: 5341 unless `CLAWTRATE_FIXTURE_PORT` names another. */
+export const FIXTURE_PORT = Number(process.env.CLAWTRATE_FIXTURE_PORT ?? 5341);
+
 /** Every fixture page sees the same moment, so row times and stamps are stable. */
 export const NOW = new Date("2026-11-16T17:40:00-05:00");
 

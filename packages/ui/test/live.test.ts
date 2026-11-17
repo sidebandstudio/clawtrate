@@ -94,6 +94,9 @@ const question = (status: QuestionCard["status"] = "pending"): QuestionCard => (
   submitting: false,
   error: null,
   raw: null,
+  ordinary: true,
+  sent: null,
+  settledBy: [],
 });
 
 const message = (change: Partial<OutgoingMessage>): OutgoingMessage => ({

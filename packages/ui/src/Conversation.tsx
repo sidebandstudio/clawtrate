@@ -21,9 +21,24 @@ import {
 import { AccessBar } from "./AccessBar.tsx";
 import { useCommand } from "./bridge.tsx";
 import { Avatar, Presence } from "./Avatar.tsx";
+import {
+  CardScope,
+  CardSlot,
+  focusPending,
+  oldestPending,
+  RunCardList,
+  TrailingCards,
+  useStepHandover,
+} from "./cards/index.ts";
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
 import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
-import { IncompleteCaption, OutgoingBubble, RunCards, RunEnding, RunReply } from "./LiveTurn.tsx";
+import {
+  IncompleteCaption,
+  OutgoingBubble,
+  RunActivity,
+  RunEnding,
+  RunReply,
+} from "./LiveTurn.tsx";
 import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime, summarizeArguments } from "./format.ts";
@@ -50,8 +65,22 @@ function ReasoningStep({ text }: { text: string }) {
 
 function ToolStep({ call }: { call: ToolCall }) {
   const state = call.result ? (call.result.isError ? "failed" : "done") : "no result";
+  // Kept for the card this call may become once its result names it.
+  const handover = useStepHandover();
+  const note = (element: HTMLDetailsElement, focused: boolean) =>
+    call.callId && handover?.note(call.callId, { open: element.open, focused });
   return (
-    <details className="step" data-testid="tool-call">
+    <details
+      className="step"
+      data-testid="tool-call"
+      onToggle={(event) =>
+        note(event.currentTarget, event.currentTarget.contains(document.activeElement))
+      }
+      onFocus={(event) => note(event.currentTarget, true)}
+      onBlur={(event) =>
+        note(event.currentTarget, event.currentTarget.contains(event.relatedTarget as Node | null))
+      }
+    >
       <summary>
         <ChevronIcon className="step-chevron" />
         <span className="step-tool-name">{call.name}</span>
@@ -85,7 +114,13 @@ export function stepsLabel(blocks: TranscriptBlock[]): string {
 }
 
 /** A run of thoughts and tool calls, folded into one line until asked for. */
-function Steps({ blocks }: { blocks: TranscriptBlock[] }) {
+function Steps({ blocks: all }: { blocks: TranscriptBlock[] }) {
+  // A call drawn as a card is not drawn here as well.
+  const handover = useStepHandover();
+  const blocks = all.filter(
+    (block) => block.kind !== "tool-call" || !block.callId || !handover?.isCard(block.callId),
+  );
+  if (blocks.length === 0) return null;
   return (
     <details className="steps">
       <summary className="event-line">
@@ -155,6 +190,7 @@ const NEAR_BOTTOM_PX = 96;
 /** Blocks of readable text in a transcript; the place is held in the finest one. */
 const TEXT_BLOCKS =
   ".task-line, .stamp, .event-line, .steps > summary, .step > summary, .status-phrase, " +
+  ".request-title, .card > summary, " +
   ".bubble :is(p, li, h1, h2, h3, h4, h5, h6, pre, td, th, blockquote)";
 
 type Caret = { node: Node; offset: number };
@@ -185,8 +221,8 @@ function caretTop(caret: Caret): number | null {
 
 /**
  * The reader's place survives a change of width: opening, closing, docking or
- * undocking Work, or resizing the window, and late reflows such as fonts
- * arriving. A reader following the end stays at the end. Otherwise the text
+ * undocking Work, or resizing the window, late reflows such as fonts
+ * arriving, and any change of content above or below it. A reader following the end stays at the end. Otherwise the text
  * at the reading line, just under the protected band at the top, stays where
  * it was while the lines reflow around it: the exact character when the
  * engine can say which, or else the start of its paragraph, list item or row.
@@ -200,7 +236,6 @@ function useHoldPlace(
     const element = scroller.current;
     if (!element) return;
     let place: { block: Element; caret: Caret | null; top: number } | null = null;
-    let width = element.clientWidth;
 
     /** Where the reading line is, and where a held place is drawn, relative to the scroller. */
     const frame = () => {
@@ -235,14 +270,14 @@ function useHoldPlace(
       place = held;
     };
 
-    // Watching the content too covers late reflows, such as fonts arriving.
+    // Watching the content too covers late reflows, such as fonts arriving, and every
+    // change of content: a step becoming a card, a card arriving or resolving above.
     const observer = new ResizeObserver(() => {
       if (following.current) toEnd();
-      else if (element.clientWidth !== width && place) {
+      else if (place) {
         const now = drawnAt(place);
         if (now !== null) element.scrollTop += now - frame().top - place.top;
       }
-      width = element.clientWidth;
       record();
     });
     record();
@@ -348,13 +383,15 @@ function TranscriptView({
       if (before) rows.push(...before);
     }
     rows.push(
-      item.role === "system" ? (
-        <p className="event-line" data-side="center" key={item.id}>
-          {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
-        </p>
-      ) : (
-        <Turn key={item.id} item={item} incomplete={live.incomplete.has(item.id)} />
-      ),
+      <CardSlot key={item.id} item={item}>
+        {item.role === "system" ? (
+          <p className="event-line" data-side="center">
+            {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
+          </p>
+        ) : (
+          <Turn item={item} incomplete={live.incomplete.has(item.id)} />
+        )}
+      </CardSlot>,
     );
   }
   const trailing = endingsBefore.get(null);
@@ -372,13 +409,16 @@ function TranscriptView({
         data-testid="transcript"
       >
         <div className="transcript-inner">
-          <h1 className="task-line" tabIndex={-1}>
-            {task.title}
-          </h1>
-          <TaskContext task={task} />
-          {note}
-          {rows}
-          {live.foot}
+          <CardScope taskKey={task.key} transcript={transcript}>
+            <h1 className="task-line" tabIndex={-1}>
+              {task.title}
+            </h1>
+            <TaskContext task={task} />
+            {note}
+            {rows}
+            <TrailingCards except={live.drawsCards} />
+            {live.foot}
+          </CardScope>
         </div>
       </div>
       {live.needsYou && !atEnd ? (
@@ -462,6 +502,8 @@ type LiveParts = {
   endingsBefore: Map<string | null, ReactNode[]>;
   /** History items that end a reply cut off by a stop or a failure. */
   incomplete: Set<string>;
+  /** Runs whose cards the foot draws under their message, so the trailing cards leave them out. */
+  drawsCards: Set<string>;
   /** Changes whenever the foot's content does, for following the end. */
   signature: string;
   status: StatusLineView | null;
@@ -492,6 +534,8 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
   const placed = new Set<string>();
   const endingsBefore = new Map<string | null, ReactNode[]>();
   const incomplete = new Set<string>();
+  const drawsCards = new Set<string>();
+  const shown = new Set(transcript.items.map((item) => item.id));
   const signature: string[] = [];
 
   // Which user message comes after each one, to place an ending under its turn.
@@ -554,10 +598,14 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
 
   for (const run of footRuns) {
     if (run.messageId) bubble(run.messageId);
-    if (run === active || heldByEngine(run, transcript)) {
-      foot.push(<RunCards key={`cards-${run.id}`} run={run} transcript={transcript} />);
-      foot.push(<RunReply key={`reply-${run.id}`} run={run} />);
+    const held = run === active || heldByEngine(run, transcript);
+    if (held) foot.push(<RunActivity key={`activity-${run.id}`} run={run} />);
+    // A run whose message history does not show yet has its cards here, under that message.
+    if (!run.anchorItemId || !shown.has(run.anchorItemId)) {
+      drawsCards.add(run.id);
+      foot.push(<RunCardList key={`cards-${run.id}`} runId={run.id} />);
     }
+    if (held) foot.push(<RunReply key={`reply-${run.id}`} run={run} />);
     signature.push(`${run.id}:${run.state}:${run.text.length}:${run.steps.length}`);
     for (const message of transcript.outbox) {
       if (message.mode === "steer" && message.runId === run.id) bubble(message.id);
@@ -617,15 +665,13 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
     );
   }
 
-  const needsYou =
-    options.interactive &&
-    (transcript.approvals.some((card) => card.status === "pending") ||
-      transcript.questions.some((card) => card.status === "pending"));
+  const needsYou = options.interactive && oldestPending(transcript) !== null;
   return {
     bot,
     foot,
     endingsBefore,
     incomplete,
+    drawsCards,
     signature: signature.join("|"),
     status,
     needsYou,
@@ -633,32 +679,15 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
   };
 }
 
-/** The oldest card that needs the person, for "Review" and ⌘J. */
+/** The oldest card that needs the person, which "Review" and ⌘J go to: the cards' own choice. */
 function needsYouOf(bot: Bot, transcript: Transcript | undefined, interactive: boolean): NeedsYou {
   if (!transcript || !interactive) return null;
-  const question = transcript.questions.find((card) => card.status === "pending");
-  const approval = transcript.approvals.find((card) => card.status === "pending");
-  const questionAt = question?.createdAt ?? Number.POSITIVE_INFINITY;
-  const approvalAt = approval?.createdAt ?? Number.POSITIVE_INFINITY;
-  if (approval && (!question || approvalAt <= questionAt))
+  const oldest = oldestPending(transcript);
+  if (oldest?.kind === "approval")
     return { kind: "approval", text: `${bot.name} needs your approval to run a command` };
-  if (question) return { kind: "question", text: `${bot.name} asked you a question` };
+  if (oldest?.kind === "question")
+    return { kind: "question", text: `${bot.name} asked you a question` };
   return null;
-}
-
-/** Move to the oldest card that needs the person, and focus it. */
-function reviewOldest(root: HTMLElement | null) {
-  // The oldest by arrival, questions and approvals mixed; one with no time comes last.
-  const pending = [...(root?.querySelectorAll<HTMLElement>('[data-pending="true"]') ?? [])];
-  const at = (element: HTMLElement) =>
-    element.dataset.since ? Number(element.dataset.since) : Number.POSITIVE_INFINITY;
-  const card = pending.reduce<HTMLElement | undefined>(
-    (oldest, each) => (!oldest || at(each) < at(oldest) ? each : oldest),
-    undefined,
-  );
-  if (!card) return;
-  card.scrollIntoView({ block: "nearest" });
-  card.focus();
 }
 
 /** The lifecycle words the announcer speaks for a run (section 2). */
@@ -771,7 +800,10 @@ export function Conversation({
     : "";
 
   const active = currentRun(transcript);
-  const review = useCallback(() => reviewOldest(sectionRef.current), []);
+  const review = useCallback(() => {
+    const oldest = transcript ? oldestPending(transcript) : null;
+    if (oldest) focusPending(oldest);
+  }, [transcript]);
   const openSteps = useCallback(() => {
     const activity = sectionRef.current?.querySelectorAll<HTMLElement>(
       '[data-placeholder="activity"]',

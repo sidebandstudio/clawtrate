@@ -68,6 +68,8 @@ export type BridgeCommand =
     }
   /** The whole text an approval asks about, read again and not kept. */
   | { type: "readApprovalText"; key: string; approvalId: string }
+  /** Read back an approval whose last decision was refused or got no answer. */
+  | { type: "checkApproval"; key: string; approvalId: string }
   /** A history item whole, read again and not kept. */
   | { type: "readHistoryItem"; key: string; itemId: string }
   /**
@@ -351,6 +353,12 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         key: sessionKey(command.key),
         approvalId: id(command.approvalId, "approval id"),
       };
+    case "checkApproval":
+      return {
+        type: "checkApproval",
+        key: sessionKey(command.key),
+        approvalId: id(command.approvalId, "approval id"),
+      };
     case "readHistoryItem":
       return {
         type: "readHistoryItem",
@@ -571,6 +579,8 @@ class ViewerSession implements BridgeSession {
           owner,
           ...(policy.maxResultChars !== undefined ? { maxChars: policy.maxResultChars } : {}),
         });
+      case "checkApproval":
+        return client.checkApproval(this.mine(command.key), command.approvalId);
       case "readHistoryItem":
         return client.readHistoryItem(this.mine(command.key), command.itemId);
       case "retryCreation":
