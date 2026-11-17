@@ -22,6 +22,9 @@ const SHOTS = process.env.CLAWTRATE_RAIL_SHOTS;
 
 test.describe.configure({ mode: "serial" });
 
+/** Reads of the gateway go through its command line, slow on a busy machine: each wait has its own deadline. */
+const gateway = expect.configure({ timeout: 30_000 });
+
 type Host = { child: ChildProcess; url: string; data: string };
 const hosts: Host[] = [];
 /** The interface with interactive access, and a second device that stays read-only. */
@@ -285,7 +288,7 @@ test("F-056: a rename in place reaches the gateway, survives a reload and is see
   await page.getByRole("textbox", { name: `Rename ${task.title}` }).fill(renamed);
   await page.keyboard.press("Enter");
   await expect(taskRow(page, renamed)).toBeFocused({ timeout: 20_000 });
-  await expect.poll(async () => (await describe(task.key))?.label).toBe(renamed);
+  await gateway.poll(async () => (await describe(task.key))?.label).toBe(renamed);
   await expect(taskRow(second, renamed)).toBeVisible({ timeout: 20_000 });
   await shot(page, "renamed-light-1440");
   await reload(page);
@@ -297,7 +300,7 @@ test("F-014: a task's pin reaches the gateway, survives a reload and is seen by 
   const task = await ownTask("pip", "Pip", "Pin me");
   await taskMenu(page, task.title);
   await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
-  await expect.poll(async () => (await describe(task.key))?.pinned).toBe(true);
+  await gateway.poll(async () => (await describe(task.key))?.pinned).toBe(true);
   for (const on of [page, second]) {
     await expect(
       on.getByRole("list", { name: "Pip's tasks" }).getByTestId("task").first(),
@@ -310,15 +313,15 @@ test("F-014: a task's pin reaches the gateway, survives a reload and is seen by 
   ).toHaveAccessibleName(new RegExp(`^${task.title}, pinned`));
   await taskMenu(page, task.title);
   await page.getByRole("menuitem", { name: "Unpin" }).click();
-  await expect.poll(async () => (await describe(task.key))?.pinned ?? false).toBe(false);
+  await gateway.poll(async () => (await describe(task.key))?.pinned ?? false).toBe(false);
 });
 
 test("F-022: Mark as unread reaches the gateway, survives a reload and is seen by the second connection; opening reads it", async () => {
   const task = await ownTask("pip", "Pip", "Unread me");
-  await expect.poll(async () => (await describe(task.key))?.unread ?? false).toBe(false);
+  await gateway.poll(async () => (await describe(task.key))?.unread ?? false).toBe(false);
   await taskMenu(page, task.title);
   await page.getByRole("menuitem", { name: "Mark as unread" }).click();
-  await expect.poll(async () => (await describe(task.key))?.unread).toBe(true);
+  await gateway.poll(async () => (await describe(task.key))?.unread).toBe(true);
   await expect(taskRow(second, task.title).locator(".unread-dot")).toHaveCount(1, {
     timeout: 20_000,
   });
@@ -341,7 +344,7 @@ test("F-277: Archive moves a task into the bot's Archived group on the gateway, 
   const task = await ownTask("pip", "Pip", "Archive me");
   await taskMenu(page, task.title);
   await page.getByRole("menuitem", { name: "Archive" }).click();
-  await expect.poll(async () => (await describe(task.key))?.archived).toBe(true);
+  await gateway.poll(async () => (await describe(task.key))?.archived).toBe(true);
   await expect(taskRow(second, task.title)).toHaveCount(0, { timeout: 20_000 });
   await reload(page);
   await unfold(page, "Pip");
@@ -357,7 +360,7 @@ test("F-277: Archive moves a task into the bot's Archived group on the gateway, 
   await shot(page, "archived-light-1440");
   await archived.getByTestId("archived-task").filter({ hasText: task.title }).click();
   await page.getByRole("menuitem", { name: "Restore" }).click();
-  await expect.poll(async () => (await describe(task.key))?.archived ?? false).toBe(false);
+  await gateway.poll(async () => (await describe(task.key))?.archived ?? false).toBe(false);
   await expect(taskRow(second, task.title)).toBeVisible({ timeout: 20_000 });
 });
 
@@ -395,7 +398,7 @@ test("F-278: Delete, confirmed, stops the task's active run first and removes it
   expect(ended.some((event) => (event.payload as { state?: string }).state === "aborted")).toBe(
     true,
   );
-  await expect.poll(async () => await describe(task.key)).toBeNull();
+  await gateway.poll(async () => await describe(task.key)).toBeNull();
   expect((await listed("pip", "all")).some((row) => row.key === task.key)).toBe(false);
   await expect(taskRow(page, task.title)).toHaveCount(0);
   await expect(taskRow(second, task.title)).toHaveCount(0, { timeout: 20_000 });
@@ -525,7 +528,7 @@ test("F-424: the gateway keeps a bot's main session unarchived; a bot without on
     await page.getByRole("menuitem", { name: "Archive task" }).click();
     await expect(page.locator(".title-pill-task")).toHaveText("Main", { timeout: 20_000 });
     let unarchived: Row[] = [];
-    await expect
+    await gateway
       .poll(async () => {
         unarchived = await listed(botId);
         return unarchived.map((row) => row.label);
