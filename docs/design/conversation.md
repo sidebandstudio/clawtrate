@@ -136,7 +136,7 @@ A bot with its own picture has no face to move. For it the ring also says thinki
 
 Accessible name: the avatar is `role="img"` with the name "<Bot>, <state>", for example "Otto, working". Where it sits inside a control that already speaks the state, it is hidden from assistive technology. (F-020, F-086)
 
-Sizes: 88 px in the Work pane, 56 px pinned, 40 px in the rail, 28 px in the status line, 22 px in the title pill and in a card's live status, 20 px in the Jump control. Below 28 px the ring sits 3 px out.
+Sizes: 64 px in the Work pane, 56 px pinned, 40 px in the rail, 28 px in the status line, 22 px in the title pill and in a card's live status, 20 px in the Jump control. Below 28 px the ring sits 3 px out.
 
 ## 4. The status line
 
@@ -508,7 +508,7 @@ The same rule holds when things change above the reader: a block folding at the 
 
 ## 17. After a reconnect
 
-The connection strip in `visual-language.md` reports the connection. For a conversation that was mid-run it adds:
+The status strip in `visual-language.md` reports the connection. For a conversation that was mid-run it adds:
 
 - **While disconnected**, the status line stays, but nothing in it moves: the avatar is blocked, and the phrase reads "Reconnecting. Last seen reading the backup log". The elapsed time is hidden. The app does not animate what it cannot see.
 - **On reconnect**, the strip reads "Connected · catching up" while the transcript is fetched again and merged. No message appears twice. (F-107)

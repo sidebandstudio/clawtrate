@@ -1,6 +1,6 @@
 # Clawtrate visual language
 
-This document replaces the look of the first app shell. It keeps the shell's structure, file names and naming style, and changes everything visual. The prototype in `docs/design/prototype/` shows it assembled: `connect.html`, `pairing.html` and `app.html`. The prototype's `css/tokens.css` and `css/app.css` are written as drop-in replacements for the two files in `packages/ui/src/styles/`.
+This document replaces the look of the first app shell. It keeps the shell's structure, file names and naming style, and changes everything visual. The prototype in `docs/design/prototype/` shows it assembled and working on local fixtures: `connect.html`, `pairing.html` and `app.html`. The prototype's `css/tokens.css` and `css/app.css` are written against the shell's own markup (`.shell`, `.rail`, `.main-pane`, `.status-strip`, `.transcript-wrap`, `.drawer-scrim`, `.work-panel`) and are the source for section 14, which says how to bring them into `packages/ui/src/styles/` one component at a time.
 
 The conversation components (the working view, step cards, Messaged cards, approval and question cards, the composer during a run) are the second part of this design. They are specified in `docs/design/conversation.md`, in this same language.
 
@@ -16,7 +16,7 @@ The conversation components (the working view, step cards, Messaged cards, appro
 8. The conversation
 9. The Work pane
 10. Connection and pairing screens
-11. The connection strip
+11. The status strip
 12. Compact and phone layouts
 13. Accessibility
 14. Change list for the builder
@@ -31,7 +31,7 @@ Each of these is a rule a reviewer can check.
 4. **Neutral chrome.** Greys carry no tint. There are no gradients or glows.
 5. **Colour belongs to the bots and to you.** The avatars are the colour in the app. The accent appears on your own bubbles, on unread, on a bot that is working, on focus and on links. Selection and primary buttons are neutral.
 6. **One typeface, two weights.** Regular and medium. Semibold only for headings inside a reply and for the product name. A mono face only for code.
-7. **Nothing below 12 px, and every text colour reaches 4.5:1** on every surface it can sit on.
+7. **Nothing below 12 px, and every text colour reaches 4.5:1** on every surface it is allowed to sit on. Section 13 lists the one surface with restrictions. A disabled control changes its fill and text; it is never faded with opacity.
 8. **Messages are bubbles.** No name, avatar or time beside a message. Time is a centred stamp between blocks.
 9. **The bot's work is quiet until asked for.** Thoughts and tool calls fold into one line.
 10. **One list.** Tasks live under their bot in the rail. There is no separate task column.
@@ -103,15 +103,17 @@ Unchanged: `--accent` (`#0a6e5c` / `#3ee6c1`), `--accent-strong`, `--accent-line
 | `--radius-md` | 8px | 14px |
 | `--radius-lg` | 12px | 18px |
 | `--rail-width` | 228px | 280px |
-| `--list-width` | 312px | 0 (retired) |
+| `--list-width` | 312px | 0 (retired; keep 312px until the task column is removed, section 14 step 4) |
 | `--panel-width` | 320px | 360px |
 | `--header-height` | 52px | 56px, now the band the floating controls sit in |
 
-New: `--weight-regular` 400, `--weight-medium` 500, `--weight-strong` 600; `--space-10` 40px; `--radius-pill` 999px; `--transcript-max` 760px; `--conversation-min` 440px; `--tap-min` 44px; `--avatar-row` 40px, `--avatar-pin` 56px, `--avatar-hero` 88px, `--avatar-pill` 22px. The motion tokens (`--dur-quick` 120ms, `--dur-base` 200ms, `--dur-settle` 420ms, `--ease-in-out`, and the `--loop-*` periods) are used by the conversation components and are defined here so there is one token file.
+New: `--weight-regular` 400, `--weight-medium` 500, `--weight-strong` 600; `--space-10` 40px; `--radius-pill` 999px; `--transcript-max` 760px; `--conversation-min` 440px; `--strip-band` 40px (the band under the title pill that is kept clear for the status strip); `--tap-min` 44px; `--avatar-row` 40px, `--avatar-pin` 56px, `--avatar-hero` 64px, `--avatar-pill` 22px. The motion tokens (`--dur-quick` 120ms, `--dur-base` 200ms, `--dur-settle` 420ms, `--ease-in-out`, and the `--loop-*` periods) are used by the state marks here and by the conversation components, and are defined once in this file.
 
 ## 3. Type
 
-One family, Figtree, an open-licensed variable sans (SIL OFL) available as `@fontsource-variable/figtree`. It is round and open at small sizes, which suits bubbles and round controls, and its figures are clear in times and sizes. JetBrains Mono stays for code. Instrument Sans and Instrument Serif are removed.
+One family, Figtree, a variable sans. It is round and open at small sizes, which suits bubbles and round controls, and its figures are clear in times and sizes. JetBrains Mono stays for code. Instrument Sans and Instrument Serif are removed.
+
+**Licence.** Figtree comes from the npm package `@fontsource-variable/figtree`, pinned to 5.3.0. The package declares the SIL Open Font License 1.1, copyright The Figtree Project Authors. That licence permits bundling and embedding the font in software under any licence, MIT included, provided the font is not sold by itself and its copyright notice and licence text travel with it; the font stays under the OFL while the app's code stays MIT. The app installs the package and lets the bundler include the font, as it already does for JetBrains Mono (also OFL 1.1). No font file is committed to this repository. The prototype pages name the faces and load them only from a local, ignored stylesheet that `prototype/tools/make-local-fonts.mjs` builds from the same pinned packages.
 
 | Role | Size | Weight | Line height | Colour |
 |---|---|---|---|---|
@@ -159,6 +161,8 @@ Rules: no uppercase labels, no added letter-spacing except on the two titles, no
 | Default | `--bg-bubble`, pill | Secondary actions |
 | Quiet | Transparent, `--text-muted` | Tertiary actions |
 
+Disabled, every button takes `--bg-bubble` with `--text-faint` (4.7:1 or better) and keeps full opacity; a disabled round button does the same.
+
 Sizes: 40 px default, 48 px (`data-size="lg"`, full width) on the connection screens, 30 px (`data-size="sm"`) inside cards and strips. Icons are 16 px with a 1.6 px round stroke, drawn for Clawtrate.
 
 ## 5. Avatars
@@ -175,7 +179,7 @@ The construction is in `prototype/js/icons.js`: a 40-unit grid, the body filling
 |---|---|---|
 | Rail row | 40 px (44 on touch) | `--avatar-row` |
 | Pinned tile | 56 px | `--avatar-pin` |
-| Work pane | 88 px | `--avatar-hero` |
+| Work pane | 64 px | `--avatar-hero` |
 | Title pill | 22 px | `--avatar-pill` |
 | Empty conversation | 64 px | |
 
@@ -194,20 +198,26 @@ The window is two panes, with a third on request.
 
 | Pane | Width | Notes |
 |---|---|---|
-| Rail | 280 px (248 px below 900) | Bots, with tasks under the open bot |
-| Conversation | the rest, never less than 440 px | Transcript column capped at 760 px and centred |
-| Work pane | 360 px | Docked when there is room for it and 440 px of conversation; otherwise a drawer |
+| Rail | 280 px (248 px below 900) | Bots, with tasks under them |
+| Main pane | the rest | Holds the conversation and the Work pane |
+| Conversation | never less than 440 px; 600 px or more beside a docked Work pane | Transcript column capped at 760 px and centred |
+| Work pane | 360 px | A drawer by default. Docked only when the main pane is 960 px or wider. |
 
-The element that holds the shell (`.app`, the app's `#root`) is a size container, and the layout responds to its width, so the same rules serve a narrow window, a split view and the phone.
+**When the Work pane docks.** The test is the reading width inside a bubble, not the width of the column. With a 600 px conversation, a long reply has about 450 px of text; below that, paragraphs become tall and the pane beside them is nearly as wide as the conversation. So the pane docks only when the main pane is at least 960 px (600 for the conversation, 360 for the pane), which is a 1240 px window with a 280 px rail. Below that it is a drawer over the right edge and the conversation keeps its full width.
 
-| Container width | Rail | Work pane | Conversation at that width |
-|---|---|---|---|
-| 1080 and up | 280 | docked, 360 | 440 at 1080, 800 at 1440 |
-| 900–1079 | 280 | drawer over the right edge | 620–799 |
-| 688–899 | 248 | drawer | 440–651; at 800 it is 552 |
-| below 688 | one pane at a time | full-width sheet | full width |
+Two containers carry the layout, so the same rules serve a narrow window, a split view and the phone: the element that holds the shell (`.app`) for the rail and the one-pane switch, and `.main-pane` for the Work pane.
+
+| Window | Rail | Work pane | Conversation, pane closed | Conversation, pane open |
+|---|---|---|---|---|
+| 1440 | 280 | docked | 1160 | 800 |
+| 1240 | 280 | docked | 960 | 600 |
+| 1100 | 280 | drawer | 820 | 820, under the drawer |
+| 800 | 248 | drawer | 552 | 552, under the drawer |
+| below 688 | one pane at a time | full-width sheet | full width | under the sheet |
 
 688 is where a 248 px rail leaves exactly 440 px for the conversation.
+
+**The reader's place.** Opening or closing the pane, docking or undocking it, and resizing the window never move the reader. If the reader was at the bottom, they stay at the bottom. Otherwise the first message in view stays where it was while the text reflows around it.
 
 ## 7. The rail: bots and their tasks
 
@@ -217,11 +227,13 @@ The element that holds the shell (`.app`, the app's `#root`) is a size container
 rail-top        search and new, top right; the left part drags the window
 bot-list
   pin-grid      pinned bots as large tiles, three per row (when any are pinned)
+  pin-tasks     the tasks of an unfolded pinned bot, right under the tiles
   rail-section  a small grey word, for the user's own sections
-  bot-group     a bot, and its tasks when it is open
+  bot-group     a bot, and its tasks when it is unfolded
     bot
+    bot-toggle  folds or unfolds the tasks without opening the bot
     task-list
-rail-footer     the gateway: a status dot, its name, its state; settings
+rail-footer     the gateway: a status dot, its name, its state; opens the gateway menu
 ```
 
 There is no product name in the rail and no heading above the bots.
@@ -229,35 +241,73 @@ There is no product name in the rail and no heading above the bots.
 ### Bot row
 
 - 60 px tall (68 on touch), padded 10 px, radius 18.
-- Avatar 40 px, 12 px gap, then two lines. Line one: the name (15/500) and, right-aligned, the time of the bot's latest activity (12, faint). Line two: one line of preview (14, muted), with the unread dot at its right end when there is unread activity.
-- The preview is the latest message in the bot's most recent task, as plain text. When the latest item is not text it is described in words ("Asked a question", "Sent a file").
-- Time format: today as `5:36 PM`, yesterday as `Yesterday`, within a week as `Mon`, older as `Nov 9`.
+- Avatar 40 px, 12 px gap, then two lines.
+- Line one: the name (15/500) and, right-aligned, the time of the bot's latest activity (12, faint).
+- Line two: a state mark when a task is running or failed, one line of preview (14, muted), and the unread dot at the right end.
+- Time format: `now` while a task is running, today as `5:36 PM`, yesterday as `Yesterday`, within a week as `Mon`, older as `Nov 9`.
 - Hover: `--bg-hover`. Selected: `--bg-selected`. Both are neutral.
-- Unread: an 8 px dot in `--accent-line`. This is the only accent in the rail at rest.
+
+**What a row says about a bot with several tasks.** A folded bot must not hide work in its older tasks, so its row is a summary of all of them, and its three signals are independent:
+
+| Signal | Comes from | Where |
+|---|---|---|
+| Preview and time | The latest activity in any task | Line two, and the time |
+| Unread | Any task that is unread, other than the one on screen | The dot at the right end of line two |
+| Run state | The most urgent state among the tasks: waiting for you, failed or blocked, done with failures, working, idle | A mark at the start of line two |
+
+So a bot whose newest task has been read still shows the dot for an older unread task, and a bot with a task running in the background shows the working mark and that task's activity while a different task is open. The shell knows two of these states today, working and failed; `conversation.md` adds the rest and gives the avatar a state of its own. The same summary applies to pinned tiles, where the mark or the dot sits beside the name, and to the phone.
 
 ### Tasks under a bot
 
-Grok Bot gives a bot one conversation; a Clawtrate bot has many tasks. The arrangement keeps the single list and puts tasks inside it:
+Grok Bot gives a bot one conversation; a Clawtrate bot has many tasks. The arrangement keeps the single list and puts tasks inside it. Three things are tracked separately: the selected bot, the selected task, and which bots are unfolded.
 
-- **A bot with one task looks and behaves like a plain row.** Clicking it opens the task. No task rows are shown. A new bot starts this way, so the simple case stays simple.
-- **A bot with several tasks unfolds when opened.** Clicking the bot opens its most recent task and shows its tasks under it. The bot and its tasks sit in one soft block (`--bg-hover`, radius 18), and the current task carries the selection (`--bg-selected`, radius 10, medium weight). The bot row inside the block has no fill of its own.
-- **Only the open bot is unfolded** by default. Another bot can be unfolded without switching to it: the disclosure on hover, or Right Arrow when the row has focus. Left Arrow folds it.
-- **A task row is one line**, 34 px (44 on touch), indented to align with the bot's name: the title (14, muted; `--text` when current or unread) and at most one mark at the right. In this document the mark is the unread dot; the conversation specification adds the run states. The time of last activity is the row's tooltip, not text, so titles keep the width.
-- Tasks are ordered by latest activity. Six are shown; a seventh row reads "Show all 14". Archived tasks are not listed here.
-- The last row is **New task** (a plus and the words, faint). It creates a task, selects it and focuses the composer. Shortcut: ⌘T.
-- A folded bot row speaks for all its tasks: its preview, time and unread dot come from the most recent one, and its state is the most urgent of theirs.
-- **Pinned bots** are tiles and have no room for rows. When a pinned bot with several tasks is open, its tasks show as a block directly under the pin grid, headed by nothing, in the same form.
+**A bot with one task** looks and behaves like a plain row. Clicking it opens the task, and the row takes the selection. No task rows are shown. A new bot starts this way, so the simple case stays simple.
 
-Semantics: the bot is a `button` with `aria-expanded` when it has several tasks; the task list is a `ul` labelled "<Bot>'s tasks"; the current task has `aria-current="true"`.
+**A bot with several tasks:**
+
+- Clicking it opens it and unfolds its tasks under it. The task opened is the one last opened for that bot; when there is none, the most recent. The most recent task never overrides a remembered one.
+- The bot and its tasks sit in one faint block (55% of `--bg-hover`, radius 18). Only the current task is strongly filled (`--bg-selected`, radius 10, medium weight). The bot row inside the block has no fill.
+- Opening another bot folds the one that was unfolded by being open. A bot the user unfolded by hand stays unfolded until they fold it, so two bots' tasks can be in view at once.
+- Folding does not change the selection. A folded selected bot shows the selection on its row.
+- The fold control is a small chevron that takes the time's place while the row is hovered or has focus. Clicking the open bot's row also folds and unfolds it. From the keyboard, Right unfolds and Left folds.
+- Which bots the user unfolded or folded by hand persists across restarts.
+
+**A task row** is one line, 34 px (44 on touch), indented 20 px from the block's edge:
+
+- The title (14, muted; `--text` when current, unread or running). With no mark, the title has the whole row.
+- At most one mark at the right, only when there is something to say: the working mark, the failed mark, or the unread dot. `conversation.md` adds the remaining states.
+- A truncated title is available in full: a tooltip on hover and on keyboard focus, touch and hold on the phone, and always at the start of the task's transcript and in Details. The time of last activity is in the row's accessible description.
+
+**How many.** Tasks are ordered by latest activity. Six are shown; the next row reads "Show all 14", with the total, and becomes "Show fewer". The current task is always among the six. Archived tasks are not listed here.
+
+**New task** is the last row (a plus and the words, faint). It creates an empty task under the bot, selects it and focuses the composer. Shortcut: ⌘T. For a bot with one task, where no rows show, New task is in the bot's context menu and in the "+" button's menu at the top of the rail.
+
+**Pinned bots** are tiles and have no room for rows. An unfolded pinned bot's tasks show as a block directly under the pin grid, in the same form.
+
+**One pane (the phone).** The list is the same. Tapping a bot with one task opens it. Tapping a bot with several tasks unfolds them in place; tapping it again folds them; tapping a task opens it. There is no separate task-list screen, and Back from a conversation returns to this list.
+
+**Semantics.** The bot is a `button` with `aria-expanded` when it has several tasks. Its name includes the number of tasks and what the summary shows: "Otto, 14 tasks, working, unread". The task list is a `ul` labelled "Otto's tasks". The current task has `aria-current="true"`. A single-task bot has `aria-current` itself.
 
 ### Pinned bots and sections
 
-- Pinned bots: a three-column grid of tiles at the top. A tile is a 56 px avatar with the name under it (13, centred, one line), radius 18, `--bg-selected` when open.
+- Pinned bots: a three-column grid of tiles at the top. A tile is a 56 px avatar with the name under it (13, centred, one line) and the working mark or unread dot beside the name; radius 18, `--bg-selected` when open.
 - Sections: a small grey word (13, faint, in the user's own casing) with 14 px above and 6 px below. No rule, no caps.
 
-### Footer
+### Footer and the gateway menu
 
-One row: a status dot, the gateway's name (14/500) with its state under it (12, faint), and a quiet round Settings button. The dot is `--accent-line` when connected, `--warn` and pulsing while connecting or reconnecting, `--danger` when the connection failed. Clicking the row opens gateway settings. The theme switch and Disconnect move into Settings; until Settings exists they go in a menu on this row.
+One row: a status dot, the gateway's name (14/500) with its state under it (12, faint). The dot is `--accent-line` when connected, `--warn` and pulsing while connecting or reconnecting, `--danger` when the gateway cannot be reached. The row always agrees with the status strip (section 11).
+
+The row is a menu button. It opens the **gateway menu**, which replaces the shell's theme and disconnect icon buttons until Settings exists:
+
+| Part | Content |
+|---|---|
+| Head | The gateway's name; under it the state, the address and, when known, the gateway's version |
+| Theme | Three radio items: "Match the system", "Light", "Dark". The current one has a check. |
+| Disconnect | One item in `--danger`. It disconnects and returns to the connection screen. |
+
+- Surface: `.menu`, 256 px, `--bg-raised` with `--shadow-pop`, radius 14, items 34 px (44 on touch). It opens upward from the row. In the one-pane layout it opens downward from the round button at the top left, which carries the same status dot.
+- Keyboard: Enter, Space or Up on the row opens it and focuses the current theme. Up and Down move between items, Home and End go to the ends, Enter or Space chooses. Escape, or a click outside, closes it and returns focus to the row.
+- Roles: `menu`, with `menuitemradio` for the themes and `menuitem` for Disconnect; the row has `aria-haspopup="menu"` and `aria-expanded`. The row's accessible name carries the state: "Home gateway, connected. Open the gateway menu."
 
 ## 8. The conversation
 
@@ -265,11 +315,15 @@ One row: a status dot, the gateway's name (14/500) with its state under it (12, 
 
 No bar. Three things float over the top of the transcript in a 56 px band:
 
-- **Title pill**, centred: 36 px tall, `--bg-raised` with `--shadow-raised`. A 22 px avatar, the bot's name (14/500), then the task's title (14, muted, truncated). It opens the Work pane. Accessible name: "<Bot>, <task>. Show details."
+- **Title pill**, centred: a small identifier, not a toolbar. 36 px tall, at most 240 px wide, `--bg-raised` with `--shadow-raised`. A 22 px avatar, the bot's name (14/500), a middle dot, then the task's title (14, muted), which truncates. In the one-pane layout it is the avatar and the name only. It opens the Work pane. Its accessible name is always complete: "Otto, Disk almost full on the media box. Show details." With no task selected it is the bot alone, and the name says so.
 - **Work pane button**, top right: a round icon button, pressed while the pane is open. ⌘\ toggles it.
 - **Back**, top left: shown only in the one-pane layout.
 
-The transcript scrolls under these and fades out towards the top (a mask from 22 px to 66 px), so text never collides with the pill at full strength.
+**The protected top band.** The floating controls have one band of their own: 56 px for the pill and the buttons, then 40 px (`--strip-band`) for the status strip. The transcript's first line starts below both, so nothing is ever under them at rest. Text scrolling up fades out before it reaches the pill; when the status strip is showing, it fades out before it reaches the strip. The band is always reserved, so the transcript does not reflow when the strip appears or leaves.
+
+### The task's name
+
+The first line of every transcript is the task's title in full (14/500, centred, balanced over up to two lines). It is where the task is named on the phone, where the pill has no room for it.
 
 ### Messages
 
@@ -285,29 +339,41 @@ The transcript scrolls under these and fades out towards the top (a mask from 22
 
 Until the conversation components are built, a turn's thoughts and tool calls fold into one event line, "Used 2 tools", which opens to plain rows: the tool name on `--bg-code` and a one-line summary. This replaces the shell's always-open "Thought" and tool rows. `conversation.md` replaces it with the activity block.
 
+### Jump to latest
+
+The shell's `.jump-latest` keeps its behaviour: new output is followed only when the reader is within 96 px of the end; otherwise their place holds and the control appears. It is a pill centred 10 px above the foot of the transcript: 36 px, `--bg-raised` with `--shadow-pop`, the words "Jump to latest" and a down arrow. `conversation.md` gives it the states a running turn needs.
+
 ### Composer
 
 One pill at the foot of the column, aligned with the bubbles' outer edges: 48 px, radius 24, `--bg-raised` with a `--border-strong` outline; the outline becomes `--accent-line` with a soft halo on focus. Inside: a round "+" on the left (attach), the text, and a round send button on the right. The send button is `--bg-inverse` when there is text and grey when there is none. Placeholder: "Message <Bot>".
 
-A connection that may only read keeps the pill, filled with `--bg-bubble` and no controls: an eye icon and "This device can read but not send. Ask the gateway owner for write access."
+| Situation | Composer |
+|---|---|
+| A task is open | The pill |
+| No task is selected | No composer. There is nothing to send to; the empty state offers "New task". |
+| The connection may only read | The pill filled with `--bg-bubble`, no controls: an eye icon and "This device can read but not send. Ask the gateway owner for write access." |
+| Offline | The pill; placeholder "Offline. You can keep writing."; send disabled; the draft is kept |
 
-### Empty and loading
+### Empty, loading and failed
 
-- **No task selected**: the bot's avatar at 64 px, "Pick a task", and "Choose one of <Bot>'s tasks, or start a new one."
-- **A task with no messages**: the avatar, "Nothing here yet", and "Say what you need, and <Bot> will take it from there."
-- **Could not load**: "Could not load this conversation", the reason, and a default button "Try again". Whatever was last loaded stays on screen.
-- **Loading**: three grey bubbles in the shape of an exchange, pulsing gently; still when motion is reduced.
+- **No task selected**: the bot's avatar at 64 px, "Pick a task", "Choose one of <Bot>'s tasks, or start a new one.", and the actions right there: "New task" (primary), and in the one-pane layout "Choose a task", which returns to the list.
+- **A new task with no messages**: the avatar, "Nothing here yet", and "Say what you need, and <Bot> will take it from there." The composer has focus.
+- **Loading**: the task's name, then three grey bubbles in the shape of an exchange, pulsing gently; still when motion is reduced.
+- **Could not load, nothing saved**: "Could not load this conversation", the reason, and a default button "Try again".
+- **Could not refresh, with saved content**: the saved conversation stays on screen. One line on `--danger-soft` above it says "Couldn't refresh this conversation. Showing what was loaded before." with "Try again".
 
 ## 9. The Work pane
 
-The pane is about a third of a wide window. Its frame:
+**Frame.** The pane gets to its content quickly; identity takes the least room it can.
 
-- A 56 px band with one round Close button, top right.
-- **Who**: the avatar at 88 px, the bot's name (20/500), and its label (14, faint), centred.
+- A round Close button floats at the top right. There is no band reserved for it.
+- **Who**: the avatar at 64 px, the bot's name (17/500) and its label (13, faint), centred, starting 20 px from the top.
 - **Tabs**: plain words in a centred row: Details, Files, Computer. The chosen tab has a `--bg-selected` pill; the others are muted text. No underline, no box.
-- **Content**, scrolling, 20 px from the edges. Groups are headed by a small grey word (13, faint). Facts are label and value rows, 44 px each, inside one `--bg-bubble` block with radius 18 and hairlines between rows.
+- **Content** starts about 200 px from the top and scrolls, 20 px from the edges.
 
-Empty states are words, not boxes: a 44 px round mark with an icon, a title (15/500), and one sentence saying what will appear.
+**Details.** The task's title in full comes first (15/500, wrapping to two lines), above the facts, not squeezed into a row. Facts are label and value rows, 42 px each, in one `--bg-bubble` block with radius 18 and hairlines between rows. Groups after that are headed by a small grey word (13, faint). The rows in the prototype (model, where the bot runs, last activity) are examples of the frame; later flows decide the final set.
+
+**Empty states** are words, not boxes: a 44 px round mark with an icon, a title (15/500), and one sentence saying what will appear.
 
 | Tab | Empty title | Sentence |
 |---|---|---|
@@ -315,104 +381,181 @@ Empty states are words, not boxes: a 44 px round mark with an icon, a title (15/
 | Computer | No screen to show | When <Bot> uses a browser or a desktop, you can watch it here. |
 | Details, routines | (no title) | None yet. Ask <Bot> to do something on a schedule. |
 
-The Details tab in the prototype shows the task, the model, where the bot runs and the last activity. Those rows are examples of the frame; later flows decide the final set.
+**Drawer and docked.** Below a 960 px main pane it is a drawer: over the right edge, 360 px or the width less 56 px, radius 18 on its left corners, `--shadow-pop`, with the shell's `.drawer-scrim` over everything behind it. In the one-pane layout it is a full-width sheet. At 960 px and above it is docked, with the window's one hairline on its left edge.
 
-Docked, the pane has the window's one hairline on its left edge. When there is not room, it is a drawer: over the right edge, 360 px or the width less 56 px, radius 18 on its left corners, `--shadow-pop`, with `--bg-scrim` over the rest. A click on the scrim or Escape closes it. In the one-pane layout it is a full-width sheet. Opening or closing the pane never changes the conversation's scroll position or state.
+| | Drawer or sheet | Docked |
+|---|---|---|
+| Role | `dialog`, `aria-modal="true"`, labelled "Work pane" | `complementary` (the `aside`) |
+| Focus on open | Moves to Close | Stays where it was |
+| Tab | Stays inside the pane | Follows the page |
+| Behind it | Inert: not focusable, not clickable, hidden from assistive technology | Live |
+| Closing | Close, Escape, a click on the scrim, ⌘\ | Close, ⌘\ |
+| Focus on close | Returns to the control that opened it | Unchanged |
+
+Crossing the docking width while the pane is open switches between the two without closing it.
+
+**Tabs.** A tab list with one tab stop. Left and Right move to the next tab and select it, wrapping; Home and End go to the ends. Each tab controls a tab panel that is labelled by it and can take focus.
+
+Opening or closing the pane keeps the reader's place (section 6).
 
 ## 10. Connection and pairing screens
 
 One centred column, 360 px wide, on the bare stage. No card, no border, no shadow, no gradient.
 
+**The mark** is the product's own: `packages/ui/src/assets/logo-mark.png`, the file `pnpm brand:icons` derives from the logo. It is shown at 56 px with a 16 px radius above the name on Connect, and alone above the title on Pairing. It is never redrawn. These are the only places the mark appears inside the app.
+
 **Connect** (`connect.html`):
 
-- The mark (56 px, radius 16), the name (28/600), the slogan (15, muted).
+- The mark, the name (28/600), the slogan (15, muted).
 - Two pill fields, 48 px, `--bg-inset`, placeholders as labels: "Gateway address" and "Token, for the first pairing only". Each has a visually hidden label.
-- A primary button, full width: "Connect" ("Connecting…" while busy, disabled). Under it a quiet button: "Use the development gateway", shown only when that gateway is present.
+- A primary button, full width: "Connect". While connecting it reads "Connecting…" and is disabled: `--bg-bubble` with `--text-faint`, never a faded primary.
+- Under it a quiet button: "Use the development gateway", shown only when that gateway is present.
 - One hint (13, faint): "Clawtrate works with an OpenClaw gateway you already run. It asks for read access only, and the token is used once."
-- A failure appears between the fields and the buttons on `--danger-soft`: a medium-weight title ("Could not connect") and one sentence with the reason and what to check.
+- A failure appears between the fields and the buttons on `--danger-soft`: a medium-weight title ("Could not connect", or "Enter the gateway's address") and one sentence with the reason and what to check.
 
 **Pairing** (`pairing.html`):
 
 - The mark, then "Approve this device" (22/600) and one sentence: "<Gateway> has not seen this device before. Approve it once on the gateway's machine and Clawtrate connects by itself."
-- The command to run, in one `--bg-inset` block with a copy button. One command, not a list of steps.
-- "Waiting for approval" with a pulsing `--warn` dot, in a live region.
+- The command to run, in one `--bg-inset` block with a copy button. One command, not a list of steps. Copying turns the button into a check and says "Copied" in a live region (the shell's `.copy-status`) for 1.6 seconds.
+- "Waiting for approval" with a pulsing `--warn` dot, in a live region. After "Check now" finds nothing it reads "Not approved yet. Still waiting".
 - What the device asks for, in plain words, as a chip: "Read bots, tasks and conversations". One chip per scope requested.
-- A default button "Check now" and a quiet button "Use another gateway".
+- A default button "Check now" ("Checking…" and disabled while it checks) and a quiet button "Use another gateway".
 - A footer line (12, faint) with the request id and the device id, for support.
 
-**The ensemble.** Along the foot of both screens stands a row of characters, cropped by the bottom edge, at different sizes and tilts. They are decoration: `aria-hidden`, not interactive, and they do not move.
+**The bots.** A row of characters stands along the foot of both screens, cropped by the bottom edge, at different sizes and tilts. They are decoration: `aria-hidden`, not interactive, and they do not move. They are in the page's flow, after the form with 24 px between, so they can never sit over it; when the form is tall, the page scrolls and they follow it. Below 640 px of height they are not shown at all, so the command, the waiting line and the way out always fit by themselves.
 
-## 11. The connection strip
+## 11. The status strip
 
-The shell stays mounted with its cached content when the connection drops. One compact pill reports it. It overlays the top of the conversation, directly under the title pill, so nothing shifts when it appears or leaves. In the shell's markup it stays `.banner`; it is placed in the conversation's grid cell rather than in a row of its own.
+The shell stays mounted with its cached content when the connection drops. One compact pill, the shell's `.status-strip`, reports it. It sits in the protected band under the title pill (section 8) and overlays the conversation, so nothing shifts when it appears or leaves and no message text is ever under it.
 
 | State | Dot | Words | Action |
 |---|---|---|---|
-| Reconnecting | `--warn`, pulsing | Reconnecting · showing saved messages | Retry now |
-| Cannot reach the gateway | `--danger` | Can't reach <gateway> · showing saved messages | Retry now |
-| Connected, fetching what was missed | `--warn`, pulsing | Connected · catching up | none |
-| Caught up | `--accent-line` | Synced · 3 new in this task (or "Synced" alone) | none; leaves after 4 seconds |
-| Fetch failed | `--danger` | Couldn't sync this task | Try again |
+| Reconnecting | `--warn`, pulsing | **Reconnecting** · showing saved messages | Retry now |
+| Cannot reach the gateway | `--danger` | **Can't reach <gateway>** · showing saved messages | Retry now |
+| Connected, fetching what was missed | `--warn`, pulsing | **Connected** · catching up | none |
+| Caught up | `--accent-line` | **Synced** · 3 new in this task (or "Synced" alone) | none; leaves after 4 seconds |
+| Fetch failed | `--danger` | **Couldn't sync this task** | Try again |
+| The gateway's bots and tasks failed to load | `--danger` | The gateway's message, or "Could not load this gateway's bots and tasks." | Retry now |
 
-Rules: the strip has `role="status"`. The second part of each line is muted and truncates first on a narrow column. Nothing in the conversation unmounts on reconnect, and anything the user had expanded stays expanded. The rail's footer shows the same state on its dot and in its second line. When synced items land below the fold, the reader's position holds and the "Jump to latest" control (in `conversation.md`) offers them.
+- The first part of each line is the state and always shows in full, with the action. The part after the middle dot is an explanation in `--text-muted`; it is the only part that shortens, and on a narrow column it shortens to nothing.
+- The strip has `role="status"`. It is 34 px tall, at most the column's width less 24 px.
+- One state drives the strip, the footer's dot and words, and the composer, so they cannot disagree: while the strip says reconnecting, the footer says "Reconnecting…" and the composer says "Offline. You can keep writing."
+- Nothing in the conversation unmounts on reconnect, and anything the user had opened stays open. When synced items land below the fold, the reader's place holds and Jump to latest offers them.
 
 ## 12. Compact and phone layouts
 
-**Drawer widths (688–1079).** Described in section 9. The rail narrows to 248 px below 900.
+**Drawer widths (below 1240).** Described in sections 6 and 9. The rail narrows to 248 px below 900.
 
-**One pane (below 688, and the phone).** The rail is the list and the conversation is the detail.
+**One pane (below 688, and the phone).** The rail is the list and the main pane is the detail.
 
-- The list fills the width. The footer row is replaced by a round button at the top left: the Settings icon with the connection dot on it. Search and New stay top right.
+- The list fills the width. The footer row is replaced by a round button at the top left: the Settings icon with the connection dot on it, which opens the gateway menu. Search and New stay top right.
 - Rows are 68 px with 44 px avatars; task rows are 44 px; text is one step larger (17 px names and messages).
-- **Tapping a bot with one task opens it.** **Tapping a bot with several tasks unfolds them in place**, and tapping a task opens it. Tapping the unfolded bot again folds it. This is the same list as on the desktop; only the open step differs, because the detail is a separate screen.
-- In the conversation, Back is a round button at the top left and the Work pane button stays at the top right. The title pill sits between them and truncates the task title first.
-- The Work pane is a full-width sheet with the same frame.
+- Tasks unfold in place, as in section 7. Pinned tiles and their task block work the same way.
+- In the conversation, Back is a round button at the top left and the Work pane button stays at the top right. The title pill between them is the avatar and the bot's name; the task is named at the start of the transcript and in Details.
+- The Work pane is a full-width sheet with the same frame, and is modal.
 - The composer keeps its form; its buttons are 40 px.
-- The connection screens keep their column; the ensemble is scaled to 60%.
+- The connection screens keep their column; the bots are scaled to 60%, and are hidden on a short screen.
 
 The iOS app is built in React Native and does not use this CSS. The sizes, tokens and behaviour above are the specification for it; `[data-input="touch"]` in the prototype shows them.
 
 ## 13. Accessibility
 
-**Contrast**, measured against every surface each colour is used on, including hovered and selected rows and soft fills:
+**Contrast**, measured against every surface each colour is used on, with translucent fills composited over their real parents:
 
-| Text | Light, lowest | Dark, lowest |
-|---|---|---|
-| `--text` | 14.3:1 | 11.2:1 |
-| `--text-muted` | 5.5:1 | 6.1:1 |
-| `--text-faint` | 4.7:1 | 4.7:1 |
-| `--accent` as text | 4.7:1 | 7.9:1 |
-| `--warn` as text | 4.5:1 | 6.7:1 |
-| `--danger` as text | 5.0:1 | 5.5:1 |
-| Text in your bubbles | 6.2:1 | 10.2:1 |
+| Text | Light, lowest | Dark, lowest | Where the lowest is |
+|---|---|---|---|
+| `--text` | 13.9:1 | 11.2:1 | The selected task inside an unfolded bot (light); a soft accent fill (dark) |
+| `--text-muted` | 5.4:1 | 6.1:1 | The selected task inside an unfolded bot (light) |
+| `--text-faint` | 4.5:1 | 4.7:1 | The selected task inside an unfolded bot (light) |
+| `--accent` as text | 4.6:1 | 7.9:1 | The same |
+| `--warn` as text | 4.6:1 | 6.7:1 | A selected rail row; see the restriction below |
+| `--danger` as text | 5.0:1 | 5.5:1 | |
+| Text in your bubbles | 6.2:1 | 10.2:1 | |
+| Disabled button text | 5.4:1 | 6.2:1 | `--text-faint` on `--bg-bubble` |
 
-`--accent-line` is for marks only (3.1:1 at worst in light); it is never text. In light theme `--text-faint` and `--text-muted` are close in value by necessity, so hierarchy between them comes from size and position.
+**One surface has a restriction.** The selected task's fill inside an unfolded bot is the darkest light surface (`#dededd` once its two fills are composited over the rail). On it `--warn` reaches only 4.4:1 in light theme, so warn-coloured text is never placed there: the current task's title is `--text`, and a task's state is a mark, not a word. `--accent-line` is for marks only (3.1:1 at worst in light); it is never text. In light theme `--text-faint` and `--text-muted` are close in value by necessity, so hierarchy between them comes from size and position.
+
+Text fading under the floating controls and anything behind the drawer's scrim is deliberately concealed and is outside these figures.
 
 **Focus.** Every control shows a 2 px `--accent-line` outline, 2 px out, on keyboard focus. Fields show the same as a ring.
 
-**Keyboard.** Tab order follows the reading order: rail top, bots and tasks, footer, conversation header, transcript, composer, Work pane. In the rail, Up and Down move between rows, Right unfolds a bot, Left folds it, Enter opens. ⌘\ toggles the Work pane, Escape closes a drawer or sheet, ⌘K opens search, ⌘N a new bot, ⌘T a new task, ⌘I focuses the composer.
+**Keyboard.**
 
-**Names.** Round buttons have `aria-label`s that say what they do. A bot row's name includes its count of tasks and "unread" when it applies. The transcript is a focusable region so it can be scrolled from the keyboard.
+| Where | Keys |
+|---|---|
+| Anywhere | ⌘\ toggles the Work pane. ⌘K search, ⌘N new bot, ⌘T new task, ⌘I focus the composer. |
+| Rail | Tab reaches every row. Up and Down move between rows; Home and End go to the ends. Right unfolds a bot, Left folds it; Left on a task goes to its bot. Enter opens. |
+| Gateway menu | Section 7. |
+| Work pane tabs | Left, Right, Home, End. |
+| Drawer | Focus is kept inside. Escape closes it. |
+| Composer | Enter sends, Shift+Enter adds a line. |
 
-**Motion.** This part of the design moves very little: a pulsing status dot and the loading bubbles. Both stop under reduced motion, where the dot's colour and the words beside it carry the state.
+Tab order follows reading order: rail top, bots and tasks, footer, conversation header, transcript, composer, Work pane.
+
+**Names.** Round buttons have `aria-label`s that say what they do. A bot row's name includes its number of tasks and its summary. The transcript is a focusable region so it can be scrolled from the keyboard.
+
+**Motion.** This part of the design moves very little: a pulsing status dot, the loading bubbles and the working mark's arc. All stop when motion is reduced, whether by the system setting or by the app's own (`data-motion="reduce"` on the root, which the stylesheet honours the same way); the dot's colour, the mark's shape and the words beside them carry the state.
 
 **Targets.** 32 px round buttons with at least 8 px between them on desktop; 40 px and larger on touch, with rows at 44 px or more.
 
 ## 14. Change list for the builder
 
-In order. Each step leaves the app working.
+Written against the shell as it is in `packages/ui/src/`: `App.tsx`, `Shell.tsx` (`Rail`, `TaskList`, `WorkPanel`, `StatusStrip`, `useSelection`, `Shell`), `Conversation.tsx` (`TranscriptView`, `Placeholder`, `Conversation`), `ConnectScreen.tsx`, `Avatar.tsx`, `icons.tsx`, and `styles/app.css`.
 
-1. **Fonts.** In `packages/ui/package.json` add `@fontsource-variable/figtree` and remove `@fontsource-variable/instrument-sans` and `@fontsource/instrument-serif`. In `packages/ui/src/index.ts` import Figtree in their place. Keep JetBrains Mono.
-2. **Tokens.** Replace `packages/ui/src/styles/tokens.css` with `docs/design/prototype/css/tokens.css`, keeping the shell's three theme selectors. Both dark blocks get the same values, as now.
-3. **Styles.** Replace `packages/ui/src/styles/app.css` with `docs/design/prototype/css/app.css`. Classes that no longer exist: `.brand`, `.brand-name`, `.bot-theme`, `.bot-count`, `.avatar-emoji`, `.list-pane`, `.pane-header`, `.pane-title`, `.task-top`, `.task-preview`, `.task-status`, `.run-node`, `.conversation-title`, `.turn*`, `.user-mark`, `.system-row`, `.step-chevron`, `.step-kind`, `.step-reasoning-preview`, `.step-state`, `.step-body`, `.live-text`, `.read-only-bar`, `.work-placeholder`, `.divider`, `.pair-steps`, `.pair-step`, `.pair-marker`, `.field-label`, `.request-id`.
-4. **Root.** Give the element that holds the shell the class `app` (`App.tsx`), and set `data-input="touch"` on the root when the primary pointer is coarse.
-5. **Icons** (`icons.tsx`). Stroke width 1.6. Add: search, plus, settings, back, x, arrow-up, file, screen, lock. The paths are in `prototype/js/icons.js`.
-6. **Avatar** (`Avatar.tsx`). Draw a character from a body, a colour, a tilt and a look, as in `prototype/js/icons.js`. With no stored choice, derive them from a stable hash of the bot's id. Show `avatarUrl` cropped to a circle when the bot has one. Remove the emoji badge and the `badge` prop. Stop generating pattern images for the seed bots in `tools/dev-gateway` so they show characters.
-7. **Rail** (`Shell.tsx`, `Rail`). Remove the brand row. Add `.rail-top` with Search and New. Render each bot as a `.bot-group`: the `.bot` row (avatar, name and time, preview and unread dot), and under the open bot with several tasks its `.task-list`, ending in New task. Mark the open group `data-open="true"`; mark a single-task bot `aria-current`. Replace the footer with the gateway row and a Settings button; move the theme switch and Disconnect into a menu on that row.
-8. **Task list** (`Shell.tsx`, `TaskList`). Delete the pane. Its rows move into the rail as one-line `.task` buttons. Keep `data-testid="task-list"` and `data-testid="task"` on the new elements so the e2e tests find them. Selecting a bot now also selects its most recent task.
-9. **Grid** (`Shell.tsx`, `.shell`). Two columns and the Work pane: `data-panel` stays. `Banner` stays a child of `.shell`; the new rules place it over the conversation. Add `data-view="list|detail"` for the one-pane layout, set to `detail` when a task is opened and to `list` by Back.
-10. **Conversation** (`Conversation.tsx`). Replace the header bar with `.conversation-header` holding Back, the `.title-pill` and the Work pane button. Render each transcript item as `.msg[data-role]` holding a `.bubble` (with `.md` for the bot); keep `data-testid="transcript-turn"` on `.msg`. Insert `.stamp` rows by the ten-minute rule. Fold a turn's reasoning and tool blocks into one `details.steps` with an `.event-line` summary; keep `data-testid="tool-call"` on each `.step`. Replace the read-only bar with the composer pill in its read-only form. Rewrite the empty, error and loading states as in section 8. Follow new output only when the reader is within 80 px of the bottom.
-11. **Work pane** (`Shell.tsx`, `WorkPanel`). Replace the header and the three placeholder sections with the Close band, `.work-hero`, `.tabs` and the tab content with its empty states. Close on Escape and on a click on the scrim when it is a drawer.
-12. **Connection screens** (`ConnectScreen.tsx`). Remove the card and the numbered steps. Build the centred column and the ensemble as in section 10. Keep every existing state and message; only their arrangement changes.
-13. **Decisions.** Update the Brand section of `docs/decisions.md`: one typeface, the neutral palette, and where the accent is used.
-14. **Checks.** Update the e2e selectors that named removed elements, retake the screenshots at 1440, 1100 and 800 px and at phone width in both themes, and compare them with `docs/design/prototype/`.
+`prototype/css/app.css` is in the order of these steps. In each step, take the named section of that file together with the markup change, and delete the old rules the step lists. Each step leaves the app working and looking coherent, because a component's styles and markup change together. The stylesheet is never replaced in one go.
+
+### What moves where
+
+| Now | After | Step |
+|---|---|---|
+| `.shell` grid: rail, task list, main pane | `.shell` grid: rail, main pane | 4 |
+| `Rail`: `.brand`, `.rail-section` "Bots", `.bot` (avatar, name, theme, count) | `Rail`: `.rail-top`, `.bot-group` holding `.bot` (avatar, name and time, preview and unread), `.bot-toggle`, `.task-list` | 4 |
+| `TaskList`: `section.list-pane`, its `.pane-header`, `.task` with `.task-top`, `.task-preview`, `.task-status` | Removed. Its rows become one-line `.task` buttons inside the rail's `.bot-group`. | 4 |
+| `.rail-tooltip` for bot names in the compact rail | `.rail-tooltip` for truncated task titles | 4 |
+| `.rail-footer`: `.gateway-pill` (a status), theme button, disconnect button | `.rail-footer`: `.gateway-pill` as a menu button; `.gateway-menu` | 4 |
+| `.main-pane` (a one-column grid) holding `StatusStrip`, `Conversation`, `.drawer-scrim`, `WorkPanel` | `.main-pane` (a flex row, container `main`) holding the same four, in the same order | 5 |
+| `WorkPanel`: `.pane-header` with a title and Close, one `.work-empty` paragraph | `.work-close`, `.work-hero`, `.tabs`, `.work-sections` with three tab panels | 5 |
+| `.drawer-scrim` (a button, shown below 1320 px) | The same button, shown whenever the pane is a drawer (main pane below 960 px) | 5 |
+| `Conversation` header: `.pane-header.conversation-header` with `.back-button`, `.conversation-title` (h1 and a meta line), panel button | `.conversation-header` with `.header-side` (Back), `.title-pill`, `.header-side` (panel button) | 6 |
+| `StatusStrip`: `.status-strip` in the main pane's flow | `.status-strip` positioned in the protected band; `data-strip` on `.conversation` | 6 |
+| `.transcript-wrap` > `.transcript` > `.transcript-inner` > `article.turn` | The same three wrappers > `.task-line`, `.stamp`, `.msg` > `.bubble`, `details.steps` | 6 |
+| `.jump-latest` | The same element, restyled | 6 |
+| `footer.read-only-bar` | `footer.composer` (the pill; `data-readonly` when the connection may only read) | 6 |
+| `ConnectScreen`: `.connect-card` with a `.panel` card, `.pair-steps`, two `.command` blocks | `.connect-card` with a bare `.panel`, one `.command`, `.copy-status`, `.waiting`, `.scopes`; `.ensemble` after the card | 7 |
+
+Keep every `data-testid` on the element that takes over its role: `bot-list`, `bot`, `task-list`, `task`, `rail-tooltip`, `status-strip`, `transcript`, `transcript-turn` (on `.msg`), `live-turn`, `tool-call` (on `.step`), `jump-latest`, `work-panel`.
+
+### Steps
+
+1. **Fonts.** Add `@fontsource-variable/figtree` at 5.3.0 to `packages/ui/package.json` and import it in `src/index.ts`. Leave the Instrument packages until step 8.
+2. **Tokens.** Replace the values in `styles/tokens.css` with those in `prototype/css/tokens.css`, keeping the shell's three theme selectors; both dark blocks get the same values. Add the new tokens. Keep `--list-width` at 312px for now. The app works with its old rules on the new values.
+3. **Base, controls and avatars.** Take the sections "Base", "Controls" and "Avatars". The classes are unchanged (`.icon-button`, `.button`, `.input`, `.avatar`), so no markup changes except: give the element that holds the shell and the connection screen the class `app` (`App.tsx`), set `data-input="touch"` on the root when the primary pointer is coarse, and set `data-motion="reduce"` on it when the user asks for reduced motion in the app. In `icons.tsx` set the stroke to 1.6 and add search, plus, settings, x, arrow-up, file and screen from `prototype/js/icons.js`. In `Avatar.tsx` draw a character (body, colour, tilt, look, as in `prototype/js/icons.js`), derived from a stable hash of the bot's id when nothing is stored; show `avatarUrl` cropped to a circle when the bot has one; remove the emoji badge and the `badge` prop; delete `.avatar-emoji`. Stop generating pattern images for the seed bots in `tools/dev-gateway`.
+4. **Rail and tasks.** Take "Shell" (the two-column grid), "State marks" and "Rail", with the Motion section's `orbit` and `ping`. Set `--list-width` to 0.
+   - `Rail`: remove the brand row and the "Bots" heading; add `.rail-top` with Search and New. Render each bot as a `.bot-group` as in `prototype/js/app.js` (`renderRail`): the row, the fold control, and its `.task-list` when unfolded, ending in "Show all" and "New task". Pinned bots, when the data has them, render as `.pin-grid` and `.pin-tasks`.
+   - `TaskList`: delete it, its `.list-pane` and its header. Move its "Showing the most recent tasks only" note (`.list-note`) to the end of the bot's task rows.
+   - `useSelection`: keep `taskByBot`; it is the remembered task and it wins over the most recent. Add the set of bots unfolded or folded by hand, stored with `writePreference`. Keep marking a task read when it is left. Compute the bot's summary (latest activity, any unread, most urgent state) from all of its tasks.
+   - `Shell`: selecting a bot no longer sets `view` to `"list"`. In the one-pane layout a bot with several tasks unfolds in place and selecting a task sets `view` to `"detail"`.
+   - Footer: make `.gateway-pill` a menu button and add the gateway menu (section 7) with the theme choice and Disconnect; remove the two icon buttons. Keep the gateway details in the menu's head.
+   - `.rail-tooltip`: show it for a truncated task title on hover and on keyboard focus.
+   - Delete: `.brand`, `.brand-name`, `.bot-theme`, `.bot-count`, `.list-pane`, `.pane-title` rules that only the list used, `.task-top`, `.task-preview`, `.task-status`, the `.task[aria-current]::before` bar, and the `max-width: 979px` compact-rail block.
+5. **Main pane and Work pane.** Take "Shell" (`.main-pane`) and "Work pane".
+   - `.main-pane` becomes a flex row and a named container (`main`). The order of its children does not change.
+   - `WorkPanel`: replace the header and the placeholder paragraph with `.work-close`, `.work-hero`, the tab list and three tab panels (section 9).
+   - Behaviour: the pane is modal when it is a drawer and not when docked (the table in section 9). The shell already moves focus in when the drawer opens; add the focus trap, `inert` on `.rail` and `.conversation`, the dialog role, and the return of focus on close, and switch all of it off when docked. Keep the reader's place across opening and closing (`holdPlace` in `prototype/js/app.js`).
+   - Delete the `min-width: 1320px` and `max-width: 1319px` blocks; the container query replaces them.
+6. **Conversation.** Take "Conversation", "Markdown", "Composer", "Empty and loading states" and "Status strip".
+   - Header: replace `.conversation-title` with the `.title-pill`; wrap Back and the panel button in `.header-side`. Drop the `.pane-header` class here.
+   - `StatusStrip`: keep the component and its place in the markup. Change its text to the two-part form (`.status-strip-text` with the explanation in a `span`) and add the caught-up and sync-failed states (section 11). Set `data-strip="true"` on `.conversation` while it shows.
+   - `TranscriptView`: keep `.transcript-wrap`, the scroller and its follow logic. Add `.task-line` first. Render each item as `.msg[data-role]` with a `.bubble` (`.md` for the bot), insert `.stamp` rows by the ten-minute rule, and fold a turn's reasoning and tool blocks into one `details.steps`. The live turn is a `.msg` whose bubble holds the live text.
+   - `Placeholder` and the loading branch: the states in section 8, including "New task" in the no-task state and the retained-content line when a refresh fails.
+   - Footer: replace `.read-only-bar` with the composer pill, in its read-only form while the connection may only read; render no composer when no task is selected.
+   - Delete: `.pane-header`, `.conversation-title`, `.turn*`, `.user-mark`, `.system-row`, `.step-chevron`, `.step-kind`, `.step-reasoning-preview`, `.step-state`, `.step-body`, `.live-text`, `.read-only-bar`, and the `@container (max-width: 620px)` block.
+7. **Connection screens.** Take "Connection and pairing screens". Remove the card and the numbered steps from `ConnectScreen.tsx`; build the centred column and the row of bots as in section 10. Keep every existing state and message, and `.copy-status`. The mark is `assets/logo-mark.png` at 56 px. Delete `.divider`, `.pair-steps`, `.pair-step`, `.pair-marker`, `.field-label`, `.request-id`, `.run-node`.
+8. **Clean up.** Take "Motion" and "Compact layouts". Delete the `max-width: 759px` block; the `app` container query replaces it. Remove `@fontsource-variable/instrument-sans` and `@fontsource/instrument-serif` and their imports. Update the Brand section of `docs/decisions.md`: one typeface and its licence, the neutral palette, where the accent is used, and where the mark appears.
+9. **Checks.** Update the e2e selectors that named removed elements. Then check, at 1440, 1240, 1100 and 800 px and at phone width, in both themes:
+   - selecting a bot opens its remembered task; folding and unfolding do not change the selection; a folded bot still shows unread and running work;
+   - the six-row cap, "Show all", "New task", and the arrow keys in the rail;
+   - the Work pane docks at a 960 px main pane, is modal only as a drawer, and keeps the reader's place when toggled after scrolling;
+   - the status strip, the footer and the composer agree in every connection state, and no text is under the strip;
+   - the connection screens at 320 × 568 px;
+   - reduced motion from the system and from `data-motion`.
