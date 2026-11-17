@@ -103,7 +103,7 @@ pnpm e2e
 ### Without a gateway: the fixture mode and the visual tests
 
 ```bash
-pnpm fixture   # builds the interface on fixed sample data and serves it on 127.0.0.1:5341
+pnpm fixture   # builds the interface on fixed sample data and serves it on 127.0.0.1:5341 (CLAWTRATE_FIXTURE_PORT picks another)
 pnpm visual    # screenshot, legibility and behaviour tests against the fixture mode
 ```
 

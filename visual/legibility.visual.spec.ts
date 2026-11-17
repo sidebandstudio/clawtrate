@@ -3,7 +3,15 @@
 // translucent fills composited over their real parents. Text behind the Work
 // drawer's scrim is inert and deliberately concealed, so it is not measured.
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import {
+  contextFor,
+  FIXTURE_PORT,
+  openFixture,
+  OTTO_DISK,
+  settle,
+  SIZES,
+  THEMES,
+} from "./fixture.ts";
 
 type Finding = { text: string; size: number; ratio: number; color: string; background: string };
 
@@ -213,7 +221,9 @@ test("the fixture mode makes no request beyond its own files", async ({ page }) 
   const foreign: string[] = [];
   page.on("request", (request) => {
     const url = request.url();
-    if (!url.startsWith("http://127.0.0.1:5341/") && !url.startsWith("data:")) foreign.push(url);
+    if (!url.startsWith(`http://127.0.0.1:${FIXTURE_PORT}/`) && !url.startsWith("data:")) {
+      foreign.push(url);
+    }
   });
   page.on("websocket", (socket) => foreign.push(socket.url()));
   for (const query of ["scene=connect", "scene=pairing", `scene=synced&${OTTO_DISK}&panel=open`]) {
