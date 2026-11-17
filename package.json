@@ -20,6 +20,7 @@
     "preview:web": "pnpm --filter @clawtrate/desktop preview:web",
     "package:mac": "pnpm --filter @clawtrate/desktop package:mac",
     "package:win": "pnpm --filter @clawtrate/desktop package:win",
+    "check:packaged": "playwright test -c playwright.packaged.config.ts",
     "dev-gateway": "node tools/dev-gateway/src/cli.ts",
     "brand:icons": "node tools/brand/src/make-icons.ts",
     "brand:strip": "node tools/brand/src/strip-logo.ts"
