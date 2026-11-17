@@ -314,7 +314,7 @@ Messaged  ● Marlow   Write a two-line entry for the house log.    ✓ Replied 
 | State   | At the right. Done: the duration, 12 px, `--text-faint`, tabular. Any other state: its mark and word (7.3).                                                                                                                                       |
 | Chevron | 12 px, turns when the card is open.                                                                                                                                                                                                               |
 
-Size and surface: 40 px tall (44 on touch), `--bg-bubble`, radius 18, as wide as the column up to 640 px (560 px beside a docked Work pane), padded 14 px left and 12 px right, 8 px between parts. In a column narrower than 560 px the line is two: the verb, icon, object and state on the first, the detail on the second, 56 px in all. The detail is never dropped, and the state word is never shortened.
+Size and surface: 40 px tall (44 on touch), `--bg-bubble`, radius 18, as wide as the column up to 640 px (560 px beside a docked Work pane), padded 14 px left and 12 px right, 8 px between parts. In a column narrower than 560 px the card has its own layout, given in 7.9: the verb and the object form one sentence that may take two lines, so that what the action acted on is always readable. The detail is never dropped, and the state word is never shortened.
 
 **Cards in a row form a column.** Cards with nothing between them sit 2 px apart, and their touching corners are 6 px instead of 18, so the actions of a stretch of work read as one quiet column, the way the steps of Grok Bot's illustrated step list do. A bubble, a request card or a note between cards ends the column; the next card starts a new one, 8 px below what came before it. Messaged and T3 Code cards join a column like any other card.
 
@@ -453,9 +453,11 @@ The status line and the cards say the same thing at the same moment, in the same
 
 ### 7.9 Phone width and touch
 
-- The same cards at touch sizes: 44 px lines, or 56 px when the detail takes its second line. In a column narrower than 560 px, which includes every phone, the detail is always on the second line.
+- **The narrow layout.** In a column narrower than 560 px, which includes every phone, a card is a small block, not a single line. At the top right sit the state and the chevron, as wide as their words need; the state word is never shortened. To their left, the verb, the icon and the object are one sentence that wraps like text, over at most two lines, in the line's 15 px (17 on touch). Under it, the detail, one line, truncated at its end. Heights: about 60 px for a one-line sentence with a detail, about 80 px for two lines, never less than 44 px.
+- **The object stays readable in every state.** The verb is never shortened and the object never loses its start: a long object, such as the query in "Couldn't search posts on X for "heat pump rebate 2026 experiences"", carries on to the second line, and only what does not fit in two lines is cut, at the end, with an ellipsis. Running, waiting, review, last seen, Failed, Unavailable and every other state use the same layout, so a longer state word ("Waiting for you", "Last seen running") takes room from the sentence's first line and never from the object. The whole sentence is the line's accessible name, and touch and hold offers it in full (below).
+- The same holds at larger text sizes and in longer languages: the sentence wraps rather than truncating its object first.
 - Columns, folds, levels and states are the same. A fold's rows are 44 px.
-- Touch and hold on a card offers "Copy result", which copies exactly the result text its readable view shows, and "Copy raw". On a fold it offers "Copy list", the singular lines of its actions, one per line. On a "Thought" line it offers "Copy reasoning". (F-431)
+- Touch and hold on a card opens a sheet headed by the card's whole sentence and detail, untruncated, and offers "Copy result", which copies exactly the result text its readable view shows, and "Copy raw". On a fold it offers "Copy list", the singular lines of its actions, one per line. On a "Thought" line it offers "Copy reasoning". (F-431)
 - Tapping the status line brings the running card into view, as a click does.
 
 ### 7.10 The read-only connection
