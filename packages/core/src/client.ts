@@ -2905,6 +2905,54 @@ export class ClawtrateClient {
     this.setTranscript(key, () => ({ ...this.state.transcripts[key]!, mcpTools: map }));
   }
 
+  /**
+   * A recipient run a task's sends name that this client follows nowhere: its task was let go
+   * while the sender's was not open, or it was never seen. The recipient's own history says
+   * where it stands (in flight, or ended as its rows show), and from then on it is followed as
+   * a session nobody has open, so the sender's card shows what the gateway established and
+   * keeps up with it, rather than reading Sent. One read per recipient session, after each of
+   * the sender's history reads, for the newest `MAX_LINKED_RUNS` recipients.
+   */
+  private async readRecipients(key: string, generation: number): Promise<void> {
+    const transcript = this.state.transcripts[key];
+    if (!transcript) return;
+    const rawOf = (step: Run["steps"][number]) => step.raw ?? this.raw.get(key, step.id);
+    const missing = new Map<string, Set<string>>();
+    for (const link of recipientLinks(transcript.runs, rawOf).slice(-MAX_LINKED_RUNS)) {
+      if (!link.runId || !link.sessionKey) continue;
+      const runId = capId(link.runId, MAX_ID_CHARS);
+      const sessionKey = capId(link.sessionKey, MAX_ID_CHARS);
+      if (transcript.linkedRuns[runId] || this.tracked(sessionKey)) continue;
+      if (this.foreign.get(sessionKey)?.runs.some((run) => run.id === runId)) continue;
+      missing.set(sessionKey, (missing.get(sessionKey) ?? new Set()).add(runId));
+    }
+    for (const [sessionKey, ids] of missing) {
+      let history: RawRecord | null;
+      try {
+        history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
+      } catch {
+        continue;
+      }
+      if (generation !== this.generation || !this.tracked(key) || this.tracked(sessionKey)) return;
+      const aliases = Object.fromEntries(historyQueuePairs(history?.messages));
+      const { messages, inFlight } = throughRunAliases(
+        history?.messages,
+        asRecord(history?.inFlightRun),
+        aliases,
+      );
+      const found = runsFromHistory(messages, inFlight, {
+        sessionKey,
+        now: this.now(),
+        raw: this.foreignRaw,
+      }).filter((run) => ids.has(run.id));
+      if (found.length === 0) continue;
+      this.updateForeign(sessionKey, (activity) => ({
+        ...activity,
+        runs: [...activity.runs.filter((run) => !ids.has(run.id)), ...found],
+      }));
+    }
+  }
+
   /** Copy the state of every recipient run a task's `sessions_send` results name, where it is known. */
   private refreshLinkedRuns(key: string): void {
     const transcript = this.state.transcripts[key];
@@ -4301,9 +4349,10 @@ export class ClawtrateClient {
     const empty = this.emptyTranscript(key);
     // Only a run known to wait on a question is carried; history rebuilds every other run.
     const waiting = known ? runsWithQuestionMarkers(known) : [];
-    if (waiting.length === 0) return empty;
-    // The task holds them now, so they are not kept twice.
+    // The task holds them now: none is kept twice, and no copy left here goes stale while the
+    // task's own events update the task. Letting the task go keeps what another task links to.
     this.foreign.delete(sessionKey);
+    if (waiting.length === 0) return empty;
     return { ...empty, runs: waiting };
   }
 
@@ -4496,6 +4545,7 @@ export class ClawtrateClient {
       // A run settled from history may be a recipient another open task's card follows.
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
       for (const run of toStop) void this.abortRun(key, run.id);
+      void this.readRecipients(key, generation);
       void this.backfillQuestions(key, generation);
       void this.backfillApprovals(key, generation);
       void this.readToolMap(key, generation);

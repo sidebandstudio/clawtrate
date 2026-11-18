@@ -276,6 +276,73 @@ describe("a recipient's task let go while its sender's task is open", () => {
     await until(() => transcript().linkedRuns["peer-r"]?.state === "completed");
     client.stop();
   });
+
+  it("F-122: a sender opened after its recipient's task was let go reads the recipient's run from history", async () => {
+    const gateway = grantingGateway();
+    let peerEnded = false;
+    gateway.handlers["chat.history"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== PEER)
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "send-c",
+                  name: "sessions_send",
+                  arguments: { sessionKey: PEER, message: "A message" },
+                },
+              ],
+              __openclaw: { id: "a1", runId: "sender-r" },
+            },
+            {
+              role: "toolResult",
+              toolCallId: "send-c",
+              toolName: "sessions_send",
+              isError: false,
+              content: [{ type: "text", text: "{}" }],
+              details: { status: "accepted", sessionKey: PEER, runId: "peer-r" },
+              __openclaw: { id: "t1", runId: "sender-r" },
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Sent." }],
+              stopReason: "stop",
+              __openclaw: { id: "a2", runId: "sender-r" },
+            },
+          ],
+        };
+      return peerEnded
+        ? {
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "Lake loop it is." }],
+                stopReason: "stop",
+                __openclaw: { id: "p1", runId: "peer-r" },
+              },
+            ],
+          }
+        : { messages: [], inFlightRun: { runId: "peer-r" } };
+    };
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    // The person leaves the sender's task for the recipient's, where its run ends; then that
+    // task is let go too, before the sender's is opened again: nothing follows the run now.
+    client.closeSession(KEY);
+    client.openSession(PEER);
+    await until(() => client.state.transcripts[PEER]?.status === "ready");
+    peerEnded = true;
+    gateway.emit("agent", agentEvent("peer-r", 2, "lifecycle", { phase: "end" }, PEER));
+    await until(() => client.state.transcripts[PEER]?.runs[0]?.state === "completed");
+    client.closeSession(PEER);
+    await until(() => client.state.transcripts[PEER] === undefined);
+    client.openSession(KEY);
+    // The sender's card follows what the recipient's history establishes: the run ended.
+    await until(() => client.state.transcripts[KEY]?.linkedRuns["peer-r"]?.state === "completed");
+    client.stop();
+  });
 });
 
 describe("a queued turn's two ids stay one run", () => {
