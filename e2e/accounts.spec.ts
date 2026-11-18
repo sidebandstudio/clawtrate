@@ -526,9 +526,10 @@ test("F-490: a bot whose model on the gateway lists fallbacks, or lost its accou
 test("F-476 F-490: an order in the gateway's settings is named as that, never as a lock", async () => {
   test.setTimeout(120_000);
   // Second on Acme · Work; the gateway's owner orders Acme's accounts in the settings: that one alone.
-  await patchConfig({
-    agents: { entries: { second: { model: { primary: "acme/dev-1@acme:work", fallbacks: [] } } } },
-  });
+  // A patch that changes nothing makes no new revision to wait for, so it is made only when needed.
+  const onWork = { primary: "acme/dev-1@acme:work", fallbacks: [] };
+  if (JSON.stringify(entry(await config(), "second")?.model) !== JSON.stringify(onWork))
+    await patchConfig({ agents: { entries: { second: { model: onWork } } } });
   await patchConfig({ auth: { order: { acme: ["acme:work"] } } });
   try {
     const status = await view("second", "acme");
