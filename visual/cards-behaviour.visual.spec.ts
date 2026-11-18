@@ -1019,7 +1019,8 @@ test.describe("Messaged cards", () => {
     const verb = async (scene: string, testId: string) => {
       await openFixture(page, `scene=${scene}`, "light");
       const card = page.getByTestId(testId).last();
-      await card.locator("summary").click();
+      // The card's own line: a thread card's items have lines of their own.
+      await card.locator(":scope > summary").click();
       return card
         .locator(".exchange-item")
         .first()
