@@ -15,7 +15,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { BackIcon, CheckIcon, LockIcon, WarnIcon } from "../icons.tsx";
 import { AccountRow } from "./AccountChoices.tsx";
-import { Connect } from "./Connect.tsx";
+import { Connect, keptLabel } from "./Connect.tsx";
 import { Confirm } from "./Dialog.tsx";
 import { AdminBar, GrantedBar, useGranted } from "./parts.tsx";
 import {
@@ -52,7 +52,10 @@ export function useAccountsSection({
   toNav: ReactNode;
 }): { view: SectionView | null; connect: ReactNode | null } {
   const bridge = useBridge();
-  const [page, setPage] = useState<Page>({ page: "list" });
+  // A label step left open comes back where it was left (section 6).
+  const [page, setPage] = useState<Page>(() =>
+    keptLabel(accounts) ? { page: "connect", startWith: null } : { page: "list" },
+  );
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState("");
   const [labelError, setLabelError] = useState<string | null>(null);

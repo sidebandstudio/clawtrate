@@ -19,8 +19,23 @@ import {
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { ChevronIcon, ExternalIcon, LockIcon } from "../icons.tsx";
+import { recall, remember } from "./memory.ts";
 import { AdminBar, CodeBlock, Note, Result, Wait } from "./parts.tsx";
 import { accountName, flowWords, providerName } from "./words.ts";
+
+/** A label step left before Done, kept until the app quits so it comes back (section 6). */
+const LABEL_KEPT = "connect-label";
+type KeptLabel = { account: string; byKey: boolean };
+
+/** The label step left open, when its account is still on the gateway. */
+export function keptLabel(accounts: AccountsState): KeptLabel | null {
+  const kept = recall<KeptLabel>(LABEL_KEPT);
+  if (!kept) return null;
+  const there =
+    accounts.accounts.some((each) => each.id === kept.account) ||
+    (accounts.signIn?.result?.added.includes(kept.account) ?? false);
+  return there ? kept : null;
+}
 
 export type ConnectView = {
   title: string;
@@ -74,17 +89,25 @@ export function useConnect({
   const admin = connection.canAdmin;
   // Done: the sign-in that finished is let go, so the component opens afresh next time.
   const finish = (account: string | null) => {
+    remember(LABEL_KEPT, null);
     void bridge.send({ type: "dismissSignIn" }).catch(() => {});
     onDone(account);
   };
   const signIn = accounts.signIn;
-  const [where, setWhere] = useState<Where>(() =>
-    startWith && connection.canAdmin
-      ? { view: "flow", method: startWith }
-      : signIn && isSignInActive(signIn)
-        ? { view: "flow", method: signIn.method }
-        : { view: "methods" },
-  );
+  const [where, setWhereState] = useState<Where>(() => {
+    if (startWith && connection.canAdmin) return { view: "flow", method: startWith };
+    if (signIn && isSignInActive(signIn)) return { view: "flow", method: signIn.method };
+    const kept = keptLabel(accounts);
+    return kept ? { view: "label", ...kept } : { view: "methods" };
+  });
+  // The label step is kept while it is open; leaving it any other way than closing lets it go.
+  const setWhere = (next: Where) => {
+    remember(
+      LABEL_KEPT,
+      next.view === "label" ? { account: next.account, byKey: next.byKey } : null,
+    );
+    setWhereState(next);
+  };
   const [label, setLabel] = useState("");
   const [labelError, setLabelError] = useState<string | null>(null);
   const [keyProvider, setKeyProvider] = useState(accounts.keyProviders[0]?.provider ?? "");

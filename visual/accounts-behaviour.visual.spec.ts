@@ -757,3 +757,33 @@ test.describe("phone, a key", () => {
     await expect(page.getByTestId("api-key")).toBeInViewport();
   });
 });
+
+test("F-476: a label step closed before Done comes back, in New bot and in Settings → Accounts, until Done", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=connected`, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^xAI · / })
+    .click();
+  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  // Closed before Done: New bot opens on the label step again.
+  await page.keyboard.press("Escape");
+  await expect(newBot(page)).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  // Settings → Accounts opens on it too.
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await expect(settings.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await settings.getByRole("textbox", { name: "Label" }).fill("Travel");
+  await settings.getByRole("button", { name: "Done" }).click();
+  await expect(settings.getByRole("heading", { name: "Accounts", level: 3 })).toBeVisible();
+  // Done lets it go: Settings opens on the list.
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ControlOrMeta+,");
+  await expect(settings.getByRole("heading", { name: "Accounts", level: 3 })).toBeVisible();
+});
