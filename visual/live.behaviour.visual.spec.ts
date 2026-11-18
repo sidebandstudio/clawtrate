@@ -221,6 +221,27 @@ test.describe("sending", () => {
     await expect(field(page)).toBeFocused();
   });
 
+  test("F-466: Cmd/Ctrl+L appends the selected text after an existing draft, on a new line, and focuses the field", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await field(page).fill("About this:");
+    await page.evaluate(() => {
+      const heading = document.querySelector(".task-line")!;
+      const range = document.createRange();
+      range.selectNodeContents(heading);
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+      (document.querySelector(".transcript") as HTMLElement).focus();
+    });
+    await expect(field(page)).not.toBeFocused();
+    await page.keyboard.press("ControlOrMeta+l");
+    await expect(field(page)).toHaveValue("About this:\nDisk almost full on the media box");
+    await expect(field(page)).toBeFocused();
+    // Nothing was sent: the words wait in the field.
+    await expect(page.getByTestId("outgoing")).toHaveCount(0);
+  });
+
   test("F-073: an unsent draft is kept per task", async ({ page }) => {
     await open(page, "composer");
     await field(page).fill("Half a thought about the disk");
@@ -973,6 +994,57 @@ test.describe("steering, queueing and holding", () => {
 });
 
 test.describe("keyboard", () => {
+  test("F-072: inside a pending approval or question card Cmd/Ctrl+Enter answers that card and sends nothing; outside it, it sends", async ({
+    page,
+  }) => {
+    const record = () =>
+      page.evaluate(() => {
+        const w = window as unknown as {
+          clawtrateFixture: Record<string, (command: unknown) => Promise<unknown>>;
+          sent: Array<{ type: string }>;
+        };
+        w.sent = [];
+        const fixture = w.clawtrateFixture;
+        const invoke = fixture.invoke!.bind(fixture);
+        const send = fixture.send!.bind(fixture);
+        fixture.invoke = (command) => (w.sent.push(command as { type: string }), invoke(command));
+        fixture.send = (command) => (w.sent.push(command as { type: string }), send(command));
+      });
+    const types = () =>
+      page.evaluate(() =>
+        (window as unknown as { sent: Array<{ type: string }> }).sent.map((each) => each.type),
+      );
+
+    // An approval: ⌘↵ on its Deny button is Allow once, and the draft stays unsent.
+    await openFixture(page, "scene=approval-pending&panel=closed", "light");
+    await record();
+    await field(page).fill("A draft that must not go");
+    const approval = page.getByTestId("approval-card");
+    await approval.getByRole("button", { name: "Deny" }).focus();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await expect(approval.locator(".tag")).toHaveText("Allowed once");
+    expect(await types()).toEqual(["resolveApproval"]);
+    await expect(field(page)).toHaveValue("A draft that must not go");
+    await expect(page.getByTestId("outgoing")).toHaveCount(0);
+
+    // A question: ⌘↵ inside the card sends its answer, not the draft.
+    await openFixture(page, "scene=question-single&panel=closed", "light");
+    await record();
+    await field(page).fill("Another draft that stays");
+    const question = page.getByTestId("question-card");
+    await question.getByRole("radio").first().click();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await expect(question).toHaveAttribute("data-state", "answered");
+    expect(await types()).toEqual(["answerQuestion"]);
+    await expect(field(page)).toHaveValue("Another draft that stays");
+
+    // Outside any card the same keys send the draft.
+    await page.getByTestId("transcript").focus();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await expect(field(page)).toHaveValue("");
+    expect(await types()).toEqual(["answerQuestion", "sendMessage"]);
+  });
+
   test("F-097 F-102: focus is never left on a control that has gone", async ({ page }) => {
     await open(page, "run-working");
     await page.getByRole("button", { name: "Stop Otto" }).focus();
