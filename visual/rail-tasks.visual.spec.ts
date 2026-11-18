@@ -11,8 +11,18 @@ const OTTO = "bot=otto&task=agent:otto:disk-space";
 const taskRow = (page: Page, title: string) =>
   page.getByTestId("task").filter({ hasText: title }).first();
 
+/** In one pane an unfolded bot shows three tasks: show them all to reach the one named. */
+async function reach(page: Page, title: string) {
+  if (await taskRow(page, title).isVisible()) return;
+  await page
+    .getByRole("button", { name: /^Show all/ })
+    .first()
+    .click();
+}
+
 /** Open a task's menu from the keyboard, as on every width. */
 async function taskMenu(page: Page, title: string) {
+  await reach(page, title);
   await taskRow(page, title).focus();
   await page.keyboard.press("Shift+F10");
   await expect(page.getByRole("menu")).toBeVisible();
@@ -36,6 +46,7 @@ export const RAIL_TASK_SCENES: Scene[] = [
     query: `scene=rail-synced&${OTTO}`,
     prepare: async (page) => {
       await showList(page);
+      await reach(page, "Certificate renewal");
       await taskRow(page, "Certificate renewal").focus();
       await page.keyboard.press("F2");
       await expect(page.getByTestId("task-rename")).toBeVisible();
