@@ -1545,6 +1545,52 @@ test("F-066 F-283 F-067: on a real reply, the actions show beside it, a reaction
   await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
 });
 
+test("F-071 F-070: / lists the bot's own skills and the gateway's actions, a chosen skill goes to the gateway with the words, and @ lists the bots", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { key } = await ownTask(page, "Slash and mention");
+  type Skill = { name: string; userInvocable?: boolean; eligible?: boolean; disabled?: boolean };
+  const listed = await gatewayCall<{ skills: Skill[] }>("skills.status", { agentId: "otto" });
+  const runnable = listed.skills
+    .filter((each) => each.userInvocable && each.eligible && !each.disabled)
+    .map((each) => each.name);
+  expect(runnable).toContain("weather");
+  await composer(page).click();
+  await page.keyboard.type("/");
+  const rows = page.getByRole("listbox", { name: "Skills and actions" }).getByRole("option");
+  await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+  const skills = await rows
+    .filter({ has: page.locator(".composer-menu-tag", { hasText: /^Skill$/ }) })
+    .locator(".composer-menu-name")
+    .allInnerTexts();
+  // Each skill this bot may run, and nothing else, is a Skill (the first 50 the list shows).
+  expect(skills.length).toBe(Math.min(50, runnable.length));
+  await expect(rows.filter({ hasText: "/status" }).locator(".composer-menu-tag")).toHaveText(
+    "Action",
+  );
+  await page.keyboard.type("weath");
+  await expect(rows).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("token-chip")).toContainText("/weather");
+  await page.keyboard.type("in Lisbon #text");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => gatewayHasMessage(key, "/weather in Lisbon #text"), { timeout: 30_000 })
+    .toBe(true);
+  await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+
+  await composer(page).click();
+  await page.keyboard.type("Ask @");
+  const mentions = page
+    .getByRole("listbox", { name: "Mention a bot or routine" })
+    .getByRole("option");
+  await expect(mentions.filter({ hasText: "@Marlow" })).toContainText("Bot", { timeout: 30_000 });
+  await expect(mentions.filter({ hasText: /Bot$/ })).toHaveCount(4);
+  await page.keyboard.press("Escape");
+  await composer(page).fill("");
+});
+
 test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
   page,
 }) => {
