@@ -250,8 +250,14 @@ export type SignInStep = {
 export type LockCheck = {
   botId: string;
   account: string;
-  /** `kept`: still exactly the bound account; `widened`: it was, and the sign-in added to it. */
-  outcome: "kept" | "widened";
+  /**
+   * What the read after the sign-in showed of a bot that was locked: `kept`,
+   * still exactly the bound account; `widened`, an order that names it and
+   * more; `changed`, an order that no longer names it alone; `unchecked`, the
+   * read failed or the gateway said its status is unavailable, so nothing is
+   * known of the order now.
+   */
+  outcome: "kept" | "widened" | "changed" | "unchecked";
 };
 
 export type SignInResult = {

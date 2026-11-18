@@ -790,11 +790,20 @@ export class AccountsEngine {
       const wasLocked = binding.evidence.status === "matched";
       await this.checkLock(binding.botId);
       if (!wasLocked) continue;
-      const after = this.ctx.get().bindings.find((b) => b.botId === binding.botId);
+      const status = this.ctx.get().bindings.find((b) => b.botId === binding.botId)
+        ?.evidence.status;
+      // "Widened" only when the read afterwards shows the order naming more than the account.
       checks.push({
         botId: binding.botId,
         account: binding.account!,
-        outcome: after?.evidence.status === "matched" ? "kept" : "widened",
+        outcome:
+          status === "matched"
+            ? "kept"
+            : status === "multi"
+              ? "widened"
+              : status === "failed" || status === "unavailable" || status === undefined
+                ? "unchecked"
+                : "changed",
       });
     }
     return checks;

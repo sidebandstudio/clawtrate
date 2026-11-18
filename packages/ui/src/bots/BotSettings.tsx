@@ -42,6 +42,9 @@ import {
   gatewayCli,
   kindWord,
   levelWord,
+  LOCK_OLD_MS,
+  lockClaim,
+  lockText,
   modelsOf,
   providerName,
   stateWord,
@@ -50,8 +53,6 @@ import {
 /** How often the Account page reads the order: 4 s after the lock command was copied, else 30 s. */
 export const WATCH_MS = 4_000;
 export const CHECK_MS = 30_000;
-/** Evidence older than this, with the connection down, is shown as old. */
-const OLD_MS = 5 * 60_000;
 
 type View = "main" | "account" | "change" | "connect";
 
@@ -234,7 +235,10 @@ export function BotSettings({
     connection.connectedAt !== null &&
     checkedAt < connection.connectedAt;
   const evidenceOld =
-    checkedAt !== null && (offline || beforeConnection || now - checkedAt > OLD_MS * 6);
+    checkedAt !== null && (offline || beforeConnection || now - checkedAt > LOCK_OLD_MS);
+  // Every lock this tab names is worded from its evidence and that evidence's age.
+  const age = { now, connected: !offline, connectedAt: connection.connectedAt };
+  const lock = lockClaim(binding, age);
 
   // --- The tab's first page --------------------------------------------------------------
   if (view === "main") {
@@ -246,11 +250,7 @@ export function BotSettings({
         : binding.mode === "gateway"
           ? who
           : "";
-    const wordText =
-      bindingWord(binding) +
-      (evidenceOld && word === "locked" && !bindingWord(binding).includes(", as of")
-        ? `, as of ${clock(binding.evidence.checkedAt!)}`
-        : "");
+    const wordText = bindingWord(binding, age);
     const model = binding.model ?? defaultRef(accounts)?.model ?? null;
     const saveModel = async (nextModel: string, nextEffort: string | null) => {
       setError(null);
@@ -523,18 +523,18 @@ export function BotSettings({
             </p>
           </Note>
         )}
-        {changed &&
-          word === "locked" &&
-          was &&
-          (toGateway || target?.provider === was.provider) && (
-            <Note tone="warn">
-              <p>
-                {toGateway
-                  ? `${name} is locked to ${accountName(was, accounts)}. The gateway keeps an order for ${name} that names only ${accountName(was, accounts)}, and goes on using that account alone until its owner clears the order on the gateway's machine. Account shows the command.`
-                  : `${name} is locked to ${accountName(was, accounts)}. After saving, ${name} runs on ${accountName(target!, accounts)} first, and the gateway still tries ${accountName(was, accounts)} when ${accountName(target!, accounts)} fails, until you lock to ${accountName(target!, accounts)} or unlock. Account then shows both commands.`}
-              </p>
-            </Note>
-          )}
+        {changed && lock && was && (toGateway || target?.provider === was.provider) && (
+          <Note tone="warn" testId="locked-change-note">
+            <p>
+              {lock.asOf === null
+                ? `${name} is locked to ${accountName(was, accounts)}.`
+                : `${name} was locked to ${accountName(was, accounts)} when Clawtrate last checked, at ${clock(lock.asOf)}.`}{" "}
+              {toGateway
+                ? `${lock.asOf === null ? "The gateway keeps" : "If it still does, the gateway keeps"} an order for ${name} that names only ${accountName(was, accounts)}, and goes on using that account alone until its owner clears the order on the gateway's machine. Account shows the command.`
+                : `${lock.asOf === null ? "After saving" : "If it still is, after saving"}, ${name} runs on ${accountName(target!, accounts)} first, and the gateway still tries ${accountName(was, accounts)} when ${accountName(target!, accounts)} fails, until you lock to ${accountName(target!, accounts)} or unlock. Account then shows both commands.`}
+            </p>
+          </Note>
+        )}
         {error && (
           <p className="b-field-error" role="alert">
             {error}
@@ -836,18 +836,12 @@ export function BotSettings({
       </details>
     );
     if (word === "locked") {
-      const asOf =
-        (e.status === "failed" || e.status === "unavailable") && e.lastMatchAt !== null
-          ? `, as of ${clock(e.lastMatchAt)}`
-          : evidenceOld && e.checkedAt !== null
-            ? `, as of ${clock(e.checkedAt)}`
-            : "";
       page.push(
         <Note key="s" icon={<LockIcon />} testId="locked-note">
           <p>
-            <b>Locked{asOf}.</b> {name}'s ordinary runs use {me} only: if it fails, the run fails
-            and says why, and the gateway doesn't try another account. A run started with another
-            account named still goes round it.
+            <b>{lockText(lock!)}.</b> {name}'s ordinary runs use {me} only: if it fails, the run
+            fails and says why, and the gateway doesn't try another account. A run started with
+            another account named still goes round it.
           </p>
         </Note>,
         ...warnings,

@@ -787,3 +787,45 @@ test("F-476: a label step closed before Done comes back, in New bot and in Setti
   await page.keyboard.press("ControlOrMeta+,");
   await expect(settings.getByRole("heading", { name: "Accounts", level: 3 })).toBeVisible();
 });
+
+test("F-490: every place that names a lock words it from its evidence: Used by, Change account and the sign-in's result", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=failed`, "light");
+  // Change account: a lock last confirmed before a failed read is spoken of in the past, with its time.
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await expect(page.getByTestId("locked-change-note")).toContainText(
+    /^Otto was locked to OpenAI · Work when Clawtrate last checked, at \d+:\d\d [AP]M\. If it still is, after saving/,
+  );
+  await expect(page.getByText(/Otto is locked to/)).toHaveCount(0);
+  // Settings → Accounts: Used by gives the same lock with its time.
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await settings.getByRole("button", { name: /^OpenAI · Work,/ }).click();
+  await expect(settings.getByTestId("account-facts")).toContainText(
+    /Otto \(locked as of \d+:\d\d [AP]M\)/,
+  );
+  await expect(settings.getByTestId("account-facts")).not.toContainText("Otto (locked)");
+});
+
+test("F-474 F-490: a sign-in's result says a lock widened only from a read that shows it, and says when it couldn't check", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=connected`, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^xAI · / })
+    .click();
+  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await change(
+    page,
+    `return { ...state, accounts: { ...state.accounts, signIn: { ...state.accounts.signIn, result: { ...state.accounts.signIn.result, locks: [{ botId: "otto", account: "openai:work", outcome: "unchecked" }] } } } };`,
+  );
+  await expect(page.getByTestId("lock-unchecked")).toHaveText(
+    "Clawtrate couldn't check Otto's lock after this sign-in, so it can't say whether the sign-in changed it. Otto's Account page checks it again.",
+  );
+  await expect(page.getByText(/added the new account to Otto's lock/)).toHaveCount(0);
+});

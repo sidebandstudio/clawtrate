@@ -698,6 +698,22 @@ describe("sign-ins, through the gateway's own methods", () => {
     client.stop();
   });
 
+  it("a lock check that fails after a sign-in is unchecked: it never says the lock widened", async () => {
+    const fake = new AccountsGateway();
+    fake.orders.pip = { acme: ["acme:home"] };
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    expect(accountWord(binding(accounts(), "pip"))).toBe("locked");
+    await client.startSignIn(CHOICES.device, null);
+    // The read after the sign-in reads main and one other bot; only Pip's own check fails.
+    fake.failStatusFor = "pip";
+    fake.answerDevice();
+    await until(() => accounts().signIn?.stage === "connected");
+    expect(accounts().signIn?.result?.locks).toEqual([
+      { botId: "pip", account: "acme:home", outcome: "unchecked" },
+    ]);
+    client.stop();
+  });
+
   for (const [outcome, stage] of [
     ["refuse", "failed"],
     ["expire", "expired"],

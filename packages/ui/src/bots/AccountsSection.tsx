@@ -23,6 +23,7 @@ import {
   accountName,
   howMade,
   kindWord,
+  lockText,
   providerName,
   stateWord,
   usedBy,
@@ -136,7 +137,11 @@ export function useAccountsSection({
   const account =
     page.page === "account" ? accounts.accounts.find((each) => each.id === page.id) : undefined;
   if (page.page === "account" && account) {
-    const users = usedBy(account.id, accounts.bindings, bots);
+    const users = usedBy(account.id, accounts.bindings, bots, {
+      now,
+      connected: connection.status === "connected",
+      connectedAt: connection.connectedAt,
+    });
     const { tone, word } = stateWord(account, now);
     const keeper = account.keptBy
       ? (bots.find((bot) => bot.id === account.keptBy)?.name ?? account.keptBy)
@@ -267,7 +272,11 @@ export function useAccountsSection({
                 ? `Only ${keeper} can use it`
                 : users.length > 0
                   ? users
-                      .map((each) => (each.locked ? `${each.bot.name} (locked)` : each.bot.name))
+                      .map((each) =>
+                        each.lock
+                          ? `${each.bot.name} (${lockText(each.lock, true)})`
+                          : each.bot.name,
+                      )
                       .join(", ")
                   : "No bots"}
             </dd>

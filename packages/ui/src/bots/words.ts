@@ -98,19 +98,55 @@ export function stateWord(
   return { tone: null, word: "Connected" };
 }
 
-/** The bots bound to an account in their settings: "Used by" (section 7). */
+/** How old a lock's evidence is, against the connection it is shown on. */
+export type EvidenceAge = { now: number; connected: boolean; connectedAt: number | null };
+
+/** Evidence older than this, on an open page, is shown with its time. */
+export const LOCK_OLD_MS = 30 * 60_000;
+
+/**
+ * Every claim that a bot is locked, from its evidence and the evidence's age
+ * (section 10): null when it is not locked; otherwise the time to give it,
+ * or null for a reading of the gateway as it is now. A lock last confirmed
+ * before a read that failed or found status unavailable is "as of" that
+ * confirmation; one read while offline, before this connection, or long
+ * ago is "as of" that read.
+ */
+export function lockClaim(binding: BotBinding, age: EvidenceAge): { asOf: number | null } | null {
+  if (accountWord(binding) !== "locked") return null;
+  const e = binding.evidence;
+  if ((e.status === "failed" || e.status === "unavailable") && e.lastMatchAt !== null)
+    return { asOf: e.lastMatchAt };
+  const old =
+    e.checkedAt !== null &&
+    (!age.connected ||
+      (age.connectedAt !== null && e.checkedAt < age.connectedAt) ||
+      age.now - e.checkedAt > LOCK_OLD_MS);
+  return { asOf: old ? e.checkedAt : null };
+}
+
+/** A lock claim in words: "Locked", "Locked, as of 5:41 PM"; lower case inside a sentence. */
+export function lockText(claim: { asOf: number | null }, inSentence = false): string {
+  const word = inSentence ? "locked" : "Locked";
+  return claim.asOf === null ? word : `${word}${inSentence ? "" : ","} as of ${clock(claim.asOf)}`;
+}
+
+/** The bots bound to an account in their settings: "Used by" (section 7), each with its lock claim. */
 export function usedBy(
   accountId: string,
   bindings: readonly BotBinding[],
   bots: readonly Bot[],
-): Array<{ bot: Bot; locked: boolean }> {
+  age: EvidenceAge,
+): Array<{ bot: Bot; lock: { asOf: number | null } | null }> {
   return bindings
     .filter((binding) => binding.mode === "account" && binding.account === accountId)
     .map((binding) => ({
       bot: bots.find((bot) => bot.id === binding.botId),
-      locked: accountWord(binding) === "locked",
+      lock: lockClaim(binding, age),
     }))
-    .filter((each): each is { bot: Bot; locked: boolean } => each.bot !== undefined);
+    .filter(
+      (each): each is { bot: Bot; lock: { asOf: number | null } | null } => each.bot !== undefined,
+    );
 }
 
 /** The line under an account's title: its kind, a state that needs attention, who uses it. */
@@ -122,7 +158,9 @@ export function accountLine(
 ): { kind: string; state: { tone: "warn" | "danger"; word: string } | null; users: string } {
   const { tone, word } = stateWord(account, now);
   const keeper = account.keptBy ? bots.find((bot) => bot.id === account.keptBy) : null;
-  const users = usedBy(account.id, accounts.bindings, bots).map((each) => each.bot.name);
+  const users = accounts.bindings
+    .filter((binding) => binding.mode === "account" && binding.account === account.id)
+    .flatMap((binding) => bots.filter((bot) => bot.id === binding.botId).map((bot) => bot.name));
   return {
     kind: kindWord(account),
     state: tone ? { tone, word } : null,
@@ -166,13 +204,10 @@ export function flowWords(flow: SignInFlow): string {
 }
 
 /** The word on a bot's account row (section 10). It never shortens. */
-export function bindingWord(binding: BotBinding): string {
+export function bindingWord(binding: BotBinding, age: EvidenceAge): string {
   switch (accountWord(binding)) {
     case "locked":
-      return (binding.evidence.status === "failed" || binding.evidence.status === "unavailable") &&
-        binding.evidence.lastMatchAt !== null
-        ? `Locked, as of ${clock(binding.evidence.lastMatchAt)}`
-        : "Locked";
+      return lockText(lockClaim(binding, age)!);
     case "stale":
       return "Lock out of date";
     case "no-account":

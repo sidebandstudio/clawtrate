@@ -506,18 +506,34 @@ export function useConnect({
           {locks.map((lock) => {
             const name = bots.find((bot) => bot.id === lock.botId)?.name ?? lock.botId;
             const locked = accounts.accounts.find((each) => each.id === lock.account);
+            const lockedName = locked ? accountName(locked, accounts) : lock.account;
+            // Each from the read after the sign-in: what it showed, or that it could not show it.
             return lock.outcome === "kept" ? (
-              <Note key={lock.botId} icon={<LockIcon />}>
+              <Note key={lock.botId} icon={<LockIcon />} testId="lock-kept">
                 <p>
                   Clawtrate checked {name}'s lock after this sign-in. It still allows only{" "}
-                  {locked ? accountName(locked, accounts) : lock.account}.
+                  {lockedName}.
+                </p>
+              </Note>
+            ) : lock.outcome === "unchecked" ? (
+              <Note key={lock.botId} tone="warn" testId="lock-unchecked">
+                <p>
+                  Clawtrate couldn't check {name}'s lock after this sign-in, so it can't say whether
+                  the sign-in changed it. {name}'s Account page checks it again.
+                </p>
+              </Note>
+            ) : lock.outcome === "widened" ? (
+              <Note key={lock.botId} tone="warn" testId="lock-widened">
+                <p>
+                  This sign-in added the new account to {name}'s lock: the gateway's order for{" "}
+                  {name} now names more than {lockedName}. Lock {name} again in its settings.
                 </p>
               </Note>
             ) : (
-              <Note key={lock.botId} tone="warn">
+              <Note key={lock.botId} tone="warn" testId="lock-changed">
                 <p>
-                  This sign-in added the new account to {name}'s lock. Lock {name} again in its
-                  settings.
+                  {name}'s order no longer names only {lockedName}, so {name} is not locked to it.
+                  Lock {name} again in its settings.
                 </p>
               </Note>
             );
