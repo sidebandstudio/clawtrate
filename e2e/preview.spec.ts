@@ -1350,10 +1350,13 @@ test("F-096: a message sent while the run works is steered into it and captioned
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
   expect((await seen()).some((sample) => sample.steer)).toBe(true);
-  // The gateway took it into the run; on screen it stays, as its bubble until history settles it.
+  // The gateway admitted it as a steer, by its own record: in its history the message is
+  // answered inside the run it was sent into, not by a turn of its own after that run.
   await expect
-    .poll(() => gatewayHasMessage(key, "Only the photos set, please."), { timeout: 30_000 })
-    .toBe(true);
+    .poll(() => answeredInsideRun(key, "Only the photos set, please.", runId), {
+      timeout: 30_000,
+    })
+    .toBe("inside");
   await expect(
     page.locator(".transcript").getByText("Only the photos set, please.", { exact: true }),
   ).not.toHaveCount(0);
@@ -1464,6 +1467,32 @@ async function toolStarted(key: string, runId: string): Promise<boolean> {
         (event.stream === "item" && event.data?.kind === "tool" && event.data.phase === "start"),
     )
   );
+}
+
+/**
+ * Where the gateway's history answers a message of yours: "inside" when the first reply after
+ * it belongs to `runId` (it was steered into that run), "own" when it belongs to another run (a
+ * turn of its own), "none" while history holds no reply after it, or no such message.
+ */
+async function answeredInsideRun(
+  key: string,
+  text: string,
+  runId: string,
+): Promise<"inside" | "own" | "none"> {
+  type Row = { role: string; content?: unknown; __openclaw?: { runId?: string } };
+  const history = await gatewayCall<{ messages: Row[] }>("chat.history", {
+    sessionKey: key,
+    limit: 40,
+  });
+  const asked = history.messages.findIndex(
+    (row) => row.role === "user" && JSON.stringify(row.content ?? "").includes(text),
+  );
+  if (asked < 0) return "none";
+  const reply = history.messages
+    .slice(asked + 1)
+    .find((row) => row.role !== "user" && typeof row.__openclaw?.runId === "string");
+  if (!reply) return "none";
+  return reply.__openclaw!.runId === runId ? "inside" : "own";
 }
 
 /** Whether the gateway's history of a task holds a message of yours with this text. */
