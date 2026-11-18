@@ -523,13 +523,70 @@ test("F-490: a bot whose model on the gateway lists fallbacks, or lost its accou
   });
 });
 
+test("F-476 F-490: an order in the gateway's settings is named as that, never as a lock", async () => {
+  test.setTimeout(120_000);
+  // The gateway's owner orders Acme's accounts in the settings: one account, Second's own.
+  await patchConfig({ auth: { order: { acme: ["acme:work"] } } });
+  try {
+    const status = await view("second", "acme");
+    expect(status?.profileOrder).toEqual(["acme:work"]);
+    const settings = await accountPage();
+    await settings.getByRole("button", { name: "Check now" }).click();
+    await expect(settings.getByTestId("evidence")).toContainText(
+      "The gateway's settings order Acme's accounts as Acme · Work. That order is the gateway's, not Second's own, so it is not a lock.",
+      { timeout: 20_000 },
+    );
+    await expect(settings.getByTestId("locked-note")).toHaveCount(0);
+    await expect(settings.getByTestId("bound-note")).toBeVisible();
+    await page.getByRole("button", { name: "Back to settings" }).click();
+    await expect(page.getByTestId("account-word")).toHaveText("Bound");
+  } finally {
+    await patchConfig({ auth: { order: { acme: null } } }, ["auth.order.acme"]);
+  }
+});
+
+test("F-476 F-490: an account only another bot keeps is no account for this bot, and never a lock", async () => {
+  test.setTimeout(120_000);
+  // acme:studio is in Otto's own store: Otto's view lists it, Second's does not.
+  expect((await view("otto", "acme"))?.profiles.some((p) => p.profileId === "acme:studio")).toBe(
+    true,
+  );
+  expect((await view("second", "acme"))?.profiles.some((p) => p.profileId === "acme:studio")).toBe(
+    false,
+  );
+  await patchConfig({
+    agents: { entries: { second: { model: { primary: "acme/dev-1@acme:studio" } } } },
+  });
+  try {
+    const settings = await accountPage();
+    await settings.getByRole("button", { name: "Check now" }).click();
+    await expect(
+      settings.getByText(
+        "No account. Second's account, Acme · Studio, is kept by Otto only, so Second can't use it.",
+        { exact: false },
+      ),
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(settings.getByTestId("locked-note")).toHaveCount(0);
+    await page.getByRole("button", { name: "Back to settings" }).click();
+    await expect(page.getByTestId("account-word")).toHaveText("No account");
+  } finally {
+    await patchConfig({
+      agents: { entries: { second: { model: { primary: "acme/dev-1@acme:work" } } } },
+    });
+  }
+});
+
 /** A merge patch of the gateway's config, as the gateway's owner might make it, applied. */
-async function patchConfig(patch: Json): Promise<void> {
+async function patchConfig(patch: Json, replacePaths?: string[]): Promise<void> {
   const before = await admin.request<{ hash: string; configRevisionHash?: string }>(
     "config.get",
     {},
   );
-  await admin.request("config.patch", { raw: JSON.stringify(patch), baseHash: before.hash });
+  await admin.request("config.patch", {
+    raw: JSON.stringify(patch),
+    baseHash: before.hash,
+    ...(replacePaths ? { replacePaths } : {}),
+  });
   await expect
     .poll(
       async () => {
@@ -613,9 +670,9 @@ test("F-476 F-490: a locked bot whose account answers 401, 402 or 429 fails the 
     await page.keyboard.press("ControlOrMeta+\\");
   await page.getByRole("tab", { name: "Settings" }).click();
   await page.getByRole("button", { name: /^Account: / }).click();
-  // Its account has no label: it is named by its provider alone.
+  // Its account has no label: it is named by its provider and its id on the gateway.
   await expect(page.getByTestId("locked-note")).toContainText(
-    "Locked. Fence's ordinary runs use Acme only",
+    "Locked. Fence's ordinary runs use Acme acme:fence429 only",
     { timeout: 30_000 },
   );
   devGateway(INSTANCE, "unlock", "--agent", bot, "--provider", "acme");
