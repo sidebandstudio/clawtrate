@@ -46,6 +46,14 @@ export type TaskActionContext = {
   runMark: (key: string) => string;
   /** Moves each time a run of the task is seen to end as stopped (`WaitingIndex.stopMark`). */
   stopMark: (key: string) => number;
+  /**
+   * The engine's own Stop (`ClawtrateClient.stopRun`) for each run of the task it
+   * follows that is running or waiting. Answers how many of its runs are now
+   * running, waiting or stopping: 0 when it follows none.
+   */
+  stopRuns: (key: string) => Promise<number>;
+  /** Whether a run of the task the engine follows is still running, waiting or stopping. */
+  runsActive: (key: string) => boolean;
 };
 
 /** How long an archive waits for the end of a run that started while its request was out. */
@@ -208,15 +216,23 @@ function sessionIdOf(row: RawRecord | null, key: string): string {
 
 /**
  * Stop whatever runs in a task, then wait, within `STOP_SETTLE_MS`, until the
- * gateway's own row says nothing does. Returns the row it last read.
+ * gateway's own row says nothing does and the engine's runs of it have ended.
+ * Returns the row it last read.
+ *
+ * A run the engine follows is stopped by the engine's Stop, as the Stop button
+ * does: it is `stopping` until the gateway says how it ended, one the gateway has
+ * not named yet is aborted once it is named, and the follow-ups queued behind it
+ * are parked when it stops, so none is sent into the task being archived. Only
+ * when the engine follows no run of the task (another device's, or a task not open
+ * here) does the gateway's own abort of the session's runs stop it.
  */
 export async function stopAndSettle(ctx: TaskActionContext, key: string): Promise<RawRecord> {
-  await ctx.request("chat.abort", { sessionKey: key });
+  if ((await ctx.stopRuns(key)) === 0) await ctx.request("chat.abort", { sessionKey: key });
   const deadline = ctx.now() + STOP_SETTLE_MS;
   for (;;) {
     const row = await describe(ctx, key);
     if (!row) throw new Error(`The gateway has no task ${key}.`);
-    if (!isActive(row)) return row;
+    if (!isActive(row) && !ctx.runsActive(key)) return row;
     if (ctx.now() >= deadline)
       throw new Error("The task's run did not stop in time. Nothing was archived or deleted.");
     await ctx.sleep(STOP_POLL_MS);

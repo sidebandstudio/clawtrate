@@ -149,6 +149,9 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
     },
     runMark: () => mark,
     stopMark: () => stops,
+    // By default the engine follows no run of the task.
+    stopRuns: async () => 0,
+    runsActive: () => false,
   };
   return {
     ctx,
@@ -326,6 +329,64 @@ describe("the rail's task actions", () => {
     expect(calls[1]!.params).toEqual({ sessionKey: KEY });
   });
 
+  it("F-277 F-278: a run the engine follows is stopped by the engine's Stop, and the task is archived only once that run has ended", async () => {
+    const rows: Record<string, Record<string, unknown>> = {
+      [KEY]: { sessionId: "s-1", hasActiveRun: true },
+    };
+    const { ctx, calls } = fakeGateway(rows);
+    const order: string[] = [];
+    let engineActive = false;
+    ctx.stopRuns = async (key) => {
+      order.push(`engine stop ${key}`);
+      // The gateway's row is idle at once, but the engine's run is still stopping
+      // (a run it has not named yet, or whose end has not come) for two more reads.
+      rows[KEY]!.hasActiveRun = false;
+      engineActive = true;
+      return 1;
+    };
+    let reads = 0;
+    ctx.runsActive = () => {
+      if (engineActive && ++reads === 3) engineActive = false;
+      return engineActive;
+    };
+    const request = ctx.request;
+    ctx.request = async (method, params) => {
+      order.push(method);
+      return request(method, params);
+    };
+    await archiveTask(ctx, KEY, { stop: true });
+    expect(order).toEqual([
+      "sessions.describe",
+      `engine stop ${KEY}`,
+      "sessions.describe",
+      "sessions.describe",
+      "sessions.describe",
+      "sessions.patch",
+    ]);
+    expect(calls.some((call) => call.method === "chat.abort")).toBe(false);
+  });
+
+  it("F-278: delete of a task whose run the engine follows goes through the engine's Stop too", async () => {
+    const rows: Record<string, Record<string, unknown>> = {
+      [KEY]: { sessionId: "s-1", hasActiveRun: true },
+    };
+    const { ctx, calls } = fakeGateway(rows);
+    let stopped = 0;
+    ctx.stopRuns = async () => {
+      stopped += 1;
+      rows[KEY]!.hasActiveRun = false;
+      return 1;
+    };
+    await deleteTask(ctx, KEY);
+    expect(stopped).toBe(1);
+    expect(calls.map((call) => call.method)).toEqual([
+      "sessions.describe",
+      "sessions.describe",
+      "sessions.patch",
+      "sessions.delete",
+    ]);
+  });
+
   it("F-278: a run that does not stop within its deadline leaves the task as it was", async () => {
     const { ctx, calls } = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: true } });
     await expect(deleteTask(ctx, KEY)).rejects.toThrow("did not stop in time");
@@ -398,6 +459,8 @@ describe("the rail's task actions", () => {
       sleep: async () => {},
       runMark: () => "",
       stopMark: () => 0,
+      stopRuns: async () => 0,
+      runsActive: () => false,
     };
     const listed = await listArchived(ctx, "pip");
     expect(listed.tasks).toHaveLength(MAX_ARCHIVED_LISTED);

@@ -7,8 +7,8 @@ import { ClawtrateClient } from "../src/client.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { SIDEBAR_PREF_KEY } from "../src/sidebar.ts";
 import { MAX_LISTED_TASKS } from "../src/state-bounds.ts";
-import { FAST, grantingGateway, URL_A } from "./client-harness.ts";
-import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { FAST, grantingGateway, KEY, openTask, URL_A } from "./client-harness.ts";
+import { deferred, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const PIP_TASK = "agent:pip:dashboard:2cc23cbf-30e2-4416-837a-56d92c983588";
 
@@ -382,6 +382,51 @@ describe("the rail's actions through the client", () => {
       key: PIP_TASK,
     });
     viewer.dispose();
+    client.stop();
+  });
+});
+
+describe("Stop and archive, and delete, through the engine's own Stop", () => {
+  it("F-277 F-278: a run stopped before the gateway named it is stopped by its id once named, its follow-up stays not sent, and only then is the task archived", async () => {
+    const gateway = grantingGateway();
+    const answer = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => answer.promise;
+    gateway.handlers["chat.history"] = () => ({ messages: [] });
+    let active = true;
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: active },
+    });
+    // What the engine shows of the run and its follow-up when the archive reaches the gateway.
+    let atArchive: unknown = null;
+    gateway.handlers["sessions.patch"] = () => {
+      atArchive = {
+        run: transcript().runs.find((run) => run.id === id)?.state,
+        followUp: transcript().outbox.find((m) => m.id === later)?.status,
+      };
+      return { ok: true };
+    };
+    const { client, transcript } = await openTask({ gateway });
+    const id = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    const later = client.sendMessage(KEY, "Then this", { mode: "queue" });
+    const archived = client.archiveTask(KEY, { stop: true });
+    await until(() => transcript().runs.find((run) => run.id === id)?.state === "stopping");
+    await sleep(600);
+    // An abort before the gateway has taken the send stops nothing: none is sent yet,
+    // and nothing is archived while the run may still start.
+    expect(gateway.calls("chat.abort")).toEqual([]);
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    answer.resolve({ runId: id, status: "started" });
+    await until(() => gateway.calls("chat.abort").length === 1);
+    expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: id }]);
+    active = false;
+    await expect(archived).resolves.toEqual({ stoppedRun: false });
+    expect(gateway.calls("sessions.patch")).toEqual([
+      { key: KEY, archived: true, expectedSessionId: "s-1" },
+    ]);
+    // Archived only once the engine's Stop had settled: the run stopped, its follow-up parked.
+    expect(atArchive).toEqual({ run: "stopped", followUp: "not-sent" });
+    expect(gateway.calls("chat.send")).toHaveLength(1);
     client.stop();
   });
 });

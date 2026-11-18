@@ -4770,6 +4770,18 @@ export class ClawtrateClient {
       now: () => this.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       stopMark: (key) => this.waiting.stopMark(key),
+      stopRuns: async (key) => {
+        const runs = this.state.transcripts[key]?.runs ?? [];
+        await Promise.all(
+          runs
+            .filter((run) => run.state === "running" || run.state === "waiting")
+            .map((run) => this.stopRun(key, run.id, owner ? { owner } : {})),
+        );
+        return (this.state.transcripts[key]?.runs ?? []).filter((run) => isActive(run.state))
+          .length;
+      },
+      runsActive: (key) =>
+        (this.state.transcripts[key]?.runs ?? []).some((run) => isActive(run.state)),
       runMark: (key) => {
         const row = this.rows.get(capId(key, MAX_ID_CHARS));
         const active = row?.hasActiveRun === true || row?.status === "running";
