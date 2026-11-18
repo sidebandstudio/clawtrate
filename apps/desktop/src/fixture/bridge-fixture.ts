@@ -55,6 +55,7 @@ import {
 import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { isModelScene, MODEL_SCENES, modelCommand, modelScene } from "./models.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -101,6 +102,7 @@ export const SCENES = [
   ...LIVE_SCENES,
   ...RAIL_SCENES,
   ...ACTION_SCENES,
+  ...MODEL_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -236,6 +238,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
   const base = loaded(now);
   if (isCardScene(name)) return { initial: cardScene(name, now).change(base), steps: [] };
   if (isRailScene(name)) return { initial: railScene(name, base, now), steps: [] };
+  if (isModelScene(name)) return { initial: modelScene(name, base, now), steps: [] };
   switch (name) {
     case "main":
       return { initial: base, steps: [] };
@@ -540,6 +543,16 @@ export function createFixtureBridge(
     if (rail) {
       sent.push(command);
       return rail;
+    }
+    const model = modelCommand(
+      command,
+      () => state,
+      (next) => set(next),
+      () => Date.now(),
+    );
+    if (model) {
+      sent.push(command);
+      return model;
     }
     const live = liveCommand(
       command,

@@ -1018,7 +1018,7 @@ export function Conversation({
           >
             <BackIcon />
           </button>
-          {task && bot && (
+          {task?.model && bot && (
             <ModelChip
               task={task}
               bot={bot}

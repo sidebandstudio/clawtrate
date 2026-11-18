@@ -142,12 +142,18 @@ export function WorkPanel({
             <>
               <p className="work-task">{task.title}</p>
               <dl className="facts">
+                {!task.model && bot?.model && (
+                  <div>
+                    <dt>Model</dt>
+                    <dd>{bot.model}</dd>
+                  </div>
+                )}
                 <div>
                   <dt>Last activity</dt>
                   <dd>{task.updatedAt === null ? "Unknown" : stampTime(task.updatedAt)}</dd>
                 </div>
               </dl>
-              {bot && (
+              {bot && task.model && (
                 <TaskModelDetails
                   task={task}
                   bot={bot}

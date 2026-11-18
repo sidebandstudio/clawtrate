@@ -945,7 +945,8 @@ export function RunLineView({
         <span className="mono">{runId}</span>
         <CopyButton what="run id" text={runId} />
       </p>
-      <div className="run-raw">
+      {/* Raw takes the card's own styles, on the stage rather than on a card's surface. */}
+      <div className="card run-raw">
         <CardFoot disclosure={disclosure} raw={raw} />
       </div>
     </details>
