@@ -12,6 +12,8 @@ import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
+import { fuseMismatches } from "../apps/desktop/packaging/fuse-check.ts";
+import { APP_ID } from "../apps/desktop/src/main/identity.ts";
 import { appEnv, packagedExecutable } from "./global-setup.ts";
 import {
   integrityLevels,
@@ -150,8 +152,9 @@ test("shows unread tasks as an overlay on its taskbar button, and clears it at z
   test.skip(!WINDOWS, "the macOS dock badge is not read from outside yet");
   // The page reports the count through the bridge, as the renderer does for
   // unread tasks; the main process sets the overlay icon, whose description
-  // Windows gives as the taskbar button's help text.
-  const exe = packagedExecutable(APP);
+  // Windows gives as the taskbar button's help text. The button is the one
+  // with the app's own id, the bundle id its installer gives its shortcuts,
+  // from the first launch on: not the executable's path.
   const setBadge = (count: number) =>
     page.evaluate((value) => {
       (
@@ -159,9 +162,9 @@ test("shows unread tasks as an overlay on its taskbar button, and clears it at z
       ).clawtrateHost.setBadge(value);
     }, count);
   await setBadge(3);
-  await expect.poll(() => taskbarOverlayDescription(exe), { timeout: 15_000 }).toBe("3 unread");
+  await expect.poll(() => taskbarOverlayDescription(APP_ID), { timeout: 15_000 }).toBe("3 unread");
   await setBadge(0);
-  await expect.poll(() => taskbarOverlayDescription(exe), { timeout: 15_000 }).toBe("");
+  await expect.poll(() => taskbarOverlayDescription(APP_ID), { timeout: 15_000 }).toBe("");
 });
 
 test("hands a second launch to the running app instead of starting another", async () => {
@@ -224,6 +227,12 @@ test("runs its renderer in the operating system's sandbox", () => {
   }
   // The same query tells an unsandboxed process apart: the main process is not sandboxed.
   expect(kernelSaysSandboxed(APP_PID), "sandbox_check for the main process").toBe(0);
+});
+
+test("keeps the fuses it was packaged with", async () => {
+  // Read from the binary as it was built or installed: Node's own entry points
+  // off, and only its archive loaded, checked against its hash.
+  expect(await fuseMismatches(packagedExecutable(APP), process.platform)).toEqual([]);
 });
 
 test("pairs with its own development gateway instance and shows the seeded bots", async () => {
