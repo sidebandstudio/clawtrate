@@ -165,10 +165,32 @@ jobs:
           "--- PowerShell 7:"
           pwsh -NoProfile -NonInteractive -File (Join-Path $env:RUNNER_TEMP 'variant.ps1')
           taskkill /F /T /PID $app.Id
+          Start-Sleep -Seconds 3
+          "--- the check's own setup, outside Playwright:"
+          $env:CLAWTRATE_PACKAGED_APP = $dir
+          node --input-type=module -e "const g = await import('./e2e-packaged/global-setup.ts'); const w = await import('./e2e-packaged/windows.ts'); const { execFileSync } = await import('node:child_process'); const teardown = await g.default(); await new Promise((r) => setTimeout(r, 8000)); const exe = g.packagedExecutable(process.env.CLAWTRATE_PACKAGED_APP); console.log('title', w.mainWindowTitle(Number(process.env.CLAWTRATE_PACKAGED_PID))); console.log('lookup', JSON.stringify(w.taskbarOverlayDescription(exe))); execFileSync('powershell.exe', ['-NoProfile', '-File', process.env.RUNNER_TEMP + '/variant.ps1'], { stdio: 'inherit', env: { ...process.env, CHECK_EXE: exe } }); await teardown();"
+          Remove-Item Env:CLAWTRATE_PACKAGED_APP
+          # Log the taskbar's buttons every two seconds while the check runs.
+          $logger = @'
+          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+          $ae = [Windows.Automation.AutomationElement]
+          $all = [Windows.Automation.Condition]::TrueCondition
+          while ($true) {
+            $bar = $ae::RootElement.FindFirst([Windows.Automation.TreeScope]::Children, (New-Object Windows.Automation.PropertyCondition($ae::ClassNameProperty, 'Shell_TrayWnd')))
+            $ids = foreach ($el in $bar.FindAll([Windows.Automation.TreeScope]::Descendants, $all)) { if ($el.Current.AutomationId -like 'Appid:*') { "[$($el.Current.AutomationId) | $($el.Current.Name) | help=$($el.Current.HelpText)]" } }
+            "$(Get-Date -Format HH:mm:ss.fff) $($ids -join ' ')" | Add-Content (Join-Path $env:RUNNER_TEMP 'taskbar.log')
+            Start-Sleep -Seconds 2
+          }
+          '@
+          $logger | Set-Content (Join-Path $env:RUNNER_TEMP 'logger.ps1')
+          Start-Process powershell.exe -ArgumentList '-NoProfile', '-File', (Join-Path $env:RUNNER_TEMP 'logger.ps1') -WindowStyle Hidden
       - name: Run the launch check against the installed app
         env:
           CLAWTRATE_PACKAGED_APP: ${{ steps.install.outputs.dir }}
         run: pnpm check:packaged
+      - if: always()
+        continue-on-error: true
+        run: Get-Content (Join-Path $env:RUNNER_TEMP 'taskbar.log')
       - name: Uninstall silently and check nothing is left
         run: |
           $dir = '${{ steps.install.outputs.dir }}'
