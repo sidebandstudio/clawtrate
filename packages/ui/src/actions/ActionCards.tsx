@@ -865,12 +865,16 @@ export function RunLineView({
   runId,
   line,
   model,
+  lifecycle = null,
 }: {
   runId: string;
   line: RunLine;
   model: string | null;
+  /** The events that started and ended the run, as received; null when only history knows it. */
+  lifecycle?: Array<{ via: string; record: unknown }> | null;
 }) {
   const env = useActionEnv();
+  const raw = useRawDisclosure();
   const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.run(runId), false);
   const record = `${model ?? actionWords.RUN_LINE.modelNotReported} · ${actionWords.RUN_LINE.effort(env.effort)}`;
   return (
@@ -913,6 +917,34 @@ export function RunLineView({
         <span className="mono">{runId}</span>
         <CopyButton what="run id" text={runId} />
       </p>
+      <CardFoot disclosure={raw} raw={runRaw(runId, lifecycle)} />
     </details>
   );
+}
+
+/** The run line's Raw: the events that started and ended the run, as the gateway sent them. */
+export function runRaw(
+  runId: string,
+  lifecycle: Array<{ via: string; record: unknown }> | null,
+): RawContent {
+  const events = (lifecycle ?? [])
+    .filter((each) => each.record !== null && each.record !== undefined)
+    .map(
+      (each) =>
+        [`The event, as the gateway sent it (${each.via})`, each.record] as [string, unknown],
+    );
+  const notes: string[] = [];
+  if (!lifecycle || lifecycle.length === 0) {
+    notes.push(
+      "This run was read from the gateway's history, which keeps no event for a run's start or end.",
+    );
+  } else if (events.length < lifecycle.length) {
+    notes.push("An event was too long for this app to keep as received.");
+  }
+  return {
+    state: "loaded",
+    events,
+    ids: [{ label: "Run", value: runId }],
+    ...(notes.length ? { notes } : {}),
+  };
 }

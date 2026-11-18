@@ -12,7 +12,9 @@ import {
   type Transcript,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { runRaw } from "./actions/ActionCards.tsx";
 import { useBridge } from "./bridge.tsx";
+import { CardFoot, useRawDisclosure } from "./cards/parts.tsx";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
 import { endingOf } from "./live.ts";
 import { Markdown } from "./Markdown.tsx";
@@ -187,6 +189,7 @@ export function RunEnding({
   const moved = useRef(false);
   const lineRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const raw = useRawDisclosure();
   useEffect(() => {
     if (!moved.current) return;
     moved.current = false;
@@ -299,6 +302,13 @@ export function RunEnding({
           </button>
         </div>
       )}
+      <CardFoot disclosure={raw} raw={turnErrorRaw(run)} />
     </div>
   );
+}
+
+/** A failed turn's Raw: the event that ended it, as the gateway sent it, else what started it. */
+function turnErrorRaw(run: Run) {
+  const ended = (run.lifecycle ?? []).filter((each) => /error|end/.test(each.via));
+  return runRaw(run.id, ended.length > 0 ? ended : (run.lifecycle ?? null));
 }
