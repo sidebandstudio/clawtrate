@@ -13,6 +13,7 @@ export const SHORTCUTS: Array<[keys: string, does: string]> = [
   ["⌘L", "Add the selected text to the message"],
   ["⌘F", "Find in this conversation"],
   ["⇧⌘F", "Search bots and tasks"],
+  ["⌘T", "New task for the open bot; ⌥T in a browser"],
   ["⌘1–9", "Open the bot in that place"],
   ["⌥↑ ⌥↓", "The bot above or below"],
   ["⌃Tab", "The next bot; ⇧⌃Tab, the one before"],

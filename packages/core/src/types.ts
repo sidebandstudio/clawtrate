@@ -5,6 +5,7 @@ import { initialAccountsState, type AccountsState } from "./accounts.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
+import type { SidebarState } from "./sidebar.ts";
 
 export type ConnectionStatus =
   /** No gateway configured yet. */
@@ -124,7 +125,11 @@ export type TaskStatus =
    */
   | "waiting"
   | "blocked"
-  | "done-with-failures";
+  | "done-with-failures"
+  /** The latest run was stopped (`interrupted` or `killed`). */
+  | "stopped"
+  /** A run waits its turn on the gateway (`queued`) and nothing runs yet. */
+  | "queued";
 
 export type Task = {
   key: string;
@@ -140,6 +145,21 @@ export type Task = {
    * window. Absent when the gateway does not report both.
    */
   context?: TaskContext;
+  /**
+   * The bot's main session (`isMain`, or its `agent:<bot>:main` key): the gateway
+   * refuses to archive or delete it ("Cannot archive an agent's main session.").
+   */
+  isMain?: boolean;
+  /** Pinned on the gateway (`sessions.patch` `pinned`); pinned tasks come first under their bot. */
+  pinned?: boolean;
+  /** What the task waits on while `status` is `waiting` (`waiting.ts`), and since when. */
+  waitingFor?: "approval" | "question";
+  waitingSince?: number;
+  /**
+   * The gateway's explicit unread marker (`markedUnreadAt`), or null when it has
+   * none: a read made on opening names it, so it never clears a newer "Mark as unread".
+   */
+  unreadMarker?: number | null;
   /**
    * The reasoning effort the task asks for (`thinkingLevel` on its session
    * row), as the gateway names it. Absent when the task records none.
@@ -281,6 +301,12 @@ export type ClawtrateState = {
    * says it is being approached.
    */
   retention: { estimated: number; bound: number; near: boolean };
+  /**
+   * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
+   * pinned bots, sections, hidden bots and the manual order. Absent where a host
+   * does not read it.
+   */
+  sidebar?: SidebarState;
   /** Paths of fields cut to their bound that nothing beneath records itself. */
   cut?: string[];
 };
@@ -366,4 +392,5 @@ export const initialState: ClawtrateState = {
   creations: [],
   accounts: initialAccountsState,
   retention: { estimated: 0, bound: 0, near: false },
+  sidebar: { status: "unknown", prefs: null },
 };

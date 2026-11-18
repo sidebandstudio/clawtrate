@@ -33,10 +33,9 @@ const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
 const SHOTS = process.env.CLAWTRATE_CARD_SHOTS;
 const STAMP = Date.now().toString(36);
 
-// Not serial: one check failing on timing does not keep the rest from running. The checks
-// still run in file order on one worker; after a failure Playwright starts a new worker,
-// which pairs fresh hosts in beforeAll. Only the last check reads what earlier ones left
-// (`later`), and it fails when that is empty.
+// Not serial: one check failing on timing does not keep the rest from running. Each check
+// stands alone: it makes the tasks, approvals and questions it reads, and reads no other
+// check's. A new worker, after a failure, pairs fresh hosts in beforeAll.
 
 type Host = { child: ChildProcess; url: string; data: string };
 const hosts: Host[] = [];
@@ -44,8 +43,6 @@ let clients: Record<ClientName, OperatorSession>;
 /** The interface with interactive access, and one that stays read-only. */
 let page: Page;
 let reader: Page;
-/** Tasks to read again, later, from history, on a host that never saw them live. */
-const later: Array<{ bot: string; title: string; reply: string }> = [];
 
 async function startOwnHost(): Promise<Host> {
   const data = mkdtempSync(join(tmpdir(), "clawtrate-cards-"));
@@ -203,7 +200,8 @@ function sendFacts(runId: string): { toolCallId: string; recipientRunId: string 
 let clientTasks = 0;
 async function clientTask(botId: string, slug: string): Promise<{ key: string; title: string }> {
   clientTasks += 1;
-  const title = `${slug}-${STAMP}${clientTasks > 1 ? `-${clientTasks}` : ""}`;
+  // The count before the stamp: no title is part of another's, as a row is found by its text.
+  const title = `${slug}-${clientTasks}-${STAMP}`;
   const key = `agent:${botId}:${title}`;
   for (const op of Object.values(clients)) {
     await op.request("sessions.messages.subscribe", { key });
@@ -211,13 +209,19 @@ async function clientTask(botId: string, slug: string): Promise<{ key: string; t
   return { key, title };
 }
 
-/** A new task started by the host's own device, labelled: its title and key. */
+/**
+ * A new task started by the host's own device, labelled: its title and key. New on every call,
+ * so a repeated check never meets an earlier one's task.
+ */
+let hostTasks = 0;
 async function hostTask(
   botId: string,
   label: string,
   text: string,
 ): Promise<{ title: string; key: string }> {
-  const title = `${label} ${STAMP}`;
+  hostTasks += 1;
+  // The count before the stamp: no title is part of another's, as a row is found by its text.
+  const title = `${label} ${hostTasks} ${STAMP}`;
   const { key } = await hostCommand<{ key: string }>(page, {
     type: "createTask",
     botId,
@@ -386,7 +390,6 @@ test.describe("approval cards on a real gateway", () => {
     });
     await expect(card(fresh, "approval-card")).toHaveCount(0);
     await fresh.context().close();
-    later.push({ bot: "Otto", title, reply: "The slow command finished." });
   });
 
   test("F-163 F-165: denied: the card says the command was not run", async () => {
@@ -483,7 +486,6 @@ test.describe("question cards on a real gateway", () => {
     await expect(question.locator(".answer")).toHaveText(["ALake loop"]);
     await expect(transcript(page)).toContainText("route: Lake loop", { timeout: 30_000 });
     await shot(question, "question-answered");
-    later.push({ bot: "Pip", title, reply: "route: Lake loop" });
   });
 
   test("F-114 F-303: several questions in one card, answered together", async () => {
@@ -602,6 +604,12 @@ test.describe("Messaged cards on a real gateway", () => {
         })
       ).inFlightRun?.runId !== recipientRunId;
     const incoming = page.getByTestId("incoming-line").or(page.getByTestId("received-card"));
+    // The card is first read while the gateway still has the recipient working: the slow
+    // recipient runs for about twenty seconds after the send ends.
+    await sample();
+    expect(await recipientEnded(), "the recipient still works when the card is first read").toBe(
+      false,
+    );
     const deadline = Date.now() + 90_000;
     while (Date.now() < deadline) {
       await sample();
@@ -619,7 +627,9 @@ test.describe("Messaged cards on a real gateway", () => {
     // the run was seen: what was known of the recipient is not lost. The host follows every
     // session from before the send, so it sees the recipient's run: once the gateway has ended
     // it, the card says so, and a card still Sent has lost it.
-    const order = ["Sent", "Working", "No reply yet"];
+    // Before the send's own result is read the card can say Unknown: the gateway sends a run's
+    // tool results to other clients as session.tool, and this host reads them from history.
+    const order = ["Unknown", "Sent", "Working", "No reply yet"];
     expect(
       states.every((each) => order.includes(each)),
       states.join(" → "),
@@ -628,6 +638,8 @@ test.describe("Messaged cards on a real gateway", () => {
       states.every((each, k) => k === 0 || order.indexOf(each) > order.indexOf(states[k - 1]!)),
       states.join(" → "),
     ).toBe(true);
+    // It was seen working: the card said so before it said how the run ended.
+    expect(states, states.join(" → ")).toContain("Working");
     expect(states.at(-1), states.join(" → ")).toBe("No reply yet");
     await shot(page, "messaged-slow-reply-arrived");
   });
@@ -722,10 +734,34 @@ test.describe("Messaged cards sent from this app on a real gateway", () => {
     expect(states.at(-1)).toBe("Recipient waiting");
     await shot(card(page, "messaged-card"), "messaged-recipient-waiting");
     await openTask(page, "Marlow", "Notes for Pip");
-    // Marlow's main task is shared: this check's question is the one pending there, by its id.
-    const pending = page.locator('[data-testid="question-card"][data-state="pending"]');
-    await expect(pending).toHaveCount(1, { timeout: 60_000 });
-    const question = page.locator(`[id="${await pending.getAttribute("id")}"]`);
+    // Marlow's main task is shared: this check's question is the one the gateway lists as
+    // pending there, asked since this check began, and its card is found by that id.
+    let questionId = "";
+    await expect
+      .poll(
+        async () => {
+          const listed = await clients.questions.request<{
+            questions?: Array<{
+              id: string;
+              sessionKey?: string;
+              status?: string;
+              createdAtMs?: number;
+            }>;
+          }>("question.list", {});
+          questionId =
+            listed.questions?.find(
+              (each) =>
+                each.sessionKey === "agent:marlow:main" &&
+                each.status === "pending" &&
+                (each.createdAtMs ?? 0) >= checkStarted,
+            )?.id ?? "";
+          return questionId;
+        },
+        { timeout: 60_000 },
+      )
+      .not.toBe("");
+    const question = page.locator(`#card-question-${questionId.replace(/[^\w-]/g, "_")}`);
+    await expect(question).toHaveAttribute("data-state", "pending", { timeout: 30_000 });
     await question.getByRole("radio", { name: /Lake loop/ }).click();
     await expect(question).toHaveAttribute("data-state", "answered", { timeout: 30_000 });
     await openTask(page, "Pip", title);
@@ -870,14 +906,35 @@ test.describe("cards read again from history", () => {
     browser,
   }) => {
     test.setTimeout(240_000);
-    expect(later.length).toBeGreaterThan(0);
+    // A settled approval and an answered question of this check's own, settled on this host.
+    const approved = await hostTask("otto", "Approve then read", "#sleep 2");
+    await openTask(page, "Otto", approved.title);
+    const approval = card(page, "approval-card");
+    await expect(approval).toHaveCount(1, { timeout: 30_000 });
+    await approval.getByRole("button", { name: "Allow once" }).click();
+    await expect(approval.locator(".tag")).toHaveText("Allowed once", { timeout: 30_000 });
+    await expect(transcript(page)).toContainText("The slow command finished.", {
+      timeout: 30_000,
+    });
+    const asked = await hostTask("pip", "Answer then read", "ask me a question");
+    await openTask(page, "Pip", asked.title);
+    const question = card(page, "question-card");
+    await expect(question).toHaveCount(1, { timeout: 30_000 });
+    await question.getByRole("radio", { name: /Lake loop/ }).click();
+    await expect(question).toHaveAttribute("data-state", "answered", { timeout: 30_000 });
+    await expect(transcript(page)).toContainText("route: Lake loop", { timeout: 30_000 });
+    // A host that never saw either live reads them from history alone.
     const fresh = await pairedPage(browser, await startOwnHost());
     await requestAccess(fresh);
-    for (const task of later) {
+    for (const task of [
+      { bot: "Otto", title: approved.title, reply: "The slow command finished." },
+      { bot: "Pip", title: asked.title, reply: "route: Lake loop" },
+    ]) {
       await openTask(fresh, task.bot, task.title);
       await expect(transcript(fresh)).toContainText(task.reply, { timeout: 30_000 });
       await expect(card(fresh, "approval-card")).toHaveCount(0);
       await expect(card(fresh, "question-card")).toHaveCount(0);
     }
+    await fresh.context().close();
   });
 });

@@ -53,6 +53,7 @@ import {
   type AccountParams,
 } from "./accounts.ts";
 import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
+import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
 
 export const FIXTURE_INFO: HostInfo = {
@@ -98,6 +99,7 @@ export const SCENES = [
   "offline-unreachable",
   "offline-down",
   ...LIVE_SCENES,
+  ...RAIL_SCENES,
   ...ACTION_SCENES,
 ] as const;
 
@@ -232,6 +234,7 @@ function failTranscript(state: ClawtrateState, key: string, keepItems: boolean):
 function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: Step[] } {
   const base = loaded(now);
   if (isCardScene(name)) return { initial: cardScene(name, now).change(base), steps: [] };
+  if (isRailScene(name)) return { initial: railScene(name, base, now), steps: [] };
   switch (name) {
     case "main":
       return { initial: base, steps: [] };
@@ -461,6 +464,10 @@ export function createFixtureBridge(
   sent: BridgeCommand[];
   /** The last unread count the interface gave for the dock badge. */
   badge: number | null;
+  /** From now on, refuse the rail's commands of this type, as a gateway refuses a change. */
+  refuse(type: string): void;
+  /** The next plain archive meets a run that had just started, and stops it. */
+  raceArchive(): void;
   /**
    * Hold the fixture's delayed answers (a decision applied, refused, or read
    * back; a reconnect answered) until `release`: a test that must see a state lasting only until the
@@ -506,11 +513,24 @@ export function createFixtureBridge(
 
   // Files are named and counted, never kept.
   const files = new Map<string, { fileName: string; mimeType: string; sizeBytes: number }>();
+  // The rail's task actions, answered as the engine would.
+  const railRefused = new Set<string>();
+  const railRace = { archive: false };
+  const railCommand = railCommands(now, railRefused, railRace);
   async function apply(command: BridgeCommand): Promise<unknown> {
     const account = accountCommand(command, () => state, set, accountParams);
     if (account) {
       sent.push(command);
       return account;
+    }
+    const rail = railCommand(
+      command,
+      () => state,
+      (next) => set(next),
+    );
+    if (rail) {
+      sent.push(command);
+      return rail;
     }
     const live = liveCommand(
       command,
@@ -779,6 +799,8 @@ export function createFixtureBridge(
     setState: (change) => set(change(state)),
     sent,
     badge: null,
+    refuse: (type: string) => void railRefused.add(type),
+    raceArchive: () => void (railRace.archive = true),
     hold() {
       held ??= [];
     },

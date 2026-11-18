@@ -1060,7 +1060,7 @@ describe("the run markers and the step behind a file", () => {
     expect(finishedChanges({ runs: merged })).toBe(1);
   });
 
-  it("F-448: a write closed only because its run ended takes history's result, so it is the file's source", () => {
+  it("F-448: a write whose result never arrived is of unknown outcome until history gives its result, and then it is the file's source", () => {
     const raw = new RawTable();
     const ctx = { sessionKey: KEY, now: 5_000, raw };
     const event = (seq: number, stream: string, data: Record<string, unknown>) => ({
@@ -1084,8 +1084,10 @@ describe("the run markers and the step behind a file", () => {
       event(3, "lifecycle", { phase: "end" }),
     ])
       activity = applyAgentEvent(activity, each, ctx).activity;
-    expect(activity.runs[0]!.steps[0]!.status).toBe("failed");
+    // How it ended is not known: it is not said to have failed, and it is no file's source.
+    expect(activity.runs[0]!.steps[0]).toMatchObject({ status: "unknown", error: null });
     expect(fileSource(activity, "notes/scratch.md")).toBeNull();
+    expect(finishedChanges(activity)).toBe(1);
     // History holds the write's result: that is how the step ended.
     const rows = [
       {

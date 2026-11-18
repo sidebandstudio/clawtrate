@@ -276,6 +276,73 @@ describe("a recipient's task let go while its sender's task is open", () => {
     await until(() => transcript().linkedRuns["peer-r"]?.state === "completed");
     client.stop();
   });
+
+  it("F-122: a sender opened after its recipient's task was let go reads the recipient's run from history", async () => {
+    const gateway = grantingGateway();
+    let peerEnded = false;
+    gateway.handlers["chat.history"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== PEER)
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "send-c",
+                  name: "sessions_send",
+                  arguments: { sessionKey: PEER, message: "A message" },
+                },
+              ],
+              __openclaw: { id: "a1", runId: "sender-r" },
+            },
+            {
+              role: "toolResult",
+              toolCallId: "send-c",
+              toolName: "sessions_send",
+              isError: false,
+              content: [{ type: "text", text: "{}" }],
+              details: { status: "accepted", sessionKey: PEER, runId: "peer-r" },
+              __openclaw: { id: "t1", runId: "sender-r" },
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Sent." }],
+              stopReason: "stop",
+              __openclaw: { id: "a2", runId: "sender-r" },
+            },
+          ],
+        };
+      return peerEnded
+        ? {
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "Lake loop it is." }],
+                stopReason: "stop",
+                __openclaw: { id: "p1", runId: "peer-r" },
+              },
+            ],
+          }
+        : { messages: [], inFlightRun: { runId: "peer-r" } };
+    };
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    // The person leaves the sender's task for the recipient's, where its run ends; then that
+    // task is let go too, before the sender's is opened again: nothing follows the run now.
+    client.closeSession(KEY);
+    client.openSession(PEER);
+    await until(() => client.state.transcripts[PEER]?.status === "ready");
+    peerEnded = true;
+    gateway.emit("agent", agentEvent("peer-r", 2, "lifecycle", { phase: "end" }, PEER));
+    await until(() => client.state.transcripts[PEER]?.runs[0]?.state === "completed");
+    client.closeSession(PEER);
+    await until(() => client.state.transcripts[PEER] === undefined);
+    client.openSession(KEY);
+    // The sender's card follows what the recipient's history establishes: the run ended.
+    await until(() => client.state.transcripts[KEY]?.linkedRuns["peer-r"]?.state === "completed");
+    client.stop();
+  });
 });
 
 describe("a queued turn's two ids stay one run", () => {
@@ -323,6 +390,69 @@ describe("a queued turn's two ids stay one run", () => {
     gateway.emit("agent", agentEvent(X, 9, "lifecycle", { phase: "end" }));
     await until(() => transcript().runs[0]?.state === "completed");
     expect(transcript().runs).toHaveLength(1);
+    client.stop();
+  });
+
+  it("a transcript built from history alone pairs them, from history itself: one run, in flight", async () => {
+    const gateway = grantingGateway();
+    // The gateway ran the turn from its queue: the earlier turn, then the queued one's user row
+    // under the send's key and its rows under the gateway's own id, in flight under the send's.
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        { role: "user", content: "first", __openclaw: { id: "u0", idempotencyKey: "first:user" } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "First done" }],
+          stopReason: "stop",
+          __openclaw: { id: "a0", runId: "first" },
+        },
+        { role: "user", content: "queued", __openclaw: { id: "u1", idempotencyKey: `${C}:user` } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Working on it" }],
+          __openclaw: { id: "a1", runId: X },
+        },
+      ],
+      inFlightRun: { runId: C },
+    });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().runs.length > 0 && transcript().status === "ready");
+    expect(runIds(transcript().runs)).toEqual([
+      ["first", "completed"],
+      [C, "running"],
+    ]);
+    expect(transcript().queueAliases).toEqual({ [X]: C });
+    // A late frame under either id is that one run.
+    gateway.emit("agent", agentEvent(X, 2, "run_status", { phase: "model" }));
+    gateway.emit("agent", agentEvent(C, 3, "lifecycle", { phase: "end" }));
+    await until(() => transcript().runs.find((run) => run.id === C)?.state === "completed");
+    expect(transcript().runs).toHaveLength(2);
+    client.stop();
+  });
+
+  it("a steer's user row inside the run it was sent into pairs nothing", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        { role: "user", content: "start", __openclaw: { id: "u0", idempotencyKey: "base:user" } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Looking" }],
+          __openclaw: { id: "a0", runId: "base" },
+        },
+        { role: "user", content: "steer", __openclaw: { id: "u1", idempotencyKey: "steer:user" } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Only the photos, then" }],
+          stopReason: "stop",
+          __openclaw: { id: "a1", runId: "base" },
+        },
+      ],
+    });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().status === "ready" && transcript().runs.length > 0);
+    expect(transcript().queueAliases).toEqual({});
+    expect(runIds(transcript().runs)).toEqual([["base", "completed"]]);
     client.stop();
   });
 });
@@ -391,6 +521,33 @@ describe("a steer the gateway admits as a run of its own", () => {
     gateway.emit("chat", { runId: "steer-ack", sessionKey: KEY, seq: 1, state: "final" });
     await sleep(50);
     expect(runIds(transcript().runs)).toEqual([["base", "completed"]]);
+    client.stop();
+  });
+
+  it("a steer admitted as a run of its own whose only frame here is its error is shown as that failed run", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.send"] = () => ({ runId: "steer-own", status: "started" });
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("base", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs[0]?.state === "running");
+    client.sendMessage(KEY, "And the documents too.");
+    await until(() => transcript().steerAliases["steer-own"] === "base");
+    // Its start and text did not reach this client; its end did.
+    gateway.emit("chat", {
+      runId: "steer-own",
+      sessionKey: KEY,
+      seq: 1,
+      state: "error",
+      errorMessage: "The model refused this run",
+    });
+    await until(() => transcript().runs.some((run) => run.id === "steer-own"));
+    expect(transcript().runs.find((run) => run.id === "steer-own")).toMatchObject({
+      state: "failed",
+      error: { message: "The model refused this run" },
+    });
+    expect(transcript().steerAliases).toEqual({});
+    // The run it was sent into is untouched.
+    expect(transcript().runs.find((run) => run.id === "base")?.state).toBe("running");
     client.stop();
   });
 });

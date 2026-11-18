@@ -152,6 +152,44 @@ describe("the tasks a browser asks to have open again", () => {
   });
 });
 
+describe("a second viewer of a task the host already follows", () => {
+  it("gets the task's transcript when it opens it, with nothing else changing", async () => {
+    const { base, interest, store } = await host();
+    const sockets: WebSocket[] = [];
+    const viewer = () =>
+      createRemoteBridge({
+        open: () => {
+          const socket = new WebSocket(`${base.replace("http", "ws")}/bridge`, {
+            headers: { cookie: `${ACCESS_COOKIE}=${TOKEN}`, origin: base },
+          });
+          sockets.push(socket);
+          return socket as unknown as WebSocketLike;
+        },
+        attach: async () => {
+          throw new Error("unused");
+        },
+      });
+    const key = "agent:otto:already-loaded";
+    const first = await viewer();
+    await first.send({ type: "openSession", key });
+    // Its history read lands: the one store update this task gets.
+    const loaded = {
+      sessionKey: key,
+      status: "ready",
+    } as (typeof initialState.transcripts)[string];
+    store.set({ ...initialState, transcripts: { [key]: loaded } });
+    await until(() => first.getState().transcripts[key] !== undefined);
+    // A second tab opens it: the host follows it already, so the store does not change.
+    const second = await viewer();
+    expect(second.getState().transcripts[key]).toBeUndefined();
+    await second.send({ type: "openSession", key });
+    expect(interest.get(key)).toBe(2);
+    await until(() => second.getState().transcripts[key] !== undefined);
+    expect(second.getState().transcripts[key]).toEqual(loaded);
+    for (const socket of sockets) socket.close();
+  });
+});
+
 describe("slow viewers (one snapshot per viewer beyond what its socket accepted)", () => {
   const fakeSocket = (buffered = 0) => {
     const sent: string[] = [];

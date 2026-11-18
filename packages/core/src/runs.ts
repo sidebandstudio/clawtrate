@@ -84,8 +84,13 @@ export type CardCloseReason =
 export type ClosedCard = PendingCard & { reason: CardCloseReason };
 
 export type StepKind = "tool" | "reasoning";
-/** `waiting` is a tool step held by its own pending approval; the approval is not a second step. */
-export type StepStatus = "running" | "waiting" | "done" | "failed";
+/**
+ * `waiting` is a tool step held by its own pending approval; the approval is not a second step.
+ * `unknown` is a tool step whose run ended before its result arrived here: nothing established
+ * how it ended (it may have succeeded, failed or never returned), and history's finished copy
+ * replaces it.
+ */
+export type StepStatus = "running" | "waiting" | "done" | "failed" | "unknown";
 
 /** A step that has not finished. */
 export function isOpenStep(step: Step): boolean {
@@ -929,12 +934,7 @@ export function finishRun(
     const closed: Step =
       step.kind === "reasoning"
         ? { ...step, status: "done", endedAt }
-        : {
-            ...step,
-            status: "failed",
-            endedAt,
-            error: step.error ?? STEP_CLOSED_BY_RUN_END,
-          };
+        : { ...step, status: "unknown", endedAt };
     return settleRaw(closed, ctx);
   });
   return {
@@ -951,6 +951,23 @@ export function finishRun(
     ],
     finishedBeforeStop: run.state === "stopping" && to === "completed",
     textComplete: run.textComplete || to === "completed",
+  };
+}
+
+/**
+ * A run whose end this client inferred (`outcomeKnown: false`: nothing showed how it ended),
+ * taken back to where it stood before that inference, so that the end the gateway sends or
+ * stores settles it as it really ended: `stopping` if a Stop was asked, otherwise
+ * `running`. A run whose end is known is returned as it is.
+ */
+export function reopenInferred(run: Run): Run {
+  if (!isTerminal(run.state) || run.outcomeKnown) return run;
+  return {
+    ...run,
+    state: run.stopRequestedAt !== null ? "stopping" : "running",
+    endedAt: null,
+    outcomeKnown: true,
+    finishedBeforeStop: false,
   };
 }
 
@@ -1266,16 +1283,19 @@ export function registerRunAlias(
 }
 
 /**
- * The pairs a history page shows of a queued turn's two ids: a user row keyed
- * `<send id>:user` (OpenClaw 2026.10.6) followed by rows under another run id,
- * where the send's run is one this task shows. The pairing frame may have been
- * missed (a reconnect), and history alone still ties them.
+ * The pairs a history page shows of a queued turn's two ids, read from the page alone,
+ * whatever this client holds (a reconnect that missed the pairing frame, or a transcript
+ * built from history only): a user row keyed `<send id>:user` (OpenClaw 2026.10.6) followed
+ * by rows under a run id the page has not shown before. A steer's user row is followed by
+ * the rows of the run it was sent into, which came before it, and an ordinary turn's by
+ * rows under the send's own id: neither pairs.
  */
 export function historyQueuePairs(
   messages: unknown,
-  shownRunIds: ReadonlySet<string>,
 ): Array<[gatewayRunId: string, clientRunId: string]> {
   const pairs: Array<[string, string]> = [];
+  // Run ids the page has shown so far, sends and their rows alike.
+  const seen = new Set<string>();
   let sendId: string | null = null;
   for (const entry of Array.isArray(messages) ? messages : []) {
     const message = asRecord(entry);
@@ -1283,11 +1303,13 @@ export function historyQueuePairs(
     if (message.role === "user") {
       const key = rowIdempotencyKey(message);
       sendId = key?.endsWith(":user") ? key.slice(0, -":user".length) : null;
+      if (sendId) seen.add(sendId);
       continue;
     }
     const runId = str(meta(message).runId);
-    if (!runId || !sendId) continue;
-    if (runId !== sendId && shownRunIds.has(sendId)) pairs.push([runId, sendId]);
+    if (!runId) continue;
+    if (sendId && runId !== sendId && !seen.has(runId)) pairs.push([runId, sendId]);
+    seen.add(runId);
     sendId = null;
   }
   return pairs;
@@ -1330,7 +1352,7 @@ function canonicalRunId(activity: TaskActivity, runId: string): string {
 /**
  * An event under a steer's own run id. A bare acknowledgement (a `chat` final
  * with no message, all a joined steer gets) is dropped. Anything showing a run
- * of its own removes the alias: the steer is a run of its own, kept under its
+ * of its own, an error that ends it included, removes the alias: the steer is a run of its own, kept under its
  * own id. Null when the event is to be dropped.
  */
 function steerOwnRun(
@@ -1348,7 +1370,8 @@ function steerOwnRun(
         )
       : payload.state === "delta"
         ? contentText(message?.content) !== "" || typeof payload.deltaText === "string"
-        : message !== null && contentText(message.content) !== "";
+        : // An error ends a run of its own: a joined steer is acknowledged by a bare final only.
+          payload.state === "error" || (message !== null && contentText(message.content) !== "");
   if (!own) return null;
   const steerAliases = { ...activity.steerAliases };
   delete steerAliases[runId];
@@ -1747,9 +1770,14 @@ export function applyChatEvent(
   if (!own) return activity;
   activity = own;
   const existing = findRun(activity, runId);
-  if (existing && isTerminal(existing.state)) return activity;
-  let next = ensureRun(activity, runId, ctx);
   const state = payload.state;
+  if (existing && isTerminal(existing.state)) {
+    // An end this client only inferred gives way to the end the gateway sends.
+    const ends = state === "final" || state === "aborted" || state === "error";
+    if (existing.outcomeKnown || !ends) return activity;
+    activity = replaceRun(activity, reopenInferred(existing));
+  }
+  let next = ensureRun(activity, runId, ctx);
   next = updateRun(next, runId, (run) => {
     switch (state) {
       case "status":
@@ -1805,7 +1833,12 @@ export function applyAgentEvent(
   if (existing && seq !== null && existing.lastSeq !== null && seq <= existing.lastSeq)
     return { activity };
   const replacement = stream === "tool" && data.phase === "result" && data.replace === true;
-  if (existing && isTerminal(existing.state) && !replacement) return { activity };
+  if (existing && isTerminal(existing.state) && !replacement) {
+    // An end this client only inferred gives way to the end the gateway sends.
+    const ends = stream === "lifecycle" && (data.phase === "end" || data.phase === "error");
+    if (existing.outcomeKnown || !ends) return { activity };
+    activity = replaceRun(activity, reopenInferred(existing));
+  }
 
   let next = ensureRun(activity, runId, ctx);
   const ts = num(payload.ts) ?? ctx.now;
@@ -2590,15 +2623,9 @@ export function runsFromHistory(
   });
 }
 
-/**
- * The error of a step this client closed because its run ended before the step's result
- * arrived: an inference, not how the step ended. History's finished copy replaces it.
- */
-export const STEP_CLOSED_BY_RUN_END = "The run ended before this step finished.";
-
-/** A step closed only because its run ended, with no result of its own. */
+/** A step closed only because its run ended, with no result of its own: how it ended is not known. */
 function closedByRunEnd(step: Step): boolean {
-  return step.status === "failed" && step.error === STEP_CLOSED_BY_RUN_END && step.result === null;
+  return step.status === "unknown";
 }
 
 function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "history" } {
@@ -2615,8 +2642,9 @@ function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "h
       step: {
         ...history,
         startedAt: live.startedAt ?? history.startedAt,
-        // A finished live step keeps the end the events reported; else the end is history's row time.
-        ...(isOpenStep(live)
+        // A finished live step keeps the end the events reported; else the end is history's row
+        // time. A step its run's end closed here had no end of its own reported.
+        ...(isOpenStep(live) || inferred
           ? live.rowTimes || history.rowTimes
             ? { rowTimes: true }
             : {}
@@ -2632,15 +2660,22 @@ function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "h
       source: "history",
     };
   }
-  // A live step whose start the stream missed names no file; history's call does.
+  // A live step whose start the stream missed has no call: no arguments, no file, and a raw
+  // payload without its call. History's copy has the call, and its payload has both halves.
   const truncated = history.truncated && !live.truncated;
   const files = !live.files && history.files ? history.files : undefined;
+  const missedCall = live.kind === "tool" && live.argsText === null && history.argsText !== null;
   return {
     step:
-      truncated || files
-        ? { ...live, ...(truncated ? { truncated: true } : {}), ...withFiles(files) }
+      truncated || files || missedCall
+        ? {
+            ...live,
+            ...(truncated ? { truncated: true } : {}),
+            ...withFiles(files),
+            ...(missedCall ? { argsText: history.argsText, args: history.args ?? null } : {}),
+          }
         : live,
-    source: "live",
+    source: missedCall ? "history" : "live",
   };
 }
 
@@ -2810,7 +2845,9 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
       ...mergedAnchor(current, fromRun, steps),
       reasoningRevision: current.reasoningRevision + (reasoningIdsChanged(current, steps) ? 1 : 0),
     };
-    if (!isTerminal(current.state) && isTerminal(fromRun.state)) {
+    // An end this client only inferred gives way to the end history establishes.
+    if (isTerminal(fromRun.state) && fromRun.outcomeKnown) run = reopenInferred(run);
+    if (!isTerminal(run.state) && isTerminal(fromRun.state)) {
       run = {
         ...finishRun(
           run,

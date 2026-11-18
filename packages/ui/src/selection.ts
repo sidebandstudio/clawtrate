@@ -6,7 +6,8 @@ import { isUnread, markSeen, type SeenMap } from "./unread.ts";
 /** Rows shown under an unfolded bot before "Show all". */
 export const TASK_CAP = 6;
 
-export type RunState = "waiting" | "failed" | "blocked" | "done-with-failures" | "working";
+export type RunState =
+  "waiting" | "failed" | "blocked" | "done-with-failures" | "working" | "stopped" | "queued";
 
 export type BotSummary = {
   /** The task with the latest activity, across all of the bot's tasks. */
@@ -37,19 +38,37 @@ export function taskState(task: Task, seen: SeenMap, onScreenKey: string | null)
     case "blocked":
       return task.status;
     case "done-with-failures":
-      return task.key !== onScreenKey && unseen(task, seen) ? "done-with-failures" : null;
+    case "stopped":
+      // Until the next run, or until the task is opened (conversation.md, section 4).
+      return task.key !== onScreenKey && unseen(task, seen) ? task.status : null;
+    case "queued":
+      return "queued";
     default:
       return null;
   }
 }
 
-const URGENCY: RunState[] = ["waiting", "failed", "blocked", "done-with-failures", "working"];
+/** The order of section 4 for the avatar: a queued task counts as idle. */
+const URGENCY: RunState[] = [
+  "waiting",
+  "failed",
+  "blocked",
+  "done-with-failures",
+  "working",
+  "stopped",
+];
 
 /**
  * What a bot's row says about all of its tasks. The three signals are
  * independent, so a folded bot never hides work in an older task.
  */
-export function summarize(tasks: Task[], seen: SeenMap, onScreenKey: string | null): BotSummary {
+export function summarize(
+  tasks: Task[],
+  seen: SeenMap,
+  onScreenKey: string | null,
+  /** What this viewer read, for unread: the gateway's word alone on a connection that writes. */
+  unreadSeen: SeenMap = seen,
+): BotSummary {
   let latest: Task | null = null;
   for (const task of tasks) {
     if (!latest || (task.updatedAt ?? 0) > (latest.updatedAt ?? 0)) latest = task;
@@ -57,7 +76,7 @@ export function summarize(tasks: Task[], seen: SeenMap, onScreenKey: string | nu
   const states = new Set(tasks.map((task) => taskState(task, seen, onScreenKey)));
   return {
     latest,
-    unread: tasks.some((task) => task.key !== onScreenKey && isUnread(task, seen)),
+    unread: tasks.some((task) => task.key !== onScreenKey && isUnread(task, unreadSeen)),
     // Failed and blocked share a place; failed is named first.
     state: URGENCY.find((state) => states.has(state)) ?? null,
   };
@@ -70,6 +89,8 @@ export const STATE_WORDS: Record<RunState, string> = {
   blocked: "blocked",
   "done-with-failures": "done with failures",
   working: "working",
+  stopped: "stopped",
+  queued: "queued",
 };
 
 /**
@@ -94,13 +115,21 @@ export function botLabel(
 }
 
 /** The rows under an unfolded bot: the first six, always including the current task. */
-export function visibleTasks(tasks: Task[], currentKey: string | null, showAll: boolean): Task[] {
-  if (showAll || tasks.length <= TASK_CAP) return tasks;
-  const top = tasks.slice(0, TASK_CAP);
+export function visibleTasks(
+  tasks: Task[],
+  currentKey: string | null,
+  showAll: boolean,
+  cap: number = TASK_CAP,
+): Task[] {
+  if (showAll || tasks.length <= cap) return tasks;
+  const top = tasks.slice(0, cap);
   const current = tasks.find((task) => task.key === currentKey);
-  if (current && !top.includes(current)) top[TASK_CAP - 1] = current;
+  if (current && !top.includes(current)) top[cap - 1] = current;
   return top;
 }
+
+/** Rows shown under an unfolded bot in one pane, so the rest of the list stays in view. */
+export const TASK_CAP_ONE_PANE = 3;
 
 function readJson<T extends object>(key: string): T {
   try {
@@ -119,13 +148,25 @@ const SEEN_KEY = "seen";
  * are unfolded. A bot with several tasks unfolds while it is open, unless it was
  * folded by hand; a bot unfolded by hand stays unfolded until it is folded.
  */
-export function useSelection(state: ClawtrateState) {
+/** No local reads: unread is the gateway's alone. */
+const NOTHING_SEEN: SeenMap = Object.freeze({}) as SeenMap;
+
+/**
+ * `gatewayOwnsUnread`: the connection writes, so reading a task is a change the
+ * gateway accepts or refuses. Then the dot and the badge are what the gateway
+ * reports (`unreadSeen` is empty) and nothing this viewer does locally clears
+ * them; a read-only connection, whose reads the gateway never hears, keeps its
+ * own memory of what it read.
+ */
+export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
   const [botId, setBotId] = useState<string | null>(() => readPreference("bot"));
   const [taskByBot, setTaskByBot] = useState<Record<string, string>>(() => readJson("tasks"));
   const [seen, setSeen] = useState<SeenMap>(() => readJson(SEEN_KEY));
   const [held, setHeld] = useState<Set<string>>(() => readIdSet("unfolded"));
   const [openFolded, setOpenFolded] = useState(() => readPreference("folded") === "true");
   const [showAll, setShowAll] = useState<Set<string>>(() => new Set());
+  /** Tasks marked unread while open: leaving them does not mark them read again. */
+  const [keptUnread, setKeptUnread] = useState<Set<string>>(() => new Set());
 
   const bot = state.bots.find((b) => b.id === botId) ?? state.bots[0];
   const tasks = useMemo(
@@ -138,13 +179,54 @@ export function useSelection(state: ClawtrateState) {
   // Leaving a task marks it read as of its latest activity, so its dot only
   // returns for activity that happens after this viewer saw it.
   const markRead = useCallback(() => {
-    if (!task) return;
+    if (!task || keptUnread.has(task.key)) return;
     setSeen((current) => {
       const next = markSeen(current, task);
       if (next !== current) writePreference(SEEN_KEY, JSON.stringify(next));
       return next;
     });
-  }, [task]);
+  }, [task, keptUnread]);
+
+  /**
+   * A read the gateway refused or that failed: this viewer forgets having read
+   * the task, so the rail and the badge show what the gateway reports.
+   */
+  const forgetReadHere = useCallback((key: string) => {
+    setSeen((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      writePreference(SEEN_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  /**
+   * "Mark as unread": this viewer forgets having read the task, so the
+   * gateway's unread decides, and leaving it open does not read it again.
+   */
+  const markUnreadHere = useCallback(
+    (key: string) => {
+      forgetReadHere(key);
+      setKeptUnread((current) => new Set(current).add(key));
+    },
+    [forgetReadHere],
+  );
+
+  /** "Mark as read": as if this viewer had just read it. */
+  const markReadHere = useCallback((target: Task) => {
+    setKeptUnread((current) => {
+      if (!current.has(target.key)) return current;
+      const next = new Set(current);
+      next.delete(target.key);
+      return next;
+    });
+    setSeen((current) => {
+      const next = markSeen(current, target);
+      if (next !== current) writePreference(SEEN_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   const setFolded = useCallback((folded: boolean) => {
     setOpenFolded(folded);
@@ -175,8 +257,19 @@ export function useSelection(state: ClawtrateState) {
   /** Open a task under any bot: one operation for the bot, the task and what is read. */
   const selectTask = useCallback(
     (id: string, key: string) => {
-      if (id === bot?.id && key === task?.key) return;
-      markRead();
+      // The task shown may be only the bot's newest, nothing chosen: choosing it remembers it,
+      // so a newer task of the bot does not take its place.
+      if (id === bot?.id && key === remembered) return;
+      if (id !== bot?.id || key !== task?.key) {
+        markRead();
+        // Opening a task kept unread reads it again from now on.
+        setKeptUnread((current) => {
+          if (!current.has(key)) return current;
+          const next = new Set(current);
+          next.delete(key);
+          return next;
+        });
+      }
       if (id !== bot?.id) {
         setBotId(id);
         writePreference("bot", id);
@@ -188,7 +281,7 @@ export function useSelection(state: ClawtrateState) {
         return next;
       });
     },
-    [bot, task, markRead, setFolded],
+    [bot, task, remembered, markRead, setFolded],
   );
 
   const isOpen = useCallback(
@@ -225,6 +318,15 @@ export function useSelection(state: ClawtrateState) {
     [updateHeld, state.tasksByBot, bot, setFolded],
   );
 
+  /** Unfold a bot by hand, as Right does: a bot whose new second task was just created. */
+  const unfold = useCallback(
+    (id: string) => {
+      updateHeld((ids) => ids.add(id));
+      if (id === bot?.id) setFolded(false);
+    },
+    [updateHeld, bot, setFolded],
+  );
+
   /** Forget that these bots were unfolded by hand. */
   const release = useCallback(
     (ids: string[]) => updateHeld((held) => ids.forEach((id) => held.delete(id))),
@@ -253,6 +355,7 @@ export function useSelection(state: ClawtrateState) {
     tasks,
     task,
     seen,
+    unreadSeen: gatewayOwnsUnread ? NOTHING_SEEN : seen,
     showAll,
     isOpen,
     selectBot,
@@ -262,6 +365,11 @@ export function useSelection(state: ClawtrateState) {
     unfoldOnly,
     release,
     taskFor,
+    unfold,
+    keptUnread,
+    markUnreadHere,
+    markReadHere,
+    forgetReadHere,
   };
 }
 

@@ -126,12 +126,27 @@ export function plainPreview(text: string | null): string | null {
 }
 
 function taskStatus(row: RawRecord): TaskStatus {
-  if (row.hasActiveRun === true) return "running";
   const status = str(row.status);
-  if (status === "running" || status === "queued") return "running";
-  if (status === "failed" || status === "error" || str(row.lastRunError)) return "failed";
+  if (status === "running") return "running";
+  if (status === "queued") return row.hasActiveRun === true ? "running" : "queued";
+  if (row.hasActiveRun === true) return "running";
+  if (status === "failed" || status === "error" || status === "timeout" || str(row.lastRunError))
+    return "failed";
+  if (status === "interrupted" || status === "killed") return "stopped";
   if (status === "done") return "done";
   return "idle";
+}
+
+/**
+ * A title for a row that names none: a bot's main task is "Main", and a task
+ * made empty from the rail ("New task", `agent:<bot>:dashboard:<id>`) is
+ * "New task" until it is renamed or its first message gives it a title.
+ */
+function fallbackTitle(key: string): string {
+  const rest = key.split(":").slice(2).join(":") || key;
+  if (rest === "main") return "Main";
+  if (/^dashboard:[0-9a-f-]{8,}$/i.test(rest)) return "New task";
+  return rest;
 }
 
 /**
@@ -163,16 +178,20 @@ export function mapSessionRow(row: RawRecord): Task | null {
   if (!key || !isTaskSession(row)) return null;
   const botId = str(row.agentId) ?? botIdFromSessionKey(key);
   if (!botId) return null;
-  const suffix = key.split(":").slice(2).join(":") || key;
   return {
     key,
     botId,
     sessionId: str(row.sessionId),
-    title: str(row.label) ?? str(row.derivedTitle) ?? str(row.displayName) ?? suffix,
+    title: str(row.label) ?? str(row.derivedTitle) ?? str(row.displayName) ?? fallbackTitle(key),
     preview: plainPreview(str(row.lastMessagePreview)),
     updatedAt: num(row.updatedAt) ?? num(row.lastActivityAt) ?? num(row.createdAt),
     status: taskStatus(row),
     unread: row.unread === true,
+    ...((typeof row.isMain === "boolean" ? row.isMain : /^agent:[^:]+:main$/.test(key))
+      ? { isMain: true }
+      : {}),
+    ...(row.pinned === true ? { pinned: true } : {}),
+    ...(row.markedUnreadAt !== undefined ? { unreadMarker: num(row.markedUnreadAt) } : {}),
     ...contextOf(row),
     ...(str(row.thinkingLevel) ? { effort: str(row.thinkingLevel)! } : {}),
   };
@@ -198,7 +217,7 @@ export function sessionRowsFromList(result: unknown): RawRecord[] {
   });
 }
 
-/** Group tasks under their bot, newest first. */
+/** Group tasks under their bot: pinned first, then newest first. */
 export function groupTasks(rows: Iterable<RawRecord>): Record<string, Task[]> {
   const grouped: Record<string, Task[]> = {};
   for (const row of rows) {
@@ -207,7 +226,12 @@ export function groupTasks(rows: Iterable<RawRecord>): Record<string, Task[]> {
     (grouped[task.botId] ??= []).push(task);
   }
   for (const tasks of Object.values(grouped)) {
-    tasks.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.key.localeCompare(b.key));
+    tasks.sort(
+      (a, b) =>
+        Number(b.pinned === true) - Number(a.pinned === true) ||
+        (b.updatedAt ?? 0) - (a.updatedAt ?? 0) ||
+        a.key.localeCompare(b.key),
+    );
   }
   return grouped;
 }

@@ -196,6 +196,33 @@ import {
 } from "./state-bounds.ts";
 import { createStore, type Store } from "./store.ts";
 import {
+  changeSidebar,
+  initialSidebar,
+  readSidebar,
+  sidebarRev,
+  SIDEBAR_PREF_KEY,
+  type SidebarChange,
+  type SidebarContext,
+  type SidebarPrefs,
+  type SidebarState,
+} from "./sidebar.ts";
+import {
+  archiveTask,
+  deleteTask,
+  listArchived,
+  markTask,
+  newMainTask,
+  newTask,
+  pinTask,
+  renameTask,
+  restoreTask,
+  type ArchivedList,
+  type ArchiveResult,
+  type CreatedTask,
+  type TaskActionContext,
+} from "./task-actions.ts";
+import { fromActivity, WaitingIndex } from "./waiting.ts";
+import {
   initialConnectionState,
   initialScopeUpgrade,
   initialState,
@@ -260,6 +287,8 @@ export const MAX_OUTBOX_PER_TASK = MAX_OUTBOX;
 export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 /** Operations waiting for access at once; past it a new one is refused. */
 export const MAX_ACCESS_WAITERS = 128;
+/** Reads on opening a task on their way at once; past it, one more waits for the next opening. */
+export const MAX_OPENED_READS = 16;
 /**
  * Approval outcomes the gateway reported, kept by id apart from the visible
  * cards so a request or list entry that arrives after its resolution can never
@@ -647,6 +676,13 @@ export class ClawtrateClient {
    */
   private gatewayBootId: string | null = null;
   private rows = new Map<string, RawRecord>();
+  /** Which tasks wait for the person, across every bot (`waiting.ts`), for the rail. */
+  private readonly waiting = new WaitingIndex();
+  /** Tasks whose read on opening is on its way: one per task at a time, however often it is asked. */
+  private readonly openedReads = new Set<string>();
+  /** Reads and writes of the rail's arrangement in the order they were asked, and the latest shown. */
+  private sidebarIssued = 0;
+  private sidebarShown = 0;
   /** Open transcripts, counted, so several viewers can share one. */
   private readonly openSessions = new Map<string, number>();
   /** The streaming reply text of each task's newest `MAX_STREAMS_PER_TASK` runs, only while they stream. */
@@ -982,6 +1018,7 @@ export class ClawtrateClient {
       delete transcripts[key];
       return { ...state, transcripts };
     });
+    if (this.waiting.unhold(key)) this.publishTasks();
   }
 
   /**
@@ -2139,7 +2176,12 @@ export class ClawtrateClient {
     }
   }
 
-  /** `chat.abort` for one run the gateway has named, its exact id. */
+  /**
+   * `chat.abort` for one run the gateway has named, its exact id. Only the gateway's refusal
+   * gives the Stop up. An abort that was not sent, or whose answer the connection lost, leaves
+   * the run stopping: once the connection is back, the run is aborted again if it still is, as
+   * many times as the connection drops, until the gateway answers or the run's end arrives.
+   */
   private async abortRun(key: string, runId: string): Promise<void> {
     try {
       const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
@@ -2147,7 +2189,22 @@ export class ClawtrateClient {
       if (result?.aborted === false) this.scheduleHistory(key);
     } catch (error) {
       this.noteMissingScope(error);
-      this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(error)));
+      if (error instanceof GatewayProtocolRequestError) {
+        this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(error)));
+        return;
+      }
+      // Let the connection's own handling of a drop run first, so a lost connection is seen as one.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      // A client that was stopped sends nothing more.
+      if (!this.protocol) return;
+      try {
+        await this.ensureScope(WRITE_SCOPE);
+      } catch (waiting) {
+        this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(waiting)));
+        return;
+      }
+      const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
+      if (run?.state === "stopping" && run.bound) await this.abortRun(key, runId);
     }
   }
 
@@ -2983,6 +3040,54 @@ export class ClawtrateClient {
     const current = this.state.transcripts[key];
     if (!current || current.workspaceRoot === workspaceRoot) return;
     this.setTranscript(key, () => ({ ...this.state.transcripts[key]!, workspaceRoot }));
+  }
+
+  /**
+   * A recipient run a task's sends name that this client follows nowhere: its task was let go
+   * while the sender's was not open, or it was never seen. The recipient's own history says
+   * where it stands (in flight, or ended as its rows show), and from then on it is followed as
+   * a session nobody has open, so the sender's card shows what the gateway established and
+   * keeps up with it, rather than reading Sent. One read per recipient session, after each of
+   * the sender's history reads, for the newest `MAX_LINKED_RUNS` recipients.
+   */
+  private async readRecipients(key: string, generation: number): Promise<void> {
+    const transcript = this.state.transcripts[key];
+    if (!transcript) return;
+    const rawOf = (step: Run["steps"][number]) => step.raw ?? this.raw.get(key, step.id);
+    const missing = new Map<string, Set<string>>();
+    for (const link of recipientLinks(transcript.runs, rawOf).slice(-MAX_LINKED_RUNS)) {
+      if (!link.runId || !link.sessionKey) continue;
+      const runId = capId(link.runId, MAX_ID_CHARS);
+      const sessionKey = capId(link.sessionKey, MAX_ID_CHARS);
+      if (transcript.linkedRuns[runId] || this.tracked(sessionKey)) continue;
+      if (this.foreign.get(sessionKey)?.runs.some((run) => run.id === runId)) continue;
+      missing.set(sessionKey, (missing.get(sessionKey) ?? new Set()).add(runId));
+    }
+    for (const [sessionKey, ids] of missing) {
+      let history: RawRecord | null;
+      try {
+        history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
+      } catch {
+        continue;
+      }
+      if (generation !== this.generation || !this.tracked(key) || this.tracked(sessionKey)) return;
+      const aliases = Object.fromEntries(historyQueuePairs(history?.messages));
+      const { messages, inFlight } = throughRunAliases(
+        history?.messages,
+        asRecord(history?.inFlightRun),
+        aliases,
+      );
+      const found = runsFromHistory(messages, inFlight, {
+        sessionKey,
+        now: this.now(),
+        raw: this.foreignRaw,
+      }).filter((run) => ids.has(run.id));
+      if (found.length === 0) continue;
+      this.updateForeign(sessionKey, (activity) => ({
+        ...activity,
+        runs: [...activity.runs.filter((run) => !ids.has(run.id)), ...found],
+      }));
+    }
   }
 
   /** Copy the state of every recipient run a task's `sessions_send` results name, where it is known. */
@@ -4071,6 +4176,7 @@ export class ClawtrateClient {
     }
     this.creationWaiters.clear();
     this.approvalOutcomes.clear();
+    this.waiting.clear();
     this.unrouted.clear();
     this.recipients.clear();
     this.spawnedBy.clear();
@@ -4317,6 +4423,9 @@ export class ClawtrateClient {
     for (const key of Object.keys(this.state.transcripts)) {
       if (this.tracked(key)) void this.loadTranscript(key, true, resync);
     }
+    void this.loadSidebar(generation);
+    void this.loadWaitingQuestions(generation);
+    void this.loadWaitingApprovals(generation);
 
     if (failures.length > 0) {
       this.log("error", `discovery failed: ${failures.join("; ")}`);
@@ -4374,6 +4483,29 @@ export class ClawtrateClient {
 
   private publishTasks(): void {
     const tasksByBot = groupTasks(this.rows.values());
+    // What waits for the person, and whose latest run was stopped (`waiting.ts`): a task the
+    // engine follows by its runs, any other by the gateway's events.
+    for (const tasks of Object.values(tasksByBot)) {
+      for (const [index, task] of tasks.entries()) {
+        // A row with no active run ends what waited before it; a newer marker stays.
+        if (task.status !== "running") this.waiting.settle(task.key, task.updatedAt);
+        const waiting = this.waiting.waitingFor(task.key);
+        if (waiting) {
+          tasks[index] = {
+            ...task,
+            status: "waiting",
+            waitingFor: waiting.kind,
+            waitingSince: waiting.since,
+          };
+        } else if (
+          (task.status === "idle" || task.status === "done") &&
+          this.waiting.stoppedAt(task.key) !== null
+        ) {
+          // A run stopped with `chat.abort` leaves the row no status: its runs or its end said so.
+          tasks[index] = { ...task, status: "stopped" };
+        }
+      }
+    }
     this.store.update((state) => ({ ...state, tasksByBot }));
   }
 
@@ -4488,9 +4620,10 @@ export class ClawtrateClient {
     const empty = this.emptyTranscript(key);
     // Only a run known to wait on a question is carried; history rebuilds every other run.
     const waiting = known ? runsWithQuestionMarkers(known) : [];
-    if (waiting.length === 0) return empty;
-    // The task holds them now, so they are not kept twice.
+    // The task holds them now: none is kept twice, and no copy left here goes stale while the
+    // task's own events update the task. Letting the task go keeps what another task links to.
     this.foreign.delete(sessionKey);
+    if (waiting.length === 0) return empty;
     return { ...empty, runs: waiting };
   }
 
@@ -4515,6 +4648,9 @@ export class ClawtrateClient {
       ...state,
       transcripts: { ...state.transcripts, [key]: fn(state.transcripts[key]) },
     }));
+    // The rail describes a task the engine follows by the same runs the conversation shows.
+    const transcript = this.state.transcripts[key];
+    if (transcript && this.waiting.hold(key, fromActivity(transcript))) this.publishTasks();
   }
 
   /**
@@ -4598,10 +4734,10 @@ export class ClawtrateClient {
       if (stale()) return;
       // A resync starts every stream of this task again from what the gateway sends next.
       if (resync) this.streams.retire(key);
-      // A queued turn's two ids, as history pairs them: kept, so a pairing frame missed in a
-      // gap still makes one run, and later frames under either id update that run.
-      const shown = new Set((this.state.transcripts[key]?.runs ?? []).map((run) => run.id));
-      const pairs = historyQueuePairs(history?.messages, shown);
+      // A queued turn's two ids, as history pairs them, whatever this client holds: kept, so a
+      // pairing frame missed in a gap, or a transcript built from history alone, still makes
+      // one run, and later frames under either id update that run.
+      const pairs = historyQueuePairs(history?.messages);
       if (pairs.length > 0) {
         this.updateActivity(key, (activity) =>
           pairs.reduce(
@@ -4682,11 +4818,8 @@ export class ClawtrateClient {
       this.afterActivity(key);
       // A run settled from history may be a recipient another open task's card follows.
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
-      for (const run of toStop) {
-        this.request("chat.abort", { sessionKey: key, runId: run.id }).catch((error: unknown) =>
-          this.noteMissingScope(error),
-        );
-      }
+      for (const run of toStop) void this.abortRun(key, run.id);
+      void this.readRecipients(key, generation);
       void this.backfillQuestions(key, generation);
       void this.backfillApprovals(key, generation);
       void this.readToolMap(key, generation);
@@ -4791,11 +4924,21 @@ export class ClawtrateClient {
       case "chat":
         this.handleChat(event);
         return;
-      case "agent":
+      case "agent": {
+        const payload = asRecord(event.payload);
+        if (payload && this.waiting.onAgent(payload, this.now())) this.publishTasks();
         this.handleAgent(event);
         return;
+      }
+      case "users.prefs.changed": {
+        const keys = asRecord(event.payload)?.keys;
+        if (Array.isArray(keys) && keys.includes(SIDEBAR_PREF_KEY))
+          void this.loadSidebar(this.generation);
+        return;
+      }
       case "question.requested": {
         const record = asRecord(event.payload);
+        if (record && this.waiting.onQuestionRequested(record, this.now())) this.publishTasks();
         const key = typeof record?.sessionKey === "string" ? record.sessionKey : null;
         if (record && key && this.tracked(key)) {
           this.updateActivity(key, (activity, ctx) =>
@@ -4836,6 +4979,7 @@ export class ClawtrateClient {
               ? "plugin"
               : "system-agent";
         const resolution = parseApprovalResolved(event.payload, kind);
+        if (resolution && this.waiting.onApprovalResolved(resolution.id)) this.publishTasks();
         // Kept even when no card has arrived yet: its request or list entry may come later.
         if (resolution) this.noteApprovalOutcome(resolution);
         return;
@@ -4844,6 +4988,7 @@ export class ClawtrateClient {
         const payload = asRecord(event.payload);
         const id = payload?.id;
         if (!payload || typeof id !== "string") return;
+        if (this.waiting.onQuestionResolved(id)) this.publishTasks();
         for (const [key, activity] of [...this.foreign.entries()]) {
           if (activity.runs.some((run) => run.pendingCards.some((card) => card.id === id)))
             this.updateForeign(key, (each) => foreignQuestionResolved(each, payload));
@@ -4867,6 +5012,229 @@ export class ClawtrateClient {
       }
       default:
         return;
+    }
+  }
+
+  // Managing tasks and the rail's arrangement (`task-actions.ts`, `sidebar.ts`) --------
+
+  /**
+   * The context the rail's actions run in: the gateway, and the write tier,
+   * asked for through the same request as sending (`ensureScope`) only when an
+   * action needs it, by the viewer that started it.
+   */
+  private actionContext(owner: object | null): TaskActionContext & SidebarContext {
+    const generation = this.generation;
+    return {
+      request: async (method, params) => {
+        this.checkNotWithdrawn(owner);
+        if (generation !== this.generation) throw new Error("Switched to another gateway.");
+        try {
+          return await this.request(method, params);
+        } catch (error) {
+          this.noteMissingScope(error);
+          throw error;
+        }
+      },
+      ensureWrite: async () => {
+        if (this.options.readOnly)
+          throw new Error("This host only reads; it does not change tasks.");
+        await this.ensureScope(WRITE_SCOPE, owner);
+        this.checkNotWithdrawn(owner);
+      },
+      now: () => this.now(),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      stopMark: (key) => this.waiting.stopMark(key),
+      stopRuns: async (key) => {
+        const runs = this.state.transcripts[key]?.runs ?? [];
+        await Promise.all(
+          runs
+            .filter((run) => run.state === "running" || run.state === "waiting")
+            .map((run) => this.stopRun(key, run.id, owner ? { owner } : {})),
+        );
+        return (this.state.transcripts[key]?.runs ?? []).filter((run) => isActive(run.state))
+          .length;
+      },
+      runsActive: (key) =>
+        (this.state.transcripts[key]?.runs ?? []).some((run) => isActive(run.state)),
+      runMark: (key) => {
+        const row = this.rows.get(capId(key, MAX_ID_CHARS));
+        const active = row?.hasActiveRun === true || row?.status === "running";
+        return `${this.waiting.latestRunId(key) ?? ""}\u0000${active ? "active" : "idle"}`;
+      },
+    };
+  }
+
+  /** A task the gateway just created, listed at once from its answer until `sessions.changed` brings its row. */
+  private listCreated(created: CreatedTask): string {
+    const key = capId(created.key, MAX_ID_CHARS);
+    if (!this.rows.has(key) && isTaskSession(created.row)) {
+      // Within the same bound as a list read: the newest `MAX_LISTED_TASKS`, the oldest giving way.
+      this.rows = newestRows([...this.rows.values(), created.row]);
+      this.publishTasks();
+    }
+    return created.key;
+  }
+
+  /** A new, empty task under a bot (F-054). Answers its key, already in the task list. */
+  async newTask(
+    botId: string,
+    options: { label?: string | null; owner?: object } = {},
+  ): Promise<string> {
+    const ctx = this.actionContext(options.owner ?? null);
+    return this.listCreated(await newTask(ctx, botId, options.label ?? null));
+  }
+
+  /** A bot's replacement first task, "Main", after its last unarchived task went (F-424). */
+  async newMainTask(botId: string, options: { owner?: object } = {}): Promise<string> {
+    return this.listCreated(await newMainTask(this.actionContext(options.owner ?? null), botId));
+  }
+
+  async renameTask(key: string, label: string, options: { owner?: object } = {}): Promise<void> {
+    await renameTask(this.actionContext(options.owner ?? null), key, label);
+  }
+
+  async pinTask(key: string, pinned: boolean, options: { owner?: object } = {}): Promise<void> {
+    await pinTask(this.actionContext(options.owner ?? null), key, pinned);
+  }
+
+  /**
+   * Mark a task unread or read. `opened` is a read the person did not ask for
+   * (opening the task): it names the unread marker it saw, and is made only
+   * while the connection already writes, never asking for access.
+   */
+  async markTask(
+    key: string,
+    unread: boolean,
+    options: { owner?: object; opened?: boolean } = {},
+  ): Promise<void> {
+    if (options.opened) {
+      if (!this.holds(WRITE_SCOPE) || this.options.readOnly) return;
+      const id = capId(key, MAX_ID_CHARS);
+      const row = this.rows.get(id);
+      if (!row || row.unread !== true || this.openedReads.has(id)) return;
+      if (this.openedReads.size >= MAX_OPENED_READS) return;
+      const marker = typeof row.markedUnreadAt === "number" ? row.markedUnreadAt : null;
+      this.openedReads.add(id);
+      try {
+        await markTask(this.actionContext(options.owner ?? null), key, false, marker);
+      } finally {
+        this.openedReads.delete(id);
+      }
+      return;
+    }
+    await markTask(this.actionContext(options.owner ?? null), key, unread);
+  }
+
+  async archiveTask(
+    key: string,
+    options: { stop?: boolean; owner?: object } = {},
+  ): Promise<ArchiveResult> {
+    return archiveTask(this.actionContext(options.owner ?? null), key, {
+      stop: options.stop === true,
+    });
+  }
+
+  async restoreTask(key: string, options: { owner?: object } = {}): Promise<void> {
+    await restoreTask(this.actionContext(options.owner ?? null), key);
+  }
+
+  async deleteTask(key: string, options: { owner?: object } = {}): Promise<void> {
+    await deleteTask(this.actionContext(options.owner ?? null), key);
+  }
+
+  /** A bot's archived tasks, read now and not kept (`operator.read`). */
+  async listArchived(botId: string): Promise<ArchivedList> {
+    if (this.state.connection.status !== "connected")
+      throw new Error("Not connected to the gateway.");
+    return listArchived(this.actionContext(null), botId);
+  }
+
+  /** Change the rail's arrangement on the gateway; `base` is this device's, for the first change. */
+  async changeSidebar(
+    change: SidebarChange,
+    base: SidebarPrefs | null,
+    options: { owner?: object } = {},
+  ): Promise<void> {
+    const generation = this.generation;
+    // Asked now: a read asked after this write began outranks its answer when they tie.
+    const issued = ++this.sidebarIssued;
+    const next = await changeSidebar(this.actionContext(options.owner ?? null), change, base);
+    // Shown only if nothing newer, by the arrangement's own revision, is shown already.
+    if (generation === this.generation) this.setSidebar(next, issued);
+  }
+
+  /**
+   * Show an arrangement unless a newer one is shown: answers are ordered by the revision the
+   * gateway holds with the arrangement (`SidebarPrefs.rev`), never by when they arrive, so a
+   * late read or an old write's acknowledgement never hides another device's later change.
+   */
+  private setSidebar(sidebar: SidebarState, issued: number): void {
+    const shown = this.state.sidebar;
+    if (sidebar.status === "ok" && shown?.status === "ok") {
+      const next = sidebarRev(sidebar.prefs);
+      const now = sidebarRev(shown.prefs);
+      // A tie (the same revision, or values with none) goes to what was asked last.
+      if (next < now || (next === now && issued < this.sidebarShown)) return;
+    }
+    this.sidebarShown = Math.max(this.sidebarShown, issued);
+    this.store.update((state) => ({ ...state, sidebar }));
+  }
+
+  /** Read the arrangement the gateway keeps; on any failure the rail keeps its own. */
+  private async loadSidebar(generation: number): Promise<void> {
+    const issued = ++this.sidebarIssued;
+    try {
+      const sidebar = await readSidebar(this.actionContext(null));
+      if (generation === this.generation) this.setSidebar(sidebar, issued);
+    } catch (error) {
+      this.log("warn", `users.prefs.get failed: ${errorMessage(error)}`);
+      if (generation === this.generation && this.state.sidebar?.status !== "ok")
+        this.setSidebar({ ...initialSidebar, status: "unavailable" }, issued);
+    }
+  }
+
+  /**
+   * The approvals pending at a connect, for the rail's waiting state (needs
+   * `operator.approvals`). The gateway lists a pending approval only to the
+   * device whose run asked for it (and to admin), so this restores this device's
+   * own; another device learns of one only from the run's live lifecycle.
+   */
+  private async loadWaitingApprovals(generation: number): Promise<void> {
+    if (!this.holds(APPROVALS_SCOPE)) return;
+    let changed = false;
+    for (const source of APPROVAL_SOURCES) {
+      try {
+        const value = await this.request(source.method, {});
+        if (generation !== this.generation) return;
+        const record = asRecord(value);
+        const items = Array.isArray(value)
+          ? value
+          : Array.isArray(record?.approvals)
+            ? record.approvals
+            : [];
+        for (const item of items) {
+          const card = source.parse(item);
+          if (card?.status === "pending")
+            changed = this.waiting.restoreApproval(card, this.now()) || changed;
+        }
+      } catch (error) {
+        this.log("warn", `${source.method} failed: ${errorMessage(error)}`);
+      }
+    }
+    if (changed) this.publishTasks();
+  }
+
+  /** The questions pending at a connect, for the rail's waiting state (needs `operator.questions`). */
+  private async loadWaitingQuestions(generation: number): Promise<void> {
+    if (!this.holds(QUESTIONS_SCOPE)) return;
+    try {
+      const listed = asRecord(await this.request("question.list", {}));
+      if (generation !== this.generation) return;
+      const questions = Array.isArray(listed?.questions) ? listed.questions : [];
+      this.waiting.replaceQuestions(questions, this.now());
+      this.publishTasks();
+    } catch (error) {
+      this.log("warn", `question.list failed: ${errorMessage(error)}`);
     }
   }
 
