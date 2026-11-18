@@ -131,7 +131,11 @@ export function applySidebarChange(prefs: SidebarPrefs, change: SidebarChange): 
   const without = (list: string[], id: string) => list.filter((other) => other !== id);
   switch (change.op) {
     case "pin":
-      if (change.pinned && !prefs.pins.includes(change.botId) && prefs.pins.length >= MAX_SIDEBAR_BOTS)
+      if (
+        change.pinned &&
+        !prefs.pins.includes(change.botId) &&
+        prefs.pins.length >= MAX_SIDEBAR_BOTS
+      )
         throw new SidebarFullError(`At most ${MAX_SIDEBAR_BOTS} bots can be pinned.`);
       return parseSidebar({
         ...prefs,

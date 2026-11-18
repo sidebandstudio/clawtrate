@@ -4032,6 +4032,7 @@ export class ClawtrateClient {
     }
     void this.loadSidebar(generation);
     void this.loadWaitingQuestions(generation);
+    void this.loadWaitingApprovals(generation);
 
     if (failures.length > 0) {
       this.log("error", `discovery failed: ${failures.join("; ")}`);
@@ -4700,6 +4701,37 @@ export class ClawtrateClient {
       if (generation === this.generation && this.state.sidebar?.status !== "ok")
         this.setSidebar({ ...initialSidebar, status: "unavailable" }, issued);
     }
+  }
+
+  /**
+   * The approvals pending at a connect, for the rail's waiting state (needs
+   * `operator.approvals`). The gateway lists a pending approval only to the
+   * device whose run asked for it (and to admin), so this restores this device's
+   * own; another device learns of one only from the run's live lifecycle.
+   */
+  private async loadWaitingApprovals(generation: number): Promise<void> {
+    if (!this.holds(APPROVALS_SCOPE)) return;
+    let changed = false;
+    for (const source of APPROVAL_SOURCES) {
+      try {
+        const value = await this.request(source.method, {});
+        if (generation !== this.generation) return;
+        const record = asRecord(value);
+        const items = Array.isArray(value)
+          ? value
+          : Array.isArray(record?.approvals)
+            ? record.approvals
+            : [];
+        for (const item of items) {
+          const card = source.parse(item);
+          if (card?.status === "pending")
+            changed = this.waiting.restoreApproval(card, this.now()) || changed;
+        }
+      } catch (error) {
+        this.log("warn", `${source.method} failed: ${errorMessage(error)}`);
+      }
+    }
+    if (changed) this.publishTasks();
   }
 
   /** The questions pending at a connect, for the rail's waiting state (needs `operator.questions`). */

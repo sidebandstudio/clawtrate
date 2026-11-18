@@ -198,6 +198,26 @@ export class WaitingIndex {
     return changed;
   }
 
+  /** A pending approval from the gateway's lists at a connect: its task waits, since it was asked. */
+  restoreApproval(
+    approval: {
+      sessionKey: string | null;
+      id: string;
+      runId: string | null;
+      createdAt: number | null;
+    },
+    at: number,
+  ): boolean {
+    const key = str(approval.sessionKey);
+    const id = str(approval.id);
+    if (!key || !id) return false;
+    return this.add(key, `approval:${id}`, {
+      kind: "approval",
+      runId: str(approval.runId),
+      since: approval.createdAt ?? at,
+    });
+  }
+
   /** An approval's own `*.approval.resolved`, by id, wherever it was kept. */
   onApprovalResolved(id: unknown): boolean {
     const approval = str(id);

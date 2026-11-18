@@ -194,7 +194,7 @@ describe("the rail's actions through the client", () => {
     await client.changeSidebar({ op: "pin", botId: "pip", pinned: true }, null);
     expect(client.state.sidebar?.prefs?.pins).toEqual(["pip"]);
     pending();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(() => resolve(undefined), 50));
     expect(client.state.sidebar?.prefs?.pins).toEqual(["pip"]);
     client.stop();
   });
@@ -221,6 +221,44 @@ describe("the rail's actions through the client", () => {
       stream: "lifecycle",
       data: { phase: "approval-resolved" },
     });
+    await until(() => client.state.tasksByBot.pip?.[0]?.status === "running");
+    client.stop();
+  });
+
+  it("F-021: a device that connects while its own run waits for an approval sees the task waiting", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["agents.list"] = () => ({ defaultId: "pip", agents: [{ id: "pip" }] });
+    const row = { key: "agent:pip:main", agentId: "pip", hasActiveRun: true, updatedAt: 10 };
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: [row], hasMore: false },
+    });
+    gateway.handlers["users.prefs.get"] = () => ({ status: "no_durable_identity" });
+    gateway.handlers["exec.approval.list"] = () => [
+      {
+        id: "a1",
+        request: { command: "ls", sessionKey: "agent:pip:main", runId: "r1" },
+        createdAtMs: 20,
+        expiresAtMs: 9_999_999_999_999,
+      },
+    ];
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: INTERACTIVE_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+      }),
+    });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.tasksByBot.pip?.[0]?.status === "waiting");
+    expect(client.state.tasksByBot.pip![0]).toMatchObject({
+      waitingFor: "approval",
+      waitingSince: 20,
+    });
+    // Resolved on another device: the approval's own event clears it.
+    gateway.emit("exec.approval.resolved", { id: "a1", decision: "deny", ts: 30 });
     await until(() => client.state.tasksByBot.pip?.[0]?.status === "running");
     client.stop();
   });
