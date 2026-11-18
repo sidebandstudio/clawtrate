@@ -328,35 +328,71 @@ export function unaccountedRuns(): string[] {
 }
 
 /**
+ * Every task the running check submitted to or opened, recorded before the
+ * request goes out, so a failed check is drained even where no event of its
+ * run has arrived yet.
+ */
+const LEDGER = new Set<string>();
+
+/** Work a failed check left that draining could not stop: the next check does not start on it. */
+let leftBusy: { keys: string[]; reason: string } | null = null;
+
+/** The tasks bots message each other in: a failed check's recipient runs may still go on there. */
+const SHARED_SESSIONS = MESSAGING_PAIR.map((botId) => `agent:${botId}:main`);
+
+/**
  * Run one check: it fails if it fails, or if any run that appeared on any
  * client while it ran was left with its calls or its end unasserted, whether
- * or not the check made a view of it.
+ * or not the check made a view of it. On any failure the tasks it used (its
+ * ledger, every task that had a run event during it, and the bots' shared main
+ * tasks) are drained: their runs stopped and the gateway idle there. If that
+ * cannot be established, the next check fails at its start, saying so, rather
+ * than run on a busy instance.
  */
-export async function runCheck(h: Harness, check: ScenarioCheck): Promise<void> {
+export async function runCheck(
+  h: Harness,
+  check: ScenarioCheck,
+  options: { drainTimeoutMs?: number } = {},
+): Promise<void> {
+  if (leftBusy) {
+    const busy = leftBusy;
+    leftBusy = null;
+    if (!(await drain(h, busy.keys, options.drainTimeoutMs))) {
+      leftBusy = busy;
+      throw new CheckFailure(`not started: ${busy.reason}`);
+    }
+  }
   TRACKED.clear();
+  LEDGER.clear();
   const clients = (["plain", "approvals", "questions"] as const).map((name) => h.op(name));
   const before = clients.map((op) => op.lastSeq);
   try {
     await check.run(h);
-  } catch (error) {
-    // A failed check may leave runs going. They are stopped, and the gateway is idle in every
-    // task that had a run during the check, before the next check starts and counts events.
-    await drain(h, sessionsWithRuns(clients, before));
-    throw error;
-  }
-  await sleep(300);
-  for (const [i, op] of clients.entries()) {
-    for (const e of op.events) {
-      const p = rec(e.payload);
-      if (e.seq <= before[i]! || typeof p.runId !== "string") continue;
-      if (e.event !== "agent" && e.event !== "chat" && e.event !== "session.tool") continue;
-      if (!TRACKED.has(p.runId)) {
-        TRACKED.set(p.runId, { calls: false, end: false, sessionKey: String(p.sessionKey) });
+    await sleep(300);
+    for (const [i, op] of clients.entries()) {
+      for (const e of op.events) {
+        const p = rec(e.payload);
+        if (e.seq <= before[i]! || typeof p.runId !== "string") continue;
+        if (e.event !== "agent" && e.event !== "chat" && e.event !== "session.tool") continue;
+        if (!TRACKED.has(p.runId)) {
+          TRACKED.set(p.runId, { calls: false, end: false, sessionKey: String(p.sessionKey) });
+        }
       }
     }
+    const left = unaccountedRuns();
+    if (left.length > 0) throw new CheckFailure(left.join("; "));
+  } catch (error) {
+    const keys = [
+      ...new Set([...LEDGER, ...sessionsWithRuns(clients, before), ...SHARED_SESSIONS]),
+    ];
+    if (!(await drain(h, keys, options.drainTimeoutMs))) {
+      leftBusy = {
+        keys,
+        reason: `the check before it ("${check.name}") failed and the gateway still had work in ${keys.join(", ")}`,
+      };
+    }
+    throw error;
   }
-  const left = unaccountedRuns();
-  if (left.length > 0) throw new CheckFailure(left.join("; "));
 }
 
 /** The tasks that had any run event on the check's clients since `before`. */
@@ -372,27 +408,40 @@ function sessionsWithRuns(clients: OperatorSession[], before: number[]): Set<str
   return keys;
 }
 
-/** Stop whatever runs in these tasks and wait until the gateway has nothing in flight or waiting there. */
-export async function drain(h: Harness, keys: Iterable<string>): Promise<void> {
+/**
+ * Stop whatever runs in these tasks and wait until the gateway has nothing in
+ * flight or waiting there. Whether it got there: false when a task was still
+ * busy at the deadline.
+ */
+export async function drain(
+  h: Harness,
+  keys: Iterable<string>,
+  timeoutMs = 60_000,
+): Promise<boolean> {
   const op = h.op("plain");
+  const deadline = Date.now() + timeoutMs;
+  let idle = true;
   for (const key of keys) {
-    await op.request("chat.abort", { sessionKey: key }).catch(() => {});
-    const deadline = Date.now() + 60_000;
-    while (Date.now() < deadline) {
+    let clear = false;
+    while (!clear && Date.now() < deadline) {
+      await op.request("chat.abort", { sessionKey: key }).catch(() => {});
       const history = await op
         .request<{ inFlightRun?: unknown; pendingInputs?: { items?: unknown[] } }>("chat.history", {
           sessionKey: key,
           limit: 1,
         })
         .catch(() => null);
-      if (history && !history.inFlightRun && (history.pendingInputs?.items ?? []).length === 0)
-        break;
-      await op.request("chat.abort", { sessionKey: key }).catch(() => {});
-      await sleep(500);
+      clear =
+        history !== null &&
+        !history.inFlightRun &&
+        (history.pendingInputs?.items ?? []).length === 0;
+      if (!clear) await sleep(500);
     }
+    idle &&= clear;
   }
   // Late events of the stopped runs (a stopped tool's result) arrive just after.
   await sleep(500);
+  return idle;
 }
 
 /**
@@ -3413,6 +3462,7 @@ export function createHarness(
     async session(botId: string, tag: string) {
       counter += 1;
       const key = `agent:${botId}:check-${tag}-${stamp}-${counter}`;
+      LEDGER.add(key);
       for (const [name, op] of Object.entries(clients)) {
         // Approval rows in the subscription need operator.approvals.
         await op.request("sessions.messages.subscribe", {
@@ -3425,6 +3475,7 @@ export function createHarness(
     async start(client: ClientName, key: string, message: string, extra: JsonRecord = {}) {
       const op = clients[client];
       const from = op.lastSeq;
+      LEDGER.add(key);
       const sent = await op.send(key, message, extra);
       expect(
         typeof sent.runId === "string" && sent.runId,
@@ -3461,6 +3512,7 @@ export function createHarness(
       expect(ownerAgent, "this harness cannot start a run as the owner");
       const op = clients.plain;
       const from = op.lastSeq;
+      LEDGER.add(key);
       const done = ownerAgent(botId, key, message);
       const first = await op.waitFor(
         `the owner's run in ${key}`,

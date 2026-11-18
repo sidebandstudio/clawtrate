@@ -331,6 +331,8 @@ describe("a check cannot skip a run", () => {
     const op = {
       events: events.map((e, i) => ({ ...e, seq: i + 1, at: 0 })),
       lastSeq: 0,
+      // Nothing in flight: a failed check's drain finds every task idle.
+      request: async () => ({}),
     } as unknown as OperatorSession;
     return createHarness({ plain: op, approvals: op, questions: op });
   };
@@ -357,5 +359,113 @@ describe("a check cannot skip a run", () => {
         view.expectEnd("final", "");
       },
     });
+  });
+});
+
+describe("a failed check is drained before the next one starts", () => {
+  /** A client whose events and answers the test controls; `busy` says which tasks have work. */
+  const controlled = (busy: Set<string>) => {
+    const calls: Array<[string, unknown]> = [];
+    const op = {
+      events: [] as unknown[],
+      lastSeq: 0,
+      request: async (method: string, params: { sessionKey?: string }) => {
+        calls.push([method, params]);
+        if (method === "chat.abort") return { ok: true, aborted: false, runIds: [] };
+        if (method === "chat.history")
+          return busy.has(params.sessionKey ?? "") ? { inFlightRun: { runId: "late" } } : {};
+        return {};
+      },
+      send: async () => {
+        throw new Error("no answer");
+      },
+    } as unknown as OperatorSession;
+    return { h: createHarness({ plain: op, approvals: op, questions: op }), calls };
+  };
+
+  it("drains a task the check submitted to even when no event of its run arrived", async () => {
+    const busy = new Set<string>();
+    const { h, calls } = controlled(busy);
+    let key = "";
+    await expect(
+      runCheck(
+        h,
+        {
+          name: "send then fail",
+          covers: [],
+          run: async () => {
+            key = await h.session("main", "late-first-event");
+            await h.start("plain", key, "#text");
+          },
+        },
+        { drainTimeoutMs: 200 },
+      ),
+    ).rejects.toThrow(/no answer/);
+    expect(calls).toContainEqual(["chat.abort", { sessionKey: key }]);
+    expect(calls).toContainEqual(["chat.history", { sessionKey: key, limit: 1 }]);
+  });
+
+  it("does not start the next check while the failed one's work goes on, and says why", async () => {
+    const busy = new Set<string>();
+    const { h } = controlled(busy);
+    let key = "";
+    await expect(
+      runCheck(
+        h,
+        {
+          name: "leaves work",
+          covers: [],
+          run: async () => {
+            key = await h.session("main", "still-busy");
+            busy.add(key);
+            throw new Error("failed while its run goes on");
+          },
+        },
+        { drainTimeoutMs: 200 },
+      ),
+    ).rejects.toThrow(/failed while its run goes on/);
+    let ran = false;
+    await expect(
+      runCheck(
+        h,
+        {
+          name: "next",
+          covers: [],
+          run: async () => {
+            ran = true;
+          },
+        },
+        { drainTimeoutMs: 200 },
+      ),
+    ).rejects.toThrow(/not started: the check before it \("leaves work"\) failed/);
+    expect(ran).toBe(false);
+    // Once that work has ended, checks run again.
+    busy.clear();
+    await runCheck(h, { name: "after", covers: [], run: async () => {} }, { drainTimeoutMs: 200 });
+  });
+
+  it("drains when the only failure is a run left unasserted", async () => {
+    const busy = new Set<string>();
+    const { h, calls } = controlled(busy);
+    const op = h.op("plain") as unknown as { events: unknown[] };
+    await expect(
+      runCheck(
+        h,
+        {
+          name: "lazy",
+          covers: [],
+          run: async () => {
+            op.events.push({
+              event: "chat",
+              seq: 1,
+              at: 0,
+              payload: { runId: "r9", sessionKey: "agent:marlow:main", seq: 1, state: "delta" },
+            });
+          },
+        },
+        { drainTimeoutMs: 200 },
+      ),
+    ).rejects.toThrow(/were not asserted/);
+    expect(calls).toContainEqual(["chat.abort", { sessionKey: "agent:marlow:main" }]);
   });
 });
