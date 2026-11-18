@@ -52,6 +52,15 @@ import type {
   StepText,
 } from "./runs.ts";
 import { MAX_STEP_PATH_CHARS, MAX_STEP_PATHS } from "./file-paths.ts";
+import {
+  MAX_SECTION_NAME_CHARS,
+  MAX_SIDEBAR_BOTS,
+  MAX_SIDEBAR_ID_CHARS,
+  MAX_SIDEBAR_SECTIONS,
+  type SidebarPrefs,
+  type SidebarSection,
+  type SidebarState,
+} from "./sidebar.ts";
 import type { Digest } from "./bounds.ts";
 import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
 import type {
@@ -565,8 +574,32 @@ const task = flagged<Task>()({
   updatedAt: NUMBER,
   status: ENUM,
   unread: FLAG,
+  isMain: FLAG,
+  pinned: FLAG,
+  waitingFor: ENUM,
+  waitingSince: NUMBER,
+  unreadMarker: NUMBER,
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
   effort: NAME,
+});
+/** The rail's arrangement as the gateway keeps it (`sidebar.ts`). */
+const sidebarId = id(MAX_SIDEBAR_ID_CHARS);
+const sidebar = object<SidebarState>()({
+  status: ENUM,
+  prefs: object<SidebarPrefs>()({
+    pins: list(MAX_SIDEBAR_BOTS, sidebarId),
+    sections: list(
+      MAX_SIDEBAR_SECTIONS,
+      object<SidebarSection>()({
+        // A name of `MAX_SECTION_NAME_CHARS` characters, each escaped at its longest (`\u0000`), never cut.
+        name: text(MAX_SECTION_NAME_CHARS * 6 + 2),
+        bots: list(MAX_SIDEBAR_BOTS, sidebarId),
+      }),
+    ),
+    hidden: list(MAX_SIDEBAR_BOTS, sidebarId),
+    order: list(MAX_SIDEBAR_BOTS, sidebarId),
+    rev: NUMBER,
+  }),
 });
 /** A task creation as kept (`MAX_CREATIONS` of them). */
 export const CREATION: Bound = object<TaskCreation>()({
@@ -626,11 +659,14 @@ const SESSION_ROW_FIELDS = [
   "derivedTitle",
   "displayName",
   "hasActiveRun",
+  "isMain",
   "key",
   "label",
   "lastActivityAt",
   "lastMessagePreview",
   "lastRunError",
+  "markedUnreadAt",
+  "pinned",
   "sessionId",
   "sessionKey",
   "spawnedBy",
@@ -680,6 +716,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   unroutedApprovalsOmitted: NUMBER,
   creations: list(MAX_CREATIONS, CREATION),
   retention: retentionAlarm,
+  sidebar,
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };

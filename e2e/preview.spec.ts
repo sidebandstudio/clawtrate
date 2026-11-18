@@ -614,6 +614,8 @@ test("the conversation keeps its width and the work panel becomes a drawer", asy
   const ottoTasks = page.getByRole("list", { name: "Otto's tasks" });
   await expect(ottoTasks).toBeVisible();
   await expect(page.locator(".conversation")).toBeHidden();
+  // One pane shows three of an unfolded bot's tasks, so the rest of the list stays in view.
+  await ottoTasks.getByRole("button", { name: /^Show all/ }).click();
   await ottoTasks.getByTestId("task").filter({ hasText: "Weekly backup check" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Weekly backup check" })).toBeVisible();
   await expect(ottoTasks).toBeHidden();
