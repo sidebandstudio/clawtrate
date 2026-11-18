@@ -19,7 +19,7 @@
 // objects in any form. If a check cannot run somewhere, its row is not done.
 
 import { execFileSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
 export const STATUSES = ["todo", "done", "desktop done", "gap"] as const;
@@ -144,13 +144,21 @@ export function skipProblems(file: string, source: string): string[] {
 
 const SKIP_DIRS = new Set(["node_modules", "dist", "out", ".run", "test-results", "baselines"]);
 
+/**
+ * Folders a build writes, which hold no test of ours: the iOS app's native
+ * project (`expo prebuild`, with its Pods) and its build output. A build can be
+ * writing them while the walk runs.
+ */
+const GENERATED = /(^|[\\/])apps[\\/]mobile[\\/](ios|android|build|\.expo)$/;
+
 /** The test files under `dir`: every `*.test.ts` and `*.spec.ts`. */
 export function testFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((entry) => {
-    if (SKIP_DIRS.has(entry)) return [];
-    const path = join(dir, entry);
-    if (statSync(path).isDirectory()) return testFiles(path);
-    return /\.(test|spec)\.ts$/.test(entry) ? [path] : [];
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    if (SKIP_DIRS.has(entry.name)) return [];
+    const path = join(dir, entry.name);
+    if (GENERATED.test(path)) return [];
+    if (entry.isDirectory()) return testFiles(path);
+    return entry.isFile() && /\.(test|spec)\.ts$/.test(entry.name) ? [path] : [];
   });
 }
 

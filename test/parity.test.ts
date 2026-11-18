@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -50,6 +50,37 @@ describe("the parity table", () => {
     },
     LISTING,
   );
+
+  it("walks no generated native project or build output, and no link that a build left dangling", () => {
+    mkdirSync(join(ROOT, "test-results"), { recursive: true });
+    const root = mkdtempSync(join(ROOT, "test-results", "walk-"));
+    try {
+      for (const dir of [
+        "apps/mobile/test",
+        "apps/mobile/ios/Pods/Headers",
+        "apps/mobile/build/x",
+        "apps/desktop/test",
+      ])
+        mkdirSync(join(root, dir), { recursive: true });
+      writeFileSync(join(root, "apps/mobile/test/a.test.ts"), "");
+      writeFileSync(join(root, "apps/desktop/test/b.test.ts"), "");
+      writeFileSync(join(root, "apps/mobile/ios/Pods/c.test.ts"), "");
+      writeFileSync(join(root, "apps/mobile/build/x/d.test.ts"), "");
+      // A link to a file a build has not written yet, as Pods holds while it installs.
+      symlinkSync(join(root, "missing"), join(root, "apps/mobile/ios/Pods/Headers/e.h"));
+      symlinkSync(join(root, "missing"), join(root, "apps/desktop/test/f.test.ts"));
+      expect(
+        testFiles(join(root, "apps"))
+          .map((path) => relative(root, path))
+          .sort(),
+      ).toEqual([
+        join("apps", "desktop", "test", "b.test.ts"),
+        join("apps", "mobile", "test", "a.test.ts"),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("reads ids, platforms and statuses from table rows", () => {
     const rows = parseTable(
