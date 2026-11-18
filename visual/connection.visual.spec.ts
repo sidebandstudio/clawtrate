@@ -215,8 +215,15 @@ test("F-457 F-387: Disconnect keeps the pairing and what is on screen until Reco
   ).toBeVisible();
   // Reconnect: Connecting, then Connected.
   await page.keyboard.press("ControlOrMeta+,");
+  // The gateway's answer is held while the check looks: Connecting lasts only until it comes.
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
+  );
   await dialog.getByRole("button", { name: "Reconnect" }).click();
   await expect(dialog.getByTestId("gateway-state")).toHaveText("Connecting");
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
+  );
   await expect(dialog.getByTestId("gateway-state")).toHaveText("Connected");
   await expect(dialog.getByRole("button", { name: "Disconnect" })).toBeVisible();
 });
@@ -268,9 +275,16 @@ test("F-387: Reconnect to a gateway that still does not answer goes to Connectin
   const dialog = page.getByRole("dialog", { name: "Settings" });
   const state = dialog.getByTestId("gateway-state");
   await expect(state).toHaveText("Offline");
+  // The gateway's answer is held while the check looks: Connecting lasts only until it comes.
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
+  );
   await dialog.getByRole("button", { name: "Reconnect" }).click();
   await expect(state).toHaveText("Connecting");
   await expect(dialog.getByTestId("gateway-problem")).toHaveCount(0);
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
+  );
   await expect(state).toHaveText("Offline");
   const problem = dialog.getByTestId("gateway-problem");
   await expect(problem.locator("strong")).toHaveText("Can't reach the gateway");

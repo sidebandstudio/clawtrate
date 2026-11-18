@@ -223,7 +223,8 @@ describe("instance names", () => {
     expect(disagree.status).toBe(1);
     expect(disagree.stderr).toMatch(/disagree/);
     expect(readdirSync(home)).toEqual([]);
-  });
+    // Starts the CLI as a process for each case: seconds alone, many more on a loaded machine.
+  }, 120_000);
 });
 
 describe("per-instance folders, markers and the spawn boundary", () => {

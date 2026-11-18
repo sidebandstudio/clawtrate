@@ -149,7 +149,9 @@ describe("no input exceeds the totals", () => {
       total += jsonTextLength(key) + 1 + each + 1;
     }
     expect(total).toBeLessThanOrEqual(WORST_STATE_CHARS);
-  });
+    // It builds and bounds a state of tens of millions of characters: seconds of work alone,
+    // many more on a loaded machine, so the default five-second ceiling is not its measure.
+  }, 120_000);
 
   it("an object inside a `cut` list is dropped, not kept past the bound", () => {
     const enforced = enforce(STEP, { cut: [{ unbounded: "x".repeat(100_000) }, "output.text"] });
@@ -163,7 +165,8 @@ describe("no input exceeds the totals", () => {
         const enforced = enforce(bound, wrongShapes(bound, shape));
         expect(size(enforced)).toBeLessThanOrEqual(worstCase(bound));
       }
-    });
+      // Megabyte values in every field of every bound, the state included: heavy, as above.
+    }, 120_000);
   }
 });
 

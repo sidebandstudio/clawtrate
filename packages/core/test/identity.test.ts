@@ -19,6 +19,7 @@ import {
   MAX_STEPS_PER_RUN,
   mergeHistoryRuns,
   RawTable,
+  reasoningStepId,
   retainActivity,
   runsFromHistory,
   type EngineContext,
@@ -193,6 +194,139 @@ describe("a restart is a new segment however long the earlier one (A4, B1)", () 
     };
     const after = feed({ ...emptyActivity, runs: [unknown] }, [thinking(3, "abcd")]);
     expect(after.runs[0]!.steps).toHaveLength(2);
+  });
+});
+
+describe("reasoning ids cannot collide, whatever characters the gateway's ids hold", () => {
+  it("a run whose id holds the separator and another run's tool anchor give two ids", () => {
+    // Run `r:t.c` at its start, and run `r` after tool `c:s`, both read `reasoning:r:t.c:s:0` unencoded.
+    const first = feed(emptyActivity, [thinking(1, "at the start", "r:t.c")], raw);
+    const second = feed(
+      emptyActivity,
+      [
+        agentEvent("r", 1, "tool", { phase: "start", name: "read", toolCallId: "c:s", args: {} }),
+        agentEvent("r", 2, "tool", {
+          phase: "result",
+          name: "read",
+          toolCallId: "c:s",
+          isError: false,
+          result: { content: [{ type: "text", text: "ok" }] },
+        }),
+        thinking(3, "after the tool"),
+      ],
+      raw,
+    );
+    const a = first.runs[0]!.steps.find((step) => step.kind === "reasoning")!.id;
+    const b = second.runs[0]!.steps.find((step) => step.kind === "reasoning")!.id;
+    expect(a).not.toBe(b);
+    expect(raw.get(KEY, a)!.call).toMatchObject({ data: { text: "at the start" } });
+    expect(raw.get(KEY, b)!.call).toMatchObject({ data: { text: "after the tool" } });
+  });
+
+  it("takes any string the gateway sends, a lone surrogate included, and keeps it apart from its replacement", () => {
+    const lone = JSON.parse('"\\ud800"') as string;
+    const ids = [
+      reasoningStepId(lone, null, 0),
+      reasoningStepId("\ufffd", null, 0),
+      reasoningStepId("r", `t.${lone}`, 0),
+      reasoningStepId("r", "t.\ufffd", 0),
+      reasoningStepId("r%3A", null, 0),
+      reasoningStepId("r:", null, 0),
+    ];
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("leaves ordinary ids as they were", () => {
+    const run = feed(emptyActivity, [thinking(1, "plain", "3af2093c-c659-48cf")], raw).runs[0]!;
+    expect(run.steps[0]!.id).toBe("reasoning:3af2093c-c659-48cf:s:0");
+  });
+});
+
+describe("tool calls whose id is absent or repeated", () => {
+  type Part = { reasoning: string } | { tool: string | null };
+  /** The same run as history rows and as live events; its step ids from each, in order. */
+  function bothWays(parts: Part[]) {
+    const rows: unknown[] = [{ role: "user", content: "Go", __openclaw: { id: "u0", seq: 0 } }];
+    const events: Array<ReturnType<typeof agentEvent>> = [];
+    let content: unknown[] = [];
+    let seq = 1;
+    let eventSeq = 0;
+    const emit = (stream: string, data: Record<string, unknown>) =>
+      events.push(agentEvent("r", (eventSeq += 1), stream, data));
+    emit("lifecycle", { phase: "start" });
+    for (const part of parts) {
+      if ("reasoning" in part) {
+        content.push({ type: "thinking", thinking: part.reasoning });
+        emit("thinking", { text: part.reasoning, delta: part.reasoning });
+        emit("lifecycle", { phase: "model" });
+        continue;
+      }
+      const id = part.tool;
+      content.push({ type: "toolCall", ...(id ? { id } : {}), name: "ls", arguments: {} });
+      rows.push({
+        role: "assistant",
+        content,
+        __openclaw: { id: `a${seq}`, seq: seq++, runId: "r" },
+      });
+      rows.push({
+        role: "toolResult",
+        ...(id ? { toolCallId: id } : {}),
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        __openclaw: { id: `t${seq}`, seq: seq++, runId: "r" },
+      });
+      content = [];
+      emit("tool", { phase: "start", name: "ls", ...(id ? { toolCallId: id } : {}), args: {} });
+      emit("tool", {
+        phase: "result",
+        name: "ls",
+        ...(id ? { toolCallId: id } : {}),
+        isError: false,
+        result: { content: [{ type: "text", text: "ok" }], details: {} },
+      });
+      emit("lifecycle", { phase: "model" });
+    }
+    content.push({ type: "text", text: "Done" });
+    rows.push({
+      role: "assistant",
+      content,
+      stopReason: "stop",
+      __openclaw: { id: `a${seq}`, seq, runId: "r" },
+    });
+    const live = feed(emptyActivity, events, raw).runs[0]!.steps.map((step) => step.id);
+    const history = runsFromHistory(rows, null, ctx(new RawTable()))[0]!.steps.map(
+      (step) => step.id,
+    );
+    return { live, history };
+  }
+
+  it("a repeated call id is one step, and it does not move the anchor: reasoning after it counts on from the call before, so no id repeats", () => {
+    const { live, history } = bothWays([
+      { tool: "a" },
+      { reasoning: "one" },
+      { tool: "b" },
+      { reasoning: "two" },
+      { tool: "a" },
+      { reasoning: "three" },
+    ]);
+    expect(live).toEqual([
+      "tool:a",
+      "reasoning:r:t.a:0",
+      "tool:b",
+      "reasoning:r:t.b:0",
+      "reasoning:r:t.b:1",
+    ]);
+    expect(history).toEqual(live);
+  });
+
+  it("a call with no id makes no step and does not move the anchor, live or from history", () => {
+    const { live, history } = bothWays([
+      { reasoning: "one" },
+      { tool: null },
+      { reasoning: "two" },
+    ]);
+    expect(live).toEqual(["reasoning:r:s:0", "reasoning:r:s:1"]);
+    expect(history).toEqual(live);
   });
 });
 
