@@ -37,6 +37,7 @@ export const ACTION_SCENES = [
   "actions-history",
   "actions-question",
   "actions-retained",
+  "actions-retained-history",
 ] as const;
 
 export type ActionScene = (typeof ACTION_SCENES)[number];
@@ -1236,6 +1237,23 @@ function retainedRun(now: number): TaskActivity {
   return retainActivity(activity);
 }
 
+/**
+ * A finished run of 150 reads read from history: its rows hold all 150 calls,
+ * and the engine's retention keeps the newest 128 steps of them.
+ */
+function retainedHistory(now: number): Pick<Transcript, "items" | "runs"> {
+  const reads = Array.from({ length: 150 }, (_, i) => ({
+    call: read(`logs/scan-${String(i + 1).padStart(3, "0")}.log`, `scan ${i + 1}: ok`, 0.1),
+  }));
+  const turns: Turn[] = [
+    { user: "Scan every log this month.", parts: [...reads, { text: "All 150 are fine." }] },
+  ];
+  const rows = historyRows(turns, now - 30 * 60 * SECOND);
+  const ctx: EngineContext = { sessionKey: OPEN_TASK, now, raw: new RawTable() };
+  const runs = retainActivity({ ...emptyActivity, runs: runsFromHistory(rows, null, ctx) }).runs;
+  return { items: mapHistory(rows), runs };
+}
+
 // Scenes --------------------------------------------------------------------------------
 
 const withOpenTask = (
@@ -1309,7 +1327,8 @@ export function actionScene(
       ],
     };
   }
-  const history = fromHistory(scene(name), now);
+  const history =
+    name === "actions-retained-history" ? retainedHistory(now) : fromHistory(scene(name), now);
   return {
     initial: withOpenTask(base, (t) => ({
       ...t,

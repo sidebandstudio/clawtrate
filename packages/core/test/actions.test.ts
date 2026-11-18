@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  retentionAccount,
   askUserQuestionId,
   callFromBlock,
   callFromStep,
@@ -1837,6 +1838,60 @@ describe("the general card's readable view", () => {
     });
     expect(readableOf({ ...c, gatewayTitle: null }).rows.map((r) => r.label)).not.toContain(
       "The gateway calls it",
+    );
+  });
+});
+
+describe("one account of what a run draws against what the gateway reported (7.7)", () => {
+  const tool = (id: string, omittedBefore = 0) =>
+    ({ kind: "tool", toolCallId: id, ...(omittedBefore ? { omittedBefore } : {}) }) as Step;
+  const ids = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => `c${from + i}`);
+
+  it("counts nothing missing where history draws what the engine dropped", () => {
+    // 150 calls; the engine kept the last 128 and dropped 22, which history's rows draw.
+    const run = {
+      steps: ids(23, 150).map((id, i) => tool(id, i === 0 ? 22 : 0)),
+      omittedTools: 22,
+    };
+    const account = retentionAccount(run, ids(1, 150));
+    expect(account).toEqual({ reported: 150, shown: 150, before: new Map(), atEnd: 0 });
+  });
+  it("counts what is missing where nothing draws it, in place", () => {
+    const run = {
+      steps: ids(273, 400).map((id, i) => tool(id, i === 0 ? 272 : 0)),
+      omittedTools: 272,
+    };
+    const account = retentionAccount(run, ids(273, 400));
+    expect(account.reported).toBe(400);
+    expect(account.shown).toBe(128);
+    expect([...account.before]).toEqual([["c273", 272]]);
+  });
+  it("counts only the part history does not draw", () => {
+    const run = { steps: ids(23, 30).map((id, i) => tool(id, i === 0 ? 22 : 0)), omittedTools: 22 };
+    const account = retentionAccount(run, [...ids(13, 22), ...ids(23, 30)]);
+    expect([...account.before]).toEqual([["c23", 12]]);
+    expect(account).toMatchObject({ reported: 30, shown: 18 });
+  });
+  it("counts the end's gap against what history draws after the last kept call", () => {
+    const run = { steps: [tool("c1")], omittedTools: 3, omittedToolsAtEnd: 3 };
+    expect(retentionAccount(run, ["c1", "c2"]).atEnd).toBe(2);
+    expect(retentionAccount(run, ["c1", "c2", "c3", "c4"]).atEnd).toBe(0);
+  });
+  it("gives the run line the drawn and the reported counts", () => {
+    const run = {
+      state: "completed" as const,
+      startedAt: 1,
+      endedAt: 2,
+      reportedStartAt: null,
+      omittedTools: 22,
+    };
+    const calls = [call("read", { path: "a.md" }, { text: "x" })];
+    expect(runLineOf(run, calls, {}, { reported: 150, shown: 150 })!.text).toBe(
+      "Worked · 150 actions",
+    );
+    expect(runLineOf(run, calls, {}, { reported: 400, shown: 128 })!.text).toBe(
+      "Worked · 400 actions · 128 shown",
     );
   });
 });

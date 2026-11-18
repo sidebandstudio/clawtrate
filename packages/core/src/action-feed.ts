@@ -380,6 +380,62 @@ export function phraseLine(call: ActionCall, ctx: ReadingContext = {}): ActionLi
   return lineOf(call, ctx);
 }
 
+// What retention left out --------------------------------------------------------------
+
+/** How many of a run's actions are drawn, how many the gateway reported, and where the rest were. */
+export type RetentionAccount = {
+  /** Actions the gateway reported for the run: every one the engine saw, and any more drawn. */
+  reported: number;
+  /** Actions drawn, from the engine's record and history's together. */
+  shown: number;
+  /** Actions missing directly before a drawn call, by its call id; only where some are missing. */
+  before: Map<string, number>;
+  /** Actions missing after the last drawn call the engine kept. */
+  atEnd: number;
+};
+
+/**
+ * The one account of what a run's transcript draws against what the gateway
+ * reported, after the live record and history are combined (7.7). `drawn` is
+ * every call id the transcript draws for the run, in order, from the engine's
+ * steps and from history's rows alike. A call the engine dropped
+ * (`omittedBefore`, `omittedToolsAtEnd`) that history draws is not missing;
+ * a gap is said only where calls are missing from what is drawn, and the
+ * run line's counts are these.
+ */
+export function retentionAccount(
+  run: Pick<Run, "steps"> & Partial<Pick<Run, "omittedTools" | "omittedToolsAtEnd">>,
+  drawn: readonly string[],
+): RetentionAccount {
+  const kept = new Map<string, number>();
+  for (const step of run.steps)
+    if (step.kind === "tool" && step.toolCallId) kept.set(step.toolCallId, step.omittedBefore ?? 0);
+  const seen = new Set<string>();
+  const before = new Map<string, number>();
+  // Calls drawn since the last call the engine kept, which the engine did not keep.
+  let extras = 0;
+  for (const id of drawn) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const dropped = kept.get(id);
+    if (dropped === undefined) {
+      extras += 1;
+      continue;
+    }
+    if (dropped > extras) before.set(id, dropped - extras);
+    extras = 0;
+  }
+  const atEnd = Math.max(0, (run.omittedToolsAtEnd ?? 0) - extras);
+  const missing = [...before.values()].reduce((sum, n) => sum + n, 0) + atEnd;
+  const engine = kept.size + (run.omittedTools ?? 0);
+  return {
+    reported: Math.max(engine, seen.size + missing),
+    shown: seen.size,
+    before,
+    atEnd,
+  };
+}
+
 // The run line ------------------------------------------------------------------------
 
 export type RunLine = {
@@ -407,8 +463,11 @@ export function runLineOf(
     Partial<Pick<Run, "omittedTools" | "endFromRows">>,
   calls: ActionCall[],
   ctx: ReadingContext = {},
+  /** What the transcript draws of the run (`retentionAccount`); without it, the engine's count. */
+  account?: Pick<RetentionAccount, "reported" | "shown">,
 ): RunLine | null {
-  const reported = calls.length + (run.omittedTools ?? 0);
+  const reported = account?.reported ?? calls.length + (run.omittedTools ?? 0);
+  const drawn = account?.shown ?? calls.length;
   if (!isTerminal(run.state) || run.state === "cancelled" || reported === 0) return null;
   // Only times the gateway reported: its lifecycle start, and an end that is not a history row's.
   const start = run.reportedStartAt;
@@ -430,11 +489,11 @@ export function runLineOf(
     n("unknown") ? RUN_LINE.problem.unknown(n("unknown")) : "",
   ].filter(Boolean);
   const count = RUN_LINE.actions(reported);
-  const shown = reported > calls.length ? RUN_LINE.shown(calls.length) : "";
+  const shown = reported > drawn ? RUN_LINE.shown(drawn) : "";
   const text = [label, count, shown, failed ? RUN_LINE.failedCount(failed) : "", ...others]
     .filter(Boolean)
     .join(" · ");
-  return { label, actions: reported, shown: calls.length, failed, problems: others, text };
+  return { label, actions: reported, shown: drawn, failed, problems: others, text };
 }
 
 /** Whether any call is still open, so the run's actions are live. */

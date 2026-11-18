@@ -200,6 +200,23 @@ test.describe("action cards", () => {
     await expect(next).toHaveAttribute("data-fold", "11");
   });
 
+  test("F-090: history that draws every action the engine dropped says none is missing: the run line counts what is drawn, and no gap line is drawn", async ({
+    page,
+  }) => {
+    await open(page, "actions-retained-history");
+    // All 150 reads are drawn: history's rows hold the 22 the engine's retention dropped.
+    const drawn = await page
+      .locator(".transcript details.card.action[data-kind='read']")
+      .evaluateAll((nodes) =>
+        nodes.reduce((n, node) => n + Number((node as HTMLElement).dataset.fold ?? 1), 0),
+      );
+    expect(drawn).toBe(150);
+    await expect(page.getByTestId("actions-not-kept")).toHaveCount(0);
+    await expect(page.getByTestId("run-line").locator("summary")).toHaveAccessibleName(
+      "Worked · 150 actions",
+    );
+  });
+
   test("F-093: Raw never builds a result: a call history kept no result for is unavailable, and kept text names where it came from", async ({
     page,
   }) => {
