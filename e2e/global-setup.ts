@@ -110,7 +110,13 @@ export async function stopChild(child: ChildProcess, timeoutMs = 10_000): Promis
  * recorded. A test that quits and restarts a client starts its own with this,
  * on its own copy of the host's data, and stops it by its process.
  */
-export function startHost(instance: string, staticDir: string, dataDir: string) {
+export function startHost(
+  instance: string,
+  staticDir: string,
+  dataDir: string,
+  /** More of the host's own flags, such as `--read-only`. */
+  extra: string[] = [],
+) {
   const gated: Gated = gatedSpawn(
     spawn,
     process.execPath,
@@ -127,6 +133,7 @@ export function startHost(instance: string, staticDir: string, dataDir: string) 
       staticDir,
       "--data-dir",
       dataDir,
+      ...extra,
     ],
     // The instance is named by the flag alone, never inherited from the environment.
     { cwd: ROOT, env: cliEnv(), stdio: ["ignore", "pipe", "inherit"] },
