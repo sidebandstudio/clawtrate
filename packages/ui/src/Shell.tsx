@@ -211,13 +211,17 @@ export function Shell({
         .map((each) => [each.key, each.unreadMarker ?? null]),
     );
   });
+  // A read the gateway refused, or that failed, leaves the task unread here too, as the gateway has it.
+  const forgetRead = selection.forgetReadHere;
   const readTask = useCallback(
     (key: string, explicitToo: boolean) => {
       if (keptRef.current.has(key) || (!explicitToo && (markersRef.current[key] ?? null) !== null))
         return;
-      void send({ type: "markTask", key, unread: false, opened: true }).catch(() => {});
+      void send({ type: "markTask", key, unread: false, opened: true }).catch(() =>
+        forgetRead(key),
+      );
     },
-    [send],
+    [send, forgetRead],
   );
   // One effect, so opening a task makes one read however its row changes meanwhile: the
   // opening reads it once; later, a new reply while it is open reads it again; leaving does too.

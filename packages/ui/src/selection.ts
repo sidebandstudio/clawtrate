@@ -172,10 +172,10 @@ export function useSelection(state: ClawtrateState) {
   }, [task, keptUnread]);
 
   /**
-   * "Mark as unread": this viewer forgets having read the task, so the
-   * gateway's unread decides, and leaving it open does not read it again.
+   * A read the gateway refused or that failed: this viewer forgets having read
+   * the task, so the rail and the badge show what the gateway reports.
    */
-  const markUnreadHere = useCallback((key: string) => {
+  const forgetReadHere = useCallback((key: string) => {
     setSeen((current) => {
       if (!(key in current)) return current;
       const next = { ...current };
@@ -183,8 +183,19 @@ export function useSelection(state: ClawtrateState) {
       writePreference(SEEN_KEY, JSON.stringify(next));
       return next;
     });
-    setKeptUnread((current) => new Set(current).add(key));
   }, []);
+
+  /**
+   * "Mark as unread": this viewer forgets having read the task, so the
+   * gateway's unread decides, and leaving it open does not read it again.
+   */
+  const markUnreadHere = useCallback(
+    (key: string) => {
+      forgetReadHere(key);
+      setKeptUnread((current) => new Set(current).add(key));
+    },
+    [forgetReadHere],
+  );
 
   /** "Mark as read": as if this viewer had just read it. */
   const markReadHere = useCallback((target: Task) => {
@@ -337,6 +348,7 @@ export function useSelection(state: ClawtrateState) {
     keptUnread,
     markUnreadHere,
     markReadHere,
+    forgetReadHere,
   };
 }
 

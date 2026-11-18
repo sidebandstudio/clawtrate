@@ -158,6 +158,34 @@ test("F-022: a refused unread change leaves the rail and the badge as the gatewa
   expect(await badge()).toBe(before);
 });
 
+test("F-022: a refused read on opening leaves the task unread in the rail and the badge, as the gateway has it", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  const badge = () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { clawtrateFixture: { badge: number | null } }).clawtrateFixture
+          .badge,
+    );
+  await expect.poll(badge).not.toBeNull();
+  const before = await badge();
+  await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateFixture: { refuse(type: string): void } }
+    ).clawtrateFixture.refuse("markTask"),
+  );
+  const unread = taskRow(page, "Weekly backup check");
+  await expect(unread.locator(".unread-dot")).toHaveCount(1);
+  await unread.click();
+  await expect.poll(async () => (await sent(page, "markTask")).length).toBeGreaterThan(0);
+  // Leaving it, its read is refused again: the dot and the badge stay as the gateway reports.
+  await taskRow(page, "Disk almost full on the media box").click();
+  await expect.poll(async () => (await sent(page, "markTask")).length).toBeGreaterThanOrEqual(2);
+  await expect(unread.locator(".unread-dot")).toHaveCount(1);
+  await expect.poll(badge).toBe(before);
+});
+
 test("F-278: a confirmed delete of an archived task removes its row and its menu at once", async ({
   page,
 }) => {
