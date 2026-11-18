@@ -417,6 +417,13 @@ export type ClientOptions = {
    * never requested, so every write fails at once.
    */
   readOnly?: boolean;
+  /**
+   * Reopen the saved gateway at start (the default). False keeps it, and the
+   * device's pairing, but starts disconnected from it, as after Disconnect,
+   * until the person reconnects: a host whose storage outlived its install
+   * asks before it walks back into a gateway.
+   */
+  resume?: boolean;
 };
 
 /** A file sent with a message, as `chat.send` takes it: base64 content. */
@@ -868,7 +875,7 @@ export class ClawtrateClient {
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
     this.settings = await this.savedSettings();
-    if (this.settings?.suspended) {
+    if (this.settings?.suspended || (this.settings && this.options.resume === false)) {
       this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
       return;
     }

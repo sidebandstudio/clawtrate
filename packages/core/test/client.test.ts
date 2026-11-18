@@ -198,6 +198,34 @@ describe("pairing instructions (A3)", () => {
   });
 });
 
+describe("a saved gateway at start", () => {
+  it("is reopened by default, and with resume false is kept but not reopened until the person reconnects", async () => {
+    const gateway = new FakeGateway();
+    const storage = memoryStorage();
+    const first = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await first.connect({ url: URL_A, token: "t" });
+    await until(() => first.state.connection.status === "connected");
+    first.stop();
+    const opened = gateway.sockets.length;
+
+    const kept = new ClawtrateClient(testHost(gateway, storage), { ...FAST, resume: false });
+    await kept.start();
+    expect(kept.state.connection).toMatchObject({ status: "disconnected", gatewayUrl: URL_A });
+    await sleep(50);
+    expect(gateway.sockets).toHaveLength(opened);
+    // Reconnect is the person's choice: it opens the saved gateway.
+    await kept.retryNow();
+    await until(() => kept.state.connection.status === "connected");
+    expect(gateway.sockets.length).toBeGreaterThan(opened);
+    kept.stop();
+
+    const resumed = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await resumed.start();
+    await until(() => resumed.state.connection.status === "connected");
+    resumed.stop();
+  });
+});
+
 describe("shared transcripts (B2)", () => {
   it("keeps a task open while another viewer still shows it, and releases closed viewers", async () => {
     const { client, gateway } = await connected();
