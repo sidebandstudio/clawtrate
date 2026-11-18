@@ -1627,6 +1627,25 @@ test("F-100: with the Turn time limit set to 1 minute, a longer turn ends as fai
   }
 });
 
+test("F-099: a run stuck on a tool call that never returns reaches stopped within 30 seconds of Stop", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { key } = await ownTask(page, "Stuck tool");
+  // The stand-in coding agent's call that does not finish for an hour.
+  await composer(page).fill("Start the long coding task. #mcp-stop");
+  await page.keyboard.press("Enter");
+  const runId = await inFlightRunId(key);
+  await expect.poll(() => toolStarted(key, runId), { timeout: 60_000 }).toBe(true);
+  const pressed = Date.now();
+  await page.getByRole("button", { name: "Stop Otto" }).click();
+  const note = stopNote(page, runId);
+  await expect(note).toContainText("Completed actions are not undone.", { timeout: 30_000 });
+  expect(Date.now() - pressed).toBeLessThan(30_000);
+  await expect(page.getByTestId("status-line")).toHaveCount(0);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+});
+
 test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
   page,
 }) => {
