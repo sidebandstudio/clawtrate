@@ -190,6 +190,11 @@ class Builder {
     return this;
   }
 
+  /** What the gateway sent for a step, whole, as the engine's raw table keeps it. */
+  rawOf(stepId: string) {
+    return this.raw.get(this.key, stepId);
+  }
+
   question(record: Record<string, unknown>): this {
     this.activity = applyQuestionRequested(this.activity, record, this.ctx());
     return this;
@@ -1349,6 +1354,38 @@ function filler(at: number, count: number, prefix: string): TranscriptItem[] {
   }));
 }
 
+/**
+ * What history holds of a finished run, as the gateway returns it: one
+ * assistant item with the text written beside each call and each call's
+ * block, its result's text and the facts the engine keeps of it. A run still
+ * going has no history yet: the engine draws it.
+ */
+function historyOf(runs: TaskActivity["runs"], now: number): TranscriptItem[] {
+  return runs.flatMap((run): TranscriptItem[] => {
+    if (run.state === "running" || run.state === "waiting" || run.state === "queued") return [];
+    const blocks: TranscriptItem["blocks"] = [];
+    for (const step of run.steps) {
+      if (step.kind !== "tool" || !step.toolCallId) continue;
+      for (const p of run.preambles ?? [])
+        if (p.beforeCall === step.toolCallId) blocks.push({ kind: "text", text: p.text });
+      blocks.push({
+        kind: "tool-call",
+        callId: step.toolCallId,
+        name: step.toolName ?? "tool",
+        argumentsText: step.argsText?.text ?? "{}",
+        result:
+          step.status === "running" || step.status === "waiting"
+            ? null
+            : { isError: step.status === "failed", text: step.result?.text ?? "" },
+        ...(step.t3 ? { t3: step.t3 } : {}),
+      });
+    }
+    return [
+      { id: `a-${run.id}:0`, role: "assistant", timestamp: now - MINUTE, blocks, model: null },
+    ];
+  });
+}
+
 function senderItems(now: number): TranscriptItem[] {
   return [
     {
@@ -1428,7 +1465,9 @@ export function cardScene(name: CardSceneName, now: number): CardScene {
           ...senderItems(now),
           ...filler(now - MINUTE, 20, "l"),
         ]
-      : senderItems(now);
+      : name.startsWith("t3-")
+        ? [...senderItems(now), ...historyOf(activity.runs, now)]
+        : senderItems(now);
   const interSession = receiving
     ? [
         {
@@ -1528,6 +1567,12 @@ export function cardScene(name: CardSceneName, now: number): CardScene {
 
 function taskRow(spec: (typeof CARD_TASKS)[keyof typeof CARD_TASKS], now: number): Task {
   return { ...spec, updatedAt: now - MINUTE, status: "running", unread: false };
+}
+
+/** A step's raw payload as the gateway sent it, whole: what `readStepRaw` returns for a long one. */
+export function wholeStepRaw(name: string, now: number, stepId: string) {
+  if (!isCardScene(name)) return null;
+  return build(name, now).b.rawOf(stepId);
 }
 
 /** The approval as the gateway sent it, before anything was cut: what "read it whole" returns. */

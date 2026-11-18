@@ -21,6 +21,7 @@ import {
   type Thought,
 } from "@clawtrate/core";
 import { createContext, useContext, useEffect, type ReactNode } from "react";
+import { Avatar } from "../Avatar.tsx";
 import { AgentMark, CodeBlock, ExternalIcon, Glyph, RawView } from "../cards/parts.tsx";
 import { useCardEnv } from "../cards/context.tsx";
 import { ChevronIcon } from "../icons.tsx";
@@ -237,6 +238,7 @@ export function T3CallBody({ call }: { call: T3Call }) {
     <ol className="exchange">
       {(sent || c.length > 0) && (
         <li className="exchange-item">
+          {env.bot ? <Avatar bot={env.bot} /> : <span aria-hidden="true" />}
           <div>
             <div className="exchange-meta">
               <b>{sender}</b>

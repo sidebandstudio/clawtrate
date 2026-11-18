@@ -33,6 +33,7 @@ import {
   isCardScene,
   questionEvent,
   wholeApproval,
+  wholeStepRaw,
   type CardSceneName,
   type DecisionMode,
 } from "./cards.ts";
@@ -730,7 +731,9 @@ export function createFixtureBridge(
         const step = transcript?.runs
           .flatMap((run) => run.steps)
           .find((each) => each.id === command.stepId);
-        return (step?.raw ? { status: "available", raw: step.raw } : null) as BridgeResultFor<C>;
+        // A payload too long to travel inline is read whole from the scene's own raw table.
+        const raw = step?.raw ?? (step ? wholeStepRaw(name, now, step.id) : null);
+        return (raw ? { status: "available", raw } : null) as BridgeResultFor<C>;
       }
       default:
         // The live scenes answer their own commands (takeBackMessage, sendAgain, sendMessage).

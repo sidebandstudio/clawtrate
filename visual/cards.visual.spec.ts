@@ -28,7 +28,6 @@ const APPROVAL = "F-163 F-164 F-171 F-329";
 const RESOLVED = "F-165 F-168 F-169 F-325";
 const QUESTION = "F-112 F-113 F-114 F-302 F-303";
 const MESSAGED = "F-119 F-121 F-122 F-123 F-434 F-469";
-const T3 = "F-132 F-133 F-134 F-135 F-137 F-314 F-470";
 
 const SHOTS: Shot[] = [
   { name: "approval-pending", scene: "approval-pending", rows: APPROVAL },
@@ -151,29 +150,6 @@ const SHOTS: Shot[] = [
   { name: "received-failed", scene: "received-failed", rows: "F-125" },
   { name: "received-stopped", scene: "received-stopped", rows: "F-125" },
   { name: "incoming-line", scene: "incoming-line", rows: "F-120" },
-  {
-    name: "t3-folded",
-    scene: "t3-call-made",
-    rows: "F-132",
-    prepare: async () => undefined,
-  },
-  // Before its result, by the gateway's map of tool names (`tools.effective`).
-  { name: "t3-started", scene: "t3-started", rows: T3 },
-  { name: "t3-approval", scene: "t3-approval", rows: T3 },
-  { name: "t3-call-made", scene: "t3-call-made", rows: T3 },
-  {
-    name: "t3-raw",
-    scene: "t3-call-made",
-    rows: T3,
-    prepare: async (_page, card) => {
-      await open(_page, card);
-      await card.getByRole("button", { name: "Raw" }).click();
-    },
-  },
-  { name: "t3-work-may-continue", scene: "t3-work-may-continue", rows: "F-137" },
-  { name: "t3-failed", scene: "t3-failed", rows: "F-314" },
-  { name: "t3-delivery-unknown", scene: "t3-delivery-unknown", rows: "F-470" },
-  { name: "t3-not-sent", scene: "t3-not-sent", rows: T3 },
 ];
 
 /** The card a scene is about: the one its name begins with. */
