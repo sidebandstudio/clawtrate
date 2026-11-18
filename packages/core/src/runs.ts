@@ -2532,15 +2532,22 @@ function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "h
       source: "history",
     };
   }
-  // A live step whose start the stream missed names no file; history's call does.
+  // A live step whose start the stream missed has no call: no arguments, no file, and a raw
+  // payload without its call. History's copy has the call, and its payload has both halves.
   const truncated = history.truncated && !live.truncated;
   const files = !live.files && history.files ? history.files : undefined;
+  const missedCall = live.kind === "tool" && live.argsText === null && history.argsText !== null;
   return {
     step:
-      truncated || files
-        ? { ...live, ...(truncated ? { truncated: true } : {}), ...withFiles(files) }
+      truncated || files || missedCall
+        ? {
+            ...live,
+            ...(truncated ? { truncated: true } : {}),
+            ...withFiles(files),
+            ...(missedCall ? { argsText: history.argsText } : {}),
+          }
         : live,
-    source: "live",
+    source: missedCall ? "history" : "live",
   };
 }
 

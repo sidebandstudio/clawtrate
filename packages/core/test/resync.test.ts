@@ -366,4 +366,38 @@ describe("a resync through the client is idempotent (F-107)", () => {
   });
 });
 
+describe("a tool step whose start the live stream missed (F-107)", () => {
+  it("takes its call from history: its arguments, and Raw's call beside the result", async () => {
+    const gateway = harness.grantingGateway();
+    const { client, transcript } = await openTask({ gateway });
+    // Only the result arrived live: the step has no arguments, and its raw entry no call.
+    gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
+    gateway.emit(
+      "agent",
+      agentEvent("run-1", 3, "tool", {
+        phase: "result",
+        name: "ls",
+        toolCallId: "call_1",
+        result: { content: [{ type: "text", text: "a" }] },
+      }),
+    );
+    await until(() => transcript().runs[0]?.steps[0]?.status === "done");
+    expect(transcript().runs[0]!.steps[0]!.argsText).toBeNull();
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        { role: "assistant", content: [lsCall], __openclaw: { id: "a1", seq: 2, runId: "run-1" } },
+        lsRow,
+      ],
+    });
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => transcript().runs[0]?.steps[0]?.argsText !== null);
+    expect(transcript().runs[0]!.steps[0]!.argsText?.text).toContain('"path": "."');
+    const raw = await client.readStepRaw(KEY, "tool:call_1");
+    expect(raw?.status).toBe("available");
+    expect(raw && "raw" in raw ? raw.raw.call : null).not.toBeNull();
+    expect(raw && "raw" in raw ? raw.raw.result : null).not.toBeNull();
+    client.stop();
+  });
+});
+
 import * as harness from "./client-harness.ts";
