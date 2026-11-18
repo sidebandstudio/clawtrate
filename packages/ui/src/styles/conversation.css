@@ -41,14 +41,6 @@
   font-size: 0.9em;
 }
 
-/* A one-line stand-in for a run's steps, built separately. */
-.card-placeholder {
-  margin: 6px 0 0;
-  padding: 0 14px;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-
 /* State marks: the rest of the set ----------------------------------------- */
 
 .glyph[data-state="sending"]::before {

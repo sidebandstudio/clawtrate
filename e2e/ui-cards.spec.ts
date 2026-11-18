@@ -783,7 +783,8 @@ test.describe("Messaged cards' actions on a real gateway", () => {
       `#card-bot-message-${`tool:${toolCallId}`.replace(/[^\w-]/g, "_")}`,
     );
     await openTask(page, "Pip", t.title);
-    await sender.locator("summary").click();
+    // The card's own line: its body may hold the Thought line of the reasoning that led to it.
+    await sender.locator(":scope > summary").click();
     await sender.getByRole("button", { name: "Open this message in Marlow's task" }).click();
     await expect(page.locator(".title-pill")).toContainText("Notes for Pip");
     // Marlow's task, at the Message from Pip card of the run this message started, open and
@@ -791,7 +792,7 @@ test.describe("Messaged cards' actions on a real gateway", () => {
     const received = page.locator(`[data-testid="received-card"][data-run-id="${recipientRunId}"]`);
     await expect(received).toHaveCount(1);
     await expect(received).toHaveAttribute("open", "");
-    await expect(received.locator("summary")).toBeFocused();
+    await expect(received.locator(":scope > summary")).toBeFocused();
     await expect(page.locator('[data-testid="received-card"][open]')).toHaveCount(1);
     await shot(received, "received-card");
     await received.getByRole("button", { name: "Open this message in Pip's task" }).click();
@@ -808,7 +809,7 @@ test.describe("Messaged cards' actions on a real gateway", () => {
     }
     await openTask(page, "Pip", t.title);
     const messaged = card(page, "messaged-card").last();
-    await messaged.locator("summary").click();
+    await messaged.locator(":scope > summary").click();
     await messaged
       .getByRole("button", { name: "Show every message between Pip and Marlow in this task" })
       .click();
@@ -833,11 +834,14 @@ test.describe("tool-server calls on a real gateway", () => {
   /** The stand-in names its own tools (`coder__send_message`, …), none of T3 Code's: no card. */
   const ordinaryStep = async (on: Page, text: string) => {
     await expect(card(on, "t3-card")).toHaveCount(0);
-    await on.locator(".steps > summary").first().click();
+    // Its action card: a tool server's call (by the gateway's map or its result), else the general card.
     const step = on.getByTestId("tool-call").first();
-    await expect(step.locator(".step-tool-name")).toHaveText(/^coder__/);
-    await step.locator("summary").click();
+    await expect(step).toHaveAttribute("data-kind", /^(server|tool)$/);
+    await step.locator(":scope > summary").click();
     await expect(step).toContainText(text);
+    await step.getByRole("tab", { name: "Raw" }).click();
+    await expect(step.locator(".tool-name")).toHaveText(/^coder__/);
+    await step.getByRole("tab", { name: "Readable" }).click();
     return step;
   };
 
@@ -869,7 +873,7 @@ test.describe("tool-server calls on a real gateway", () => {
     await clients.plain.terminal(t.runId);
     await openTask(page, "Juniper", t.title);
     const step = await ordinaryStep(page, "Error");
-    await expect(step.locator(".step-state")).toHaveText("failed");
+    await expect(step.locator(":scope > summary .action-state")).toHaveText("Failed");
   });
 
   test("F-134: a slow call, and a call stopped mid-way, stay ordinary steps", async () => {
@@ -891,8 +895,9 @@ test.describe("tool-server calls on a real gateway", () => {
     await expect(page.getByTestId("live-turn")).toHaveCount(0, { timeout: 15_000 });
     // Read from history on the read-only page: history keeps the call and no result for it.
     await openTask(reader, "Juniper", stop.title);
-    const step = await ordinaryStep(reader, '"seconds": 3600');
-    await expect(step.locator(".step-state")).toHaveText("no result");
+    // Its arguments, as label and value rows; nothing establishes what the server did: Unknown.
+    const step = await ordinaryStep(reader, "3600");
+    await expect(step.locator(":scope > summary .action-state")).toHaveText("Unknown");
   });
 });
 

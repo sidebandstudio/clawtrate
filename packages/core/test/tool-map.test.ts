@@ -3,8 +3,8 @@
 // result, read when the task opens and again when the gateway reports its
 // plugins changed.
 import { describe, expect, it } from "vitest";
-import { mcpToolMap } from "../src/cards.ts";
-import { MAX_MCP_TOOLS } from "../src/state-bounds.ts";
+import { builtinToolNames, mcpToolMap } from "../src/cards.ts";
+import { MAX_BUILTIN_TOOLS, MAX_MCP_TOOLS } from "../src/state-bounds.ts";
 import { KEY, openTask } from "./client-harness.ts";
 import { GatewayError, until } from "./fake-gateway.ts";
 
@@ -134,6 +134,72 @@ describe("the tool map from tools.effective", () => {
       answerRead(answer([entry("t3code__t3_thread_launch", "t3code", "t3_thread_launch")]));
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
       expect(transcript()?.mcpTools ?? {}).toEqual({});
+    } finally {
+      client.stop();
+    }
+  });
+});
+
+describe("the inventory's built-in and plugin tools, and the bot's workspace root", () => {
+  const plugin = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    label: id,
+    description: "",
+    rawDescription: "",
+    source: "plugin",
+    pluginId: "skills",
+    ...extra,
+  });
+  const withPlugins = (tools: unknown[]) => ({
+    ...answer([entry("coder__send_message", "coder", "send_message")]),
+    groups: [
+      ...answer([entry("coder__send_message", "coder", "send_message")]).groups,
+      { id: "plugins", label: "Plugins", source: "plugin", tools },
+    ],
+  });
+
+  it("names core and plugin tools, never a tool-server or denied one, up to its bound", () => {
+    expect(
+      builtinToolNames(
+        withPlugins([plugin("skills_search"), plugin("hidden", { deniedBySession: true })]),
+        MAX_BUILTIN_TOOLS,
+      ),
+    ).toEqual(["read", "skills_search"]);
+    const many = Array.from({ length: MAX_BUILTIN_TOOLS + 3 }, (_, i) => plugin(`p${i}`));
+    expect(builtinToolNames(withPlugins(many), MAX_BUILTIN_TOOLS)).toHaveLength(MAX_BUILTIN_TOOLS);
+  });
+
+  it("are read when a task opens: the inventory from tools.effective, the root from agents.files.list", async () => {
+    const asked: unknown[] = [];
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["tools.effective"] = () => withPlugins([plugin("skills_search")]);
+    gateway.handlers["agents.files.list"] = (params) => {
+      asked.push(params);
+      return { agentId: "otto", workspace: "/workspace/otto", files: [] };
+    };
+    try {
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      await until(() => transcript()?.workspaceRoot === "/workspace/otto");
+      await until(() => (transcript()?.builtinTools ?? []).includes("skills_search"));
+      expect(asked).toEqual([{ agentId: "otto" }]);
+      expect(transcript().builtinTools).toEqual(["read", "skills_search"]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("leaves the root unknown when the gateway does not give it", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["agents.files.list"] = () => {
+      throw new GatewayError({ code: "INVALID_REQUEST", message: "unknown method" });
+    };
+    try {
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      await until(() => transcript()?.status === "ready");
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      expect(transcript().workspaceRoot ?? null).toBeNull();
     } finally {
       client.stop();
     }

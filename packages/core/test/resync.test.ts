@@ -392,6 +392,7 @@ describe("a tool step whose start the live stream missed (F-107)", () => {
     gateway.emit("session.message", { sessionKey: KEY });
     await until(() => transcript().runs[0]?.steps[0]?.argsText !== null);
     expect(transcript().runs[0]!.steps[0]!.argsText?.text).toContain('"path": "."');
+    expect(transcript().runs[0]!.steps[0]!.args).toEqual({ path: "." });
     const raw = await client.readStepRaw(KEY, "tool:call_1");
     expect(raw?.status).toBe("available");
     expect(raw && "raw" in raw ? raw.raw.call : null).not.toBeNull();

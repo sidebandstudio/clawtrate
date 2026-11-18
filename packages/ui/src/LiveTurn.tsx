@@ -1,8 +1,8 @@
 // The parts of a turn that the engine holds before history does: your
 // messages until the gateway's history has them, the run's streaming reply,
-// and how a run ended (conversation.md, sections 6, 16 and 17). A run's steps
-// have a place here held by a one-line placeholder; its approvals, questions
-// and messages between bots are the cards' own (./cards).
+// and how a run ended (conversation.md, sections 6, 16 and 17). A run's
+// actions are the action cards' (./actions); its approvals, questions and
+// messages between bots are the cards' own (./cards).
 
 import {
   isTerminal,
@@ -16,15 +16,6 @@ import { useBridge } from "./bridge.tsx";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
 import { endingOf } from "./live.ts";
 import { Markdown } from "./Markdown.tsx";
-
-/** A plain one-line stand-in for a run's steps, built elsewhere: it names what it is. */
-export function Placeholder({ kind, children }: { kind: "activity"; children: ReactNode }) {
-  return (
-    <p className="card-placeholder" data-placeholder={kind}>
-      {children}
-    </p>
-  );
-}
 
 /** Your message while the engine holds it, with what is known about its delivery. */
 export function OutgoingBubble({
@@ -123,17 +114,6 @@ export function OutgoingBubble({
   );
 }
 
-/** A run's steps while the engine holds it, as one placeholder line. */
-export function RunActivity({ run }: { run: Run }) {
-  const steps = run.steps.length;
-  if (steps === 0) return null;
-  return (
-    <Placeholder kind="activity">
-      Activity: {steps} {steps === 1 ? "step" : "steps"}
-    </Placeholder>
-  );
-}
-
 /**
  * A run's reply while the engine holds it: streamed in as it arrives, with a
  * caret until the gateway reports it complete. A reply cut off by a stop or a
@@ -228,7 +208,7 @@ export function RunEnding({
             {ending.elsewhere ? "," : "."}
           </b>{" "}
           {ending.elsewhere ? "from another device or session. " : ""}
-          Completed steps are not undone.
+          Completed actions are not undone.
         </p>
       </div>
     );
