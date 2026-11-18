@@ -24,6 +24,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # A unit test reads the gateway's own tool-naming function from the installed package.
       - run: npm install --global openclaw@2026.10.6
+      # The development gateway's browser tests start the Chromium that Playwright installs.
+      - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
