@@ -3066,3 +3066,56 @@ textarea {
 .settings-repair-actions {
   margin-top: var(--space-3);
 }
+
+/* A row's menu control on touch (no right-click there): hidden with a fine pointer,
+   a 44 px target at the row's right with a coarse one. */
+.row-more {
+  display: none;
+}
+
+[data-input="touch"] .row-more {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: var(--tap-min);
+  height: var(--tap-min);
+  color: var(--text-muted);
+}
+
+[data-input="touch"] .bot-group > .row-more {
+  top: 12px;
+  right: 2px;
+}
+
+[data-input="touch"] .bot-group > .bot {
+  padding-right: calc(var(--tap-min) + 4px);
+}
+
+[data-input="touch"] .task-list > li {
+  position: relative;
+}
+
+[data-input="touch"] .task-list > li > .task:not(.task-more) {
+  padding-right: var(--tap-min);
+}
+
+[data-input="touch"] .pin-grid > li {
+  position: relative;
+}
+
+[data-input="touch"] .pin-grid > li > .row-more {
+  top: 2px;
+  right: 2px;
+}
+
+/* Touch menus show no keyboard shortcuts. */
+[data-input="touch"] .menu-hint {
+  display: none;
+}
+
+/* The bot-toggle's place belongs to the menu control on touch. */
+[data-input="touch"] .bot-group > .bot-toggle {
+  display: none;
+}

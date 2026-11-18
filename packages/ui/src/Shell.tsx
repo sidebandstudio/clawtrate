@@ -267,11 +267,15 @@ export function Shell({
   // One pane at a time: moving between the list and a conversation hides the
   // control that was used, so focus goes to the destination. Into a
   // conversation, its heading; back to the list, the row that opened it.
-  const navigatedTo = useRef<"list" | "detail" | null>(null);
-  const openDetail = useCallback(() => {
-    if (onePane) navigatedTo.current = "detail";
-    setView("detail");
-  }, [onePane]);
+  const navigatedTo = useRef<"list" | "detail" | "composer" | null>(null);
+  /** Into a conversation: its heading, or its composer for a task just made (New task). */
+  const openDetail = useCallback(
+    (options?: { composer?: boolean }) => {
+      if (onePane) navigatedTo.current = options?.composer ? "composer" : "detail";
+      setView("detail");
+    },
+    [onePane],
+  );
   const showList = useCallback(() => setView("list"), []);
   const backToList = useCallback(() => {
     navigatedTo.current = "list";
@@ -281,7 +285,10 @@ export function Shell({
     const target = navigatedTo.current;
     if (!target) return;
     navigatedTo.current = null;
-    if (target === "detail") {
+    const composer = mainRef.current?.querySelector<HTMLElement>(".composer-input");
+    if (target === "composer" && composer) {
+      composer.focus();
+    } else if (target === "detail" || target === "composer") {
       const conversation = mainRef.current?.querySelector(".conversation");
       const heading = conversation?.querySelector<HTMLElement>("h1");
       (heading ?? conversation?.querySelector<HTMLElement>(".back-button"))?.focus();

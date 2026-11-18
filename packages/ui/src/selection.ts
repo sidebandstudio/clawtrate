@@ -109,13 +109,21 @@ export function botLabel(
 }
 
 /** The rows under an unfolded bot: the first six, always including the current task. */
-export function visibleTasks(tasks: Task[], currentKey: string | null, showAll: boolean): Task[] {
-  if (showAll || tasks.length <= TASK_CAP) return tasks;
-  const top = tasks.slice(0, TASK_CAP);
+export function visibleTasks(
+  tasks: Task[],
+  currentKey: string | null,
+  showAll: boolean,
+  cap: number = TASK_CAP,
+): Task[] {
+  if (showAll || tasks.length <= cap) return tasks;
+  const top = tasks.slice(0, cap);
   const current = tasks.find((task) => task.key === currentKey);
-  if (current && !top.includes(current)) top[TASK_CAP - 1] = current;
+  if (current && !top.includes(current)) top[cap - 1] = current;
   return top;
 }
+
+/** Rows shown under an unfolded bot in one pane, so the rest of the list stays in view. */
+export const TASK_CAP_ONE_PANE = 3;
 
 function readJson<T extends object>(key: string): T {
   try {

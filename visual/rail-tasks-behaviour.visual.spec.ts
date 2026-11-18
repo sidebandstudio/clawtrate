@@ -590,3 +590,46 @@ test("F-456: Re-pair sets Pairing pending; on approval the new authorization's s
   await expect(dialog.getByTestId("repair-problem")).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "Re-pair" })).toHaveCount(0);
 });
+
+test.describe("on a phone", () => {
+  const PHONE = SIZES.find((size) => size.phone)!;
+  test.use(contextFor(PHONE, "light"));
+
+  test("F-054 F-025: every row with a menu shows a 44 px control for it, its menu has no shortcut hints, New task focuses the composer, and the list stays in view with a bot unfolded", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+    await page.getByRole("button", { name: "Back to bots" }).tap();
+    // Otto is unfolded: three of its tasks, then the rest of the list, all in view.
+    await expect(tasksOf(page, "Otto")).toHaveCount(3);
+    await expect(page.getByRole("button", { name: "Show all 14" })).toBeVisible();
+    const last = bot(page, "Quartermaster");
+    const box = (await last.boundingBox())!;
+    expect(box.y + box.height).toBeLessThanOrEqual(PHONE.height);
+    // A visible control for every bot's and every task's menu, at least 44 px.
+    for (const control of await page.locator(".row-more").all()) {
+      const size = (await control.boundingBox())!;
+      expect(size.width).toBeGreaterThanOrEqual(44);
+      expect(size.height).toBeGreaterThanOrEqual(44);
+      await expect(control).toBeVisible();
+    }
+    await expect(page.locator(".bot-group > .row-more")).toHaveCount(5);
+    await expect(page.getByTestId("task-list").first().locator(".row-more")).toHaveCount(3);
+    // A tap opens the task's menu, with no keyboard shortcuts in it.
+    await page.getByRole("button", { name: "More for Weekly backup check" }).tap();
+    const menu = page.getByRole("menu", { name: "Weekly backup check" });
+    await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeVisible();
+    await expect(menu.locator(".menu-hint")).toBeHidden();
+    await page.getByRole("button", { name: "More for Weekly backup check" }).tap();
+    await expect(menu).toHaveCount(0);
+    // And a bot's.
+    await page.getByRole("button", { name: "More for Juniper" }).tap();
+    await expect(
+      page.getByRole("menu", { name: "Juniper" }).getByRole("menuitem", { name: "New task" }),
+    ).toBeVisible();
+    // New task from the row: the conversation shows with the composer focused.
+    await page.getByRole("menuitem", { name: "New task" }).tap();
+    await expect(page.locator(".composer-input")).toBeFocused();
+    await expect(page.locator(".title-pill-task")).toHaveText("New task");
+  });
+});

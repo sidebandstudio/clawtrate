@@ -223,3 +223,11 @@ export const SectionIcon = (props: IconProps) => (
     <path d="M2.75 4.25h10.5M2.75 8h6.5M2.75 11.75h6.5M11.75 9.5v4M9.75 11.5h4" />
   </Icon>
 );
+
+export const MoreIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="3.5" cy="8" r="0.6" fill="currentColor" />
+    <circle cx="8" cy="8" r="0.6" fill="currentColor" />
+    <circle cx="12.5" cy="8" r="0.6" fill="currentColor" />
+  </Icon>
+);

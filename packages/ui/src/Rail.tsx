@@ -30,6 +30,7 @@ import {
   EditIcon,
   EyeIcon,
   HideIcon,
+  MoreIcon,
   PinIcon,
   PlusIcon,
   RestoreIcon,
@@ -58,6 +59,7 @@ import {
   summarize,
   taskState,
   TASK_CAP,
+  TASK_CAP_ONE_PANE,
   visibleTasks,
   type BotSummary,
   type RunState,
@@ -132,6 +134,27 @@ function Presence({ bot, state, primary }: { bot: Bot; state: RunState | null; p
 
 type Tip = { text: string; top: number; left: number };
 
+/**
+ * A row's menu as a control of its own, for touch, where there is no right-click
+ * or Menu key: shown only with a coarse pointer (styles: `.row-more`), at least
+ * 44 px. A keyboard reaches the same menu with Shift+F10 on the row.
+ */
+function MoreButton({ label, onOpen }: { label: string; onOpen: (trigger: HTMLElement) => void }) {
+  return (
+    <button
+      type="button"
+      className="icon-button row-more"
+      data-variant="quiet"
+      tabIndex={-1}
+      aria-label={label}
+      aria-haspopup="menu"
+      onClick={(event) => onOpen(event.currentTarget)}
+    >
+      <MoreIcon />
+    </button>
+  );
+}
+
 /** How a task's state ends its row's accessible name (conversation.md, section 20). */
 const SPOKEN: Record<RunState, string> = {
   working: ", working",
@@ -161,6 +184,7 @@ function TaskRows({
   onTaskMenu,
   actions,
   archived,
+  cap,
   now,
 }: {
   bot: Bot;
@@ -168,7 +192,7 @@ function TaskRows({
   selection: SelectionModel;
   onOpenTask: (botId: string, key: string) => void;
   onTip: (tip: Tip | null) => void;
-  onTaskMenu: (task: Task, trigger: HTMLElement, x: number, y: number) => void;
+  onTaskMenu: (task: Task, trigger: HTMLElement, x: number, y: number, toggle?: boolean) => void;
   actions: TaskActions | null;
   archived: {
     gone: ReadonlySet<string>;
@@ -176,6 +200,8 @@ function TaskRows({
     onToggle: () => void;
     onMenu: (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => void;
   };
+  /** Rows shown before "Show all": fewer in one pane, so the rest of the list stays in view. */
+  cap: number;
   now: number;
 }) {
   const currentKey = selection.bot?.id === bot.id ? (selection.task?.key ?? null) : null;
@@ -193,7 +219,7 @@ function TaskRows({
   };
   return (
     <ul className="task-list" aria-label={`${bot.name}'s tasks`} data-testid="task-list">
-      {visibleTasks(tasks, currentKey, all).map((task) => {
+      {visibleTasks(tasks, currentKey, all, cap).map((task) => {
         const current = task.key === currentKey;
         const unread =
           (!current || selection.keptUnread.has(task.key)) && isUnread(task, selection.seen);
@@ -259,10 +285,18 @@ function TaskRows({
                 ) : null}
               </span>
             </button>
+            <MoreButton
+              label={`More for ${task.title}`}
+              onOpen={(trigger) => {
+                const rect = trigger.getBoundingClientRect();
+                onTip(null);
+                onTaskMenu(task, trigger, rect.right - 232, rect.bottom, true);
+              }}
+            />
           </li>
         );
       })}
-      {tasks.length > TASK_CAP && (
+      {tasks.length > cap && (
         <li>
           <button
             type="button"
@@ -362,7 +396,7 @@ export function Rail({
   /** One pane at a time: a bot with several tasks unfolds in place instead of opening. */
   onePane: boolean;
   /** A task, or a bot with one task or none, was opened. */
-  onOpen: () => void;
+  onOpen: (options?: { composer?: boolean }) => void;
   /** One pane: show the list, for a search started from a conversation. */
   onShowList: () => void;
   theme: ThemeChoice;
@@ -513,7 +547,7 @@ export function Rail({
       selection.selectTask(bot.id, key);
       selection.unfold(bot.id);
       setFocusTask({ key, bot: bot.id, composer: true });
-      onOpen();
+      onOpen({ composer: true });
       setAnnouncement(`Started a new task for ${bot.name}.`);
     });
   };
@@ -624,9 +658,13 @@ export function Rail({
       else selection.markReadHere(task);
     });
 
-  const openTaskMenu = (task: Task, trigger: HTMLElement, x: number, y: number) => {
+  const openTaskMenu = (task: Task, trigger: HTMLElement, x: number, y: number, toggle = false) => {
     setTip(null);
-    setMenu({ kind: "task", botId: task.botId, key: task.key, trigger, x, y });
+    setMenu((current) =>
+      toggle && current?.kind === "task" && current.trigger === trigger
+        ? null
+        : { kind: "task", botId: task.botId, key: task.key, trigger, x, y },
+    );
   };
 
   const openArchivedMenu = (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => {
@@ -825,9 +863,20 @@ export function Rail({
     );
   };
 
-  const openBotMenu = (botId: string, trigger: HTMLElement, x: number, y: number) => {
+  // A second press on the touch control that opened a menu closes it (`toggle`).
+  const openBotMenu = (
+    botId: string,
+    trigger: HTMLElement,
+    x: number,
+    y: number,
+    toggle = false,
+  ) => {
     setTip(null);
-    setMenu({ kind: "bot", botId, trigger, x, y });
+    setMenu((current) =>
+      toggle && current?.kind === "bot" && current.trigger === trigger
+        ? null
+        : { kind: "bot", botId, trigger, x, y },
+    );
   };
 
   const openGatewayMenu = (trigger: HTMLElement) => {
@@ -1546,6 +1595,13 @@ export function Rail({
             <ChevronIcon />
           </button>
         )}
+        <MoreButton
+          label={`More for ${bot.name}`}
+          onOpen={(trigger) => {
+            const rect = trigger.getBoundingClientRect();
+            openBotMenu(bot.id, trigger, rect.right - 232, rect.bottom, true);
+          }}
+        />
         {(open || (place !== "search" && interactive && archivedOpen.has(bot.id))) && (
           <TaskRows
             bot={bot}
@@ -1556,6 +1612,7 @@ export function Rail({
             onTaskMenu={openTaskMenu}
             actions={taskActions}
             archived={archivedProps(bot)}
+            cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
             now={now}
           />
         )}
@@ -1591,6 +1648,13 @@ export function Rail({
             {summary.unread && <span className="unread-dot" />}
           </span>
         </button>
+        <MoreButton
+          label={`More for ${bot.name}`}
+          onOpen={(trigger) => {
+            const rect = trigger.getBoundingClientRect();
+            openBotMenu(bot.id, trigger, rect.left, rect.bottom, true);
+          }}
+        />
       </li>
     );
   };
@@ -1735,6 +1799,7 @@ export function Rail({
                   onTaskMenu={openTaskMenu}
                   actions={taskActions}
                   archived={archivedProps(owner)}
+                  cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
                   now={now}
                 />
               </li>
