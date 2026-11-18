@@ -128,6 +128,7 @@ import {
   queueLocalRun,
   RawTable,
   reconcileOutbox,
+  historyQueuePairs,
   registerRunAlias,
   registerSteerAlias,
   settleRunFromSendAnswer,
@@ -3330,7 +3331,7 @@ export class ClawtrateClient {
     const aliased = throughRunAliases(
       history?.messages,
       asRecord(history?.inFlightRun),
-      current.steerAliases,
+      current.queueAliases,
     );
     const fromHistory = runsFromHistory(aliased.messages, aliased.inFlight, ctx, { windowCut });
     const whole = scratch.get(key, stepId);
@@ -4390,10 +4391,22 @@ export class ClawtrateClient {
       if (stale()) return;
       // A resync starts every stream of this task again from what the gateway sends next.
       if (resync) this.streams.retire(key);
+      // A queued turn's two ids, as history pairs them: kept, so a pairing frame missed in a
+      // gap still makes one run, and later frames under either id update that run.
+      const shown = new Set((this.state.transcripts[key]?.runs ?? []).map((run) => run.id));
+      const pairs = historyQueuePairs(history?.messages, shown);
+      if (pairs.length > 0) {
+        this.updateActivity(key, (activity) =>
+          pairs.reduce(
+            (next, [gateway, client]) => registerRunAlias(next, gateway, client),
+            activity,
+          ),
+        );
+      }
       const { messages, inFlight } = throughRunAliases(
         history?.messages,
         asRecord(history?.inFlightRun),
-        this.state.transcripts[key]?.steerAliases ?? {},
+        this.state.transcripts[key]?.queueAliases ?? {},
       );
       const inFlightId = typeof inFlight?.runId === "string" ? inFlight.runId : null;
       const ctx = this.context(key);

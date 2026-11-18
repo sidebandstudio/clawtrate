@@ -104,7 +104,7 @@ describe("a turn the gateway ran from its queue under an id of its own", () => {
       }),
     );
     gateway.emit("sessions.changed", { sessionKey: KEY, runId: X, clientRunId: C, phase: "model" });
-    await until(() => transcript().steerAliases[X] === C);
+    await until(() => transcript().queueAliases[X] === C);
     // The gateway's id is the send's run, not a run of its own.
     expect(transcript().runs.map((run) => run.id)).toEqual([C]);
     gateway.handlers["chat.history"] = () => history(null);
@@ -274,6 +274,55 @@ describe("a recipient's task let go while its sender's task is open", () => {
     expect(transcript().linkedRuns["peer-r"]?.state).toBe("running");
     gateway.emit("agent", agentEvent("peer-r", 2, "lifecycle", { phase: "end" }, PEER));
     await until(() => transcript().linkedRuns["peer-r"]?.state === "completed");
+    client.stop();
+  });
+});
+
+describe("a queued turn's two ids stay one run", () => {
+  const X = "gateway-own-run";
+  const C = "queued-send";
+
+  it("a late frame under the gateway's id, after the send's run ended, updates that run and makes no other", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({ messages: [] });
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit("agent", agentEvent(X, 1, "run_status", { phase: "preparing_workspace" }));
+    gateway.emit("agent", agentEvent(C, 1, "lifecycle", { phase: "start" }));
+    gateway.emit("sessions.changed", { sessionKey: KEY, runId: X, clientRunId: C, phase: "start" });
+    await until(() => transcript().queueAliases[X] === C);
+    gateway.emit("chat", { runId: C, sessionKey: KEY, seq: 2, state: "final" });
+    await until(() => transcript().runs[0]?.state === "completed");
+    gateway.emit("agent", agentEvent(X, 2, "run_status", { phase: "cleanup" }));
+    gateway.emit("chat", { runId: X, sessionKey: KEY, seq: 3, state: "final" });
+    await sleep(50);
+    expect(runIds(transcript().runs)).toEqual([[C, "completed"]]);
+    client.stop();
+  });
+
+  it("after a reconnect that missed the pairing, history pairs them: one run, still running", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({ messages: [] });
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit("agent", agentEvent(C, 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs[0]?.state === "running");
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        { role: "user", content: "queued", __openclaw: { id: "u1", idempotencyKey: `${C}:user` } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Still working" }],
+          __openclaw: { id: "a1", runId: X },
+        },
+      ],
+      inFlightRun: { runId: X },
+    });
+    gateway.dropAll();
+    await until(() => transcript().caughtUp?.reason === "reconnect");
+    expect(runIds(transcript().runs)).toEqual([[C, "running"]]);
+    // A frame under the gateway's id afterwards updates the same run.
+    gateway.emit("agent", agentEvent(X, 9, "lifecycle", { phase: "end" }));
+    await until(() => transcript().runs[0]?.state === "completed");
+    expect(transcript().runs).toHaveLength(1);
     client.stop();
   });
 });

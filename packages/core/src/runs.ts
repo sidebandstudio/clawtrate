@@ -25,6 +25,7 @@ import {
   MAX_RUN_LIST,
   MAX_SETTLED_APPROVAL_COUNT,
   MAX_SETTLED_QUESTION_COUNT,
+  MAX_QUEUE_ALIAS_COUNT,
   MAX_STEER_ALIAS_COUNT,
   MAX_STEPS_PER_TASK,
 } from "./state-bounds.ts";
@@ -468,15 +469,20 @@ export type TaskActivity = {
   /** Whether each kind's list loaded: one kind failing leaves the others shown, and says so. */
   approvalSources: Record<ApprovalKind, ApprovalSourceAccess>;
   /**
-   * Other run ids for a run this task shows, mapped to it. Two kinds: the id a
-   * steer send returned, mapped to the run the steer joined (the gateway
-   * settles it at once with an empty final); and the gateway's own id for a
-   * turn it ran from its queue, mapped to the send's run id that the turn's
-   * lifecycle and end carry (`sessions.changed` names both, `runId` and
-   * `clientRunId`). While the run it names is active, an alias's events are
-   * ignored.
+   * Run ids a steer send returned, mapped to the run the steer joined. The
+   * gateway settles them at once with an empty final; while the joined run is
+   * active their events are ignored. History is never read through these.
    */
   steerAliases: Record<string, string>;
+  /**
+   * The gateway's own run id for a turn it ran from its queue, mapped to the
+   * send's run id that the turn's lifecycle and end carry: the two are one run.
+   * Learned from `sessions.changed` (`runId` beside `clientRunId`) or from
+   * history (a user row keyed `<send id>:user` followed by rows under the
+   * gateway's id). Applied for as long as it is kept: a late frame under the
+   * gateway's id updates the one run, and history rows under it are that run's.
+   */
+  queueAliases: Record<string, string>;
   /** Set after the task was reloaded because of an event gap or a reconnect. */
   caughtUp: CaughtUp | null;
   /**
@@ -497,6 +503,7 @@ export const emptyActivity: TaskActivity = {
   approvalAccess: "unavailable",
   approvalSources: { exec: "unavailable", plugin: "unavailable", "system-agent": "unavailable" },
   steerAliases: {},
+  queueAliases: {},
   caughtUp: null,
   questionsOmitted: 0,
   runsOmitted: 0,
@@ -520,6 +527,8 @@ export const MAX_RUNS_PER_TASK = 16;
 export const MAX_CLOSED_CARDS = MAX_CLOSED_CARDS_PER_RUN;
 /** Steer aliases kept per task. */
 export const MAX_STEER_ALIASES = MAX_STEER_ALIAS_COUNT;
+/** Queue aliases kept per task, the newest. */
+export const MAX_QUEUE_ALIASES = MAX_QUEUE_ALIAS_COUNT;
 /** Settled question cards kept per task. */
 export const MAX_SETTLED_QUESTIONS = MAX_SETTLED_QUESTION_COUNT;
 /** Settled approvals kept per task. */
@@ -1133,18 +1142,58 @@ export function registerSteerAlias(
 /**
  * The gateway ran a send's turn under an id of its own (a turn it took from its
  * queue): it reports `run_status` under that id, and the turn's lifecycle and
- * end under the send's id, `clientRunId`. The two are one run; the gateway's
- * id becomes an alias, so its events never make a second run that no end
- * would ever settle.
+ * end under the send's id, `clientRunId`. The two are one run: the gateway's id
+ * becomes a queue alias of the send's run. A run already shown under the
+ * gateway's id is folded in: dropped when it holds nothing, or renamed when the
+ * send's run is not shown yet.
  */
 export function registerRunAlias(
   activity: TaskActivity,
   gatewayRunId: string,
   clientRunId: string,
 ): TaskActivity {
-  if (gatewayRunId === clientRunId || activity.steerAliases[gatewayRunId] === clientRunId)
+  if (gatewayRunId === clientRunId || activity.queueAliases[gatewayRunId] === clientRunId)
     return activity;
-  return registerSteerAlias(activity, gatewayRunId, clientRunId);
+  const shown = findRun(activity, gatewayRunId);
+  let runs = activity.runs;
+  if (shown && shown.origin === "gateway") {
+    if (shown.steps.length === 0 && !shown.text) runs = runs.filter((run) => run !== shown);
+    else if (!findRun(activity, clientRunId))
+      runs = runs.map((run) => (run === shown ? { ...run, id: clientRunId } : run));
+  }
+  return {
+    ...activity,
+    runs,
+    queueAliases: { ...activity.queueAliases, [gatewayRunId]: clientRunId },
+  };
+}
+
+/**
+ * The pairs a history page shows of a queued turn's two ids: a user row keyed
+ * `<send id>:user` (OpenClaw 2026.10.6) followed by rows under another run id,
+ * where the send's run is one this task shows. The pairing frame may have been
+ * missed (a reconnect), and history alone still ties them.
+ */
+export function historyQueuePairs(
+  messages: unknown,
+  shownRunIds: ReadonlySet<string>,
+): Array<[gatewayRunId: string, clientRunId: string]> {
+  const pairs: Array<[string, string]> = [];
+  let sendId: string | null = null;
+  for (const entry of Array.isArray(messages) ? messages : []) {
+    const message = asRecord(entry);
+    if (!message) continue;
+    if (message.role === "user") {
+      const key = rowIdempotencyKey(message);
+      sendId = key?.endsWith(":user") ? key.slice(0, -":user".length) : null;
+      continue;
+    }
+    const runId = str(meta(message).runId);
+    if (!runId || !sendId) continue;
+    if (runId !== sendId && shownRunIds.has(sendId)) pairs.push([runId, sendId]);
+    sendId = null;
+  }
+  return pairs;
 }
 
 /**
@@ -1174,6 +1223,11 @@ export function settleRunFromSendAnswer(
     }
     return run;
   });
+}
+
+/** The run an event's id stands for: through the task's queue aliases, or itself. */
+function canonicalRunId(activity: TaskActivity, runId: string): string {
+  return activity.queueAliases[runId] ?? runId;
 }
 
 /** Events for a steer's own run id are dropped while the run it joined is active. */
@@ -1569,8 +1623,10 @@ export function applyChatEvent(
   projectedText: string | null,
   ctx: EngineContext,
 ): TaskActivity {
-  const runId = str(payload.runId);
-  if (!runId || isSteerAlias(activity, runId)) return activity;
+  const raw = str(payload.runId);
+  if (!raw) return activity;
+  const runId = canonicalRunId(activity, raw);
+  if (isSteerAlias(activity, runId)) return activity;
   const existing = findRun(activity, runId);
   if (existing && isTerminal(existing.state)) return activity;
   let next = ensureRun(activity, runId, ctx);
@@ -1614,10 +1670,12 @@ export function applyAgentEvent(
   payload: RawRecord,
   ctx: EngineContext,
 ): ApplyResult {
-  const runId = str(payload.runId);
+  const raw = str(payload.runId);
   const stream = str(payload.stream);
   const data = asRecord(payload.data) ?? {};
-  if (!runId || !stream || isSteerAlias(activity, runId)) return { activity };
+  if (!raw || !stream) return { activity };
+  const runId = canonicalRunId(activity, raw);
+  if (isSteerAlias(activity, runId)) return { activity };
   const existing = findRun(activity, runId);
   const seq = num(payload.seq);
   // A repeated or older frame is dropped. Forward jumps are normal: the gateway
@@ -2100,11 +2158,13 @@ function meta(message: RawRecord): RawRecord {
 }
 
 /**
- * History rows read through the task's run aliases: a turn the gateway ran from
- * its queue is stored under the gateway's own run id, while its live events
- * carry the send's id. Rows (and the in-flight run) naming an alias name the
- * run it stands for, so history and the live run are one run, not two. Rows
- * without an alias are returned as they are.
+ * History rows read through the task's queue aliases: a turn the gateway ran
+ * from its queue is stored under the gateway's own run id, while its live
+ * events carry the send's id. Steer aliases are never applied here: a steer
+ * the gateway admitted as a run of its own keeps its own rows and anchor.
+ * Rows (and the in-flight run) naming a queue alias name the run it stands
+ * for, so history and the live run are one run, not two. Rows without an
+ * alias are returned as they are.
  */
 export function throughRunAliases(
   messages: unknown,
@@ -2687,6 +2747,14 @@ export function retainActivity(activity: TaskActivity): TaskActivity {
     );
     changed = true;
   }
+  let queueAliases = activity.queueAliases;
+  const queueKeys = Object.keys(queueAliases);
+  if (queueKeys.length > MAX_QUEUE_ALIASES) {
+    queueAliases = Object.fromEntries(
+      queueKeys.slice(-MAX_QUEUE_ALIASES).map((key) => [key, activity.queueAliases[key]!]),
+    );
+    changed = true;
+  }
   let questions = activity.questions;
   const settled = questions.filter((question) => question.status !== "pending");
   if (settled.length > MAX_SETTLED_QUESTIONS) {
@@ -2704,7 +2772,7 @@ export function retainActivity(activity: TaskActivity): TaskActivity {
     changed = true;
   }
   return changed
-    ? { ...activity, runs, runsOmitted, steerAliases, questions, approvals }
+    ? { ...activity, runs, runsOmitted, steerAliases, queueAliases, questions, approvals }
     : activity;
 }
 
