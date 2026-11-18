@@ -326,6 +326,13 @@ test("F-424: archiving or deleting a bot's last task creates and selects a new M
   await page.keyboard.press("Shift+F10");
   const items = await page.getByRole("menu").getByRole("menuitem").allTextContents();
   expect(items).toContain("Rename task…");
+  // Its Rename dialog takes the 512 characters the gateway and the field in place take.
+  await page.getByRole("menuitem", { name: "Rename task…" }).click();
+  await expect(page.getByRole("dialog").getByRole("textbox", { name: "Name" })).toHaveAttribute(
+    "maxlength",
+    "512",
+  );
+  await page.keyboard.press("Escape");
   expect(items).not.toContain("Archive task");
   expect(items).not.toContain("Delete task…");
 });
