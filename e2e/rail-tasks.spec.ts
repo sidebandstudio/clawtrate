@@ -17,6 +17,7 @@ import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { devGateway, startHost, stopChild } from "./global-setup.ts";
+import { leaveIdle } from "./teardown.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
@@ -24,7 +25,9 @@ const STAMP = Date.now().toString(36);
 /** Where to save screenshots against the real gateway, when set. */
 const SHOTS = process.env.CLAWTRATE_RAIL_SHOTS;
 
-test.describe.configure({ mode: "serial" });
+// Not serial: the checks run in file order on one worker (playwright.config.ts), each in a
+// task of its own, on bots of its own, or on seeded tasks it leaves as it found them, so one
+// failing on timing does not keep the others from running.
 
 /** Reads of the gateway go through its command line, slow on a busy machine: each wait has its own deadline. */
 const gateway = expect.configure({ timeout: 30_000 });
@@ -337,6 +340,18 @@ test.afterAll(async () => {
   );
   await within(5_000, watcher?.close() ?? Promise.resolve());
   await within(5_000, admin?.close() ?? Promise.resolve());
+});
+
+/** When the running check began: a check that fails leaves nothing it started after this. */
+let checkStarted = 0;
+test.beforeEach(() => {
+  checkStarted = Date.now();
+});
+// Playwright reads its fixtures from the first argument's pattern; this hook needs none.
+// eslint-disable-next-line no-empty-pattern
+test.afterEach(async ({}, testInfo) => {
+  test.setTimeout(testInfo.timeout + 120_000);
+  if (testInfo.status !== testInfo.expectedStatus) await leaveIdle(gatewayCall, checkStarted);
 });
 
 test("F-054 F-012: New task from the + at the top right creates an empty task on the gateway, selects it and focuses its composer", async () => {
