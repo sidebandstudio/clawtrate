@@ -28,6 +28,14 @@ describe("packaging configuration", () => {
     expect(JSON.stringify(config)).not.toMatch(/fixture|out\/web/);
   });
 
+  it("has the Windows uninstaller remove the copy of the installer kept for an updater", () => {
+    const include = builderConfig({}, "45.3.2").nsis?.include;
+    expect(include).toBe("packaging/installer.nsh");
+    const script = readFileSync(join(APP, include!), "utf8");
+    expect(script).toContain('Delete "$LOCALAPPDATA\\${APP_INSTALLER_STORE_FILE}"');
+    expect(script).toContain('RMDir "$LOCALAPPDATA\\${CLAWTRATE_UPDATER_DIR}"');
+  });
+
   it("builds into a folder git ignores and publishes nothing", () => {
     const config = builderConfig({}, "45.3.2");
     expect(config.directories?.output).toBe("dist");

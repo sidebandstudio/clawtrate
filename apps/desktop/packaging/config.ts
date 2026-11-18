@@ -113,6 +113,8 @@ export function builderConfig(env: Env, electronVersion: string): Configuration 
       perMachine: false,
       allowToChangeInstallationDirectory: true,
       differentialPackage: false,
+      // The uninstaller also removes the copy of the installer kept for an updater.
+      include: "packaging/installer.nsh",
     },
   };
 }
