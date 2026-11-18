@@ -15,6 +15,7 @@ import {
   CONNECT_WORDS as W,
   countdownWords,
   failureTitle,
+  footWords,
   pairingLede,
   PRODUCT_NAME,
   protocolLede,
@@ -470,10 +471,7 @@ export function ConnectScreen({
               <img src={logoUrl} alt={PRODUCT_NAME} width={56} height={56} />
             </header>
             <ProtocolNotice connection={connection} error={mismatch} />
-            <p className="connect-foot">
-              {gatewayLabel(connection.gatewayUrl)}
-              {connection.serverVersion ? ` · OpenClaw ${connection.serverVersion}` : ""} · {host}
-            </p>
+            <p className="connect-foot">{footWords("protocol", connection, host)}</p>
           </>
         ) : pairing ? (
           <>
@@ -481,10 +479,7 @@ export function ConnectScreen({
               <img src={logoUrl} alt={PRODUCT_NAME} width={56} height={56} />
             </header>
             <PairingPanel connection={connection} />
-            <p className="connect-foot">
-              Request {pairing.requestId.slice(0, 8)} · this device{" "}
-              {(connection.deviceId ?? pairing.deviceId).slice(0, 8)} · {host}
-            </p>
+            <p className="connect-foot">{footWords("pairing", connection, host)}</p>
           </>
         ) : (
           <>
@@ -498,13 +493,7 @@ export function ConnectScreen({
             ) : (
               <ConnectForm connection={connection} info={info} />
             )}
-            <p className="connect-foot">
-              {connection.deviceId
-                ? `This device ${connection.deviceId.slice(0, 8)}`
-                : W.preparingIdentity}
-              {" · "}
-              {host}
-            </p>
+            <p className="connect-foot">{footWords("connect", connection, host)}</p>
           </>
         )}
       </div>

@@ -119,3 +119,25 @@ export function setupSteps(connection: ConnectionState, loadingBots: boolean): S
       : { state: "pending", label: "Load bots" },
   ];
 }
+
+/**
+ * The connection screens' foot line, for support: on the pairing screen the
+ * request and this device, on the protocol notice the gateway and its version,
+ * else this device; then the host and its version ("Desktop 0.1.0").
+ */
+export function footWords(
+  screen: "connect" | "pairing" | "protocol",
+  connection: ConnectionState,
+  host: string,
+): string {
+  switch (screen) {
+    case "pairing": {
+      const pairing = connection.pairing!;
+      return `Request ${pairing.requestId.slice(0, 8)} · this device ${(connection.deviceId ?? pairing.deviceId).slice(0, 8)} · ${host}`;
+    }
+    case "protocol":
+      return `${gatewayLabel(connection.gatewayUrl)}${connection.serverVersion ? ` · OpenClaw ${connection.serverVersion}` : ""} · ${host}`;
+    case "connect":
+      return `${connection.deviceId ? `This device ${connection.deviceId.slice(0, 8)}` : CONNECT_WORDS.preparingIdentity} · ${host}`;
+  }
+}
