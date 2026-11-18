@@ -44,6 +44,38 @@ test.describe("the rail", () => {
     await expect(bot(page, "Otto").locator(".unread-dot")).toBeVisible();
   });
 
+  test("a task chosen in the rail stays open when a newer task of its bot appears", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    await bot(page, "Pip").click();
+    // Nothing remembered for Pip: its newest task shows, and the person chooses that very task.
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Plan the week");
+    await page.getByRole("list", { name: "Pip's tasks" }).getByText("Plan the week").click();
+    // Another task of Pip's starts, newer than every other.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState(change: (state: never) => unknown): void };
+        }
+      ).clawtrateFixture;
+      fixture.setState(((state: {
+        tasksByBot: Record<string, Array<{ key: string; title: string; updatedAt: number | null }>>;
+      }) => {
+        const pip = state.tasksByBot.pip!;
+        const newer = {
+          ...pip[0]!,
+          key: "agent:pip:newer",
+          title: "A newer task",
+          updatedAt: Date.now() + 60_000,
+        };
+        return { ...state, tasksByBot: { ...state.tasksByBot, pip: [newer, ...pip] } };
+      }) as never);
+    });
+    await expect(page.getByRole("list", { name: "Pip's tasks" })).toContainText("A newer task");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Plan the week");
+  });
+
   test("selecting a bot opens its remembered task; a bot with one task is a plain row", async ({
     page,
   }) => {

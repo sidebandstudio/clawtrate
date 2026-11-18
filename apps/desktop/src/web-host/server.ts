@@ -540,12 +540,16 @@ export function startWebHost(options: WebHostOptions) {
         id = message.id;
         const command = parseBridgeCommand(message.command);
         session.apply(command).then(
-          (value) =>
+          (value) => {
+            // Opening a task the host already follows changes no state, so no snapshot would
+            // carry it: this viewer gets its transcript now, whatever else happens.
+            if (command.type === "openSession") channel.sendState(runtime.client.state);
             channel.send(
               value === undefined
                 ? { type: "result", id, ok: true }
                 : { type: "result", id, ok: true, value },
-            ),
+            );
+          },
           (error: unknown) =>
             channel.send({
               type: "result",
