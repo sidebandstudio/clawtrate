@@ -9,8 +9,9 @@ import { FuseV1Options, FuseVersion, type FuseV1Config } from "@electron/fuses";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import type { AfterPackContext, Configuration } from "electron-builder";
+import { APP_ID } from "../src/main/identity.ts";
 
-export const APP_ID = "dev.clawtrate.desktop";
+export { APP_ID };
 export const PRODUCT_NAME = "Clawtrate";
 
 export type Env = Record<string, string | undefined>;

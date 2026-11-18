@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { APP_ID, builderConfig, fuses, macSigningRequested } from "../packaging/config.ts";
+import { windowsAppUserModelId } from "../src/main/identity.ts";
 
 const APP = join(import.meta.dirname, "..");
 
@@ -23,6 +24,18 @@ describe("packaging configuration", () => {
       "!**/node_modules/**",
     ]);
     expect(JSON.stringify(config)).not.toMatch(/fixture|out\/web/);
+  });
+
+  it("gives the packaged Windows app the bundle id, the installer's shortcuts' id, as its AppUserModelID", () => {
+    expect(windowsAppUserModelId("win32", true)).toBe(APP_ID);
+    expect(windowsAppUserModelId("win32", false)).toBeNull();
+    expect(windowsAppUserModelId("darwin", true)).toBeNull();
+    expect(windowsAppUserModelId("linux", true)).toBeNull();
+    const main = readFileSync(join(APP, "src/main/index.ts"), "utf8");
+    expect(main).toContain(
+      "const appUserModelId = windowsAppUserModelId(process.platform, app.isPackaged);",
+    );
+    expect(main).toContain("if (appUserModelId) app.setAppUserModelId(appUserModelId);");
   });
 
   it("builds into a folder git ignores and publishes nothing", () => {
