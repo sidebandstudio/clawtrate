@@ -20,6 +20,7 @@ import { canWrite } from "../src/access.ts";
 import { messageRefusal, refusalFor, size } from "../src/Composer.tsx";
 import {
   composerFor,
+  currentRun,
   duration,
   elapsed,
   endingOf,
@@ -437,4 +438,62 @@ describe("attachments", () => {
       "21 files attached. A message can carry up to 20 files.",
     );
   });
+});
+
+describe("F-468: what the transition tables leave on screen", () => {
+  const otto = { bot: "Otto", connected: true, chosen: null };
+  const held = (text: string, id: string) =>
+    message({ id, text, mode: "steer", status: "held", runId: "run-1" });
+  const cases: Array<[string, Transcript, (t: Transcript) => void]> = [
+    [
+      "a completed run leaves no status line, and the composer is back to Message Otto",
+      transcript([run({ state: "completed", endedAt: NOW })]),
+      (t) => {
+        expect(currentRun(t)).toBeUndefined();
+        expect(composerFor(t, otto)).toMatchObject({ placeholder: "Message Otto", mode: "send" });
+      },
+    ],
+    [
+      "with only an approval pending, plain Enter steers and the status line waits for you",
+      transcript([
+        run({ state: "waiting", pendingCards: [{ id: "a-1", kind: "approval", since: NOW }] }),
+      ]),
+      (t) => {
+        expect(composerFor(t, otto)).toMatchObject({ mode: "steer", modeWord: "Steer" });
+        expect(statusLineFor(currentRun(t)!, t, live)).toMatchObject({
+          phrase: "Waiting for you",
+        });
+      },
+    ],
+    [
+      "with a question pending, typed messages are held on the shelf, never your bubbles, and plain Enter holds",
+      transcript(
+        [run({ state: "waiting", pendingCards: [{ id: "q-1", kind: "question", since: NOW }] })],
+        {
+          questions: [question()],
+          outbox: [held("first", "m-1"), held("second", "m-2")],
+        },
+      ),
+      (t) => {
+        expect(composerFor(t, otto)).toMatchObject({ mode: "hold", modeWord: "Hold" });
+        expect(shelfMessages(t).map((m) => [m.text, m.status])).toEqual([
+          ["first", "held"],
+          ["second", "held"],
+        ]);
+        expect(outgoingBubbles(t)).toEqual([]);
+      },
+    ],
+    [
+      "after a confirmed Stop the messages are Not sent on the shelf, no run is current, and the composer starts a new run",
+      transcript([run({ state: "stopped", endedAt: NOW })], {
+        outbox: [message({ id: "m-1", text: "left", mode: "queue", status: "not-sent" })],
+      }),
+      (t) => {
+        expect(currentRun(t)).toBeUndefined();
+        expect(shelfMessages(t).map((m) => m.status)).toEqual(["not-sent"]);
+        expect(composerFor(t, otto).mode).toBe("send");
+      },
+    ],
+  ];
+  it.each(cases)("F-468: %s", (_name, t, check) => check(t));
 });
