@@ -50,6 +50,13 @@ export type SidebarPrefs = {
   hidden: string[];
   /** The manual order of the list. */
   order: string[];
+  /**
+   * The arrangement's revision on the gateway: every write raises it by one under the
+   * compare-and-set, so it orders the values the gateway held. The gateway's protocol
+   * gives no version of a preference (`users.prefs.get` answers entries, and
+   * `users.prefs.changed` names keys), so the arrangement carries its own. Absent is 0.
+   */
+  rev?: number;
 };
 
 export type SidebarState = {
@@ -123,7 +130,22 @@ export function parseSidebar(value: unknown): SidebarPrefs {
     if (bots.length > 0) sections.push({ name, bots });
     if (sections.length >= MAX_SIDEBAR_SECTIONS) break;
   }
-  return { pins: ids(record.pins), sections, hidden: ids(record.hidden), order: ids(record.order) };
+  const rev =
+    typeof record.rev === "number" && Number.isSafeInteger(record.rev) && record.rev > 0
+      ? record.rev
+      : 0;
+  return {
+    pins: ids(record.pins),
+    sections,
+    hidden: ids(record.hidden),
+    order: ids(record.order),
+    ...(rev > 0 ? { rev } : {}),
+  };
+}
+
+/** The revision an arrangement carries; none held is below every revision. */
+export function sidebarRev(prefs: SidebarPrefs | null | undefined): number {
+  return prefs ? (prefs.rev ?? 0) : -1;
 }
 
 /** Apply one change. Pure; the result is within every bound. */
@@ -229,7 +251,7 @@ export async function changeSidebar(
       read.raw === null || read.raw === undefined
         ? parseSidebar(base ?? {})
         : parseSidebar(read.raw);
-    const next = applySidebarChange(from, change);
+    const next = { ...applySidebarChange(from, change), rev: (from.rev ?? 0) + 1 };
     if (sidebarBytes(next) > MAX_SIDEBAR_BYTES)
       throw new SidebarFullError(
         "The gateway keeps at most 4,096 bytes of arrangement, and this change would pass that. Remove a section or shorten section names first.",

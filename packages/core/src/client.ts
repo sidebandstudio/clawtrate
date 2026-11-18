@@ -187,6 +187,7 @@ import {
   changeSidebar,
   initialSidebar,
   readSidebar,
+  sidebarRev,
   SIDEBAR_PREF_KEY,
   type SidebarChange,
   type SidebarContext,
@@ -660,7 +661,7 @@ export class ClawtrateClient {
   private readonly waiting = new WaitingIndex();
   /** Tasks whose read on opening is on its way: one per task at a time, however often it is asked. */
   private readonly openedReads = new Set<string>();
-  /** Reads and writes of the rail's arrangement in the order they were made, and the newest shown. */
+  /** Reads and writes of the rail's arrangement in the order they were asked, and the latest shown. */
   private sidebarIssued = 0;
   private sidebarShown = 0;
   /** Open transcripts, counted, so several viewers can share one. */
@@ -4677,21 +4678,32 @@ export class ClawtrateClient {
     options: { owner?: object } = {},
   ): Promise<void> {
     const generation = this.generation;
+    // Asked now: a read asked after this write began outranks its answer when they tie.
+    const issued = ++this.sidebarIssued;
     const next = await changeSidebar(this.actionContext(options.owner ?? null), change, base);
-    // What the gateway holds once this write was made: newer than any read asked before now.
-    if (generation === this.generation) this.setSidebar(next, ++this.sidebarIssued);
+    // Shown only if nothing newer, by the arrangement's own revision, is shown already.
+    if (generation === this.generation) this.setSidebar(next, issued);
   }
 
-  /** Show an arrangement unless something newer than it is already shown. */
+  /**
+   * Show an arrangement unless a newer one is shown: answers are ordered by the revision the
+   * gateway holds with the arrangement (`SidebarPrefs.rev`), never by when they arrive, so a
+   * late read or an old write's acknowledgement never hides another device's later change.
+   */
   private setSidebar(sidebar: SidebarState, issued: number): void {
-    if (issued <= this.sidebarShown) return;
-    this.sidebarShown = issued;
+    const shown = this.state.sidebar;
+    if (sidebar.status === "ok" && shown?.status === "ok") {
+      const next = sidebarRev(sidebar.prefs);
+      const now = sidebarRev(shown.prefs);
+      // A tie (the same revision, or values with none) goes to what was asked last.
+      if (next < now || (next === now && issued < this.sidebarShown)) return;
+    }
+    this.sidebarShown = Math.max(this.sidebarShown, issued);
     this.store.update((state) => ({ ...state, sidebar }));
   }
 
   /** Read the arrangement the gateway keeps; on any failure the rail keeps its own. */
   private async loadSidebar(generation: number): Promise<void> {
-    // A read's answer is as new as the moment it was asked: an older one never replaces a newer.
     const issued = ++this.sidebarIssued;
     try {
       const sidebar = await readSidebar(this.actionContext(null));

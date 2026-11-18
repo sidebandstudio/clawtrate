@@ -165,6 +165,8 @@ describe("the rail's actions through the client", () => {
     setPrefs({
       pins: ["main"],
       sections: [{ name: "Work", bots: ["pip"] }],
+      // Another device's write, after this device's: a later revision.
+      rev: 2,
       hidden: [],
       order: [],
     });
@@ -195,6 +197,43 @@ describe("the rail's actions through the client", () => {
     expect(client.state.sidebar?.prefs?.pins).toEqual(["pip"]);
     pending();
     await new Promise((resolve) => setTimeout(() => resolve(undefined), 50));
+    expect(client.state.sidebar?.prefs?.pins).toEqual(["pip"]);
+    client.stop();
+  });
+
+  it("F-014 F-016: an old write's acknowledgement arriving after another device's later change is shown leaves that change in view", async () => {
+    const { client, gateway } = await connected(INTERACTIVE_SCOPES);
+    let stored: unknown = undefined;
+    gateway.handlers["users.prefs.get"] = () => ({
+      status: "ok",
+      entries: stored === undefined ? {} : { [SIDEBAR_PREF_KEY]: stored },
+    });
+    let acknowledge: (value: unknown) => void = () => {};
+    gateway.handlers["users.prefs.set"] = (params) => {
+      // This device's pin is committed at once; its acknowledgement is held.
+      stored = (params as { entries: Record<string, unknown> }).entries[SIDEBAR_PREF_KEY];
+      return new Promise((resolve) => {
+        acknowledge = resolve;
+      });
+    };
+    const pinning = client.changeSidebar({ op: "pin", botId: "pip", pinned: true }, null);
+    await until(() => stored !== undefined);
+    // Another device then adds a section on top of it, and this device shows that.
+    const mine = stored as { rev: number };
+    stored = {
+      pins: ["pip"],
+      sections: [{ name: "Later section", bots: ["main"] }],
+      hidden: [],
+      order: [],
+      rev: mine.rev + 1,
+    };
+    gateway.emit("users.prefs.changed", { profileId: "owner", keys: [SIDEBAR_PREF_KEY] });
+    await until(() => client.state.sidebar?.prefs?.sections.length === 1);
+    acknowledge({ status: "ok" });
+    await pinning;
+    expect(client.state.sidebar?.prefs?.sections).toEqual([
+      { name: "Later section", bots: ["main"] },
+    ]);
     expect(client.state.sidebar?.prefs?.pins).toEqual(["pip"]);
     client.stop();
   });

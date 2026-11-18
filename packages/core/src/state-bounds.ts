@@ -550,6 +550,7 @@ const sidebar = object<SidebarState>()({
     ),
     hidden: list(MAX_SIDEBAR_BOTS, sidebarId),
     order: list(MAX_SIDEBAR_BOTS, sidebarId),
+    rev: NUMBER,
   }),
 });
 /** A task creation as kept (`MAX_CREATIONS` of them). */

@@ -133,7 +133,7 @@ describe("the rail's arrangement on the gateway", () => {
     expect(store.asked()).toBe(1);
     expect(state).toEqual({
       status: "ok",
-      prefs: { pins: ["otto", "pip"], sections: [], hidden: ["marlow"], order: [] },
+      prefs: { pins: ["otto", "pip"], sections: [], hidden: ["marlow"], order: [], rev: 1 },
     });
     const set = store.calls.find((call) => call.method === "users.prefs.set")!;
     expect(set.params.expectedEntries).toEqual({ [SIDEBAR_PREF_KEY]: null });
