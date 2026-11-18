@@ -2,6 +2,12 @@
 // check names rows by starting its title, or the title of a group it is in,
 // with their ids, for example `test("F-013 F-015: ...")`.
 //
+// A row is done on the platforms its platform cell names. A check under
+// `apps/mobile/` (the iOS app's unit tests and its Simulator checks) is an iOS
+// check; every other check is a desktop check. So a `both` row is `done` only
+// when a desktop check and an iOS check both name it, an `iOS` row needs an iOS
+// check, and `desktop done` and a `desktop` row need a desktop check.
+//
 // Only checks that will run count. The test runners themselves say which those
 // are: Vitest collects each test file by running it, and Playwright loads each
 // spec, so a check in a comment or behind code that never runs is never
@@ -35,9 +41,22 @@ export function parseTable(markdown: string): ParityRow[] {
     });
 }
 
-/** The checks in `vitest list --json --staticParse=false` output. Vitest leaves out skipped and todo tests. */
-export function vitestChecks(json: string): CheckPath[] {
-  return (JSON.parse(json) as { name: string }[]).map((test) => test.name.split(" > "));
+/** Whether a test file is one of the iOS app's checks. */
+export function isIosCheck(file: string): boolean {
+  return /(^|[\\/])apps[\\/]mobile[\\/]/.test(file);
+}
+
+/**
+ * The checks in `vitest list --json --staticParse=false` output. Vitest leaves out skipped and todo
+ * tests. `keep` chooses by test file, for the desktop's checks or the iOS app's.
+ */
+export function vitestChecks(
+  json: string,
+  keep: (file: string) => boolean = () => true,
+): CheckPath[] {
+  return (JSON.parse(json) as { name: string; file?: string }[])
+    .filter((test) => keep(test.file ?? ""))
+    .map((test) => test.name.split(" > "));
 }
 
 type PlaywrightSuite = {
@@ -88,10 +107,15 @@ function list(root: string, cwd: string, bin: string, args: string[]): string {
   });
 }
 
-/** The checks Vitest will run in `dir`, with the config found there. */
-export function listVitest(root: string, dir = root): CheckPath[] {
+/** The checks Vitest will run in `dir`, with the config found there; `keep` chooses by test file. */
+export function listVitest(
+  root: string,
+  dir = root,
+  keep: (file: string) => boolean = () => true,
+): CheckPath[] {
   return vitestChecks(
     list(root, dir, "vitest", ["list", "--json", "--staticParse=false", "--root", dir]),
+    keep,
   );
 }
 
@@ -130,8 +154,15 @@ export function testFiles(dir: string): string[] {
   });
 }
 
-/** Everything wrong with the table and the checks that name it. */
-export function parityProblems(rows: ParityRow[], named: Set<string>): string[] {
+/**
+ * Everything wrong with the table and the checks that name it: `desktop` are
+ * the ids the desktop's checks name, `ios` those the iOS app's checks name.
+ */
+export function parityProblems(
+  rows: ParityRow[],
+  desktop: Set<string>,
+  ios: Set<string> = new Set(),
+): string[] {
   const problems: string[] = [];
   const ids = new Set(rows.map((row) => row.id));
   for (const row of rows) {
@@ -141,11 +172,19 @@ export function parityProblems(rows: ParityRow[], named: Set<string>): string[] 
     if (row.status === "desktop done" && row.platform !== "both") {
       problems.push(`${row.id}: "desktop done" is only for rows whose platform is both`);
     }
-    if ((row.status === "done" || row.status === "desktop done") && !named.has(row.id)) {
+    if (row.status !== "done" && row.status !== "desktop done") continue;
+    if (!desktop.has(row.id) && !ios.has(row.id)) {
       problems.push(`${row.id}: marked ${row.status}, but no check that runs names it`);
+      continue;
     }
+    const needsDesktop = row.status === "desktop done" || row.platform !== "iOS";
+    const needsIos = row.status === "done" && row.platform !== "desktop";
+    if (needsDesktop && !desktop.has(row.id))
+      problems.push(`${row.id}: marked ${row.status}, but no desktop check names it`);
+    if (needsIos && !ios.has(row.id))
+      problems.push(`${row.id}: marked ${row.status}, but no iOS check names it`);
   }
-  for (const id of named)
+  for (const id of new Set([...desktop, ...ios]))
     if (!ids.has(id)) problems.push(`${id}: a check names it, but the table has no such row`);
   return problems;
 }
