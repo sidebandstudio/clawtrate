@@ -121,6 +121,28 @@ jobs:
           $running = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$dir\*" }
           if ($running) { throw "the installer left the app running: $($running.ProcessId -join ', ')" }
           "dir=$dir" >> $env:GITHUB_OUTPUT
+      # Temporary: what the runner's taskbar shows for the installed app.
+      - continue-on-error: true
+        run: |
+          $dir = '${{ steps.install.outputs.dir }}'
+          "this shell's session: $((Get-Process -Id $PID).SessionId)"
+          Get-Process explorer -ErrorAction SilentlyContinue | Format-Table Id, SessionId
+          $ud = Join-Path $env:RUNNER_TEMP 'diag-user-data'
+          $app = Start-Process (Join-Path $dir 'Clawtrate.exe') -ArgumentList "--user-data-dir=$ud" -PassThru
+          Start-Sleep -Seconds 10
+          "app session: $($app.SessionId), title: $((Get-Process -Id $app.Id).MainWindowTitle)"
+          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+          $ae = [Windows.Automation.AutomationElement]
+          $all = [Windows.Automation.Condition]::TrueCondition
+          foreach ($top in $ae::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $all)) {
+            "top: $($top.Current.ClassName) | $($top.Current.Name)"
+            if ($top.Current.ClassName -in 'Shell_TrayWnd', 'Shell_SecondaryTrayWnd') {
+              foreach ($el in $top.FindAll([Windows.Automation.TreeScope]::Descendants, $all)) {
+                "  $($el.Current.ControlType.ProgrammaticName) | $($el.Current.ClassName) | id=$($el.Current.AutomationId) | name=$($el.Current.Name) | help=$($el.Current.HelpText)"
+              }
+            }
+          }
+          taskkill /F /T /PID $app.Id
       - name: Run the launch check against the installed app
         env:
           CLAWTRATE_PACKAGED_APP: ${{ steps.install.outputs.dir }}
@@ -147,12 +169,26 @@ jobs:
           name: packaged-results
           path: test-results/
           retention-days: 3
-      # Whether the development gateway can run here; temporary.
-      - if: always()
-        continue-on-error: true
-        timeout-minutes: 5
-        run: |
-          npm install --global openclaw@2026.10.6
-          openclaw --version
-          pnpm dev-gateway start --instance probe-windows
-          pnpm dev-gateway reset --instance probe-windows
+
+  # Temporary: whether the development gateway can run on Windows.
+  windows-gateway-probe:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm install --global --foreground-scripts openclaw@2026.10.6
+        timeout-minutes: 15
+      - run: openclaw --version
+      - continue-on-error: true
+        run: pnpm dev-gateway start --instance probe-windows
+      - continue-on-error: true
+        run: pnpm dev-gateway reset --instance probe-windows
