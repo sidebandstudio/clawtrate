@@ -1285,6 +1285,36 @@ export function finishedChanges(transcript: Pick<Transcript, "runs">): number {
   return count;
 }
 
+/**
+ * Whether a file change that finished is missing from a list of the task's files. The
+ * gateway lists what its stored transcript says the task touched, and it can store a tool's
+ * result after the result's event has arrived here: a list read in between does not have it
+ * yet. A change counts when its step is done and its result did not say it changed nothing;
+ * it is listed when the list holds one of its paths as modified. A list that left files out
+ * (`omitted`) cannot say, so it counts as having them.
+ */
+export function changesUnlisted(
+  transcript: Pick<Transcript, "runs">,
+  list: Pick<TaskFileList, "files" | "omitted">,
+): boolean {
+  if (list.omitted > 0) return false;
+  const modified = new Set(
+    list.files.filter((file) => file.kind === "modified").map((file) => file.path),
+  );
+  for (const run of transcript.runs)
+    for (const step of run.steps)
+      if (
+        step.kind === "tool" &&
+        step.files &&
+        isChangeTool(step.toolName) &&
+        step.status === "done" &&
+        step.files.changed !== false &&
+        !step.files.paths.some((path) => modified.has(path))
+      )
+        return true;
+  return false;
+}
+
 /** A step that touched a file: what it did and when, to say so and to reach it. */
 export type FileSource = {
   stepId: string;

@@ -10,6 +10,9 @@ const PORT = Number(process.env.CLAWTRATE_FIXTURE_PORT ?? 5341);
 
 export default defineConfig({
   testDir: "visual",
+  // A folder of its own: Playwright empties its output folder when a run starts, and the
+  // end-to-end runs keep theirs under test-results/ while they run.
+  outputDir: "test-results/visual",
   snapshotPathTemplate: "{testDir}/baselines/{platform}/{arg}{ext}",
   timeout: 60_000,
   fullyParallel: true,

@@ -27,6 +27,7 @@ import {
   MAX_RUN_LIST,
   MAX_SETTLED_APPROVAL_COUNT,
   MAX_SETTLED_QUESTION_COUNT,
+  MAX_QUEUE_ALIAS_COUNT,
   MAX_STEER_ALIAS_COUNT,
   MAX_STEPS_PER_TASK,
 } from "./state-bounds.ts";
@@ -528,11 +529,23 @@ export type TaskActivity = {
   /** Whether each kind's list loaded: one kind failing leaves the others shown, and says so. */
   approvalSources: Record<ApprovalKind, ApprovalSourceAccess>;
   /**
-   * Run ids a steer send returned, mapped to the run the steer joined. The
-   * gateway settles them at once with an empty final; while the joined run is
-   * active their events are ignored.
+   * Run ids a steer send returned, mapped to the run the steer was sent into.
+   * Tentative: a steer the gateway joins to that run is acknowledged by one bare
+   * `chat final` under its own id, which is dropped; any event showing a run of
+   * its own (lifecycle, reasoning, text, a tool, or a final with a message)
+   * removes the alias, and the steer is a run of its own. History is never read
+   * through these.
    */
   steerAliases: Record<string, string>;
+  /**
+   * The gateway's own run id for a turn it ran from its queue, mapped to the
+   * send's run id that the turn's lifecycle and end carry: the two are one run.
+   * Learned from `sessions.changed` (`runId` beside `clientRunId`) or from
+   * history (a user row keyed `<send id>:user` followed by rows under the
+   * gateway's id). Applied for as long as it is kept: a late frame under the
+   * gateway's id updates the one run, and history rows under it are that run's.
+   */
+  queueAliases: Record<string, string>;
   /** Set after the task was reloaded because of an event gap or a reconnect. */
   caughtUp: CaughtUp | null;
   /**
@@ -553,6 +566,7 @@ export const emptyActivity: TaskActivity = {
   approvalAccess: "unavailable",
   approvalSources: { exec: "unavailable", plugin: "unavailable", "system-agent": "unavailable" },
   steerAliases: {},
+  queueAliases: {},
   caughtUp: null,
   questionsOmitted: 0,
   runsOmitted: 0,
@@ -576,6 +590,8 @@ export const MAX_RUNS_PER_TASK = 16;
 export const MAX_CLOSED_CARDS = MAX_CLOSED_CARDS_PER_RUN;
 /** Steer aliases kept per task. */
 export const MAX_STEER_ALIASES = MAX_STEER_ALIAS_COUNT;
+/** Queue aliases kept per task, the newest. */
+export const MAX_QUEUE_ALIASES = MAX_QUEUE_ALIAS_COUNT;
 /** Settled question cards kept per task. */
 export const MAX_SETTLED_QUESTIONS = MAX_SETTLED_QUESTION_COUNT;
 /** Settled approvals kept per task. */
@@ -901,7 +917,7 @@ export function finishRun(
             ...step,
             status: "failed",
             endedAt,
-            error: step.error ?? "The run ended before this step finished.",
+            error: step.error ?? STEP_CLOSED_BY_RUN_END,
           };
     return settleRaw(closed, ctx);
   });
@@ -1088,6 +1104,42 @@ export function dropUnboundRun(activity: TaskActivity, runId: string): TaskActiv
   return { ...activity, runs: activity.runs.filter((each) => each !== run) };
 }
 
+/**
+ * A send whose outcome is not known (no answer, the connection dropped, or an
+ * acceptance that named no run): its optimistic run goes, unless the person has
+ * asked to stop it. That run stays `stopping`, unnamed, so the Stop is not
+ * forgotten: a history read names it (then it is stopped) or settles it
+ * (`settleUnboundStops`).
+ */
+export function dropUnboundRunUnlessStopping(activity: TaskActivity, runId: string): TaskActivity {
+  return findRun(activity, runId)?.state === "stopping"
+    ? activity
+    : dropUnboundRun(activity, runId);
+}
+
+/**
+ * After a history read, the runs the person asked to stop before the gateway
+ * named them, whose send is no longer awaiting its answer: one the gateway has
+ * in flight under the send's id is now named (and is to be stopped); one
+ * history holds is settled by the merge; one nothing shows is settled as
+ * stopped with no known outcome, keeping `stopRequestedAt`, so a later read
+ * that finds it in flight still stops it.
+ */
+export function settleUnboundStops(
+  runs: Run[],
+  inFlightRunId: string | null,
+  historyRunIds: ReadonlySet<string>,
+  awaitingAnswer: ReadonlySet<string>,
+  ctx: EngineContext,
+): Run[] {
+  return runs.map((run) => {
+    if (run.bound || run.state !== "stopping" || run.origin !== "local") return run;
+    if (run.id === inFlightRunId) return { ...run, bound: true };
+    if (historyRunIds.has(run.id) || awaitingAnswer.has(run.id)) return run;
+    return { ...finishRun(run, "stopped", ctx), outcomeKnown: false };
+  });
+}
+
 /** "The gateway refuses to start the run": `running` or `queued` to `failed`, "Couldn't start". */
 export function failRunStart(
   activity: TaskActivity,
@@ -1144,10 +1196,11 @@ export function revertStop(activity: TaskActivity, runId: string, error: string)
 }
 
 /**
- * A steer joined the active run. The gateway settles the send's own run id at
- * once; remember it so its empty final does not show as a run. A steer leaves
- * pending approvals and questions pending (capability map, run behavior), so
- * the joined run's state does not change here.
+ * A steer was sent into the active run, and the gateway answered with a run id
+ * of the steer's own. Whether it joined that run is known only from what comes
+ * under that id (`steerOwnRun`); until then its bare acknowledgement is not
+ * shown as a run. A steer leaves pending approvals and questions pending
+ * (capability map, run behavior), so the joined run's state does not change here.
  */
 export function registerSteerAlias(
   activity: TaskActivity,
@@ -1155,19 +1208,135 @@ export function registerSteerAlias(
   targetId: string,
 ): TaskActivity {
   if (aliasId === targetId) return activity;
-  const runs = activity.runs.filter(
-    (run) =>
-      !(run.id === aliasId && run.origin === "gateway" && run.steps.length === 0 && !run.text),
-  );
-  return { ...activity, runs, steerAliases: { ...activity.steerAliases, [aliasId]: targetId } };
+  // Its events may have come first: a run showing something of its own is its own run, and no
+  // alias is recorded; an empty one was only the bare acknowledgement, and goes.
+  const shown = findRun(activity, aliasId);
+  if (shown && (shown.steps.length > 0 || shown.text || shown.origin !== "gateway"))
+    return activity;
+  return {
+    ...activity,
+    runs: shown ? activity.runs.filter((run) => run !== shown) : activity.runs,
+    steerAliases: { ...activity.steerAliases, [aliasId]: targetId },
+  };
 }
 
-/** Events for a steer's own run id are dropped while the run it joined is active. */
-function isSteerAlias(activity: TaskActivity, runId: string): boolean {
-  const target = activity.steerAliases[runId];
-  if (!target) return false;
-  const run = findRun(activity, target);
-  return run !== undefined && !isTerminal(run.state);
+/**
+ * The gateway ran a send's turn under an id of its own (a turn it took from its
+ * queue): it reports `run_status` under that id, and the turn's lifecycle and
+ * end under the send's id, `clientRunId`. The two are one run: the gateway's id
+ * becomes a queue alias of the send's run. A run already shown under the
+ * gateway's id is folded in: dropped when it holds nothing, or renamed when the
+ * send's run is not shown yet.
+ */
+export function registerRunAlias(
+  activity: TaskActivity,
+  gatewayRunId: string,
+  clientRunId: string,
+): TaskActivity {
+  if (gatewayRunId === clientRunId || activity.queueAliases[gatewayRunId] === clientRunId)
+    return activity;
+  const shown = findRun(activity, gatewayRunId);
+  let runs = activity.runs;
+  if (shown && shown.origin === "gateway") {
+    if (shown.steps.length === 0 && !shown.text) runs = runs.filter((run) => run !== shown);
+    else if (!findRun(activity, clientRunId))
+      runs = runs.map((run) => (run === shown ? { ...run, id: clientRunId } : run));
+  }
+  return {
+    ...activity,
+    runs,
+    queueAliases: { ...activity.queueAliases, [gatewayRunId]: clientRunId },
+  };
+}
+
+/**
+ * The pairs a history page shows of a queued turn's two ids: a user row keyed
+ * `<send id>:user` (OpenClaw 2026.10.6) followed by rows under another run id,
+ * where the send's run is one this task shows. The pairing frame may have been
+ * missed (a reconnect), and history alone still ties them.
+ */
+export function historyQueuePairs(
+  messages: unknown,
+  shownRunIds: ReadonlySet<string>,
+): Array<[gatewayRunId: string, clientRunId: string]> {
+  const pairs: Array<[string, string]> = [];
+  let sendId: string | null = null;
+  for (const entry of Array.isArray(messages) ? messages : []) {
+    const message = asRecord(entry);
+    if (!message) continue;
+    if (message.role === "user") {
+      const key = rowIdempotencyKey(message);
+      sendId = key?.endsWith(":user") ? key.slice(0, -":user".length) : null;
+      continue;
+    }
+    const runId = str(meta(message).runId);
+    if (!runId || !sendId) continue;
+    if (runId !== sendId && shownRunIds.has(sendId)) pairs.push([runId, sendId]);
+    sendId = null;
+  }
+  return pairs;
+}
+
+/**
+ * The gateway's answer to a send names a run that is already over: a send it
+ * aborted before the turn ran (`status: "timeout"`, `summary: "aborted"`,
+ * from its abort of a send not yet registered), or a send it had already
+ * finished (`ok`) or failed (`error`). No event of that run will follow, so the
+ * answer settles it. Any other status (`started`, `in_flight`, `accepted`)
+ * leaves it to the run's events.
+ */
+export function settleRunFromSendAnswer(
+  activity: TaskActivity,
+  runId: string,
+  answer: RawRecord,
+  ctx: EngineContext,
+): TaskActivity {
+  const status = str(answer.status);
+  const endedAt = num(answer.endedAt) ?? ctx.now;
+  return updateRun(activity, runId, (run) => {
+    if (isTerminal(run.state) || run.state === "queued") return run;
+    if (status === "timeout" && answer.summary === "aborted")
+      return finishRun(run, "stopped", ctx, null, endedAt);
+    if (status === "ok") return finishRun(run, "completed", ctx, null, endedAt);
+    if (status === "error") {
+      const message = str(answer.summary) ?? "The gateway reported an error.";
+      return finishRun(run, "failed", ctx, { message, kind: "gateway" }, endedAt);
+    }
+    return run;
+  });
+}
+
+/** The run an event's id stands for: through the task's queue aliases, or itself. */
+function canonicalRunId(activity: TaskActivity, runId: string): string {
+  return activity.queueAliases[runId] ?? runId;
+}
+
+/**
+ * An event under a steer's own run id. A bare acknowledgement (a `chat` final
+ * with no message, all a joined steer gets) is dropped. Anything showing a run
+ * of its own removes the alias: the steer is a run of its own, kept under its
+ * own id. Null when the event is to be dropped.
+ */
+function steerOwnRun(
+  activity: TaskActivity,
+  runId: string,
+  event: "chat" | "agent",
+  payload: RawRecord,
+): TaskActivity | null {
+  if (!Object.hasOwn(activity.steerAliases, runId)) return activity;
+  const message = asRecord(payload.message);
+  const own =
+    event === "agent"
+      ? ["lifecycle", "assistant", "thinking", "tool", "item", "command_output"].includes(
+          str(payload.stream) ?? "",
+        )
+      : payload.state === "delta"
+        ? contentText(message?.content) !== "" || typeof payload.deltaText === "string"
+        : message !== null && contentText(message.content) !== "";
+  if (!own) return null;
+  const steerAliases = { ...activity.steerAliases };
+  delete steerAliases[runId];
+  return { ...activity, steerAliases };
 }
 
 // Questions -----------------------------------------------------------------------
@@ -1555,8 +1724,12 @@ export function applyChatEvent(
   projectedText: string | null,
   ctx: EngineContext,
 ): TaskActivity {
-  const runId = str(payload.runId);
-  if (!runId || isSteerAlias(activity, runId)) return activity;
+  const raw = str(payload.runId);
+  if (!raw) return activity;
+  const runId = canonicalRunId(activity, raw);
+  const own = steerOwnRun(activity, runId, "chat", payload);
+  if (!own) return activity;
+  activity = own;
   const existing = findRun(activity, runId);
   if (existing && isTerminal(existing.state)) return activity;
   let next = ensureRun(activity, runId, ctx);
@@ -1600,10 +1773,14 @@ export function applyAgentEvent(
   payload: RawRecord,
   ctx: EngineContext,
 ): ApplyResult {
-  const runId = str(payload.runId);
+  const raw = str(payload.runId);
   const stream = str(payload.stream);
   const data = asRecord(payload.data) ?? {};
-  if (!runId || !stream || isSteerAlias(activity, runId)) return { activity };
+  if (!raw || !stream) return { activity };
+  const runId = canonicalRunId(activity, raw);
+  const own = steerOwnRun(activity, runId, "agent", payload);
+  if (!own) return { activity };
+  activity = own;
   const existing = findRun(activity, runId);
   const seq = num(payload.seq);
   // A repeated or older frame is dropped. Forward jumps are normal: the gateway
@@ -1908,10 +2085,22 @@ function toolAnchor(toolCallId: string): string {
  * is the nearest tool call before it (`t.<toolCallId>`), `c` for a run whose
  * start a history window does not show, or null for the run's start; `n`
  * counts the reasoning blocks since that anchor. The live stream and history
- * compute it alike, so nothing has to be matched.
+ * compute it alike, so nothing has to be matched. The run id and the anchor
+ * have `%` and `:` escaped (`idPart`), so neither can hold the `:` that separates the parts
+ * and no two places share an id, whatever characters the gateway's ids use;
+ * ordinary ids (letters, digits, `-`, `_`, `.`) are unchanged by it.
  */
 export function reasoningStepId(runId: string, anchor: string | null, n: number): string {
-  return `reasoning:${runId}:${anchor ?? "s"}:${n}`;
+  return `reasoning:${idPart(runId)}:${anchor === null ? "s" : idPart(anchor)}:${n}`;
+}
+
+/**
+ * One part of a reasoning id: `%` and `:` escaped, every other code unit kept as
+ * it is, a lone surrogate included. The parts can then hold no separator, so
+ * two places never share an id, and no string the gateway sends can make it throw.
+ */
+function idPart(value: string): string {
+  return value.replace(/%/g, "%25").replace(/:/g, "%3A");
 }
 
 function applyAssistant(run: Run, data: RawRecord, ts: number, ctx: EngineContext): Run {
@@ -2105,6 +2294,33 @@ function applyCommandOutput(run: Run, data: RawRecord): Run {
 
 function meta(message: RawRecord): RawRecord {
   return asRecord(message["__openclaw"]) ?? {};
+}
+
+/**
+ * History rows read through the task's queue aliases: a turn the gateway ran
+ * from its queue is stored under the gateway's own run id, while its live
+ * events carry the send's id. Steer aliases are never applied here: a steer
+ * the gateway admitted as a run of its own keeps its own rows and anchor.
+ * Rows (and the in-flight run) naming a queue alias name the run it stands
+ * for, so history and the live run are one run, not two. Rows without an
+ * alias are returned as they are.
+ */
+export function throughRunAliases(
+  messages: unknown,
+  inFlight: RawRecord | null,
+  aliases: Readonly<Record<string, string>>,
+): { messages: unknown; inFlight: RawRecord | null } {
+  const target = (id: unknown) =>
+    typeof id === "string" && Object.hasOwn(aliases, id) ? aliases[id]! : null;
+  const rows = Array.isArray(messages)
+    ? messages.map((entry) => {
+        const message = asRecord(entry);
+        const to = message ? target(meta(message).runId) : null;
+        return to ? { ...message, __openclaw: { ...meta(message!), runId: to } } : entry;
+      })
+    : messages;
+  const flight = inFlight && target(inFlight.runId);
+  return { messages: rows, inFlight: flight ? { ...inFlight, runId: flight } : inFlight };
 }
 
 /** The display id `mapHistory` gives a row, so runs can anchor to transcript items. */
@@ -2356,11 +2572,27 @@ export function runsFromHistory(
   });
 }
 
+/**
+ * The error of a step this client closed because its run ended before the step's result
+ * arrived: an inference, not how the step ended. History's finished copy replaces it.
+ */
+export const STEP_CLOSED_BY_RUN_END = "The run ended before this step finished.";
+
+/** A step closed only because its run ended, with no result of its own. */
+function closedByRunEnd(step: Step): boolean {
+  return step.status === "failed" && step.error === STEP_CLOSED_BY_RUN_END && step.result === null;
+}
+
 function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "history" } {
   // A finished step beats a running one. Between two finished steps the live
   // one keeps the raw frames the user watched, unless the gateway marked its
   // result replaceable: then the transcript holds the canonical result.
-  if ((isOpenStep(live) && !isOpenStep(history)) || (live.replaceable && !isOpenStep(history))) {
+  // So does a step closed here only because its run ended, when history knows how it ended.
+  const inferred = closedByRunEnd(live) && !closedByRunEnd(history);
+  if (
+    ((isOpenStep(live) || inferred) && !isOpenStep(history)) ||
+    (live.replaceable && !isOpenStep(history))
+  ) {
     return {
       step: {
         ...history,
@@ -2377,13 +2609,19 @@ function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "h
         ...(live.gatewayTitle ? { gatewayTitle: live.gatewayTitle } : {}),
         ...(live.commandBearing || history.commandBearing ? { commandBearing: true } : {}),
         // The canonical copy replaced a finished, replaceable result: an explicit correction.
-        correction: isOpenStep(live) ? live.correction : live.correction + 1,
+        correction: isOpenStep(live) || inferred ? live.correction : live.correction + 1,
       },
       source: "history",
     };
   }
+  // A live step whose start the stream missed names no file; history's call does.
+  const truncated = history.truncated && !live.truncated;
+  const files = !live.files && history.files ? history.files : undefined;
   return {
-    step: history.truncated && !live.truncated ? { ...live, truncated: true } : live,
+    step:
+      truncated || files
+        ? { ...live, ...(truncated ? { truncated: true } : {}), ...withFiles(files) }
+        : live,
     source: "live",
   };
 }
@@ -2757,6 +2995,14 @@ export function retainActivity(activity: TaskActivity): TaskActivity {
     );
     changed = true;
   }
+  let queueAliases = activity.queueAliases;
+  const queueKeys = Object.keys(queueAliases);
+  if (queueKeys.length > MAX_QUEUE_ALIASES) {
+    queueAliases = Object.fromEntries(
+      queueKeys.slice(-MAX_QUEUE_ALIASES).map((key) => [key, activity.queueAliases[key]!]),
+    );
+    changed = true;
+  }
   let questions = activity.questions;
   const settled = questions.filter((question) => question.status !== "pending");
   if (settled.length > MAX_SETTLED_QUESTIONS) {
@@ -2774,7 +3020,7 @@ export function retainActivity(activity: TaskActivity): TaskActivity {
     changed = true;
   }
   return changed
-    ? { ...activity, runs, runsOmitted, steerAliases, questions, approvals }
+    ? { ...activity, runs, runsOmitted, steerAliases, queueAliases, questions, approvals }
     : activity;
 }
 
@@ -2801,6 +3047,12 @@ function namesOutgoing(rowKey: string | null, outgoing: OutgoingMessage): boolea
   );
 }
 
+/** A user row the gateway wrote itself (`provenance.kind: "internal_system"`), never a person's message. */
+function gatewayAuthored(message: RawRecord): boolean {
+  const provenance = asRecord(message.provenance) ?? asRecord(meta(message).provenance);
+  return provenance?.kind === "internal_system";
+}
+
 /**
  * Match outgoing messages to the user rows history now holds, by identifiers
  * only: the row's idempotency key, or the `messageSeq` `chat.send` returned
@@ -2812,7 +3064,10 @@ function namesOutgoing(rowKey: string | null, outgoing: OutgoingMessage): boolea
 export function reconcileOutbox(activity: TaskActivity, messages: unknown): TaskActivity {
   const rows = (Array.isArray(messages) ? messages : [])
     .map((entry, index) => ({ message: asRecord(entry), index }))
-    .filter((row): row is { message: RawRecord; index: number } => row.message?.role === "user");
+    .filter(
+      (row): row is { message: RawRecord; index: number } =>
+        row.message?.role === "user" && !gatewayAuthored(row.message),
+    );
   const used = new Set<number>();
   const anchors = new Map<string, string>();
   const outbox = activity.outbox.filter((outgoing) => {
@@ -2857,16 +3112,6 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
 export const UNCONFIRMED_ERROR =
   "The gateway accepted this message, but its history does not show it. It may not have been delivered.";
 
-/** The run that ended last: by its end time, and among equal or unknown ones, by its place. */
-function lastEnded(runs: readonly Run[]): Run | undefined {
-  let last: Run | undefined;
-  for (const run of runs) {
-    if (!isTerminal(run.state) || run.state === "cancelled") continue;
-    if (!last || (run.endedAt ?? -Infinity) >= (last.endedAt ?? -Infinity)) last = run;
-  }
-  return last;
-}
-
 /** Whether a message is unsent work this client still holds: its frame has not left. */
 function notLeft(message: OutgoingMessage): boolean {
   if (message.status === "queued" || message.status === "held") return true;
@@ -2877,20 +3122,29 @@ function notLeft(message: OutgoingMessage): boolean {
 }
 
 /**
- * After a confirmed Stop nothing starts by itself (conversation.md §15–16):
- * with no run active and the last one stopped, every message whose frame has
- * not left (`leftAt`) becomes `not-sent`, whatever its status said: queued,
- * held, or released and still waiting in the delivery chain. Queued runs are
- * cancelled. A message whose frame left is not touched; it settles as the
- * gateway answers it. Messages sent after the stop start a run of their own,
- * so this applies only to work left from before it.
+ * After a confirmed Stop nothing starts by itself (conversation.md §15–16).
+ * It is decided per stopped run, at the change that stops it: when a run that
+ * was active becomes `stopped`, every message whose frame has not left
+ * (`leftAt`) becomes `not-sent`, whatever its status said (queued, held, or
+ * released and still waiting in the delivery chain), and their queued runs are
+ * cancelled. Another run being active, or ending later, changes nothing. A
+ * message whose frame left is not touched; it settles as the gateway answers
+ * it. A message sent after the stop, or sent again by the person, was not
+ * waiting when it stopped, so it is never parked by it.
  */
-export function parkAfterStop(activity: TaskActivity, now: number): TaskActivity {
-  if (activity.runs.some((run) => isActive(run.state))) return activity;
-  if (lastEnded(activity.runs)?.state !== "stopped") return activity;
-  const parked = activity.outbox.filter(notLeft);
-  if (parked.length === 0) return activity;
-  let next = activity;
+export function parkAfterStop(
+  before: TaskActivity,
+  after: TaskActivity,
+  now: number,
+): TaskActivity {
+  const stopped = after.runs.some((run) => {
+    const was = findRun(before, run.id)?.state;
+    return run.state === "stopped" && was !== undefined && isActive(was);
+  });
+  if (!stopped) return after;
+  const parked = after.outbox.filter(notLeft);
+  if (parked.length === 0) return after;
+  let next = after;
   for (const message of parked) {
     next = updateMessage(cancelQueuedRun(next, message.id, now), message.id, {
       status: "not-sent",

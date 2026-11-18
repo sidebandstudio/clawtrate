@@ -3,13 +3,14 @@
 // files'. Two tests hold it to that: one reflects over the live objects' own
 // properties, and the values of their maps, sets and arrays, and fails for any
 // collection this registry does not name or past its `max`; the other scans
-// the source and fails for any `new Map`, `Set`, `WeakMap`, `WeakSet` or
-// array literal kept directly in a class field, a module-level variable or a
-// variable a later-running function captures, that is neither a field named
-// here nor on its allowlist. Neither sees a collection held inside a plain
-// object or array kept at module level or in a closure (the walk cannot reach
-// it; the scan looks only at a collection written directly as a variable's or
-// field's value), nor one made by a factory call such as `Array.from`.
+// the source and fails for any `new Map`, `Set`, `WeakMap`, `WeakSet`, array
+// literal or factory-made collection (`Array.from`, `Array.of`,
+// `Object.fromEntries`) kept in a class field, a module-level variable or a
+// variable a later-running function captures, directly or inside an object
+// literal written as that value, that is neither a field named here nor on its
+// allowlist. Neither sees a collection put into a plain object after it was
+// made (`box.list = []` on an object that is not `this`), nor one another
+// function call returns.
 // `hostWorstCase` adds each entry's `max × each` to the
 // part of the host's worst case it names (`row`), so the documented table is
 // arithmetic over this registry. Sizes are JSON characters, as in

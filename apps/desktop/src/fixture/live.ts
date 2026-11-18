@@ -560,13 +560,15 @@ export function liveCommand(
   get: () => ClawtrateState,
   set: (state: ClawtrateState) => void,
   files: Map<string, OutgoingMessage["attachments"][number]> = new Map(),
+  /** Runs a delayed answer; the fixture's own lets a test hold it (`hold`, `release`). */
+  later: (run: () => void, ms: number) => void = (run, ms) => void setTimeout(run, ms),
 ): Promise<unknown> | undefined {
   const now = Date.now();
   const update = (change: (t: Transcript) => Transcript) => set(withTranscript(get(), change));
   switch (command.type) {
     case "requestAccess": {
       set(upgrade(get(), { status: "requesting" }));
-      setTimeout(
+      later(
         () =>
           set(
             upgrade(get(), {
@@ -637,7 +639,7 @@ export function liveCommand(
           each.id === command.runId ? { ...each, state: "stopping", stopRequestedAt: now } : each,
         ),
       }));
-      setTimeout(
+      later(
         () =>
           update((transcript) => ({
             ...transcript,

@@ -275,6 +275,21 @@ const SYSTEM_ROW_TEXT: Record<string, string> = {
 };
 
 /**
+ * A turn the gateway wrote itself: a user row whose `provenance.kind` is
+ * `internal_system` (OpenClaw 2026.10.6, `input-provenance`). Its text is the
+ * gateway's prompt to the bot, not the person's words, so it shows as a line
+ * saying what the gateway did. The restart recovery's prompt names a restart
+ * the gateway believes happened; the line says only that it resumed a turn.
+ */
+function gatewayTurnText(message: RawRecord): string | null {
+  const provenance = asRecord(message.provenance) ?? asRecord(meta(message).provenance);
+  if (provenance?.kind !== "internal_system") return null;
+  return str(provenance.sourceTool)?.toLowerCase() === "main_session_restart_recovery"
+    ? "The gateway resumed an earlier turn by itself"
+    : "The gateway started a turn by itself";
+}
+
+/**
  * `chat.history` messages to display items. Consecutive assistant messages of
  * one run (tool rounds) become a single assistant turn, and each tool result is
  * attached to the call that produced it.
@@ -312,6 +327,17 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
       case "user": {
         const text = textOf(message.content);
         currentRun = null;
+        const gatewayTurn = gatewayTurnText(message);
+        if (gatewayTurn) {
+          items.push({
+            id,
+            role: "system",
+            timestamp,
+            blocks: [{ kind: "text", text: gatewayTurn }],
+            model: null,
+          });
+          return;
+        }
         if (!text.trim()) return;
         items.push({
           id,

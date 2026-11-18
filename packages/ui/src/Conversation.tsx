@@ -32,6 +32,7 @@ import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
 import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { TEXT_BLOCKS } from "./reading-line.ts";
 
 /**
  * One transcript item. Your message is a bubble; the bot's item is its
@@ -82,12 +83,6 @@ function useReading(): ReadingContext {
 
 /** How close to the end counts as "reading the latest", in pixels. */
 const NEAR_BOTTOM_PX = 96;
-
-/** Blocks of readable text in a transcript; the place is held in the finest one. */
-const TEXT_BLOCKS =
-  ".task-line, .stamp, .event-line, .action > summary, .step > summary, .status-phrase, " +
-  ".request-title, .card > summary, " +
-  ".bubble :is(p, li, h1, h2, h3, h4, h5, h6, pre, td, th, blockquote)";
 
 type Caret = { node: Node; offset: number };
 

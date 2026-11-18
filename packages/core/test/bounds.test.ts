@@ -140,9 +140,7 @@ describe("no input exceeds the totals", () => {
     },
   );
 
-  // These build and measure states near the documented maximum, about 100 million characters:
-  // seconds of work, more on a busy machine, so they are given the time it takes.
-  it("a state past every bound is brought within the state total", { timeout: 120_000 }, () => {
+  it("a state past every bound is brought within the state total", () => {
     const state = adversary(STATE, "maximal") as ClawtrateState;
     const enforced = enforceState(state);
     const transcripts = Object.values(enforced.transcripts);
@@ -155,7 +153,9 @@ describe("no input exceeds the totals", () => {
       total += jsonTextLength(key) + 1 + each + 1;
     }
     expect(total).toBeLessThanOrEqual(WORST_STATE_CHARS);
-  });
+    // It builds and bounds a state of tens of millions of characters: seconds of work alone,
+    // many more on a loaded machine, so the default five-second ceiling is not its measure.
+  }, 120_000);
 
   it("an object inside a `cut` list is dropped, not kept past the bound", () => {
     const enforced = enforce(STEP, { cut: [{ unbounded: "x".repeat(100_000) }, "output.text"] });
@@ -164,16 +164,13 @@ describe("no input exceeds the totals", () => {
   });
 
   for (const shape of ["string", "object", "number"] as const) {
-    it(
-      `a ${shape} where any field belongs is brought within its bound`,
-      { timeout: 120_000 },
-      () => {
-        for (const bound of [STEP, RUN, OUTGOING, QUESTION, APPROVAL, TRANSCRIPT, STATE]) {
-          const enforced = enforce(bound, wrongShapes(bound, shape));
-          expect(size(enforced)).toBeLessThanOrEqual(worstCase(bound));
-        }
-      },
-    );
+    it(`a ${shape} where any field belongs is brought within its bound`, () => {
+      for (const bound of [STEP, RUN, OUTGOING, QUESTION, APPROVAL, TRANSCRIPT, STATE]) {
+        const enforced = enforce(bound, wrongShapes(bound, shape));
+        expect(size(enforced)).toBeLessThanOrEqual(worstCase(bound));
+      }
+      // Megabyte values in every field of every bound, the state included: heavy, as above.
+    }, 120_000);
   }
 });
 

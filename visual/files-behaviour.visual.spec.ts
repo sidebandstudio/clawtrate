@@ -218,6 +218,98 @@ test.describe("the Files tab", () => {
     expect((await lists()) - listsBefore).toBeLessThanOrEqual(2);
   });
 
+  test("F-448: a write the list does not have yet is fetched again after each history read, until the list shows it", async ({
+    page,
+  }) => {
+    await openFixture(page, `${FILES}&files=loaded`, "light");
+    await listed(page);
+    // The gateway lists a file from its stored transcript: until it has stored the write, its
+    // list does not name the file.
+    await page.evaluate(() => {
+      type Fixture = { invoke: (command: { type: string }) => Promise<unknown> };
+      const w = window as unknown as { clawtrateFixture: Fixture; stored: boolean };
+      w.stored = false;
+      const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = async (command) => {
+        const answer = await invoke(command);
+        if (command.type !== "listTaskFiles" || !w.stored) return answer;
+        const list = answer as { files: Array<Record<string, unknown>> };
+        const file = {
+          path: "notes/new-plan.md",
+          workspacePath: "notes/new-plan.md",
+          name: "new-plan.md",
+          kind: "modified",
+          missing: false,
+          size: 120,
+          updatedAt: Date.now(),
+        };
+        return { ...list, files: [file, ...list.files] };
+      };
+    });
+    const lists = async () => (await sent(page)).filter((c) => c.type === "listTaskFiles").length;
+    type State = {
+      transcripts: Record<
+        string,
+        { loadedAt: number | null; runs: Array<{ steps: Array<Record<string, unknown>> }> }
+      >;
+    };
+    const change = (fn: (state: State) => State) =>
+      page.evaluate((source) => {
+        const fixture = (
+          window as unknown as {
+            clawtrateFixture: { setState(change: (state: never) => unknown): void };
+          }
+        ).clawtrateFixture;
+        fixture.setState(new Function("state", `return (${source})(state)`) as never);
+      }, fn.toString());
+    // A write lands in the open task.
+    const before = await lists();
+    await change((state) => {
+      const key = "agent:otto:disk-space";
+      const transcript = state.transcripts[key]!;
+      const runs = transcript.runs.map((run, index) => {
+        if (index !== transcript.runs.length - 1) return run;
+        const model = transcript.runs.flatMap((each) => each.steps).find((each) => each.files)!;
+        const written = {
+          ...model,
+          id: "tool:new-plan",
+          toolCallId: "new-plan",
+          toolName: "write",
+          status: "done",
+          endedAt: Date.now(),
+          files: { paths: ["notes/new-plan.md"], changed: true, created: true },
+        };
+        return { ...run, steps: [...run.steps, written] };
+      });
+      return { ...state, transcripts: { ...state.transcripts, [key]: { ...transcript, runs } } };
+    });
+    // Fetched once after the result, before the gateway stored it: not listed.
+    await expect.poll(lists).toBe(before + 1);
+    await page.waitForTimeout(800);
+    await expect(row(page, "new-plan.md")).toHaveCount(0);
+    // The gateway stores it, and the task's history is read again: the list is fetched again.
+    await page.evaluate(() => ((window as unknown as { stored: boolean }).stored = true));
+    const bump = () =>
+      change((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: { ...transcript, loadedAt: (transcript.loadedAt ?? 0) + 1 },
+          },
+        };
+      });
+    await bump();
+    await expect(row(page, "new-plan.md")).toBeVisible();
+    expect(await lists()).toBe(before + 2);
+    // Listed now: a later history read fetches nothing.
+    await bump();
+    await page.waitForTimeout(800);
+    expect(await lists()).toBe(before + 2);
+  });
+
   test("F-448: when commands ran since the list was checked, the tab says so; a refresh shows what they changed", async ({
     page,
   }) => {
