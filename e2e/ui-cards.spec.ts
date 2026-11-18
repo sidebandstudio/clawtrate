@@ -33,10 +33,9 @@ const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
 const SHOTS = process.env.CLAWTRATE_CARD_SHOTS;
 const STAMP = Date.now().toString(36);
 
-// Not serial: one check failing on timing does not keep the rest from running. The checks
-// still run in file order on one worker; after a failure Playwright starts a new worker,
-// which pairs fresh hosts in beforeAll. Only the last check reads what earlier ones left
-// (`later`), and it fails when that is empty.
+// Not serial: one check failing on timing does not keep the rest from running. Each check
+// stands alone: it makes the tasks, approvals and questions it reads, and reads no other
+// check's. A new worker, after a failure, pairs fresh hosts in beforeAll.
 
 type Host = { child: ChildProcess; url: string; data: string };
 const hosts: Host[] = [];
@@ -44,8 +43,6 @@ let clients: Record<ClientName, OperatorSession>;
 /** The interface with interactive access, and one that stays read-only. */
 let page: Page;
 let reader: Page;
-/** Tasks to read again, later, from history, on a host that never saw them live. */
-const later: Array<{ bot: string; title: string; reply: string }> = [];
 
 async function startOwnHost(): Promise<Host> {
   const data = mkdtempSync(join(tmpdir(), "clawtrate-cards-"));
@@ -393,7 +390,6 @@ test.describe("approval cards on a real gateway", () => {
     });
     await expect(card(fresh, "approval-card")).toHaveCount(0);
     await fresh.context().close();
-    later.push({ bot: "Otto", title, reply: "The slow command finished." });
   });
 
   test("F-163 F-165: denied: the card says the command was not run", async () => {
@@ -490,7 +486,6 @@ test.describe("question cards on a real gateway", () => {
     await expect(question.locator(".answer")).toHaveText(["ALake loop"]);
     await expect(transcript(page)).toContainText("route: Lake loop", { timeout: 30_000 });
     await shot(question, "question-answered");
-    later.push({ bot: "Pip", title, reply: "route: Lake loop" });
   });
 
   test("F-114 F-303: several questions in one card, answered together", async () => {
@@ -872,14 +867,35 @@ test.describe("cards read again from history", () => {
     browser,
   }) => {
     test.setTimeout(240_000);
-    expect(later.length).toBeGreaterThan(0);
+    // A settled approval and an answered question of this check's own, settled on this host.
+    const approved = await hostTask("otto", "Approve then read", "#sleep 2");
+    await openTask(page, "Otto", approved.title);
+    const approval = card(page, "approval-card");
+    await expect(approval).toHaveCount(1, { timeout: 30_000 });
+    await approval.getByRole("button", { name: "Allow once" }).click();
+    await expect(approval.locator(".tag")).toHaveText("Allowed once", { timeout: 30_000 });
+    await expect(transcript(page)).toContainText("The slow command finished.", {
+      timeout: 30_000,
+    });
+    const asked = await hostTask("pip", "Answer then read", "ask me a question");
+    await openTask(page, "Pip", asked.title);
+    const question = card(page, "question-card");
+    await expect(question).toHaveCount(1, { timeout: 30_000 });
+    await question.getByRole("radio", { name: /Lake loop/ }).click();
+    await expect(question).toHaveAttribute("data-state", "answered", { timeout: 30_000 });
+    await expect(transcript(page)).toContainText("route: Lake loop", { timeout: 30_000 });
+    // A host that never saw either live reads them from history alone.
     const fresh = await pairedPage(browser, await startOwnHost());
     await requestAccess(fresh);
-    for (const task of later) {
+    for (const task of [
+      { bot: "Otto", title: approved.title, reply: "The slow command finished." },
+      { bot: "Pip", title: asked.title, reply: "route: Lake loop" },
+    ]) {
       await openTask(fresh, task.bot, task.title);
       await expect(transcript(fresh)).toContainText(task.reply, { timeout: 30_000 });
       await expect(card(fresh, "approval-card")).toHaveCount(0);
       await expect(card(fresh, "question-card")).toHaveCount(0);
     }
+    await fresh.context().close();
   });
 });
