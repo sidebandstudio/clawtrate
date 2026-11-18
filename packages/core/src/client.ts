@@ -4473,6 +4473,8 @@ export class ClawtrateClient {
       this.dropRawOfRemovedSteps(key, current, rebuilt);
       this.setTranscript(key, () => withLive(rebuilt));
       this.afterActivity(key);
+      // A run settled from history may be a recipient another open task's card follows.
+      this.refreshLinkersOf(key, current.runs, rebuilt.runs);
       for (const run of toStop) {
         this.request("chat.abort", { sessionKey: key, runId: run.id }).catch((error: unknown) =>
           this.noteMissingScope(error),

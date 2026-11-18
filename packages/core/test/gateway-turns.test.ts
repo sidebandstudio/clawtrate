@@ -394,3 +394,59 @@ describe("a steer the gateway admits as a run of its own", () => {
     client.stop();
   });
 });
+
+describe("a recipient's run settled from history while its sender's task is open", () => {
+  const PEER = "agent:marlow:main";
+
+  it("F-122: the sender's card follows it in the same step, never left Working", async () => {
+    const gateway = grantingGateway();
+    let recipientActive = true;
+    gateway.handlers["chat.history"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== PEER) return { messages: [] };
+      return recipientActive
+        ? { messages: [], inFlightRun: { runId: "peer-r" } }
+        : {
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "Finished." }],
+                __openclaw: { id: "a1", runId: "peer-r" },
+              },
+            ],
+          };
+    };
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit(
+      "agent",
+      agentEvent("sender-r", 1, "tool", {
+        phase: "start",
+        name: "sessions_send",
+        toolCallId: "send-c",
+        args: { sessionKey: PEER, message: "A message" },
+      }),
+    );
+    gateway.emit(
+      "agent",
+      agentEvent("sender-r", 2, "tool", {
+        phase: "result",
+        name: "sessions_send",
+        toolCallId: "send-c",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "{}" }],
+          details: { status: "accepted", sessionKey: PEER, runId: "peer-r" },
+        },
+      }),
+    );
+    gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    client.openSession(PEER);
+    await until(() => client.state.transcripts[PEER]?.status === "ready");
+    // Its own end never reaches this client; the row naming it does, and history settles it.
+    recipientActive = false;
+    gateway.emit("sessions.changed", { sessionKey: PEER, runId: "peer-r", phase: "end" });
+    await until(() => client.state.transcripts[PEER]?.runs[0]?.state === "completed");
+    expect(transcript().linkedRuns["peer-r"]?.state).toBe("completed");
+    client.stop();
+  });
+});
