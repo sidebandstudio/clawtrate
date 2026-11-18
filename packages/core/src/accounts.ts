@@ -34,11 +34,17 @@ export const ACCOUNT_READ_CONCURRENCY = 4;
 /** A label: trimmed, 1 to 32 characters (bots.md section 22). */
 export const MAX_LABEL_CHARS = 32;
 /**
- * The longest account id or bot id read back from the person's preferences.
- * Longer ones are not Clawtrate's and are not kept, so each record stays
- * within what `owners.ts` registers for it.
+ * The longest account id or bot id read back from the person's preferences,
+ * measured as JSON, the way it is kept and counted. Longer ones are not
+ * Clawtrate's and are not kept, so each record stays within what `owners.ts`
+ * registers for it.
  */
 export const MAX_PREF_ID_CHARS = 256;
+
+/** How long a string is once serialized: what a bound on a kept entry counts. */
+export function serializedLength(value: string): number {
+  return JSON.stringify(value).length;
+}
 const PREF_PROFILE_ID = /^[\w.-]{1,128}:[^\s]{1,127}$/;
 const PREF_BOT_ID = /^[\w.-]{1,128}$/;
 
@@ -46,6 +52,7 @@ const PREF_BOT_ID = /^[\w.-]{1,128}$/;
 export function prefProfileId(value: unknown): string | null {
   return typeof value === "string" &&
     value.length <= MAX_PREF_ID_CHARS &&
+    serializedLength(value) <= MAX_PREF_ID_CHARS &&
     PREF_PROFILE_ID.test(value)
     ? value
     : null;
@@ -53,12 +60,22 @@ export function prefProfileId(value: unknown): string | null {
 
 /** A bot id as a preference key may name it. */
 export function prefBotId(value: unknown): string | null {
-  return typeof value === "string" && PREF_BOT_ID.test(value) ? value : null;
+  return typeof value === "string" &&
+    PREF_BOT_ID.test(value) &&
+    serializedLength(value) <= MAX_PREF_ID_CHARS
+    ? value
+    : null;
 }
 /** The longest a sign-in may wait on the gateway, a little over its own 25 minutes. */
 export const SIGNIN_WAIT_MS = 26 * 60_000;
 /** The longest typed code, address or key passed to the gateway. */
 export const MAX_SECRET_CHARS = 8_192;
+/**
+ * The longest a held typed value can be once serialized: each UTF-16 unit of
+ * one at most `MAX_SECRET_CHARS` long becomes at most six characters
+ * (`\u0001`), and the quotes.
+ */
+export const MAX_SECRET_JSON_CHARS = 6 * MAX_SECRET_CHARS + 2;
 /** How long "Still creating" waits before it shows (bots.md section 3). */
 export const SLOW_CREATE_MS = 4_000;
 /** Preference keys Clawtrate keeps on the gateway, per person. */

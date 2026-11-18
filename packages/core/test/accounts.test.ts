@@ -14,6 +14,7 @@ import {
   labelProblem,
   lockCommand,
   MAX_ACCOUNTS,
+  MAX_SECRET_CHARS,
   parseModelRef,
   readBotView,
   retainedOrder,
@@ -1277,6 +1278,41 @@ describe("the bounds", () => {
         expect(JSON.stringify(entry).length, path).toBeLessThanOrEqual(CLIENT_OWNERS[path]!.each);
       }
     }
+    client.stop();
+  });
+
+  it("an id that is short but grows when serialized is measured as it is kept, and is not kept", async () => {
+    const fake = new AccountsGateway();
+    // 125 characters as written, 727 as JSON: each control character is six.
+    const grows = `acme:${"\u0002".repeat(120)}`;
+    fake.prefs[`clawtrate.account-kind.${grows}`] = "subscription";
+    fake.prefs["clawtrate.bot-account.otto"] = { mode: "account", account: grows };
+    fake.prefs["clawtrate.bot-account.pip"] = { mode: "account", account: "acme:home" };
+    const { client } = await accountsClient({ gateway: fake });
+    const engine = (
+      client as unknown as {
+        accounts: { kinds: Map<string, unknown>; intents: Map<string, unknown> };
+      }
+    ).accounts;
+    expect([...engine.kinds.keys()]).not.toContain(grows);
+    expect([...engine.intents.keys()]).toEqual(["pip"]);
+    client.stop();
+  });
+
+  it("a typed value held for a sign-in fits its registered size however it serializes", async () => {
+    const { client, fake } = await accountsClient();
+    const engine = (client as unknown as { accounts: { secrets: string[] } }).accounts;
+    const next = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) =>
+      (params as { answer?: unknown }).answer
+        ? { done: false, status: "running", step: { id: "wait", type: "text", message: "Wait" } }
+        : next(params);
+    await client.startSignIn(CHOICES.browser, null);
+    await client.answerSignIn("\u0003".repeat(MAX_SECRET_CHARS));
+    expect(engine.secrets).toHaveLength(1);
+    expect(JSON.stringify(engine.secrets[0]).length).toBeLessThanOrEqual(
+      CLIENT_OWNERS["accounts.secrets"]!.each,
+    );
     client.stop();
   });
 

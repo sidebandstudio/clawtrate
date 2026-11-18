@@ -21,6 +21,7 @@ import {
   MAX_ACCOUNTS,
   MAX_LOCK_CHECKS,
   MAX_SECRET_CHARS,
+  MAX_SECRET_JSON_CHARS,
   mergeAccounts,
   normalizeLabel,
   parseModelRef,
@@ -35,6 +36,7 @@ import {
   readStep,
   SIGNIN_WAIT_MS,
   MAX_SIGNIN_SECRETS,
+  serializedLength,
   secretForms,
   SLOW_CREATE_MS,
   unreadEvidence,
@@ -458,7 +460,8 @@ export class AccountsEngine {
   /** Hold what the person typed, for the life of this sign-in, to take it out of what comes back. */
   private holdSecret(value: string): void {
     for (const form of secretForms(value)) {
-      if (this.secrets.includes(form)) continue;
+      // Measured as it is kept: what `owners.ts` registers for each.
+      if (this.secrets.includes(form) || serializedLength(form) > MAX_SECRET_JSON_CHARS) continue;
       this.secrets.push(form);
       if (this.secrets.length > MAX_SIGNIN_SECRETS) this.secrets.shift();
     }

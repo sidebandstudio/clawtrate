@@ -20,7 +20,7 @@
 import {
   MAX_ACCOUNTS,
   MAX_PREF_ID_CHARS,
-  MAX_SECRET_CHARS,
+  MAX_SECRET_JSON_CHARS,
   MAX_SIGNIN_SECRETS,
 } from "./accounts.ts";
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_PENDING_ATTACHMENTS } from "./attachments.ts";
@@ -215,7 +215,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "accounts.unwritten": { max: MAX_ACCOUNTS, each: ID, row: "bookkeeping" },
   // What the person typed into the one sign-in under way, in the forms it may come back in, while
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
-  "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_CHARS + 2, row: "bookkeeping" },
+  "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.
   "fileTransfers.held": {
