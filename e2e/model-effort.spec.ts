@@ -178,7 +178,7 @@ test.afterAll(async () => {
   }
 });
 
-test("F-042 F-043 F-478: a bot's model and effort chosen in its settings are saved on its account and seen by a second connection", async () => {
+test("F-042 F-043: a bot's model and effort chosen in its settings are saved on its account and seen by a second connection", async () => {
   test.setTimeout(180_000);
   await page.getByRole("button", { name: "Show work panel" }).click();
   await page.getByRole("tab", { name: "Settings" }).click();
