@@ -7,8 +7,20 @@
 // It changes nothing in the browser: `Target.setAutoAttach` without pausing
 // new tabs, and `Page.enable` on each tab. It never sets the download
 // behaviour, which the gateway's own client owns.
+//
+// Every command it sends is first allowed by `allow()`: while the watch is
+// being set up for a caller, that is the caller's authority, checked right
+// before each command; when it says no, the watch sends nothing more and
+// closes.
 
-import { openBrowserCdp } from "./cdp.js";
+import { CdpError, openBrowserCdp } from "./cdp.js";
+
+/** The watch was not allowed to send a command, so it sent none and closed. */
+export class WatchRefused extends CdpError {
+  constructor() {
+    super("watch_refused", "the watch's command was not allowed");
+  }
+}
 
 /**
  * Open a watch on `bot`'s browser. Resolves once it is attached to the tabs
@@ -17,7 +29,17 @@ import { openBrowserCdp } from "./cdp.js";
  */
 export async function watchBrowser(bot, options = {}) {
   const { onChange = () => {} } = options;
+  let allow = options.allow ?? (() => true);
+  if (!allow()) throw new WatchRefused();
   const cdp = await openBrowserCdp(bot, options);
+  /** Send a command only once `allow()` says so; otherwise close the watch. */
+  const command = (method, params, sendOptions) => {
+    if (!allow()) {
+      cdp.close();
+      return Promise.reject(new WatchRefused());
+    }
+    return cdp.send(method, params, sendOptions);
+  };
   /** sessionId -> { targetId, loading: Set<frameId>, enabling: boolean } */
   const tabs = new Map();
   /** download guid -> sessionId */
@@ -40,8 +62,7 @@ export async function watchBrowser(bot, options = {}) {
       changed();
       // Chromium answers this only once a pending navigation in the tab has
       // ended, so until then the tab counts as loading.
-      cdp
-        .send("Page.enable", {}, { sessionId: params.sessionId })
+      command("Page.enable", {}, { sessionId: params.sessionId })
         .then(
           () => (tab.enabling = false),
           () => {
@@ -74,7 +95,7 @@ export async function watchBrowser(bot, options = {}) {
   cdp.onClose(changed);
 
   try {
-    await cdp.send("Target.setAutoAttach", {
+    await command("Target.setAutoAttach", {
       autoAttach: true,
       waitForDebuggerOnStart: false,
       flatten: true,
@@ -84,9 +105,14 @@ export async function watchBrowser(bot, options = {}) {
     throw error;
   }
 
+  if (cdp.closed) throw new WatchRefused();
   return {
     get closed() {
       return cdp.closed;
+    },
+    /** Replace what allows the watch's later commands (for tabs opened later). */
+    setAllow(fn) {
+      allow = fn;
     },
     /**
      * What is unresolved now, or null: "download" while a download is in

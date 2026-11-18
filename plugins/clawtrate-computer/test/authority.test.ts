@@ -6,7 +6,7 @@
 // prepared for that caller.
 
 import { describe, expect, it } from "vitest";
-import { ATLAS_TAB, Access, FakeBrowser, load, until } from "./harness.ts";
+import { ATLAS, ATLAS_TAB, Access, FakeBrowser, load, until } from "./harness.ts";
 
 const tab = { targetId: ATLAS_TAB };
 const texts = (socket: { frames(): { opcode: number; payload: Buffer }[] }) =>
@@ -338,6 +338,38 @@ describe("no command to the browser, and no confirmation, once access has gone",
     h.browser.tabSockets.at(-1)!.event("Page.screencastFrame", { data: "AA==", sessionId: 3 });
     expect(h.browser.sent("Page.screencastFrameAck")).toEqual([]);
     expect(socket.closeCode()).toEqual({ code: 4006, reason: "authority_revoked" });
+    await h.stop();
+  });
+});
+
+describe("the take's watch is set up only while the caller's access holds", () => {
+  it("a take whose access quietly ends while it connects sends no command at all, the watch's setup included", async () => {
+    const h = load();
+    const access = new Access();
+    h.browser.connectDelayMs = 60;
+    const take = h.call("control.take", tab, { access });
+    await until(() => h.browser.tabSockets.length > 0);
+    access.revoked = true;
+    expect(ended(await take)).toEqual([false, "FORBIDDEN", "session_access_ended"]);
+    expect(h.browser.sent().map((e) => e.method)).toEqual([]);
+    expect(h.browser.fetches.some((f) => f.url.endsWith("/json/version"))).toBe(false);
+    expect(h.state.leases.size).toBe(0);
+    await h.stop();
+  });
+
+  it("access that quietly ends during the watch's setup stops it before its next command", async () => {
+    const h = load();
+    const access = new Access();
+    h.browser.connectDelayMs = 60;
+    const take = h.call("control.take", tab, { access });
+    // The watch's connection is opening; access goes before its first command.
+    await until(() => h.browser.sockets.some((s) => s.url.includes("/devtools/browser/")));
+    access.revoked = true;
+    expect(ended(await take)).toEqual([false, "FORBIDDEN", "session_access_ended"]);
+    const toBrowser = h.browser.sent().filter((e) => e.url.includes("/devtools/browser/"));
+    expect(toBrowser).toEqual([]);
+    expect(h.browser.watchSocket(ATLAS)).toBeUndefined();
+    expect(h.state.leases.size).toBe(0);
     await h.stop();
   });
 });

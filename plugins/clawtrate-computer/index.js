@@ -261,17 +261,25 @@ export function createComputer(api, options = {}) {
    * The plugin's watch on a bot's browser, opened if needed; null when the
    * browser cannot be watched (not running, or not answering in time).
    */
-  function ensureWatch(bot, ms = timeouts.discoveryMs + timeouts.connectMs + timeouts.commandMs) {
+  function ensureWatch(
+    bot,
+    ms = timeouts.discoveryMs + timeouts.connectMs + timeouts.commandMs,
+    allow = () => true,
+  ) {
     const known = state.watches.get(bot.profile);
     if (known?.watch && !known.watch.closed) return Promise.resolve(known.watch);
     if (known?.pending) return known.pending;
     const entry = { registration, watch: null, pending: null };
-    entry.pending = watchBrowser(bot, { ...net, onChange: changed })
+    // Set up on the opener's behalf: each setup command only while `allow` holds.
+    entry.pending = watchBrowser(bot, { ...net, onChange: changed, allow })
       .then((watch) => {
         if (state.watches.get(bot.profile) !== entry || stopped) {
           watch.close();
           return null;
         }
+        // Set up. What it sends later (Page.enable for a tab opened later) is
+        // the plugin's own observation of the bot's browser, on no caller's behalf.
+        watch.setAllow(() => !stopped);
         entry.watch = watch;
         watch.onClose(() => {
           if (state.watches.get(bot.profile) === entry) state.watches.delete(bot.profile);
@@ -884,7 +892,13 @@ export function createComputer(api, options = {}) {
     if (lease.ending)
       refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
     // What the plugin can see in the bot's browser, it must not grant over.
-    const watch = await ensureWatch(bot);
+    // A watch this take sets up sends each of its commands only while the
+    // caller's access holds, checked right before it.
+    if (!current()) {
+      await endLease(lease, "revoked", "access-revoked");
+      accessEnded();
+    }
+    const watch = await ensureWatch(bot, undefined, current);
     if (lease.ending)
       refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
     if (!current()) {
