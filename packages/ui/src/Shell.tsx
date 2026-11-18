@@ -335,6 +335,50 @@ export function Shell({
     },
     [drawerOpen, setPanel, taskKey],
   );
+  // From the Computer tab: a step shown in the chat, and the question card (work-pane.md, section 18).
+  const showStep = useCallback(
+    (stepId: string) => {
+      const callId = stepId.startsWith("tool:") ? stepId.slice(5) : stepId;
+      const reveal = () => {
+        const found = taskKey !== null && revealStep(taskKey, callId);
+        setChatNote("");
+        requestAnimationFrame(() =>
+          setChatNote(
+            found
+              ? "Showing the step in the chat"
+              : "This step isn't in the chat: it is not loaded here, or not kept.",
+          ),
+        );
+      };
+      if (drawerOpen) {
+        keepFocus.current = true;
+        setPanel(false);
+        requestAnimationFrame(() => requestAnimationFrame(reveal));
+      } else reveal();
+    },
+    [drawerOpen, setPanel, taskKey],
+  );
+  const showQuestion = useCallback(() => {
+    const reveal = () => {
+      const cards = document.querySelectorAll<HTMLElement>(
+        '.transcript [data-testid="question-card"]',
+      );
+      const card = cards[cards.length - 1];
+      if (!card) return;
+      card.scrollIntoView({ block: "center" });
+      (card.querySelector<HTMLElement>("button, input") ?? card).focus({ preventScroll: true });
+    };
+    if (drawerOpen) {
+      keepFocus.current = true;
+      setPanel(false);
+      requestAnimationFrame(() => requestAnimationFrame(reveal));
+    } else requestAnimationFrame(reveal);
+  }, [drawerOpen, setPanel]);
+  const showComputer = useCallback(() => {
+    setPanel(true);
+    setWorkTab("computer");
+    requestAnimationFrame(() => document.getElementById("work-tab-computer")?.focus());
+  }, [setPanel, setWorkTab]);
   const goBackToFile = useCallback(() => {
     setPanel(true);
     setWorkTab("files");
@@ -459,6 +503,7 @@ export function Shell({
               caughtUp={caughtUp}
               toggleRef={toggleRef}
               inert={drawerOpen || inert}
+              onShowComputer={showComputer}
             />
           </WorkLinksContext.Provider>
         </OpenTaskContext.Provider>
@@ -481,6 +526,12 @@ export function Shell({
             fileRequest={fileRequest}
             onShowInChat={showInChat}
             onFilePath={setOpenFilePath}
+            computer={state.computer}
+            connection={state.connection}
+            interactive={interactive}
+            onShowStep={showStep}
+            onShowQuestion={showQuestion}
+            onRequestAccess={() => void send({ type: "requestAccess" })}
             drawer={drawerOpen}
             onClose={() => setPanel(false)}
             closeRef={closeRef}
