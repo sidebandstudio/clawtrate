@@ -390,6 +390,11 @@
     return `<div class="r-seg" role="radiogroup" aria-label="Show as">` +
       opts.map(([v, t]) => `<button type="button" role="radio" aria-checked="${v === cur}" tabindex="${v === cur ? 0 : -1}" data-r="seg" data-v="${v}">${t}</button>`).join("") + `</div>`;
   }
+  // On the phone New routine is a round "+" button, so the title keeps its room.
+  const newButton = (label) =>
+    phone()
+      ? `<button type="button" class="icon-button" data-r="new" aria-label="${esc(label)}" title="${esc(label)}">${icon("plus")}</button>`
+      : button(label, 'data-size="sm" data-r="new"', "primary");
   const backButton = (label, action) =>
     `<button type="button" class="icon-button" data-r="${action}" aria-label="${label}">${icon("back")}</button>`;
 
@@ -445,7 +450,7 @@
     const list = visibleRoutines();
     const head =
       `<header class="r-head">${phone() ? backButton("Back to bots", "to-bots") : ""}<h1 id="view-title">Routines</h1><span class="spacer"></span>${seg()}` +
-      (isAdmin() ? button(S.bot ? `New routine for ${botName(S.bot)}` : "New routine", 'data-size="sm" data-r="new"', "primary") : "") + `</header>`;
+      (isAdmin() ? newButton(S.bot ? `New routine for ${botName(S.bot)}` : "New routine") : "") + `</header>`;
     let body = awayCard();
     if (schedulerOff()) body += note(`<p><b>The gateway's scheduler is off.</b> Routines and check-ins don't run on their schedule. Run now still works.</p>`, "warn");
     body += `<div class="r-toolbar">${botSelect()}<span data-testid="count">${S.state === "loading" || S.state === "error" ? "" : `${list.length} routine${list.length === 1 ? "" : "s"}`}</span></div>`;
@@ -511,7 +516,7 @@
     const hours = Array.from({ length: 12 }, (_, k) => `<span style="top:calc(${k * 2} * var(--hour))">${k === 0 ? "" : hm(k * 2, 0).replace(":00", "")}</span>`).join("");
     const head =
       `<header class="r-head">${phone() ? backButton("Back to bots", "to-bots") : ""}<h1 id="view-title">Routines</h1><span class="spacer"></span>${seg()}` +
-      (isAdmin() ? button("New routine", 'data-size="sm" data-r="new"', "primary") : "") + `</header>`;
+      (isAdmin() ? newButton("New routine") : "") + `</header>`;
     const body =
       `<div class="r-toolbar">${botSelect()}</div>` +
       `<div class="r-cal-bar"><button type="button" class="icon-button" aria-label="Previous">${icon("back")}</button><button type="button" class="icon-button" aria-label="Next">${icon("chevron")}</button>` +

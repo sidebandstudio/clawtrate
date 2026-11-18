@@ -352,6 +352,7 @@ for (const [w, h] of [[1440, 900], [1100, 760], [800, 760], [390, 844]]) {
 }
 p = await open("width=phone", { width: 390, height: 844 });
 check("phone: List and Day only, Back to bots in the header", (await count(p, '.r-seg [role="radio"]')) === 2 && (await label(p, '.r-head [data-r="to-bots"]')) === "Back to bots");
+check("phone: New routine is a round + button, so the title keeps its room", (await label(p, '.r-head .icon-button[data-r="new"]')) === "New routine" && (await p.evaluate(() => { const t = document.querySelector("#view-title"); return t.scrollWidth <= t.clientWidth; })));
 await p.click('.r-head [data-r="to-bots"]');
 check("phone: Back shows the bots, focus on the Routines button", (await p.evaluate(() => document.querySelector(".shell").dataset.view)) === "list" && (await p.evaluate(() => document.activeElement.id)) === "routines-button");
 await p.click("#routines-button");
