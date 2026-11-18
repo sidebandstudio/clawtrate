@@ -349,6 +349,8 @@ test("F-022: leaving a task whose opening read the gateway refused keeps its dot
           .length,
     )
     .toBe(1);
+  // The refusal is answered while the task is still open; only then is it left.
+  await page.evaluate(() => new Promise((done) => setTimeout(done, 200)));
   await taskRow(page, "Disk almost full on the media box").click();
   await expect(page.locator(".title-pill-task")).toHaveText("Disk almost full on the media box");
   await expect(taskRow(page, "Weekly backup check").locator(".unread-dot")).toHaveCount(1);
