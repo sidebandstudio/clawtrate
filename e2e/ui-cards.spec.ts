@@ -734,21 +734,29 @@ test.describe("Messaged cards' actions on a real gateway", () => {
     const t = await clientTask("pip", "message-open");
     const run = await clients.plain.send(t.key, "#message");
     await clients.plain.terminal(String(run.runId));
+    // This message's identities: the send's call id (its card here) and the recipient run.
+    const { toolCallId, recipientRunId } = sendFacts(String(run.runId));
+    expect(toolCallId).not.toBe("");
+    expect(recipientRunId).not.toBe("");
+    const sender = page.locator(
+      `#card-bot-message-${`tool:${toolCallId}`.replace(/[^\w-]/g, "_")}`,
+    );
     await openTask(page, "Pip", t.title);
-    const messaged = card(page, "messaged-card");
-    await messaged.locator("summary").click();
-    await messaged.getByRole("button", { name: "Open this message in Marlow's task" }).click();
+    await sender.locator("summary").click();
+    await sender.getByRole("button", { name: "Open this message in Marlow's task" }).click();
     await expect(page.locator(".title-pill")).toContainText("Notes for Pip");
-    // Marlow's task, at the Message from Pip card of the run this message started, open and focused.
-    // Marlow's task holds cards from other checks too: this one is the card the link opened.
-    const received = page.locator('[data-testid="received-card"][open]');
+    // Marlow's task, at the Message from Pip card of the run this message started, open and
+    // focused: that card by its run, among the cards other checks left in this shared task.
+    const received = page.locator(`[data-testid="received-card"][data-run-id="${recipientRunId}"]`);
     await expect(received).toHaveCount(1);
     await expect(received).toHaveAttribute("open", "");
     await expect(received.locator("summary")).toBeFocused();
+    await expect(page.locator('[data-testid="received-card"][open]')).toHaveCount(1);
     await shot(received, "received-card");
     await received.getByRole("button", { name: "Open this message in Pip's task" }).click();
     await expect(page.getByRole("heading", { level: 1, name: t.title })).toBeVisible();
-    await expect(card(page, "messaged-card")).toHaveAttribute("open", "");
+    // Back at this message's own card, still open.
+    await expect(sender).toHaveAttribute("open", "");
   });
 
   test("two messages to Marlow in one task, its whole history loaded: Show full exchange shows both and the replies, read-only", async () => {
