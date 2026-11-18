@@ -127,6 +127,8 @@ function useHoldPlace(
     const element = scroller.current;
     if (!element) return;
     let place: { block: Element; caret: Caret | null; top: number } | null = null;
+    // Where the hold last put the scroll, until that scroll is reported.
+    let held: number | null = null;
 
     /** Where the reading line is, and where a held place is drawn, relative to the scroller. */
     const frame = () => {
@@ -156,28 +158,46 @@ function useHoldPlace(
       const rect = block.getBoundingClientRect();
       const found = caretAt(rect.left + 2, Math.max(line + 2, rect.top + 2));
       const caret = found && block.contains(found.node) ? found : null;
-      const held = { block, caret, top: 0 };
-      held.top = (drawnAt(held) ?? rect.top) - top;
-      place = held;
+      const next = { block, caret, top: 0 };
+      next.top = (drawnAt(next) ?? rect.top) - top;
+      place = next;
+    };
+
+    /** Put the held text back where it was drawn: the layout moved under it, not the reader. */
+    const hold = () => {
+      if (!place) return;
+      const now = drawnAt(place);
+      if (now === null) return;
+      const was = element.scrollTop;
+      element.scrollTop += now - frame().top - place.top;
+      if (element.scrollTop !== was) held = element.scrollTop;
     };
 
     // Watching the content too covers late reflows, such as fonts arriving, and every
     // change of content: a step becoming a card, a card arriving or resolving above.
     const observer = new ResizeObserver(() => {
       if (following.current) toEnd();
-      else if (place) {
-        const now = drawnAt(place);
-        if (now !== null) element.scrollTop += now - frame().top - place.top;
-      }
+      else hold();
       record();
     });
+    // A scroll is reported a frame after it happens. The hold's own is no new place of the
+    // reader's: a change committed before it is reported, such as an effect opening a part of
+    // a fold or a pane docking, has moved the layout again, and is held too, before the place
+    // is recorded. Any other scroll, the reader's or a control brought into view, is where the
+    // reader now is.
+    const onScroll = () => {
+      const own = held !== null && Math.abs(element.scrollTop - held) <= 0.5;
+      held = null;
+      if (own && !following.current) hold();
+      record();
+    };
     record();
     observer.observe(element);
     if (element.firstElementChild) observer.observe(element.firstElementChild);
-    element.addEventListener("scroll", record, { passive: true });
+    element.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       observer.disconnect();
-      element.removeEventListener("scroll", record);
+      element.removeEventListener("scroll", onScroll);
     };
   }, [scroller, following, toEnd]);
 }

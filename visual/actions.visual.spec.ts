@@ -984,6 +984,60 @@ test.describe("action cards", () => {
     await expect(parts.nth(1).locator(".fold-rows .step").nth(1)).toHaveAttribute("open", "");
   });
 
+  test("the reading line holds through a second change above it committed before the hold's own scroll is reported", async ({
+    page,
+  }) => {
+    // The hold moves the view when the layout moves; that scroll is reported a frame later. A
+    // change committed in between (an effect opening a fold's part, a pane docking) moves the
+    // layout again, and is held too: the hold's own scroll is not where the reader now is.
+    await page.setViewportSize({ width: 1440, height: 520 });
+    await open(page, "actions-long");
+    const marker = page.getByText("The house loses most heat through the loft.");
+    await marker.evaluate((element) => {
+      const scroller = element.closest<HTMLElement>('[data-testid="transcript"]')!;
+      const band = Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
+      scroller.scrollTop +=
+        element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await settle(page);
+    const before = (await marker.boundingBox())!.y;
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      // A bubble drawn above the line, after the read of the energy bills.
+      const insert = (text: string) =>
+        fixture.setState((state) => {
+          const key = "agent:otto:disk-space";
+          const t = state.transcripts[key]!;
+          const items = t.items.map((item) => {
+            const at = item.blocks.findIndex(
+              (b) =>
+                b.kind === "tool-call" &&
+                b.name === "read" &&
+                (b.argumentsText ?? "").includes("energy-bills"),
+            );
+            if (at === -1) return item;
+            const blocks = [...item.blocks];
+            blocks.splice(at + 1, 0, { kind: "text", text });
+            return { ...item, blocks };
+          });
+          return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, items } } };
+        });
+      insert("The bills are in. Two more files to read.");
+      // The hold answers this frame's layout with a scroll; the second change lands after that
+      // frame is drawn and before the next one reports the scroll.
+      requestAnimationFrame(() => setTimeout(() => insert("One of them is from last winter.")));
+    });
+    await expect(page.getByText("One of them is from last winter.")).toBeVisible();
+    await settle(page);
+    await settle(page);
+    expect(Math.abs((await marker.boundingBox())!.y - before)).toBeLessThanOrEqual(1);
+  });
+
   test("F-430: at phone width the sentence wraps to at most two lines, the detail is below it, and the state word is whole", async ({
     browser,
   }) => {
