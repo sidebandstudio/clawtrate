@@ -938,3 +938,35 @@ describe("frames", () => {
     expect(parseFrame(notJpeg)).toBeNull();
   });
 });
+
+describe("renewing within the plugin's own deadline", () => {
+  it("F-142: renews a view at a quarter of the renewal time the plugin gives, timed from each renewal's start however slowly it is answered", async () => {
+    vi.useFakeTimers();
+    const sent: number[] = [];
+    const h = harness({
+      "clawtrate-computer.view.open": () => ({
+        streamId: "stream-1",
+        wsPath: `/clawtrate-computer/stream?ticket=${TICKET}`,
+        renewWithinMs: 6_000,
+        targetId: TAB,
+      }),
+      // Each renewal takes four seconds to be answered.
+      "clawtrate-computer.view.renew": () => {
+        sent.push(Date.now());
+        return new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({ ok: true, renewWithinMs: 6_000, streamRenewed: true, leaseRenewed: false }),
+            4_000,
+          ),
+        );
+      },
+    });
+    await live(h);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(sent.length).toBeGreaterThanOrEqual(7);
+    const gaps = sent.slice(1).map((at, i) => at - sent[i]!);
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(1_500);
+    expect(h.pane().view?.status).toBe("live");
+  });
+});

@@ -301,6 +301,7 @@ export function ComputerTab(props: ComputerTabProps) {
             requestAnimationFrame(() => openRef.current?.focus());
           }}
           onTake={take}
+          onWatch={watch}
           onCancel={() => send({ type: "computerCancelTake" })}
           onRelease={(answer) => send({ type: "computerRelease", answer })}
           onAnswerInChat={() => {

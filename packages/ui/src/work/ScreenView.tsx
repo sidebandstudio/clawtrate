@@ -36,6 +36,7 @@ export type ScreenViewProps = {
   frames: FrameCanvases;
   onClose: () => void;
   onTake: () => void;
+  onWatch: () => void;
   onCancel: () => void;
   onRelease: (answer: { questionId: string; itemId: string; option: number } | null) => void;
   onAnswerInChat: () => void;
@@ -279,7 +280,12 @@ export function ScreenView(props: ScreenViewProps) {
       ) : (
         <div className="screen-blank">
           {view?.status === "ended" ? (
-            <p>{words.viewEndLine(name, view.end ?? "gateway-ended", view.error)}</p>
+            <>
+              <p role="status">{words.viewEndLine(name, view.end ?? "gateway-ended", view.error)}</p>
+              <button type="button" className="screen-watch" onClick={props.onWatch}>
+                Watch again
+              </button>
+            </>
           ) : (
             <>
               {glyph("working")}

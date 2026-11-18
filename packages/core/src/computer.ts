@@ -407,6 +407,8 @@ type LiveView = {
   latest: { seq: number; width: number; height: number; jpeg: Uint8Array } | null;
   waiter: { after: number; resolve: (frame: ComputerFrame | null) => void; timer: Timer } | null;
   ended: boolean;
+  /** The view's own deadline, from `view.open` and every renewal's answer. */
+  renewWithinMs: number;
 };
 
 /** A lease this viewer holds or is giving back; its generation stays here. */
@@ -770,6 +772,7 @@ export class ComputerViews {
       latest: null,
       waiter: null,
       ended: false,
+      renewWithinMs: 20_000,
     };
     live.view = view;
     const tab = pane.tabs.find((each) => each.targetId === view.targetId);
@@ -821,8 +824,9 @@ export class ComputerViews {
     view.streamId = streamId;
     view.ticket = wsPath!.slice(wsPath!.indexOf("=") + 1);
     const renew = Number(answer?.renewWithinMs);
+    if (Number.isFinite(renew) && renew > 0) view.renewWithinMs = renew;
     this.openSocket(live, view, url);
-    this.reschedule(live, Number.isFinite(renew) && renew > 0 ? renew : undefined);
+    this.reschedule(live);
   }
 
   private openSocket(live: Live, view: LiveView, url: string): void {
@@ -983,15 +987,18 @@ export class ComputerViews {
   // Renewing ----------------------------------------------------------------------------------
 
   /** One timer per viewer renews its view and its lease together, while either is held. */
-  private reschedule(live: Live, renewWithinMs?: number): void {
+  private reschedule(live: Live): void {
     if (live.renewTimer) clearTimeout(live.renewTimer);
     live.renewTimer = null;
     const pane = this.pane(live.viewer);
     const viewing = live.view && !live.view.ended && live.view.streamId;
     const holding = live.lease && pane?.control.status === "granted";
     if (!viewing && !holding) return;
-    const within =
-      renewWithinMs ?? live.lease?.renewWithinMs ?? pane?.control.renewWithinMs ?? 20_000;
+    // Well within the shorter of the two deadlines: the view's and the held tab's.
+    const within = Math.min(
+      viewing ? live.view!.renewWithinMs : Infinity,
+      holding ? live.lease!.renewWithinMs : Infinity,
+    );
     const every = Math.max(1000, Math.min(RENEW_EVERY_MS, Math.floor(within / 4)));
     live.renewTimer = setTimeout(() => void this.renew(live), every);
   }
@@ -1006,6 +1013,8 @@ export class ComputerViews {
     const targetId = lease?.targetId ?? view!.targetId;
     const key = lease?.key ?? pane.key;
     const useView = view && view.targetId === targetId ? view : null;
+    // The next renewal is timed from this one's start, so a slow answer never stretches the cadence.
+    this.reschedule(live);
     try {
       const answer = asRecord(
         await deadline(
@@ -1018,6 +1027,11 @@ export class ComputerViews {
           RENEW_DEADLINE_MS,
         ),
       );
+      const within = Number(answer?.renewWithinMs);
+      if (Number.isFinite(within) && within > 0) {
+        if (useView) useView.renewWithinMs = within;
+        if (lease) lease.renewWithinMs = within;
+      }
       if (useView && live.view === useView && !useView.ended && answer?.streamRenewed !== true)
         this.endView(live, "gateway-ended", null);
       // "You have control" holds only while each renewal confirms the lease.
@@ -1036,7 +1050,6 @@ export class ComputerViews {
         void this.readTabs(live.viewer);
       }
     }
-    this.reschedule(live);
   }
 
   // Taking control ----------------------------------------------------------------------------
