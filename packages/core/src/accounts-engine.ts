@@ -15,6 +15,8 @@ import {
   INTENT_PREF_PREFIX,
   isBusy,
   KIND_PREF_PREFIX,
+  KIND_RECORDS,
+  type KindRecord,
   labelProblem,
   MAX_ACCOUNTS,
   MAX_LOCK_CHECKS,
@@ -37,7 +39,6 @@ import {
   SLOW_CREATE_MS,
   unreadEvidence,
   withoutSecret,
-  type AccountKind,
   type AccountsState,
   type AccountWrite,
   type BindingIntent,
@@ -101,7 +102,7 @@ export const MAX_CREATE_AVATAR_CHARS = 32_768;
 
 export class AccountsEngine {
   /** How each account was made, from Clawtrate's own record of the sign-ins it started. */
-  private readonly kinds = new Map<string, AccountKind>();
+  private readonly kinds = new Map<string, KindRecord>();
   /** What Clawtrate set for each bot it created or changed. */
   private readonly intents = new Map<string, BindingIntent>();
   /** Bots created here whose empty fallback list did not land. */
@@ -194,9 +195,9 @@ export class AccountsEngine {
     if (!entries) return;
     for (const [key, value] of Object.entries(entries)) {
       // Each entry is bounded here, where it enters: an id Clawtrate could have written, a known value.
-      if (key.startsWith(KIND_PREF_PREFIX) && (value === "subscription" || value === "key")) {
+      if (key.startsWith(KIND_PREF_PREFIX) && KIND_RECORDS.includes(value as KindRecord)) {
         const id = prefProfileId(key.slice(KIND_PREF_PREFIX.length));
-        if (id) this.remember(this.kinds, id, value, MAX_ACCOUNTS);
+        if (id) this.remember(this.kinds, id, value as KindRecord, MAX_ACCOUNTS);
       } else if (key.startsWith(INTENT_PREF_PREFIX)) {
         const bot = prefBotId(key.slice(INTENT_PREF_PREFIX.length));
         const intent = readIntent(value);
@@ -715,11 +716,12 @@ export class AccountsEngine {
         result.landed = shared ? "shared" : "kept";
         result.keptBy = shared ? null : signIn.forBot;
         if (signIn.stage === "checking" || signIn.stage === "unconfirmed") {
-          const kind: AccountKind =
+          // A key typed here; a browser sign-in that saves a key (OpenRouter's); a subscription.
+          const kind: KindRecord =
             signIn.byKey || signIn.flow === "key"
               ? "key"
               : signIn.provider === "openrouter"
-                ? "key"
+                ? "sign-in-key"
                 : "subscription";
           for (const each of result.added) await this.recordKind(each, kind);
         }
@@ -765,8 +767,8 @@ export class AccountsEngine {
     return checks;
   }
 
-  private async recordKind(profileId: string, kind: AccountKind): Promise<void> {
-    if (kind === "gateway" || !prefProfileId(profileId)) return;
+  private async recordKind(profileId: string, kind: KindRecord): Promise<void> {
+    if (!prefProfileId(profileId)) return;
     this.remember(this.kinds, profileId, kind, MAX_ACCOUNTS);
     await this.ctx
       .request("users.prefs.set", { entries: { [`${KIND_PREF_PREFIX}${profileId}`]: kind } })

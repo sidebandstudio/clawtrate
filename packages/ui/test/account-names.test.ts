@@ -4,7 +4,7 @@
 
 import type { GatewayAccount } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { accountName, accountParts } from "../src/bots/words.ts";
+import { accountName, accountParts, howMade } from "../src/bots/words.ts";
 
 const account = (id: string, label: string | null): GatewayAccount => ({
   id,
@@ -14,6 +14,7 @@ const account = (id: string, label: string | null): GatewayAccount => ({
   status: "ok",
   expiresAt: null,
   kind: "subscription",
+  made: "sign-in",
   keptBy: null,
   logoutSupported: true,
 });
@@ -45,5 +46,13 @@ describe("account names", () => {
   it("names every account by its id below admin", () => {
     const list = [account("acme:work", "Work"), account("acme:home", null)];
     expect(names(list, false).every((name, i) => name.endsWith(list[i]!.id))).toBe(true);
+  });
+});
+
+describe("how an account was made", () => {
+  it("says a key typed into Clawtrate was entered here, and a key a browser sign-in saved was not", () => {
+    const key = { ...account("openrouter:default", null), type: "api_key", kind: "key" as const };
+    expect(howMade({ ...key, made: "typed" })).toBe("An API key, entered in Clawtrate");
+    expect(howMade({ ...key, made: "sign-in" })).toBe("A sign-in that saves a key");
   });
 });

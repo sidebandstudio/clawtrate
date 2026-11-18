@@ -605,6 +605,27 @@ describe("a bot left half-made", () => {
   });
 });
 
+describe("how an account was made", () => {
+  it("tells a key typed into Clawtrate from a key a browser sign-in saved", async () => {
+    const fake = new AccountsGateway();
+    fake.prefs["clawtrate.account-kind.acme:work"] = "key";
+    fake.prefs["clawtrate.account-kind.acme:home"] = "sign-in-key";
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    try {
+      const find = (id: string) => accounts().accounts.find((a) => a.id === id);
+      expect(find("acme:work")).toMatchObject({ kind: "key", made: "typed" });
+      expect(find("acme:home")).toMatchObject({ kind: "key", made: "sign-in" });
+      // An account Clawtrate has no record of was added on the gateway.
+      expect(find("globex:team") ?? find("acme:studio")).toMatchObject({
+        kind: "gateway",
+        made: null,
+      });
+    } finally {
+      client.stop();
+    }
+  });
+});
+
 describe("sign-ins, through the gateway's own methods", () => {
   it("a link and a code: starting, waiting with the code and the link, connected, and where it landed", async () => {
     const fake = new AccountsGateway();
@@ -647,6 +668,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     expect(fake.prefs["clawtrate.account-kind.acme:travel"]).toBe("subscription");
     expect(accounts().accounts.find((a) => a.id === "acme:travel")).toMatchObject({
       kind: "subscription",
+      made: "sign-in",
       keptBy: null,
     });
     client.stop();
@@ -1219,6 +1241,7 @@ describe("the bounds", () => {
           status: "ok",
           expiresAt: 1,
           kind: "subscription",
+          made: "sign-in",
           keptBy: null,
           logoutSupported: true,
         })),

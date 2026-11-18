@@ -107,6 +107,7 @@ const account = (
   status: type === "api_key" ? "static" : "ok",
   expiresAt: null,
   kind,
+  made: kind === "subscription" ? "sign-in" : kind === "key" ? "typed" : null,
   keptBy: null,
   logoutSupported: true,
   ...extra,

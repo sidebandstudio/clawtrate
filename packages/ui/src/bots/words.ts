@@ -66,7 +66,7 @@ export function howMade(account: GatewayAccount): string {
   return account.kind === "subscription"
     ? "A sign-in Clawtrate started"
     : account.kind === "key"
-      ? account.type === "api_key"
+      ? account.made === "typed"
         ? "An API key, entered in Clawtrate"
         : "A sign-in that saves a key"
       : "Added on the gateway";

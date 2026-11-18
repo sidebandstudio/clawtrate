@@ -70,6 +70,14 @@ export const INTENT_PREF_PREFIX = "clawtrate.bot-account.";
 /** How an account was made, as far as Clawtrate knows: only from a sign-in it started. */
 export type AccountKind = "subscription" | "key" | "gateway";
 
+/**
+ * What Clawtrate records on the gateway for an account it made: a
+ * subscription's sign-in, a key typed into Clawtrate, or a sign-in in a
+ * browser that saves a key (OpenRouter's).
+ */
+export type KindRecord = "subscription" | "key" | "sign-in-key";
+export const KIND_RECORDS: readonly KindRecord[] = ["subscription", "key", "sign-in-key"];
+
 export type GatewayAccount = {
   /** The profile id on the gateway, `<provider>:<name>`. */
   id: string;
@@ -82,6 +90,11 @@ export type GatewayAccount = {
   status: string | null;
   expiresAt: number | null;
   kind: AccountKind;
+  /**
+   * How Clawtrate made it: a key typed into Clawtrate ("typed"), a sign-in it
+   * started ("sign-in"), or neither (null, an account added on the gateway).
+   */
+  made: "typed" | "sign-in" | null;
   /**
    * The bot whose own store keeps it, when no bot's refreshed view lists it
    * as inherited; null when it is in the shared store, which every bot sees.
@@ -492,9 +505,14 @@ export function readBotView(answer: unknown): BotView {
  * there is no second view, so its own accounts are kept by it until a read
  * with another bot present shows otherwise (bots.md section 5).
  */
+const kindOf = (record: KindRecord | undefined): AccountKind =>
+  record === "subscription" ? "subscription" : record ? "key" : "gateway";
+const madeOf = (record: KindRecord | undefined): GatewayAccount["made"] =>
+  record === "key" ? "typed" : record ? "sign-in" : null;
+
 export function mergeAccounts(
   views: Map<string, BotView>,
-  kinds: ReadonlyMap<string, AccountKind>,
+  kinds: ReadonlyMap<string, KindRecord>,
 ): GatewayAccount[] {
   const seen = new Map<string, { profile: ViewProfile; shared: boolean; owners: Set<string> }>();
   for (const [botId, view] of views) {
@@ -520,7 +538,8 @@ export function mergeAccounts(
       type: profile.type,
       status: profile.status,
       expiresAt: profile.expiresAt,
-      kind: kinds.get(profile.id) ?? "gateway",
+      kind: kindOf(kinds.get(profile.id)),
+      made: madeOf(kinds.get(profile.id)),
       keptBy,
       logoutSupported: profile.logoutSupported,
     });

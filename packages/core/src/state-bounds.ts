@@ -658,6 +658,7 @@ const account = object<GatewayAccount>()({
   status: ENUM,
   expiresAt: NUMBER,
   kind: ENUM,
+  made: ENUM,
   keptBy: ID,
   logoutSupported: FLAG,
 });
