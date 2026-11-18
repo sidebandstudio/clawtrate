@@ -1191,7 +1191,8 @@ export class ComputerViews {
       last.text += input.text;
     } else {
       if (lease.inputs.length >= MAX_QUEUED_INPUTS) return false;
-      lease.inputs.push(input);
+      // A copy: text typed next is added to it, never to the caller's own object.
+      lease.inputs.push({ ...input });
     }
     void this.pump(live, lease);
     return true;
