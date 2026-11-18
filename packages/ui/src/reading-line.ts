@@ -6,6 +6,6 @@
  * conversation holds.
  */
 export const TEXT_BLOCKS =
-  ".task-line, .stamp, .event-line, .steps > summary, .step > summary, .status-phrase, " +
+  ".task-line, .stamp, .event-line, .action > summary, .step > summary, .status-phrase, " +
   ".request-title, .card > summary, " +
   ".bubble :is(p, li, h1, h2, h3, h4, h5, h6, pre, td, th, blockquote)";

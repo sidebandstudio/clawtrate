@@ -998,7 +998,7 @@ textarea {
 .msg[data-role="user"] + .msg[data-role="assistant"],
 .msg[data-role="assistant"] + .msg[data-role="user"],
 .event-line + .msg[data-role="user"],
-.steps + .msg[data-role="user"] {
+:is(.action, .thought, .run-line) + .msg[data-role="user"] {
   margin-top: var(--space-4);
 }
 
@@ -1046,120 +1046,6 @@ textarea {
 .event-line[data-side="center"] {
   margin-right: auto;
   margin-left: auto;
-}
-
-/* Until the conversation components are built, a turn's thoughts and tool
-   calls fold into one line. Opened, each is still its own row, and each row
-   still opens to what the shell shows today: the full reasoning, or the call's
-   arguments and result. The row rules are scoped to .steps-list, so the
-   conversation components can bring their own .step later. */
-.steps > summary,
-.steps-list .step > summary {
-  list-style: none;
-  cursor: pointer;
-  user-select: none;
-}
-
-.steps > summary::-webkit-details-marker,
-.steps-list .step > summary::-webkit-details-marker {
-  display: none;
-}
-
-.steps > summary:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.steps[open] > summary .icon,
-.steps-list .step[open] > summary .step-chevron {
-  transform: rotate(90deg);
-}
-
-.steps-list {
-  width: 100%;
-  max-width: min(86%, 640px); /* the width of an assistant bubble */
-  margin: 2px 0 6px;
-  padding: 4px;
-  border-radius: var(--radius-lg);
-  background: var(--bg-bubble);
-}
-
-.step {
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-
-.steps-list .step > summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 0 10px;
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-
-.steps-list .step > summary:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.steps-list .step-chevron {
-  width: 12px;
-  height: 12px;
-  flex: none;
-  color: var(--text-faint);
-}
-
-.steps-list .step-kind {
-  flex: none;
-  font-weight: var(--weight-medium);
-}
-
-.steps-list .step-tool-name {
-  flex: none;
-  padding: 1px 7px;
-  border-radius: 6px;
-  background: var(--bg-code);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-
-.steps-list .step-summary,
-.steps-list .step-reasoning-preview {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.steps-list .step-state {
-  flex: none;
-  font-size: var(--text-xs);
-  color: var(--text-faint);
-}
-
-.steps-list .step-state[data-error="true"] {
-  color: var(--danger);
-}
-
-.steps-list .step-body {
-  padding: 4px 10px 10px 30px;
-}
-
-.steps-list .step-body .reasoning {
-  max-width: 62ch;
-  margin: 0;
-  font-size: var(--text-md);
-  line-height: 1.55;
-  white-space: pre-wrap;
-  color: var(--text-muted);
-}
-
-.steps-list .step-body .code-block {
-  background: var(--bg-pane);
 }
 
 /* The shell's .jump-latest: a pill centred over the foot of the transcript,
@@ -2101,8 +1987,7 @@ textarea {
     padding: 0 var(--space-3) var(--space-3);
   }
 
-  .bubble,
-  .steps-list {
+  .bubble {
     max-width: 88%;
   }
 

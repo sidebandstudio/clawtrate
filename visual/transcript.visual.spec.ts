@@ -272,26 +272,26 @@ test("F-065: on a narrow column a wide table scrolls inside its bubble", async (
   expect(bubble.x + bubble.width).toBeLessThanOrEqual(390);
 });
 
-test("F-088: the bot's progress narration shows as short separate bubbles, in order, with its tool calls folded between", async ({
+test("F-088: the bot's progress narration shows as short separate bubbles, in order, with its action cards between", async ({
   page,
 }) => {
   await openFixture(page, `scene=main&${PIP_WEEK}`, "light");
   await atTop(page);
   const turn = page.getByTestId("transcript-turn").nth(1);
   const parts = await turn
-    .locator(":scope > .msg, :scope > .steps")
+    .locator(":scope > .msg, :scope > .action")
     .evaluateAll((nodes) =>
       nodes.map((node) =>
-        node.classList.contains("steps")
-          ? `[${node.querySelector("summary")!.textContent!.trim()}]`
+        node.classList.contains("action")
+          ? `[${node.querySelector("summary")!.getAttribute("aria-label")!.split(",")[0]}]`
           : node.textContent!.trim().slice(0, 30),
       ),
     );
   expect(parts).toEqual([
     "On it. Checking your calendar ",
-    "[Used 1 tool]",
+    "[Read this-week.md]",
     "Reading Thursday's notes now. ",
-    "[Used 1 tool]",
+    "[Read thursday.md]",
     "Thursday is empty, so I kept i",
     "Here is the week, with Thursda",
   ]);
@@ -344,10 +344,12 @@ test("F-076: Cmd/Ctrl+F finds text in the open conversation", async ({ page }) =
   const { top } = await highlighted();
   expect(top!).toBeGreaterThan(box.y + 98 - 1);
   expect(top!).toBeLessThan(box.y + box.height);
-  // A match inside folded tool calls opens its group.
+  // A match inside a closed action card opens the card: its line, then its result.
   await field.fill("Permission denied");
-  await expect(count).toHaveText("1 of 1");
-  await expect(page.locator("details.steps[open]")).toHaveCount(1);
+  await expect(count).toHaveText("1 of 2");
+  await page.keyboard.press("Enter");
+  await expect(count).toHaveText("2 of 2");
+  await expect(page.locator("details.action[open]")).toHaveCount(1);
   await field.fill("no such words here");
   await expect(count).toHaveText("No matches");
   await expect(page.getByRole("button", { name: "Next match" })).toBeDisabled();

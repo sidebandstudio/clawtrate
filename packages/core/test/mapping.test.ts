@@ -183,3 +183,11 @@ describe("plainPreview", () => {
     expect(plainPreview("")).toBeNull();
   });
 });
+
+describe("a task's requested effort", () => {
+  it("is the session row's thinkingLevel, as the gateway names it, and absent without one", () => {
+    const row = { key: "agent:otto:disk-space", agentId: "otto", label: "Disk" };
+    expect(mapSessionRow({ ...row, thinkingLevel: "high" })?.effort).toBe("high");
+    expect(mapSessionRow(row)).not.toHaveProperty("effort");
+  });
+});
