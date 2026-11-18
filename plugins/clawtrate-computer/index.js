@@ -80,6 +80,9 @@ const GENERATION = /^[0-9a-f]{32}$/;
 const COORDINATE_LIMIT = 100000;
 const TEXT_LIMIT = 2000;
 
+/** Thrown inside a sequence of browser commands when the caller's access has gone. */
+const STALE = Symbol("stale");
+
 /** Messages the bot and people see. */
 export const BLOCKED_WHILE_HELD =
   "A person has control of this bot's browser. Wait until they give it back.";
@@ -299,9 +302,14 @@ export function createComputer(api, options = {}) {
    * deadline, when a command fails or is not answered, or when the lease
    * ends.
    */
-  async function quiesce(lease) {
+  async function quiesce(lease, current) {
     const { cdp } = lease;
     const { signal } = lease.abort;
+    // Every command goes out on the caller's behalf, so only while its access holds.
+    const send = (method) => {
+      if (!current()) throw STALE;
+      return cdp.send(method, {}, { signal });
+    };
     let activity = 0;
     const off = cdp.on((message) => {
       if (NAVIGATION_EVENTS.has(message.method)) {
@@ -314,11 +322,11 @@ export function createComputer(api, options = {}) {
       // Stopped first: Chromium answers Page.enable on a new connection only
       // once a pending navigation has committed, but answers a stop at once
       // and cancels that navigation.
-      await cdp.send("Page.stopLoading", {}, { signal });
-      await cdp.send("Page.enable", {}, { signal });
+      await send("Page.stopLoading");
+      await send("Page.enable");
       for (;;) {
         const seen = activity;
-        await cdp.send("Page.stopLoading", {}, { signal });
+        await send("Page.stopLoading");
         if (Date.now() + quietWindowMs > deadline) return false;
         const disturbed = await waitUntil(
           () => activity !== seen || lease.ending,
@@ -328,8 +336,8 @@ export function createComputer(api, options = {}) {
         if (lease.ending || signal.aborted) return false;
         if (!disturbed) return true;
       }
-    } catch {
-      return false;
+    } catch (error) {
+      return error === STALE ? "stale" : false;
     } finally {
       off();
     }
@@ -742,6 +750,19 @@ export function createComputer(api, options = {}) {
     }
     emitControl(lease, "draining");
     changed();
+    const current = () => stillCurrent(caller, lease.retained) && stillCurrent(caller, auth);
+    /** End the lease as busy and say so, but only to a caller whose access still holds. */
+    const busy = async (cause, reason) => {
+      const running = runningCalls(bot.profile);
+      await endLease(lease, "busy", cause);
+      if (!stillCurrent(caller, auth)) accessEnded();
+      opts.respond(true, {
+        state: "busy",
+        reason,
+        runningCalls: running,
+        generation: lease.generation,
+      });
+    };
     // New bot calls are blocked from now on; running ones get drainTimeoutMs.
     const drained = await waitUntil(
       () => runningCalls(bot.profile) === 0,
@@ -750,21 +771,11 @@ export function createComputer(api, options = {}) {
     );
     if (lease.ending)
       refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
-    if (!stillCurrent(caller, lease.retained)) {
+    if (!current()) {
       await endLease(lease, "revoked", "access-revoked");
       accessEnded();
     }
-    if (!drained) {
-      const running = runningCalls(bot.profile);
-      await endLease(lease, "busy", "bot-still-acting");
-      opts.respond(true, {
-        state: "busy",
-        reason: "the bot is still acting in this browser",
-        runningCalls: running,
-        generation: lease.generation,
-      });
-      return;
-    }
+    if (!drained) return busy("bot-still-acting", "the bot is still acting in this browser");
     // The lease's own connection to the tab: input goes through it, and the
     // lease ends when it closes (the tab or the browser went away).
     try {
@@ -790,26 +801,17 @@ export function createComputer(api, options = {}) {
     });
     if (lease.ending)
       refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
-    const quiet = await quiesce(lease);
+    const quiet = await quiesce(lease, current);
     if (lease.ending)
       refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
-    if (!quiet) {
-      if (!stillCurrent(caller, lease.retained)) {
-        await endLease(lease, "revoked", "access-revoked");
-        accessEnded();
-      }
-      // Never granted while the tab may still be loading what the bot started.
-      await endLease(lease, "busy", "browser-not-quiet");
-      opts.respond(true, {
-        state: "busy",
-        reason: "the bot's browser is still loading a page",
-        runningCalls: runningCalls(bot.profile),
-        generation: lease.generation,
-      });
-      return;
+    if (quiet === "stale" || !current()) {
+      await endLease(lease, "revoked", "access-revoked");
+      accessEnded();
     }
+    // Never granted while the tab may still be loading what the bot started.
+    if (!quiet) return busy("browser-not-quiet", "the bot's browser is still loading a page");
     // Connecting waited: the grant goes out only while the access still holds.
-    if (!stillCurrent(caller, lease.retained)) {
+    if (!current()) {
       await endLease(lease, "revoked", "access-revoked");
       accessEnded();
     }
@@ -834,12 +836,14 @@ export function createComputer(api, options = {}) {
       refuse("FORBIDDEN", "not_holder", "only the current holder can release, with its generation");
     }
     await endLease(lease, "released", "released");
+    // Released either way; the answer goes only to a caller whose access still holds.
+    if (!stillCurrent(caller, opts.sessionAccessAuthority)) accessEnded();
     opts.respond(true, { state: "released", generation: lease.generation, targetId });
   });
 
   method("input", async (opts, params) => {
     const caller = callerOf(opts);
-    const { bot } = admitBot(opts);
+    const { auth, bot } = admitBot(opts);
     const targetId = targetIdOf(params);
     if (typeof params.generation !== "string" || !GENERATION.test(params.generation)) {
       refuse("FORBIDDEN", "not_holder", "take control first");
@@ -855,6 +859,7 @@ export function createComputer(api, options = {}) {
       if (lease.ending || state.leases.get(lease.key) !== lease || lease.state !== "granted") {
         throw new CdpError("lease_ended", "control ended");
       }
+      if (!stillCurrent(caller, auth)) throw new Error("the request's access ended");
       lease.retained.assertCurrent();
     };
     try {
@@ -873,7 +878,18 @@ export function createComputer(api, options = {}) {
         `input not delivered: ${error?.message ?? error}`,
       );
     }
-    if (!lease.ending) armLeaseExpiry(lease);
+    // The last reply waited too: nothing is confirmed, and the lease is not
+    // extended, unless the lease and the caller's access still hold now.
+    try {
+      stillHeld();
+    } catch (error) {
+      if (!(error instanceof CdpError)) {
+        await endLease(lease, "revoked", "access-revoked");
+        accessEnded();
+      }
+      refuse("UNAVAILABLE", "input_not_delivered", "control ended before the input was confirmed");
+    }
+    armLeaseExpiry(lease);
     opts.respond(true, { ok: true });
   });
 
@@ -967,8 +983,8 @@ export function createComputer(api, options = {}) {
         if (stream.ended) return;
         if (message.method === "Page.screencastFrame") {
           const { data, metadata = {}, sessionId } = message.params ?? {};
-          void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
           if (!current()) return;
+          void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
           if (typeof data !== "string" || socket.destroyed) return;
           if (socket.writableLength > STREAM_BUFFER_LIMIT) return;
           // The built-in screencast's layout, so one decoder serves both:
@@ -997,7 +1013,9 @@ export function createComputer(api, options = {}) {
         }
       });
       try {
+        if (!current()) return true;
         await cdp.send("Page.enable", {}, { signal: stream.abort.signal });
+        if (!current()) return true;
         await cdp.send(
           "Page.startScreencast",
           { format: "jpeg", quality: 60, maxWidth: 1280, maxHeight: 1280, everyNthFrame: 1 },

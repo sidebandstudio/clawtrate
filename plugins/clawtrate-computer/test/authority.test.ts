@@ -234,3 +234,110 @@ describe("the stream", () => {
     await h.stop();
   });
 });
+
+describe("no command to the browser, and no confirmation, once access has gone", () => {
+  const pageCommands = (h: ReturnType<typeof load>) =>
+    h.browser
+      .sent("")
+      .filter((e) => e.url.includes("/devtools/page/"))
+      .map((e) => e.method);
+
+  it("a take whose access quietly ends while it connects sends the tab no command at all", async () => {
+    const h = load();
+    const access = new Access();
+    h.browser.connectDelayMs = 60;
+    const take = h.call("control.take", tab, { access });
+    await until(() => h.browser.sockets.length > 0);
+    access.revoked = true;
+    const answer = await take;
+    expect(ended(answer)).toEqual([false, "FORBIDDEN", "session_access_ended"]);
+    expect(pageCommands(h)).toEqual([]);
+    expect(h.events.map((e) => e.state)).toEqual(["draining", "revoked"]);
+    expect(h.state.leases.size).toBe(0);
+    await h.stop();
+  });
+
+  it("a take whose access quietly ends during the quiet window sends no further stop", async () => {
+    const h = load({ quietWindowMs: 150 });
+    const access = new Access();
+    const take = h.call("control.take", tab, { access });
+    await until(() => h.browser.sent("Page.stopLoading").length === 2);
+    access.revoked = true;
+    // Activity in the window would make the take stop loading again.
+    h.browser.sockets.at(-1)!.event("Page.frameStartedLoading", { frameId: "f" });
+    const answer = await take;
+    expect(ended(answer)).toEqual([false, "FORBIDDEN", "session_access_ended"]);
+    expect(h.browser.sent("Page.stopLoading")).toHaveLength(2);
+    expect(h.events.some((e) => e.state === "granted")).toBe(false);
+    await h.stop();
+  });
+
+  it("input whose last reply arrives after access quietly ended is not confirmed, and the lease is not extended but ended", async () => {
+    const h = load({ renewTimeoutMs: 400 });
+    const access = new Access();
+    const taken = await h.call("control.take", tab, { access });
+    expect(taken.payload?.state).toBe("granted");
+    h.browser.replyDelayMs = 80;
+    const input = h.call(
+      "input",
+      { ...tab, generation: taken.payload!.generation, kind: "text", text: "late" },
+      { access },
+    );
+    await until(() => h.browser.sent("Input.insertText").length === 1);
+    access.revoked = true;
+    const answer = await input;
+    expect(ended(answer)).toEqual([false, "FORBIDDEN", "session_access_ended"]);
+    expect(h.state.leases.size).toBe(0);
+    expect(h.statesOf(taken.payload!.generation)).toEqual(["draining", "granted", "revoked"]);
+    await h.stop();
+  });
+
+  it("a click whose access quietly ends between its commands sends none of the rest", async () => {
+    const h = load();
+    const access = new Access();
+    const taken = await h.call("control.take", tab, { access });
+    h.browser.replyDelayMs = 60;
+    const input = h.call(
+      "input",
+      { ...tab, generation: taken.payload!.generation, kind: "click", x: 5, y: 5 },
+      { access },
+    );
+    await until(() => h.browser.sent("Input.dispatchMouseEvent").length === 1);
+    access.revoked = true;
+    const answer = await input;
+    expect(answer.ok).toBe(false);
+    expect(h.browser.sent("Input.dispatchMouseEvent")).toHaveLength(1);
+    expect(h.state.leases.size).toBe(0);
+    await h.stop();
+  });
+
+  it("a release that waited for queued input answers only a caller whose access still holds", async () => {
+    const h = load();
+    const access = new Access();
+    const taken = await h.call("control.take", tab, { access });
+    const generation = taken.payload!.generation;
+    h.browser.stalledMethods.add("Input.insertText");
+    void h.call("input", { ...tab, generation, kind: "text", text: "stalled" }, { access });
+    await until(() => h.browser.sent("Input.insertText").length === 1);
+    const release = h.call("control.release", { ...tab, generation }, { access });
+    access.revoked = true;
+    const answer = await release;
+    expect(ended(answer)).toEqual([false, "FORBIDDEN", "session_access_ended"]);
+    // Released all the same: the bot is not left blocked.
+    expect(h.state.leases.size).toBe(0);
+    await h.stop();
+  });
+
+  it("a frame that arrives after access quietly ended is not acknowledged", async () => {
+    const h = load();
+    const access = new Access();
+    const view = await h.call("view.open", tab, { access });
+    const socket = await h.upgrade(String(view.payload!.wsPath));
+    await until(() => h.browser.sent("Page.startScreencast").length === 1);
+    access.revoked = true;
+    h.browser.sockets.at(-1)!.event("Page.screencastFrame", { data: "AA==", sessionId: 3 });
+    expect(h.browser.sent("Page.screencastFrameAck")).toEqual([]);
+    expect(socket.closeCode()).toEqual({ code: 4006, reason: "authority_revoked" });
+    await h.stop();
+  });
+});
