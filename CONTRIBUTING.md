@@ -23,7 +23,7 @@ pnpm e2e         # end-to-end tests against a development gateway of their own
 pnpm visual      # screenshots and behaviour of the fixture mode; the baselines are macOS ones
 ```
 
-CI runs lint, typecheck and the unit tests on Linux, `pnpm e2e` on Linux with OpenClaw 2026.10.6 from npm, `pnpm visual` and an unsigned `pnpm package:mac` on macOS 15, and on Windows Server 2025 an unsigned `pnpm package:win`, a silent install, `pnpm check:packaged` against the installed app and a silent uninstall.
+CI runs lint, typecheck and the unit tests on Linux, `pnpm e2e` on Linux with OpenClaw 2026.10.6 from npm, `pnpm visual` and an unsigned `pnpm package:mac` on macOS 15, and on Windows Server 2025 an unsigned `pnpm package:win`, a silent install, a check of the Start menu shortcut, `pnpm check:packaged` against the installed app, and a silent uninstall that must leave nothing the installer made.
 
 ## The development gateway
 
