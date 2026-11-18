@@ -441,7 +441,15 @@ export async function drain(
   keys: Iterable<string>,
   timeoutMs = 60_000,
 ): Promise<boolean> {
-  const op = h.op("plain");
+  return drainSessions(h.op("plain"), keys, timeoutMs);
+}
+
+/** `drain` through one operator: the computer checks drain their tasks with it too. */
+export async function drainSessions(
+  op: OperatorSession,
+  keys: Iterable<string>,
+  timeoutMs = 60_000,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   let idle = true;
   for (const key of keys) {

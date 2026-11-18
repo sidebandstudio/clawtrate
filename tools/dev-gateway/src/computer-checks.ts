@@ -12,6 +12,7 @@
 import { spawnSync } from "node:child_process";
 import { browserProcesses, listProcesses } from "./cli.ts";
 import type { OperatorSession, GatewayEvent } from "./operator.ts";
+import { drainSessions } from "./scenario-check.ts";
 import { OTHER_LOOPBACK, OUTSIDE_ADDRESS } from "./scenarios.ts";
 import { PAGES_RECORD_PATH, REFUSED_TITLE, SLOW_PAGE_MS, type Refusal } from "./scripted-pages.ts";
 
@@ -1181,7 +1182,35 @@ export const COMPUTER_CHECKS: ComputerCheck[] = [
   },
 ];
 
-/** Run the checks in order. One line per check; a failure does not stop the others. */
+/**
+ * After a failed check: stop every run in the checks' tasks and wait until
+ * the gateway is idle there, and until no lease is left on the bots' tabs
+ * (one the failed check held ends by expiry). Whether that was established.
+ */
+async function settle(ctx: ComputerContext, world: World): Promise<boolean> {
+  const { holder } = ctx.clients;
+  const keys = [...new Set([...world.tabs.values()].map((tab) => tab.key))];
+  if (!(await drainSessions(holder, keys))) return false;
+  const deadline = Date.now() + ctx.renewTimeoutMs + 10_000;
+  for (;;) {
+    let held = false;
+    for (const key of keys) {
+      const answer = await call(holder, "tabs", { sessionKey: key });
+      if (!answer.ok) return false;
+      held ||= ((answer.payload.tabs ?? []) as JsonRecord[]).some((t) => t.lease !== null);
+    }
+    if (!held) return true;
+    if (Date.now() > deadline) return false;
+    await sleep(500);
+  }
+}
+
+/**
+ * Run the checks in order, one line per check; a failure does not stop the
+ * others. As in the scenario runner, a failed check's tasks are drained
+ * before the next check starts, and the next check does not start on an
+ * instance where that could not be established.
+ */
 export async function runComputerChecks(
   ctx: ComputerContext,
   log: (line: string) => void = console.log,
@@ -1189,7 +1218,14 @@ export async function runComputerChecks(
   const world: World = { stamp: Date.now().toString(36), tabs: new Map() };
   let passed = 0;
   let failed = 0;
+  let leftBusy: string | null = null;
   for (const check of COMPUTER_CHECKS) {
+    if (leftBusy && !(await settle(ctx, world))) {
+      failed += 1;
+      log(`FAIL  ${check.name}: not started: ${leftBusy}`);
+      continue;
+    }
+    leftBusy = null;
     try {
       await check.run(ctx, world);
       passed += 1;
@@ -1197,6 +1233,9 @@ export async function runComputerChecks(
     } catch (error) {
       failed += 1;
       log(`FAIL  ${check.name}: ${error instanceof Error ? error.message : String(error)}`);
+      if (!(await settle(ctx, world))) {
+        leftBusy = `the check before it ("${check.name}") failed and its tasks or the bots' tabs were still busy`;
+      }
     }
   }
   return { passed, failed };
