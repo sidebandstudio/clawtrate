@@ -2257,7 +2257,12 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
         ...(str(details?.mcpServer)
           ? withT3(
               name ?? step.toolName,
-              mergeT3Facts(step.t3, t3ResultFacts(details?.structuredContent, isError)),
+              // The rendered text first, as history keeps it: the live event's details mask a
+              // field named `code`, which T3 Code's failures carry.
+              mergeT3Facts(
+                step.t3,
+                t3ResultFacts(structuredFromText(text) ?? details?.structuredContent, isError),
+              ),
             )
           : {}),
         correction: replacing ? step.correction + 1 : step.correction,

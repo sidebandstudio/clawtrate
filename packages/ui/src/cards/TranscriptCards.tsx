@@ -17,12 +17,7 @@ import {
 } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
 import { ApprovalCardView } from "./ApprovalCard.tsx";
-import {
-  CardEnvContext,
-  OpenTaskContext,
-  useCardEnv,
-  type CardEnv,
-} from "./context.tsx";
+import { CardEnvContext, OpenTaskContext, useCardEnv, type CardEnv } from "./context.tsx";
 import {
   BotMessageCardView,
   IncomingLine,

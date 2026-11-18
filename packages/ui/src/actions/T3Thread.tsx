@@ -53,7 +53,9 @@ export const T3FeedContext = createContext<T3Feed>({
 });
 
 const clock = (at: number | null) =>
-  at === null ? null : new Date(at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  at === null
+    ? null
+    : new Date(at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
 // State words ------------------------------------------------------------------------
 
@@ -90,9 +92,7 @@ export function threadWord(state: T3ThreadState | null, lost: boolean): Word {
   if (state.type === "open") {
     if (state.word === "waiting") return CALL_WORDS.waiting;
     if (lost) return { glyph: "sending", word: actionWords.STATE_WORDS.lastSeenCallStarted };
-    return state.word === "checking"
-      ? { glyph: "sending", word: W.checking }
-      : CALL_WORDS.started;
+    return state.word === "checking" ? { glyph: "sending", word: W.checking } : CALL_WORDS.started;
   }
   if (state.type === "call") return CALL_WORDS[state.state];
   const glyph = STATUS_GLYPHS[state.status] ?? "check";
@@ -164,10 +164,14 @@ function CameBack({ call }: { call: T3Call }) {
       );
     }
     if (call.state === "unknown")
-      say("The bot was stopped before the call returned. The gateway cannot say whether T3 Code received it.");
+      say(
+        "The bot was stopped before the call returned. The gateway cannot say whether T3 Code received it.",
+      );
     if (call.state === "not-sent") say("This call was not made. Nothing was sent.");
     if (call.state === "started")
-      say("Nothing yet shows that the call was made, and nothing more is reported until it returns.");
+      say(
+        "Nothing yet shows that the call was made, and nothing more is reported until it returns.",
+      );
     if (call.state === "waiting") say("This call waits for your approval. Nothing has been sent.");
     return <>{lines}</>;
   }
@@ -202,13 +206,20 @@ function CameBack({ call }: { call: T3Call }) {
       if (f?.resultRun?.runId) say(W.resultRun(f.resultRun.runId));
       break;
     case "interrupt":
-      if (status) say(status === "Stop requested" ? "A stop was asked for. That is not proof that T3 Code stopped." : `The run: ${status}.`);
+      if (status)
+        say(
+          status === "Stop requested"
+            ? "A stop was asked for. That is not proof that T3 Code stopped."
+            : `The run: ${status}.`,
+        );
       break;
     case "listing":
       break;
   }
   // A result that reports no final status shows the call was made, not that the work is done.
-  const final = f?.status && ["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(f.status);
+  const final =
+    f?.status &&
+    ["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(f.status);
   if (!final) say(W.notFinished);
   return <>{lines}</>;
 }
@@ -217,7 +228,10 @@ function CameBack({ call }: { call: T3Call }) {
 export function T3CallBody({ call }: { call: T3Call }) {
   const env = useCardEnv();
   const sender = env.bot?.name ?? "The bot";
-  const sent = call.role === "launch" || call.role === "send" ? (call.call.args.message as string | undefined) : undefined;
+  const sent =
+    call.role === "launch" || call.role === "send"
+      ? (call.call.args.message as string | undefined)
+      : undefined;
   const c = chips(call);
   return (
     <ol className="exchange">
@@ -249,7 +263,9 @@ export function T3CallBody({ call }: { call: T3Call }) {
         <div>
           <div className="exchange-meta">
             <b>T3 Code</b>
-            {call.state === "made" && call.call.endedAt !== null && <time>{clock(call.call.endedAt)}</time>}
+            {call.state === "made" && call.call.endedAt !== null && (
+              <time>{clock(call.call.endedAt)}</time>
+            )}
           </div>
           <CameBack call={call} />
         </div>
@@ -391,7 +407,13 @@ export function T3ThreadCard({ headId, thought }: { headId: string; thought: Rea
       data-testid="t3-card"
       data-call={headId}
       data-thread={info.key ?? undefined}
-      data-state={state?.type === "reported" ? state.status : state?.type === "call" ? state.state : state?.word}
+      data-state={
+        state?.type === "reported"
+          ? state.status
+          : state?.type === "call"
+            ? state.state
+            : state?.word
+      }
       data-connection={lost ? "lost" : undefined}
       id={actionDomId(headId)}
       open={open}
@@ -476,7 +498,9 @@ export function showThread(taskKey: string, headId: string, callId: string): boo
     const card = document.querySelector<HTMLDetailsElement>(
       `.t3-thread[data-call="${CSS.escape(headId)}"]`,
     );
-    const item = card?.querySelector<HTMLDetailsElement>(`[data-item-call="${CSS.escape(callId)}"]`);
+    const item = card?.querySelector<HTMLDetailsElement>(
+      `[data-item-call="${CSS.escape(callId)}"]`,
+    );
     if (!card || !item) {
       if (tries > 0) requestAnimationFrame(() => focus(tries - 1));
       return;

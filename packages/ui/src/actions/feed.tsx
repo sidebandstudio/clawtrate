@@ -831,7 +831,8 @@ class LiveJoins {
   kept = (callId: string) => this.decided.get(callId) === "line";
   /** A call is running now: when its result comes, how its line is held decides. */
   saw(callId: string) {
-    if (this.running.size >= MAX_JOIN_DECISIONS) this.running.delete(this.running.values().next().value!);
+    if (this.running.size >= MAX_JOIN_DECISIONS)
+      this.running.delete(this.running.values().next().value!);
     this.running.add(callId);
   }
   /** Decide, once, for a call about to join; true when it keeps its line. */
@@ -899,7 +900,8 @@ function t3Pass(
       const info: T3ThreadInfo = { key: at.thread?.key ?? null, head: call, calls: [call] };
       threads.set(call.id, info);
       if (at.thread) byKey.set(at.thread.key, info);
-    } else if (at.type === "joined" || at.type === "line") byKey.get(at.thread.key)?.calls.push(call);
+    } else if (at.type === "joined" || at.type === "line")
+      byKey.get(at.thread.key)?.calls.push(call);
   }
   for (const { list, entry, call } of found) {
     const at = placements.get(call.id)!;

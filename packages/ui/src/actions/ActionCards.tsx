@@ -202,7 +202,10 @@ const rec = (value: unknown) =>
     : null;
 
 /** What the gateway sent for one call, as section 9 lays it out. */
-export function rawContentOf(call: ActionCall, env: ActionEnv): { content: RawContent; load: () => void } {
+export function rawContentOf(
+  call: ActionCall,
+  env: ActionEnv,
+): { content: RawContent; load: () => void } {
   const found = env.stepOf(call.id);
   const open = call.status === "running" || call.status === "waiting" || call.status === "review";
   const timing = [

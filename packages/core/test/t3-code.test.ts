@@ -29,7 +29,6 @@ import {
   workMayContinue,
   type ActionCall,
   type ReadingContext,
-  type T3Call,
   type T3Sequence,
 } from "../src/index.ts";
 
@@ -71,7 +70,13 @@ function live(
   tool: string,
   args: Rec,
   structured: Rec | null,
-  opts: { isError?: boolean; open?: boolean; server?: string; resultTool?: string; ctx?: ReadingContext } = {},
+  opts: {
+    isError?: boolean;
+    open?: boolean;
+    server?: string;
+    resultTool?: string;
+    ctx?: ReadingContext;
+  } = {},
 ): ActionCall {
   seq += 1;
   const id = `call_${seq}`;
@@ -107,7 +112,10 @@ function live(
     });
   }
   const run = activity.runs[0]!;
-  return callFromStep(run.steps.find((s) => s.toolCallId === id)!, run);
+  return callFromStep(
+    run.steps.find((s) => s.toolCallId === id)!,
+    run,
+  );
 }
 
 /** The same call from history alone: its rows, which keep no details for a tool server. */
@@ -139,7 +147,11 @@ function fromHistory(tool: string, args: Rec, structured: Rec | null, isError = 
   const run = runsFromHistory(rows, null, ctx)[0]!;
   const step = run.steps.find((s) => s.toolCallId === id)!;
   return {
-    alone: callFromBlock(block as Extract<typeof block, { kind: "tool-call" }>, undefined, undefined),
+    alone: callFromBlock(
+      block as Extract<typeof block, { kind: "tool-call" }>,
+      undefined,
+      undefined,
+    ),
     withStep: callFromBlock(block as Extract<typeof block, { kind: "tool-call" }>, step, run),
   };
 }
@@ -160,7 +172,13 @@ const LAUNCHED = {
   status: "running",
 };
 const readResult = (items: Rec[], hasMore = false, status = "completed") => ({
-  thread: { threadId: THREAD, title: "Skip machines", status, latestRunId: "run-1", activeRunId: null },
+  thread: {
+    threadId: THREAD,
+    title: "Skip machines",
+    status,
+    latestRunId: "run-1",
+    activeRunId: null,
+  },
   recentRuns: [{ runId: "run-1", status }],
   items,
   nextPosition: items.length ? items.length - 1 : null,
@@ -192,7 +210,9 @@ describe("which calls are T3 Code's (11.1)", () => {
   });
 
   it("F-132: before its result, only the gateway's name map makes a call T3 Code's", () => {
-    const open = live("t3_thread_send", { threadId: THREAD, message: "Also a test." }, null, { open: true });
+    const open = live("t3_thread_send", { threadId: THREAD, message: "Also a test." }, null, {
+      open: true,
+    });
     expect(t3(open, {})).toBeNull();
     expect(kindOf(open, {}).kind).toBe("tool");
     expect(t3(open, MAP)?.state).toBe("started");
@@ -200,7 +220,12 @@ describe("which calls are T3 Code's (11.1)", () => {
   });
 
   it("F-132 F-134: the result overrules the map: a call the map named T3 Code's whose result names another tool is not", () => {
-    const c = live("t3_thread_read", { threadId: THREAD }, { notes: [] }, { resultTool: "T3_thread_read" });
+    const c = live(
+      "t3_thread_read",
+      { threadId: THREAD },
+      { notes: [] },
+      { resultTool: "T3_thread_read" },
+    );
     expect(t3(c, MAP)).toBeNull();
     expect(kindOf(c, MAP).kind).toBe("server");
   });
@@ -211,13 +236,24 @@ describe("which calls are T3 Code's (11.1)", () => {
     expect(t3(c, { toolServers: { [c.name]: { server: SERVER, tool: "notes_read" } } })).toBeNull();
   });
 
-  it("F-132 F-134: from history, the map's word stands only with T3 Code's structured content, an error or a refusal; never Call made on the map alone", () => {
+  it("F-132 F-134: from history, which keeps no details, the map's word stands; live, never Call made on the map alone", () => {
     const read = fromHistory("t3_thread_launch", LAUNCH_ARGS, LAUNCHED);
     expect(t3(read.alone)?.state).toBe("made");
     expect(t3(read.alone)?.thread?.threadId).toBe(THREAD);
     expect(t3(read.withStep)?.thread?.threadId).toBe(THREAD);
+    // A rendering that cannot be read: still T3 Code's by the map, a card of its own with no thread.
     const plain = fromHistory("t3_thread_launch", LAUNCH_ARGS, null);
-    expect(t3(plain.alone)).toBeNull();
+    expect(t3(plain.alone)?.state).toBe("made");
+    expect(t3(plain.alone)?.thread).toBeNull();
+    expect(t3(plain.alone, {})).toBeNull();
+    // Live, a result that names no tool and carries nothing of T3 Code's is not T3 Code's by the map.
+    const bare: ActionCall = {
+      ...live("t3_thread_launch", LAUNCH_ARGS, null, { open: true }),
+      status: "returned",
+      text: "ok",
+      t3: null,
+    };
+    expect(t3(bare)).toBeNull();
     const failed = fromHistory("t3_thread_send", { threadId: THREAD, message: "x" }, null, true);
     expect(t3(failed.alone)?.state).toBe("failed");
   });
@@ -232,8 +268,16 @@ describe("each call's state (11)", () => {
   });
 
   it("F-314: an error result is Failed, with T3 Code's code and message", () => {
-    const failure = { _tag: "OrchestratorMcpFailure", code: "thread_not_sendable", message: "Nothing to steer." };
-    const c = t3(live("t3_thread_send", { threadId: THREAD, message: "x", mode: "steer" }, failure, { isError: true }))!;
+    const failure = {
+      _tag: "OrchestratorMcpFailure",
+      code: "thread_not_sendable",
+      message: "Nothing to steer.",
+    };
+    const c = t3(
+      live("t3_thread_send", { threadId: THREAD, message: "x", mode: "steer" }, failure, {
+        isError: true,
+      }),
+    )!;
     expect(c.state).toBe("failed");
     expect(c.error).toEqual({ code: "thread_not_sendable", message: "Nothing to steer." });
     expect(lineOf(c.call, MAP).state).toMatchObject({ word: "Failed", tone: "danger" });
@@ -263,19 +307,28 @@ describe("each call's state (11)", () => {
 describe("a thread's identity (11.2)", () => {
   it("F-313 F-441: a thread is its server, environment and id together; the same id on two servers is two threads", () => {
     const a = t3(live("t3_thread_read", { threadId: THREAD }, readResult([])))!;
-    const b = t3(live("t3_thread_read", { threadId: THREAD }, readResult([]), { server: "laptop-t3" }), {
-      ...MAP,
-    })!;
+    const b = t3(
+      live("t3_thread_read", { threadId: THREAD }, readResult([]), { server: "laptop-t3" }),
+      {
+        ...MAP,
+      },
+    )!;
     expect(a.thread!.key).toBe(threadKey(SERVER, null, THREAD));
     expect(b.thread!.key).not.toBe(a.thread!.key);
-    const env = t3(live("t3_thread_read", { threadId: THREAD, environmentId: "env-2" }, readResult([])))!;
+    const env = t3(
+      live("t3_thread_read", { threadId: THREAD, environmentId: "env-2" }, readResult([])),
+    )!;
     expect(env.thread!.key).toBe(threadKey(SERVER, "env-2", THREAD));
     expect(env.thread!.key).not.toBe(a.thread!.key);
   });
 
   it("F-441: a launch learns its thread from its result; one that failed has no thread and is a card of its own", () => {
     expect(t3(live("t3_thread_launch", LAUNCH_ARGS, null, { open: true }))!.thread).toBeNull();
-    const failure = { _tag: "OrchestratorMcpFailure", code: "target_required", message: "Pass projectId." };
+    const failure = {
+      _tag: "OrchestratorMcpFailure",
+      code: "target_required",
+      message: "Pass projectId.",
+    };
     const failed = t3(live("t3_thread_launch", LAUNCH_ARGS, failure, { isError: true }))!;
     expect(failed.thread).toBeNull();
     const placed = placeT3([{ type: "t3", call: failed }]);
@@ -306,7 +359,13 @@ describe("one card for each thread, and where each later call goes (11.2, 11.4)"
       ),
     )!;
   const send = () =>
-    t3(live("t3_thread_send", { threadId: THREAD, message: "Also a test." }, { threadId: THREAD, runId: "run-2", status: "running", delivery: "started" }))!;
+    t3(
+      live(
+        "t3_thread_send",
+        { threadId: THREAD, message: "Also a test." },
+        { threadId: THREAD, runId: "run-2", status: "running", delivery: "started" },
+      ),
+    )!;
 
   it("F-313: a call whose result names the thread, directly under its card, joins it", () => {
     const l = launch();
@@ -322,17 +381,36 @@ describe("one card for each thread, and where each later call goes (11.2, 11.4)"
   it("F-313: a call joins only after its result: open, it keeps its line", () => {
     const l = launch();
     const w = wait(true);
-    expect(placeT3([{ type: "t3", call: l }, { type: "t3", call: w }]).get(w.id)?.type).toBe("line");
+    expect(
+      placeT3([
+        { type: "t3", call: l },
+        { type: "t3", call: w },
+      ]).get(w.id)?.type,
+    ).toBe("line");
   });
 
   it("F-313: after a bubble, or with its line held by the reader, a call keeps its line and is an item of the card too", () => {
     const l = launch();
     const s = send();
-    const afterBubble = placeT3([{ type: "t3", call: l }, { type: "other" }, { type: "t3", call: s }]);
+    const afterBubble = placeT3([
+      { type: "t3", call: l },
+      { type: "other" },
+      { type: "t3", call: s },
+    ]);
     expect(afterBubble.get(s.id)).toMatchObject({ type: "line", head: l.id });
-    const held = placeT3([{ type: "t3", call: l }, { type: "t3", call: s }], (id) => id === s.id);
+    const held = placeT3(
+      [
+        { type: "t3", call: l },
+        { type: "t3", call: s },
+      ],
+      (id) => id === s.id,
+    );
     expect(held.get(s.id)?.type).toBe("line");
-    const otherRecord = placeT3([{ type: "t3", call: l }, { type: "boundary" }, { type: "t3", call: s }]);
+    const otherRecord = placeT3([
+      { type: "t3", call: l },
+      { type: "boundary" },
+      { type: "t3", call: s },
+    ]);
     expect(otherRecord.get(s.id)?.type).toBe("line");
   });
 
@@ -340,7 +418,11 @@ describe("one card for each thread, and where each later call goes (11.2, 11.4)"
     const l = launch();
     const s = send();
     const w = wait();
-    const placed = placeT3([{ type: "t3", call: l }, { type: "t3", call: s }, { type: "t3", call: w }]);
+    const placed = placeT3([
+      { type: "t3", call: l },
+      { type: "t3", call: s },
+      { type: "t3", call: w },
+    ]);
     expect(placed.get(s.id)?.type).toBe("joined");
     expect(placed.get(w.id)?.type).toBe("joined");
   });
@@ -354,13 +436,25 @@ describe("one card for each thread, and where each later call goes (11.2, 11.4)"
   });
 
   it("F-313: listings are lines of their own and fold with each other, never a thread's card", () => {
-    const projects = live("t3_project_list", {}, { projects: [{ id: "a" }, { id: "b" }], nextCursor: null });
-    const threads = live("t3_thread_list", { allProjects: true }, { threads: [{ threadId: THREAD }], total: 1 });
+    const projects = live(
+      "t3_project_list",
+      {},
+      { projects: [{ id: "a" }, { id: "b" }], nextCursor: null },
+    );
+    const threads = live(
+      "t3_thread_list",
+      { allProjects: true },
+      { threads: [{ threadId: THREAD }], total: 1 },
+    );
     const p = t3(projects)!;
     expect(placeT3([{ type: "t3", call: p }]).get(p.id)).toEqual({ type: "listing" });
     expect(kindOf(projects, MAP).key).toBe("t3:listing");
     expect(kindOf(projects, MAP).key).toBe(kindOf(threads, MAP).key);
-    expect(lineOf(projects, MAP)).toMatchObject({ verb: "Looked through", object: "T3 Code projects", detail: "2 projects" });
+    expect(lineOf(projects, MAP)).toMatchObject({
+      verb: "Looked through",
+      object: "T3 Code projects",
+      detail: "2 projects",
+    });
     expect(lineOf(threads, MAP).detail).toBe("1 thread");
   });
 
@@ -373,7 +467,8 @@ describe("one card for each thread, and where each later call goes (11.2, 11.4)"
 });
 
 describe("a thread's state (11.2)", () => {
-  const open = (tool: string, args: Rec) => t3(live(tool, { threadId: THREAD, ...args }, null, { open: true }))!;
+  const open = (tool: string, args: Rec) =>
+    t3(live(tool, { threadId: THREAD, ...args }, null, { open: true }))!;
   const done = (tool: string, structured: Rec, args: Rec = {}) =>
     t3(live(tool, { threadId: THREAD, ...args }, structured))!;
   const launch = () => t3(live("t3_thread_launch", LAUNCH_ARGS, LAUNCHED))!;
@@ -391,37 +486,74 @@ describe("a thread's state (11.2)", () => {
   it("F-134: else what T3 Code last reported, from any call's returned result, with its time", () => {
     const l = launch();
     expect(threadStateOf([l])).toMatchObject({ type: "reported", status: "running", callId: l.id });
-    const w = done("t3_thread_wait", { threadId: THREAD, runId: "run-1", status: "completed", timedOut: false });
-    expect(threadStateOf([l, w])).toMatchObject({ type: "reported", status: "completed", callId: w.id });
+    const w = done("t3_thread_wait", {
+      threadId: THREAD,
+      runId: "run-1",
+      status: "completed",
+      timedOut: false,
+    });
+    expect(threadStateOf([l, w])).toMatchObject({
+      type: "reported",
+      status: "completed",
+      callId: w.id,
+    });
     expect(threadStateOf([l, w])).toMatchObject({ at: w.call.endedAt });
   });
 
   it("F-134: a wait that timed out reports its run's status: Running, never Completed", () => {
     const l = launch();
-    const w = done("t3_thread_wait", { threadId: THREAD, runId: "run-1", status: "running", timedOut: true });
+    const w = done("t3_thread_wait", {
+      threadId: THREAD,
+      runId: "run-1",
+      status: "running",
+      timedOut: true,
+    });
     expect(threadStateOf([l, w])).toMatchObject({ type: "reported", status: "running" });
   });
 
   it("F-134 F-314: a failed check or a refused follow-up shows on its own item and does not change the thread's word", () => {
     const l = launch();
     const failure = { _tag: "OrchestratorMcpFailure", code: "thread_not_sendable", message: "No." };
-    const refused = t3(live("t3_thread_send", { threadId: THREAD, message: "x", mode: "steer" }, failure, { isError: true }))!;
+    const refused = t3(
+      live("t3_thread_send", { threadId: THREAD, message: "x", mode: "steer" }, failure, {
+        isError: true,
+      }),
+    )!;
     expect(refused.state).toBe("failed");
     expect(threadStateOf([l, refused])).toMatchObject({ type: "reported", status: "running" });
   });
 
   it("F-134: a stop asked for reports interrupt_requested, which is Stop requested, not proof that it stopped", () => {
     const l = launch();
-    const i = done("t3_thread_interrupt", { threadId: THREAD, runId: "run-1", status: "interrupt_requested" }, { stop: true });
-    expect(threadStateOf([l, i])).toMatchObject({ type: "reported", status: "interrupt_requested" });
+    const i = done(
+      "t3_thread_interrupt",
+      { threadId: THREAD, runId: "run-1", status: "interrupt_requested" },
+      { stop: true },
+    );
+    expect(threadStateOf([l, i])).toMatchObject({
+      type: "reported",
+      status: "interrupt_requested",
+    });
   });
 
   it("F-134: a launch without a message reports no status, so the thread falls to its latest sending call's state", () => {
-    const idle = t3(live("t3_thread_launch", { ...LAUNCH_ARGS, message: undefined }, { ...LAUNCHED, runId: null, status: null }))!;
+    const idle = t3(
+      live(
+        "t3_thread_launch",
+        { ...LAUNCH_ARGS, message: undefined },
+        { ...LAUNCHED, runId: null, status: null },
+      ),
+    )!;
     expect(idle.reported).toBeNull();
     expect(threadStateOf([idle])).toEqual({ type: "call", state: "made", callId: idle.id });
-    const failure = { _tag: "OrchestratorMcpFailure", code: "thread_not_found", message: "No thread." };
-    const failed = t3(live("t3_thread_send", { threadId: THREAD, message: "x" }, failure, { isError: true }))!;
+    const failure = {
+      _tag: "OrchestratorMcpFailure",
+      code: "thread_not_found",
+      message: "No thread.",
+    };
+    const failed = t3(
+      live("t3_thread_send", { threadId: THREAD, message: "x" }, failure, { isError: true }),
+    )!;
     expect(threadStateOf([failed])).toEqual({ type: "call", state: "failed", callId: failed.id });
   });
 
@@ -451,14 +583,20 @@ describe("what a read read: its two dimensions (11.1, 11.3)", () => {
 
   it("F-133: the last page with the reply's text cut is not read to the end", () => {
     const r = read(readResult([item("assistant_message", "Done, and then", "run-1", true)], false));
-    expect(readDimensions(r.facts)).toMatchObject({ toEnd: false, morePages: false, replyCut: true });
+    expect(readDimensions(r.facts)).toMatchObject({
+      toEnd: false,
+      morePages: false,
+      replyCut: true,
+    });
     expect(readLines(readDimensions(r.facts))).toEqual([
       "Part of the reply only: its text was cut, and the rest was not read",
     ]);
   });
 
   it("F-133: another item of the run cut, with more pages: both lines together", () => {
-    const r = read(readResult([item("tool", "Ran", "run-1", true), item("assistant_message", "Done.")], true));
+    const r = read(
+      readResult([item("tool", "Ran", "run-1", true), item("assistant_message", "Done.")], true),
+    );
     expect(readLines(readDimensions(r.facts))).toEqual([
       "First page only: the reply may continue",
       "Part of the run only: an item's text was cut, and the rest was not read",
@@ -466,7 +604,12 @@ describe("what a read read: its two dimensions (11.1, 11.3)", () => {
   });
 
   it("F-133: an item of an earlier run that was cut is not the latest run's", () => {
-    const r = read(readResult([item("assistant_message", "Old", "run-0", true), item("assistant_message", "New.")]));
+    const r = read(
+      readResult([
+        item("assistant_message", "Old", "run-0", true),
+        item("assistant_message", "New."),
+      ]),
+    );
     expect(readDimensions(r.facts).toEnd).toBe(true);
     expect(r.facts?.reply).toBe("New.");
   });
@@ -491,7 +634,10 @@ describe("what a read read: its two dimensions (11.1, 11.3)", () => {
 
 describe("what the engine keeps (bounds)", () => {
   it("F-133: a read's facts fit their bound, its long reply cut and said to be, never an id", () => {
-    const facts = t3ResultFacts(readResult([item("assistant_message", "y".repeat(30_000))]), false)!;
+    const facts = t3ResultFacts(
+      readResult([item("assistant_message", "y".repeat(30_000))]),
+      false,
+    )!;
     const fitted = fitT3Facts({ ...facts, argThread: THREAD })!;
     expect(JSON.stringify(fitted).length).toBeLessThanOrEqual(MAX_T3_FACTS_CHARS);
     expect(fitted.replyShort).toBe(true);
@@ -522,7 +668,15 @@ describe("the change in place (11.4)", () => {
   it("F-132 F-134: a call the map named T3 Code's becomes the other tool's card in place when its result names another tool", () => {
     const open = live("t3_thread_read", { threadId: THREAD }, null, { open: true });
     expect(lineOf(open, MAP).kind).toBe("t3");
-    const overruled = { ...live("t3_thread_read", { threadId: THREAD }, { notes: [] }, { resultTool: "T3_thread_read" }), id: open.id };
+    const overruled = {
+      ...live(
+        "t3_thread_read",
+        { threadId: THREAD },
+        { notes: [] },
+        { resultTool: "T3_thread_read" },
+      ),
+      id: open.id,
+    };
     const l = lineOf(overruled, MAP);
     expect(l.kind).toBe("server");
     expect(l.id).toBe(open.id);
@@ -530,8 +684,17 @@ describe("the change in place (11.4)", () => {
 
   it("F-313: a call whose line was held keeps it when its result names the thread, so nothing the reader had moves", () => {
     const l = t3(live("t3_thread_launch", LAUNCH_ARGS, LAUNCHED))!;
-    const w = t3(live("t3_thread_wait", { threadId: THREAD }, { threadId: THREAD, runId: "run-1", status: "completed", timedOut: false }))!;
-    const seq: T3Sequence = [{ type: "t3", call: l }, { type: "t3", call: w }];
+    const w = t3(
+      live(
+        "t3_thread_wait",
+        { threadId: THREAD },
+        { threadId: THREAD, runId: "run-1", status: "completed", timedOut: false },
+      ),
+    )!;
+    const seq: T3Sequence = [
+      { type: "t3", call: l },
+      { type: "t3", call: w },
+    ];
     expect(placeT3(seq, () => true).get(w.id)?.type).toBe("line");
     expect(placeT3(seq, () => false).get(w.id)?.type).toBe("joined");
   });
@@ -539,16 +702,42 @@ describe("the change in place (11.4)", () => {
 
 describe("own lines' words (11.4)", () => {
   it("F-313: each later call's line in T3 Code's family, with the first line sent or the status it got back", () => {
-    const s = live("t3_thread_send", { threadId: THREAD, message: "Also a test.\nThanks." }, { threadId: THREAD, status: "running", delivery: "steered" });
-    expect(lineOf(s, MAP)).toMatchObject({ verb: "Followed up with", object: "T3 Code", detail: "Also a test." });
+    const s = live(
+      "t3_thread_send",
+      { threadId: THREAD, message: "Also a test.\nThanks." },
+      { threadId: THREAD, status: "running", delivery: "steered" },
+    );
+    expect(lineOf(s, MAP)).toMatchObject({
+      verb: "Followed up with",
+      object: "T3 Code",
+      detail: "Also a test.",
+    });
     const r = live("t3_thread_read", { threadId: THREAD }, readResult([]));
-    expect(lineOf(r, MAP)).toMatchObject({ verb: "Read the thread in", object: "T3 Code", detail: "Completed" });
-    const w = live("t3_thread_wait", { threadId: THREAD }, { threadId: THREAD, status: "running", timedOut: true });
+    expect(lineOf(r, MAP)).toMatchObject({
+      verb: "Read the thread in",
+      object: "T3 Code",
+      detail: "Completed",
+    });
+    const w = live(
+      "t3_thread_wait",
+      { threadId: THREAD },
+      { threadId: THREAD, status: "running", timedOut: true },
+    );
     expect(lineOf(w, MAP)).toMatchObject({ verb: "Waited for", detail: "Running" });
-    const i = live("t3_thread_interrupt", { threadId: THREAD }, { threadId: THREAD, status: "interrupt_requested" });
-    expect(lineOf(i, MAP)).toMatchObject({ verb: "Asked", object: "T3 Code to stop", detail: "Stop requested" });
+    const i = live(
+      "t3_thread_interrupt",
+      { threadId: THREAD },
+      { threadId: THREAD, status: "interrupt_requested" },
+    );
+    expect(lineOf(i, MAP)).toMatchObject({
+      verb: "Asked",
+      object: "T3 Code to stop",
+      detail: "Stop requested",
+    });
     const open = live("t3_thread_read", { threadId: THREAD }, null, { open: true });
-    expect(lineOf(open, MAP)).toMatchObject({ verb: "Reading the thread in", running: "Reading the thread in T3 Code" });
+    expect(lineOf(open, MAP)).toMatchObject({
+      verb: "Reading the thread in",
+      running: "Reading the thread in T3 Code",
+    });
   });
 });
-

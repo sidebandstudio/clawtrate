@@ -107,8 +107,9 @@ function stateOf(call: ActionCall, ctx: ReadingContext): T3CallState {
  * a result, the gateway's map is the evidence, and a result that names another
  * tool overrules it. A result that names no tool (history keeps no `details`
  * for a tool server) leaves the map's word only where something else says it
- * is T3 Code's: T3 Code's structured content as the gateway rendered it, an
- * error, or a refusal. The map alone never makes a call Call made.
+ * is T3 Code's: T3 Code's structured content, an error, or a refusal. Live,
+ * the map alone never makes a call Call made; from history it does, since
+ * history keeps no `details` for any tool server.
  */
 export function t3CallOf(call: ActionCall, ctx: ReadingContext = {}): T3Call | null {
   const identity = toolServerOf(call, ctx);
@@ -117,7 +118,10 @@ export function t3CallOf(call: ActionCall, ctx: ReadingContext = {}): T3Call | n
   const role = ROLES[tool];
   const facts = call.t3 ?? null;
   const state = stateOf(call, ctx);
-  if (identity.mapped && state === "made" && !facts?.read) return null;
+  // Live, a result names its tool: one that names none and carries nothing of T3 Code's leaves
+  // the map's word unproven. History keeps no details for a tool server, so there the map stands,
+  // and a result whose rendering cannot be read is a card of its own (11.1).
+  if (identity.mapped && state === "made" && !facts?.read && !call.fromHistory) return null;
   const a = call.args;
   const environmentId = facts?.argEnvironment ?? str(a.environmentId);
   const threadId =
@@ -151,7 +155,8 @@ export function t3CallOf(call: ActionCall, ctx: ReadingContext = {}): T3Call | n
         : role === "send"
           ? str(a.message)
           : null,
-    error: state === "failed" ? { code: facts?.code ?? null, message: facts?.message ?? null } : null,
+    error:
+      state === "failed" ? { code: facts?.code ?? null, message: facts?.message ?? null } : null,
     facts,
     call,
   };

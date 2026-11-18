@@ -3,13 +3,7 @@
 // engine reads them. T3 Code's thread cards are in `actions/T3Thread.tsx`. No state claims more than an
 // event established, and the app makes no connection to T3 Code.
 
-import type {
-  Bot,
-  BotMessageCard,
-  InterSessionMessage,
-  Run,
-  StepRaw,
-} from "@clawtrate/core";
+import type { Bot, BotMessageCard, InterSessionMessage, Run, StepRaw } from "@clawtrate/core";
 import { useContext, useState, type ReactNode } from "react";
 import { Avatar } from "../Avatar.tsx";
 import { CardThoughtContext, useCardEnv } from "./context.tsx";

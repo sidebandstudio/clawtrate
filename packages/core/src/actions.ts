@@ -444,10 +444,33 @@ export function toolServerOf(
   const server = str(call.details?.mcpServer);
   const tool = str(call.details?.mcpTool);
   if (server && tool) return { server, tool, mapped: false };
-  const known = ctx.toolServers?.[call.name];
+  const known = mappedTool(call.name, ctx);
   return known && str(known.server) && str(known.tool)
     ? { server: known.server, tool: known.tool, mapped: true }
     : null;
+}
+
+/** Each name map by its names in lower case, made once per map. */
+const lowerMaps = new WeakMap<object, Map<string, { server: string; tool: string }>>();
+
+/**
+ * The gateway's map entry for an effective name. The gateway keeps names
+ * unique without regard to case, and its tool events can name a call in
+ * lower case where `tools.effective` keeps the case (OpenClaw 2026.10.6:
+ * `t3code__T3_thread_read-2` is called `t3code__t3_thread_read-2`), so a
+ * name the map does not hold exactly is looked up in lower case.
+ */
+function mappedTool(name: string, ctx: ReadingContext) {
+  const map = ctx.toolServers;
+  if (!map) return undefined;
+  const exact = map[name];
+  if (exact) return exact;
+  let lower = lowerMaps.get(map);
+  if (!lower) {
+    lower = new Map(Object.entries(map).map(([key, value]) => [key.toLowerCase(), value]));
+    lowerMaps.set(map, lower);
+  }
+  return lower.get(name.toLowerCase());
 }
 
 export type KindInfo = {
@@ -486,11 +509,11 @@ export function kindOf(call: ActionCall, ctx: ReadingContext = {}): KindInfo {
       // T3 Code's listings fold with each other, when the gateway's map named them at their start
       // (11.2); a thread's calls never fold: they join their thread's card.
       const listing = server.tool === "t3_project_list" || server.tool === "t3_thread_list";
-      return info("t3", listing && ctx.toolServers?.[call.name] ? "t3:listing" : null);
+      return info("t3", listing && mappedTool(call.name, ctx) ? "t3:listing" : null);
     }
     // Folds only when the gateway's map named it at its start (7.4), by the server and tool it
     // turned out to be: a result that names another operation keeps it apart.
-    const atStart = ctx.toolServers?.[call.name];
+    const atStart = mappedTool(call.name, ctx);
     return info("server", atStart ? `server:${server.server}:${server.tool}` : null);
   }
   const a = call.args;
@@ -1829,9 +1852,7 @@ function wordsOf(call: ActionCall, kind: ActionKind, ctx: ReadingContext): Words
     case "message": {
       // The Messaged cards' own words: the status line says what the card says (section 10).
       const agent = /^agent:([^:]+):/.exec(str(a.sessionKey))?.[1] ?? null;
-      const who = agent
-        ? (ctx.botName?.(agent) ?? agent)
-        : str(a.label) || OBJECTS.anotherBot;
+      const who = agent ? (ctx.botName?.(agent) ?? agent) : str(a.label) || OBJECTS.anotherBot;
       return {
         ...three(VERBS.message, who, firstLine(a.message ?? a.prompt)),
         noun: [NOUNS.messaging, who],
