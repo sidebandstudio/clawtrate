@@ -9,7 +9,7 @@ pnpm install
 pnpm exec playwright install chromium   # once, for the end-to-end and visual tests
 ```
 
-The [README](README.md) explains the development gateway, the web preview and the desktop app. [`docs/decisions.md`](docs/decisions.md) records versions and why things are the way they are; add to it when you make a choice a later contributor needs to know about. [`docs/parity.md`](docs/parity.md) is the definition of done.
+The [README](README.md) explains the development gateway, the web preview and the desktop app. [`docs/decisions.md`](docs/decisions.md) records versions and why things are the way they are; add to it when you make a choice a later contributor needs to know about. [`docs/parity.md`](docs/parity.md) is the definition of done, and [`docs/roadmap.md`](docs/roadmap.md) is the plan: what is left to build, who has each part, and how to take one.
 
 ## Checks
 
