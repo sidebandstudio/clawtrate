@@ -6,6 +6,7 @@ import type {
   SidebarState,
   Task,
 } from "@clawtrate/core";
+import { ACTIVE_RUN_MESSAGE } from "@clawtrate/core";
 import {
   useCallback,
   useEffect,
@@ -588,11 +589,22 @@ export function Rail({
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
     const act = async (stop: boolean) => {
-      await bridge.invoke({ type: "archiveTask", key: task.key, stop });
+      const { stoppedRun } = await bridge.invoke({ type: "archiveTask", key: task.key, stop });
       setAnnouncement(`Archived ${task.title}.`);
+      // The gateway's archive ends anything running in the task: a run that had just started,
+      // seen to end as stopped on its own end event, is said here, with the way back.
+      if (stoppedRun)
+        runner.tell({
+          tone: "info",
+          text: "Archived. A run that had just started was stopped.",
+          action: {
+            label: "Restore",
+            onSelect: () => restore({ key: task.key, title: task.title, botId: bot.id }),
+          },
+        });
       await afterRemoval(bot, task, remaining, next);
     };
-    if (isActive(task)) {
+    const askStop = () =>
       setDialog({
         title: `Stop and archive “${task.title}”?`,
         body: <p>{bot.name} is still working on this task. Archiving it stops its run first.</p>,
@@ -1291,6 +1303,7 @@ export function Rail({
             {
               kind: "item" as const,
               label: "Archive task",
+              note: "Ends anything running in this task.",
               icon: <ArchiveIcon />,
               onSelect: () => {
                 const trigger = menu?.trigger ?? null;
@@ -1445,6 +1458,8 @@ export function Rail({
             {
               kind: "item" as const,
               label: isActive(task) ? "Stop and archive…" : "Archive",
+              // The gateway's archive ends whatever runs in the task, also a run started just now.
+              ...(isActive(task) ? {} : { note: "Ends anything running in this task." }),
               icon: <ArchiveIcon />,
               onSelect: () => {
                 close();
@@ -1875,8 +1890,27 @@ export function Rail({
         {announcement}
       </p>
       {runner.notice && (
-        <div className="rail-notice" role="alert" data-testid="rail-notice">
-          <span>{runner.notice}</span>
+        <div
+          className="rail-notice"
+          role={runner.notice.tone === "danger" ? "alert" : "status"}
+          data-tone={runner.notice.tone === "info" ? "info" : undefined}
+          data-testid="rail-notice"
+        >
+          <span>{runner.notice.text}</span>
+          {runner.notice.action && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              onClick={() => {
+                const action = runner.notice?.action;
+                runner.dismiss();
+                action?.onSelect();
+              }}
+            >
+              {runner.notice.action.label}
+            </button>
+          )}
           <button
             type="button"
             className="icon-button"

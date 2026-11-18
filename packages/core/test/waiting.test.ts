@@ -64,6 +64,25 @@ describe("which tasks wait for the person", () => {
     expect(index.stoppedAt(KEY)).toBeNull();
   });
 
+  it("moves a task's stop mark on each run seen to end as stopped, and keeps it across a newer run", () => {
+    const index = new WaitingIndex();
+    expect(index.stopMark(KEY)).toBe(0);
+    index.onAgent(lifecycle("start", {}, "r1"), 10);
+    index.onAgent(lifecycle("end", {}, "r1"), 20);
+    expect(index.stopMark(KEY)).toBe(0);
+    index.onAgent(lifecycle("start", {}, "r2"), 30);
+    index.onAgent(lifecycle("end", { aborted: true }, "r2"), 40);
+    const first = index.stopMark(KEY);
+    expect(first).toBeGreaterThan(0);
+    index.onAgent(lifecycle("start", {}, "r3"), 50);
+    expect(index.stopMark(KEY)).toBe(first);
+    // An older run's end after a newer start does not move it.
+    index.onAgent(lifecycle("end", { aborted: true }, "r2"), 60);
+    expect(index.stopMark(KEY)).toBe(first);
+    index.onAgent(lifecycle("end", { status: "cancelled" }, "r3"), 70);
+    expect(index.stopMark(KEY)).toBeGreaterThan(first);
+  });
+
   it("F-021 F-057: a task the engine follows is described by its runs, not by the events", () => {
     const index = new WaitingIndex();
     index.onAgent(lifecycle("start", {}, "r1"), 10);

@@ -17,7 +17,7 @@ import {
   type SidebarChange,
   type SidebarPrefs,
 } from "./sidebar.ts";
-import { MAX_TASK_LABEL_CHARS, type ArchivedList } from "./task-actions.ts";
+import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 
 export type BridgeCommand =
@@ -165,9 +165,11 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                           ? { data: string }
                           : C extends { type: "newTask" | "newMainTask" }
                             ? { key: string }
-                            : C extends { type: "listArchived" }
-                              ? ArchivedList
-                              : void;
+                            : C extends { type: "archiveTask" }
+                              ? ArchiveResult
+                              : C extends { type: "listArchived" }
+                                ? ArchivedList
+                                : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";

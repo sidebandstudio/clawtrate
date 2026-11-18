@@ -36,7 +36,7 @@ const MARKER_PREFIX_CHARS = 13;
 export const WAITING_MARKER_CHARS =
   MAX_WAITING_ID_CHARS + MARKER_PREFIX_CHARS + MAX_WAITING_ID_CHARS + 64;
 /** JSON characters one entry of the latest-run map can take: its key, run id, time and flag. */
-export const WAITING_RUN_CHARS = 2 * MAX_WAITING_ID_CHARS + 64;
+export const WAITING_RUN_CHARS = 2 * MAX_WAITING_ID_CHARS + 96;
 /** JSON characters one held task can take: its key, a waiting kind and two times. */
 export const WAITING_HELD_CHARS = MAX_WAITING_ID_CHARS + 96;
 
@@ -98,7 +98,12 @@ export class WaitingIndex {
   /** Session key to its markers by id, in the order tasks began waiting. */
   private readonly sessions = new Map<string, Map<string, Marker>>();
   /** Each task's latest run as the events report it: its id, when, and whether it was stopped. */
-  private readonly runs = new Map<string, { runId: string; at: number; stopped: boolean }>();
+  private readonly runs = new Map<
+    string,
+    { runId: string; at: number; stopped: boolean; stopSeq: number }
+  >();
+  /** Counts the run ends seen as stopped, in the order they arrived: each task keeps its latest. */
+  private stops = 0;
   /** Tasks whose runs the engine holds, as those runs describe them; they win over the events. */
   private readonly held = new Map<string, HeldTask>();
 
@@ -143,7 +148,7 @@ export class WaitingIndex {
         const latest = this.runs.get(key);
         if (latest?.runId === runId) return false;
         this.runs.delete(key);
-        this.runs.set(key, { runId, at: ts, stopped: false });
+        this.runs.set(key, { runId, at: ts, stopped: false, stopSeq: latest?.stopSeq ?? 0 });
         cap(this.runs, MAX_WAITING_SESSIONS);
         return latest?.stopped === true;
       }
@@ -167,7 +172,12 @@ export class WaitingIndex {
         const reason = classifyLifecycleTerminal(data.phase, data);
         const stopped = reason === "aborted" || reason === "cancelled";
         this.runs.delete(key);
-        this.runs.set(key, { runId, at: ts, stopped });
+        this.runs.set(key, {
+          runId,
+          at: ts,
+          stopped,
+          stopSeq: stopped ? (this.stops += 1) : (latest?.stopSeq ?? 0),
+        });
         cap(this.runs, MAX_WAITING_SESSIONS);
         return changed || stopped || latest?.stopped === true;
       }
@@ -282,6 +292,15 @@ export class WaitingIndex {
       if (!first || marker.since < first.since) first = marker;
     }
     return first && { kind: first.kind, since: first.since };
+  }
+
+  /**
+   * A mark that moves each time a run of the task is seen to end as stopped, on the
+   * evidence of that run's own end event: read before and after an action to learn
+   * whether a run was stopped meanwhile.
+   */
+  stopMark(key: string): number {
+    return this.runs.get(key)?.stopSeq ?? 0;
   }
 
   /** The latest run the events reported for a task, by id; null when none was seen. */

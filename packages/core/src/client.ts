@@ -205,6 +205,7 @@ import {
   renameTask,
   restoreTask,
   type ArchivedList,
+  type ArchiveResult,
   type CreatedTask,
   type TaskActionContext,
 } from "./task-actions.ts";
@@ -4581,6 +4582,7 @@ export class ClawtrateClient {
       },
       now: () => this.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      stopMark: (key) => this.waiting.stopMark(key),
       runMark: (key) => {
         const row = this.rows.get(capId(key, MAX_ID_CHARS));
         const active = row?.hasActiveRun === true || row?.status === "running";
@@ -4650,8 +4652,11 @@ export class ClawtrateClient {
     await markTask(this.actionContext(options.owner ?? null), key, unread);
   }
 
-  async archiveTask(key: string, options: { stop?: boolean; owner?: object } = {}): Promise<void> {
-    await archiveTask(this.actionContext(options.owner ?? null), key, {
+  async archiveTask(
+    key: string,
+    options: { stop?: boolean; owner?: object } = {},
+  ): Promise<ArchiveResult> {
+    return archiveTask(this.actionContext(options.owner ?? null), key, {
       stop: options.stop === true,
     });
   }

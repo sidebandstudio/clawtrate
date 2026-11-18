@@ -3119,3 +3119,14 @@ textarea {
 [data-input="touch"] .bot-group > .bot-toggle {
   display: none;
 }
+
+/* A notice that says what an action did beyond its name, with its way back. */
+.rail-notice[data-tone="info"] {
+  align-items: center;
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.rail-notice .button[data-size="sm"] {
+  flex: none;
+}

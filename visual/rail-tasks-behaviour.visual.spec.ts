@@ -222,6 +222,161 @@ test("F-278: a confirmed delete of an archived task removes its row and its menu
   await expect(page.getByRole("menu")).toHaveCount(0);
 });
 
+type Fixture = {
+  setState: (change: (state: Record<string, unknown>) => Record<string, unknown>) => void;
+  invoke: (command: Record<string, unknown>) => Promise<unknown>;
+  refuse: (type: string) => void;
+  raceArchive: () => void;
+  badge: number | null;
+  getState: () => { tasksByBot: Record<string, Array<{ key: string; unread: boolean }>> };
+};
+
+test("Archive: a task that starts working as Archive goes out gets the Stop and archive question, not an error", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  await taskMenu(page, "Certificate renewal");
+  const archive = page.getByRole("menuitem", { name: "Archive", exact: true });
+  // Where Archive is offered, it says what the gateway's archive does.
+  await expect(archive).toHaveAccessibleDescription("Ends anything running in this task.");
+  // The gateway's task starts working while the request is out, before it answers.
+  await page.evaluate(() => {
+    const bridge = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const invoke = bridge.invoke.bind(bridge);
+    bridge.invoke = (command) => {
+      if (command.type === "archiveTask")
+        bridge.setState((state) => {
+          const tasksByBot = state.tasksByBot as Record<string, Array<Record<string, unknown>>>;
+          return {
+            ...state,
+            tasksByBot: {
+              ...tasksByBot,
+              otto: tasksByBot.otto!.map((task) =>
+                task.key === command.key ? { ...task, status: "running" } : task,
+              ),
+            },
+          };
+        });
+      return invoke(command);
+    };
+  });
+  await archive.click();
+  const dialog = page.getByRole("dialog", { name: /Stop and archive/ });
+  await expect(dialog).toBeVisible();
+  await expect(page.getByTestId("rail-notice")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Stop and archive" }).click();
+  await expect(taskRow(page, "Certificate renewal")).toHaveCount(0);
+});
+
+test("Archive: when the archive stopped a run that had just started, the notice says so, with Restore", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.raceArchive(),
+  );
+  await taskMenu(page, "Certificate renewal");
+  await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
+  const notice = page.getByTestId("rail-notice");
+  await expect(notice).toContainText("Archived. A run that had just started was stopped.");
+  await expect(notice).toHaveAttribute("role", "status");
+  await notice.getByRole("button", { name: "Restore" }).click();
+  await expect(taskRow(page, "Certificate renewal")).toBeVisible();
+  // An archive that met no run says nothing more.
+  await taskMenu(page, "Router firmware");
+  await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
+  await expect(taskRow(page, "Router firmware")).toHaveCount(0);
+  await expect(page.getByTestId("rail-notice")).toHaveCount(0);
+});
+
+test("F-054: a double-click's second click creates nothing, however fast the first create was answered; a deliberate second New task creates one", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  const row = page.getByTestId("new-task-row").first();
+  // The first click's create is answered before the gesture's second click lands.
+  await row.evaluate((el) =>
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })),
+  );
+  await expect(page.locator(".composer-input")).toBeFocused();
+  await row.evaluate((el) =>
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 })),
+  );
+  // A double-click held for longer than the answer takes.
+  await row.dblclick({ delay: 180 });
+  await expect.poll(async () => (await sent(page, "newTask")).length).toBe(2);
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="task"]').length > 0);
+  expect(await sent(page, "newTask")).toHaveLength(2);
+  // Once that one has opened, New task again is a new task.
+  await expect(page.locator(".composer-input")).toBeFocused();
+  await row.click();
+  await expect.poll(async () => (await sent(page, "newTask")).length).toBe(3);
+});
+
+test("F-022: leaving a task whose opening read the gateway refused keeps its dot and the badge, also with an explicit unread mark", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  const key = "agent:otto:backup-check";
+  await page.evaluate((key) => {
+    const bridge = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    bridge.setState((state) => {
+      const tasksByBot = state.tasksByBot as Record<string, Array<Record<string, unknown>>>;
+      return {
+        ...state,
+        tasksByBot: {
+          ...tasksByBot,
+          otto: tasksByBot.otto!.map((task) =>
+            task.key === key ? { ...task, unread: true, unreadMarker: Date.now() } : task,
+          ),
+        },
+      };
+    });
+    bridge.refuse("markTask");
+  }, key);
+  const badge = () =>
+    page.evaluate(
+      () => (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.badge,
+    );
+  await expect.poll(badge).not.toBeNull();
+  const before = await badge();
+  await taskRow(page, "Weekly backup check").click();
+  await expect(page.locator(".title-pill-task")).toHaveText("Weekly backup check");
+  await expect
+    .poll(
+      async () =>
+        (await sent(page, "markTask")).filter((command) => "key" in command && command.key === key)
+          .length,
+    )
+    .toBe(1);
+  await taskRow(page, "Disk almost full on the media box").click();
+  await expect(page.locator(".title-pill-task")).toHaveText("Disk almost full on the media box");
+  await expect(taskRow(page, "Weekly backup check").locator(".unread-dot")).toHaveCount(1);
+  await expect.poll(badge).toBe(before);
+});
+
+test("F-277: a task restored from the Archived group and archived again shows in the group again", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  await taskMenu(page, "Certificate renewal");
+  await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
+  await expect(taskRow(page, "Certificate renewal")).toHaveCount(0);
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
+  const archived = page.getByRole("list", { name: "Otto's archived tasks" });
+  await archived.getByTestId("archived-task").filter({ hasText: "Certificate renewal" }).click();
+  await page.getByRole("menuitem", { name: "Restore" }).click();
+  await expect(taskRow(page, "Certificate renewal")).toBeVisible();
+  await expect(
+    archived.getByTestId("archived-task").filter({ hasText: "Certificate renewal" }),
+  ).toHaveCount(0);
+  await taskMenu(page, "Certificate renewal");
+  await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
+  await expect(
+    archived.getByTestId("archived-task").filter({ hasText: "Certificate renewal" }),
+  ).toHaveCount(1);
+});
+
 test("F-056: double-click or F2 renames in place; Enter renames, Escape keeps the name, and focus returns to the row", async ({
   page,
 }) => {

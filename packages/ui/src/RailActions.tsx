@@ -420,8 +420,15 @@ export function neighbour(tasks: Task[], key: string): string | null {
  * the rail's notice; while the engine waits for the gateway's owner to grant
  * access, the access bar says so.
  */
+/** The rail's notice for one action: a refusal, or what an action did beyond its name, with a way back. */
+export type RailNotice = {
+  text: string;
+  tone: "danger" | "info";
+  action?: { label: string; onSelect: () => void };
+};
+
 export function useActionRunner(announce: (text: string) => void) {
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<RailNotice | null>(null);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(null), 8000);
@@ -434,12 +441,20 @@ export function useActionRunner(announce: (text: string) => void) {
       } catch (failure) {
         const message = failure instanceof Error ? failure.message : String(failure);
         const text = `Couldn't ${what}. ${message}`;
-        setNotice(text);
+        setNotice({ text, tone: "danger" });
         announce(text);
         return undefined;
       }
     },
     [announce],
   );
-  return { notice, dismiss: () => setNotice(null), run };
+  /** Say what an action did beyond its name, in the action's notice. */
+  const tell = useCallback(
+    (next: RailNotice) => {
+      setNotice(next);
+      announce(next.text);
+    },
+    [announce],
+  );
+  return { notice, dismiss: () => setNotice(null), run, tell };
 }

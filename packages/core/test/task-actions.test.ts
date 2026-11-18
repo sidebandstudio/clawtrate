@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ActiveRunError,
+  ARCHIVE_STOP_WAIT_MS,
   archiveParams,
   archiveTask,
   archivedListParams,
@@ -91,6 +92,7 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
   let written = false;
   let mainMade = false;
   let mark = "idle";
+  let stops = 0;
   const ctx: TaskActionContext = {
     request: async (method, raw) => {
       const params = raw as Record<string, unknown>;
@@ -146,8 +148,15 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
       clock += ms;
     },
     runMark: () => mark,
+    stopMark: () => stops,
   };
-  return { ctx, calls, wrote: () => written, setMark: (next: string) => (mark = next) };
+  return {
+    ctx,
+    calls,
+    wrote: () => written,
+    setMark: (next: string) => (mark = next),
+    stop: () => (stops += 1),
+  };
 }
 
 describe("the rail's task actions", () => {
@@ -251,6 +260,44 @@ describe("the rail's task actions", () => {
     expect(gateway.calls.map((call) => call.method)).toEqual(["sessions.describe"]);
   });
 
+  it("an idle archive that stops nothing says so, without waiting", async () => {
+    const { ctx, calls } = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: false } });
+    expect(await archiveTask(ctx, KEY, { stop: false })).toEqual({ stoppedRun: false });
+    expect(calls.map((call) => call.method)).toEqual(["sessions.describe", "sessions.patch"]);
+  });
+
+  it("a run that starts while the archive request is out, and whose own end says it was stopped, is reported", async () => {
+    const gateway = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: false } });
+    const request = gateway.ctx.request;
+    gateway.ctx.request = async (method, params) => {
+      const answer = await request(method, params);
+      // Another device's run starts as the patch travels; the gateway's archive drains it.
+      if (method === "sessions.patch") gateway.setMark("run-2");
+      return answer;
+    };
+    const sleep = gateway.ctx.sleep;
+    let polls = 0;
+    gateway.ctx.sleep = async (ms) => {
+      await sleep(ms);
+      // The run's end event, read as stopped, arrives just after the answer.
+      if ((polls += 1) === 2) gateway.stop();
+    };
+    expect(await archiveTask(gateway.ctx, KEY, { stop: false })).toEqual({ stoppedRun: true });
+  });
+
+  it("a run that starts while the archive request is out but is not seen to stop is not reported, after a bounded wait", async () => {
+    const gateway = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: false } });
+    const request = gateway.ctx.request;
+    gateway.ctx.request = async (method, params) => {
+      const answer = await request(method, params);
+      if (method === "sessions.patch") gateway.setMark("run-2");
+      return answer;
+    };
+    const started = gateway.ctx.now();
+    expect(await archiveTask(gateway.ctx, KEY, { stop: false })).toEqual({ stoppedRun: false });
+    expect(gateway.ctx.now() - started).toBeGreaterThanOrEqual(ARCHIVE_STOP_WAIT_MS);
+  });
+
   it("F-277: a task whose run is active is not archived without Stop, and nothing is asked of it", async () => {
     const { ctx, calls } = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: true } });
     await expect(archiveTask(ctx, KEY, { stop: false })).rejects.toBeInstanceOf(ActiveRunError);
@@ -350,6 +397,7 @@ describe("the rail's task actions", () => {
       now: () => 0,
       sleep: async () => {},
       runMark: () => "",
+      stopMark: () => 0,
     };
     const listed = await listArchived(ctx, "pip");
     expect(listed.tasks).toHaveLength(MAX_ARCHIVED_LISTED);

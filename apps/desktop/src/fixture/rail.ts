@@ -12,6 +12,7 @@
 //   rail-read     the gateway's arrangement on a read-only connection
 
 import {
+  ACTIVE_RUN_MESSAGE,
   applySidebarChange,
   emptyActivity,
   INTERACTIVE_SCOPES,
@@ -299,8 +300,10 @@ export function railCommands(
         return later(() => {
           const found = find(command.key);
           if (!found) return;
-          if (active(found.task) && !command.stop)
-            throw new Error("This task is still working. Stop it first.");
+          if (active(found.task) && !command.stop) throw new Error(ACTIVE_RUN_MESSAGE);
+          // As the engine reports a run stopped by the archive, on that run's own end event.
+          const stoppedRun = !command.stop && race.archive;
+          race.archive = false;
           const state = get();
           archive.set(found.botId, [
             {
@@ -323,6 +326,7 @@ export function railCommands(
               ),
             },
           });
+          return { stoppedRun };
         });
       case "restoreTask":
         return later(() => {

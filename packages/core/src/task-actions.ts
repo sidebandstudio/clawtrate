@@ -44,7 +44,15 @@ export type TaskActionContext = {
    * it before and after its own check, and sends nothing if it moved.
    */
   runMark: (key: string) => string;
+  /** Moves each time a run of the task is seen to end as stopped (`WaitingIndex.stopMark`). */
+  stopMark: (key: string) => number;
 };
+
+/** How long an archive waits for the end of a run that started while its request was out. */
+export const ARCHIVE_STOP_WAIT_MS = 3_000;
+
+/** What an archive did beyond archiving: a run that had just started was stopped by it. */
+export type ArchiveResult = { stoppedRun: boolean };
 
 /** An archived task, as the Archived group shows it. */
 export type ArchivedTask = {
@@ -60,9 +68,12 @@ export type ArchivedTask = {
 export type ArchivedList = { tasks: ArchivedTask[]; more: boolean };
 
 /** Archive or delete was asked of a task whose run is still active, without "Stop and …". */
+/** What an archive refused because the task is working says; it crosses the bridge as a message. */
+export const ACTIVE_RUN_MESSAGE = "This task is still working. Stop it first.";
+
 export class ActiveRunError extends Error {
   constructor() {
-    super("This task is still working. Stop it first.");
+    super(ACTIVE_RUN_MESSAGE);
     this.name = "ActiveRunError";
   }
 }
@@ -310,7 +321,7 @@ export async function archiveTask(
   ctx: TaskActionContext,
   key: string,
   options: { stop: boolean },
-): Promise<void> {
+): Promise<ArchiveResult> {
   await ctx.ensureWrite();
   const mark = ctx.runMark(key);
   let row = await describe(ctx, key);
@@ -322,8 +333,18 @@ export async function archiveTask(
     // would stop it, so nothing is sent and the person is asked.
     throw new ActiveRunError();
   }
-  if (row?.archived === true) return;
+  if (row?.archived === true) return { stoppedRun: false };
+  const sent = { run: ctx.runMark(key), stop: ctx.stopMark(key) };
   await call(ctx, "sessions.patch", archiveParams(key, sessionIdOf(row, key), true));
+  if (options.stop) return { stoppedRun: false };
+  // The gateway's archive ends anything running in the task (its drain), and has no guard
+  // against a run that starts while the request is out. When a run started meanwhile, its own
+  // end event says whether the archive stopped it; that end comes with or just after the answer.
+  if (ctx.stopMark(key) === sent.stop && ctx.runMark(key) !== sent.run) {
+    const deadline = ctx.now() + ARCHIVE_STOP_WAIT_MS;
+    while (ctx.stopMark(key) === sent.stop && ctx.now() < deadline) await ctx.sleep(STOP_POLL_MS);
+  }
+  return { stoppedRun: ctx.stopMark(key) !== sent.stop };
 }
 
 export async function restoreTask(ctx: TaskActionContext, key: string): Promise<void> {
