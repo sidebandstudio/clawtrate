@@ -992,6 +992,8 @@ In the last case the client asks the gateway for the request's state as soon as 
 | The request is still pending     | "Otto's run has ended. This request is still open, and you can still answer it." | Those the request offers                                |
 | The request is no longer pending | "Otto's run has ended and this request is closed."                               | None. The card folds to the state the gateway gives it. |
 
+When the run completed or failed, Clawtrate then denies a request still pending, so its action is not taken after the run (F-418; `decisions.md`, Approvals): the card closes as "Closed: the run ended" or "Closed: the run failed" once the gateway confirms the denial. The "still open" line above stays only while that answer is outstanding, or when the gateway refuses it; if another decision won, the card shows that decision.
+
 What follows an allow is not stated in advance. The gateway may run the command and pass the result back to the bot's task; whatever it does shows in the transcript when it happens.
 
 **Resolved**, the card folds to one line, 40 px: a tag, the summary, the time, and a chevron. The sentence under it says what the gateway has reported and no more. Allowing a command is not proof that it ran: whether it ran, and how it ended, is on its action card.

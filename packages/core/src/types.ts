@@ -119,9 +119,10 @@ export type TaskStatus =
   | "failed"
   | "idle"
   /**
-   * The next three come from run events (a pending approval or question, an
-   * unreachable machine, a failed step in a finished run) that a read-only
-   * connection does not receive yet; the mapping never produces them today.
+   * The next three come from run events, not from the gateway's row
+   * (`waiting.ts`): a pending approval or question; a run the gateway ended as
+   * blocked (`livenessState: "blocked"`); a latest run that completed with
+   * failed actions.
    */
   | "waiting"
   | "blocked"
@@ -155,6 +156,8 @@ export type Task = {
   /** What the task waits on while `status` is `waiting` (`waiting.ts`), and since when. */
   waitingFor?: "approval" | "question";
   waitingSince?: number;
+  /** How many actions failed in the latest run, while `status` is `done-with-failures`. */
+  failedActions?: number;
   /**
    * The gateway's explicit unread marker (`markedUnreadAt`), or null when it has
    * none: a read made on opening names it, so it never clears a newer "Mark as unread".

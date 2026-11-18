@@ -185,8 +185,10 @@ import {
   MAX_LISTED_TASKS,
   MAX_MESSAGE_JSON_CHARS,
   MAX_OUTBOX,
+  MAX_LIFECYCLE_RECORDS,
   MAX_PENDING_APPROVAL_COUNT,
   MAX_RUN_TEXT_CHARS,
+  MAX_SETTLED_APPROVAL_COUNT,
   MAX_TASK_LINE_CHARS,
   MAX_TRACKED_TASKS as TRACKED_TASKS,
   MAX_UNROUTED,
@@ -295,6 +297,15 @@ export const MAX_OPENED_READS = 16;
  * make it actionable again. The oldest give way; switching gateways clears them.
  */
 export const MAX_APPROVAL_OUTCOMES = 512;
+/**
+ * Tasks let go whose settled approval cards are kept, so a task read again from
+ * history shows each where it was, linked to its action, with the request and
+ * what settled it in its Raw: the gateway's lists hold only pending requests and
+ * its history keeps no approval record. Each keeps at most a task's own number
+ * of settled cards (`MAX_SETTLED_APPROVAL_COUNT`); the oldest task gives way,
+ * and switching gateways clears them.
+ */
+export const MAX_KEPT_APPROVAL_TASKS = 16;
 /**
  * Approvals whose attempts are kept apart from any task: those with a decision
  * on its way, an unknown outcome or a read-back on its way. Past it, a
@@ -758,6 +769,8 @@ export class ClawtrateClient {
   private readonly checkingSlots = new Set<string>();
   /** What the gateway reported about approvals, by id, newest last (`MAX_APPROVAL_OUTCOMES`). */
   private readonly approvalOutcomes = new Map<string, ApprovalResolution>();
+  /** Settled approval cards of tasks let go, by task, newest last (`MAX_KEPT_APPROVAL_TASKS`). */
+  private readonly keptApprovals = new Map<string, ApprovalCard[]>();
   /**
    * Each unsettled approval's attempts, by id, kept for as long as anything is
    * outstanding whether or not a task shows it (`MAX_APPROVAL_ATTEMPTS`). Every
@@ -1013,6 +1026,7 @@ export class ClawtrateClient {
       this.request("sessions.messages.unsubscribe", { key }).catch(() => {});
     }
     this.keepLinkedRuns(key);
+    this.keepSettledApprovals(key);
     this.store.update((state) => {
       const transcripts = { ...state.transcripts };
       delete transcripts[key];
@@ -1041,6 +1055,22 @@ export class ClawtrateClient {
       ...activity,
       runs: [...activity.runs.filter((run) => !linked.has(run.id)), ...kept],
     }));
+  }
+
+  /**
+   * A task let go keeps its settled approval cards, as settled: none of them can
+   * be answered again, and a pending one is the gateway's lists' to give back.
+   */
+  private keepSettledApprovals(key: string): void {
+    const settled = (this.state.transcripts[key]?.approvals ?? [])
+      .filter((card) => card.status !== "pending")
+      .slice(-MAX_SETTLED_APPROVAL_COUNT);
+    this.keptApprovals.delete(key);
+    if (settled.length === 0) return;
+    this.keptApprovals.set(key, settled);
+    while (this.keptApprovals.size > MAX_KEPT_APPROVAL_TASKS) {
+      this.keptApprovals.delete(this.keptApprovals.keys().next().value as string);
+    }
   }
 
   /** How many viewers hold a transcript open. */
@@ -2211,6 +2241,31 @@ export class ClawtrateClient {
   // Approvals -------------------------------------------------------------------
 
   /**
+   * A request still pending after its own run completed or failed is closed by
+   * denying it, so its action is not taken after the run it belonged to
+   * (conversation.md section 12, "When the run has already ended"; F-418).
+   * The deny goes through `resolveApproval` like any other, once: only while
+   * nothing was ever decided for the approval here (`attempt` 0), and only on a
+   * connection that already holds `operator.approvals`, so it never asks for
+   * access by itself. Its outcome keeps why it was sent (`reason`), and a
+   * decision that raced it shows as the gateway reports it. A stopped run is
+   * the gateway's to cancel.
+   */
+  private withdrawEndedApprovals(key: string): void {
+    const transcript = this.state.transcripts[key];
+    if (!transcript || !this.holds(APPROVALS_SCOPE)) return;
+    for (const approval of transcript.approvals) {
+      if (approval.status !== "pending" || !approval.runEnded || !approval.runId) continue;
+      const run = findRun(transcript, approval.runId);
+      if (!run || (run.state !== "completed" && run.state !== "failed")) continue;
+      if (this.attemptsFor(approval.id).attempt !== 0 || this.attemptsFull(approval.id)) continue;
+      void this.resolveApproval(key, approval.id, "deny", {
+        reason: run.state === "failed" ? "run-failed" : "run-ended",
+      }).catch(() => undefined);
+    }
+  }
+
+  /**
    * Resolve an approval with the method for its kind: allow once, deny, or a
    * standing allow (`allow-always`), optionally limited to `expiresInDays`
    * days where the gateway takes a duration (exec and the generic kind). Deny
@@ -2223,7 +2278,13 @@ export class ClawtrateClient {
     key: string,
     approvalId: string,
     decision: ApprovalDecision,
-    options: { expiresInDays?: number | null; owner?: object; shownDigest?: string | null } = {},
+    options: {
+      expiresInDays?: number | null;
+      owner?: object;
+      shownDigest?: string | null;
+      /** This client's reason for a deny it sends on its own (`run-ended`, `run-failed`). */
+      reason?: "run-ended" | "run-failed";
+    } = {},
   ): Promise<void> {
     const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
     if (!approval || approval.status !== "pending")
@@ -2289,13 +2350,17 @@ export class ClawtrateClient {
         resolution = resolutionFromSnapshot(result?.approval, { via: method, record: result });
         applied = result?.applied === true;
         if (!resolution) throw new Error("The gateway did not say how the approval ended.");
+        // This client's own deny, applied: why it sent it is what the card says.
+        if (applied && options.reason && resolution.status === "denied") {
+          resolution = { ...resolution, reason: options.reason };
+        }
       } else {
         // The legacy methods answer `{ok: true}` once the decision is applied.
         resolution = {
           id: approvalId,
           status: decision === "deny" ? "denied" : "allowed",
           decision,
-          reason: "user",
+          reason: options.reason ?? "user",
           resolvedAt: this.now(),
           resolvedBy: this.host.client.displayName,
           resolver: null,
@@ -3759,6 +3824,7 @@ export class ClawtrateClient {
     });
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
+    this.withdrawEndedApprovals(key);
     for (const run of transcript.runs) {
       const timerKey = `${key}\u0000${run.id}`;
       const timer = this.turnTimers.get(timerKey);
@@ -4176,6 +4242,7 @@ export class ClawtrateClient {
     }
     this.creationWaiters.clear();
     this.approvalOutcomes.clear();
+    this.keptApprovals.clear();
     this.waiting.clear();
     this.unrouted.clear();
     this.recipients.clear();
@@ -4497,12 +4564,22 @@ export class ClawtrateClient {
             waitingFor: waiting.kind,
             waitingSince: waiting.since,
           };
-        } else if (
-          (task.status === "idle" || task.status === "done") &&
-          this.waiting.stoppedAt(task.key) !== null
-        ) {
-          // A run stopped with `chat.abort` leaves the row no status: its runs or its end said so.
-          tasks[index] = { ...task, status: "stopped" };
+        } else if (task.status === "idle" || task.status === "done" || task.status === "failed") {
+          const end = this.waiting.latestEnd(task.key);
+          if (end.stoppedAt !== null && task.status !== "failed") {
+            // A run stopped with `chat.abort` leaves the row no status: its runs or its end said so.
+            tasks[index] = { ...task, status: "stopped" };
+          } else if (end.blocked) {
+            // The gateway ended the run as blocked: it cannot go on until something changes.
+            tasks[index] = { ...task, status: "blocked" };
+          } else if (end.failedActions > 0 && task.status !== "failed") {
+            // The run completed, with failed actions: never a plain success (F-295).
+            tasks[index] = {
+              ...task,
+              status: "done-with-failures",
+              failedActions: end.failedActions,
+            };
+          }
         }
       }
     }
@@ -4623,8 +4700,15 @@ export class ClawtrateClient {
     // The task holds them now: none is kept twice, and no copy left here goes stale while the
     // task's own events update the task. Letting the task go keeps what another task links to.
     this.foreign.delete(sessionKey);
-    if (waiting.length === 0) return empty;
-    return { ...empty, runs: waiting };
+    // Its settled approval cards come back as they were; each finds its action once history
+    // rebuilds the run (`normalizeApprovals`).
+    const approvals = this.keptApprovals.get(key) ?? [];
+    this.keptApprovals.delete(key);
+    return {
+      ...empty,
+      ...(waiting.length > 0 ? { runs: waiting } : {}),
+      ...(approvals.length > 0 ? { approvals } : {}),
+    };
   }
 
   private emptyTranscript(key: string): Transcript {
@@ -4862,6 +4946,7 @@ export class ClawtrateClient {
     const projected = this.streams.project(payload);
     const text = payload.state === "delta" ? projected : null;
     this.updateActivity(key, (activity, ctx) => applyChatEvent(activity, payload, text, ctx));
+    if (payload.state === "error") this.noteLifecycle(key, runId, "chat (error)", payload);
     // final, aborted or error: the durable transcript now owns the text.
     if (payload.state !== "delta" && payload.state !== "status") this.scheduleHistory(key);
   }
@@ -4900,9 +4985,34 @@ export class ClawtrateClient {
     }
     this.updateActivity(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
     const phase = asRecord(payload.data)?.phase;
+    if (
+      payload.stream === "lifecycle" &&
+      (phase === "start" || phase === "end" || phase === "error")
+    ) {
+      this.noteLifecycle(key, payload.runId, `agent (lifecycle ${String(phase)})`, payload);
+    }
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);
     }
+  }
+
+  /**
+   * Keep an event that started or ended a run with the run, as received, for
+   * the run line's and the turn error's Raw (F-094): its start, its end, and a
+   * chat error, the latest of each kind. A run the event names that this task
+   * does not hold keeps nothing.
+   */
+  private noteLifecycle(key: string, runId: string, via: string, record: RawRecord): void {
+    this.updateActivity(key, (activity) => {
+      const run = findRun(activity, runId);
+      if (!run) return activity;
+      const kept = (run.lifecycle ?? []).filter((each) => each.via !== via);
+      const lifecycle = [...kept, { via, record }].slice(-MAX_LIFECYCLE_RECORDS);
+      return {
+        ...activity,
+        runs: activity.runs.map((each) => (each === run ? { ...run, lifecycle } : each)),
+      };
+    });
   }
 
   private handleEvent(event: EventFrame, generation: number): void {

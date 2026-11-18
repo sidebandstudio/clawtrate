@@ -286,6 +286,12 @@ const preamble = object<Preamble>()({
   ended: FLAG,
   beforeCall: ID,
 });
+/** The events that started and ended a run: its start, its end, and a chat error. */
+export const MAX_LIFECYCLE_RECORDS = 3;
+const lifecycleRecord = object<{ via: string; record: unknown }>()({
+  via: NAME,
+  record: json(MAX_RECORD_CHARS),
+});
 export const RUN: Bound = flagged<Run>()({
   id: ID,
   bound: FLAG,
@@ -314,6 +320,7 @@ export const RUN: Bound = flagged<Run>()({
   ending: runEnding,
   outcomeKnown: FLAG,
   attemptErrors: list(MAX_ATTEMPT_ERROR_COUNT, text(MAX_ATTEMPT_ERROR_CHARS)),
+  lifecycle: list(MAX_LIFECYCLE_RECORDS, lifecycleRecord),
   omittedSteps: NUMBER,
   omittedTools: NUMBER,
   omittedToolsAtEnd: NUMBER,
@@ -603,6 +610,7 @@ const task = flagged<Task>()({
   pinned: FLAG,
   waitingFor: ENUM,
   waitingSince: NUMBER,
+  failedActions: NUMBER,
   unreadMarker: NUMBER,
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
   effort: NAME,
