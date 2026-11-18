@@ -81,8 +81,13 @@ export type CardCloseReason =
 export type ClosedCard = PendingCard & { reason: CardCloseReason };
 
 export type StepKind = "tool" | "reasoning";
-/** `waiting` is a tool step held by its own pending approval; the approval is not a second step. */
-export type StepStatus = "running" | "waiting" | "done" | "failed";
+/**
+ * `waiting` is a tool step held by its own pending approval; the approval is not a second step.
+ * `unknown` is a tool step whose run ended before its result arrived here: nothing established
+ * how it ended (it may have succeeded, failed or never returned), and history's finished copy
+ * replaces it.
+ */
+export type StepStatus = "running" | "waiting" | "done" | "failed" | "unknown";
 
 /** A step that has not finished. */
 export function isOpenStep(step: Step): boolean {
@@ -853,12 +858,7 @@ export function finishRun(
     const closed: Step =
       step.kind === "reasoning"
         ? { ...step, status: "done", endedAt }
-        : {
-            ...step,
-            status: "failed",
-            endedAt,
-            error: step.error ?? STEP_CLOSED_BY_RUN_END,
-          };
+        : { ...step, status: "unknown", endedAt };
     return settleRaw(closed, ctx);
   });
   return {
@@ -2501,15 +2501,9 @@ export function runsFromHistory(
   });
 }
 
-/**
- * The error of a step this client closed because its run ended before the step's result
- * arrived: an inference, not how the step ended. History's finished copy replaces it.
- */
-export const STEP_CLOSED_BY_RUN_END = "The run ended before this step finished.";
-
-/** A step closed only because its run ended, with no result of its own. */
+/** A step closed only because its run ended, with no result of its own: how it ended is not known. */
 function closedByRunEnd(step: Step): boolean {
-  return step.status === "failed" && step.error === STEP_CLOSED_BY_RUN_END && step.result === null;
+  return step.status === "unknown";
 }
 
 function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "history" } {
