@@ -18,6 +18,10 @@ export default tseslint.config(
       "docs/design/prototype/**",
       // Git-ignored local working folder; never part of the repository.
       ".orchestrator/**",
+      // The iOS app's native project and build output: `expo prebuild` and `pnpm mobile:build` write them.
+      "apps/mobile/ios/**",
+      "apps/mobile/build/**",
+      "apps/mobile/.expo/**",
     ],
   },
   js.configs.recommended,
@@ -74,6 +78,41 @@ export default tseslint.config(
         "process",
         "Buffer",
         "require",
+      ],
+    },
+  },
+  {
+    // Metro reads its config as CommonJS.
+    files: ["apps/mobile/metro.config.js"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
+  },
+  {
+    // The iOS app: React Native, which has the WHATWG WebSocket and timers as globals.
+    files: ["apps/mobile/src/**/*.{ts,tsx}", "apps/mobile/index.ts"],
+    languageOptions: {
+      globals: {
+        WebSocket: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+        setInterval: "readonly",
+        clearInterval: "readonly",
+        console: "readonly",
+      },
+    },
+    plugins: { "react-hooks": reactHooks },
+    rules: {
+      ...reactHooks.configs.recommended.rules,
+      // Only the pure modules of the interface: its components use the DOM, and React 19.3.1.
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@clawtrate/ui",
+              message: "import a pure module, such as @clawtrate/ui/summary",
+            },
+          ],
+        },
       ],
     },
   },
