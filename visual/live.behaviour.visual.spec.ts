@@ -116,11 +116,14 @@ test.describe("sending", () => {
         window as unknown as { clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> } }
       ).clawtrateFixture;
       const original = fixture.invoke.bind(fixture);
+      // The refusal comes when the check says so, not after a time: the words and files must be
+      // seen to leave first, on a machine of any speed.
+      const held = window as unknown as { refuse?: () => void };
       fixture.invoke = (command: unknown) =>
         (command as { type: string }).type === "sendMessage"
-          ? new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("The message is too long.")), 300),
-            )
+          ? new Promise((_, reject) => {
+              held.refuse = () => reject(new Error("The message is too long."));
+            })
           : original(command);
     });
     await page
@@ -131,6 +134,8 @@ test.describe("sending", () => {
     await page.keyboard.press("Enter");
     await expect(page.locator(".attachments .chip")).toHaveCount(0);
     await page.keyboard.type("typed meanwhile");
+    await expect(field(page)).toHaveValue("typed meanwhile");
+    await page.evaluate(() => (window as unknown as { refuse: () => void }).refuse());
     await expect(page.locator(".composer-shelf [role=alert]")).toContainText(
       "Couldn't send this message.",
     );
