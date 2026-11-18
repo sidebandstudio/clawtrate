@@ -184,10 +184,13 @@ async function shot(target: Page | ReturnType<Page["locator"]>, name: string): P
 }
 
 test.beforeAll(async ({ browser }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(420_000);
   expect(INSTANCE, "a named instance").toMatch(/^[a-z0-9-]+$/);
   page = await pairedPage(browser, await startOwnHost());
   await requestAccess(page);
+  // Paired up front: each pairing is a gateway command, slow on a loaded machine.
+  await adminClient();
+  await questionsClient();
 });
 
 let checkStarted = 0;
@@ -262,7 +265,9 @@ test("F-171 F-164 F-432: a command the gateway warns about: the warning on the c
   await expect(card.locator(".tag")).toHaveText("Allowed once", { timeout: 30_000 });
   const action = page.locator(".transcript details.card.action[data-kind='command']").last();
   await expect(action).toHaveAttribute("data-status", "running", { timeout: 30_000 });
-  await action.locator(":scope > summary").click();
+  // The line is redrawn with each output update; open it without waiting for it to hold still.
+  await action.locator(":scope > summary").click({ force: true, timeout: 15_000 });
+  await expect(action).toHaveAttribute("open", "");
   await expect(action.locator("pre").first()).toContainText("Step 1 of 4", { timeout: 15_000 });
   await expect(action).toHaveAttribute("data-status", "running");
   await expect(action.locator("pre").first()).toContainText("Step 2 of 4", { timeout: 15_000 });
@@ -300,7 +305,8 @@ test("F-325: Allow once runs the command exactly once and saves no rule; the sam
   expect(calls).toEqual(["sleep 7"]);
   const results = rows.filter((row) => row.role === "toolResult" && row.toolName === "exec");
   expect(results).toHaveLength(1);
-  expect(results[0]!.details).toMatchObject({ status: "completed", exitCode: 0 });
+  // History keeps the result's exit code (and not its live status).
+  expect(results[0]!.details).toMatchObject({ exitCode: 0 });
   // No rule was saved: Otto's allowlist on the gateway has no entry for the command.
   const policy = await (
     await adminClient()
