@@ -38,6 +38,7 @@ import {
   MAX_SIGNIN_SECRETS,
   serializedLength,
   secretForms,
+  wholeForms,
   SLOW_CREATE_MS,
   unreadEvidence,
   withoutSecret,
@@ -101,6 +102,9 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 
 /** The longest picture New bot sends. */
 export const MAX_CREATE_AVATAR_CHARS = 32_768;
+
+/** The most steps one sign-in is followed through before Clawtrate stops it. */
+export const MAX_SIGNIN_STEPS = 64;
 
 export class AccountsEngine {
   /** How each account was made, from Clawtrate's own record of the sign-ins it started. */
@@ -167,7 +171,9 @@ export class AccountsEngine {
       const at = ctx.now();
       ctx.update((a) => this.compose(a, config, views, catalog, at));
     } catch (error) {
-      ctx.update((a) => ({ ...a, status: "error", error: errorText(error) }));
+      // While a sign-in lasts, its typed values are taken out of whatever comes back.
+      const message = this.scrub(errorText(error));
+      ctx.update((a) => ({ ...a, status: "error", error: message }));
     }
   }
 
@@ -343,7 +349,7 @@ export class AccountsEngine {
       ctx.update((a) =>
         this.patchBinding(a, botId, (b) => ({
           ...b,
-          evidence: { ...b.evidence, status: "failed", error: errorText(error) },
+          evidence: { ...b.evidence, status: "failed", error: this.scrub(errorText(error)) },
         })),
       );
     }
@@ -459,12 +465,22 @@ export class AccountsEngine {
 
   /** Hold what the person typed, for the life of this sign-in, to take it out of what comes back. */
   private holdSecret(value: string): void {
-    for (const form of secretForms(value)) {
-      // Measured as it is kept: what `owners.ts` registers for each.
-      if (this.secrets.includes(form) || serializedLength(form) > MAX_SECRET_JSON_CHARS) continue;
-      this.secrets.push(form);
-      if (this.secrets.length > MAX_SIGNIN_SECRETS) this.secrets.shift();
-    }
+    // Measured as it is kept: what `owners.ts` registers for each.
+    const fits = (form: string) => serializedLength(form) <= MAX_SECRET_JSON_CHARS;
+    const whole = wholeForms(value).filter(fits);
+    const derived = secretForms(value).filter((form) => fits(form) && !whole.includes(form));
+    // The whole value first, so nothing derived from it pushes it out; what is derived
+    // (an address's query values) only while there is room.
+    const kept = [...whole, ...this.secrets.filter((form) => !whole.includes(form))];
+    for (const form of derived) if (!kept.includes(form)) kept.push(form);
+    this.secrets.splice(0, this.secrets.length, ...kept.slice(0, MAX_SIGNIN_SECRETS));
+  }
+
+  /** Take one value's forms out of what is held: its use is over, while a sign-in may go on. */
+  private releaseSecret(value: string): void {
+    const forms = secretForms(value);
+    const left = this.secrets.filter((form) => !forms.includes(form));
+    this.secrets.splice(0, this.secrets.length, ...left);
   }
 
   /** The sign-in is over: nothing it was given is held any more. */
@@ -518,7 +534,7 @@ export class AccountsEngine {
       const now = ctx.get().signIn;
       return now !== null && now.id === id && isActive(now);
     };
-    for (let guard = 0; guard < 64; guard += 1) {
+    for (let guard = 0; guard < MAX_SIGNIN_STEPS; guard += 1) {
       if (!stillMine()) return;
       const abort = new AbortController();
       this.signInAbort = abort;
@@ -601,6 +617,16 @@ export class AccountsEngine {
       });
       return await this.afterSignIn(id, before);
     }
+    // The safety stop: a sign-in that goes on this long without asking for anything ends here,
+    // as failed, and like every end it forgets what it was given.
+    if (!stillMine()) return;
+    await ctx.request("wizard.cancel", { sessionId: id }).catch(() => undefined);
+    this.setSignIn(id, {
+      stage: "failed",
+      step: null,
+      error: `The gateway's sign-in went on for ${MAX_SIGNIN_STEPS} steps without asking for anything, so Clawtrate stopped following it. Check the accounts, or sign in on the gateway's machine.`,
+    });
+    await this.afterSignIn(id, before);
   }
 
   /**
@@ -735,7 +761,6 @@ export class AccountsEngine {
     }
     if (ctx.get().signIn?.id !== id) return;
     const ended = ctx.get().signIn!;
-    this.forgetSecrets();
     // "Connected" only when the read after it shows the account; otherwise what is known.
     const stage =
       ended.stage !== "checking"
@@ -746,7 +771,12 @@ export class AccountsEngine {
             ? "connected"
             : "refreshed";
     this.setSignIn(id, { result, stage, saving: false, cancelling: false });
-    await this.load();
+    // The accounts read again while what it was given is still held: its errors are scrubbed too.
+    try {
+      await this.load();
+    } finally {
+      if (ctx.get().signIn?.id === id) this.forgetSecrets();
+    }
   }
 
   /** Every bot bound to an account of `provider`: was it locked, and is it still? */
@@ -843,6 +873,8 @@ export class AccountsEngine {
       error: null,
       at: this.ctx.now(),
     });
+    // Held while this save lasts, like a sign-in's: every answer and log line is scrubbed of it.
+    this.holdSecret(key);
     try {
       const answer = asRecord(
         await this.ctx.request("models.authSetApiKey", { provider, apiKey: key, agentId: forBot }),
@@ -870,11 +902,14 @@ export class AccountsEngine {
       // No `cause`: the gateway's own error may carry the key; only its cleaned words leave.
       // eslint-disable-next-line preserve-caught-error
       throw new Error(message);
+    } finally {
+      this.releaseSecret(key);
     }
   }
 
   private setWrite(write: AccountWrite | null): void {
-    this.ctx.update((a) => ({ ...a, write }));
+    const clean = write?.error ? { ...write, error: this.scrub(write.error) } : write;
+    this.ctx.update((a) => ({ ...a, write: clean }));
   }
 
   // Writes to config ---------------------------------------------------------------------

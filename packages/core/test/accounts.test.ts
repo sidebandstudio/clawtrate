@@ -1105,6 +1105,87 @@ describe("a typed API key leaves no trace", () => {
       await traceless(client, storage, logs, form);
   });
 
+  it("a pasted address with many query values is held whole first: its pieces never push it out", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const fields = Array.from({ length: 12 }, (_, i) => `f${i}=made-up-value-${i}`).join("&");
+    const address = `http://127.0.0.1:1/scripted/back?code=made-up-code-77&${fields}`;
+    const next = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) => {
+      const { answer } = params as { answer?: { value: string } };
+      return answer
+        ? {
+            done: false,
+            status: "running",
+            step: { id: "again", type: "text", message: `Got ${answer.value}` },
+          }
+        : next(params);
+    };
+    await client.startSignIn(CHOICES.browser, null);
+    await client.answerSignIn(address);
+    const shown = client.state.accounts.signIn?.step?.message ?? "";
+    expect(shown).not.toContain(address);
+    expect(shown).not.toContain("made-up-code-77");
+    await client.dismissSignIn();
+    await traceless(client, storage, logs, address);
+  });
+
+  it("the read after a sign-in that fails echoing the pasted code puts none of it in the accounts' error", async () => {
+    const { client, fake } = await keyClient();
+    const code = "made-up-code-read-after";
+    const next = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) => {
+      const { answer } = params as { answer?: { value: string } };
+      if (!answer) return next(params);
+      fake.gateway.handlers["models.authStatus"] = () => {
+        throw new GatewayError({
+          code: "UNAVAILABLE",
+          message: `could not read after ${answer.value}`,
+        });
+      };
+      return { done: true, status: "done" };
+    };
+    await client.startSignIn(CHOICES.browser, null);
+    await client.answerSignIn(code);
+    await until(() => client.state.accounts.status === "error");
+    expect(client.state.accounts.signIn?.stage).toBe("unverified");
+    expect(client.state.accounts.error).toContain("could not read after");
+    expect(JSON.stringify(client.state)).not.toContain(code);
+  });
+
+  it("a key saved directly holds the key while it lasts: an echoing preference write logs none of it", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const key = "clawtrate-dev-key.globex.made-up-direct";
+    fake.gateway.handlers["models.authSetApiKey"] = () => {
+      fake.shared.push({ id: "globex:direct", provider: "globex", type: "api_key" });
+      return { profileId: "globex:direct" };
+    };
+    fake.gateway.handlers["users.prefs.set"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: `cannot store ${key}` });
+    };
+    await client.saveApiKey("globex", key, null);
+    expect(logs.some((line) => line.startsWith("could not record an account's kind"))).toBe(true);
+    await traceless(client, storage, logs, key);
+  });
+
+  it("the safety stop after 64 steps ends the sign-in as failed, says so, and forgets what it was given", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const code = "made-up-code-endless";
+    const next = fake.gateway.handlers["wizard.next"]!;
+    let answered = false;
+    fake.gateway.handlers["wizard.next"] = (params) => {
+      answered ||= (params as { answer?: { value: unknown } }).answer?.value === code;
+      return answered
+        ? { done: false, status: "running", step: { id: "note", type: "note", message: "Noted" } }
+        : next(params);
+    };
+    await client.startSignIn(CHOICES.browser, null);
+    await client.answerSignIn(code);
+    await until(() => client.state.accounts.signIn?.stage === "failed");
+    expect(client.state.accounts.signIn?.error).toMatch(/64 steps/);
+    expect(fake.gateway.calls("wizard.cancel")).toHaveLength(1);
+    await traceless(client, storage, logs, code);
+  });
+
   it("a log line that echoes the typed key while the sign-in lasts carries none of it", async () => {
     const { client, storage, logs, fake } = await keyClient();
     // The record of how the account was made is written before the sign-in ends; its error echoes the key.

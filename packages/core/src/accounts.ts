@@ -804,6 +804,7 @@ export const MAX_SIGNIN_SECRETS = 8;
  * kept: they would cut into ordinary words.
  */
 export function secretForms(value: string): string[] {
+  const whole = wholeForms(value);
   const trimmed = value.trim();
   const pieces = [value, trimmed];
   const query = trimmed.indexOf("?");
@@ -813,12 +814,24 @@ export function secretForms(value: string): string[] {
       pieces.push(equals >= 0 ? part.slice(equals + 1) : part);
     }
   }
-  const forms: string[] = [];
+  const forms: string[] = [...whole];
   for (const piece of pieces) {
     for (const form of [piece, decoded(piece)]) {
       if (form !== null && form.length >= 4 && !forms.includes(form)) forms.push(form);
     }
   }
+  return forms;
+}
+
+/**
+ * The value itself, as typed, trimmed and decoded: what is held first and
+ * never pushed out by the pieces derived from it. A value shorter than 4
+ * characters is not a credential and is not held (docs/decisions.md).
+ */
+export function wholeForms(value: string): string[] {
+  const forms: string[] = [];
+  for (const form of [value, value.trim(), decoded(value), decoded(value.trim())])
+    if (form !== null && form.length >= 4 && !forms.includes(form)) forms.push(form);
   return forms;
 }
 
