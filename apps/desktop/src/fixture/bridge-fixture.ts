@@ -619,7 +619,7 @@ export function createFixtureBridge(
     }
     if (command.type === "readMachine") {
       if (!computer) throw new Error("Not connected to the gateway.");
-      return computer.machine(command.key);
+      return computer.machine(command.key, command.probe);
     }
     switch (command.type) {
       case "connect":

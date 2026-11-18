@@ -344,6 +344,24 @@ test.describe("the computer button, recovery and the machine", () => {
     ).toHaveCount(0);
   });
 
+  test("F-150: when the gateway's own desktop isn't available, Prepare it again asks the gateway to prepare it, and nothing else does", async ({
+    page,
+  }) => {
+    await openFixture(page, `${OTTO_COMPUTER}&computer=desktop`, "light");
+    const machine = computerPanel(page).getByTestId("computer-machine");
+    await expect(machine).toContainText(
+      "The gateway's desktop isn't available. No display is attached.",
+    );
+    const reads = await sentOf(page, "readMachine");
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.every((each) => each.probe === false)).toBe(true);
+    await machine.getByRole("button", { name: "Prepare it again" }).click();
+    await expect(machine).not.toContainText("The gateway's desktop isn't available.");
+    expect((await sentOf(page, "readMachine")).filter((each) => each.probe === true)).toHaveLength(
+      1,
+    );
+  });
+
   test("F-148: a node record that couldn't be read is Unknown, never Not connected", async ({
     page,
   }) => {

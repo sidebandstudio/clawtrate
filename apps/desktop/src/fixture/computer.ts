@@ -5,7 +5,7 @@
 //
 //   &computer=noplugin|unconfigured|unused|closed|ended|tabclosed|browsergone|
 //             draining|control|busy|unsettled|conflict|stuck|active|elsewhere|
-//             releasefail|releaseunknown|complexquestion|offline|nodeunknown|watching
+//             releasefail|releaseunknown|complexquestion|offline|nodeunknown|desktop|watching
 //   &firstwatch=1     the one-time note before the first watch
 //   &takerace=grant   a grant that arrives after the take was cancelled
 //   &access=read      a read-only connection
@@ -48,6 +48,7 @@ export const COMPUTER_STATES = [
   "complexquestion",
   "offline",
   "nodeunknown",
+  "desktop",
 ] as const;
 export type ComputerMode = (typeof COMPUTER_STATES)[number];
 
@@ -355,6 +356,7 @@ export function computerFixture(
   let takes = 0;
   let releases = 0;
   let shownTab = 0;
+  let prepared = false;
   const sockets = new Set<FakeStream>();
   const generation = { current: "" };
 
@@ -551,8 +553,9 @@ export function computerFixture(
 
   return {
     engine,
-    /** Machine facts the scripted gateway gives for `readMachine`. */
-    machine: (key: string) => {
+    /** Machine facts the scripted gateway gives for `readMachine`; `probe` prepares its desktop. */
+    machine: (key: string, probe: boolean) => {
+      if (probe) prepared = true;
       const otto = key.startsWith("agent:otto:");
       return {
         setting: otto
@@ -586,7 +589,10 @@ export function computerFixture(
             }
           : {},
         sharedWith: otto ? { "media-box": ["Pip"] } : {},
-        desktop: null,
+        desktop:
+          mode === "desktop"
+            ? { available: prepared, error: prepared ? null : "No display is attached." }
+            : null,
         readAt: Date.now(),
       };
     },
