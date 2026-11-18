@@ -12,6 +12,8 @@
 //   &sort=name             the rail's sort order: recent, name or manual
 //   &files=loaded          the Work pane's Files states (files.ts), with &checkout=1, &fileload=failed
 //   &tab=files             the Work pane's tab
+//   &computer=control      the Work pane's Computer states (computer.ts), with &firstwatch=1,
+//                          &takerace=grant, &access=read
 
 import { App, BridgeProvider, rosterKey, rosterScope } from "@clawtrate/ui";
 import { StrictMode } from "react";
@@ -20,6 +22,7 @@ import { createFixtureBridge, GATEWAY_ID, GATEWAY_URL, isScene } from "./bridge-
 import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
+import { computerParams } from "./computer.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -53,6 +56,10 @@ function seedPreferences() {
   if (panel === "open" || panel === "closed") write("panel", panel);
   const tab = params.get("tab");
   if (tab) write("workTab", tab);
+  // The Computer scenes: the one-time note before the first watch was seen, unless asked for.
+  if (params.has("computer") && params.get("firstwatch") !== "1") {
+    for (const bot of ["main", "otto", "marlow", "pip"]) write(`computerNote.${bot}`, "1");
+  }
   const list = (name: string) => params.get(name)?.split(",").filter(Boolean);
   if (params.has("pins") || params.has("hidden") || params.has("sort")) {
     // Kept per gateway, under the fixture gateway's identity.
@@ -73,6 +80,7 @@ document.documentElement.dataset.host = "web";
 const sceneName = params.get("scene");
 const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   files: fileParams(params),
+  computer: computerParams(params),
 });
 // For tests and manual checks: change the state from the console.
 Object.assign(window, { clawtrateFixture: bridge });
