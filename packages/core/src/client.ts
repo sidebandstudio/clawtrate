@@ -83,7 +83,7 @@ import {
   type TaskFileList,
   type WorkspacePage,
 } from "./files.ts";
-import type { ApprovalInstructions, ClawtrateHost, WebSocketLike } from "./host.ts";
+import type { ApprovalInstructions, ClawtrateHost } from "./host.ts";
 import {
   asRecord,
   botIdFromSessionKey,
@@ -712,8 +712,11 @@ export class ClawtrateClient {
    * the gateway names nobody.
    */
   private selfId: string | null = null;
-  /** The socket of the attempt under way, for how much of a large send it has written (F-286). */
-  private socket: WebSocketLike | null = null;
+  /**
+   * How many bytes the socket of the attempt under way has yet to write, or undefined where it
+   * does not say or is not open (F-286). A reader, not the socket: nothing the socket holds is kept.
+   */
+  private socketBuffered: (() => number | undefined) | null = null;
   private rows = new Map<string, RawRecord>();
   /** Which tasks wait for the person, across every bot (`waiting.ts`), for the rail. */
   private readonly waiting = new WaitingIndex();
@@ -1506,14 +1509,14 @@ export class ClawtrateClient {
    * connection changes or the attempt is over. Nothing is shown where the socket does not say.
    */
   private followUpload(key: string, messageId: string, params: unknown): void {
-    const socket = this.socket;
-    if (!socket || typeof socket.bufferedAmount !== "number") return;
+    const read = this.socketBuffered;
+    if (!read || read() === undefined) return;
     const totalBytes = utf8Length(JSON.stringify(params));
     const sample = () => {
       const message = this.outgoing(key, messageId);
-      const live = this.socket === socket && socket.readyState === 1;
-      if (!message || message.status !== "sending" || !live) return;
-      const buffered = Math.min(socket.bufferedAmount ?? 0, totalBytes);
+      const now = this.socketBuffered === read ? read() : undefined;
+      if (!message || message.status !== "sending" || now === undefined) return;
+      const buffered = Math.min(now, totalBytes);
       const sentBytes = totalBytes - buffered;
       this.updateActivity(key, (activity) =>
         updateMessage(activity, messageId, { upload: { sentBytes, totalBytes } }),
@@ -4372,7 +4375,10 @@ export class ClawtrateClient {
         // An attempt is under way: no retry is waiting any more.
         if (this.state.connection.retryAt !== null) this.setConnection({ retryAt: null });
         const socket = this.host.createWebSocket(settings.url);
-        this.socket = socket;
+        this.socketBuffered = () =>
+          socket.readyState === 1 && typeof socket.bufferedAmount === "number"
+            ? socket.bufferedAmount
+            : undefined;
         socket.onopen = () => handlers.open();
         socket.onmessage = (event) => handlers.message(String(event.data));
         socket.onclose = (event) => handlers.close(event.code, event.reason);
