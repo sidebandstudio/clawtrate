@@ -22,6 +22,8 @@ import {
   mergeAccounts,
   normalizeLabel,
   parseModelRef,
+  prefBotId,
+  prefProfileId,
   readBotView,
   readCatalog,
   readIntent,
@@ -174,12 +176,14 @@ export class AccountsEngine {
     const entries = asRecord(prefs?.entries);
     if (!entries) return;
     for (const [key, value] of Object.entries(entries)) {
+      // Each entry is bounded here, where it enters: an id Clawtrate could have written, a known value.
       if (key.startsWith(KIND_PREF_PREFIX) && (value === "subscription" || value === "key")) {
-        this.remember(this.kinds, key.slice(KIND_PREF_PREFIX.length), value, MAX_ACCOUNTS);
+        const id = prefProfileId(key.slice(KIND_PREF_PREFIX.length));
+        if (id) this.remember(this.kinds, id, value, MAX_ACCOUNTS);
       } else if (key.startsWith(INTENT_PREF_PREFIX)) {
+        const bot = prefBotId(key.slice(INTENT_PREF_PREFIX.length));
         const intent = readIntent(value);
-        if (intent)
-          this.remember(this.intents, key.slice(INTENT_PREF_PREFIX.length), intent, MAX_ACCOUNTS);
+        if (bot && intent) this.remember(this.intents, bot, intent, MAX_ACCOUNTS);
       }
     }
   }
@@ -648,7 +652,7 @@ export class AccountsEngine {
   }
 
   private async recordKind(profileId: string, kind: AccountKind): Promise<void> {
-    if (kind === "gateway") return;
+    if (kind === "gateway" || !prefProfileId(profileId)) return;
     this.remember(this.kinds, profileId, kind, MAX_ACCOUNTS);
     await this.ctx
       .request("users.prefs.set", { entries: { [`${KIND_PREF_PREFIX}${profileId}`]: kind } })
@@ -658,6 +662,8 @@ export class AccountsEngine {
   }
 
   private async recordIntent(botId: string, intent: BindingIntent): Promise<void> {
+    // An id too long to be one Clawtrate keeps is not recorded.
+    if (!prefBotId(botId) || (intent.mode === "account" && !prefProfileId(intent.account))) return;
     this.remember(this.intents, botId, intent, MAX_ACCOUNTS);
     await this.ctx
       .request("users.prefs.set", { entries: { [`${INTENT_PREF_PREFIX}${botId}`]: intent } })

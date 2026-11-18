@@ -33,6 +33,28 @@ export const MAX_LOCK_CHECKS = 32;
 export const ACCOUNT_READ_CONCURRENCY = 4;
 /** A label: trimmed, 1 to 32 characters (bots.md section 22). */
 export const MAX_LABEL_CHARS = 32;
+/**
+ * The longest account id or bot id read back from the person's preferences.
+ * Longer ones are not Clawtrate's and are not kept, so each record stays
+ * within what `owners.ts` registers for it.
+ */
+export const MAX_PREF_ID_CHARS = 256;
+const PREF_PROFILE_ID = /^[\w.-]{1,128}:[^\s]{1,127}$/;
+const PREF_BOT_ID = /^[\w.-]{1,128}$/;
+
+/** An account id as a preference may name it, or null when it is not one Clawtrate wrote. */
+export function prefProfileId(value: unknown): string | null {
+  return typeof value === "string" &&
+    value.length <= MAX_PREF_ID_CHARS &&
+    PREF_PROFILE_ID.test(value)
+    ? value
+    : null;
+}
+
+/** A bot id as a preference key may name it. */
+export function prefBotId(value: unknown): string | null {
+  return typeof value === "string" && PREF_BOT_ID.test(value) ? value : null;
+}
 /** The longest a sign-in may wait on the gateway, a little over its own 25 minutes. */
 export const SIGNIN_WAIT_MS = 26 * 60_000;
 /** The longest typed code, address or key passed to the gateway. */
@@ -556,8 +578,8 @@ export type BindingIntent = { mode: "account"; account: string } | { mode: "gate
 export function readIntent(value: unknown): BindingIntent | null {
   const record = asRecord(value);
   if (record?.mode === "gateway") return { mode: "gateway" };
-  if (record?.mode === "account" && typeof record.account === "string" && record.account)
-    return { mode: "account", account: record.account };
+  const account = prefProfileId(record?.account);
+  if (record?.mode === "account" && account) return { mode: "account", account };
   return null;
 }
 

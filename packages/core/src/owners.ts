@@ -16,7 +16,7 @@
 // `state-bounds.ts`; an entry whose values are the state's own objects counts
 // only its keys, since the state already counts the objects.
 
-import { MAX_ACCOUNTS } from "./accounts.ts";
+import { MAX_ACCOUNTS, MAX_PREF_ID_CHARS } from "./accounts.ts";
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_PENDING_ATTACHMENTS } from "./attachments.ts";
 import { jsonLength, worstCase } from "./bounds.ts";
 import {
@@ -199,8 +199,13 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   withdrawnOwners: { max: 0, each: 0, row: null, weak: true },
   // Provider accounts (`accounts-engine.ts`): how each account was made, from the record of the
   // sign-ins Clawtrate started; what it set for each bot; bots whose empty fallback list did not land.
-  "accounts.kinds": { max: MAX_ACCOUNTS, each: ID + SHORT, row: "bookkeeping" },
-  "accounts.intents": { max: MAX_ACCOUNTS, each: 3 * ID, row: "bookkeeping" },
+  // Keys and values are bounded where they enter (`prefProfileId`, `prefBotId`, `readIntent`).
+  "accounts.kinds": { max: MAX_ACCOUNTS, each: MAX_PREF_ID_CHARS + SHORT, row: "bookkeeping" },
+  "accounts.intents": {
+    max: MAX_ACCOUNTS,
+    each: 2 * MAX_PREF_ID_CHARS + SHORT,
+    row: "bookkeeping",
+  },
   "accounts.unwritten": { max: MAX_ACCOUNTS, each: ID, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.

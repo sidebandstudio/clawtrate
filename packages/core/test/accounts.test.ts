@@ -24,6 +24,7 @@ import {
   type ClawtrateState,
 } from "../src/index.ts";
 import { createBridgeSession } from "../src/bridge.ts";
+import { CLIENT_OWNERS } from "../src/owners.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { AccountsGateway, accountsClient, CHOICES } from "./accounts-fake.ts";
@@ -898,6 +899,34 @@ describe("the bounds", () => {
     const enforced = enforceState(state);
     expect(enforced.accounts.accounts.length).toBe(MAX_ACCOUNTS);
     expect(JSON.stringify(enforced.accounts).length).toBeLessThanOrEqual(worstCase(ACCOUNTS));
+  });
+
+  it("preference entries Clawtrate did not write are not kept, so each record stays within its registered size", async () => {
+    const fake = new AccountsGateway();
+    const longId = `acme:${"x".repeat(3_000)}`;
+    const largeAccount = `acme:${"y".repeat(3_500)}`;
+    fake.prefs[`clawtrate.account-kind.${longId}`] = "subscription";
+    fake.prefs["clawtrate.account-kind.acme:fine"] = "key";
+    fake.prefs["clawtrate.bot-account.otto"] = { mode: "account", account: largeAccount };
+    fake.prefs[`clawtrate.bot-account.${"b".repeat(400)}`] = { mode: "gateway" };
+    fake.prefs["clawtrate.bot-account.pip"] = { mode: "account", account: "acme:home" };
+    const { client } = await accountsClient({ gateway: fake });
+    const engine = (
+      client as unknown as {
+        accounts: { kinds: Map<string, unknown>; intents: Map<string, unknown> };
+      }
+    ).accounts;
+    expect([...engine.kinds.keys()]).toEqual(["acme:fine"]);
+    expect([...engine.intents.keys()]).toEqual(["pip"]);
+    for (const [path, map] of [
+      ["accounts.kinds", engine.kinds],
+      ["accounts.intents", engine.intents],
+    ] as const) {
+      for (const entry of map) {
+        expect(JSON.stringify(entry).length, path).toBeLessThanOrEqual(CLIENT_OWNERS[path]!.each);
+      }
+    }
+    client.stop();
   });
 
   it("the engine's own records stay within their counts", async () => {
