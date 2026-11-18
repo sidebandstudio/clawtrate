@@ -233,6 +233,7 @@ To change the logo, replace that one file and run both commands. A unit test fai
 - `packages/core`: the gateway connection, device pairing, state stores and the mapping from gateway data to view models. It has no DOM or Node APIs; hosts inject the socket, storage and signing.
 - `packages/ui`: the React interface shared by the desktop app and the web preview.
 - `apps/desktop`: the Electron app, its packaging (`packaging/`) and the web preview host.
+- `apps/mobile`: the iOS app (Expo, React Native) on the same core; [CONTRIBUTING.md](CONTRIBUTING.md#the-ios-app) says how to build it and run its Simulator checks (`pnpm mobile:build`, `pnpm mobile:check`).
 - `tools/dev-gateway`: development gateway control and the scripted model server.
 - `tools/brand`: the icon generator.
 - `docs/decisions.md`: versions, protocol choices and why things are the way they are.

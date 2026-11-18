@@ -21,6 +21,7 @@ pnpm typecheck
 pnpm test        # unit tests
 pnpm e2e         # end-to-end tests against a development gateway of their own
 pnpm visual      # screenshots and behaviour of the fixture mode; the baselines are macOS ones
+pnpm mobile:check  # on a Mac, after pnpm mobile:build: the iOS app in the Simulator (see The iOS app)
 ```
 
 CI runs lint, typecheck and the unit tests on Linux, `pnpm e2e` on Linux with OpenClaw 2026.10.6 from npm, and `pnpm visual` and an unsigned `pnpm package:mac` on macOS 15.
@@ -39,6 +40,25 @@ pnpm dev-gateway reset --instance <name>   # when you are done
 ## Publication
 
 The repository is public, so every commit is published. Commit no secrets or tokens, no private hostnames or IP addresses, no usernames or home-directory paths, no email addresses, no personal data, and no third-party images or copied assets. Commits are small and describe the change, with no co-author trailers, no "generated with" lines and no tool or agent attribution.
+
+## The iOS app
+
+`apps/mobile` is the iOS app (Expo SDK 58, React Native 0.88). It runs the same `packages/core` as the desktop app. Building and checking it needs a Mac with:
+
+- Xcode 27 or later and an iOS Simulator runtime with an iPhone 17, 16, 17 Pro or 18 Pro. Neither `xcode-select` nor sudo is needed: the scripts use `DEVELOPER_DIR` when it is set, otherwise the Xcode `xcode-select` points at, otherwise the newest Xcode in `/Applications`. Xcode 26 does not compile Expo SDK 58.
+- CocoaPods (1.17 was used).
+- For the checks: a Java runtime, 17 or later, and Maestro. They were run with Temurin JRE 21.0.13 and Maestro 2.12.1, unpacked without sudo into `~/.local/share/temurin-jre-21.0.13` and `~/.local/share/maestro-2.12.1`, where the check finds them; elsewhere, set `JAVA_HOME` and `MAESTRO` (the `maestro` executable). Maestro's analytics are turned off for the run.
+- The OpenClaw CLI, as for the desktop's end-to-end tests.
+
+No Expo account, Apple account, team or signing identity is used.
+
+```bash
+pnpm mobile:build   # expo prebuild, pod install and a Release build for the Simulator, into apps/mobile/build
+pnpm mobile:check   # the Simulator checks
+CLAWTRATE_IOS_SHOTS=/some/folder pnpm mobile:check   # and a screenshot of each screen in light and dark
+```
+
+`apps/mobile/ios` is written by `expo prebuild` from `app.json` and is not committed. The build bundles the JavaScript into the app, so no Metro server runs. `pnpm mobile:check` creates a Simulator device of its own ("Clawtrate checks <run>"), boots it without opening the Simulator window, installs the build and starts a development gateway instance of its own (`ios-<run>`); it then drives the app through Maestro and asserts what is on screen. It works over SSH with nobody at the screen. When it ends, also on failure or Ctrl-C, it shuts down and deletes its device and resets its instance; a run killed outright is cleaned up by the next one. It never touches another Simulator device. A run takes about 25 minutes on a busy machine, most of it the gateway's seeding. `pnpm lint`, `pnpm typecheck` and `pnpm test` cover the app's code and its unit tests on any platform.
 
 ## Packaging the desktop app
 
