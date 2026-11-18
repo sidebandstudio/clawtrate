@@ -836,8 +836,14 @@ export function Conversation({
     )?.focus();
   });
 
-  // ⌘J goes to what needs you.
-  useEffect(() => {
+  // ⌘J goes to what needs you. The listener is attached once, before the first paint, and
+  // reads the latest `review` when the key comes: a card on screen is always the one it finds,
+  // never a transcript from before that card arrived.
+  const latestReview = useRef(review);
+  useLayoutEffect(() => {
+    latestReview.current = review;
+  }, [review]);
+  useLayoutEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
         (event.metaKey || event.ctrlKey) &&
@@ -845,12 +851,12 @@ export function Conversation({
         reachable(sectionRef.current?.querySelector("[data-testid=transcript]") ?? null)
       ) {
         event.preventDefault();
-        review();
+        latestReview.current();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [review]);
+  }, []);
 
   const taskKey = task?.key ?? null;
   const addNotice = useCallback(
