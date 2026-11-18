@@ -364,6 +364,63 @@ describe("a check cannot skip a run", () => {
 });
 
 describe("a failed check is drained before the next one starts", () => {
+  it("stops a send the gateway admits after the first idle sample, and starts the next check only once all is quiet", async () => {
+    const key = "agent:otto:admitted-late";
+    let active = false;
+    let sampled = false;
+    const aborts: number[] = [];
+    const op = {
+      events: [],
+      lastSeq: 0,
+      request: async (method: string, params: { sessionKey: string }) => {
+        if (params.sessionKey !== key) return {};
+        if (method === "chat.abort") {
+          if (active) aborts.push(Date.now());
+          active = false;
+          return { aborted: true, runIds: [] };
+        }
+        if (method === "chat.history" && !sampled) {
+          sampled = true;
+          // The send's request failed here; the gateway takes it a moment after this answer.
+          setTimeout(() => {
+            active = true;
+          }, 100);
+        }
+        return active ? { inFlightRun: { runId: "late" } } : {};
+      },
+      send: async () => {
+        throw new Error("send connection lost");
+      },
+    } as unknown as OperatorSession;
+    const h = createHarness({ plain: op, approvals: op, questions: op });
+    await expect(
+      runCheck(
+        h,
+        {
+          name: "send then lose the answer",
+          covers: [],
+          run: async () => {
+            await h.start("plain", key, "start once");
+          },
+        },
+        { drainTimeoutMs: 5_000, drainSettleMs: 400 },
+      ),
+    ).rejects.toThrow(/send connection lost/);
+    // The late run was seen and stopped while the check was drained.
+    expect(aborts).toHaveLength(1);
+    await runCheck(
+      h,
+      {
+        name: "next",
+        covers: [],
+        run: async () => {
+          expect(active).toBe(false);
+        },
+      },
+      { drainTimeoutMs: 5_000, drainSettleMs: 400 },
+    );
+  });
+
   /** A client whose events and answers the test controls; `busy` says which tasks have work. */
   const controlled = (busy: Set<string>) => {
     const calls: Array<[string, unknown]> = [];
@@ -399,7 +456,7 @@ describe("a failed check is drained before the next one starts", () => {
             await h.start("plain", key, "#text");
           },
         },
-        { drainTimeoutMs: 200 },
+        { drainTimeoutMs: 200, drainSettleMs: 50 },
       ),
     ).rejects.toThrow(/no answer/);
     expect(calls).toContainEqual(["chat.abort", { sessionKey: key }]);
@@ -422,7 +479,7 @@ describe("a failed check is drained before the next one starts", () => {
             throw new Error("failed while its run goes on");
           },
         },
-        { drainTimeoutMs: 200 },
+        { drainTimeoutMs: 200, drainSettleMs: 50 },
       ),
     ).rejects.toThrow(/failed while its run goes on/);
     let ran = false;
@@ -436,13 +493,17 @@ describe("a failed check is drained before the next one starts", () => {
             ran = true;
           },
         },
-        { drainTimeoutMs: 200 },
+        { drainTimeoutMs: 200, drainSettleMs: 50 },
       ),
     ).rejects.toThrow(/not started: the check before it \("leaves work"\) failed/);
     expect(ran).toBe(false);
     // Once that work has ended, checks run again.
     busy.clear();
-    await runCheck(h, { name: "after", covers: [], run: async () => {} }, { drainTimeoutMs: 200 });
+    await runCheck(
+      h,
+      { name: "after", covers: [], run: async () => {} },
+      { drainTimeoutMs: 200, drainSettleMs: 50 },
+    );
   });
 
   it("drains when the only failure is a run left unasserted", async () => {
@@ -464,7 +525,7 @@ describe("a failed check is drained before the next one starts", () => {
             });
           },
         },
-        { drainTimeoutMs: 200 },
+        { drainTimeoutMs: 200, drainSettleMs: 50 },
       ),
     ).rejects.toThrow(/were not asserted/);
     expect(calls).toContainEqual(["chat.abort", { sessionKey: "agent:marlow:main" }]);
@@ -539,14 +600,14 @@ describe("the stopped stream's partial text and the queue-only schema exception"
   const check = SCENARIO_CHECKS.find((each) => each.name === "a streamed reply, stopped mid-run")!;
 
   it("fails when the aborted event carries no partial text", async () => {
-    await expect(runCheck(replay(""), check, { drainTimeoutMs: 100 })).rejects.toThrow(
-      /carries the text seen before the stop/,
-    );
+    await expect(
+      runCheck(replay(""), check, { drainTimeoutMs: 100, drainSettleMs: 20 }),
+    ).rejects.toThrow(/carries the text seen before the stop/);
   });
 
   it("passes when it carries what was seen, and more of the reply", async () => {
     const partial = scriptedFinalText("#stream 20").slice(0, 40);
-    await runCheck(replay(partial), check, { drainTimeoutMs: 100 });
+    await runCheck(replay(partial), check, { drainTimeoutMs: 100, drainSettleMs: 20 });
   });
 
   it("admits the missing-seq error event only for a run the gateway paired with an id of its own", () => {

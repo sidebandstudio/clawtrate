@@ -384,12 +384,12 @@ const SHARED_SESSIONS = MESSAGING_PAIR.map((botId) => `agent:${botId}:main`);
 export async function runCheck(
   h: Harness,
   check: ScenarioCheck,
-  options: { drainTimeoutMs?: number } = {},
+  options: { drainTimeoutMs?: number; drainSettleMs?: number } = {},
 ): Promise<void> {
   if (leftBusy) {
     const busy = leftBusy;
     leftBusy = null;
-    if (!(await drain(h, busy.keys, options.drainTimeoutMs))) {
+    if (!(await drain(h, busy.keys, options.drainTimeoutMs, options.drainSettleMs))) {
       leftBusy = busy;
       throw new CheckFailure(`not started: ${busy.reason}`);
     }
@@ -417,7 +417,7 @@ export async function runCheck(
     const keys = [
       ...new Set([...LEDGER, ...sessionsWithRuns(clients, before), ...SHARED_SESSIONS]),
     ];
-    if (!(await drain(h, keys, options.drainTimeoutMs))) {
+    if (!(await drain(h, keys, options.drainTimeoutMs, options.drainSettleMs))) {
       leftBusy = {
         keys,
         reason: `the check before it ("${check.name}") failed and the gateway still had work in ${keys.join(", ")}`,
@@ -440,40 +440,54 @@ function sessionsWithRuns(clients: OperatorSession[], before: number[]): Set<str
   return keys;
 }
 
+/** How long a drained check's tasks must stay idle, sampled throughout, before the next check. */
+export const DRAIN_SETTLE_MS = 1_500;
+const DRAIN_SAMPLE_MS = 200;
+
 /**
- * Stop whatever runs in these tasks and wait until the gateway has nothing in
- * flight or waiting there. Whether it got there: false when a task was still
+ * Stop whatever runs in these tasks and wait until the gateway has had nothing
+ * in flight or waiting in any of them for `settleMs` without a break, sampled
+ * every `DRAIN_SAMPLE_MS`: a send admitted after a first idle sample (its
+ * request failed here, the gateway took it later) is seen, stopped, and the
+ * quiet period starts again. Whether it got there: false when a task was still
  * busy at the deadline.
  */
 export async function drain(
   h: Harness,
   keys: Iterable<string>,
   timeoutMs = 60_000,
+  settleMs = DRAIN_SETTLE_MS,
 ): Promise<boolean> {
   const op = h.op("plain");
+  const all = [...keys];
   const deadline = Date.now() + timeoutMs;
-  let idle = true;
-  for (const key of keys) {
-    let clear = false;
-    while (!clear && Date.now() < deadline) {
-      await op.request("chat.abort", { sessionKey: key }).catch(() => {});
+  for (const key of all) await op.request("chat.abort", { sessionKey: key }).catch(() => {});
+  let quietSince: number | null = null;
+  for (;;) {
+    let busy = false;
+    for (const key of all) {
       const history = await op
         .request<{ inFlightRun?: unknown; pendingInputs?: { items?: unknown[] } }>("chat.history", {
           sessionKey: key,
           limit: 1,
         })
         .catch(() => null);
-      clear =
+      const clear =
         history !== null &&
         !history.inFlightRun &&
         (history.pendingInputs?.items ?? []).length === 0;
-      if (!clear) await sleep(500);
+      if (!clear) {
+        busy = true;
+        await op.request("chat.abort", { sessionKey: key }).catch(() => {});
+      }
     }
-    idle &&= clear;
+    const now = Date.now();
+    if (busy) quietSince = null;
+    else quietSince ??= now;
+    if (quietSince !== null && now - quietSince >= settleMs) return true;
+    if (now >= deadline) return false;
+    await sleep(DRAIN_SAMPLE_MS);
   }
-  // Late events of the stopped runs (a stopped tool's result) arrive just after.
-  await sleep(500);
-  return idle;
 }
 
 /**
