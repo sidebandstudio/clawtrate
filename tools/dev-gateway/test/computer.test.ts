@@ -448,7 +448,7 @@ describe("stopping and resetting wait for the browser's processes", () => {
     new Promise<void>((resolve) => (child.pid ? resolve() : child.once("spawn", () => resolve())));
 
   it("finds the instance's browser processes by an argument naming its browser folder, and nothing else", () => {
-    const state = "/home/x/.openclaw-clawtrate-dev-alpha";
+    const state = "/var/empty/clawtrate-test/.openclaw-clawtrate-dev-alpha";
     const rows = [
       {
         pid: 11,
@@ -466,7 +466,7 @@ describe("stopping and resetting wait for the browser's processes", () => {
       { pid: 22, command: `/pw/Chromium --user-data-dir=${state}-other/browser/bot-pip/user-data` },
       {
         pid: 23,
-        command: `/pw/Chromium --user-data-dir=/home/x/.openclaw-clawtrate-dev-beta/browser/b/user-data`,
+        command: `/pw/Chromium --user-data-dir=/var/empty/clawtrate-test/.openclaw-clawtrate-dev-beta/browser/b/user-data`,
       },
       { pid: process.pid, command: `node --user-data-dir=${state}/browser/x` },
     ];

@@ -1,5 +1,5 @@
 // The repository is public: no tracked file may carry a private-range
-// address literal. Documentation ranges and the unspecified address are
+// address literal, or a home-directory path. Documentation ranges and the unspecified address are
 // fine as synthetic fixtures; a test that needs a private address builds it
 // from its parts at run time.
 
@@ -38,6 +38,19 @@ export function privateAddresses(text: string): string[] {
   return found;
 }
 
+/** A home-directory path (under /home or /Users) in `text`. */
+const HOME_PATH = /(?<![A-Za-z0-9_.~-])\/(?:home|Users)\/[A-Za-z0-9_.-]+/g;
+
+/**
+ * Home-directory paths already in the repository from other work, each a
+ * made-up fixture; nothing new may join them.
+ */
+const home = (name: string) => ["", "home", name].join("/");
+const KNOWN_HOME_PATHS = new Set([
+  `docs/design/prototype/js/kinds.js: ${home("bot")}`,
+  `tools/dev-gateway/test/instances.test.ts: ${home("x")}`,
+]);
+
 describe("tracked files", () => {
   it("recognizes each private range, and leaves documentation, loopback and unspecified addresses", () => {
     const join4 = (...parts: number[]) => parts.join(".");
@@ -69,7 +82,7 @@ describe("tracked files", () => {
     }
   });
 
-  it("carry no private-range address literal", () => {
+  it("carry no private-range address literal and no new home-directory path", () => {
     const files = execFileSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" })
       .split("\0")
       .filter(Boolean);
@@ -83,8 +96,12 @@ describe("tracked files", () => {
         continue; // deleted in the working tree
       }
       if (bytes.includes(0)) continue; // binary
-      for (const address of privateAddresses(bytes.toString("utf8"))) {
+      const text = bytes.toString("utf8");
+      for (const address of privateAddresses(text)) {
         found.push(`${file}: ${address}`);
+      }
+      for (const match of text.matchAll(HOME_PATH)) {
+        if (!KNOWN_HOME_PATHS.has(`${file}: ${match[0]}`)) found.push(`${file}: ${match[0]}`);
       }
     }
     expect(found).toEqual([]);
