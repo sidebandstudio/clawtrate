@@ -548,14 +548,18 @@ describe("approvals through the client (F-163, F-165, F-166, F-168)", () => {
     const { client, gateway, transcript } = await openTask(INTERACTIVE_SCOPES);
     await until(() => transcript().approvalAccess === "ready");
     expect(transcript().approvals.map((each) => each.id)).toEqual(["ap-1"]);
+    // Each list is read twice at a connect: for this task, and for the rail's waiting state.
     for (const method of ["exec.approval.list", "plugin.approval.list", "openclaw.approval.list"]) {
-      expect(gateway.calls(method)).toEqual([{}]);
+      await until(() => gateway.calls(method).length === 2);
+      expect(gateway.calls(method)).toEqual([{}, {}]);
     }
 
     gateway.handlers["exec.approval.list"] = () => [];
     gateway.dropAll();
     await until(() => transcript().approvals[0]?.status === "closed");
-    expect(gateway.calls("exec.approval.list").length).toBe(2);
+    await until(() => gateway.calls("exec.approval.list").length === 4);
+    await sleep(20);
+    expect(gateway.calls("exec.approval.list").length).toBe(4);
     client.stop();
   });
 
