@@ -961,12 +961,21 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
       },
       60_000,
     );
-  /** Every tool call id the run made, in order, as the gateway reported their starts. */
+  /**
+   * Every tool call id the run made, in order, as the gateway reported their items' starts,
+   * which every client following the session receives, whoever started the run.
+   */
   const callIds = (runId: string) =>
     clients.plain
       .runEvents(runId)
-      .map((e) => e.payload as { stream?: string; data?: { phase?: string; toolCallId?: string } })
-      .filter((p) => p.stream === "tool" && p.data?.phase === "start")
+      .map(
+        (e) =>
+          e.payload as {
+            stream?: string;
+            data?: { kind?: string; phase?: string; toolCallId?: string };
+          },
+      )
+      .filter((p) => p.stream === "item" && p.data?.kind === "tool" && p.data?.phase === "start")
       .map((p) => String(p.data?.toolCallId));
   /** History holds the run's last result: the read again sees what the live run saw. */
   const inHistory = async (key: string, count: number) =>
@@ -1044,10 +1053,25 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
 
   test("F-133 F-313: a read with its reply cut never says it read to the end; a follow-up after a bubble keeps its line, with Show the thread", async () => {
     test.setTimeout(180_000);
-    const t = await called("t3-read", "#t3-long #t3-read #t3-send");
+    // Started by the host's own device: its run's tool events, results included, reach the host
+    // as they happen. (A host that did not start a run gets only its item events, and the result
+    // from history, where the gateway cut this read's rendering; see below.)
+    const { title, key } = await hostTask("main", "T3 long read", "#t3-long #t3-read #t3-send");
+    await clients.plain.request("sessions.messages.subscribe", { key });
+    const run = await clients.plain.waitFor(
+      "the long read's run",
+      (e) => {
+        const p = e.payload as { sessionKey?: string; stream?: string; data?: { name?: string } };
+        return (
+          p.sessionKey === key && p.stream === "item" && p.data?.name === "t3code__t3_thread_wait"
+        );
+      },
+      60_000,
+    );
+    const t = { key, title, runId: String((run.payload as { runId: string }).runId) };
+    await openTask(page, "Juniper", t.title);
     await clients.plain.terminal(t.runId);
     const [, , read, send] = callIds(t.runId);
-    await openTask(page, "Juniper", t.title);
     const c = await openCard(page);
     await expect(c.locator(`[data-item-call="${read}"]`)).toContainText(
       "Part of the reply only: its text was cut, and the rest was not read",
@@ -1178,9 +1202,18 @@ test.describe("a bot-to-bot message as an action card on a real gateway", () => 
         ["list", false],
       ]);
       // The message's words appear once for each card and nowhere else in the run.
-      for (const text of ["Could you look over the plan?", "And the route for Saturday?"]) {
-        await expect(column.getByText(text, { exact: false })).toHaveCount(1);
-        await expect(column.locator(".bubble").filter({ hasText: text })).toHaveCount(0);
+      // Each message is in its own card, and in no other element of the transcript.
+      for (const [i, text] of [
+        "Could you look over the plan?",
+        "And the route for Saturday?",
+      ].entries()) {
+        await expect(messaged.nth(i)).toContainText(text);
+        const elsewhere = await column.evaluate((element, text) => {
+          const copy = element.cloneNode(true) as HTMLElement;
+          for (const each of copy.querySelectorAll(".card.messaged")) each.remove();
+          return copy.textContent?.split(text).length ?? 1;
+        }, text);
+        expect(elsewhere - 1, text).toBe(0);
       }
     };
     await openTask(page, "Pip", t.title);

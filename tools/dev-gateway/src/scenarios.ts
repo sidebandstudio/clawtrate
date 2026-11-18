@@ -798,9 +798,10 @@ export const SCENARIOS: Scenario[] = [
     name: "t3-long",
     phrase: "start a t3 code thread with a long reply",
     summary:
-      "Launches a thread whose reply is longer than T3 Code's 20,000-character cut, then waits on it.",
+      "Launches a slow thread whose reply is longer than T3 Code's 20,000-character cut, then waits on it (6 seconds).",
     steps: () => [
-      launch(`${T3_TASK} Write a long report of what changed.`, "A long report"),
+      // Slow, so a viewer can open the task while it waits and see the read arrive.
+      launch(`${T3_TASK} Write a long report of what changed. This one is slow.`, "A long report"),
       onThread("t3_thread_wait", { timeoutMs: 30_000 }),
     ],
   },
