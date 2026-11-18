@@ -796,6 +796,62 @@ describe("sign-ins, through the gateway's own methods", () => {
     client.stop();
   });
 
+  it("a cancel refused for any reason but saving is unknown: never saving, and the accounts are read again", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.browser, null);
+    fake.gateway.handlers["wizard.cancel"] = () => {
+      throw new GatewayError({ code: "INVALID_REQUEST", message: "Cannot cancel: too late" });
+    };
+    const reads = fake.gateway.calls("models.authStatus").length;
+    expect(await client.cancelSignIn()).toEqual({ cancelled: false });
+    expect(accounts().signIn).toMatchObject({ cancelUnknown: true, saving: false });
+    await until(() => fake.gateway.calls("models.authStatus").length > reads);
+    client.stop();
+  });
+
+  it("two new accounts after a sign-in that names neither: both are named, and the person's choice is its account", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const next = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) => {
+      if (!(params as { answer?: unknown }).answer) return next(params);
+      fake.shared.push(
+        { id: "acme:elsewhere", provider: "acme", type: "oauth" },
+        { id: "acme:mine", provider: "acme", type: "oauth" },
+      );
+      return { done: true, status: "done" };
+    };
+    await client.startSignIn(CHOICES.browser, null);
+    await client.answerSignIn("made-up-code-several");
+    expect(accounts().signIn).toMatchObject({
+      stage: "several",
+      result: { added: ["acme:elsewhere", "acme:mine"] },
+    });
+    // Nothing is recorded of either until the person says which is theirs.
+    expect(Object.keys(fake.prefs).filter((key) => key.includes("acme:elsewhere"))).toEqual([]);
+    await client.chooseSignInAccount("acme:mine");
+    expect(accounts().signIn).toMatchObject({
+      stage: "connected",
+      result: { added: ["acme:mine"], landed: "shared" },
+    });
+    expect(fake.prefs["clawtrate.account-kind.acme:mine"]).toBeDefined();
+    expect(fake.prefs["clawtrate.account-kind.acme:elsewhere"]).toBeUndefined();
+    await expect(client.chooseSignInAccount("acme:work")).rejects.toThrow();
+    client.stop();
+  });
+
+  it("a key saved directly whose read afterwards fails is not called saved, and names no account", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.gateway.handlers["models.authSetApiKey"] = () => ({ profileId: "globex:direct" });
+    fake.failStatusFor = "main";
+    expect(await client.saveApiKey("globex", "made-up-key-direct-0001", null)).toEqual({
+      profileId: null,
+    });
+    expect(accounts().write).toMatchObject({ what: "key", status: "unverified" });
+    expect(accounts().write?.error).toMatch(/reading its accounts afterwards failed/);
+    expect(fake.prefs["clawtrate.account-kind.globex:direct"]).toBeUndefined();
+    client.stop();
+  });
+
   it("too late to cancel: the gateway refuses because it is saving", async () => {
     const { client, fake, accounts } = await accountsClient();
     await client.startSignIn(CHOICES.device, null);

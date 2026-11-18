@@ -285,6 +285,25 @@ const SCENES: Scene[] = [
     ),
   },
   {
+    name: "signin-several",
+    query: `${ADMIN}&signin=several`,
+    ready: signIn(/^xAI · /, (page) =>
+      expect(page.getByTestId("several").getByRole("button")).toHaveCount(2),
+    ),
+  },
+  {
+    name: "connect-key-unverified",
+    query: `${ADMIN}&keyread=fail`,
+    ready: async (page) => {
+      await connectStep(page);
+      await page.getByText("Use an API key instead").click();
+      await page.getByRole("combobox", { name: "Provider" }).selectOption("openai");
+      await page.getByTestId("api-key").fill("made-up-key-for-a-check");
+      await page.getByRole("button", { name: "Save key" }).click();
+      await expect(page.getByRole("heading", { name: "Key sent, not confirmed" })).toBeVisible();
+    },
+  },
+  {
     name: "signin-cancel-unknown",
     query: `${ADMIN}&signin=cancel-unknown`,
     ready: signIn(/^xAI · /, (page) => expect(page.getByTestId("cancel-unknown")).toBeVisible()),

@@ -21,6 +21,7 @@ import { useBridge } from "../bridge.tsx";
 import { ChevronIcon, ExternalIcon, LockIcon } from "../icons.tsx";
 import { recall, remember } from "./memory.ts";
 import { AdminBar, CodeBlock, Note, Result, Wait } from "./parts.tsx";
+import { AccountTitle } from "./AccountChoices.tsx";
 import { accountName, flowWords, providerName } from "./words.ts";
 
 /** A label step left before Done, kept until the app quits so it comes back (section 6). */
@@ -50,7 +51,9 @@ type Where =
   | { view: "methods" }
   | { view: "flow"; method: string }
   | { view: "label"; account: string; byKey: boolean }
-  | { view: "same"; provider: string };
+  | { view: "same"; provider: string }
+  /** A key the gateway took whose account the read after it didn't show. */
+  | { view: "key-check"; provider: string; known: string[] };
 
 /**
  * The connect component's state and views. The caller draws its head and
@@ -240,6 +243,7 @@ export function useConnect({
       }
       // The field is cleared at once: the key is in this one request, and nowhere after it.
       if (keyRef.current) keyRef.current.value = "";
+      const known = accounts.accounts.filter((a) => a.provider === keyProvider).map((a) => a.id);
       setKeyError(null);
       setSaving(true);
       try {
@@ -251,8 +255,11 @@ export function useConnect({
           botId: forBot,
         });
         if (!kp?.method) {
-          announce("Key saved");
-          if (profileId) setWhere({ view: "label", account: profileId, byKey: true });
+          // Saved only when the read after it shows the account; otherwise it says so.
+          if (profileId) {
+            announce("Key saved");
+            setWhere({ view: "label", account: profileId, byKey: true });
+          } else setWhere({ view: "key-check", provider: keyProvider, known });
         }
       } catch (error) {
         setKeyError(error instanceof Error ? error.message : String(error));
@@ -389,6 +396,51 @@ export function useConnect({
         />
       ),
       onBack: onLeave,
+    };
+  }
+
+  // --- A key not confirmed --------------------------------------------------------
+  if (where.view === "key-check") {
+    const who = providerName(where.provider);
+    const fresh = accounts.accounts
+      .filter((a) => a.provider === where.provider && !where.known.includes(a.id))
+      .map((a) => a.id);
+    const found = accounts.status === "ready" && fresh.length === 1 ? fresh[0]! : null;
+    return {
+      title: "API key",
+      backLabel: "Back to sign-in methods",
+      body: (
+        <Result tone="warn" mark="clock" title="Key sent, not confirmed">
+          {accounts.write?.what === "key" && accounts.write.error
+            ? accounts.write.error
+            : `The gateway took the key, but Clawtrate hasn't seen its ${who} account yet.`}{" "}
+          {found
+            ? `The gateway now lists a new ${who} account.`
+            : "Check again reads the gateway's accounts."}
+        </Result>
+      ),
+      foot: found ? (
+        <button
+          type="button"
+          className="button"
+          data-variant="primary"
+          data-size="lg"
+          onClick={() => setWhere({ view: "label", account: found, byKey: true })}
+        >
+          Continue
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="button"
+          data-variant="primary"
+          data-size="lg"
+          onClick={() => void bridge.send({ type: "refreshAccounts" }).catch(() => {})}
+        >
+          Check again
+        </button>
+      ),
+      onBack: () => setWhere({ view: "methods" }),
     };
   }
 
@@ -586,6 +638,40 @@ export function useConnect({
     >
       {word}
     </button>
+  );
+  // More than one new account and the gateway didn't name one: the person says which is theirs.
+  const chooser = (sign: SignInState) => (
+    <ul className="b-choices" data-testid="several" aria-label="New accounts">
+      {sign.result!.added.map((id) => {
+        const listed = accounts.accounts.find((each) => each.id === id);
+        const name = listed ? accountName(listed, accounts) : id;
+        return (
+          <li key={id}>
+            <button
+              type="button"
+              className="b-choice"
+              data-choose={id}
+              aria-label={`${name}: this is the account I signed in to`}
+              onClick={() =>
+                void bridge
+                  .invoke({ type: "chooseSignInAccount", profileId: id })
+                  .catch((error: unknown) =>
+                    announce(error instanceof Error ? error.message : String(error)),
+                  )
+              }
+            >
+              <span className="b-choice-text">
+                <span className="b-choice-title">
+                  {listed ? <AccountTitle account={listed} accounts={accounts} /> : id}
+                </span>
+                <span className="b-choice-sub">This is the account I signed in to</span>
+              </span>
+              <ChevronIcon />
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
   const another = (
     <button type="button" className="button" data-variant="quiet" onClick={() => void toMethods()}>
@@ -896,12 +982,28 @@ export function useConnect({
         {another}
       </>
     );
-  } else if (current.stage === "unconfirmed") {
-    const added = current.result?.added[0];
+  } else if (current.stage === "several") {
     body = (
-      <Result tone="warn" mark="clock" title="Saved, not confirmed">
-        {current.error}
-      </Result>
+      <>
+        <Result tone="ok" mark="check" title={`Signed in to ${who}`} focus={false}>
+          {current.result!.added.length} new {who} accounts appeared while this sign-in ran, and the
+          gateway didn't say which is this one. Choose the account you signed in to: the label and
+          the choice in New bot go to it.
+        </Result>
+        {chooser(current)}
+      </>
+    );
+    foot = another;
+  } else if (current.stage === "unconfirmed") {
+    const several = (current.result?.added.length ?? 0) > 1;
+    const added = several ? undefined : current.result?.added[0];
+    body = (
+      <>
+        <Result tone="warn" mark="clock" title="Saved, not confirmed">
+          {current.error}
+        </Result>
+        {several && chooser(current)}
+      </>
     );
     foot = (
       <button
@@ -909,7 +1011,7 @@ export function useConnect({
         className="button"
         data-variant="primary"
         data-size="lg"
-        disabled={!current.result}
+        disabled={!current.result || several}
         onClick={() =>
           added ? setWhere({ view: "label", account: added, byKey: current.byKey }) : finish(null)
         }

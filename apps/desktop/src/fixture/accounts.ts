@@ -12,7 +12,10 @@
 //   signin=<stage>            where a sign-in that starts goes: waiting (default),
 //                             failed, expired, cancelled, ended, busy, unconfirmed, saving,
 //                             checking (an answer stays checking), unverified (the read after
-//                             it failed), cancel-unknown (the cancel's answer says nothing)
+//                             it failed), cancel-unknown (the cancel's answer says nothing),
+//                             several (two new accounts appeared while it ran)
+//   keyread=fail              a key saved directly whose read afterwards fails
+//   keyfails=1                xAI's key goes through a sign-in that refuses it
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
 //   create=failed|slow|checking|partial   how New bot's Create goes
@@ -48,6 +51,8 @@ export type AccountParams = {
   labels: "none" | "same" | null;
   /** xAI's key goes through a sign-in on the gateway, which refuses it. */
   keyfails: boolean;
+  /** A key saved directly whose read afterwards fails; Check again reads it. */
+  keyread: boolean;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -66,6 +71,7 @@ export function accountParams(params: URLSearchParams): AccountParams {
     bot: params.get("bot"),
     defacct: params.get("defacct") === "1",
     keyfails: params.get("keyfails") === "1",
+    keyread: params.get("keyread") === "fail",
     labels:
       params.get("labels") === "none" || params.get("labels") === "same"
         ? (params.get("labels") as "none" | "same")
@@ -86,6 +92,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   defacct: false,
   labels: null,
   keyfails: false,
+  keyread: false,
 };
 
 const MINUTE = 60_000;
@@ -607,6 +614,9 @@ export function withAccess(state: ClawtrateState, params: AccountParams): Clawtr
 
 const REQUEST = "3f9a2c71-5b0e-4d6a-9c18-7e2f0a4b6d93";
 
+/** The read a "Check again" makes, when the read after a direct key save failed (`keyread=fail`). */
+let pendingRead: (() => void) | null = null;
+
 /**
  * The account commands, answered on the fixture's state. Returns undefined
  * for a command that is not one of them.
@@ -667,6 +677,8 @@ export function accountCommand(
       return Promise.resolve();
     }
     case "refreshAccounts":
+      pendingRead?.();
+      pendingRead = null;
       return Promise.resolve();
     case "checkLock":
       put((a) => ({
@@ -733,6 +745,18 @@ export function accountCommand(
           });
           later(500, () => connected());
           return;
+        }
+        if (stage === "several") {
+          // Two new accounts while it ran, the gateway naming neither: the person chooses.
+          const ids = [`${method.provider}:other`, `${method.provider}:second`];
+          put((a) => ({
+            ...a,
+            accounts: [
+              ...a.accounts,
+              ...ids.map((id) => account(id, null, "oauth", "subscription")),
+            ],
+          }));
+          return signIn({ stage: "several", step: null, result: result(ids) });
         }
         if (stage === "unverified")
           return signIn({
@@ -875,6 +899,18 @@ export function accountCommand(
       put((a) => ({ ...a, signIn: null }));
       return Promise.resolve({ dismissed: true });
     }
+    case "chooseSignInAccount": {
+      const chosen = accounts().accounts.find((x) => x.id === command.profileId);
+      signIn({
+        stage: "connected",
+        result: {
+          ...result([command.profileId]),
+          landed: chosen?.keptBy ? "kept" : "shared",
+          keptBy: chosen?.keptBy ?? null,
+        },
+      });
+      return Promise.resolve();
+    }
     case "recheckSignIn":
       signIn({ stage: "checking", result: null });
       later(300, () => connected());
@@ -910,12 +946,30 @@ export function accountCommand(
         return Promise.resolve({ profileId: null });
       }
       const id = `${command.provider}:manual`;
-      put((a) => ({
-        ...a,
-        accounts: a.accounts.some((x) => x.id === id)
-          ? a.accounts
-          : [...a.accounts, account(id, null, "api_key", "key")],
-      }));
+      const add = () =>
+        put((a) => ({
+          ...a,
+          accounts: a.accounts.some((x) => x.id === id)
+            ? a.accounts
+            : [...a.accounts, account(id, null, "api_key", "key")],
+        }));
+      if (params.keyread) {
+        // The gateway took it; the read after it failed. Check again reads it, and finds it.
+        pendingRead = add;
+        put((a) => ({
+          ...a,
+          write: {
+            what: "key",
+            target: command.provider,
+            status: "unverified",
+            error:
+              "The gateway took the key, but reading its accounts afterwards failed: models.authStatus timed out.",
+            at: Date.now(),
+          },
+        }));
+        return Promise.resolve({ profileId: null });
+      }
+      add();
       return Promise.resolve({ profileId: id });
     }
     case "setAccountLabel":

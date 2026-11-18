@@ -3351,6 +3351,11 @@ export class ClawtrateClient {
     return this.accounts.recheckSignIn();
   }
 
+  /** Which of several new accounts is the sign-in's, as the person chose. */
+  chooseSignInAccount(profileId: string): Promise<void> {
+    return this.accounts.chooseSignInAccount(profileId);
+  }
+
   /** An API key the person typed: sent once to the gateway, kept nowhere. */
   saveApiKey(
     provider: string,

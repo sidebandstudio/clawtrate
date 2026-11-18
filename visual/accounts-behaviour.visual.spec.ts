@@ -829,3 +829,49 @@ test("F-474 F-490: a sign-in's result says a lock widened only from a read that 
   );
   await expect(page.getByText(/added the new account to Otto's lock/)).toHaveCount(0);
 });
+
+test("F-474: a key saved directly is called saved only when the read after it shows the account; Check again reads it", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&keyread=fail`, "light");
+  await connectFromNewBot(page);
+  await newBot(page).getByText("Use an API key instead").click();
+  await newBot(page).getByRole("combobox", { name: "Provider" }).selectOption("openai");
+  await page.getByTestId("api-key").fill("made-up-key-for-a-check");
+  await newBot(page).getByRole("button", { name: "Save key" }).click();
+  await expect(
+    newBot(page).getByRole("heading", { name: "Key sent, not confirmed" }),
+  ).toBeVisible();
+  await expect(newBot(page).getByRole("heading", { name: "Key saved" })).toHaveCount(0);
+  await expect(newBot(page).getByRole("textbox", { name: "Label" })).toHaveCount(0);
+  await newBot(page).getByRole("button", { name: "Check again" }).click();
+  await newBot(page).getByRole("button", { name: "Continue" }).click();
+  await expect(newBot(page).getByRole("heading", { name: "Key saved" })).toBeVisible();
+  await expect(newBot(page).getByRole("textbox", { name: "Label" })).toBeVisible();
+});
+
+test("F-474: when two new accounts appear during a sign-in, the person chooses which is theirs before it is labelled", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=several`, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^xAI · / })
+    .click();
+  const several = newBot(page).getByTestId("several");
+  await expect(several.getByRole("button")).toHaveCount(2);
+  await expect(newBot(page).getByRole("textbox", { name: "Label" })).toHaveCount(0);
+  await expect(
+    newBot(page).getByText(/2 new xAI accounts appeared while this sign-in ran/),
+  ).toBeVisible();
+  await several
+    .getByRole("button", { name: /^xAI xai:second: this is the account I signed in to$/ })
+    .click();
+  await expect(newBot(page).getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await expect(
+    newBot(page).getByText("You have another xAI account", { exact: false }),
+  ).toBeVisible();
+  expect((await sent(page)).filter((each) => each.type === "chooseSignInAccount")).toEqual([
+    { type: "chooseSignInAccount", profileId: "xai:second" },
+  ]);
+});

@@ -232,6 +232,11 @@ export type SignInStage =
   | "unverified"
   /** It finished, and no new account appeared: the gateway may have refreshed one it has. */
   | "refreshed"
+  /**
+   * It finished, and more than one new account of the provider appeared while
+   * it ran, without the gateway saying which is its: the person chooses.
+   */
+  | "several"
   | "busy";
 
 /** What a step of the gateway's sign-in shows. Never the person's answer. */
@@ -323,7 +328,8 @@ export type BotCreationState = {
 export type AccountWrite = {
   what: "account" | "model" | "fallbacks" | "label" | "disconnect" | "key";
   target: string;
-  status: "saving" | "saved" | "failed";
+  /** `unverified`: the gateway took it, and the read after it did not show it. */
+  status: "saving" | "saved" | "failed" | "unverified";
   error: string | null;
   at: number;
 };

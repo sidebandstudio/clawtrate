@@ -671,8 +671,9 @@ export class AccountsEngine {
       return { cancelled: true };
     }
     const words = failure ? errorText(failure) : String(answer?.error ?? answer?.status ?? "");
-    if (isRefusal(failure) && /sav(e|ing)|too late|cannot cancel/i.test(words)) {
-      // The gateway refused because it is saving the sign-in (row 6).
+    // Saving only when the gateway's own refusal says it is saving (row 6). Anything else, a
+    // refusal for another reason or the sign-in still running past the cancel, is not known.
+    if (isRefusal(failure) && /\bsav(e|ing)\b/i.test(words)) {
       this.setSignIn(signIn.id, { cancelling: false, saving: true });
     } else {
       this.setSignIn(signIn.id, {
@@ -683,6 +684,32 @@ export class AccountsEngine {
       void this.load();
     }
     return { cancelled: false };
+  }
+
+  /**
+   * The person's choice of which new account is the sign-in's, when several
+   * appeared while it ran: that one is the sign-in's account from here on.
+   */
+  async chooseSignInAccount(profileId: string): Promise<void> {
+    const signIn = this.ctx.get().signIn;
+    if (
+      !signIn ||
+      (signIn.stage !== "several" && signIn.stage !== "unconfirmed") ||
+      !signIn.result?.added.includes(profileId)
+    )
+      throw new Error("That account isn't one this sign-in may have made.");
+    const account = this.ctx.get().accounts.find((each) => each.id === profileId);
+    this.setSignIn(signIn.id, {
+      // "Saved, not confirmed" stays what it is; it now names its account.
+      stage: signIn.stage === "several" ? "connected" : "unconfirmed",
+      result: {
+        ...signIn.result,
+        added: [profileId],
+        landed: account ? (account.keptBy ? "kept" : "shared") : null,
+        keptBy: account?.keptBy ?? null,
+      },
+    });
+    await this.recordKind(profileId, kindOf(signIn));
   }
 
   /** Read again where a finished sign-in's account landed, after that read failed. */
@@ -738,22 +765,14 @@ export class AccountsEngine {
       result.added = target.profiles
         .filter((p) => p.provider === signIn.provider && !known.has(p.id))
         .map((p) => p.id);
-      const first = result.added[0];
+      const first = result.added.length === 1 ? result.added[0] : undefined;
       if (first) {
         const shared =
           second?.profiles.some((p) => p.id === first && p.source !== "saved") ?? false;
         result.landed = shared ? "shared" : "kept";
         result.keptBy = shared ? null : signIn.forBot;
-        if (signIn.stage === "checking" || signIn.stage === "unconfirmed") {
-          // A key typed here; a browser sign-in that saves a key (OpenRouter's); a subscription.
-          const kind: KindRecord =
-            signIn.byKey || signIn.flow === "key"
-              ? "key"
-              : signIn.provider === "openrouter"
-                ? "sign-in-key"
-                : "subscription";
-          for (const each of result.added) await this.recordKind(each, kind);
-        }
+        if (signIn.stage === "checking" || signIn.stage === "unconfirmed")
+          await this.recordKind(first, kindOf(signIn));
       }
       result.locks = await this.checkLocksOf(signIn.provider);
     } catch {
@@ -767,9 +786,11 @@ export class AccountsEngine {
         ? ended.stage
         : result.readFailed
           ? "unverified"
-          : result.added.length > 0
-            ? "connected"
-            : "refreshed";
+          : result.added.length > 1
+            ? "several"
+            : result.added.length === 1
+              ? "connected"
+              : "refreshed";
     this.setSignIn(id, { result, stage, saving: false, cancelling: false });
     // The accounts read again while what it was given is still held: its errors are scrubbed too.
     try {
@@ -875,6 +896,7 @@ export class AccountsEngine {
       return { profileId: after?.id === id ? (after.result?.added[0] ?? null) : null };
     }
     const forBot = this.signInTarget(botId);
+    const before = this.accountsOf(provider);
     this.setWrite({
       what: "key",
       target: provider,
@@ -888,17 +910,36 @@ export class AccountsEngine {
       const answer = asRecord(
         await this.ctx.request("models.authSetApiKey", { provider, apiKey: key, agentId: forBot }),
       );
-      const profileId = typeof answer?.profileId === "string" ? answer.profileId : null;
-      if (profileId) await this.recordKind(profileId, "key");
+      const named = typeof answer?.profileId === "string" ? answer.profileId : null;
+      // Saved only when the read after it shows the account, as for every sign-in.
+      await this.load();
+      const read = this.ctx.get();
+      const added = read.accounts
+        .filter((a) => a.provider === provider && !before.includes(a.id))
+        .map((a) => a.id);
+      const shown =
+        read.status !== "ready"
+          ? null
+          : named
+            ? read.accounts.some((a) => a.id === named)
+              ? named
+              : null
+            : added.length === 1
+              ? added[0]!
+              : null;
+      if (shown) await this.recordKind(shown, "key");
       this.setWrite({
         what: "key",
         target: provider,
-        status: "saved",
-        error: null,
+        status: shown ? "saved" : "unverified",
+        error: shown
+          ? null
+          : read.status !== "ready"
+            ? `The gateway took the key, but reading its accounts afterwards failed${read.error ? `: ${read.error}` : ""}.`
+            : "The gateway took the key, but its accounts don't show it yet.",
         at: this.ctx.now(),
       });
-      await this.load();
-      return { profileId };
+      return { profileId: shown };
     } catch (error) {
       const message = withoutSecret(errorText(error), key);
       this.setWrite({
@@ -1433,6 +1474,16 @@ export function isActive(signIn: SignInState): boolean {
   return (
     ["starting", "waiting", "entering", "checking"].includes(signIn.stage) && signIn.result === null
   );
+}
+
+/** What Clawtrate records for an account a sign-in made, from how the sign-in went. */
+function kindOf(signIn: SignInState): KindRecord {
+  // A key typed here; a browser sign-in that saves a key (OpenRouter's); a subscription.
+  return signIn.byKey || signIn.flow === "key"
+    ? "key"
+    : signIn.provider === "openrouter"
+      ? "sign-in-key"
+      : "subscription";
 }
 
 /** The gateway answered and refused: the request was not applied. */

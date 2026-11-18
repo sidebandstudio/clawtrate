@@ -120,6 +120,7 @@ export type BridgeCommand =
   | { type: "dismissSignIn" }
   /** Read again where a finished sign-in's account landed, after that read failed. */
   | { type: "recheckSignIn" }
+  | { type: "chooseSignInAccount"; profileId: string }
   /** An API key the person typed. Sent once to the gateway and kept nowhere. */
   | { type: "saveApiKey"; provider: string; key: string; botId: string | null }
   | { type: "setAccountLabel"; profileId: string; label: string }
@@ -437,6 +438,8 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         key: secretText(command.key),
         botId: command.botId === null || command.botId === undefined ? null : botId(command.botId),
       };
+    case "chooseSignInAccount":
+      return { type: "chooseSignInAccount", profileId: profileId(command.profileId) };
     case "setAccountLabel":
       return {
         type: "setAccountLabel",
@@ -799,6 +802,8 @@ class ViewerSession implements BridgeSession {
         return client.dismissSignIn();
       case "recheckSignIn":
         return client.recheckSignIn();
+      case "chooseSignInAccount":
+        return client.chooseSignInAccount(command.profileId);
       case "saveApiKey":
         return client.saveApiKey(command.provider, command.key, command.botId);
       case "setAccountLabel":
