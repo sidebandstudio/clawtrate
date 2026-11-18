@@ -1041,6 +1041,68 @@ describe("the run markers and the step behind a file", () => {
     expect(finishedChanges({ runs: merged })).toBe(1);
   });
 
+  it("F-448: a write closed only because its run ended takes history's result, so it is the file's source", () => {
+    const raw = new RawTable();
+    const ctx = { sessionKey: KEY, now: 5_000, raw };
+    const event = (seq: number, stream: string, data: Record<string, unknown>) => ({
+      runId: "r1",
+      seq,
+      stream,
+      ts: 1_000 + seq,
+      sessionKey: KEY,
+      data,
+    });
+    // The write started, its result never arrived, and the run ended: the engine closed it.
+    let activity = emptyActivity;
+    for (const each of [
+      event(1, "lifecycle", { phase: "start" }),
+      event(2, "tool", {
+        phase: "start",
+        name: "write",
+        toolCallId: "c1",
+        args: { path: "notes/scratch.md", content: "hi" },
+      }),
+      event(3, "lifecycle", { phase: "end" }),
+    ])
+      activity = applyAgentEvent(activity, each, ctx).activity;
+    expect(activity.runs[0]!.steps[0]!.status).toBe("failed");
+    expect(fileSource(activity, "notes/scratch.md")).toBeNull();
+    // History holds the write's result: that is how the step ended.
+    const rows = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "c1",
+            name: "write",
+            arguments: { path: "notes/scratch.md", content: "hi" },
+          },
+        ],
+        __openclaw: { id: "a1", seq: 2, runId: "r1" },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "write",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        __openclaw: { id: "t1", seq: 3, runId: "r1" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "I wrote notes/scratch.md." }],
+        stopReason: "stop",
+        __openclaw: { id: "a2", seq: 4, runId: "r1" },
+      },
+    ];
+    const merged = mergeHistoryRuns(activity.runs, runsFromHistory(rows, null, ctx), ctx).runs;
+    const step = merged[0]!.steps.find((each) => each.id === "tool:c1")!;
+    expect(step.status).toBe("done");
+    expect(step.error).toBeNull();
+    expect(fileSource({ runs: merged }, "notes/scratch.md")?.stepId).toBe("tool:c1");
+  });
+
   it("F-448: a finished change is unlisted until a list holds one of its paths as modified", () => {
     const written = run("r1", "completed", [
       step("a", "write", ["notes/scratch.md"], "done", 10),

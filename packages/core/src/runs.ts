@@ -857,7 +857,7 @@ export function finishRun(
             ...step,
             status: "failed",
             endedAt,
-            error: step.error ?? "The run ended before this step finished.",
+            error: step.error ?? STEP_CLOSED_BY_RUN_END,
           };
     return settleRaw(closed, ctx);
   });
@@ -2468,17 +2468,33 @@ export function runsFromHistory(
   });
 }
 
+/**
+ * The error of a step this client closed because its run ended before the step's result
+ * arrived: an inference, not how the step ended. History's finished copy replaces it.
+ */
+export const STEP_CLOSED_BY_RUN_END = "The run ended before this step finished.";
+
+/** A step closed only because its run ended, with no result of its own. */
+function closedByRunEnd(step: Step): boolean {
+  return step.status === "failed" && step.error === STEP_CLOSED_BY_RUN_END && step.result === null;
+}
+
 function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "history" } {
   // A finished step beats a running one. Between two finished steps the live
   // one keeps the raw frames the user watched, unless the gateway marked its
   // result replaceable: then the transcript holds the canonical result.
-  if ((isOpenStep(live) && !isOpenStep(history)) || (live.replaceable && !isOpenStep(history))) {
+  // So does a step closed here only because its run ended, when history knows how it ended.
+  const inferred = closedByRunEnd(live) && !closedByRunEnd(history);
+  if (
+    ((isOpenStep(live) || inferred) && !isOpenStep(history)) ||
+    (live.replaceable && !isOpenStep(history))
+  ) {
     return {
       step: {
         ...history,
         startedAt: live.startedAt ?? history.startedAt,
         // The canonical copy replaced a finished, replaceable result: an explicit correction.
-        correction: isOpenStep(live) ? live.correction : live.correction + 1,
+        correction: isOpenStep(live) || inferred ? live.correction : live.correction + 1,
       },
       source: "history",
     };
