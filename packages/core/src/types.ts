@@ -5,6 +5,7 @@ import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
 import type { SidebarState } from "./sidebar.ts";
+import type { ComputerState } from "./computer.ts";
 
 export type ConnectionStatus =
   /** No gateway configured yet. */
@@ -297,6 +298,13 @@ export type ClawtrateState = {
    * does not read it.
    */
   sidebar?: SidebarState;
+  /**
+   * The Work pane's Computer tab (`computer.ts`): whether the gateway has the
+   * computer plugin, the latest control event of each bot's tab, and each
+   * viewer's pane. Never a ticket, a frame or a lease's generation of this
+   * device's own. Absent where a host does not show it.
+   */
+  computer?: ComputerState;
   /** Paths of fields cut to their bound that nothing beneath records itself. */
   cut?: string[];
 };
@@ -381,4 +389,5 @@ export const initialState: ClawtrateState = {
   creations: [],
   retention: { estimated: 0, bound: 0, near: false },
   sidebar: { status: "unknown", prefs: null },
+  computer: { plugin: null, control: [], panes: {} },
 };

@@ -73,6 +73,12 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/types.ts:initialState.unroutedApprovals":
     "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.creations": "static, an empty list copied on write",
+  "packages/core/src/types.ts:initialState.computer.control":
+    "static, an empty list copied on write",
+  "packages/core/src/computer.ts:initialComputerState.control":
+    "static, an empty list copied on write",
+  "packages/core/src/computer.ts:readTabs>tabs":
+    "one answer; the tabs it lists, cut to `MAX_COMPUTER_TABS` before they are kept in the pane",
   // Values that go into the bounded state, captured only by an update that runs at once.
   "packages/core/src/client.ts:completeCreation>message.attachments":
     "the new outgoing message's files, empty; kept only in the outbox, under its bound",

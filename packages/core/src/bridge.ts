@@ -9,6 +9,8 @@ import {
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
+import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
+import type { MachineFacts } from "./machine.ts";
 import type { QuestionAnswer, StepRead } from "./runs.ts";
 import {
   MAX_SIDEBAR_BOTS,
@@ -134,7 +136,35 @@ export type BridgeCommand =
   /** A bot's archived tasks, read now. */
   | { type: "listArchived"; botId: string }
   /** Change the rail's arrangement on the gateway; `base` is this device's, used when the gateway holds none. */
-  | { type: "changeSidebar"; change: SidebarChange; base: SidebarPrefs | null };
+  | { type: "changeSidebar"; change: SidebarChange; base: SidebarPrefs | null }
+  /**
+   * The Computer tab (`computer.ts`). `computerShow` makes this viewer's pane
+   * about one of its open tasks and answers the pane's id in
+   * `state.computer.panes`; the others act on that pane. Leaving gives
+   * control back first and ends the view.
+   */
+  | { type: "computerShow"; key: string }
+  | { type: "computerLeave" }
+  | { type: "computerTabs" }
+  | { type: "computerChoose"; targetId: string }
+  | { type: "computerWatch" }
+  | { type: "computerStopWatching" }
+  /** The view's newest frame once newer than `after`; null when there is none within the wait. */
+  | { type: "computerFrame"; n: number; after: number }
+  | { type: "computerTake" }
+  | { type: "computerCancelTake" }
+  /** Input for the held tab: sent only while this viewer holds the lease. */
+  | { type: "computerInput"; input: ComputerInput }
+  /** Give control back; with `answer`, the question's option goes once the release is confirmed. */
+  | {
+      type: "computerRelease";
+      answer: { questionId: string; itemId: string; option: number } | null;
+    }
+  | { type: "computerCheck" }
+  | { type: "computerDismiss" }
+  | { type: "computerStopTask" }
+  /** Where a task's bot runs its commands, and the named nodes' records, read now. */
+  | { type: "readMachine"; key: string; nodes: string[]; probe: boolean };
 
 /** What each command answers with. */
 export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
@@ -169,7 +199,15 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                               ? ArchiveResult
                               : C extends { type: "listArchived" }
                                 ? ArchivedList
-                                : void;
+                                : C extends { type: "computerShow" }
+                                  ? { viewer: string }
+                                  : C extends { type: "computerFrame" }
+                                    ? ComputerFrame | null
+                                    : C extends { type: "computerInput" }
+                                      ? { sent: boolean }
+                                      : C extends { type: "readMachine" }
+                                        ? MachineFacts
+                                        : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -598,6 +636,53 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "restoreTask":
     case "deleteTask":
       return { type: command.type, key: sessionKey(command.key) };
+    case "computerShow":
+      return { type: "computerShow", key: sessionKey(command.key) };
+    case "computerLeave":
+    case "computerTabs":
+    case "computerWatch":
+    case "computerStopWatching":
+    case "computerTake":
+    case "computerCancelTake":
+    case "computerCheck":
+    case "computerDismiss":
+    case "computerStopTask":
+      return { type: command.type };
+    case "computerChoose":
+      return { type: "computerChoose", targetId: id(command.targetId, "tab id") };
+    case "computerFrame":
+      return {
+        type: "computerFrame",
+        n: count(command.n, Number.MAX_SAFE_INTEGER, "view"),
+        after: count(command.after, Number.MAX_SAFE_INTEGER, "frame"),
+      };
+    case "computerInput":
+      return { type: "computerInput", input: parseInput(command.input) };
+    case "computerRelease": {
+      const answer = command.answer;
+      if (answer === null || answer === undefined) return { type: "computerRelease", answer: null };
+      const a = answer as Record<string, unknown>;
+      if (typeof a.itemId !== "string" || !QUESTION_ID_PATTERN.test(a.itemId))
+        throw new Error("invalid answers");
+      return {
+        type: "computerRelease",
+        answer: {
+          questionId: id(a.questionId, "question id"),
+          itemId: a.itemId,
+          option: count(a.option, MAX_PROTOCOL_OPTIONS - 1, "option"),
+        },
+      };
+    }
+    case "readMachine": {
+      const nodes = command.nodes;
+      if (!Array.isArray(nodes) || nodes.length > 8) throw new Error("invalid nodes");
+      return {
+        type: "readMachine",
+        key: sessionKey(command.key),
+        nodes: nodes.map((each) => id(each, "node")),
+        probe: command.probe === true,
+      };
+    }
     case "changeSidebar":
       return {
         type: "changeSidebar",
@@ -635,6 +720,8 @@ export type BridgeSession = {
   apply<C extends BridgeCommand>(command: C): Promise<BridgeResultFor<C>>;
   /** The tasks this viewer has open: what its snapshots carry. */
   openTasks(): ReadonlySet<string>;
+  /** This viewer's pane in `state.computer.panes`, once it showed the Computer tab: the only one its snapshots carry. */
+  computerViewer(): string | null;
   dispose(): void;
 };
 
@@ -659,6 +746,8 @@ class ViewerSession implements BridgeSession {
   private inFlight = 0;
   /** Names this viewer to the client, so what it asked for is withdrawn when it goes away. */
   private readonly owner = {};
+  /** This viewer's Computer pane, named the first time this viewer shows the Computer tab. */
+  private viewerId: string | null = null;
   private readonly client: ClawtrateClient;
   private readonly policy: BridgePolicy;
 
@@ -669,6 +758,11 @@ class ViewerSession implements BridgeSession {
     this.client = client;
     this.policy = policy;
     this.openLimit = hostLimit(policy.maxOpenTasks, MAX_VIEWER_OPEN_TASKS, "maxOpenTasks");
+  }
+
+  private get viewer(): string {
+    this.viewerId ??= this.client.computerViewer();
+    return this.viewerId;
   }
 
   /** Task commands act only on tasks this viewer has open. */
@@ -869,6 +963,37 @@ class ViewerSession implements BridgeSession {
         return client.listArchived(command.botId);
       case "changeSidebar":
         return client.changeSidebar(command.change, command.base, { owner });
+      case "computerShow":
+        client.computerShow(this.viewer, this.mine(command.key));
+        return { viewer: this.viewer };
+      case "computerLeave":
+        return client.computerLeave(this.viewer);
+      case "computerTabs":
+        return client.computerTabs(this.viewer);
+      case "computerChoose":
+        return client.computerChoose(this.viewer, command.targetId);
+      case "computerWatch":
+        return client.computerWatch(this.viewer);
+      case "computerStopWatching":
+        return client.computerStopWatching(this.viewer);
+      case "computerFrame":
+        return client.computerFrame(this.viewer, command.n, command.after);
+      case "computerTake":
+        return client.computerTake(this.viewer);
+      case "computerCancelTake":
+        return client.computerCancelTake(this.viewer);
+      case "computerInput":
+        return { sent: client.computerInput(this.viewer, command.input) };
+      case "computerRelease":
+        return client.computerRelease(this.viewer, command.answer);
+      case "computerCheck":
+        return client.computerCheck(this.viewer);
+      case "computerDismiss":
+        return client.computerDismiss(this.viewer);
+      case "computerStopTask":
+        return client.computerStopTask(this.viewer);
+      case "readMachine":
+        return client.readMachine(this.mine(command.key), command.nodes, command.probe);
     }
   }
 
@@ -888,11 +1013,18 @@ class ViewerSession implements BridgeSession {
     return this.open;
   }
 
+  computerViewer(): string | null {
+    return this.viewerId;
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     // What this viewer asked for and the gateway has not been asked yet goes with it, now.
     this.client.withdraw(this.owner);
+    // Control is given back and the view ends, as on leaving the tab.
+    const viewer = this.viewerId;
+    if (viewer) this.client.computerDispose(viewer);
     for (const key of this.open) this.client.closeSession(key);
     this.open.clear();
   }

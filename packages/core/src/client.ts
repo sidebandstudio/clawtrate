@@ -220,6 +220,15 @@ import {
 } from "./task-actions.ts";
 import { fromActivity, WaitingIndex } from "./waiting.ts";
 import {
+  CONTROL_EVENT,
+  ComputerViews,
+  initialComputerState,
+  type ClosedCode,
+  type ComputerFrame,
+  type ComputerInput,
+} from "./computer.ts";
+import { readMachine, type MachineFacts } from "./machine.ts";
+import {
   initialConnectionState,
   initialScopeUpgrade,
   initialState,
@@ -790,6 +799,37 @@ export class ClawtrateClient {
 
   /** Tasks followed at once: the host's count, at most `MAX_TRACKED_TASKS`. */
   private readonly trackedLimit: number;
+
+  /**
+   * Every viewer's Computer tab (`computer.ts`): what the plugin answered, the
+   * views and the control. Tickets, streams, frames, generations and queued
+   * input stay in it; only codes and plain facts reach the state.
+   */
+  private readonly computer: ComputerViews = new ComputerViews({
+    request: (method, params) => this.request(method, params),
+    openStream: (url) => {
+      const socket = this.host.createWebSocket(url);
+      // Frames arrive as bytes; a socket without the setting gives bytes of its own kind.
+      socket.binaryType = "arraybuffer";
+      return socket;
+    },
+    gatewayUrl: () => this.state.connection.gatewayUrl,
+    canWrite: () =>
+      this.state.connection.status === "connected" &&
+      this.state.connection.canWrite &&
+      !this.options.readOnly,
+    online: () => this.state.connection.status === "connected",
+    now: () => this.now(),
+    get: () => this.state.computer ?? initialComputerState,
+    set: (computer) => this.store.update((state) => ({ ...state, computer })),
+    pendingQuestion: (key) =>
+      this.state.transcripts[key]?.questions.find((q) => q.status === "pending") ?? null,
+    questionStatus: (key, id) =>
+      this.state.transcripts[key]?.questions.find((q) => q.id === id)?.status ?? null,
+    answer: (key, id, answers) => this.answerQuestion(key, id, answers),
+    stopTask: (key) => this.stopTask(key),
+    log: (level, message) => this.log(level, message),
+  });
 
   constructor(host: ClawtrateHost, options: ClientOptions = {}) {
     this.host = host;
@@ -3785,6 +3825,7 @@ export class ClawtrateClient {
     const sameGateway = this.state.connection.gatewayUrl === settings.url;
     const hasData = sameGateway && this.state.bots.length > 0;
     if (!sameGateway) {
+      this.computer.reset();
       this.rows = new Map();
       this.raw.clear();
       // Work kept for another gateway's tasks is never carried to this one.
@@ -3945,6 +3986,7 @@ export class ClawtrateClient {
       onClose: () => {
         if (generation !== this.generation) return;
         this.streams.clear();
+        this.computer.connectionLost();
         const status = this.state.connection.status;
         if (status !== "pairing" && status !== "error") {
           // Once this gateway has answered, every later drop is a reconnect, not a first connect.
@@ -4034,6 +4076,7 @@ export class ClawtrateClient {
     this.generation += 1;
     this.protocol?.stop();
     this.protocol = null;
+    this.computer.connectionLost();
     this.streams.clear();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
@@ -4181,6 +4224,13 @@ export class ClawtrateClient {
     this.settleAccessWaiters();
     this.checkCreations();
     this.checkUnknownDecisions();
+    // Whether the computer plugin is loaded comes from the hello's methods; panes that lost a
+    // connection while control was held read the browser's leases again before offering anything.
+    this.computer.reconnected();
+    const methods = asRecord(hello.features)?.methods;
+    this.computer.hello(
+      Array.isArray(methods) ? methods.filter((m): m is string => typeof m === "string") : [],
+    );
     const reason =
       this.pendingResync ?? (wasConnected && !this.quietReconnect ? "reconnect" : null);
     this.pendingResync = null;
@@ -4820,10 +4870,14 @@ export class ClawtrateClient {
         if (resolution) this.noteApprovalOutcome(resolution);
         return;
       }
+      case CONTROL_EVENT:
+        this.computer.controlEvent(event.payload);
+        return;
       case "question.resolved": {
         const payload = asRecord(event.payload);
         const id = payload?.id;
         if (!payload || typeof id !== "string") return;
+        this.noteQuestionClosed(id, payload.status);
         if (this.waiting.onQuestionResolved(id)) this.publishTasks();
         for (const [key, activity] of [...this.foreign.entries()]) {
           if (activity.runs.some((run) => run.pendingCards.some((card) => card.id === id)))
@@ -4849,6 +4903,106 @@ export class ClawtrateClient {
       default:
         return;
     }
+  }
+
+  // The Computer tab (`computer.ts`, `machine.ts`) ---------------------------------------
+
+  /** A question closed: an answer queued behind a release of that task's browser is removed. */
+  private noteQuestionClosed(id: string, status: unknown): void {
+    for (const transcript of Object.values(this.state.transcripts)) {
+      const question = transcript.questions.find((q) => q.id === id);
+      if (!question) continue;
+      const run = question.runId ? findRun(transcript, question.runId) : undefined;
+      const runOver = run !== undefined && run.state !== "running" && run.state !== "waiting";
+      const code: ClosedCode =
+        status === "answered"
+          ? "answered"
+          : status === "expired"
+            ? "expired"
+            : runOver
+              ? "run-ended"
+              : status === "cancelled"
+                ? "dismissed"
+                : "cancelled";
+      this.computer.questionClosed(transcript.sessionKey, code);
+    }
+  }
+
+  /** "Stop <Bot> in this task": the conversation's Stop, for every run of the task still going. */
+  private async stopTask(key: string): Promise<void> {
+    const runs = (this.state.transcripts[key]?.runs ?? []).filter(
+      (run) => run.state === "running" || run.state === "waiting",
+    );
+    if (runs.length === 0) {
+      await this.ensureScope(WRITE_SCOPE, null);
+      await this.request("chat.abort", { sessionKey: key });
+      return;
+    }
+    for (const run of runs) await this.stopRun(key, run.id);
+  }
+
+  /** A viewer id for a bridge session: its pane in `state.computer.panes`. */
+  computerViewer(): string {
+    return this.computer.newViewer();
+  }
+  computerShow(viewer: string, key: string): void {
+    this.computer.show(viewer, key);
+  }
+  computerLeave(viewer: string): void {
+    this.computer.leave(viewer);
+  }
+  computerDispose(viewer: string): void {
+    this.computer.dispose(viewer);
+  }
+  computerTabs(viewer: string): Promise<void> {
+    return this.computer.readTabs(viewer);
+  }
+  computerChoose(viewer: string, targetId: string): void {
+    this.computer.choose(viewer, targetId);
+  }
+  computerWatch(viewer: string): Promise<void> {
+    return this.computer.watch(viewer);
+  }
+  computerStopWatching(viewer: string): void {
+    this.computer.stopWatching(viewer);
+  }
+  computerFrame(viewer: string, n: number, after: number): Promise<ComputerFrame | null> {
+    return this.computer.frame(viewer, n, after);
+  }
+  computerTake(viewer: string): Promise<void> {
+    return this.computer.take(viewer);
+  }
+  computerCancelTake(viewer: string): void {
+    this.computer.cancelTake(viewer);
+  }
+  computerInput(viewer: string, input: ComputerInput): boolean {
+    return this.computer.input(viewer, input);
+  }
+  computerRelease(
+    viewer: string,
+    answer: { questionId: string; itemId: string; option: number } | null,
+  ): void {
+    this.computer.release(viewer, answer ? { answer } : {});
+  }
+  computerCheck(viewer: string): Promise<void> {
+    return this.computer.check(viewer);
+  }
+  computerDismiss(viewer: string): void {
+    this.computer.dismiss(viewer);
+  }
+  computerStopTask(viewer: string): Promise<void> {
+    return this.computer.stopTask(viewer);
+  }
+
+  /** Where the task's bot runs its commands, and the named nodes' records, read now. */
+  async readMachine(key: string, nodes: string[], probe = false): Promise<MachineFacts> {
+    if (this.state.connection.status !== "connected")
+      throw new Error("Not connected to the gateway.");
+    const botId = botIdFromSessionKey(key);
+    if (!botId) throw new Error("This task's bot is not known.");
+    // "Prepare it again" asks the gateway to prepare its own desktop; everything else only reads.
+    if (probe) await this.request("computer.status", { probe: true }).catch(() => null);
+    return readMachine((method, params) => this.request(method, params), botId, nodes, this.now());
   }
 
   // Managing tasks and the rail's arrangement (`task-actions.ts`, `sidebar.ts`) --------

@@ -39,6 +39,12 @@ import {
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
 import { emptyActivity } from "./runs.ts";
+import {
+  MAX_COMPUTER_PANES,
+  MAX_FRAME_BYTES,
+  MAX_INPUT_TEXT,
+  MAX_QUEUED_INPUTS,
+} from "./computer.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   MAX_WAITING_ID_CHARS,
@@ -226,6 +232,20 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: ID + Math.ceil(MAX_TRANSFER_BYTES / 3) * 4 + 4 * N,
     row: "fileTransfers",
   },
+  // Each viewer's Computer tab, apart from the state (`computer.ts`): its ids, the view's ticket
+  // until the stream opens, the stream's socket, the newest frame not yet drawn, the lease's
+  // generation, the input waiting to go out, an answer waiting behind a release, and timers.
+  "computer.lives": {
+    max: MAX_COMPUTER_PANES,
+    each:
+      8 * ID +
+      12 * N +
+      Math.ceil(MAX_FRAME_BYTES / 3) * 4 +
+      MAX_QUEUED_INPUTS * (MAX_INPUT_TEXT + 4 * N),
+    row: "computer",
+    opaque:
+      "a viewer's live part: one frame of at most `MAX_FRAME_BYTES`, at most `MAX_QUEUED_INPUTS` inputs of at most `MAX_INPUT_TEXT`, a socket and timer handles",
+  },
 };
 
 /**
@@ -248,6 +268,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   store: "ObservableStore",
   fileTransfers: "FileTransfers",
   waiting: "WaitingIndex",
+  computer: "ComputerViews",
 };
 
 /** One viewer's bridge session, per viewer (`MAX_WEB_VIEWERS` on the web host). */

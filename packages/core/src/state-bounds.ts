@@ -62,6 +62,19 @@ import {
   type SidebarState,
 } from "./sidebar.ts";
 import type { Digest } from "./bounds.ts";
+import {
+  MAX_COMPUTER_PANES,
+  MAX_COMPUTER_TABS,
+  MAX_COMPUTER_TEXT,
+  MAX_CONTROL_RECORDS,
+  type ComputerControl,
+  type ComputerLease,
+  type ComputerPane,
+  type ComputerState,
+  type ComputerTab,
+  type ComputerView,
+  type ControlRecord,
+} from "./computer.ts";
 import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
 import type {
   Bot,
@@ -705,6 +718,76 @@ export const WORST_ROW_CHARS =
   2 +
   SESSION_ROW_FIELDS.reduce((sum, field) => sum + field.length + 3 + MAX_TASK_LINE_CHARS + 1, 0);
 
+/** The Computer tab (`computer.ts`): codes, plain facts and short strings, never a ticket or a frame. */
+const COMPUTER_TEXT = text(MAX_COMPUTER_TEXT);
+const computerTab = object<ComputerTab>()({
+  targetId: ID,
+  url: COMPUTER_TEXT,
+  title: COMPUTER_TEXT,
+  lease: object<ComputerLease>()({ state: ENUM, holder: ENUM }),
+});
+const computerView = object<ComputerView>()({
+  n: NUMBER,
+  targetId: ID,
+  status: ENUM,
+  end: ENUM,
+  error: COMPUTER_TEXT,
+  url: COMPUTER_TEXT,
+  title: COMPUTER_TEXT,
+  frame: NUMBER,
+  width: NUMBER,
+  height: NUMBER,
+  framesTooLarge: NUMBER,
+});
+const computerControl = object<ComputerControl>()({
+  status: ENUM,
+  key: ID,
+  botId: ID,
+  targetId: ID,
+  endCause: ENUM,
+  busyReason: ENUM,
+  busyCount: NUMBER,
+  renewWithinMs: NUMBER,
+  outOfSight: FLAG,
+  stillHeld: FLAG,
+  outcome: ENUM,
+  questionGone: ENUM,
+  answerQueued: FLAG,
+  released: FLAG,
+  refusal: COMPUTER_TEXT,
+});
+const computerPane = object<ComputerPane>()({
+  viewer: ID,
+  key: ID,
+  botId: ID,
+  availability: ENUM,
+  error: COMPUTER_TEXT,
+  browser: ENUM,
+  tabs: list(MAX_COMPUTER_TABS, computerTab),
+  tabsOmitted: NUMBER,
+  checkedAt: NUMBER,
+  shown: ID,
+  view: computerView,
+  control: computerControl,
+  stopped: FLAG,
+});
+const controlRecord = object<ControlRecord>()({
+  agentId: ID,
+  profile: COMPUTER_TEXT,
+  targetId: ID,
+  holder: ENUM,
+  state: ENUM,
+  generation: ID,
+  reason: COMPUTER_TEXT,
+  at: NUMBER,
+});
+/** The Computer tab's part of the state. */
+export const COMPUTER = object<ComputerState>()({
+  plugin: FLAG,
+  control: list(MAX_CONTROL_RECORDS, controlRecord),
+  panes: map(MAX_COMPUTER_PANES, MAX_ID_CHARS, computerPane),
+});
+
 /** Every part of the state but the transcripts, and the transcripts as one map. */
 export const STATE: Bound = flagged<ClawtrateState>()({
   connection,
@@ -717,6 +800,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   creations: list(MAX_CREATIONS, CREATION),
   retention: retentionAlarm,
   sidebar,
+  computer: COMPUTER,
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };
