@@ -308,6 +308,16 @@ export function RawView({ raw }: { raw: RawContent }) {
       </p>
     );
   }
+  // A part that was not received or kept, in its place, under its heading, said in words.
+  const missing = (label: string) =>
+    (raw.missing ?? [])
+      .filter((part) => part.label === label)
+      .map((part) => (
+        <div key={part.label} data-testid="raw-missing">
+          <p className="code-label">{part.label}</p>
+          <p className="raw-state">{part.text}</p>
+        </div>
+      ));
   return (
     <>
       {(raw.notes ?? []).map((note) => (
@@ -326,6 +336,7 @@ export function RawView({ raw }: { raw: RawContent }) {
           </div>
         </dl>
       )}
+      {missing("Arguments")}
       {raw.args !== undefined && (
         <CodeBlock
           label={raw.argsLabel ?? "Arguments"}
@@ -345,12 +356,7 @@ export function RawView({ raw }: { raw: RawContent }) {
       ) : raw.running ? (
         <p className="exchange-note raw-running">No result yet. This call is still running.</p>
       ) : null}
-      {(raw.missing ?? []).map((part) => (
-        <div key={part.label} data-testid="raw-missing">
-          <p className="code-label">{part.label}</p>
-          <p className="raw-state">{part.text}</p>
-        </div>
-      ))}
+      {missing("Result")}
       {(raw.events ?? []).map(([label, value]) => (
         <CodeBlock key={label} label={label} text={formatJson(value)} copy={label.toLowerCase()} />
       ))}
