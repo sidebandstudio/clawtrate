@@ -336,6 +336,7 @@ test.afterAll(async () => {
     ),
   );
   await within(5_000, watcher?.close() ?? Promise.resolve());
+  await within(5_000, admin?.close() ?? Promise.resolve());
 });
 
 test("F-054 F-012: New task from the + at the top right creates an empty task on the gateway, selects it and focuses its composer", async () => {
@@ -697,35 +698,67 @@ test("F-021 F-057: while a bot's run waits for an approval its row says Waiting 
   );
 });
 
-/** A bot made on the gateway for one check, listed by the writing page; removed by the caller. */
+/** A paired admin connection of this spec's own, for making and removing its bots. */
+let admin: OperatorSession | null = null;
+async function adminClient(): Promise<OperatorSession> {
+  admin ??= await openOperator(
+    openInstance(INSTANCE),
+    "Clawtrate rail check (admin)",
+    ["operator.read", "operator.write", "operator.admin"],
+    [],
+  );
+  return admin;
+}
+
+/** Whether the gateway lists a bot now, by its own `agents.list`. */
+async function listsBot(botId: string): Promise<boolean> {
+  const listed = (await (await adminClient()).request("agents.list", {})) as {
+    agents?: Array<{ id: string }>;
+  };
+  return (listed.agents ?? []).some((agent) => agent.id === botId);
+}
+
+/** A bot made on the gateway for one check, once the gateway lists it; removed by the caller. */
 async function ownBot(name: string): Promise<string> {
-  const created = await gatewayCall<{ agentId: string }>("agents.create", {
+  const created = (await (
+    await adminClient()
+  ).request("agents.create", {
     name,
     workspace: join(openInstance(INSTANCE).stateDir, "workspaces", name.toLowerCase()),
     model: "scripted/dev-1",
-  });
-  await gateway
-    .poll(async () =>
-      (await gatewayCall<{ agents: Array<{ id: string }> }>("agents.list", {})).agents.some(
-        (agent) => agent.id === created.agentId,
-      ),
-    )
-    .toBe(true);
+  })) as { agentId: string };
+  await expect.poll(() => listsBot(created.agentId), { timeout: 60_000 }).toBe(true);
   return created.agentId;
 }
 
 async function removeBot(botId: string): Promise<void> {
-  await gatewayCall("agents.delete", { agentId: botId, deleteFiles: true }).catch(() => {});
-  await gateway
-    .poll(async () =>
-      (await gatewayCall<{ agents: Array<{ id: string }> }>("agents.list", {})).agents.some(
-        (agent) => agent.id === botId,
-      ),
+  await (
+    await adminClient()
+  )
+    .request("agents.delete", { agentId: botId, deleteFiles: true })
+    .catch(() => {});
+  await expect.poll(() => listsBot(botId), { timeout: 60_000 }).toBe(false);
+}
+
+/**
+ * Wait until the page's rail shows (or no longer shows) a bot: its host lists bots when it
+ * connects, so it is asked to read them again until it does, within a deadline.
+ */
+async function railShowsBot(on: Page, name: string, shown: boolean): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await rereadBots(on).catch(() => {});
+        return (await botRow(on, name).count()) > 0;
+      },
+      { timeout: 90_000, intervals: [1_000, 2_000, 5_000] },
     )
-    .toBe(false);
+    .toBe(shown);
 }
 
 test("F-424: a bot's canonical main stays and offers neither Archive nor Delete; a bot without one gets exactly one empty Main, selected, when its last task is archived or deleted, however many clients act", async () => {
+  // Two bots of its own are made and removed; each step waits on the gateway with its own deadline.
+  test.setTimeout(300_000);
   // The gateway refuses to archive a canonical main, and the rail offers neither action for it.
   const main = await describe("agent:marlow:main");
   expect(main?.isMain).toBe(true);
@@ -754,14 +787,17 @@ test("F-424: a bot's canonical main stays and offers neither Archive nor Delete;
   const deleting = await ownBot(`Ranger${STAMP}`);
   try {
     for (const botId of [archiving, deleting]) {
-      const only = await gatewayCall<{ key: string }>("sessions.create", {
+      // Each bot's one task of its own, made once the gateway lists the bot.
+      const only = (await (
+        await adminClient()
+      ).request("sessions.create", {
         agentId: botId,
         label: `Only task ${STAMP}`,
-      });
+      })) as { key: string };
       made.add(only.key);
     }
-    await rereadBots(page);
-    await expect(page.getByTestId("bot")).toHaveCount(6, { timeout: 60_000 });
+    await railShowsBot(page, `Scout${STAMP}`, true);
+    await railShowsBot(page, `Ranger${STAMP}`, true);
     const onlyMain = async (botId: string) => {
       await gateway
         .poll(async () =>
@@ -811,8 +847,8 @@ test("F-424: a bot's canonical main stays and offers neither Archive nor Delete;
   } finally {
     await removeBot(archiving);
     await removeBot(deleting);
-    await rereadBots(page);
-    await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 60_000 });
+    await railShowsBot(page, `Scout${STAMP}`, false);
+    await railShowsBot(page, `Ranger${STAMP}`, false);
   }
 });
 
