@@ -141,3 +141,41 @@ describe("a take waits for a quiet tab", () => {
     await h.stop();
   });
 });
+
+describe("a grant hands over a live connection", () => {
+  it("is refused when the lease's connection closes in the quiet window while the browser's list is slow", async () => {
+    const h = load({
+      quietWindowMs: 110,
+      timeouts: { discoveryMs: 900, connectMs: 300, commandMs: 300 },
+    });
+    const take = h.call("control.take", tab);
+    await until(() => h.browser.sent("Page.stopLoading").length === 2);
+    h.browser.stallDiscovery = true;
+    h.browser.sockets.at(-1)!.close();
+    const answer = await take;
+    expect([answer.ok, answer.error?.details?.reason]).toEqual([false, "control_request_ended"]);
+    expect(h.events.some((e) => e.state === "granted")).toBe(false);
+    expect(h.events.at(-1)).toMatchObject({ state: "revoked", reason: "browser-unavailable" });
+    expect(h.state.leases.size).toBe(0);
+    await h.stop();
+  });
+
+  it("is refused when the proof command after the last stop is not answered", async () => {
+    const h = load({ timeouts: { discoveryMs: 300, connectMs: 300, commandMs: 200 } });
+    h.browser.stalledMethods.add("Page.getFrameTree");
+    const answer = await h.call("control.take", tab);
+    expect(answer.payload?.state).not.toBe("granted");
+    expect(h.events.some((e) => e.state === "granted")).toBe(false);
+    await h.stop();
+  });
+
+  it("follows a command answered on its connection after the last stop", async () => {
+    const h = load();
+    const answer = await h.call("control.take", tab);
+    expect(answer.payload?.state).toBe("granted");
+    const page = h.browser.sent("").filter((e) => e.url.includes("/devtools/page/"));
+    const lastStop = page.map((e) => e.method).lastIndexOf("Page.stopLoading");
+    expect(page.slice(lastStop + 1).map((e) => e.method)).toEqual(["Page.getFrameTree"]);
+    await h.stop();
+  });
+});

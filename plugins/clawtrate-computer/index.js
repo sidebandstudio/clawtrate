@@ -334,10 +334,16 @@ export function createComputer(api, options = {}) {
           signal,
         );
         if (lease.ending || signal.aborted) return false;
-        if (!disturbed) return true;
+        if (!disturbed) {
+          // Proof that the connection a grant would hand over still works:
+          // a command answered on it after the last stop.
+          await send("Page.getFrameTree");
+          return cdp.closed ? "lost" : true;
+        }
       }
     } catch (error) {
-      return error === STALE ? "stale" : false;
+      if (error === STALE) return "stale";
+      return cdp.closed ? "lost" : false;
     } finally {
       off();
     }
@@ -808,12 +814,21 @@ export function createComputer(api, options = {}) {
       await endLease(lease, "revoked", "access-revoked");
       accessEnded();
     }
+    // Never granted on a connection that has died, whatever its close handler finds out later.
+    if (quiet === "lost" || lease.cdp.closed) {
+      await endLease(lease, "revoked", "browser-unavailable");
+      refuse("UNAVAILABLE", "control_request_ended", "the connection to the tab closed");
+    }
     // Never granted while the tab may still be loading what the bot started.
     if (!quiet) return busy("browser-not-quiet", "the bot's browser is still loading a page");
     // Connecting waited: the grant goes out only while the access still holds.
     if (!current()) {
       await endLease(lease, "revoked", "access-revoked");
       accessEnded();
+    }
+    if (lease.cdp.closed) {
+      await endLease(lease, "revoked", "browser-unavailable");
+      refuse("UNAVAILABLE", "control_request_ended", "the connection to the tab closed");
     }
     lease.state = "granted";
     armLeaseExpiry(lease);
