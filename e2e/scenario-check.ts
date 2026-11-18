@@ -25,6 +25,7 @@ import {
   FAMILY_ROWS,
   ownerAgent,
   runScenarioChecks,
+  SEQ_GAP_NOTES,
   UNDECLARED_FIELDS,
 } from "../tools/dev-gateway/src/scenario-check.ts";
 import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
@@ -112,6 +113,11 @@ async function main(): Promise<number> {
       for (const [kind, fields] of [...UNDECLARED_FIELDS].sort()) {
         console.log(
           `note  ${kind} carries fields its schema does not declare: ${[...fields].sort().join(", ")}`,
+        );
+      }
+      if (SEQ_GAP_NOTES.size > 0) {
+        console.log(
+          `note  agent error "seq gap", without the seq its schema requires, came for ${SEQ_GAP_NOTES.size} run(s) the gateway ran from its queue`,
         );
       }
       console.log(`${passed} of ${passed + failed} scenario checks passed`);

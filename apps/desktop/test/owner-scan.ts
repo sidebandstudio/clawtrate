@@ -1,11 +1,12 @@
 // Finds, in source, collections that can outlive the call that made it: a
 // `new Map`, `new Set`, `new WeakMap` or `new WeakSet`, or an array literal,
 // written directly as the value of a class field, a module-level variable, or
-// a variable a later-running function captures (a closure). Collections made
-// and dropped within one call are not reported. It does not see a collection
-// inside an object or array literal kept that way, nor one a factory call
-// makes (`Array.from`, `Object.fromEntries`). Strict within that: a false
-// alarm costs a line in the allowlist of `owner-sources.test.ts`.
+// a variable a later-running function captures (a closure). A collection a
+// factory call makes (`Array.from`, `Array.of`, `Object.fromEntries`) counts as
+// one, and so does a collection inside an object literal kept that way, at any
+// depth: it is reported under its path (`box.kept`). Collections made and
+// dropped within one call are not reported. Strict: a false alarm costs a line
+// in the allowlist of `owner-sources.test.ts`.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -23,10 +24,20 @@ export type Kept = {
 
 const COLLECTIONS = new Set(["Map", "Set", "WeakMap", "WeakSet"]);
 
+/** Factory calls that return a new collection or a new map-like object. */
+const FACTORIES = new Set(["Array.from", "Array.of", "Object.fromEntries"]);
+
 function isCollection(node: ts.Node): boolean {
   if (ts.isArrayLiteralExpression(node)) return true;
   if (ts.isNewExpression(node) && ts.isIdentifier(node.expression))
     return COLLECTIONS.has(node.expression.text) || node.expression.text === "Array";
+  if (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) &&
+    FACTORIES.has(`${node.expression.expression.text}.${node.expression.name.text}`)
+  )
+    return true;
   if (
     ts.isAsExpression(node) ||
     ts.isSatisfiesExpression(node) ||
@@ -34,6 +45,29 @@ function isCollection(node: ts.Node): boolean {
   )
     return isCollection(node.expression);
   return false;
+}
+
+/**
+ * The collections a kept value holds: `""` for the value itself, and for an
+ * object literal the dotted path of each collection inside it, at any depth.
+ */
+function collectionPaths(node: ts.Node): string[] {
+  if (isCollection(node)) return [""];
+  if (
+    ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isParenthesizedExpression(node)
+  )
+    return collectionPaths(node.expression);
+  if (!ts.isObjectLiteralExpression(node)) return [];
+  return node.properties.flatMap((property) => {
+    if (!ts.isPropertyAssignment(property)) return [];
+    const key =
+      ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)
+        ? property.name.text
+        : "<computed>";
+    return collectionPaths(property.initializer).map((path) => `.${key}${path}`);
+  });
 }
 
 function isFunction(node: ts.Node): node is ts.FunctionLikeDeclaration {
@@ -120,63 +154,65 @@ export function scanText(file: string, text: string): Kept[] {
       );
       return;
     }
-    // A class field initialised with a collection.
-    if (ts.isPropertyDeclaration(node) && node.initializer && isCollection(node.initializer)) {
-      const name = nameOf(node);
-      found.push({
-        where: `${file}:${cls}.${name}`,
-        kind: "field",
-        file,
-        owner: cls,
-        name,
-        line: line(node),
-      });
+    // A class field initialised with a collection, or with an object holding one.
+    if (ts.isPropertyDeclaration(node) && node.initializer) {
+      for (const path of collectionPaths(node.initializer)) {
+        const name = `${nameOf(node)}${path}`;
+        found.push({
+          where: `${file}:${cls}.${name}`,
+          kind: "field",
+          file,
+          owner: cls,
+          name,
+          line: line(node),
+        });
+      }
     }
     // `this.x = <collection>` assigns a class field.
     if (
       ts.isBinaryExpression(node) &&
       node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
       ts.isPropertyAccessExpression(node.left) &&
-      node.left.expression.kind === ts.SyntaxKind.ThisKeyword &&
-      isCollection(node.right)
+      node.left.expression.kind === ts.SyntaxKind.ThisKeyword
     ) {
-      const name = node.left.name.text;
-      found.push({
-        where: `${file}:${cls}.${name}`,
-        kind: "field",
-        file,
-        owner: cls,
-        name,
-        line: line(node),
-      });
+      for (const path of collectionPaths(node.right)) {
+        const name = `${node.left.name.text}${path}`;
+        found.push({
+          where: `${file}:${cls}.${name}`,
+          kind: "field",
+          file,
+          owner: cls,
+          name,
+          line: line(node),
+        });
+      }
     }
     // A variable, at module level or captured by a nested function.
-    if (
-      ts.isVariableDeclaration(node) &&
-      node.initializer &&
-      isCollection(node.initializer) &&
-      ts.isIdentifier(node.name)
-    ) {
-      const name = node.name.text;
-      if (fn === null) {
-        found.push({
-          where: `${file}:${name}`,
-          kind: "module",
-          file,
-          owner: null,
-          name,
-          line: line(node),
-        });
-      } else if (captured(fn, name)) {
-        const owner = nameOf(fn);
-        found.push({
-          where: `${file}:${owner}>${name}`,
-          kind: "closure",
-          file,
-          owner,
-          name,
-          line: line(node),
-        });
+    if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
+      const variable = node.name.text;
+      const keep = fn === null || captured(fn, variable);
+      for (const path of keep ? collectionPaths(node.initializer) : []) {
+        const name = `${variable}${path}`;
+        if (fn === null) {
+          found.push({
+            where: `${file}:${name}`,
+            kind: "module",
+            file,
+            owner: null,
+            name,
+            line: line(node),
+          });
+        } else {
+          const owner = nameOf(fn);
+          found.push({
+            where: `${file}:${owner}>${name}`,
+            kind: "closure",
+            file,
+            owner,
+            name,
+            line: line(node),
+          });
+        }
       }
     }
     // A collection assigned later to a variable a nested function captures.
@@ -184,21 +220,22 @@ export function scanText(file: string, text: string): Kept[] {
       ts.isBinaryExpression(node) &&
       node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
       ts.isIdentifier(node.left) &&
-      isCollection(node.right) &&
       fn !== null &&
       captured(fn, node.left.text)
     ) {
-      const name = node.left.text;
-      const owner = nameOf(fn);
-      if (!found.some((each) => each.where === `${file}:${owner}>${name}`))
-        found.push({
-          where: `${file}:${owner}>${name}`,
-          kind: "closure",
-          file,
-          owner,
-          name,
-          line: line(node),
-        });
+      for (const path of collectionPaths(node.right)) {
+        const name = `${node.left.text}${path}`;
+        const owner = nameOf(fn);
+        if (!found.some((each) => each.where === `${file}:${owner}>${name}`))
+          found.push({
+            where: `${file}:${owner}>${name}`,
+            kind: "closure",
+            file,
+            owner,
+            name,
+            line: line(node),
+          });
+      }
     }
     ts.forEachChild(node, (child) => visit(child, cls, isFunction(child) ? child : fn));
   };
