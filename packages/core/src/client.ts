@@ -2098,7 +2098,7 @@ export class ClawtrateClient {
         return;
       }
       // Let the connection's own handling of a drop run first, so a lost connection is seen as one.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
       // A client that was stopped sends nothing more.
       if (!this.protocol) return;
       try {

@@ -145,7 +145,9 @@ describe("a Stop through any number of disconnects, and an end only inferred", (
     await until(() => gateway.calls("chat.abort").length === 2);
     gateway.dropAll();
     await until(() => gateway.calls("chat.abort").length === 3);
-    expect(gateway.calls("chat.abort").every((call) => call.runId === id)).toBe(true);
+    expect(
+      gateway.calls("chat.abort").every((call) => (call as { runId?: string }).runId === id),
+    ).toBe(true);
     expect(transcript().runs.find((run) => run.id === id)).toMatchObject({
       state: "stopping",
       stopError: null,
