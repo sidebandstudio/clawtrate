@@ -166,7 +166,10 @@ describe("a turn the gateway wrote itself", () => {
       role: "system",
       blocks: [{ kind: "text", text: "The gateway resumed an earlier turn by itself" }],
     });
-    expect(JSON.stringify(transcript().items)).not.toContain("interrupted by a gateway restart");
+    // Nothing shown says it: only the line's Raw holds the row, as the gateway sent it (F-094).
+    const shown = transcript().items.map(({ raw: _raw, ...item }) => item);
+    expect(JSON.stringify(shown)).not.toContain("interrupted by a gateway restart");
+    expect(transcript().items[0]!.raw).toEqual(recovery);
     expect(transcript().runs[0]).toMatchObject({ id: "resumed", anchorItemId: "r1:0" });
     client.stop();
   });
