@@ -1,0 +1,372 @@
+// Behaviour checks for routines.html: the Routines view and its calendar, a
+// routine's page and runs, a run's conversation, live changes, the editor,
+// pause, run now, delete, the request for admin access, check-ins and the
+// away card, at the four widths and in both themes.
+// Run from the repository root:  node docs/design/prototype/tools/checks/routines.mjs
+import { chromium, pageUrl } from "./browser.mjs";
+
+const base = pageUrl("routines.html") + "?chrome=0&theme=light";
+const b = await chromium.launch();
+const out = [];
+let failed = 0;
+const check = (name, ok, extra = "") => {
+  if (!ok) failed += 1;
+  out.push(`${ok ? "ok  " : "FAIL"} ${name} ${extra}`);
+};
+const open = async (query = "", viewport = { width: 1440, height: 900 }) => {
+  const p = await b.newPage({ viewport });
+  p.on("pageerror", (e) => out.push("PAGEERROR " + e));
+  await p.goto(base + (query ? "&" + query : ""));
+  await p.waitForTimeout(150);
+  return p;
+};
+const text = (p, sel) => p.evaluate((s) => document.querySelector(s)?.textContent || "", sel);
+const has = (p, sel) => p.evaluate((s) => !!document.querySelector(s), sel);
+const count = (p, sel) => p.evaluate((s) => document.querySelectorAll(s).length, sel);
+const label = (p, sel) => p.evaluate((s) => document.querySelector(s)?.getAttribute("aria-label") || "", sel);
+const live = (p) => p.waitForTimeout(80).then(() => text(p, "#r-announce"));
+
+process.on("uncaughtException", (e) => {
+  console.log(out.join("\n"));
+  console.log("THREW", e.message.split("\n")[0]);
+  process.exit(1);
+});
+
+// The list ---------------------------------------------------------------------------------
+let p = await open();
+check("list: title, count and the view switch", (await text(p, "#view-title")) === "Routines" && (await text(p, '[data-testid="count"]')) === "7 routines" && (await count(p, '.r-seg [role="radio"]')) === 4);
+check("list: groups by bot in the gateway's order, check-in jobs left out", (await p.evaluate(() => [...document.querySelectorAll(".r-group h2")].map((h) => h.textContent).join())) === "Marlow,Otto,Pip");
+check("F-191 row: name, schedule in words with its zone, next and last", (await text(p, '[data-routine="digest"] .r-row-line')) === "Weekdays at 8:00 AM, New York · Next tomorrow 8:00 AM · Last today, succeeded");
+check("F-191 row: the whole row is its accessible name", (await label(p, '[data-routine="digest"] .r-row-main')) === "Morning digest, Marlow, Weekdays at 8:00 AM, New York, next run tomorrow 8:00 AM, last run today succeeded");
+check("F-191 paused row reads Paused, schedule faint, no next run", (await text(p, '[data-routine="cleanup"] .r-row-line')) === "Paused · Fridays at 4:00 PM, New York" && (await p.evaluate(() => document.querySelector('[data-routine="cleanup"] .r-row').dataset.paused === "true")));
+check("row: an every schedule has no zone; a once schedule says its date", (await text(p, '[data-routine="watch"] .r-row-line')).startsWith("Every 30 minutes · Next today 10:30 AM") && (await text(p, '[data-routine="reminder"] .r-row-line')).startsWith("Once, Nov 20 at 9:00 AM, New York"));
+check("row: a cron expression the page cannot put in words is shown as written, with its zone", (await text(p, '[data-routine="renewal"] .r-row-line code')) === "0 9 1 * *" && (await text(p, '[data-routine="renewal"] .r-row-line')).includes(", Berlin"));
+check("row: a failed last run has the failed mark and says failed", (await has(p, '[data-routine="backup"] .glyph[data-state="failed"]')) && (await text(p, '[data-routine="backup"] .r-row-line')).endsWith("Last today, failed"));
+check("row: a routine in another zone says that zone", (await text(p, '[data-routine="standup"] .r-row-line')).startsWith("Sundays at 5:00 PM, London"));
+check("admin: each row has a switch labelled for its routine", (await count(p, ".r-row .b-switch")) === 7 && (await label(p, '[data-routine="digest"] .b-switch')) === "Morning digest runs on schedule");
+check("admin: New routine is offered; no access bar", (await has(p, '.r-head [data-r="new"]')) && !(await has(p, ".access-bar")));
+check("F-193 rail: a routine's latest run is a task under its bot, with the clock and its name", (await p.evaluate(() => [...document.querySelectorAll('[data-testid="run-task"]')].map((x) => x.querySelector(".task-title").textContent).join())) === "Morning digest,Nightly backup check,Disk space watch");
+check("F-193 rail: a failed run's task row has the failed mark", await has(p, '[data-testid="run-task"][data-id="backup"] .glyph[data-state="failed"]'));
+check("rail: the Routines button is current", (await p.evaluate(() => document.querySelector("#routines-button").getAttribute("aria-current"))) === "page");
+
+// Pause and resume from the row
+await p.click('[data-routine="digest"] .b-switch');
+check("F-350 switch pauses: the row reads Paused and it is announced", (await text(p, '[data-routine="digest"] .r-row-line')).startsWith("Paused · Weekdays") && (await live(p)) === "Paused Morning digest");
+check("F-350 focus stays on the switch after the change", await p.evaluate(() => document.activeElement.matches('[data-routine="digest"] .b-switch')));
+await p.click('[data-routine="digest"] .b-switch');
+check("F-350 switch resumes", (await text(p, '[data-routine="digest"] .r-row-line')).startsWith("Weekdays at 8:00 AM") && (await live(p)) === "Resumed Morning digest");
+
+// The row's menu
+await p.click('[data-routine="backup"] .r-row-main', { button: "right" });
+check("F-192 right-click: Pause, Run now, Edit…, Delete…", (await p.evaluate(() => [...document.querySelectorAll("#r-menu .menu-item")].map((x) => x.textContent).join())) === "Pause,Run now,Edit…,Delete…");
+await p.keyboard.press("Escape");
+check("menu: Escape closes it and returns focus to the row", (await p.evaluate(() => document.querySelector("#r-menu").hidden && document.activeElement.matches('[data-routine="backup"] .r-row-main'))));
+await p.keyboard.press("Shift+F10");
+check("F-192 Shift+F10 opens the same menu from the keyboard", !(await p.evaluate(() => document.querySelector("#r-menu").hidden)));
+await p.keyboard.press("Escape");
+
+// The bot select
+await p.click('[data-r="bot-menu"]');
+await p.click('#r-menu [data-id="juniper"]');
+check("one bot: Juniper's check-ins block first, then no routines", (await text(p, '[data-testid="checkins-text"]')) === "Every 30 minutes, Juniper looks for anything that needs you, and stays quiet when nothing does." && (await text(p, '[data-testid="empty"]')) === "Juniper has no routines.");
+check("one bot: New routine names the bot", (await text(p, '.r-head [data-r="new"]')) === "New routine for Juniper");
+await p.click('[data-r="bot-menu"]');
+await p.click('#r-menu [data-id="otto"]');
+check("F-196 one bot: the routines' time zone line", (await text(p, '[data-testid="zone-line"]')) === "Routines' time zone: Mixed: New York, Berlin");
+await p.close();
+
+// List states
+p = await open("state=empty");
+check("empty: No routines yet, the sentence, New routine; never 'ask in chat'", (await text(p, '[data-testid="empty"] h4')) === "No routines yet" && (await text(p, '[data-testid="empty"] p')) === "A routine runs one of your bots on a schedule: a morning summary, a weekly check." && !(await p.evaluate(() => /ask in chat/i.test(document.body.textContent))));
+await p.close();
+p = await open("state=loading");
+check("loading: skeleton rows, busy", (await count(p, ".r-rows[aria-busy='true'] .skeleton")) === 3);
+await p.close();
+p = await open("state=error");
+check("couldn't load: words and Try again", (await text(p, '[data-testid="error"] h4')) === "Couldn't load routines." && (await has(p, '[data-r="retry"]')));
+await p.click('[data-r="retry"]');
+check("Try again loads the list", (await count(p, '[data-testid="routine-row"]')) === 7);
+await p.close();
+p = await open("state=scheduler-off");
+check("scheduler off: the note, and next runs as 'would be'", (await text(p, ".b-note")).startsWith("The gateway's scheduler is off. Routines and check-ins don't run on their schedule. Run now still works.") && (await text(p, '[data-routine="digest"] .r-row-line')).includes("Would be next tomorrow 8:00 AM"));
+await p.close();
+p = await open("state=scheduler-off&view=checkins&bot=juniper");
+check("scheduler off: check-ins say scheduled check-ins don't run", (await text(p, '[data-testid="checkins"]')).includes("The gateway's scheduler is off, so scheduled check-ins don't run."));
+await p.close();
+p = await open("pausefail=1");
+await p.click('[data-routine="digest"] .b-switch');
+check("F-350 a failed pause puts the switch back and says why under the row", (await p.evaluate(() => document.querySelector('[data-routine="digest"] .b-switch').getAttribute("aria-checked"))) === "true" && (await text(p, '[data-routine="digest"] .r-row-error')) === "Couldn't pause: the gateway didn't answer.");
+await p.close();
+
+// Without admin access ---------------------------------------------------------------------
+p = await open("access=read");
+check("read: no switches, no New routine, rows still read in full", (await count(p, ".b-switch")) === 0 && !(await has(p, '[data-r="new"]')) && (await text(p, '[data-routine="cleanup"] .r-row-line')).startsWith("Paused"));
+check("read: the access bar with this view's words", (await text(p, ".access-bar")).startsWith("Read-only. Creating and changing routines needs admin access.") && (await text(p, '[data-r="request"]')) === "Request admin access");
+await p.click('[data-routine="backup"] .r-row-main', { button: "right" });
+check("read: the row's menu has Open only", (await p.evaluate(() => [...document.querySelectorAll("#r-menu .menu-item")].map((x) => x.textContent).join())) === "Open");
+await p.keyboard.press("Escape");
+await p.click('[data-r="request"]');
+check("request: asking, announced", (await text(p, ".access-bar")) === "Asking the gateway…" && (await live(p)) === "Asking the gateway");
+await p.waitForTimeout(700);
+check("request: waiting for the owner, with the command and request id", (await text(p, ".access-bar")).includes("Waiting for the gateway's owner.") && (await text(p, ".access-bar .command-line")).includes("openclaw devices approve") && (await has(p, '[data-r="access-check"]')) && (await has(p, '[data-r="access-cancel"]')));
+await p.click('[data-r="access-check"]');
+check("request: granted, the controls appear; never before the explicit request", (await text(p, ".access-bar")).startsWith("Admin access granted.") && (await count(p, ".b-switch")) === 7 && (await has(p, '[data-r="new"]')));
+await p.close();
+p = await open("access=write");
+check("interactive tier: Admin access needed", (await text(p, ".access-bar")).startsWith("Admin access needed. Creating and changing routines needs admin access."));
+await p.close();
+for (const [req, words] of [["denied", "The request was denied."], ["expired", "The request expired"], ["failed", "Couldn't send the request."]]) {
+  p = await open(`access=read&req=${req}`);
+  check(`request ${req}: its words and a way to ask again`, (await text(p, ".access-bar")).startsWith(words) && (await has(p, '[data-r="request"]')));
+  await p.close();
+}
+p = await open("access=read&view=routine&routine=digest");
+check("read: a routine's page has no actions, its facts and runs still show", !(await has(p, '[data-r="run-now"]')) && !(await has(p, '[data-r="more"]')) && (await count(p, '[data-testid="run-row"]')) === 6);
+await p.close();
+p = await open("access=read&view=checkins&bot=juniper");
+check("read: check-ins show their values and no Change", (await text(p, '[data-testid="checkins-text"]')).startsWith("Every 30 minutes") && !(await has(p, '[data-r="checkins"]')));
+await p.close();
+
+// The calendar -----------------------------------------------------------------------------
+p = await open("view=week");
+check("F-197 week: seven days from today, in the viewer's zone", (await count(p, ".r-cal-dayhead")) === 7 && (await text(p, ".r-cal-dayhead")).startsWith("Today") && (await text(p, ".r-zone")) === "Your time, New York");
+check("F-197 week: weekday routine on five days, London's Sunday 5 PM at noon here", (await p.evaluate(() => [...document.querySelectorAll('[data-testid="occurrence"][data-id="digest"]')].length)) === 5 && (await label(p, '[data-testid="occurrence"][data-id="standup"]')).startsWith("Plan the week, Pip, Sun 12:00 PM"));
+check("F-197 frequent routines are a band, not chips; paused ones are not drawn", (await text(p, ".r-cal-band")) === "Disk space watch · every 30 minutes" && !(await has(p, '[data-testid="occurrence"][data-id="watch"]')) && !(await has(p, '[data-testid="occurrence"][data-id="cleanup"]')));
+check("F-197 today's past runs show how they went", (await p.evaluate(() => document.querySelector('[data-testid="occurrence"][data-id="backup"][data-past="true"]')?.dataset.outcome)) === "failed");
+check("F-197 check-ins are one line, not chips", (await text(p, ".r-cal-checkins")) === "Check-ins: Juniper every 30 minutes");
+check("calendar: top-of-the-hour chips say they may start later", (await label(p, '[data-testid="occurrence"][data-id="digest"][data-past="false"]')).endsWith("May start up to 5 minutes later."));
+await p.click('[data-r="seg"][data-v="week"]');
+await p.keyboard.press("ArrowLeft");
+check("view switch: arrows move and choose", (await count(p, ".r-cal-dayhead")) === 3);
+await p.keyboard.press("Home");
+check("view switch: Home goes to List", (await count(p, '[data-testid="routine-row"]')) === 7);
+await p.close();
+p = await open("view=day");
+check("F-197 day: one column", (await count(p, ".r-cal-dayhead")) === 1);
+await p.click('[data-testid="occurrence"][data-id="digest"]');
+check("calendar: a chip opens the routine, Back returns to the calendar", (await text(p, "#view-title")) === "Morning digest" && (await label(p, '[data-r="back"]')) === "Back to the calendar");
+await p.click('[data-r="back"]');
+check("calendar: back where it was", (await count(p, ".r-cal-dayhead")) === 1);
+await p.close();
+
+// A routine's page -------------------------------------------------------------------------
+p = await open("view=routine&routine=digest");
+check("F-188 page: Instruction as written", (await text(p, '[data-testid="instruction"]')) === "Summarise the notes I added yesterday, and list anything I need to answer today.");
+const fact = (id) => text(p, `[data-fact="${id}"] dd`);
+check("F-188 F-353 When to run: schedule, zone, next run", (await fact("schedule")) === "Weekdays at 8:00 AM" && (await fact("zone")) === "New York America/New_York" && (await fact("next")) === "Tomorrow, Thu Nov 19, 8:00 AM");
+check("F-188 runs in, results, and triggers: no webhook of its own", (await fact("runs-in")) === "A new conversation each time" && (await fact("results")) === "Kept with the run" && (await fact("triggers")) === "Its schedule only.This gateway's webhooks start a bot directly, not a routine.");
+check("F-188 no webhook address, key or header is offered", !(await p.evaluate(() => /POST to|header/i.test(document.querySelector("#view").textContent))));
+check("F-190 runs: newest first with outcomes in words", (await p.evaluate(() => [...document.querySelectorAll('[data-testid="run-row"] .r-run-how')].map((x) => x.textContent).join(" | "))) === "Succeeded · 2.6 s · 200 tokens | Succeeded · 3.1 s · 214 tokens | Ran, but its result wasn't delivered: No channel is set up to deliver to. | Failed: The model didn't answer within 120 seconds. | Skipped | Succeeded · 2.6 s · 200 tokens");
+check("F-190 a forced run says started by hand", (await text(p, '[data-testid="run-row"][data-i="1"] .r-run-when')) === "Yesterday 11:40 AM · started by hand");
+check("F-355 the footnote: 20 most recent, 7 days, 24 hours", (await text(p, ".r-foot-note")) === "Clawtrate shows the 20 most recent runs. The gateway keeps 7 days of runs, and each run's conversation for 24 hours unless it is set to keep them longer.");
+check("page: admin actions Run now, Pause, Edit, More", (await text(p, '[data-r="run-now"]')) === "Run now" && (await text(p, '.r-head [data-r="toggle"]')) === "Pause" && (await text(p, '.r-head [data-r="edit"]')) === "Edit" && (await label(p, '[data-r="more"]')) === "More for Morning digest");
+
+// Run now
+await p.click('[data-r="run-now"]');
+check("F-351 Run now: Starting…", (await text(p, '[data-r="run-now"]')) === "Starting…");
+await p.waitForTimeout(650);
+check("F-351 then Running… on the page, the rows and the rail (F-024)", (await text(p, '[data-testid="state-line"]')).startsWith("Running since") && (await text(p, '[data-testid="run-row"] .r-run-how')) === "Running…" && (await text(p, '[data-bot-row="marlow"] .bot-preview')) === "Running Morning digest" && (await has(p, '[data-bot-row="marlow"] .glyph[data-state="working"]')));
+await p.click('[data-r="run-now"]');
+check("F-351 a second Run now while running: It's already running.", (await text(p, ".r-already")) === "It's already running.");
+await p.waitForTimeout(2000);
+check("F-351 finished: the new run on top, started by hand, the rail calm, announced", (await text(p, '[data-testid="run-row"] .r-run-when')) === "Today 10:12 AM · started by hand" && !(await has(p, '[data-bot-row="marlow"] .glyph[data-state="working"]')) && (await live(p)) === "Morning digest finished");
+await p.close();
+
+p = await open("view=routine&routine=cleanup");
+check("paused page: state line, Run once now, no next run", (await text(p, '[data-testid="state-line"]')) === "Paused. It won't run until resumed." && (await text(p, '[data-r="run-now"]')) === "Run once now" && (await text(p, '[data-fact="next"] dd')) === "None while paused" && (await text(p, '[data-testid="no-runs"]')) === "No runs yet.");
+await p.click('[data-r="run-now"]');
+await p.waitForTimeout(650);
+check("F-351 a paused routine runs once and stays paused", (await text(p, '[data-testid="state-line"]')).startsWith("Running once. It stays paused.") && (await text(p, '.r-head [data-r="toggle"]')) === "Resume");
+await p.close();
+p = await open("view=routine&routine=standup");
+check("F-353 another zone: next run in its zone and in yours", (await text(p, '[data-fact="next"] dd')) === "Sun, Sun Nov 22, 5:00 PM12:00 PM your time");
+await p.close();
+p = await open("view=routine&routine=reminder");
+check("a reminder: posts in the main conversation, one-shot schedule", (await text(p, ".r-section .r-hint")) === "Posts a reminder in Marlow's main conversation:" && (await text(p, '[data-fact="runs-in"] dd')) === "Marlow's main conversation" && (await text(p, '[data-testid="no-runs"]')) === "No runs yet. The first is due Fri 9:00 AM.");
+await p.close();
+p = await open("view=routine&routine=watch");
+check("a condition: Starts only when its check passes; no zone for every", (await text(p, '[data-fact="starts"] dd')).startsWith("Only when its check passes") && !(await has(p, '[data-fact="zone"]')));
+await p.close();
+p = await open("view=routine&routine=digest&state=noruns");
+check("F-354 no runs yet: the first is due at its slot", (await text(p, '[data-testid="no-runs"]')) === "No runs yet. The first is due tomorrow 8:00 AM.");
+await p.close();
+p = await open("view=routine&routine=digest&state=deleted");
+check("deleted elsewhere: the note, no actions", (await text(p, ".b-note")).startsWith("This routine was deleted. It won't run again.") && !(await has(p, '[data-r="run-now"]')));
+await p.close();
+p = await open("view=routine&routine=digest&state=failed");
+check("failed: the state line says so", (await text(p, '[data-testid="state-line"]')) === "The last run failed.");
+await p.close();
+p = await open("view=routine&routine=digest&hooks=on");
+check("F-349 gateway hooks on: POST to with copy, key kept on the gateway", (await text(p, '[data-testid="hooks"] summary')) === "Gateway webhooks" && (await text(p, '[data-testid="hooks"]')).includes("/hooks/agent") && (await text(p, '[data-testid="hooks"]')).includes("Kept on the gateway") && (await has(p, '[data-testid="hooks"] .copy')));
+await p.click('[data-testid="hooks"] summary');
+await p.click('[data-testid="hooks"] .copy');
+check("F-349 copy: copied, or selected and said so when the clipboard refuses", /^(Copied hook address|Selected\. Press ⌘C to copy the hook address\.)$/.test(await live(p)));
+await p.close();
+
+// Delete
+p = await open("view=routine&routine=backup");
+await p.click('[data-r="more"]');
+check("More holds Delete…", (await p.evaluate(() => [...document.querySelectorAll("#r-menu .menu-item")].map((x) => x.textContent).join())).endsWith("Delete…"));
+await p.click('#r-menu [data-r="delete"]');
+check("F-352 confirmation: what is lost, Cancel focused", (await text(p, "#confirm-title")) === "Delete Nightly backup check?" && (await text(p, "#confirm-text")) === "It won't run again, and Clawtrate can't show its runs afterwards. Its last run was today at 3:30 AM." && (await p.evaluate(() => document.activeElement.dataset.r)) === "confirm-cancel" && (await p.evaluate(() => document.querySelector("#confirm-dialog").getAttribute("role"))) === "alertdialog");
+await p.click('[data-r="confirm-delete"]');
+check("F-352 deleted: back to the list, row gone, announced", (await text(p, "#view-title")) === "Routines" && !(await has(p, '[data-routine="backup"]')) && (await live(p)) === "Deleted Nightly backup check");
+await p.close();
+
+// A run --------------------------------------------------------------------------------------
+p = await open("view=routine&routine=digest");
+await p.click('[data-testid="run-row"][data-i="0"]');
+check("F-193 a run opens its conversation: scheduled message first, the gateway's part folded", (await text(p, "#view-title")) === "Morning digest · Today 8:00 AM" && (await text(p, '[data-testid="scheduled-message"] p')) === "Summarise the notes I added yesterday, and list anything I need to answer today." && (await p.evaluate(() => !document.querySelector('[data-testid="scheduled-message"] details').open)));
+check("F-190 the run's foot: no reply possible, its usage", (await text(p, '[data-testid="run-foot"]')).startsWith("This run has finished. A run can't be answered; to change what it does, edit the routine.") && (await text(p, ".r-run-facts")) === "scripted/dev-1 · 2.6 s · 120 in, 80 out tokens" && !(await has(p, ".composer-input")));
+await p.click('[data-r="back-to-routine"]');
+check("Back returns to the routine, focus on the run", (await text(p, "#view-title")) === "Morning digest" && (await p.evaluate(() => document.activeElement.matches('[data-r="open-run"][data-i="0"]'))));
+await p.close();
+p = await open("view=run&routine=digest&run=3");
+check("pruned: the gateway no longer keeps it; the summary instead; instruction as it reads now", (await text(p, ".b-note")).startsWith("The gateway no longer keeps this run's conversation.") && (await text(p, '[data-testid="scheduled-message"] .r-sched-head')) === "Scheduled message (as it reads now)");
+await p.close();
+p = await open("view=run&routine=digest&run=0&runstate=error");
+check("run couldn't load", (await text(p, '[data-testid="run-error"] h4')) === "Couldn't load this run.");
+await p.close();
+p = await open("view=run&routine=digest&run=0&runstate=running");
+check("run in progress: live steps and Running…", (await text(p, '[data-testid="run-foot"]')).trim() === "Running…" && (await has(p, '.steps .glyph[data-state="working"]')));
+await p.close();
+p = await open();
+await p.click('[data-testid="run-task"][data-id="digest"]');
+check("F-193 the rail's run row opens the run; All runs goes to the routine", (await text(p, "#view-title")) === "Morning digest · Today 8:00 AM" && (await has(p, '.r-head [data-r="back-to-routine"]')));
+await p.close();
+
+// The editor -----------------------------------------------------------------------------------
+p = await open();
+await p.click('.r-head [data-r="new"]');
+check("F-189 New routine: a dialog with Bot, Name, Instruction, When, Time zone, preview", (await p.evaluate(() => document.querySelector("#edit-dialog").open)) && (await text(p, "#edit-title")) === "New routine" && (await has(p, "#e-bot")) && (await has(p, "#e-name")) && (await has(p, "#e-instr")) && (await count(p, '#e-when [role="radio"]')) === 5 && (await has(p, "#e-tz")));
+check("F-189 the preview says what the gateway will do and the next three times", (await text(p, '[data-testid="preview"]')) === "Runs weekdays at 8:00 AM, New York time. Next: Thu Nov 19, 8:00 AM, then Fri Nov 20, Mon Nov 23.");
+check("F-354 creating does not run it", (await text(p, "#edit-dialog .b-body > .r-hint")) === "It runs first at its next time; creating it doesn't run it.");
+await p.click('[data-r="save"]');
+check("validation: name and instruction, focus on the first", (await text(p, "#e-name-error")) === "Give it a name." && (await text(p, "#e-instr-error")) === "Say what the bot should do." && (await p.evaluate(() => document.activeElement.id)) === "e-name");
+await p.fill("#e-name", "Evening wrap-up");
+await p.fill("#e-instr", "List what I finished today.");
+await p.click('[data-e-kind="every"]');
+await p.fill("#e-n", "2");
+await p.click('[data-r="save"]');
+check("F-195 below 5 minutes: the floor is Clawtrate's, said under the field", (await text(p, "#e-when-error")) === "Routines run at least 5 minutes apart.");
+await p.click('[data-e-kind="days"]');
+await p.click('[data-e-day="1"]');
+await p.click('[data-r="save"]');
+check("some days with none chosen", (await text(p, "#e-when-error")) === "Choose at least one day.");
+await p.click('[data-e-day="5"]');
+await p.selectOption("#e-tz", "Europe/Paris");
+check("time zone changes the preview, with your time", (await text(p, '[data-testid="preview"]')).startsWith("Runs fridays at 8:00 AM, Paris time. Next: Fri Nov 20, 8:00 AM (2:00 AM your time)"));
+await p.click('[data-r="save"]');
+check("saving: Saving…, fields kept", (await text(p, '[data-r="save"]')) === "Saving…" && (await p.inputValue("#e-name")) === "Evening wrap-up");
+await p.waitForTimeout(700);
+check("saved: the new routine's page, no runs yet, announced", (await text(p, "#view-title")) === "Evening wrap-up" && (await text(p, '[data-testid="no-runs"]')).startsWith("No runs yet. The first is due") && (await live(p)) === "Routine created");
+await p.close();
+p = await open("edit=open&routine=digest");
+check("F-189 edit: fields filled from the routine; the bot is kept", (await p.inputValue("#e-name")) === "Morning digest" && (await p.evaluate(() => document.querySelector('[data-e-kind="weekdays"]').getAttribute("aria-checked"))) === "true" && (await text(p, "#edit-dialog .b-body")).includes("To run it on another bot, make a new routine."));
+await p.focus('[data-e-kind="weekdays"]');
+await p.keyboard.press("ArrowDown");
+check("When is a radio group: arrows choose", (await p.evaluate(() => document.querySelector('[data-e-kind="days"]').getAttribute("aria-checked"))) === "true");
+await p.keyboard.press("Escape");
+check("Escape closes the editor", !(await p.evaluate(() => document.querySelector("#edit-dialog").open)));
+await p.close();
+p = await open("edit=open&routine=digest&editstate=refused");
+check("refused: the gateway's message, nothing typed lost", (await text(p, "#edit-dialog .b-note")).startsWith("The gateway didn't save this. invalid cron.add params: CronPattern") && (await p.inputValue("#e-name")) === "Morning digest");
+await p.close();
+p = await open("edit=open&routine=digest&editstate=conflict");
+check("changed elsewhere: does not save, offers the new version or mine", (await text(p, "#edit-dialog .b-note")).startsWith("This routine was changed elsewhere while you were editing.") && (await has(p, '[data-r="conflict-show"]')) && (await has(p, '[data-r="conflict-save"]')));
+await p.close();
+p = await open("edit=open&routine=digest&editstate=deleted");
+check("deleted elsewhere: Save as a new routine", (await text(p, "#edit-dialog .b-note")).startsWith("This routine was deleted while you were editing.") && (await has(p, '[data-r="save-as-new"]')));
+await p.close();
+p = await open("edit=open&routine=digest&editstate=noanswer");
+check("no answer: not saved yet, check before saving again", (await text(p, "#edit-dialog .b-note")).startsWith("Not saved yet. The gateway didn't answer.") && (await has(p, '[data-r="check-now"]')));
+await p.close();
+p = await open("edit=open&editstate=locked");
+check("a schedule set on the gateway is shown as written and left alone", (await text(p, '[data-testid="locked"]')).includes("0 9 1 * *") && (await text(p, '[data-testid="locked"]')).includes("change its schedule on the gateway.") && !(await has(p, '#e-when')));
+await p.close();
+p = await open("edit=new&editstate=invalid");
+check("invalid state from the address: the interval error", (await text(p, "#e-when-error")) === "Routines run at least 5 minutes apart.");
+await p.close();
+p = await open("access=read&edit=open&routine=digest");
+check("read: the editor is never offered", !(await has(p, '[data-r="edit"]')) && !(await has(p, '.r-head [data-r="new"]')));
+await p.close();
+
+// Check-ins -------------------------------------------------------------------------------------
+p = await open("view=checkins&bot=marlow");
+check("F-201 a bot without check-ins says why", (await text(p, '[data-testid="checkins-text"]')) === "Marlow doesn't check in. Without a setting of its own, only the gateway's default bot checks in.");
+await p.click('[data-r="checkins"]');
+check("F-201 the setting: Off, Daily, As needed, Every…", (await p.evaluate(() => [...document.querySelectorAll("[data-ci] .b-choice-title")].map((x) => x.textContent).join())) === "Off,Daily,As needed,Every…");
+check("F-201 As needed says what it honestly is", (await p.evaluate(() => document.querySelector('[data-ci="asneeded"] .b-choice-sub').textContent)) === "Every 30 minutes, Marlow looks for anything that needs you, and stays quiet when nothing does. Most check-ins say nothing.");
+check("F-366 Off says what it does not stop", (await text(p, '[data-testid="off-note"]')) === "Marlow still reports when a command it started in the background finishes.");
+await p.click('[data-ci="daily"]');
+check("the catch: Juniper keeps checking in, said before saving", (await text(p, "#checkins-dialog .b-note")) === "Juniper checks in now through the gateway's default. Saving also gives Juniper a setting of its own with the same cadence, so it keeps checking in.");
+await p.click("#checkins-dialog summary");
+await p.fill("[data-ci-prompt]", "Tell me about my day.");
+check("a custom prompt without NO_REPLY gets the note", (await text(p, '[data-testid="prompt-note"]')) === 'Without "If nothing needs attention, reply NO_REPLY", every check-in will post a message.');
+await p.click('[data-r="ci-save"]');
+await p.waitForTimeout(700);
+check("F-201 saved: Marlow daily, Juniper still checks in, announced", (await text(p, '[data-testid="checkins-text"]')) === "Once a day, Marlow looks for anything that needs you." && (await live(p)) === "Check-ins saved");
+await p.click('[data-r="bot-menu"]');
+await p.click('#r-menu [data-id="juniper"]');
+check("the catch held: Juniper still every 30 minutes", (await text(p, '[data-testid="checkins-text"]')).startsWith("Every 30 minutes, Juniper"));
+await p.close();
+p = await open("view=checkins&bot=juniper&checkins=off");
+check("F-366 Off: no scheduled check-ins", (await text(p, '[data-testid="checkins-text"]')) === "Juniper doesn't check in on a schedule.");
+await p.close();
+p = await open("transcript=checkin");
+check("check-in seen live: Checked in over its reply", (await text(p, '[data-testid="checkin"] .event-line')).trim() === "Checked in · 9:30 AM");
+check("from history: wrote this on its own, never 'Checked in'", (await text(p, '[data-testid="from-history"] .event-line')).trim() === "Juniper wrote this on its own · 6:00 AM");
+check("F-108 the Created routine card's name opens the routine", (await text(p, '[data-testid="created-card"]')).trim() === "Created routine Morning digest");
+await p.click('[data-testid="created-card"] a');
+check("F-108 opened", (await text(p, "#view-title")) === "Morning digest");
+await p.close();
+
+// Away -------------------------------------------------------------------------------------------
+p = await open("away=1");
+check("F-194 the away card: question, three answers, and when Clawtrate pauses", (await text(p, "#away-title")) === "You've been away for a bit. 6 routines kept running while you were away. Keep them running?" && (await count(p, '[data-testid="away"] .button')) === 3 && (await text(p, '[data-testid="away"]')).includes("If you don't answer, Clawtrate pauses them on Nov 25, the first time it is open with admin access on or after that day."));
+check("F-194 the Routines button says it needs an answer", (await label(p, "#routines-button")) === "Routines, needs your answer" && (await has(p, "#routines-button .r-away-dot")));
+await p.click('[data-r="away-pause"]');
+check("F-194 Pause them all pauses every routine", (await count(p, '.b-switch[aria-checked="true"]')) === 0 && !(await has(p, '[data-testid="away"]')));
+await p.close();
+p = await open("away=1&access=read");
+check("F-357 below admin the card says pausing needs admin, and offers no pause", !(await has(p, '[data-r="away-pause"]')) && (await text(p, '[data-testid="away"]')).includes("Pausing them needs admin access."));
+await p.close();
+
+// Widths, themes, motion ------------------------------------------------------------------------
+for (const [w, h] of [[1440, 900], [1100, 760], [800, 760], [390, 844]]) {
+  for (const theme of ["light", "dark"]) {
+    for (const view of ["", "view=routine&routine=digest", "view=week", "view=run&routine=digest&run=0"]) {
+      const pg = await b.newPage({ viewport: { width: w, height: h } });
+      pg.on("pageerror", (e) => out.push("PAGEERROR " + e));
+      await pg.goto(pageUrl("routines.html") + `?chrome=0&theme=${theme}&${view}`);
+      await pg.waitForTimeout(80);
+      const r = await pg.evaluate(() => ({
+        overflow: document.documentElement.scrollWidth > innerWidth + 1,
+        body: getComputedStyle(document.querySelector("#view")).backgroundColor,
+        title: document.querySelector("#view-title")?.textContent || "",
+      }));
+      check(`${w} ${theme} ${view || "list"}: no page overflow, a title`, !r.overflow && !!r.title && r.body !== "rgba(0, 0, 0, 0)", JSON.stringify(r));
+      await pg.close();
+    }
+  }
+}
+p = await open("width=phone", { width: 390, height: 844 });
+check("phone: List and Day only, Back to bots in the header", (await count(p, '.r-seg [role="radio"]')) === 2 && (await label(p, '.r-head [data-r="to-bots"]')) === "Back to bots");
+await p.click('.r-head [data-r="to-bots"]');
+check("phone: Back shows the bots, focus on the Routines button", (await p.evaluate(() => document.querySelector(".shell").dataset.view)) === "list" && (await p.evaluate(() => document.activeElement.id)) === "routines-button");
+await p.click("#routines-button");
+check("phone: the Routines button opens the view", (await p.evaluate(() => document.querySelector(".shell").dataset.view)) === "detail" && (await text(p, "#view-title")) === "Routines");
+check("phone: switches have a 44 px hit area", (await p.evaluate(() => document.querySelector(".r-seg button").getBoundingClientRect().height >= 38)));
+await p.close();
+p = await open("view=routine&routine=digest", { width: 800, height: 760 });
+check("800: the page header keeps Run now and More only", (await p.evaluate(() => getComputedStyle(document.querySelector(".r-head [data-wide]")).display)) === "none" && (await has(p, '[data-r="more"]')));
+await p.close();
+p = await open("motion=reduce&view=routine&routine=digest&state=running");
+check("reduced motion: nothing runs", (await p.evaluate(() => document.getAnimations().filter((a) => a.playState === "running").length)) === 0);
+await p.close();
+
+await b.close();
+console.log(out.join("\n"));
+const oks = out.filter((l) => l.startsWith("ok")).length;
+console.log(`\n${oks} ok, ${failed} not ok`);
+process.exit(failed || out.some((l) => l.startsWith("PAGEERROR")) ? 1 : 0);
