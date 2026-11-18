@@ -1093,11 +1093,25 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
 
   test("F-134 F-137 F-470: the bot stopped during a wait: the wait is Delivery unknown, the launch keeps Call made, and the card says work may continue", async () => {
     test.setTimeout(180_000);
-    const t = await called("t3-stop", "#t3-start #t3-wait");
-    await toolEvent(t.runId, "start", "t3_thread_wait");
-    await clients.plain.request("chat.abort", { sessionKey: t.key });
+    // Started and stopped by the host's own device, as the composer's Stop does: the host sees
+    // its own run stop. (History alone cannot say so: the gateway keeps no result for a call a
+    // stop cut short, and no end for its run.)
+    const { title, key } = await hostTask("main", "T3 stopped", "#t3-start #t3-wait");
+    await clients.plain.request("sessions.messages.subscribe", { key });
+    const waiting = await clients.plain.waitFor(
+      "the wait's start",
+      (e) => {
+        const p = e.payload as { sessionKey?: string; stream?: string; data?: { name?: string } };
+        return (
+          p.sessionKey === key && p.stream === "item" && p.data?.name === "t3code__t3_thread_wait"
+        );
+      },
+      60_000,
+    );
+    const t = { key, title, runId: String((waiting.payload as { runId: string }).runId) };
+    await openTask(page, "Juniper", t.title);
+    await hostCommand(page, { type: "stopRun", key: t.key, runId: t.runId }, t.key);
     await clients.plain.terminal(t.runId);
-    await toolEvent(t.runId, "result", "t3_thread_wait");
     const [launch, wait] = callIds(t.runId);
     await openTask(page, "Juniper", t.title);
     const c = await openCard(page);
