@@ -1596,6 +1596,16 @@
   margin: 0;
 }
 
+/* The standing second line under "You have control": what control does not stop. */
+.control-bar .control-paused {
+  flex-basis: 100%;
+  color: var(--text-muted);
+}
+
+.screen-caption .control-paused {
+  color: var(--text-muted);
+}
+
 .control-note {
   margin: 0 24px 6px;
   font-size: var(--text-sm);

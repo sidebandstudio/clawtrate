@@ -6,7 +6,7 @@
 // States from the address:
 //   ?bot=juniper&task=j2&panel=open&tab=computer
 //   ?computer=noplugin|unconfigured|unused|closed|watching|full|draining|control|
-//             busy|conflict|ended|offline|stuck|active
+//             busy|unsettled|conflict|ended|offline|stuck|active
 //   ?firstwatch=1        the one-time note before the first watch
 //   ?state=readonly      a read-only connection
 
@@ -32,9 +32,9 @@
     configured: mode !== "unconfigured",
     used: mode !== "unused",
     open: mode !== "closed",
-    view: ["watching", "full", "draining", "control", "busy", "conflict", "stuck", "releasefail", "releaseunknown", "complexquestion"].includes(mode) ? "live" : mode === "ended" ? "ended" : "idle",
-    full: ["full", "draining", "control", "busy", "conflict", "releasefail", "releaseunknown", "complexquestion"].includes(mode),
-    control: { draining: "draining", control: "granted", busy: "busy", conflict: "conflict", stuck: "busy", releasefail: "granted", releaseunknown: "granted", complexquestion: "granted" }[mode] || "none",
+    view: ["watching", "full", "draining", "control", "busy", "unsettled", "conflict", "stuck", "releasefail", "releaseunknown", "complexquestion"].includes(mode) ? "live" : mode === "ended" ? "ended" : "idle",
+    full: ["full", "draining", "control", "busy", "unsettled", "conflict", "releasefail", "releaseunknown", "complexquestion"].includes(mode),
+    control: { draining: "draining", control: "granted", busy: "busy", unsettled: "unsettled", conflict: "conflict", stuck: "busy", releasefail: "granted", releaseunknown: "granted", complexquestion: "granted" }[mode] || "none",
     busyCount: mode === "stuck" ? 3 : 0,
     tab: "t1",
     noteSeen: params.get("firstwatch") !== "1",
@@ -58,6 +58,11 @@
     outcome: "",
   };
   let lastTask = null;
+
+  // What a grant guarantees, and no more (the plugin's own answer says the same):
+  // never "You have control" without it.
+  const pausedLine = (name) => `${name}'s new browser actions are paused. Something it already started can still change this page.`;
+  const unsettledLine = (name) => `Something ${name} started in this browser hasn't finished yet, such as a page still loading or a download. Try again in a moment.`;
 
   const readOnly = () => W.app?.model.access === "read" || window.app?.model.access === "read";
   const app = () => window.app;
@@ -159,7 +164,7 @@
       note +
       tile +
       `<p class="screen-caption">${name}'s browser, used by all of its tasks<br><span>${esc(tab.title)} · ${tab.domain}</span></p>` +
-      (C.control === "granted" && !C.full ? `<p class="screen-caption"><strong>You have control.</strong> ${CT.linkButton("Give back control", { attrs: 'data-cmp="release"' })}</p>` : "") +
+      (C.control === "granted" && !C.full ? `<p class="screen-caption"><strong>You have control.</strong> <span class="control-paused">${pausedLine(name)}</span> ${CT.linkButton("Give back control", { attrs: 'data-cmp="release"' })}</p>` : "") +
       (tabs.length > 1
         ? `<ul class="screen-tabs" aria-label="${name}'s tabs">${tabs
             .map((x) => `<li><button type="button" class="screen-tab" data-cmp-tab="${x.id}" aria-current="${x.id === C.tab}"><span>${esc(x.title)}</span><span>${x.domain}</span></button></li>`)
@@ -393,6 +398,8 @@
     const btn = (label, cmp, variant = "", extra = "") => `<button type="button" class="button" data-size="sm"${variant ? ` data-variant="${variant}"` : ""} data-cmp="${cmp}" ${extra}>${label}</button>`;
     if (C.control === "draining") return bar("", `${glyph("working")}<span>Waiting for ${name} to finish what it's doing in the browser…</span><span class="spacer"></span>${btn("Cancel", "cancel-take")}`);
     if (C.control === "busy") return bar("", `<span>${name} is still acting in this browser. Try again in a moment.</span><span class="spacer"></span>${btn("Try again", "take")}`, "alert");
+    // Refused because something the bot started has not settled: a page still loading, a download.
+    if (C.control === "unsettled") return bar("", `<span>${unsettledLine(name)}</span><span class="spacer"></span>${btn("Try again", "take")}`, "alert");
     if (C.control === "conflict") return bar("", `<span>Someone on another device has control of ${name}'s browser.</span>`);
     const why = C.dropped ? `<span class="control-gone">${C.dropped}</span>` : "";
     if (C.control === "ended") return bar("", `<span>Your control ended.${C.endCause ? ` ${C.endCause}` : ""}</span>${why}<span class="spacer"></span>${btn("Take control", "take")}`, "alert");
@@ -411,9 +418,9 @@
     else if (C.question) answers = btn("Give back control and answer", "answer-in-chat", "primary");
     const gone = C.questionGone ? `<span class="control-gone">${C.questionGone}</span>` : "";
     return (
-      bar("control", `${icon("hand")}<strong>You have control</strong>${gone}<span class="spacer"></span>${answers}${btn("Give back control", "release", C.question ? "quiet" : "primary")}`) +
+      bar("control", `${icon("hand")}<strong>You have control</strong>${gone}<span class="spacer"></span>${answers}${btn("Give back control", "release", C.question ? "quiet" : "primary")}<span class="control-paused">${pausedLine(name)}</span>`) +
       (C.notice ? `<p class="control-note" role="status">${C.notice}</p>` : "") +
-      `<p class="control-note" id="control-note">Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${name}'s browser tool can't act here, in any of ${name}'s tasks. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p>`
+      `<p class="control-note" id="control-note">Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${name}'s new browser actions are paused, in every one of ${name}'s tasks; something it already started can still change this page. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p>`
     );
   }
 
@@ -481,7 +488,7 @@
     }
     const width = levels[C.zoom];
     const dock =
-      control || ["draining", "releasing", "unconfirmed", "answering", "busy", "conflict", "ended"].includes(C.control) || C.outcome
+      control || ["draining", "releasing", "unconfirmed", "answering", "busy", "unsettled", "conflict", "ended"].includes(C.control) || C.outcome
         ? controlBar(b)
         : readOnly()
           ? ""
@@ -503,7 +510,7 @@
       (control ? `<button type="button" class="icon-button keyboard-button" data-cmp="keyboard" aria-label="Type into the page" aria-expanded="${Boolean(C.typing)}">${icon("keyboard")}</button>` : "") +
       `</div>` +
       (control
-        ? `<details class="control-help"><summary>What reaches the page</summary><p>Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${b.name}'s browser tool can't act here, in any of ${b.name}'s tasks. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p></details>`
+        ? `<details class="control-help"><summary>What reaches the page</summary><p>Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${b.name}'s new browser actions are paused, in every one of ${b.name}'s tasks; something it already started can still change this page. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p></details>`
         : "") +
       `<div class="control-dock">${dock}</div>` +
       (control && C.typing
@@ -548,7 +555,7 @@
     C.control = "none";
   }
   function arrive(id) {
-    const result = mode === "busy" || mode === "stuck" ? "busy" : mode === "conflict" ? "conflict" : "granted";
+    const result = mode === "busy" || mode === "stuck" ? "busy" : mode === "unsettled" ? "unsettled" : mode === "conflict" ? "conflict" : "granted";
     if (id !== C.takeSession || C.control !== "draining") {
       // Abandoned and withdrawn: the take ends with no grant, and nothing is shown.
       // A grant that won the race is given back at once, with nothing shown but
@@ -563,12 +570,13 @@
     if (result === "busy") {
       C.control = "busy";
       C.busyCount += 1;
-    } else if (result === "conflict") C.control = "conflict";
+    } else if (result === "unsettled") C.control = "unsettled";
+    else if (result === "conflict") C.control = "conflict";
     else {
       C.control = "granted";
       C.events.push(`You took control of Juniper's browser · ${NOW}`);
       eventLine(`You took control of Juniper's browser · ${NOW}`);
-      CT.announce("You have control of Juniper's browser");
+      CT.announce(`You have control of Juniper's browser. ${pausedLine("Juniper")}`);
     }
     rerenderComputer();
     ($('[data-cmp="answer"]') || $('[data-cmp="answer-in-chat"]') || $('[data-cmp="release"]') || $('[data-cmp="take"]'))?.focus();

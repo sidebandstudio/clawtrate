@@ -514,9 +514,14 @@ await p.waitForTimeout(1000);
 check("F-145 granted: the question's own answers and Give back control", await q(p, () =>
   [...document.querySelectorAll(".control-bar .button")].map((x) => x.textContent).join() === "I'm done,Skip,Give back control" && document.querySelector(".screen-frame").dataset.control === "true"));
 check("the bar says which input reaches the page", await q(p, () => document.querySelector(".control-note").textContent.startsWith("Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet.")));
-check("M4 the bar promises only the browser tool's block and names the ways it leaves open", await q(p, () => {
+check("M4 the bar promises only that new browser actions are paused, says earlier work can still act, and names the ways it leaves open", await q(p, () => {
   const t = document.querySelector(".control-note").textContent;
-  return t.includes("Juniper's browser tool can't act here, in any of Juniper's tasks") && t.includes("Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands") && !t.includes("can't use its browser in any task");
+  return t.includes("Juniper's new browser actions are paused, in every one of Juniper's tasks; something it already started can still change this page") && t.includes("Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands") && !/can't act|can't use its browser/.test(t);
+}));
+check("R2 the bar never shows You have control by itself: its second line says new actions are paused and earlier work can still change the page", await q(p, () => {
+  const bar = document.querySelector(".control-bar");
+  return bar.textContent.startsWith("You have control") &&
+    bar.querySelector(".control-paused").textContent === "Juniper's new browser actions are paused. Something it already started can still change this page.";
 }));
 check("taking control is an event line in the conversation", await q(p, () => [...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You took control of Juniper's browser"))));
 await p.focus(".screen-frame");
@@ -697,6 +702,8 @@ p = await open(comp + "&computer=control", { width: 1100, height: 760 });
 await p.waitForTimeout(50);
 await p.click('.screen-view [data-cmp="close-full"]');
 check("M6 closing the full view keeps control, with Give back control in the tile", await q(p, () => window.CT.work.computer.control === "granted" && !!document.querySelector('#panel-computer [data-cmp="release"]')));
+check("R2 the tile in control says the same second line beside You have control", await q(p, () =>
+  document.querySelector("#panel-computer .screen-caption .control-paused")?.textContent === "Juniper's new browser actions are paused. Something it already started can still change this page."));
 await p.click("#tab-files");
 await p.waitForTimeout(500);
 check("M6 leaving the tab while in control gives control back first", await q(p, () =>
@@ -717,6 +724,7 @@ await p.close();
 
 for (const [m, words, name] of [
   ["busy", "Juniper is still acting in this browser. Try again in a moment.", "still acting"],
+  ["unsettled", "Something Juniper started in this browser hasn't finished yet, such as a page still loading or a download. Try again in a moment.", "the bot's work hasn't settled"],
   ["conflict", "Someone on another device has control of Juniper's browser.", "someone else has control"],
 ]) {
   p = await open(comp + `&computer=${m}`);
@@ -724,6 +732,10 @@ for (const [m, words, name] of [
   await p.click('.screen-view [data-cmp="take"]');
   await p.waitForTimeout(1000);
   check(`F-142 take refused: ${name}`, (await q(p, () => document.querySelector(".control-bar").textContent)).startsWith(words));
+  if (m !== "conflict") {
+    check(`R2 take refused (${name}) offers to try again, and claims no control`, await q(p, () =>
+      !!document.querySelector('.control-bar [data-cmp="take"]') && !/You have control/.test(document.querySelector(".control-bar").textContent)));
+  }
   await p.close();
 }
 p = await open(comp + "&computer=control");
