@@ -54,7 +54,6 @@ import {
   CARD_TASK,
   cardScene,
   RECEIVING_TASK,
-  T3_SERVER,
   wholeApproval,
   type CardSceneName,
 } from "../src/fixture/cards.ts";
