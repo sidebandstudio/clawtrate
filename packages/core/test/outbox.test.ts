@@ -393,17 +393,20 @@ describe("a failed Stop restores what was pending (F-097, F-292)", () => {
     client.stop();
   });
 
-  it("aborts without a run id when Stop comes before the gateway named the run", async () => {
+  it("aborts the run the gateway names once it has taken the send, when Stop came before", async () => {
     const { client, gateway, transcript } = await openTask();
     const reply = deferred<unknown>();
     gateway.handlers["chat.send"] = () => reply.promise;
     const id = client.sendMessage(KEY, "go");
     await until(() => gateway.calls("chat.send").length === 1);
     await client.stopRun(KEY, id);
-    expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY }]);
+    // An abort before the gateway has registered the send stops nothing; none is sent yet.
+    expect(gateway.calls("chat.abort")).toEqual([]);
     reply.resolve({ runId: "run-1", status: "started" });
     await until(() => transcript().runs[0]?.id === "run-1");
     expect(transcript().runs[0]!.state).toBe("stopping");
+    await until(() => gateway.calls("chat.abort").length === 1);
+    expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "run-1" }]);
     client.stop();
   });
 });

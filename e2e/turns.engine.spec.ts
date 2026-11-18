@@ -1,0 +1,163 @@
+// The engine itself against this run's development gateway, without the
+// interface: the orders of events and answers that a person cannot time by
+// hand, made exact. Each check pairs a client of its own, uses tasks of its
+// own, waits for the gateway to be idle in them before it ends, and unpairs.
+// Named to run after the preview and scenario checks (files run in name order):
+// the tasks it makes would change the seeded counts those read.
+
+import { expect, test } from "@playwright/test";
+import { randomBytes } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ClawtrateClient } from "../packages/core/src/client.ts";
+import { createNodeHost } from "../packages/core/src/node/index.ts";
+import { openInstance, openOperator, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
+import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+
+const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+type Engine = { client: ClawtrateClient; close: () => Promise<void> };
+
+/** A client paired with this run's instance, with write access. */
+async function engine(name: string): Promise<Engine> {
+  const inst = openInstance(INSTANCE);
+  const connection = readDevConnection(inst.connectionFile)!;
+  const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-e2e-engine-"));
+  const host = createNodeHost({
+    dataDir,
+    client: { displayName: `Clawtrate ${name}`, version: "0.0.0", platform: process.platform },
+  });
+  const client = new ClawtrateClient(host, {});
+  await client.start();
+  await client.connect({ url: connection.url, token: connection.token });
+  const approved = new Set<string>();
+  const approve = async (requestId: string | null | undefined) => {
+    if (!requestId || approved.has(requestId)) return;
+    approved.add(requestId);
+    const out = await inst.runner.run(["devices", "approve", requestId]);
+    if (out.status !== 0) throw new Error(`could not approve ${requestId}: ${out.stderr}`);
+  };
+  await expect
+    .poll(
+      async () => {
+        await approve(client.state.connection.pairing?.requestId);
+        return client.state.connection.status;
+      },
+      { timeout: 60_000 },
+    )
+    .toBe("connected");
+  if (!client.state.connection.canWrite) {
+    await client.requestAccess();
+    await expect
+      .poll(
+        async () => {
+          await approve(client.state.connection.upgrade.requestId);
+          return client.state.connection.canWrite;
+        },
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+  }
+  const { deviceId } = await host.signer.loadIdentity();
+  return {
+    client,
+    close: async () => {
+      client.stop();
+      await inst.runner.run(["devices", "remove", deviceId]);
+      rmSync(dataDir, { recursive: true, force: true });
+    },
+  };
+}
+
+/** A new task of Otto's, open in the client, history loaded. */
+async function openNewTask(client: ClawtrateClient, tag: string): Promise<string> {
+  const key = `agent:otto:e2e-${tag}-${randomBytes(3).toString("hex")}`;
+  client.openSession(key);
+  await expect.poll(() => client.state.transcripts[key]?.status, { timeout: 30_000 }).toBe("ready");
+  return key;
+}
+
+/** Whether the gateway has nothing in flight or waiting in the task. */
+async function gatewayIdle(op: OperatorSession, key: string): Promise<boolean> {
+  const history = await op.request<{
+    inFlightRun?: unknown;
+    pendingInputs?: { items?: unknown[] };
+  }>("chat.history", { sessionKey: key, limit: 1 });
+  return !history.inFlightRun && (history.pendingInputs?.items ?? []).length === 0;
+}
+
+const runs = (client: ClawtrateClient, key: string) => client.state.transcripts[key]?.runs ?? [];
+
+let op: OperatorSession;
+test.beforeAll(async () => {
+  op = await openOperator(
+    openInstance(INSTANCE),
+    "Clawtrate engine check",
+    ["operator.read", "operator.write"],
+    ["tool-events"],
+  );
+  // sessions.changed, which names a queued turn's own run id, reaches only a subscribed client.
+  await op.request("sessions.subscribe", {});
+});
+test.afterAll(async () => {
+  await op?.close();
+  if (op?.deviceId) await openInstance(INSTANCE).runner.run(["devices", "remove", op.deviceId]);
+});
+
+test("F-097: Stop pressed before the gateway has taken the send stops the turn on the gateway", async () => {
+  const { client, close } = await engine("early stop check");
+  try {
+    const key = await openNewTask(client, "early-stop");
+    const id = client.sendMessage(key, "Take your time. #slow 20");
+    // In the same turn of the event loop: the gateway cannot have answered the send yet.
+    expect(runs(client, key)[0]).toMatchObject({ id, bound: false, state: "running" });
+    await client.stopRun(key, id);
+    expect(runs(client, key)[0]!.state).toBe("stopping");
+    // Stopped by the gateway, well before the 20-second turn could have finished by itself.
+    await expect.poll(() => runs(client, key)[0]?.state, { timeout: 15_000 }).toBe("stopped");
+    expect(runs(client, key)[0]!.finishedBeforeStop).not.toBe(true);
+    await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
+  } finally {
+    await close();
+  }
+});
+
+test("a turn the gateway runs from its queue under an id of its own is one run, and it ends", async () => {
+  const { client, close } = await engine("queued turn check");
+  try {
+    const key = await openNewTask(client, "queued-turn");
+    // Another device's two sends: the second waits in the gateway's queue behind the first.
+    const first = await op.send(key, "First, slowly. #slow 6", { queueMode: "followup" });
+    await op.waitFor(
+      "the first turn's reasoning",
+      (e) =>
+        e.event === "agent" &&
+        (e.payload as { runId?: string }).runId === first.runId &&
+        (e.payload as { stream?: string }).stream === "thinking",
+    );
+    // A follow-up, not a steer: the gateway queues it behind the first turn.
+    const second = await op.send(key, "Then this. #text", { queueMode: "followup" });
+    const ids = [first.runId, second.runId] as string[];
+    // The gateway's own id for the queued turn, named beside the send's id.
+    const named = await op.waitFor("the queued turn's own id", (e) => {
+      const p = e.payload as { runId?: string; clientRunId?: string };
+      return (
+        e.event === "sessions.changed" && p.clientRunId === second.runId && p.runId !== second.runId
+      );
+    });
+    const own = (named.payload as { runId: string }).runId;
+    await expect.poll(() => gatewayIdle(op, key), { timeout: 60_000 }).toBe(true);
+    await expect
+      .poll(() => runs(client, key).map((run) => [run.id, run.state]), { timeout: 15_000 })
+      .toEqual(ids.map((runId) => [runId, "completed"]));
+    await sleep(500);
+    expect(runs(client, key).some((run) => run.id === own)).toBe(false);
+    expect(runs(client, key).map((run) => [run.id, run.state])).toEqual(
+      ids.map((runId) => [runId, "completed"]),
+    );
+  } finally {
+    await close();
+  }
+});

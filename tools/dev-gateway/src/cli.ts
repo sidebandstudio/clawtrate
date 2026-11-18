@@ -908,7 +908,9 @@ export async function start(
     }
     // The lock is held until the gateway is healthy, sandboxed and seeded, so
     // no other command acts on an instance that is still starting.
-    await waitFor("the development gateway", () => gatewayHealthy(inst), 90_000);
+    // A ceiling on a condition, not a wait: on a heavily loaded machine a cold start of the
+    // gateway has taken more than 90 seconds.
+    await waitFor("the development gateway", () => gatewayHealthy(inst), 240_000);
     await assertExecDenied(inst);
     const marker = readMarker(inst.stateDir);
     console.log(

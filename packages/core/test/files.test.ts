@@ -17,6 +17,7 @@ import {
   fileSource,
   FILE_TRANSFER_TTL_MS,
   FileTransfers,
+  changesUnlisted,
   finishedChanges,
   listTaskFiles,
   MAX_FILE_TRANSFERS,
@@ -35,7 +36,15 @@ import {
   type TaskFolder,
 } from "../src/files.ts";
 import { filePathsOf } from "../src/file-paths.ts";
-import { applyAgentEvent, emptyActivity, RawTable, type Run, type Step } from "../src/runs.ts";
+import {
+  applyAgentEvent,
+  emptyActivity,
+  mergeHistoryRuns,
+  RawTable,
+  runsFromHistory,
+  type Run,
+  type Step,
+} from "../src/runs.ts";
 
 const KEY = "agent:otto:task-1";
 const ROOT = "/state/workspaces/otto";
@@ -966,5 +975,166 @@ describe("the run markers and the step behind a file", () => {
     const written = activity.runs[0]!.steps.find((each) => each.id === "tool:c1")!;
     expect(written.files).toEqual({ paths: ["notes/a.md"], changed: true, created: true });
     expect(fileMarks(activity).get("notes/a.md")).toBe("this-run");
+  });
+
+  it("F-448: a write whose start the live stream missed takes its paths from history, so its result is counted for the refetch", () => {
+    const raw = new RawTable();
+    const ctx = { sessionKey: KEY, now: 5_000, raw };
+    // Only the result arrived live (its start was in a gap): the step names no file.
+    let activity = applyAgentEvent(
+      emptyActivity,
+      {
+        runId: "r1",
+        seq: 1,
+        stream: "lifecycle",
+        ts: 1_000,
+        sessionKey: KEY,
+        data: { phase: "start" },
+      },
+      ctx,
+    ).activity;
+    activity = applyAgentEvent(
+      activity,
+      {
+        runId: "r1",
+        seq: 3,
+        stream: "tool",
+        ts: 1_003,
+        sessionKey: KEY,
+        data: {
+          phase: "result",
+          name: "write",
+          toolCallId: "c1",
+          isError: false,
+          result: { content: [{ type: "text", text: "ok" }], details: { changed: true } },
+        },
+      },
+      ctx,
+    ).activity;
+    expect(finishedChanges(activity)).toBe(0);
+    // History holds the call with its arguments: the paths come from there.
+    const rows = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "c1",
+            name: "write",
+            arguments: { path: "notes/scratch.md", content: "hi" },
+          },
+        ],
+        __openclaw: { id: "a1", seq: 2, runId: "r1" },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "write",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        __openclaw: { id: "t1", seq: 3, runId: "r1" },
+      },
+    ];
+    const merged = mergeHistoryRuns(activity.runs, runsFromHistory(rows, "r1", ctx), ctx).runs;
+    const step = merged[0]!.steps.find((each) => each.id === "tool:c1")!;
+    expect(step.files?.paths).toEqual(["notes/scratch.md"]);
+    expect(finishedChanges({ runs: merged })).toBe(1);
+  });
+
+  it("F-448: a write closed only because its run ended takes history's result, so it is the file's source", () => {
+    const raw = new RawTable();
+    const ctx = { sessionKey: KEY, now: 5_000, raw };
+    const event = (seq: number, stream: string, data: Record<string, unknown>) => ({
+      runId: "r1",
+      seq,
+      stream,
+      ts: 1_000 + seq,
+      sessionKey: KEY,
+      data,
+    });
+    // The write started, its result never arrived, and the run ended: the engine closed it.
+    let activity = emptyActivity;
+    for (const each of [
+      event(1, "lifecycle", { phase: "start" }),
+      event(2, "tool", {
+        phase: "start",
+        name: "write",
+        toolCallId: "c1",
+        args: { path: "notes/scratch.md", content: "hi" },
+      }),
+      event(3, "lifecycle", { phase: "end" }),
+    ])
+      activity = applyAgentEvent(activity, each, ctx).activity;
+    expect(activity.runs[0]!.steps[0]!.status).toBe("failed");
+    expect(fileSource(activity, "notes/scratch.md")).toBeNull();
+    // History holds the write's result: that is how the step ended.
+    const rows = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "c1",
+            name: "write",
+            arguments: { path: "notes/scratch.md", content: "hi" },
+          },
+        ],
+        __openclaw: { id: "a1", seq: 2, runId: "r1" },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "write",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        __openclaw: { id: "t1", seq: 3, runId: "r1" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "I wrote notes/scratch.md." }],
+        stopReason: "stop",
+        __openclaw: { id: "a2", seq: 4, runId: "r1" },
+      },
+    ];
+    const merged = mergeHistoryRuns(activity.runs, runsFromHistory(rows, null, ctx), ctx).runs;
+    const step = merged[0]!.steps.find((each) => each.id === "tool:c1")!;
+    expect(step.status).toBe("done");
+    expect(step.error).toBeNull();
+    expect(fileSource({ runs: merged }, "notes/scratch.md")?.stepId).toBe("tool:c1");
+  });
+
+  it("F-448: a finished change is unlisted until a list holds one of its paths as modified", () => {
+    const written = run("r1", "completed", [
+      step("a", "write", ["notes/scratch.md"], "done", 10),
+      step("b", "edit", ["same.md"], "done", 11, {
+        files: { paths: ["same.md"], changed: false, created: null },
+      }),
+      step("c", "write", ["failed.md"], "failed", 12),
+      step("d", "read", ["read.md"], "done", 13),
+    ]);
+    const file = (path: string, kind: "modified" | "read") => ({
+      path,
+      workspacePath: path,
+      name: path,
+      kind,
+      missing: false,
+      size: 1,
+      updatedAt: 1,
+    });
+    expect(changesUnlisted({ runs: [written] }, { files: [], omitted: 0 })).toBe(true);
+    expect(
+      changesUnlisted(
+        { runs: [written] },
+        { files: [file("notes/scratch.md", "read")], omitted: 0 },
+      ),
+    ).toBe(true);
+    expect(
+      changesUnlisted(
+        { runs: [written] },
+        { files: [file("notes/scratch.md", "modified")], omitted: 0 },
+      ),
+    ).toBe(false);
+    // A list that left files out cannot say.
+    expect(changesUnlisted({ runs: [written] }, { files: [], omitted: 3 })).toBe(false);
   });
 });
