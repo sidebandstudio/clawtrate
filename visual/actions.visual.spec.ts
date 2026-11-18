@@ -305,6 +305,22 @@ test.describe("action cards", () => {
     ).toBeVisible();
   });
 
+  test("F-488: closed cards say no more than happened, also after a reload: Partial is not counted as done, a cut page is partial, a refused PDF read and a read without contents are not read", async ({
+    page,
+  }) => {
+    await open(page, "actions-outcomes");
+    expect(await names(page)).toEqual([
+      'Searched memory 1 time, "loft insulation", "heating bills", 1 partial',
+      "Opened energy.example.org, Heat pump guide, partial",
+      "Didn't read 11 PDFs, Too many PDFs: 11 provided, maximum is 10. Please reduce the number., too many",
+      "Couldn't read survey.pdf, Read did not return file contents because it detected a binary document [application/pdf], unavailable",
+    ]);
+    // The partial search is counted as partial, never in the done plural.
+    const memory = cards(page).first();
+    await expect(memory.locator(".action-verb")).toHaveText("Searched memory");
+    await expect(memory.locator(".action-object")).toHaveText("1 time");
+  });
+
   test("F-488 F-091: a run of six reads is one card with a count; reasoning between actions is not shown", async ({
     page,
   }) => {
@@ -774,19 +790,42 @@ test.describe("action cards", () => {
     await line(opened).click();
     await expect(opened).toHaveAttribute("open", "");
     const top = (await line(opened).boundingBox())!.y;
-    // The run's later read arrives: the last card changes into a fold below it.
+    // A card below updates: the run's read becomes a fold of two as the second read arrives.
     const fold = page.locator(".transcript details.card.action[data-fold]");
     await expect(fold).toHaveCount(1, { timeout: 5000 });
     await expect(line(fold)).toHaveAccessibleName(/^Read 2 files/);
-    // A card below changes too: the running command's output grows.
+    // A new card arrives below it: the command the run starts next, as the gateway's events say.
     await setState(
       page,
       `const key = "agent:otto:disk-space"; const t = state.transcripts[key];
-       const runs = t.runs.map((r) => ({ ...r, steps: r.steps.map((s) => s.toolCallId === "call_l3"
-         ? { ...s, output: { text: (s.output?.text ?? "") + "40G /srv/media/photos", totalChars: 999 } } : s) }));
+       const runs = t.runs.map((r) => {
+         if (r.id !== "run-live") return r;
+         const seed = r.steps.find((s) => s.kind === "tool");
+         const step = { ...seed, id: "tool:call_new", toolCallId: "call_new", toolName: "exec", title: "exec",
+           status: "running", startedAt: Date.now() - 1000, endedAt: null, commandBearing: true,
+           args: { command: "df -h /srv" }, argsText: null, result: null, details: null, raw: null, rawSize: null,
+           output: { text: "Filesystem  Size  Used", totalChars: 22 } };
+         return { ...r, steps: [...r.steps, step] };
+       });
        return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, runs } } };`,
     );
+    const arrived = page.locator('.transcript details.card.action[data-call="call_new"]');
+    await expect(line(arrived)).toHaveAccessibleName(/^Running df, df -h \/srv, running$/);
+    await expect(arrived).toBeVisible();
+    // That card then updates in view: its command finishes.
+    await setState(
+      page,
+      `const key = "agent:otto:disk-space"; const t = state.transcripts[key];
+       const runs = t.runs.map((r) => ({ ...r, steps: r.steps.map((s) => s.toolCallId === "call_new"
+         ? { ...s, status: "done", endedAt: Date.now(), output: null,
+             result: { text: "Filesystem  Size  Used\\n/dev/sda1  1T  61%", totalChars: 40 },
+             details: { status: "completed", exitCode: 0 } } : s) }));
+       return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, runs } } };`,
+    );
+    await expect(line(arrived)).toHaveAccessibleName(/^Ran df, df -h \/srv, /);
+    await expect(arrived.locator(".action-verb")).toHaveText("Ran");
     await settle(page);
+    // The opened card stays open, on Readable, and has not moved.
     await expect(opened).toHaveAttribute("open", "");
     await expect(opened.getByRole("tab", { name: "Readable" })).toHaveAttribute(
       "aria-selected",

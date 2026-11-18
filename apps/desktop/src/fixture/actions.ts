@@ -38,6 +38,7 @@ export const ACTION_SCENES = [
   "actions-question",
   "actions-retained",
   "actions-retained-history",
+  "actions-outcomes",
 ] as const;
 
 export type ActionScene = (typeof ACTION_SCENES)[number];
@@ -137,7 +138,30 @@ const LOG = [
 ].join("\n");
 
 /** The runs of each scene, each with the person's message that started it. */
-type Turn = { user: string; parts: Part[]; ending?: "stopped" | "error" };
+type Turn = {
+  user: string;
+  parts: Part[];
+  ending?: "stopped" | "error";
+  /** History keeps of each result's details only what the gateway's chat display projection keeps. */
+  historyKeeps?: boolean;
+};
+
+/** The detail keys `chat.history` keeps (OpenClaw 2026.10.6, `projectToolResultDetails`). */
+const HISTORY_KEEPS = [
+  "exitCode",
+  "durationMs",
+  "cwd",
+  "sessionKey",
+  "ok",
+  "changed",
+  "created",
+  "diff",
+];
+const keptByHistory = (details: Rec): Rec | null => {
+  const out: Rec = {};
+  for (const key of HISTORY_KEEPS) if (key in details) out[key] = details[key];
+  return Object.keys(out).length ? out : null;
+};
 
 function scene(name: ActionScene): Turn[] {
   switch (name) {
@@ -825,6 +849,77 @@ function scene(name: ActionScene): Turn[] {
           ],
         },
       ];
+    case "actions-outcomes": {
+      // Outcomes short of Done, as a reload reads them: history keeps the results' text, and of
+      // their details only what the gateway keeps.
+      const json = (payload: Rec) => JSON.stringify(payload, null, 2);
+      const page = (truncated: boolean): Rec => ({
+        url: "https://energy.example.org/guide",
+        finalUrl: "https://energy.example.org/guide",
+        status: 200,
+        extractMode: "markdown",
+        truncated,
+        title: "Heat pump guide",
+        text: "Page excerpt",
+      });
+      const search = (partial: boolean): Rec => ({
+        results: [{ path: "memory/loft.md" }],
+        partial,
+      });
+      const tooMany = "Too many PDFs: 11 provided, maximum is 10. Please reduce the number.";
+      const binary =
+        "Read did not return file contents because it detected a binary document [application/pdf]. Use an available document parser or converter, or convert the file to text, Markdown, or CSV, then read the converted file.";
+      return [
+        {
+          user: "Gather what we have on the heat pump.",
+          historyKeeps: true,
+          parts: [
+            {
+              call: {
+                name: "memory_search",
+                args: { query: "loft insulation" },
+                text: json(search(false)),
+                details: search(false),
+              },
+            },
+            {
+              call: {
+                name: "memory_search",
+                args: { query: "heating bills" },
+                text: json(search(true)),
+                details: search(true),
+              },
+            },
+            { text: "Now the guide and the quotes." },
+            {
+              call: {
+                name: "web_fetch",
+                args: { url: "https://energy.example.org/guide" },
+                text: json(page(true)),
+                details: page(true),
+              },
+            },
+            {
+              call: {
+                name: "pdf",
+                args: { pdfs: Array(11).fill("quote.pdf") },
+                text: tooMany,
+                details: { error: "too_many_pdfs", count: 11, max: 10 },
+              },
+            },
+            {
+              call: {
+                name: "read",
+                args: { path: "quotes/survey.pdf" },
+                text: binary,
+                details: { kind: "text", content: binary },
+              },
+            },
+            { text: "The guide was cut short, and the quotes need converting first." },
+          ],
+        },
+      ];
+    }
     case "actions-history":
       return [
         {
@@ -970,7 +1065,13 @@ function historyRows(turns: Turn[], start: number): unknown[] {
           toolName: part.call.name,
           content: [{ type: "text", text: part.call.text ?? "" }],
           isError: part.call.isError === true,
-          ...(part.call.details ? { details: part.call.details } : {}),
+          ...(part.call.details
+            ? turn.historyKeeps
+              ? keptByHistory(part.call.details)
+                ? { details: keptByHistory(part.call.details) }
+                : {}
+              : { details: part.call.details }
+            : {}),
           timestamp: at,
           __openclaw: meta(),
         });
