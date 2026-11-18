@@ -1412,6 +1412,51 @@ test("F-097: a typed Stop now stops the run through the gateway, as the Stop but
   expect(await gatewayHasMessage(key, "Stop now")).toBe(false);
 });
 
+test("F-074 F-285: a file chosen with + reaches the gateway; one over the gateway's limit stays a marked chip, holds Send until removed, and the valid 1 MiB file then sends", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { key } = await ownTask(page, "Attach files");
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Attach files" }).click();
+  await (
+    await chooser
+  ).setFiles([
+    { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.alloc(1024 * 1024, 65) },
+    { name: "photo.png", mimeType: "image/png", buffer: Buffer.alloc(7 * 1024 * 1024) },
+  ]);
+  const chips = page.locator(".attachments .chip");
+  await expect(chips).toHaveCount(2);
+  await expect(chips.filter({ hasText: "notes.txt" })).toContainText("1.0 MB");
+  // The gateway's own image ceiling, as its hello said it.
+  await expect(chips.filter({ hasText: "photo.png" })).toContainText(
+    "7.0 MB. Images can be up to 6 MB.",
+  );
+  await expect(chips.filter({ hasText: "photo.png" })).toHaveAttribute("data-tone", "danger");
+  await composer(page).fill("Two files, one too large. #text");
+  const send = page.getByRole("button", { name: "Send", exact: true });
+  await expect(send).toBeDisabled();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("outgoing")).toHaveCount(0);
+  await page.getByRole("button", { name: "Remove photo.png" }).click();
+  await expect(chips).toHaveCount(1);
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(chips).toHaveCount(0);
+  type Media = { fileName?: string; sizeBytes?: number };
+  const sentMedia = async () => {
+    const history = await gatewayCall<{
+      messages: Array<{ role: string; __openclaw?: { media?: Media[] } }>;
+    }>("chat.history", { sessionKey: key, limit: 10 });
+    return history.messages
+      .filter((row) => row.role === "user")
+      .flatMap((row) => row.__openclaw?.media ?? [])
+      .map((media) => [media.fileName, media.sizeBytes]);
+  };
+  await expect.poll(sentMedia, { timeout: 30_000 }).toEqual([["notes.txt", 1024 * 1024]]);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+});
+
 test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
   page,
 }) => {

@@ -62,7 +62,12 @@ import {
   recipientRunIds,
   type LinkedRun,
 } from "./cards.ts";
-import { MAX_FILE_BYTES, MAX_IMAGE_BYTES, validateAttachmentMeta } from "./attachments.ts";
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_FILE_BYTES,
+  MAX_IMAGE_BYTES,
+  validateAttachmentMeta,
+} from "./attachments.ts";
 import { ChatTextBaselines } from "./chat-text.ts";
 import { utf8Length } from "./encoding.ts";
 import {
@@ -230,6 +235,7 @@ import {
   type ConnectionState,
   type DiscoveryState,
   type ScopeUpgradeState,
+  type SendLimits,
   type TaskCreation,
   type TranscriptItem,
   type Transcript,
@@ -732,10 +738,15 @@ export class ClawtrateClient {
   private upgradeTier: "interactive" | "admin" = "interactive";
   private scopeUpgrade: GatewayScopeUpgrade | null = null;
   private accessWaiters: Waiter[] = [];
-  /** The frame and image ceilings from `hello-ok.policy`; nothing else of it is kept. */
-  private payloadLimits: { maxPayload: number | null; maxImageBytes: number | null } = {
+  /** The frame, image and file ceilings from `hello-ok.policy`; nothing else of it is kept. */
+  private payloadLimits: {
+    maxPayload: number | null;
+    maxImageBytes: number | null;
+    maxFileBytes: number | null;
+  } = {
     maxPayload: null,
     maxImageBytes: null,
+    maxFileBytes: null,
   };
   /** Attachment content for outgoing messages, kept off the state snapshots, with its decoded size and the characters it holds. */
   private readonly attachmentContent = new Map<
@@ -1439,22 +1450,31 @@ export class ClawtrateClient {
     };
   }
 
+  /** What one message may carry: the smaller of Clawtrate's own ceilings and the gateway's. */
+  private sendLimits(): SendLimits {
+    const { maxPayload, maxImageBytes, maxFileBytes } = this.payloadLimits;
+    return {
+      imageBytes:
+        maxImageBytes !== null ? Math.min(maxImageBytes, MAX_IMAGE_BYTES) : MAX_IMAGE_BYTES,
+      fileBytes: maxFileBytes !== null ? Math.min(maxFileBytes, MAX_FILE_BYTES) : MAX_FILE_BYTES,
+      payloadBytes: maxPayload ?? DEFAULT_MAX_PAYLOAD_BYTES,
+      files: MAX_ATTACHMENTS_PER_MESSAGE,
+    };
+  }
+
   /** Refuse a send that breaks the image, file or frame ceiling, before it reaches the socket. */
   private checkSize(params: { attachments?: OutgoingAttachment[] }): void {
-    const imageLimit =
-      this.payloadLimits.maxImageBytes !== null
-        ? Math.min(this.payloadLimits.maxImageBytes, MAX_IMAGE_BYTES)
-        : MAX_IMAGE_BYTES;
+    const limits = this.sendLimits();
     for (const attachment of params.attachments ?? []) {
       const size = decodedBytes(attachment.content);
-      const limit = isImage(attachment) ? imageLimit : MAX_FILE_BYTES;
+      const limit = isImage(attachment) ? limits.imageBytes : limits.fileBytes;
       if (size > limit) {
         throw new SendTooLargeError(
           `${attachment.fileName} is ${size} bytes; the gateway accepts ${isImage(attachment) ? "images" : "files"} up to ${limit} bytes.`,
         );
       }
     }
-    const maxPayload = this.payloadLimits.maxPayload ?? DEFAULT_MAX_PAYLOAD_BYTES;
+    const maxPayload = limits.payloadBytes;
     const frame = utf8Length(JSON.stringify(params)) + FRAME_SLACK_BYTES;
     if (frame > maxPayload) {
       throw new SendTooLargeError(
@@ -4318,6 +4338,7 @@ export class ClawtrateClient {
     this.payloadLimits = {
       maxPayload: number(policy?.maxPayload),
       maxImageBytes: number(asRecord(policy?.attachments)?.maxImageBytes),
+      maxFileBytes: number(asRecord(policy?.attachments)?.maxBytes),
     };
     this.setConnection({
       status: "connected",
@@ -4333,6 +4354,7 @@ export class ClawtrateClient {
       retryAt: null,
       connectedAt: this.now(),
       paired: true,
+      sendLimits: this.sendLimits(),
     });
     if (this.tierScopes(this.upgradeTier).every((scope) => scopeSatisfied(scopes, scope))) {
       this.upgradeWanted = false;

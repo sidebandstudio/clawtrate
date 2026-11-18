@@ -117,6 +117,14 @@ const connected: ConnectionState = {
   scopes: ["operator.read"],
   deviceId: DEVICE_ID,
   paired: true,
+  // What OpenClaw 2026.10.6 advertises by default: images 6 MiB, files the 25 MiB frame's
+  // budget once base64-encoded (18.6 MiB), frames 25 MiB.
+  sendLimits: {
+    imageBytes: 6 * 1024 * 1024,
+    fileBytes: 19_464_192,
+    payloadBytes: 25 * 1024 * 1024,
+    files: 20,
+  },
 };
 
 function loaded(now: number): ClawtrateState {

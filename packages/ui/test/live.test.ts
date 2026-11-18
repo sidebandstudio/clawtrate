@@ -17,7 +17,7 @@ import {
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 import { canWrite } from "../src/access.ts";
-import { refusalFor, size } from "../src/Composer.tsx";
+import { messageRefusal, refusalFor, size } from "../src/Composer.tsx";
 import {
   composerFor,
   duration,
@@ -410,5 +410,31 @@ describe("attachments", () => {
     );
     expect(refusalFor({ size: 1024 * 1024, type: "application/pdf" })).toBeNull();
     expect(size(640 * 1024)).toBe("640 KB");
+  });
+
+  it("F-074 F-285: the ceilings are the smaller of Clawtrate's and the gateway's, and the whole request is counted as sent, base64 and all", () => {
+    const gateway = {
+      imageBytes: 4 * 1024 * 1024,
+      fileBytes: 19_464_192,
+      payloadBytes: 25 * 1024 * 1024,
+      files: 20,
+    };
+    expect(refusalFor({ size: 5 * 1024 * 1024, type: "image/jpeg" }, gateway)).toBe(
+      "5.0 MB. Images can be up to 4 MB.",
+    );
+    expect(refusalFor({ size: 19 * 1024 * 1024, type: "application/pdf" }, gateway)).toBe(
+      "19.0 MB. Files can be up to 18.6 MB.",
+    );
+    expect(refusalFor({ size: 18 * 1024 * 1024, type: "application/pdf" }, gateway)).toBeNull();
+    // Four files of 5 MiB are 20 MiB as files but 26.7 MiB as the frame carries them.
+    const four = [1, 2, 3, 4].map((n) => ({ name: `part-${n}.pdf`, bytes: 5 * 1024 * 1024 }));
+    expect(messageRefusal("", four, gateway)).toBe(
+      "26.7 MB to send with its files. A message can carry up to 25 MB.",
+    );
+    expect(messageRefusal("", four.slice(0, 3), gateway)).toBeNull();
+    const many = Array.from({ length: 21 }, (_, n) => ({ name: `${n}.txt`, bytes: 10 }));
+    expect(messageRefusal("", many, gateway)).toBe(
+      "21 files attached. A message can carry up to 20 files.",
+    );
   });
 });

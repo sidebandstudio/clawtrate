@@ -1052,6 +1052,7 @@ export function Conversation({
           taskKey={task.key}
           transcript={transcript}
           connected={caughtUp}
+          limits={connection.sendLimits}
           notices={[
             ...stopNotices.map((notice) => ({
               ...notice,

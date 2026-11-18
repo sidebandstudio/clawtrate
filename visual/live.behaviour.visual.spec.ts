@@ -366,7 +366,40 @@ test.describe("sending", () => {
     await expect(send).toBeEnabled();
     await send.click();
     await expect(page.getByTestId("outgoing")).toHaveCount(1);
+    await expect(page.getByTestId("outgoing")).toContainText("notes.txt");
     await expect(chips).toHaveCount(0);
+  });
+
+  test("F-074 F-285: the gateway's own file ceiling, and a message too large as sent, each hold Send with the reason", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    const input = page.locator('.composer input[type="file"]');
+    // The fixture's gateway advertises what OpenClaw 2026.10.6 does: files up to 18.6 MB.
+    await input.setInputFiles([
+      { name: "scan.pdf", mimeType: "application/pdf", buffer: Buffer.alloc(19 * 1024 * 1024) },
+    ]);
+    const chips = page.locator(".attachments .chip");
+    await expect(chips).toContainText("19.0 MB. Files can be up to 18.6 MB.");
+    const send = page.getByRole("button", { name: "Send", exact: true });
+    await expect(send).toBeDisabled();
+    await page.getByRole("button", { name: "Remove scan.pdf" }).click();
+    // Four files of 5 MB each fit, one by one, but not together once encoded for the request.
+    await input.setInputFiles(
+      [1, 2, 3, 4].map((n) => ({
+        name: `part-${n}.pdf`,
+        mimeType: "application/pdf",
+        buffer: Buffer.alloc(5 * 1024 * 1024),
+      })),
+    );
+    await expect(chips).toHaveCount(4);
+    const reason = "26.7 MB to send with its files. A message can carry up to 25 MB.";
+    await expect(page.locator(".attachments-note")).toHaveText(reason);
+    await expect(send).toBeDisabled();
+    await expect(send).toHaveAttribute("title", reason);
+    await page.getByRole("button", { name: "Remove part-4.pdf" }).click();
+    await expect(page.locator(".attachments-note")).toHaveCount(0);
+    await expect(send).toBeEnabled();
   });
 });
 

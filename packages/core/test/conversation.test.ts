@@ -374,6 +374,53 @@ describe("sending (F-075, F-081, F-106)", () => {
     expect(gateway.calls("chat.send")).toEqual([]);
     client.stop();
   });
+
+  it("F-074 F-285: follows the file, image and frame ceilings the gateway advertises, and says them on the connection", async () => {
+    const gateway = grantingGateway();
+    gateway.connectReply = (params) => {
+      const hello = helloOk((params as ConnectParams).scopes, "device-token");
+      return {
+        ok: true,
+        payload: {
+          ...hello,
+          policy: { ...hello.policy, attachments: { maxBytes: 1_000_000, maxImageBytes: 500_000 } },
+        },
+      };
+    };
+    const { client, transcript } = await openTask({ gateway });
+    expect(client.state.connection.sendLimits).toEqual({
+      imageBytes: 500_000,
+      fileBytes: 1_000_000,
+      payloadBytes: 26_214_400,
+      files: 20,
+    });
+    const file = (bytes: number) => ({
+      type: "file",
+      mimeType: "application/pdf",
+      fileName: "report.pdf",
+      content: "A".repeat(Math.ceil((bytes * 4) / 3)),
+    });
+    // Under Clawtrate's own 20 MiB, over the gateway's 1,000,000 bytes: refused before the socket.
+    expect(() => client.sendMessage(KEY, "here", { attachments: [file(1_000_003)] })).toThrow(
+      /up to 1000000 bytes/,
+    );
+    expect(gateway.calls("chat.send")).toEqual([]);
+    expect(transcript().outbox).toEqual([]);
+    client.sendMessage(KEY, "here", { attachments: [file(999_000)] });
+    await until(() => gateway.calls("chat.send").length === 1);
+    client.stop();
+  });
+
+  it("F-074: a gateway that says nothing of its ceilings gets Clawtrate's own: 6 MiB images, 20 MiB files, 25 MiB frames", async () => {
+    const { client } = await openTask();
+    expect(client.state.connection.sendLimits).toEqual({
+      imageBytes: 6_291_456,
+      fileBytes: 20_971_520,
+      payloadBytes: 26_214_400,
+      files: 20,
+    });
+    client.stop();
+  });
 });
 
 describe("a run's start as the gateway reports it (F-081)", () => {

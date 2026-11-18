@@ -3,6 +3,7 @@ import {
   type AttachmentInfo,
   type Bot,
   type Run,
+  type SendLimits,
   type Transcript,
 } from "@clawtrate/core";
 import {
@@ -31,10 +32,18 @@ import { Menu, type MenuEntry } from "./Menu.tsx";
 
 /** The gateway's limits, checked as files are added (conversation.md, section 15). */
 const MIB = 1024 * 1024;
-export const IMAGE_LIMIT = 6 * MIB;
-export const FILE_LIMIT = 20 * MIB;
-export const MESSAGE_LIMIT = 25 * MIB;
-const MAX_FILES = 20;
+/**
+ * Clawtrate's own ceilings, used until the gateway has said its own (`SendLimits`): each image
+ * up to 6 MiB, each other file up to 20 MiB, the encoded request up to 25 MiB, 20 files.
+ */
+export const DEFAULT_LIMITS: SendLimits = {
+  imageBytes: 6 * MIB,
+  fileBytes: 20 * MIB,
+  payloadBytes: 25 * MIB,
+  files: 20,
+};
+/** Room in a frame for the request around the files and words, as the engine counts it. */
+const FRAME_SLACK_BYTES = 1024;
 /** How long a touch on Send is held before its menu opens. */
 const LONG_PRESS_MS = 500;
 
@@ -42,6 +51,17 @@ const LONG_PRESS_MS = 500;
 export function size(bytes: number): string {
   if (bytes >= MIB) return `${(bytes / MIB).toFixed(1)} MB`;
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/** A limit as a person reads it: "6 MB", "18.6 MB". */
+function limit(bytes: number): string {
+  const mb = bytes / MIB;
+  return Number.isInteger(mb) ? `${mb} MB` : size(bytes);
+}
+
+/** The bytes a file takes in the `chat.send` frame: its base64 form, its name and type around it. */
+export function encodedBytes(file: { bytes: number; name: string }): number {
+  return Math.ceil(file.bytes / 3) * 4 + new TextEncoder().encode(file.name).length + 96;
 }
 
 type Attached = {
@@ -58,10 +78,32 @@ type Attached = {
 };
 
 /** A file the gateway would refuse, said before anything is sent. */
-export function refusalFor(file: { size: number; type: string }): string | null {
+export function refusalFor(
+  file: { size: number; type: string },
+  limits: SendLimits = DEFAULT_LIMITS,
+): string | null {
   const image = file.type.startsWith("image/");
-  if (image && file.size > IMAGE_LIMIT) return `${size(file.size)}. Images can be up to 6 MB.`;
-  if (!image && file.size > FILE_LIMIT) return `${size(file.size)}. Files can be up to 20 MB.`;
+  if (image && file.size > limits.imageBytes)
+    return `${size(file.size)}. Images can be up to ${limit(limits.imageBytes)}.`;
+  if (!image && file.size > limits.fileBytes)
+    return `${size(file.size)}. Files can be up to ${limit(limits.fileBytes)}.`;
+  return null;
+}
+
+/** Why a message with these words and files cannot go as one request, or null. */
+export function messageRefusal(
+  text: string,
+  files: Array<{ bytes: number; name: string }>,
+  limits: SendLimits = DEFAULT_LIMITS,
+): string | null {
+  if (files.length > limits.files)
+    return `${files.length} files attached. A message can carry up to ${limits.files} files.`;
+  const encoded =
+    files.reduce((sum, file) => sum + encodedBytes(file), 0) +
+    new TextEncoder().encode(text).length +
+    FRAME_SLACK_BYTES;
+  if (files.length > 0 && encoded > limits.payloadBytes)
+    return `${size(encoded)} to send with its files. A message can carry up to ${limit(limits.payloadBytes)}.`;
   return null;
 }
 
@@ -110,6 +152,7 @@ export function Composer({
   onClearNotices,
   onAnnounce,
   focusRef,
+  limits,
 }: {
   bot: Bot;
   /** The gateway's address: drafts are kept per gateway and per task. */
@@ -125,7 +168,10 @@ export function Composer({
   onClearNotices: () => void;
   onAnnounce: (text: string) => void;
   focusRef: React.RefObject<HTMLTextAreaElement | null>;
+  /** What the gateway said one message may carry; Clawtrate's own ceilings until it has. */
+  limits: SendLimits | null;
 }) {
+  const ceilings = limits ?? DEFAULT_LIMITS;
   const bridge = useBridge();
   // A draft belongs to one task on one gateway.
   const draftKey = `${gateway ?? ""}|${taskKey}`;
@@ -167,19 +213,13 @@ export function Composer({
     chosen: chosen && chosen.run === runId ? chosen.mode : null,
   });
 
-  const total = files.reduce((sum, file) => sum + file.bytes, 0);
-  const tooMuch = total > MESSAGE_LIMIT || files.length > MAX_FILES;
+  const whole = messageRefusal(text, files, ceilings);
+  const tooMuch = whole !== null;
   const refused = files.some((file) => file.refusal) || tooMuch;
   const uploading = files.some((file) => file.uploading);
   const hasContent = text.trim().length > 0 || files.length > 0;
   const canSend = hasContent && !refused && !uploading;
-  const refusalReason = refused
-    ? tooMuch
-      ? files.length > MAX_FILES
-        ? `${files.length} files attached. A message can carry up to 20 files.`
-        : `${size(total)} attached. A message can carry up to 25 MB.`
-      : "Remove the files that are too large to send."
-    : null;
+  const refusalReason = refused ? (whole ?? "Remove the files that are too large to send.") : null;
 
   const stop = useCallback(
     (run: Run) => {
@@ -319,7 +359,7 @@ export function Composer({
     (list: FileList | File[]) => {
       for (const file of [...list]) {
         const key = `${file.name}:${file.size}:${Math.random().toString(36).slice(2)}`;
-        const refusal = refusalFor(file);
+        const refusal = refusalFor(file, ceilings);
         const entry: Attached = {
           key,
           name: file.name,
@@ -358,7 +398,7 @@ export function Composer({
           );
       }
     },
-    [bridge],
+    [bridge, ceilings],
   );
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {

@@ -98,6 +98,25 @@ export type ConnectionState = {
   connectedAt: number | null;
   /** True once this device holds a device token for the current gateway. */
   paired: boolean;
+  /**
+   * The ceilings a message and its files must fit, from the latest `hello-ok.policy`: each
+   * image within the smaller of 6 MiB and the gateway's image ceiling, each other file within
+   * the smaller of 20 MiB and its file ceiling, the encoded request within `maxPayload`. Null
+   * before the first hello.
+   */
+  sendLimits: SendLimits | null;
+};
+
+/** What one message may carry (`ConnectionState.sendLimits`). Sizes in bytes. */
+export type SendLimits = {
+  /** Each image's decoded size. */
+  imageBytes: number;
+  /** Each other file's decoded size. */
+  fileBytes: number;
+  /** The whole `chat.send` frame, its files base64-encoded. */
+  payloadBytes: number;
+  /** Files in one message. */
+  files: number;
 };
 
 export type Bot = {
@@ -373,6 +392,7 @@ export const initialConnectionState: ConnectionState = {
   retryAt: null,
   connectedAt: null,
   paired: false,
+  sendLimits: null,
 };
 
 export const initialDiscoveryState: DiscoveryState = {

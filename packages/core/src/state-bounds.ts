@@ -95,6 +95,7 @@ import type {
   DiscoveryState,
   PairingRequest,
   ScopeUpgradeState,
+  SendLimits,
   Task,
   TaskContext,
   TaskCreation,
@@ -575,6 +576,12 @@ const connection = object<ConnectionState>()({
   retryAt: NUMBER,
   connectedAt: NUMBER,
   paired: FLAG,
+  sendLimits: object<SendLimits>()({
+    imageBytes: NUMBER,
+    fileBytes: NUMBER,
+    payloadBytes: NUMBER,
+    files: NUMBER,
+  }),
 });
 const discovery = object<DiscoveryState>()({
   status: ENUM,
