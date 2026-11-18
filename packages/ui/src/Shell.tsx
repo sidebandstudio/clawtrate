@@ -531,7 +531,7 @@ export function Shell({
             interactive={interactive}
             onShowStep={showStep}
             onShowQuestion={showQuestion}
-            onRequestAccess={() => void send({ type: "requestAccess" })}
+            onRequestAccess={info.readOnly ? null : () => void send({ type: "requestAccess" })}
             drawer={drawerOpen}
             onClose={() => setPanel(false)}
             closeRef={closeRef}

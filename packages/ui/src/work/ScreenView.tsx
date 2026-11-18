@@ -123,11 +123,15 @@ export function ScreenView(props: ScreenViewProps) {
   /** A point of the picture as the page's own CSS pixels, from the frame's header size. */
   const pagePoint = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
-    if (!canvas || !view?.width || !view.height) return null;
+    if (!canvas || !view?.width || !view.height || canvas.width === 0) return null;
     const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
-    const x = ((clientX - rect.left) / rect.width) * view.width;
-    const y = ((clientY - rect.top) / rect.height) * view.height;
+    // The picture is letterboxed in its box (object-fit: contain): only the picture counts.
+    const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+    const left = rect.left + (rect.width - canvas.width * scale) / 2;
+    const top = rect.top + (rect.height - canvas.height * scale) / 2;
+    const x = ((clientX - left) / (canvas.width * scale)) * view.width;
+    const y = ((clientY - top) / (canvas.height * scale)) * view.height;
     if (x < 0 || y < 0 || x > view.width || y > view.height) return null;
     return { x: Math.round(x), y: Math.round(y) };
   };
@@ -265,6 +269,8 @@ export function ScreenView(props: ScreenViewProps) {
       aria-label={frameName}
       aria-describedby={granted ? "control-note" : undefined}
       data-testid="screen-frame"
+      data-page-width={view?.width ?? undefined}
+      data-page-height={view?.height ?? undefined}
       onClick={onClick}
       onPaste={onPaste}
     >

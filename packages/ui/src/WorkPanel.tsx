@@ -78,7 +78,7 @@ export function WorkPanel({
   interactive: boolean;
   onShowStep: (stepId: string) => void;
   onShowQuestion: () => void;
-  onRequestAccess: () => void;
+  onRequestAccess: (() => void) | null;
 }) {
   const bridge = useBridge();
   // Row times are relative to when the pane opened.

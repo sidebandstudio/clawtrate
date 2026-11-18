@@ -75,7 +75,8 @@ export type ComputerTabProps = {
   announce: (text: string) => void;
   onShowInChat: (stepId: string) => void;
   onShowQuestion: () => void;
-  onRequestAccess: () => void;
+  /** Absent on a host pinned to the read tier: it never asks for more access. */
+  onRequestAccess: (() => void) | null;
 };
 
 export function ComputerTab(props: ComputerTabProps) {
@@ -466,7 +467,8 @@ type ScreenProps = {
   onChoose: (targetId: string) => void;
   onRelease: () => void;
   onRetry: () => void;
-  onRequestAccess: () => void;
+  /** Absent on a host pinned to the read tier: it never asks for more access. */
+  onRequestAccess: (() => void) | null;
 };
 
 /** "What the plugin adds": the plugin's page is not published yet, so its summary opens here. */
@@ -570,9 +572,16 @@ function ScreenSection(props: ScreenProps) {
           <div className="screen-blank">
             <EyeIcon />
             <p>{words.readOnlyLine}</p>
-            <button type="button" className="button" data-size="sm" onClick={props.onRequestAccess}>
-              Request access
-            </button>
+            {props.onRequestAccess && (
+              <button
+                type="button"
+                className="button"
+                data-size="sm"
+                onClick={props.onRequestAccess}
+              >
+                Request access
+              </button>
+            )}
           </div>
         </div>
         {elsewhere && (
