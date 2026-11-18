@@ -203,7 +203,8 @@ function sendFacts(runId: string): { toolCallId: string; recipientRunId: string 
 let clientTasks = 0;
 async function clientTask(botId: string, slug: string): Promise<{ key: string; title: string }> {
   clientTasks += 1;
-  const title = `${slug}-${STAMP}${clientTasks > 1 ? `-${clientTasks}` : ""}`;
+  // The count before the stamp: no title is part of another's, as a row is found by its text.
+  const title = `${slug}-${clientTasks}-${STAMP}`;
   const key = `agent:${botId}:${title}`;
   for (const op of Object.values(clients)) {
     await op.request("sessions.messages.subscribe", { key });
@@ -211,13 +212,19 @@ async function clientTask(botId: string, slug: string): Promise<{ key: string; t
   return { key, title };
 }
 
-/** A new task started by the host's own device, labelled: its title and key. */
+/**
+ * A new task started by the host's own device, labelled: its title and key. New on every call,
+ * so a repeated check never meets an earlier one's task.
+ */
+let hostTasks = 0;
 async function hostTask(
   botId: string,
   label: string,
   text: string,
 ): Promise<{ title: string; key: string }> {
-  const title = `${label} ${STAMP}`;
+  hostTasks += 1;
+  // The count before the stamp: no title is part of another's, as a row is found by its text.
+  const title = `${label} ${hostTasks} ${STAMP}`;
   const { key } = await hostCommand<{ key: string }>(page, {
     type: "createTask",
     botId,
