@@ -1470,7 +1470,10 @@ test("F-301: a turn the gateway fails offers Copy request ID, which copies the i
   await card.getByRole("button", { name: "Raw" }).click();
   const shown = ((await card.getByTestId("request-id").textContent()) ?? "").trim();
   expect(shown).toMatch(/^[0-9a-f-]{36}$/);
-  await expect(card.getByTestId("turn-error-raw")).toContainText('"state": "error"');
+  // The event that ended the run, as the gateway sent it: its chat error or its lifecycle error.
+  await expect(card.getByTestId("turn-error-raw")).toContainText(
+    /The (chat|agent lifecycle) event/,
+  );
   await page.evaluate(() => navigator.clipboard.writeText(""));
   await card.getByRole("button", { name: "Copy request ID" }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(shown);
