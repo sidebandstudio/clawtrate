@@ -1,0 +1,635 @@
+/* Setting up: the components docs/design/setup.md adds. Every value is a token
+   from tokens.css. New components are marked "new"; everything else places an
+   existing one (the connection column, the choice list, notes, the fact block,
+   the access bar, the status strip, the dialog) in a setup screen. */
+
+/* The column ------------------------------------------------------------------ */
+
+.setup .connect-card {
+  text-align: left;
+}
+
+.setup .connect-brand {
+  text-align: center;
+}
+
+/* A step screen keeps the mark alone above its title, as the pairing screen does. */
+.s-mark {
+  display: block;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 14px;
+  border-radius: 13px;
+}
+
+.s-top {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  margin: 0 0 8px;
+}
+
+.s-top .button {
+  padding: 0 12px 0 6px;
+}
+
+.s-title {
+  margin: 0 0 6px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  line-height: 1.3;
+  text-align: center;
+}
+
+.s-title:focus {
+  outline: none;
+}
+
+.s-question {
+  margin: 28px 0 12px;
+}
+
+.s-lede {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+  text-align: center;
+  text-wrap: balance;
+}
+
+.s-links {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin: 10px 0 0;
+}
+
+.s-hint {
+  margin: 12px 2px 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.s-hint code,
+.s-lede code,
+.s-facts code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.s-actions {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.s-field-label {
+  display: block;
+  margin: 0 4px 6px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.s-field-error {
+  margin: 6px 4px 0;
+  font-size: var(--text-sm);
+  color: var(--danger);
+}
+
+.s-code-field {
+  display: block;
+  width: 100%;
+  min-height: 84px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
+
+/* The first question's rows open the next screen. */
+.setup .b-choices {
+  text-align: left;
+}
+
+.s-remembered {
+  margin: 0 0 var(--space-4);
+}
+
+/* new: a step list. A 20 px mark and the step's words; the running step's
+   arc turns, and stands still when motion is reduced. */
+.s-steps {
+  display: grid;
+  gap: 2px;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.s-steps li {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  align-items: start;
+  column-gap: 12px;
+  padding: 7px 4px;
+  font-size: var(--text-base);
+  line-height: 20px;
+}
+
+.s-step-mark {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+}
+
+.s-step-mark .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.s-steps [data-state="waiting"] {
+  color: var(--text-faint);
+}
+
+.s-steps [data-state="waiting"] .s-step-mark::before,
+.s-steps [data-state="running"] .s-step-mark::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.6px currentColor;
+}
+
+.s-steps [data-state="running"] .s-step-mark::before {
+  border: 1.6px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-top-color: var(--text);
+  box-shadow: none;
+  animation: s-turn 0.9s linear infinite;
+}
+
+.s-steps [data-state="done"] .s-step-mark {
+  color: var(--text-muted);
+}
+
+.s-steps [data-state="failed"] {
+  color: var(--danger);
+}
+
+.s-step-sub {
+  grid-column: 2;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.s-step-time {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+@keyframes s-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+.s-slow {
+  margin: 10px 4px 0;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+/* new: what the look found. A mark, a title, the facts, one primary action. */
+.s-found {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  margin: var(--space-4) 0 0;
+  text-align: center;
+}
+
+.s-found h3 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.s-found .empty-mark[data-tone="ok"] {
+  color: var(--accent);
+}
+
+.s-found .empty-mark[data-tone="warn"] {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.s-found .empty-mark[data-tone="danger"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.s-found .facts {
+  width: 100%;
+  text-align: left;
+}
+
+/* A fact block whose values may be sentences: label over value. */
+.s-facts {
+  margin: var(--space-4) 0 0;
+  padding: 2px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+}
+
+.s-facts > div {
+  display: grid;
+  gap: 2px;
+  padding: 10px 0;
+}
+
+.s-facts > div + div {
+  border-top: 1px solid var(--border);
+}
+
+.s-facts dt {
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.s-facts dd {
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: 1.45;
+}
+
+.setup .b-note {
+  text-align: left;
+}
+
+/* new: a host key's fingerprint, in groups of eight. */
+.s-print {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 0;
+  padding: 12px 8px 12px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+.s-print-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.s-print-alg {
+  display: block;
+  margin-bottom: 2px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.s-print code {
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  line-height: 1.6;
+  word-spacing: 0.25em;
+}
+
+.s-print-label {
+  margin: 14px 4px 0;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+/* new: a setup code's QR. Black on white in both themes, with a quiet zone. */
+.s-qr {
+  display: block;
+  width: 200px;
+  height: 200px;
+  margin: var(--space-3) auto 0;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+
+.s-qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.s-qr-gone {
+  display: grid;
+  place-items: center;
+  width: 200px;
+  height: 200px;
+  margin: var(--space-3) auto 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+}
+
+/* new: a countdown, tabular; warn in its last minute. */
+.s-expiry {
+  margin: 8px 0 0;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.s-expiry[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.s-where {
+  margin: 0;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.s-code {
+  margin: var(--space-3) 0 0;
+}
+
+.s-code code {
+  font-size: var(--text-xs);
+}
+
+.s-request {
+  margin: var(--space-4) 0 0;
+}
+
+.s-request .b-choice {
+  cursor: default;
+}
+
+/* A dialog in the prototype's frame: placed in the frame, not the window, so
+   every width shows it as the product would. */
+.s-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--bg-scrim);
+}
+
+.s-scrim .b-dialog {
+  position: static;
+  width: min(440px, 100%);
+  max-height: calc(100% - 32px);
+  margin: 0;
+}
+
+.s-scrim .b-dialog[data-kind="confirm"] {
+  width: min(380px, 100%);
+}
+
+.s-scrim .b-body {
+  text-align: left;
+}
+
+.s-scope-list {
+  display: grid;
+  gap: 6px;
+  margin: var(--space-3) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.s-scope-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-md);
+}
+
+.s-scope-list .icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+}
+
+.s-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-md);
+  line-height: 1.4;
+}
+
+.s-check input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  accent-color: var(--text);
+}
+
+/* Settings, Gateway, as the setup screens add to it. */
+.s-rows {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  list-style: none;
+}
+
+.s-rows > li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 14px;
+}
+
+.s-rows > li + li {
+  border-top: 1px solid var(--border);
+}
+
+.s-row-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+
+.s-row-title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.s-row-sub {
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.button.s-danger-text,
+.s-danger-text {
+  color: var(--danger);
+}
+
+/* A part of the app behind a state: the conversation with its strip, or the
+   composer's place with the access bar. Prototype framing, not product. */
+.s-mock {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+}
+
+.s-mock .conversation {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.s-mock-title {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 0;
+}
+
+.s-mock-pill {
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.s-mock-messages {
+  display: grid;
+  gap: 12px;
+  width: min(640px, 100% - 32px);
+  margin: 110px auto 0;
+}
+
+.s-mock-line {
+  height: 14px;
+  border-radius: 7px;
+  background: var(--bg-bubble);
+}
+
+.s-mock-foot {
+  width: min(640px, 100% - 24px);
+  margin: 0 auto 16px;
+}
+
+/* Phone width and the iPhone app. */
+[data-width="phone"] .setup .connect-card,
+[data-input="touch"] .setup .connect-card {
+  width: calc(100% - 32px);
+}
+
+[data-input="touch"] .setup .b-choice {
+  min-height: 64px;
+}
+
+[data-input="touch"] .setup .button[data-size="lg"] {
+  height: 48px;
+}
+
+[data-width="phone"] .s-qr {
+  width: 176px;
+  height: 176px;
+}
+
+[data-width="phone"] .s-scrim {
+  place-items: end stretch;
+  padding: 8px 0 0;
+}
+
+[data-width="phone"] .s-scrim .b-dialog:not([data-kind="confirm"]) {
+  width: 100%;
+  max-height: calc(100% - 8px);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+[data-width="phone"] .s-scrim .b-dialog[data-kind="confirm"] {
+  width: calc(100% - 24px);
+  margin: 0 12px 12px;
+}
+
+[data-motion="reduce"] .s-steps [data-state="running"] .s-step-mark::before {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .s-steps [data-state="running"] .s-step-mark::before {
+    animation: none;
+  }
+}
+
+/* Screens over the app: the frame shows the app's place, and a dialog over it. */
+.setup.s-over {
+  display: block;
+  overflow: hidden;
+}
+
+.s-scrim .b-dialog[data-kind="settings-lite"] {
+  width: min(520px, 100%);
+}
+
+.s-details {
+  max-height: 180px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.s-disclosure {
+  margin: var(--space-3) 0 0;
+}
+
+.s-disclosure summary {
+  font-size: var(--text-md);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.s-scrim .b-foot .button {
+  width: 100%;
+}
+
+[data-danger] {
+  background: var(--danger) !important;
+  color: #fff !important;
+}
+
+a.b-choice {
+  text-decoration: none;
+}
+
+a.b-choice:hover {
+  background: var(--bg-hover);
+}
+
+.setup .b-choice-sub {
+  white-space: normal;
+}
