@@ -18,6 +18,7 @@ import {
   renameParams,
   renameTask,
   restoreTask,
+  ROUTING_ATTEMPTS,
   STOP_SETTLE_MS,
   taskLabel,
   unreadParams,
@@ -385,6 +386,50 @@ describe("the rail's task actions", () => {
       "sessions.patch",
       "sessions.delete",
     ]);
+  });
+
+  it("F-278 F-424: a delete the gateway asks to retry, because its routing changed meanwhile, is sent again and completes", async () => {
+    const rows: Record<string, Record<string, unknown>> = { [KEY]: { sessionId: "s-1" } };
+    const { ctx, calls } = fakeGateway(rows);
+    const request = ctx.request;
+    let refusals = 0;
+    ctx.request = async (method, params) => {
+      if (method === "sessions.delete" && refusals < 2) {
+        refusals += 1;
+        calls.push({ method, params: params as Record<string, unknown> });
+        throw new Error(
+          "SessionMutationFactsUnavailableError: Session access facts are unavailable; retry after session storage is ready.",
+        );
+      }
+      return request(method, params);
+    };
+    await deleteTask(ctx, KEY);
+    expect(calls.map((call) => call.method)).toEqual([
+      "sessions.describe",
+      "sessions.patch",
+      "sessions.delete",
+      "sessions.delete",
+      "sessions.delete",
+    ]);
+    expect(rows[KEY]).toBeUndefined();
+  });
+
+  it("F-054: a create is never sent again, and a retry the gateway keeps asking for ends after a bounded number", async () => {
+    const { ctx, calls } = fakeGateway({ [KEY]: { sessionId: "s-1" } });
+    const routing = new Error(
+      "SessionMutationFactsUnavailableError: Session access facts are unavailable; retry after session storage is ready.",
+    );
+    ctx.request = async (method, params) => {
+      calls.push({ method, params: params as Record<string, unknown> });
+      if (method === "sessions.describe") return { session: { key: KEY, sessionId: "s-1" } };
+      throw routing;
+    };
+    await expect(newTask(ctx, "pip", null)).rejects.toThrow("retry after session storage");
+    expect(calls.filter((call) => call.method === "sessions.create")).toHaveLength(1);
+    await expect(renameTask(ctx, KEY, "Weekly plan")).rejects.toThrow(
+      "retry after session storage",
+    );
+    expect(calls.filter((call) => call.method === "sessions.patch")).toHaveLength(ROUTING_ATTEMPTS);
   });
 
   it("F-278: a run that does not stop within its deadline leaves the task as it was", async () => {

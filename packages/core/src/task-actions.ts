@@ -249,11 +249,33 @@ export function actionError(error: unknown): Error {
   return error instanceof Error ? error : new Error(message);
 }
 
+/**
+ * The gateway's answer to a change made while its own session routing changed under it
+ * (a bot added or removed, its configuration reloaded): `SessionMutationFactsUnavailableError`,
+ * "retry after session storage is ready" (OpenClaw 2026.10.6, `session-sharing-preparation`).
+ */
+const ROUTING_CHANGED = /retry after session storage is ready/;
+/** Times a change the gateway asked to retry is sent again. */
+export const ROUTING_ATTEMPTS = 4;
+/** Between two attempts of such a change. */
+const ROUTING_RETRY_MS = 250;
+
+/**
+ * One change on the gateway. A patch or a delete is sent again when the gateway asks for it,
+ * up to `ROUTING_ATTEMPTS` times: each names the session it is for (`expectedSessionId`),
+ * so a repeat changes nothing the first did not. A create names nothing and is never repeated.
+ */
 async function call(ctx: TaskActionContext, method: string, params: unknown): Promise<unknown> {
-  try {
-    return await ctx.request(method, params);
-  } catch (error) {
-    throw actionError(error);
+  const repeatable = method === "sessions.patch" || method === "sessions.delete";
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await ctx.request(method, params);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!repeatable || attempt >= ROUTING_ATTEMPTS || !ROUTING_CHANGED.test(message))
+        throw actionError(error);
+      await ctx.sleep(ROUTING_RETRY_MS);
+    }
   }
 }
 
