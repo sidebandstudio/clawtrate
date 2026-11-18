@@ -313,7 +313,20 @@ function TaskRows({
             type="button"
             className="task task-more task-new"
             data-testid="new-task-row"
-            onClick={() => actions.onNewTask(bot)}
+            // One gesture, one task: a double-click's second click and a held key's repeats
+            // belong to the same activation, whenever the first create was answered.
+            onClick={(event) => {
+              if (event.detail > 1) return;
+              actions.onNewTask(bot);
+            }}
+            onKeyDown={(event) => {
+              if (event.repeat && (event.key === "Enter" || event.key === " "))
+                event.preventDefault();
+            }}
+            // Nor does its second press take focus back from the new task's composer.
+            onMouseDown={(event) => {
+              if (event.detail > 1) event.preventDefault();
+            }}
           >
             <PlusIcon />
             <span className="task-title">New task</span>
@@ -814,6 +827,7 @@ export function Rail({
       // New task for the open bot: ⌘T in the desktop app, ⌥T in a browser (which keeps ⌘T).
       if (
         event.code === "KeyT" &&
+        !event.repeat &&
         !event.shiftKey &&
         ((command && !event.altKey) || (event.altKey && !command)) &&
         interactive &&
