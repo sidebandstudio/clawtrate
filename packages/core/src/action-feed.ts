@@ -230,37 +230,44 @@ export function callFromStep(
   run: Pick<Run, "state" | "error" | "ending" | "origin">,
 ): ActionCall {
   const open = step.status === "running" || step.status === "waiting";
-  const status: ActionCall["status"] = !open
-    ? "returned"
-    : isTerminal(run.state)
-      ? cutOff(run)
-        ? "cut-off"
-        : run.state === "stopped" || run.state === "cancelled"
-          ? "stopped"
-          : "unreturned"
-      : step.status === "waiting"
-        ? "waiting"
-        : "running";
+  // A step whose run ended before its result arrived here (`unknown`): no result is known, so it
+  // reads as a call its run's end left without one, as an open call at that end does.
+  const unended = step.status === "unknown";
+  const status: ActionCall["status"] =
+    !open && !unended
+      ? "returned"
+      : unended && !isTerminal(run.state)
+        ? "unreturned"
+        : isTerminal(run.state)
+          ? cutOff(run)
+            ? "cut-off"
+            : run.state === "stopped" || run.state === "cancelled"
+              ? "stopped"
+              : "unreturned"
+          : step.status === "waiting"
+            ? "waiting"
+            : "running";
   return {
     id: step.toolCallId ?? step.id,
     name: step.toolName ?? "",
     args: step.args ?? parseArgs(step.argsText?.text),
     status,
     isError: step.status === "failed",
-    text: open ? null : (step.result?.text ?? ""),
+    text: open || unended ? null : (step.result?.text ?? ""),
     details: step.details ?? null,
     // The gateway cut what it stored of the result: what only the cut part said is not known.
-    ...(!open && step.resultCut ? { cut: true } : {}),
+    ...(!open && !unended && step.resultCut ? { cut: true } : {}),
     // Kept short here: the text's end and line count, read from the whole text as it arrived.
-    ...(!open && step.result?.tail !== undefined
+    ...(!open && !unended && step.result?.tail !== undefined
       ? { textTail: step.result.tail, textLines: step.result.lines ?? null }
       : {}),
     commandBearing: step.commandBearing === true,
     // History rows' times are not the call's own: no duration is read from them.
     startedAt: step.rowTimes ? null : step.startedAt,
-    endedAt: open || step.rowTimes ? null : step.endedAt,
+    // An open call has no end yet; one its run's end closed has none of its own.
+    endedAt: open || unended || step.rowTimes ? null : step.endedAt,
     fromHistory: run.origin === "history" && !step.details,
-    partial: open ? (step.output?.text ?? null) : null,
+    partial: open || unended ? (step.output?.text ?? null) : null,
     runStopped: run.state === "stopped" || run.state === "cancelled",
     ...(step.gatewayTitle ? { gatewayTitle: step.gatewayTitle } : {}),
   };

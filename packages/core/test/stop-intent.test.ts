@@ -127,3 +127,117 @@ describe("a confirmed Stop's own follow-ups, while another run is active", () =>
     client.stop();
   });
 });
+
+describe("a Stop through any number of disconnects, and an end only inferred", () => {
+  it("F-097: an abort whose answer each dropped connection loses is sent again after each reconnect, and the run stays stopping", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.send"] = () => new Promise(() => {});
+    gateway.handlers["chat.abort"] = () => new Promise(() => {});
+    const { client, transcript } = await openTask({ gateway });
+    const id = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    await client.stopRun(KEY, id);
+    gateway.handlers["chat.history"] = () => ({ messages: [], inFlightRun: { runId: id } });
+    gateway.dropAll();
+    // History names the run: it is aborted, and that abort's answer goes with the next drop.
+    await until(() => gateway.calls("chat.abort").length === 1);
+    gateway.dropAll();
+    await until(() => gateway.calls("chat.abort").length === 2);
+    gateway.dropAll();
+    await until(() => gateway.calls("chat.abort").length === 3);
+    expect(
+      gateway.calls("chat.abort").every((call) => (call as { runId?: string }).runId === id),
+    ).toBe(true);
+    expect(transcript().runs.find((run) => run.id === id)).toMatchObject({
+      state: "stopping",
+      stopError: null,
+    });
+    gateway.emit("chat", { runId: id, sessionKey: KEY, seq: 2, state: "aborted" });
+    await until(() => transcript().runs.find((run) => run.id === id)?.state === "stopped");
+    client.stop();
+  });
+
+  it("F-097: a refused abort gives the Stop up and says why", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.abort"] = () => {
+      throw Object.assign(new Error("unauthorized"), { code: "UNAUTHORIZED" });
+    };
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("r1", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.id === "r1"));
+    await client.stopRun(KEY, "r1");
+    await until(() => transcript().runs[0]?.state === "running");
+    expect(transcript().runs[0]?.stopError).not.toBeNull();
+    expect(gateway.calls("chat.abort")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-097: a run settled as stopped with no known outcome takes the end the gateway sends later", async () => {
+    const gateway = grantingGateway();
+    const answer = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => answer.promise;
+    const { client, transcript } = await openTask({ gateway });
+    const id = client.sendMessage(KEY, "Take your time");
+    await until(() => gateway.calls("chat.send").length === 1);
+    await client.stopRun(KEY, id);
+    // Accepted with no run named, and history shows nothing of it: stopped, outcome unknown.
+    answer.resolve({ status: "accepted" });
+    await until(() => transcript().runs.find((run) => run.id === id)?.outcomeKnown === false);
+    expect(transcript().runs.find((run) => run.id === id)?.state).toBe("stopped");
+    // It had run to its end: the gateway's final says so, and that is how it ended.
+    gateway.emit("chat", { runId: id, sessionKey: KEY, seq: 2, state: "final" });
+    await until(() => transcript().runs.find((run) => run.id === id)?.outcomeKnown === true);
+    expect(transcript().runs.find((run) => run.id === id)).toMatchObject({
+      state: "completed",
+      finishedBeforeStop: true,
+    });
+    client.stop();
+  });
+
+  it("a frame that is no end leaves an end only inferred as it is", async () => {
+    const gateway = grantingGateway();
+    let history: Record<string, unknown> = { messages: [], inFlightRun: { runId: "r1" } };
+    gateway.handlers["chat.history"] = () => history;
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().runs.some((run) => run.id === "r1" && run.state === "running"));
+    history = { messages: [] };
+    gateway.dropAll();
+    await until(() => transcript().runs.find((run) => run.id === "r1")?.outcomeKnown === false);
+    // A late start and a late status say nothing of how it ended.
+    gateway.emit("agent", agentEvent("r1", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("chat", { runId: "r1", sessionKey: KEY, seq: 2, state: "status", phase: "model" });
+    await sleep(50);
+    expect(transcript().runs.find((run) => run.id === "r1")).toMatchObject({
+      state: "completed",
+      outcomeKnown: false,
+    });
+    client.stop();
+  });
+
+  it("an ordinary run settled as completed with no known outcome takes the failure history records", async () => {
+    const gateway = grantingGateway();
+    let history: Record<string, unknown> = { messages: [], inFlightRun: { runId: "r1" } };
+    gateway.handlers["chat.history"] = () => history;
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().runs.some((run) => run.id === "r1" && run.state === "running"));
+    // The run vanished across a reconnect with no row: completed, outcome unknown.
+    history = { messages: [] };
+    gateway.dropAll();
+    await until(() => transcript().runs.find((run) => run.id === "r1")?.outcomeKnown === false);
+    history = {
+      messages: [
+        {
+          role: "assistant",
+          content: "It did not work.",
+          stopReason: "error",
+          errorMessage: "The provider failed",
+          __openclaw: { id: "a1", runId: "r1" },
+        },
+      ],
+    };
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => transcript().runs.find((run) => run.id === "r1")?.outcomeKnown === true);
+    expect(transcript().runs.find((run) => run.id === "r1")?.state).toBe("failed");
+    client.stop();
+  });
+});

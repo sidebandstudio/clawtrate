@@ -175,8 +175,10 @@ export function useSelection(state: ClawtrateState) {
   /** Open a task under any bot: one operation for the bot, the task and what is read. */
   const selectTask = useCallback(
     (id: string, key: string) => {
-      if (id === bot?.id && key === task?.key) return;
-      markRead();
+      // The task shown may be only the bot's newest, nothing chosen: choosing it remembers it,
+      // so a newer task of the bot does not take its place.
+      if (id === bot?.id && key === remembered) return;
+      if (id !== bot?.id || key !== task?.key) markRead();
       if (id !== bot?.id) {
         setBotId(id);
         writePreference("bot", id);
@@ -188,7 +190,7 @@ export function useSelection(state: ClawtrateState) {
         return next;
       });
     },
-    [bot, task, markRead, setFolded],
+    [bot, task, remembered, markRead, setFolded],
   );
 
   const isOpen = useCallback(
