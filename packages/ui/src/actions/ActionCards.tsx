@@ -917,7 +917,9 @@ export function RunLineView({
         <span className="mono">{runId}</span>
         <CopyButton what="run id" text={runId} />
       </p>
-      <CardFoot disclosure={raw} raw={runRaw(runId, lifecycle)} />
+      <div className="card raw-host">
+        <CardFoot disclosure={raw} raw={runRaw(runId, lifecycle)} />
+      </div>
     </details>
   );
 }

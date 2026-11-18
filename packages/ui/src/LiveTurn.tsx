@@ -215,7 +215,9 @@ export function RunEnding({
             {ending.elsewhere ? "from another device or session. " : ""}
             Completed actions are not undone.
           </p>
-          <CardFoot disclosure={raw} raw={runRaw(run.id, run.lifecycle ?? null)} />
+          <RawHost>
+            <CardFoot disclosure={raw} raw={runRaw(run.id, run.lifecycle ?? null)} />
+          </RawHost>
         </div>
       </div>
     );
@@ -228,7 +230,9 @@ export function RunEnding({
           <p>
             <b>Finished before Stop took effect.</b> The turn completed normally.
           </p>
-          <CardFoot disclosure={raw} raw={runRaw(run.id, run.lifecycle ?? null)} />
+          <RawHost>
+            <CardFoot disclosure={raw} raw={runRaw(run.id, run.lifecycle ?? null)} />
+          </RawHost>
         </div>
       </div>
     );
@@ -331,23 +335,25 @@ export function SystemLine({ item }: { item: TranscriptItem }) {
       <p className="event-line" data-side="center">
         {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
       </p>
-      <CardFoot
-        disclosure={raw}
-        raw={{
-          state: "loaded",
-          events:
-            item.raw !== null && item.raw !== undefined
-              ? [["The history row, as the gateway sent it (chat.history)", item.raw]]
-              : [],
-          ids: [{ label: "Item", value: item.id }],
-          ...(item.raw === null
-            ? { notes: ["The row was too long for this app to keep as received."] }
-            : {}),
-          ...(item.raw === undefined
-            ? { notes: ["This line has no row of the gateway's behind it."] }
-            : {}),
-        }}
-      />
+      <RawHost>
+        <CardFoot
+          disclosure={raw}
+          raw={{
+            state: "loaded",
+            events:
+              item.raw !== null && item.raw !== undefined
+                ? [["The history row, as the gateway sent it (chat.history)", item.raw]]
+                : [],
+            ids: [{ label: "Item", value: item.id }],
+            ...(item.raw === null
+              ? { notes: ["The row was too long for this app to keep as received."] }
+              : {}),
+            ...(item.raw === undefined
+              ? { notes: ["This line has no row of the gateway's behind it."] }
+              : {}),
+          }}
+        />
+      </RawHost>
     </div>
   );
 }
@@ -355,5 +361,17 @@ export function SystemLine({ item }: { item: TranscriptItem }) {
 /** Raw for a note about a run (F-094): the events that started, paused and ended it. */
 export function RunNoteRaw({ run }: { run: Run }) {
   const raw = useRawDisclosure();
-  return <CardFoot disclosure={raw} raw={runRaw(run.id, run.lifecycle ?? null)} />;
+  return (
+    <RawHost>
+      <CardFoot disclosure={raw} raw={runRaw(run.id, run.lifecycle ?? null)} />
+    </RawHost>
+  );
+}
+
+/**
+ * Raw beside a note or a line rather than in a card: the card's own styles for
+ * Raw apply, without a card's surface.
+ */
+export function RawHost({ children }: { children: ReactNode }) {
+  return <div className="card raw-host">{children}</div>;
 }

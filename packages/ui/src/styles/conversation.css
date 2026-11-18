@@ -398,8 +398,13 @@
   min-width: 0;
 }
 
-.turn-note-body > .card-actions {
+/* Raw beside a note or a line: the card's Raw styles, without a card's surface. */
+.card.raw-host {
+  width: auto;
+  max-width: none;
   margin-top: 2px;
+  border-radius: 0;
+  background: none;
 }
 
 /* A line the gateway wrote itself, with its Raw under it. */
@@ -409,8 +414,7 @@
   align-items: center;
 }
 
-.event-row > .card-actions,
-.event-row > .raw-panel {
+.event-row > .raw-host {
   align-self: stretch;
 }
 
@@ -1221,4 +1225,10 @@
   margin: 2px 0 6px;
   font-size: var(--text-sm);
   color: var(--text-muted);
+}
+
+/* A failed turn's Raw spans the card under its words. */
+.card.turn-error > .card-actions,
+.card.turn-error > .raw-panel {
+  grid-column: 1 / -1;
 }
