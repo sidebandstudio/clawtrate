@@ -25,7 +25,14 @@ import { Avatar, Presence } from "./Avatar.tsx";
 import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from "./cards/index.ts";
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
 import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
-import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTurn.tsx";
+import {
+  IncompleteCaption,
+  OutgoingBubble,
+  RunEnding,
+  RunNoteRaw,
+  RunReply,
+  SystemLine,
+} from "./LiveTurn.tsx";
 import { ActionScope, ItemFeed, RunFeed, RunLine, showAction } from "./actions/index.ts";
 import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { FindBar } from "./Find.tsx";
@@ -313,9 +320,7 @@ function TranscriptView({
     rows.push(
       <CardSlot key={item.id} item={item}>
         {item.role === "system" ? (
-          <p className="event-line" data-side="center">
-            {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
-          </p>
+          <SystemLine item={item} />
         ) : (
           <Turn item={item} incomplete={live.incomplete.has(item.id)} />
         )}
@@ -591,15 +596,18 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
       foot.push(
         <div className="turn-note" data-testid="read-only-wait" key={`wait-${active.id}`}>
           <span className="glyph" data-state="blocked" aria-hidden="true" />
-          <p>
-            {bot.name} is waiting for an approval or an answer. This device can't see it on a
-            read-only connection.{" "}
-            {options.onRequestAccess && (
-              <button type="button" className="link-button" onClick={options.onRequestAccess}>
-                Request access
-              </button>
-            )}
-          </p>
+          <div className="turn-note-body">
+            <p>
+              {bot.name} is waiting for an approval or an answer. This device can't see it on a
+              read-only connection.{" "}
+              {options.onRequestAccess && (
+                <button type="button" className="link-button" onClick={options.onRequestAccess}>
+                  Request access
+                </button>
+              )}
+            </p>
+            <RunNoteRaw run={active} />
+          </div>
         </div>,
       );
     }

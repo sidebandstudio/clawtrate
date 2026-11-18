@@ -10,6 +10,7 @@ import {
   type OutgoingMessage,
   type Run,
   type Transcript,
+  type TranscriptItem,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { runRaw } from "./actions/ActionCards.tsx";
@@ -205,14 +206,17 @@ export function RunEnding({
     return (
       <div className="turn-note" data-testid="stop-note" data-run={run.id}>
         <span className="glyph" data-state="stopped" aria-hidden="true" />
-        <p>
-          <b>
-            {ending.after ? `Stopped after ${ending.after}` : "Stopped"}
-            {ending.elsewhere ? "," : "."}
-          </b>{" "}
-          {ending.elsewhere ? "from another device or session. " : ""}
-          Completed actions are not undone.
-        </p>
+        <div className="turn-note-body">
+          <p>
+            <b>
+              {ending.after ? `Stopped after ${ending.after}` : "Stopped"}
+              {ending.elsewhere ? "," : "."}
+            </b>{" "}
+            {ending.elsewhere ? "from another device or session. " : ""}
+            Completed actions are not undone.
+          </p>
+          <CardFoot disclosure={raw} raw={runRaw(run.id, run.lifecycle ?? null)} />
+        </div>
       </div>
     );
   }
@@ -220,9 +224,12 @@ export function RunEnding({
     return (
       <div className="turn-note" data-testid="stop-note" data-run={run.id}>
         <span className="glyph" data-state="done" aria-hidden="true" />
-        <p>
-          <b>Finished before Stop took effect.</b> The turn completed normally.
-        </p>
+        <div className="turn-note-body">
+          <p>
+            <b>Finished before Stop took effect.</b> The turn completed normally.
+          </p>
+          <CardFoot disclosure={raw} raw={runRaw(run.id, run.lifecycle ?? null)} />
+        </div>
       </div>
     );
   }
@@ -311,4 +318,42 @@ export function RunEnding({
 function turnErrorRaw(run: Run) {
   const ended = (run.lifecycle ?? []).filter((each) => /error|end/.test(each.via));
   return runRaw(run.id, ended.length > 0 ? ended : (run.lifecycle ?? null));
+}
+
+/**
+ * A line the gateway wrote itself in the task's history (a turn it started or
+ * resumed, a compaction, a reset), with Raw: the history row as it sent it (F-094).
+ */
+export function SystemLine({ item }: { item: TranscriptItem }) {
+  const raw = useRawDisclosure();
+  return (
+    <div className="event-row" data-side="center">
+      <p className="event-line" data-side="center">
+        {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
+      </p>
+      <CardFoot
+        disclosure={raw}
+        raw={{
+          state: "loaded",
+          events:
+            item.raw !== null && item.raw !== undefined
+              ? [["The history row, as the gateway sent it (chat.history)", item.raw]]
+              : [],
+          ids: [{ label: "Item", value: item.id }],
+          ...(item.raw === null
+            ? { notes: ["The row was too long for this app to keep as received."] }
+            : {}),
+          ...(item.raw === undefined
+            ? { notes: ["This line has no row of the gateway's behind it."] }
+            : {}),
+        }}
+      />
+    </div>
+  );
+}
+
+/** Raw for a note about a run (F-094): the events that started, paused and ended it. */
+export function RunNoteRaw({ run }: { run: Run }) {
+  const raw = useRawDisclosure();
+  return <CardFoot disclosure={raw} raw={runRaw(run.id, run.lifecycle ?? null)} />;
 }

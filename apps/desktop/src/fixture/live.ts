@@ -173,6 +173,25 @@ function withRun(
   }));
 }
 
+/** A run's start and its end, as the gateway's `agent` lifecycle events carry them. */
+function lifecycleOf(now: number, end: Record<string, unknown>): NonNullable<Run["lifecycle"]> {
+  const event = (seq: number, ts: number, data: Record<string, unknown>) => ({
+    runId: "run-live",
+    seq,
+    stream: "lifecycle",
+    ts,
+    sessionKey: "agent:otto:disk-space",
+    data,
+  });
+  return [
+    {
+      via: "agent (lifecycle start)",
+      record: event(1, now - 42 * SECOND, { phase: "start", startedAt: now - 42 * SECOND }),
+    },
+    { via: `agent (lifecycle ${String(end.phase)})`, record: event(9, now - 2 * SECOND, end) },
+  ];
+}
+
 const readStep = (now: number, change: Partial<Step> = {}) =>
   toolStep("call-read-1", "read", { path: "/var/log/backup/backup-2026-11-15.log" }, now, change);
 
@@ -404,6 +423,7 @@ export function liveScene(
           endedAt: now - 2 * SECOND,
           text: REPLY,
           steps: [readStep(now - 30 * SECOND, { status: "done", endedAt: now - 29 * SECOND })],
+          lifecycle: lifecycleOf(now, { phase: "end", aborted: true, stopReason: "rpc" }),
         }),
         steps: [],
       };
@@ -435,6 +455,11 @@ export function liveScene(
               "The model provider is overloaded. Nothing ran after step 1, and steps already completed are not undone.",
             kind: "provider",
           },
+          lifecycle: lifecycleOf(now, {
+            phase: "error",
+            error: "The model provider is overloaded.",
+            executionSettled: true,
+          }),
         }),
         steps: [],
       };

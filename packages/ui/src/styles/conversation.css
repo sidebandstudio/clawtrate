@@ -393,6 +393,27 @@
   margin: 0;
 }
 
+/* A note's words, then its Raw (F-094). */
+.turn-note-body {
+  min-width: 0;
+}
+
+.turn-note-body > .card-actions {
+  margin-top: 2px;
+}
+
+/* A line the gateway wrote itself, with its Raw under it. */
+.event-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.event-row > .card-actions,
+.event-row > .raw-panel {
+  align-self: stretch;
+}
+
 .turn-note b {
   font-weight: var(--weight-medium);
   color: var(--text);
