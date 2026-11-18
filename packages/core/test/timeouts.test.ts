@@ -1,0 +1,74 @@
+// Three tool calls in a row that time out: the machine may not be responding, so this
+// client stops the run and says why (F-101).
+
+import { describe, expect, it } from "vitest";
+import { agentEvent, KEY, openTask } from "./client-harness.ts";
+import { sleep, until } from "./fake-gateway.ts";
+
+type Opened = Awaited<ReturnType<typeof openTask>>;
+
+// An exec that ran out of its own time, as OpenClaw 2026.10.6 reports it.
+const TIMED_OUT = {
+  status: "failed",
+  failureKind: "overall-timeout",
+  exitReason: "overall-timeout",
+  timedOut: true,
+};
+const FINISHED = { status: "completed", exitCode: 0, exitReason: "exit", timedOut: false };
+
+let seq = 1;
+function call({ gateway }: Opened, id: string, details: Record<string, unknown>) {
+  gateway.emit(
+    "agent",
+    agentEvent("run-x", (seq += 1), "tool", {
+      phase: "start",
+      name: "exec",
+      toolCallId: id,
+      args: { command: "sleep 5" },
+    }),
+  );
+  gateway.emit(
+    "agent",
+    agentEvent("run-x", (seq += 1), "tool", {
+      phase: "result",
+      name: "exec",
+      toolCallId: id,
+      isError: details.timedOut === true,
+      result: { content: [{ type: "text", text: "Command timed out after 1 seconds." }], details },
+    }),
+  );
+}
+
+describe("tool calls that keep timing out (F-101)", () => {
+  it("F-101: after three timed-out calls in a row the run is stopped, and says so", async () => {
+    const task = await openTask();
+    task.gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
+    await until(() => task.transcript().runs[0]?.state === "running");
+    call(task, "c1", TIMED_OUT);
+    call(task, "c2", TIMED_OUT);
+    await until(() => task.transcript().runs[0]?.steps.length === 2);
+    await sleep(20);
+    expect(task.gateway.calls("chat.abort")).toEqual([]);
+    call(task, "c3", TIMED_OUT);
+    await until(() => task.gateway.calls("chat.abort").length === 1);
+    expect(task.gateway.calls("chat.abort")[0]).toEqual({ sessionKey: KEY, runId: "run-x" });
+    expect(task.transcript().runs[0]).toMatchObject({ state: "stopping", stoppedForTimeouts: 3 });
+    task.client.stop();
+  });
+
+  it("F-101: a call that finishes in time between them starts the count again", async () => {
+    const task = await openTask();
+    task.gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
+    await until(() => task.transcript().runs[0]?.state === "running");
+    call(task, "c1", TIMED_OUT);
+    call(task, "c2", TIMED_OUT);
+    call(task, "c3", FINISHED);
+    call(task, "c4", TIMED_OUT);
+    call(task, "c5", TIMED_OUT);
+    await until(() => task.transcript().runs[0]?.steps.length === 5);
+    await sleep(30);
+    expect(task.gateway.calls("chat.abort")).toEqual([]);
+    expect(task.transcript().runs[0]!.state).toBe("running");
+    task.client.stop();
+  });
+});

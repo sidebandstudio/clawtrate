@@ -58,6 +58,11 @@ export const LIVE_VIEWS: Array<{
     ready: (page) => expect(page.getByTestId("status-line")).toContainText("Waiting for an answer"),
   },
   {
+    scene: "run-stopped-timeouts",
+    rows: "F-101",
+    ready: (page) => expect(page.getByTestId("stop-note")).toContainText("timed out"),
+  },
+  {
     scene: "run-stopped-with",
     rows: "F-298 F-296 F-297",
     ready: (page) => expect(page.getByTestId("stopped-with")).toBeVisible(),

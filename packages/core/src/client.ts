@@ -117,7 +117,10 @@ import {
   questionMarkers,
   runsWithQuestionMarkers,
   bindRun,
+  markStoppedForTimeouts,
   noteRunRequest,
+  timeoutsInARow,
+  TIMEOUTS_IN_A_ROW,
   noteStoppedWith,
   cancelQueuedRun,
   dropUnboundRun,
@@ -4056,6 +4059,19 @@ export class ClawtrateClient {
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
     for (const run of transcript.runs) {
+      // Tool calls that keep timing out: the machine may not be responding. Stop the run (F-101).
+      if (
+        (run.state === "running" || run.state === "waiting") &&
+        run.stoppedForTimeouts === undefined &&
+        this.state.connection.canWrite &&
+        !this.options.readOnly
+      ) {
+        const count = timeoutsInARow(run);
+        if (count >= TIMEOUTS_IN_A_ROW) {
+          this.updateActivity(key, (activity) => markStoppedForTimeouts(activity, run.id, count));
+          void this.stopRun(key, run.id);
+        }
+      }
       const timerKey = `${key}\u0000${run.id}`;
       const timer = this.turnTimers.get(timerKey);
       if (isTerminal(run.state)) {

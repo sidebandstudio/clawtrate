@@ -259,6 +259,41 @@ function settleFiles(step: Step, details: RawRecord | null, isError: boolean): S
  * How a run failed. `kind` is the gateway's own classification where it sends
  * one (`chat` `errorKind`, for example `timeout`), never parsed from the text.
  */
+/** Tool calls in a row that time out before this client stops the run (F-101). */
+export const TIMEOUTS_IN_A_ROW = 3;
+
+/** Whether a finished tool step ran out of time, as its own result says. */
+export function timedOut(step: Step): boolean {
+  if (step.kind !== "tool" || step.status === "running") return false;
+  const details = step.details as Record<string, unknown> | null | undefined;
+  return (
+    details?.timedOut === true ||
+    (typeof step.failureKind === "string" && /timeout/i.test(step.failureKind))
+  );
+}
+
+/**
+ * How many of a run's latest finished tool calls in a row timed out: counted back from the
+ * last one to finish, up to a call that finished in time (F-101).
+ */
+export function timeoutsInARow(run: Run): number {
+  const finished = run.steps
+    .filter((step) => step.kind === "tool" && step.status !== "running")
+    .sort((a, b) => (a.endedAt ?? a.startedAt ?? 0) - (b.endedAt ?? b.startedAt ?? 0));
+  let count = 0;
+  for (let i = finished.length - 1; i >= 0 && timedOut(finished[i]!); i -= 1) count += 1;
+  return count;
+}
+
+/** The run is being stopped because its tool calls kept timing out. */
+export function markStoppedForTimeouts(
+  activity: TaskActivity,
+  runId: string,
+  count: number,
+): TaskActivity {
+  return updateRun(activity, runId, (run) => ({ ...run, stoppedForTimeouts: count }));
+}
+
 /** What a confirmed Stop of this client's ended beside the run itself, each as the gateway said. */
 export type StoppedWith = {
   /** Helper runs the gateway aborted with it (`chat.abort` `runIds` other than the run's own). */
@@ -412,6 +447,11 @@ export type Run = {
    * (F-296, F-297, F-298). Absent until a Stop of this client's is confirmed.
    */
   stoppedWith?: StoppedWith;
+  /**
+   * This client stopped the run because that many of its tool calls in a row timed out
+   * (`TIMEOUTS_IN_A_ROW`; F-101). Absent otherwise.
+   */
+  stoppedForTimeouts?: number;
   /** Paths of fields cut to their bound; a cut `text` is not extended by later deltas. */
   cut?: string[];
 };

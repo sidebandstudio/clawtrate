@@ -321,7 +321,7 @@ describe("how a run ends", () => {
   it("F-299: a confirmed stop says how long the run took and that completed steps are not undone", () => {
     expect(
       endingOf(run({ state: "stopped", stopRequestedAt: NOW - 1, endedAt: NOW - 2_000 })),
-    ).toEqual({ kind: "stopped", after: "40s", elsewhere: false });
+    ).toEqual({ kind: "stopped", after: "40s", elsewhere: false, timeouts: null });
     expect(endingOf(run({ state: "stopped", endedAt: NOW }))).toMatchObject({ elsewhere: true });
     // A stop command this device sent while the run went is not "from elsewhere".
     const stopped = run({ state: "stopped", endedAt: NOW });
@@ -528,5 +528,13 @@ describe("what a stop also ended (F-298)", () => {
         names,
       ),
     ).toEqual(["Stopped with it: the process sleep 60."]);
+  });
+});
+
+describe("a run stopped for timeouts (F-101)", () => {
+  it("F-101: the ending says how many calls in a row timed out", () => {
+    expect(
+      endingOf(run({ state: "stopped", stopRequestedAt: NOW - 1, stoppedForTimeouts: 3 })),
+    ).toMatchObject({ kind: "stopped", timeouts: 3 });
   });
 });

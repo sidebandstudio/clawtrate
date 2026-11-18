@@ -302,7 +302,13 @@ export function shelfMessages(transcript: Transcript | undefined): OutgoingMessa
 
 /** A run's ending, said as section 16 and 17 say it. */
 export type RunEnding =
-  | { kind: "stopped"; after: string | null; elsewhere: boolean }
+  | {
+      kind: "stopped";
+      after: string | null;
+      elsewhere: boolean;
+      /** This client stopped it after that many tool calls in a row timed out (F-101). */
+      timeouts: number | null;
+    }
   | { kind: "finished-before-stop" }
   | { kind: "turn-limit"; minutes: number | null; reason: string | null }
   | { kind: "failed"; reason: string };
@@ -327,6 +333,7 @@ export function endingOf(run: Run, transcript?: Transcript): RunEnding | null {
       kind: "stopped",
       after: runDuration(run),
       elsewhere: run.stopRequestedAt === null && !commanded,
+      timeouts: run.stoppedForTimeouts ?? null,
     };
   }
   if (run.state === "failed") {

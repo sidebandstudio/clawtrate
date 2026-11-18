@@ -1708,6 +1708,39 @@ test("F-296 F-298: Stop also stops the run of the bot this run messaged, and the
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
+test("F-101: after three of the run's tool calls in a row time out, the run is stopped and its note says why", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await openShell(page);
+  const { key } = await ownTask(page, "Three timeouts");
+  // Three commands that each run past their one-second limit, then a slow reply that would go on.
+  await composer(page).fill("#exec-timeout #exec-timeout #exec-timeout #slow 60");
+  await page.keyboard.press("Enter");
+  const runId = await inFlightRunId(key);
+  for (let n = 0; n < 3; n += 1) {
+    const pending = page
+      .getByTestId("approval-card")
+      .filter({ has: page.getByRole("button", { name: "Allow once" }) });
+    await expect(pending).toHaveCount(1, { timeout: 60_000 });
+    await pending.getByRole("button", { name: "Allow once" }).click();
+    await expect(pending).toHaveCount(0, { timeout: 30_000 });
+  }
+  const note = stopNote(page, runId);
+  await expect(note.locator("b")).toHaveText("Stopped after 3 tool calls in a row timed out.", {
+    timeout: 60_000,
+  });
+  await expect(note).toContainText("may not be responding");
+  await expect(page.getByTestId("status-line")).toHaveCount(0);
+  // Stopped before its slow reply could finish.
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+  const history = await gatewayCall<{ messages: Array<{ role: string; content?: unknown }> }>(
+    "chat.history",
+    { sessionKey: key, limit: 40 },
+  );
+  expect(JSON.stringify(history.messages)).not.toContain("part 240 of 240");
+});
+
 test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
   page,
 }) => {

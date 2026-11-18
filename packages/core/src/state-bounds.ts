@@ -347,6 +347,7 @@ export const RUN: Bound = flagged<Run>()({
     processes: list(MAX_STOPPED_NAMED, NAME),
     uncertain: list(MAX_STOPPED_NAMED, ID),
   }),
+  stoppedForTimeouts: NUMBER,
 });
 const attachmentInfo = object<OutgoingAttachmentInfo>()({
   fileName: text(MAX_FILE_NAME_CHARS),

@@ -52,6 +52,7 @@ export const LIVE_SCENES = [
   "message-actions",
   "message-actions-read",
   "run-stopped-with",
+  "run-stopped-timeouts",
 ] as const;
 
 export type LiveScene = (typeof LIVE_SCENES)[number];
@@ -469,6 +470,31 @@ export function liveScene(
             processes: ["sleep 60"],
             uncertain: ["agent:pip:main"],
           },
+        }),
+        steps: [],
+      };
+    case "run-stopped-timeouts":
+      // Three commands in a row ran out of time; the client stopped the run.
+      return {
+        initial: withRun(base, now, {
+          state: "stopped",
+          stopRequestedAt: now - 2 * SECOND,
+          endedAt: now - 2 * SECOND,
+          stoppedForTimeouts: 3,
+          steps: [1, 2, 3].map((n) =>
+            toolStep(
+              `call_timeout_${n}`,
+              "exec",
+              { command: "sleep 5" },
+              now - (12 - 3 * n) * SECOND,
+              {
+                status: "failed",
+                endedAt: now - (11 - 3 * n) * SECOND,
+                failureKind: "overall-timeout",
+                error: "Command timed out after 1 seconds.",
+              },
+            ),
+          ),
         }),
         steps: [],
       };

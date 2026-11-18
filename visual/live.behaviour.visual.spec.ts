@@ -850,6 +850,16 @@ test.describe("steering, queueing and holding", () => {
     await expect(steer.locator(".msg-caption")).toHaveText("Steer");
   });
 
+  test("F-101: a run stopped after three tool calls in a row timed out says so, in the stop note's form", async ({
+    page,
+  }) => {
+    await open(page, "run-stopped-timeouts");
+    const note = page.getByTestId("stop-note");
+    await expect(note.locator("b")).toHaveText("Stopped after 3 tool calls in a row timed out.");
+    await expect(note).toContainText("The machine Otto works on may not be responding.");
+    await expect(note.locator(".glyph")).toHaveAttribute("data-state", "stopped");
+  });
+
   test("F-298 F-296 F-297: after a Stop the note lists what stopped with the run, named, and what may not have been delivered", async ({
     page,
   }) => {

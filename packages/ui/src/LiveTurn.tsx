@@ -245,14 +245,21 @@ export function RunEnding({
       <div className="turn-note" data-testid="stop-note" data-run={run.id}>
         <span className="glyph" data-state="stopped" aria-hidden="true" />
         <div>
-          <p>
-            <b>
-              {ending.after ? `Stopped after ${ending.after}` : "Stopped"}
-              {ending.elsewhere ? "," : "."}
-            </b>{" "}
-            {ending.elsewhere ? "from another device or session. " : ""}
-            Completed actions are not undone.
-          </p>
+          {ending.timeouts !== null ? (
+            <p>
+              <b>Stopped after {ending.timeouts} tool calls in a row timed out.</b> The machine{" "}
+              {bot.name} works on may not be responding. Completed actions are not undone.
+            </p>
+          ) : (
+            <p>
+              <b>
+                {ending.after ? `Stopped after ${ending.after}` : "Stopped"}
+                {ending.elsewhere ? "," : "."}
+              </b>{" "}
+              {ending.elsewhere ? "from another device or session. " : ""}
+              Completed actions are not undone.
+            </p>
+          )}
           {also.length > 0 && (
             <ul className="turn-note-list" data-testid="stopped-with">
               {also.map((line) => (
