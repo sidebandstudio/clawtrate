@@ -44,6 +44,8 @@ export type AccountParams = {
   bot: string | null;
   /** The gateway's default model names an account. */
   defacct: boolean;
+  /** The two OpenAI accounts' labels: "none" for neither, "same" for one label shared. */
+  labels: "none" | "same" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -61,6 +63,10 @@ export function accountParams(params: URLSearchParams): AccountParams {
     admin: params.get("admin"),
     bot: params.get("bot"),
     defacct: params.get("defacct") === "1",
+    labels:
+      params.get("labels") === "none" || params.get("labels") === "same"
+        ? (params.get("labels") as "none" | "same")
+        : null,
   };
 }
 
@@ -75,6 +81,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   admin: null,
   bot: null,
   defacct: false,
+  labels: null,
 };
 
 const MINUTE = 60_000;
@@ -162,8 +169,13 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
   const accounts: GatewayAccount[] = none
     ? []
     : [
-        account("openai:work", "Work", "oauth", "subscription"),
-        account("openai:home", "Home", "oauth", "subscription"),
+        account("openai:work", params.labels === "none" ? null : "Work", "oauth", "subscription"),
+        account(
+          "openai:home",
+          params.labels === "none" ? null : params.labels === "same" ? "work" : "Home",
+          "oauth",
+          "subscription",
+        ),
         account("xai:personal", "Personal", "oauth", "subscription"),
         account("github-copilot:github", null, "token", "subscription", {
           status: "expiring",

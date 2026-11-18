@@ -6,25 +6,30 @@
 import type { AccountsState, Bot, GatewayAccount } from "@clawtrate/core";
 import { useRef, type KeyboardEvent } from "react";
 import { CheckIcon, ChevronIcon } from "../icons.tsx";
-import { accountGroups, accountLine, accountName, providerName } from "./words.ts";
+import { accountGroups, accountLine, accountName, accountParts, providerName } from "./words.ts";
 
 /** The value of the "Let the gateway choose" row. */
 export const GATEWAY_CHOICE = "__gateway";
 
-export function AccountTitle({ account, labels }: { account: GatewayAccount; labels: boolean }) {
-  const provider = providerName(account.provider);
-  if (!labels)
-    return (
-      <>
-        {provider} <span className="mono">{account.id}</span>
-      </>
-    );
-  return account.label ? (
+export function AccountTitle({
+  account,
+  accounts,
+}: {
+  account: GatewayAccount;
+  accounts: Pick<AccountsState, "labels" | "accounts">;
+}) {
+  const { label, id } = accountParts(account, accounts);
+  return (
     <>
-      {provider} <span>· {account.label}</span>
+      {providerName(account.provider)}
+      {label && <span> · {label}</span>}
+      {id && (
+        <>
+          {" "}
+          <span className="mono">{id}</span>
+        </>
+      )}
     </>
-  ) : (
-    <>{provider}</>
   );
 }
 
@@ -42,8 +47,8 @@ function AccountText({
   const line = accountLine(account, accounts, bots, now);
   return (
     <span className="b-choice-text">
-      <span className="b-choice-title" title={accountName(account, accounts.labels)}>
-        <AccountTitle account={account} labels={accounts.labels} />
+      <span className="b-choice-title" title={accountName(account, accounts)}>
+        <AccountTitle account={account} accounts={accounts} />
       </span>
       <span className="b-choice-sub">
         {line.kind}
@@ -138,12 +143,7 @@ export function AccountChoices({
           <ul className="b-choices">
             {group.accounts.map((account) => {
               const line = accountLine(account, accounts, bots, now);
-              const name = [
-                accountName(account, accounts.labels),
-                line.kind,
-                line.state?.word,
-                line.users,
-              ]
+              const name = [accountName(account, accounts), line.kind, line.state?.word, line.users]
                 .filter(Boolean)
                 .join(", ");
               return (
@@ -159,6 +159,12 @@ export function AccountChoices({
           </ul>
         </div>
       ))}
+      {accounts.labels && list.some((account) => !account.label) && (
+        <p className="b-hint" data-testid="unlabelled-hint">
+          An account without a label is named by its id on the gateway. Settings → Accounts can
+          label it.
+        </p>
+      )}
       <ul className="b-choices b-gw">
         <li>
           {radio(
@@ -182,19 +188,23 @@ export function AccountRow({
   bots,
   now,
   onOpen,
+  onLabel,
 }: {
   account: GatewayAccount;
   accounts: AccountsState;
   bots: readonly Bot[];
   now: number;
   onOpen: () => void;
+  /** On admin, an account without a label offers to label it (section 6). */
+  onLabel?: () => void;
 }) {
+  const offer = onLabel && accounts.labels && !account.label;
   const line = accountLine(account, accounts, bots, now);
-  const name = [accountName(account, accounts.labels), line.kind, line.state?.word, line.users]
+  const name = [accountName(account, accounts), line.kind, line.state?.word, line.users]
     .filter(Boolean)
     .join(", ");
   return (
-    <li>
+    <li className={offer ? "b-choice-with" : undefined}>
       <button
         type="button"
         className="b-choice"
@@ -203,8 +213,21 @@ export function AccountRow({
         onClick={onOpen}
       >
         <AccountText account={account} accounts={accounts} bots={bots} now={now} />
-        <ChevronIcon />
+        {!offer && <ChevronIcon />}
       </button>
+      {offer && (
+        <button
+          type="button"
+          className="button"
+          data-variant="quiet"
+          data-size="sm"
+          data-label-offer={account.id}
+          aria-label={`Add a label to ${accountName(account, accounts)}`}
+          onClick={onLabel}
+        >
+          Add a label
+        </button>
+      )}
     </li>
   );
 }

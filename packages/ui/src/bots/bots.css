@@ -319,6 +319,21 @@ button.b-choice:hover {
   cursor: default;
 }
 
+.b-choice-with {
+  display: flex;
+  align-items: center;
+  padding-right: 10px;
+}
+
+.b-choice-with > .b-choice {
+  flex: 1;
+  min-width: 0;
+}
+
+.b-choice-with > .button {
+  flex: none;
+}
+
 .b-choice-text {
   display: grid;
   flex: 1;

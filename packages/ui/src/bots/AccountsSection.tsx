@@ -228,13 +228,13 @@ export function useAccountsSection({
                         className="button"
                         data-variant="quiet"
                         data-size="sm"
-                        aria-label="Edit label"
+                        aria-label={account.label ? "Edit label" : "Add a label"}
                         onClick={() => {
                           setLabel(account.label ?? "");
                           setEditing(true);
                         }}
                       >
-                        Edit
+                        {account.label ? "Edit" : "Add a label"}
                       </button>
                     )}
                   </>
@@ -326,7 +326,7 @@ export function useAccountsSection({
         )}
         {confirm && (
           <Confirm
-            title={`Disconnect ${accountName(confirm, accounts.labels)}?`}
+            title={`Disconnect ${accountName(confirm, accounts)}?`}
             text={(() => {
               const names = users.map((each) => each.bot.name);
               return names.length > 0
@@ -343,7 +343,7 @@ export function useAccountsSection({
                 .invoke({ type: "disconnectAccount", profileId: target.id })
                 .then(
                   () => {
-                    announce(`Disconnected ${accountName(target, accounts.labels)}`);
+                    announce(`Disconnected ${accountName(target, accounts)}`);
                     setConfirm(null);
                     go({ page: "list" });
                   },
@@ -358,7 +358,7 @@ export function useAccountsSection({
     );
     return {
       view: {
-        title: accountName(account, accounts.labels),
+        title: accountName(account, accounts),
         back: back("Back to accounts", () => go({ page: "list" })),
         body,
         foot: adminFoot,
@@ -423,6 +423,17 @@ export function useAccountsSection({
                   bots={bots}
                   now={now}
                   onOpen={() => go({ page: "account", id: each.id })}
+                  {...(admin
+                    ? {
+                        // Straight to the label field, which takes the focus.
+                        onLabel: () => {
+                          setPage({ page: "account", id: each.id });
+                          setLabel("");
+                          setLabelError(null);
+                          setEditing(true);
+                        },
+                      }
+                    : {})}
                 />
               ))}
             </ul>

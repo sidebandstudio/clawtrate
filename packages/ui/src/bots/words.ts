@@ -19,12 +19,38 @@ export { providerName };
 /**
  * An account's name. Labels reach admin connections only; below admin an
  * account is its provider and its id on the gateway, which is what tells two
- * accounts of one provider apart there (section 6).
+ * accounts of one provider apart there (section 6). On admin an account
+ * without a label, or with one it shares, is named by its id as well.
  */
-export function accountName(account: GatewayAccount, labels: boolean): string {
+export function accountName(
+  account: GatewayAccount,
+  accounts: Pick<AccountsState, "labels" | "accounts">,
+): string {
   const provider = providerName(account.provider);
-  if (!labels) return `${provider} ${account.id}`;
-  return account.label ? `${provider} · ${account.label}` : provider;
+  const { label, id } = accountParts(account, accounts);
+  return `${provider}${label ? ` · ${label}` : ""}${id ? ` ${id}` : ""}`;
+}
+
+/**
+ * What names an account after its provider: its label, and its id on the
+ * gateway whenever the label alone does not tell it apart. No two accounts of
+ * a provider ever read the same: below admin there are no labels; an account
+ * with none shows its id; and one whose label another account of the provider
+ * shares (compared without case) shows its id too.
+ */
+export function accountParts(
+  account: GatewayAccount,
+  accounts: Pick<AccountsState, "labels" | "accounts">,
+): { label: string | null; id: string | null } {
+  const label = accounts.labels ? account.label : null;
+  if (!label) return { label: null, id: account.id };
+  const shared = accounts.accounts.some(
+    (other) =>
+      other.id !== account.id &&
+      other.provider === account.provider &&
+      other.label?.toLowerCase() === label.toLowerCase(),
+  );
+  return { label, id: shared ? account.id : null };
 }
 
 export function kindWord(account: GatewayAccount): string {

@@ -679,3 +679,45 @@ test("F-034: a bot written whose first task did not land is said to exist, unfin
     page.getByTestId("bot-list").getByRole("button", { name: /^Viral\b/ }),
   ).toBeVisible();
 });
+
+test("F-476: on admin two unlabelled accounts of one provider read differently, by their ids, in New bot and Settings", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&labels=none`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  const group = page.getByRole("radiogroup", { name: "Accounts" });
+  const work = group.getByRole("radio", { name: /^OpenAI openai:work, / });
+  const home = group.getByRole("radio", { name: /^OpenAI openai:home, / });
+  await expect(work).toContainText("openai:work");
+  await expect(home).toContainText("openai:home");
+  await expect(page.getByTestId("unlabelled-hint")).toContainText("named by its id");
+  const titles = await group.locator(".b-choice-title").allInnerTexts();
+  expect(new Set(titles).size).toBe(titles.length);
+  await page.keyboard.press("Escape");
+  // Settings → Accounts: the rows read differently too, and each offers a label.
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  const rows = await settings.locator(".b-choice-title").allInnerTexts();
+  expect(new Set(rows).size).toBe(rows.length);
+  await settings.getByRole("button", { name: "Add a label to OpenAI openai:home" }).click();
+  const field = settings.getByRole("textbox", { name: "Label" });
+  await expect(field).toBeFocused();
+  await field.fill("Home");
+  await field.press("Enter");
+  await expect(settings.getByRole("heading", { name: "OpenAI · Home", level: 3 })).toBeVisible();
+});
+
+test("F-476: two accounts that share a label, whatever its case, are told apart by their ids", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&labels=same`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  const group = page.getByRole("radiogroup", { name: "Accounts" });
+  await expect(group.getByRole("radio", { name: /^OpenAI · Work openai:work, / })).toBeVisible();
+  await expect(group.getByRole("radio", { name: /^OpenAI · work openai:home, / })).toBeVisible();
+  // xAI's label is its own: no id.
+  await expect(group.getByRole("radio", { name: /^xAI · Personal, / })).toBeVisible();
+});

@@ -241,7 +241,7 @@ export function BotSettings({
     const label =
       binding.mode === "account"
         ? account
-          ? accountName(account, accounts.labels)
+          ? accountName(account, accounts)
           : (binding.account ?? "")
         : binding.mode === "gateway"
           ? who
@@ -434,7 +434,7 @@ export function BotSettings({
         announce(
           toGateway
             ? `${name} now has no fixed account`
-            : `${name} now runs on ${target ? accountName(target, accounts.labels) : chosen}`,
+            : `${name} now runs on ${target ? accountName(target, accounts) : chosen}`,
         );
         setPick(null);
         setPickModel(null);
@@ -518,8 +518,8 @@ export function BotSettings({
           <Note icon={<ClockIcon />}>
             <p>
               {toGateway
-                ? `A run in progress finishes on ${was ? accountName(was, accounts.labels) : "its account"}. From the next run ${name} has no fixed account.`
-                : `A run in progress finishes on ${was ? accountName(was, accounts.labels) : "its account"}. The next run uses ${target ? accountName(target, accounts.labels) : chosen}.`}
+                ? `A run in progress finishes on ${was ? accountName(was, accounts) : "its account"}. From the next run ${name} has no fixed account.`
+                : `A run in progress finishes on ${was ? accountName(was, accounts) : "its account"}. The next run uses ${target ? accountName(target, accounts) : chosen}.`}
             </p>
           </Note>
         )}
@@ -530,8 +530,8 @@ export function BotSettings({
             <Note tone="warn">
               <p>
                 {toGateway
-                  ? `${name} is locked to ${accountName(was, accounts.labels)}. The gateway keeps an order for ${name} that names only ${accountName(was, accounts.labels)}, and goes on using that account alone until its owner clears the order on the gateway's machine. Account shows the command.`
-                  : `${name} is locked to ${accountName(was, accounts.labels)}. After saving, ${name} runs on ${accountName(target!, accounts.labels)} first, and the gateway still tries ${accountName(was, accounts.labels)} when ${accountName(target!, accounts.labels)} fails, until you lock to ${accountName(target!, accounts.labels)} or unlock. Account then shows both commands.`}
+                  ? `${name} is locked to ${accountName(was, accounts)}. The gateway keeps an order for ${name} that names only ${accountName(was, accounts)}, and goes on using that account alone until its owner clears the order on the gateway's machine. Account shows the command.`
+                  : `${name} is locked to ${accountName(was, accounts)}. After saving, ${name} runs on ${accountName(target!, accounts)} first, and the gateway still tries ${accountName(was, accounts)} when ${accountName(target!, accounts)} fails, until you lock to ${accountName(target!, accounts)} or unlock. Account then shows both commands.`}
               </p>
             </Note>
           )}
@@ -621,7 +621,7 @@ export function BotSettings({
         <Note key="kept" tone="warn" testId="retained-order">
           <p>
             The gateway still has an order for {name} that names only{" "}
-            {keptAccount ? accountName(keptAccount, accounts.labels) : kept}, so it keeps using that
+            {keptAccount ? accountName(keptAccount, accounts) : kept}, so it keeps using that
             account alone. To let the gateway choose among {who}'s accounts, the gateway's owner can
             clear it on the gateway's machine:
           </p>
@@ -645,7 +645,7 @@ export function BotSettings({
       <dl className="facts" key="facts">
         <div>
           <dt>Account</dt>
-          <dd className="b-wrap-value">{accountName(account, accounts.labels)}</dd>
+          <dd className="b-wrap-value">{accountName(account, accounts)}</dd>
         </div>
         <div>
           <dt>Kind</dt>
@@ -668,7 +668,7 @@ export function BotSettings({
         a.id !== account.id &&
         (a.keptBy === null || a.keptBy === bot.id),
     );
-    const me = accountName(account, accounts.labels);
+    const me = accountName(account, accounts);
     const e = binding.evidence;
     const checkNow = (
       <button
@@ -723,7 +723,7 @@ export function BotSettings({
           {(binding.order?.ids ?? [])
             .map((id) => {
               const listed = accounts.accounts.find((a) => a.id === id);
-              return listed ? accountName(listed, accounts.labels) : id;
+              return listed ? accountName(listed, accounts) : id;
             })
             .join(", ")}
           . That order is the gateway's, not {name}'s own, so it is not a lock. Checked at{" "}
@@ -848,7 +848,7 @@ export function BotSettings({
     } else if (word === "stale") {
       const old = binding.order?.ids[0] ?? null;
       const oldAccount = old ? accounts.accounts.find((a) => a.id === old) : null;
-      const oldName = oldAccount ? accountName(oldAccount, accounts.labels) : (old ?? "");
+      const oldName = oldAccount ? accountName(oldAccount, accounts) : (old ?? "");
       page.push(
         <Note key="s" tone="warn" testId="stale-note">
           <p>
@@ -877,7 +877,7 @@ export function BotSettings({
           <p>
             <b>Bound.</b> {name} runs on {me}. If that account fails, the gateway may use{" "}
             {others.length > 0
-              ? `another ${who} account, such as ${accountName(others[0]!, accounts.labels)},`
+              ? `another ${who} account, such as ${accountName(others[0]!, accounts)},`
               : `another ${who} account, if one is added,`}{" "}
             for that run.
           </p>

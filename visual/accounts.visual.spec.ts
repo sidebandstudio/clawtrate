@@ -72,6 +72,7 @@ const SCENES: Scene[] = [
     },
   },
   { name: "newbot-account-none-chosen", query: ADMIN, ready: accountStep },
+  { name: "newbot-account-unlabelled", query: `${ADMIN}&labels=none`, ready: accountStep },
   {
     name: "newbot-account-default",
     query: `${ADMIN}&defacct=1`,
@@ -307,6 +308,7 @@ const SCENES: Scene[] = [
   },
   // Settings → Accounts
   { name: "settings-accounts", query: ADMIN, ready: accounts },
+  { name: "settings-accounts-unlabelled", query: `${ADMIN}&labels=none`, ready: accounts },
   { name: "settings-accounts-read", query: `scene=main&${OTTO_DISK}&access=read`, ready: accounts },
   { name: "settings-accounts-empty", query: `${ADMIN}&accounts=none`, ready: accounts },
   {

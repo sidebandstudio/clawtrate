@@ -460,7 +460,7 @@ export function useConnect({
           ) : (
             <p className="b-hint" id="b-label-help">
               {needed
-                ? `You have another ${who} account, ${accountName(others[0]!, accounts.labels)}. A label tells them apart everywhere.`
+                ? `You have another ${who} account, ${accountName(others[0]!, accounts)}. A label tells them apart everywhere.`
                 : "Shown wherever this account is, so you can tell accounts apart."}
             </p>
           )}
@@ -471,7 +471,7 @@ export function useConnect({
               <Note key={lock.botId} icon={<LockIcon />}>
                 <p>
                   Clawtrate checked {name}'s lock after this sign-in. It still allows only{" "}
-                  {locked ? accountName(locked, accounts.labels) : lock.account}.
+                  {locked ? accountName(locked, accounts) : lock.account}.
                 </p>
               </Note>
             ) : (
