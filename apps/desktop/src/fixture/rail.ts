@@ -194,9 +194,16 @@ const active = (task: Task) =>
  * Answer the rail's commands. Returns undefined for any other command. A
  * rename to "Taken" is refused as the gateway refuses a label in use.
  */
-export function railCommands(now: number, refused: ReadonlySet<string> = new Set()) {
+export function railCommands(
+  now: number,
+  refused: ReadonlySet<string> = new Set(),
+  /** Set when a test makes the next plain archive meet a run that had just started, which it stops. */
+  race: { archive: boolean } = { archive: false },
+) {
   const archive = initialArchive(now);
   let created = 0;
+  /** Archives in order: each later than the last, as a gateway's archive times are. */
+  let archives = 0;
   return (
     command: BridgeCommand,
     get: () => ClawtrateState,
@@ -302,7 +309,7 @@ export function railCommands(now: number, refused: ReadonlySet<string> = new Set
               sessionId: found.task.sessionId,
               title: found.task.title,
               preview: found.task.preview,
-              archivedAt: Date.now(),
+              archivedAt: Date.now() + (archives += 1),
               updatedAt: found.task.updatedAt,
             },
             ...(archive.get(found.botId) ?? []),

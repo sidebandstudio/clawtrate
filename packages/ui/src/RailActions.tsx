@@ -294,7 +294,7 @@ export function ArchivedGroup({
   /** The bot's listed tasks, so an archive or a restore reads the group again. */
   tasks: Task[];
   /** Tasks this viewer deleted or restored from the group: gone at once, before it reads again. */
-  gone: ReadonlySet<string>;
+  gone: ReadonlyMap<string, number | null>;
   open: boolean;
   onToggle: () => void;
   onMenu: (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => void;
@@ -304,7 +304,7 @@ export function ArchivedGroup({
   const [list, setList] = useState<ArchivedList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const keys = tasks.map((task) => task.key).join("\n");
-  const goneKeys = [...gone].join("\n");
+  const goneKeys = [...gone].map(([key, at]) => `${key} ${at}`).join("\n");
 
   useEffect(() => {
     if (!open) return;
@@ -322,7 +322,13 @@ export function ArchivedGroup({
       live = false;
     };
   }, [open, bridge, bot.id, keys, goneKeys]);
-  const shown = list && { ...list, tasks: list.tasks.filter((task) => !gone.has(task.key)) };
+  // Hidden only while the gateway still lists that same archive of the task.
+  const shown = list && {
+    ...list,
+    tasks: list.tasks.filter(
+      (task) => !gone.has(task.key) || gone.get(task.key) !== task.archivedAt,
+    ),
+  };
 
   const menuAt = (task: ArchivedTask) => (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();

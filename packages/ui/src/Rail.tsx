@@ -195,7 +195,7 @@ function TaskRows({
   onTaskMenu: (task: Task, trigger: HTMLElement, x: number, y: number, toggle?: boolean) => void;
   actions: TaskActions | null;
   archived: {
-    gone: ReadonlySet<string>;
+    gone: ReadonlyMap<string, number | null>;
     open: boolean;
     onToggle: () => void;
     onMenu: (task: ArchivedTask, trigger: HTMLElement, x: number, y: number) => void;
@@ -514,9 +514,15 @@ export function Rail({
   const [archivedOpen, setArchivedOpen] = useState<Set<string>>(() => new Set());
   /** Bots whose New task is on its way; held across renders, read and written by events only. */
   const [creating] = useState(() => new Set<string>());
-  /** Archived tasks this viewer deleted or restored: gone from the open group at once. */
-  const [archivedGone, setArchivedGone] = useState<ReadonlySet<string>>(() => new Set());
-  const goneFromArchive = (key: string) => setArchivedGone((current) => new Set(current).add(key));
+  /**
+   * Archived tasks this viewer deleted or restored: gone from the open group at once. Each is
+   * named with the archive it left (`archivedAt`), so the same task archived again shows.
+   */
+  const [archivedGone, setArchivedGone] = useState<ReadonlyMap<string, number | null>>(
+    () => new Map(),
+  );
+  const goneFromArchive = (task: { key: string; archivedAt?: number | null }) =>
+    setArchivedGone((current) => new Map(current).set(task.key, task.archivedAt ?? null));
   /** Where focus goes once the rail has rendered after an action: a task's row, or the composer. */
   const [focusTask, setFocusTask] = useState<{
     key: string | null;
@@ -581,14 +587,25 @@ export function Rail({
         onConfirm: () => act(true),
         returnTo: trigger,
       });
+    if (isActive(task)) {
+      askStop();
       return;
     }
-    void runner.run(`archive ${task.title}`, () => act(false));
+    // The task may have started working since its row was drawn: the engine sends nothing then,
+    // and the person gets the same question as for a task that was already working.
+    void runner.run(`archive ${task.title}`, async () => {
+      try {
+        await act(false);
+      } catch (failure) {
+        if (failure instanceof Error && failure.message.includes(ACTIVE_RUN_MESSAGE)) askStop();
+        else throw failure;
+      }
+    });
   };
 
   const remove = (
     bot: Bot,
-    task: { key: string; title: string; status?: Task["status"] },
+    task: { key: string; title: string; status?: Task["status"]; archivedAt?: number | null },
     trigger: HTMLElement | null,
     listed: boolean,
   ) => {
@@ -612,7 +629,7 @@ export function Rail({
         setAnnouncement(`Deleted ${task.title}.`);
         if (listed) await afterRemoval(bot, task as Task, remaining, next);
         else {
-          goneFromArchive(task.key);
+          goneFromArchive(task);
           setFocusTask({ key: null, bot: bot.id });
         }
       },
@@ -620,10 +637,12 @@ export function Rail({
     });
   };
 
-  const restore = (task: ArchivedTask) => {
+  const restore = (
+    task: Pick<ArchivedTask, "key" | "title" | "botId"> & { archivedAt?: number | null },
+  ) => {
     void runner.run(`restore ${task.title}`, async () => {
       await bridge.invoke({ type: "restoreTask", key: task.key });
-      goneFromArchive(task.key);
+      goneFromArchive(task);
       setAnnouncement(`Restored ${task.title}.`);
       setFocusTask({ key: task.key, bot: task.botId });
     });
