@@ -970,6 +970,7 @@ export function createComputer(api, options = {}) {
     // The holder, the lease and the session's access are checked again
     // before every command, so input admitted under a lease cannot land
     // after it ends.
+    const accessHolds = () => stillCurrent(caller, auth) && stillCurrent(caller, lease.retained);
     const stillHeld = () => {
       if (lease.ending || state.leases.get(lease.key) !== lease || lease.state !== "granted") {
         throw new CdpError("lease_ended", "control ended");
@@ -986,7 +987,12 @@ export function createComputer(api, options = {}) {
         }
       });
     } catch (error) {
-      if (!(error instanceof CdpError)) void endLease(lease, "revoked", "access-revoked");
+      // However the input ended (refused, failed, or its reply never came),
+      // a lease whose caller has lost access is ended, not kept.
+      if (!accessHolds()) {
+        await endLease(lease, "revoked", "access-revoked");
+        accessEnded();
+      }
       refuse(
         "UNAVAILABLE",
         "input_not_delivered",
@@ -998,7 +1004,7 @@ export function createComputer(api, options = {}) {
     try {
       stillHeld();
     } catch (error) {
-      if (!(error instanceof CdpError)) {
+      if (!(error instanceof CdpError) || !accessHolds()) {
         await endLease(lease, "revoked", "access-revoked");
         accessEnded();
       }

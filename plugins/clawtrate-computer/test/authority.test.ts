@@ -373,3 +373,49 @@ describe("the take's watch is set up only while the caller's access holds", () =
     await h.stop();
   });
 });
+
+describe("an input that fails still answers to the caller's access", () => {
+  for (const how of ["times out", "fails", "finds the tab closed"]) {
+    it(`a lease is ended, not kept, when the last input ${how} after access quietly ended`, async () => {
+      const h = load({ timeouts: { discoveryMs: 500, connectMs: 500, commandMs: 250 } });
+      const access = new Access();
+      const taken = await h.call("control.take", tab, { access });
+      expect(taken.payload?.state).toBe("granted");
+      const generation = taken.payload!.generation;
+      h.browser.stalledMethods.add("Input.insertText");
+      const input = h.call("input", { ...tab, generation, kind: "text", text: "late" }, { access });
+      await until(() => h.browser.sent("Input.insertText").length === 1);
+      access.revoked = true;
+      if (how === "fails")
+        h.browser.tabSockets
+          .at(-1)!
+          .emit("message", {
+            data: JSON.stringify({
+              id: h.browser.sent("").filter((e) => e.url.includes("/devtools/page/")).length,
+              error: { message: "failed" },
+            }),
+          });
+      if (how === "finds the tab closed") h.browser.tabSockets.at(-1)!.close();
+      const answer = await input;
+      expect(ended(answer)).toEqual([false, "FORBIDDEN", "session_access_ended"]);
+      await until(() => h.state.leases.size === 0);
+      expect(h.statesOf(generation)).toContain("revoked");
+      await h.stop();
+    });
+  }
+
+  it("an input that times out while access holds keeps the lease", async () => {
+    const h = load({ timeouts: { discoveryMs: 500, connectMs: 500, commandMs: 250 } });
+    const taken = await h.call("control.take", tab);
+    h.browser.stalledMethods.add("Input.insertText");
+    const answer = await h.call("input", {
+      ...tab,
+      generation: taken.payload!.generation,
+      kind: "text",
+      text: "slow",
+    });
+    expect([answer.ok, answer.error?.details?.reason]).toEqual([false, "input_not_delivered"]);
+    expect(h.state.leases.size).toBe(1);
+    await h.stop();
+  });
+});
