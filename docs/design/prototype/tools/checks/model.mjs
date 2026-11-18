@@ -120,7 +120,7 @@ await p.click("#t-chip");
 check("25.2 a list that failed offers Try again", await p.evaluate(() => document.querySelector(".t-menu-wait").textContent.includes("Couldn't load the models.") && document.activeElement.dataset.tRetry !== undefined));
 await p.close();
 p = await open("tmodel=unreported");
-check("25.2 a task whose row names no model says so", await p.evaluate(() => document.getElementById("t-chip").textContent.includes("Model not reported")));
+check("25.2 a task whose row names no model has no chip and no Model group", await p.evaluate(() => !document.getElementById("t-chip") && !document.getElementById("t-details")));
 await p.close();
 
 // Read-only --------------------------------------------------------------------------------------------

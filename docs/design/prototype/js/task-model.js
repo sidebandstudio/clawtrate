@@ -66,7 +66,7 @@
   function chip() {
     const side = $(".conversation-header .header-side");
     $("#t-chip")?.remove();
-    if (!otto()) return;
+    if (!otto() || S.state === "unreported") return;
     const v = shown();
     const inner =
       (S.state === "held" ? icon("clock", "icon t-held") : "") +
@@ -158,7 +158,7 @@
   function details() {
     const panel = $("#panel-details");
     $("#t-details", panel)?.remove();
-    if (!otto() || !panel) return;
+    if (!otto() || !panel || S.state === "unreported") return;
     const v = shown();
     const line =
       S.state === "held"
