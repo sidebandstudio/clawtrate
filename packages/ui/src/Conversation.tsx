@@ -29,7 +29,8 @@ import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTu
 import { ActionScope, ItemFeed, RunFeed, RunLine, showAction } from "./actions/index.ts";
 import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { FindBar } from "./Find.tsx";
-import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
+import { CONVERSATION_WORDS as W, emptyBody, stampBefore } from "./conversation-words.ts";
+import { contextWords, fullDate, stampTime } from "./format.ts";
 import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
@@ -69,8 +70,6 @@ function TaskContext({ task }: { task: Task }) {
     </p>
   );
 }
-
-const STAMP_GAP_MS = 10 * 60_000;
 
 /** What the reading of an action needs beyond each call: the bots' names, as the cards name them. */
 function useReading(): ReadingContext {
@@ -294,10 +293,7 @@ function TranscriptView({
   const endingsBefore = live.endingsBefore;
   for (const item of transcript.items) {
     const at = item.timestamp;
-    if (
-      at !== null &&
-      (previous === null || at - previous > STAMP_GAP_MS || daysAgo(previous, at) !== 0)
-    ) {
+    if (at !== null && stampBefore(previous, at)) {
       rows.push(
         <div className="stamp" key={`stamp-${item.id}`}>
           {stampTime(at, now)}
@@ -913,18 +909,12 @@ export function Conversation({
     );
   } else if (!online && (!transcript || itemCount === 0) && !hasLive) {
     // Nothing was saved for this task, and nothing can load until the gateway is back.
-    body = (
-      <EmptyState
-        bot={bot}
-        title="Waiting for the gateway"
-        body="This conversation loads when the connection returns."
-      />
-    );
+    body = <EmptyState bot={bot} title={W.waitingTitle} body={W.waitingBody} />;
   } else if (!transcript || (transcript.status === "loading" && itemCount === 0 && !hasLive)) {
     body = (
       <div className="transcript-wrap">
         <div className="transcript" data-testid="transcript">
-          <div className="transcript-inner" aria-busy="true" aria-label="Loading conversation">
+          <div className="transcript-inner" aria-busy="true" aria-label={W.loading}>
             <h1 className="task-line" tabIndex={-1}>
               {task.title}
             </h1>
@@ -938,20 +928,14 @@ export function Conversation({
     );
   } else if (transcript.status === "error" && itemCount === 0 && !hasLive) {
     body = (
-      <EmptyState bot={bot} title="Could not load this conversation" body={transcript.error}>
+      <EmptyState bot={bot} title={W.loadFailed} body={transcript.error}>
         <button type="button" className="button" onClick={onReload}>
-          Try again
+          {W.tryAgain}
         </button>
       </EmptyState>
     );
   } else if (itemCount === 0 && !hasLive) {
-    body = (
-      <EmptyState
-        bot={bot}
-        title="Nothing here yet"
-        body={`Messages between you and ${bot.name} in this task will appear here.`}
-      />
-    );
+    body = <EmptyState bot={bot} title={W.emptyTitle} body={emptyBody(bot.name)} />;
   } else {
     body = (
       <TranscriptView
@@ -972,9 +956,9 @@ export function Conversation({
         note={
           refreshNote && (
             <p className="load-note" role="alert">
-              Couldn't refresh this conversation. Showing what was loaded before.
+              {W.refreshFailed}
               <button type="button" className="button" data-size="sm" onClick={onReload}>
-                Try again
+                {W.tryAgain}
               </button>
             </p>
           )

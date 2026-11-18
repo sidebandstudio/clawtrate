@@ -46,6 +46,38 @@ export default tseslint.config(
     },
   },
   {
+    // The interface's pure modules, which the iOS app imports as well: no React
+    // and no DOM, so React Native can run them (see packages/ui/package.json).
+    files: [
+      "packages/ui/src/{access,character,connect-words,conversation-words,format,gateway-state,screen,strip,summary,unread}.ts",
+    ],
+    languageOptions: { globals: {} },
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["react", "react-dom", "react/*", "react-dom/*"],
+              message: "a pure module of the interface uses no React",
+            },
+            { group: ["*.tsx", "./*.css"], message: "a pure module imports pure modules only" },
+          ],
+        },
+      ],
+      "no-restricted-globals": [
+        "error",
+        "window",
+        "document",
+        "navigator",
+        "localStorage",
+        "process",
+        "Buffer",
+        "require",
+      ],
+    },
+  },
+  {
     files: ["packages/ui/**/*.{ts,tsx}", "apps/desktop/src/renderer/**/*.{ts,tsx}"],
     languageOptions: { globals: { ...globals.browser } },
     plugins: { "react-hooks": reactHooks },

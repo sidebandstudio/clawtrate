@@ -11,11 +11,21 @@ import logoUrl from "./assets/logo-mark.png";
 import { Character, type CharacterSpec } from "./Avatar.tsx";
 import { useCommand } from "./bridge.tsx";
 import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
+import {
+  CONNECT_WORDS as W,
+  countdownWords,
+  failureTitle,
+  pairingLede,
+  PRODUCT_NAME,
+  protocolLede,
+  scopeWords,
+  setupSteps,
+  SLOGAN,
+} from "./connect-words.ts";
 import { gatewayLabel } from "./format.ts";
 import { CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
 
-export const PRODUCT_NAME = "Clawtrate";
-export const SLOGAN = "Your OpenClaw agents, orchestrated.";
+export { failureTitle, PRODUCT_NAME, SLOGAN } from "./connect-words.ts";
 
 /** A command with a copy button that works over plain http too, or says how to copy by hand. */
 export function CommandLine({ command, label }: { command: string; label: string }) {
@@ -49,7 +59,7 @@ export function CommandLine({ command, label }: { command: string; label: string
       </div>
       <p className="copy-status" role="status" aria-live="polite">
         {state === "copied"
-          ? "Copied."
+          ? W.copied
           : state === "manual"
             ? `Selected. Press ${shortcut} to copy.`
             : ""}
@@ -64,13 +74,8 @@ function Countdown({ until }: { until: number | null }) {
     const timer = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(timer);
   }, []);
-  // No retry waiting means an attempt is under way.
-  if (until === null) return <> now</>;
-  const seconds = Math.max(0, Math.ceil((until - now) / 1000));
-  return <>{seconds > 0 ? ` in ${seconds}s` : " now"}</>;
+  return <>{countdownWords(until, now)}</>;
 }
-
-type StepState = "done" | "current" | "pending";
 
 /**
  * Setting up a gateway, one step at a time: connecting, pairing this device,
@@ -86,24 +91,9 @@ function SetupSteps({
   /** While pairing, the step says what it is waiting for. */
   pairingText?: ReactNode;
 }) {
-  const gateway = gatewayLabel(connection.gatewayUrl);
-  const pairing = connection.status === "pairing";
-  const reached = pairing || loadingBots;
-  const steps: Array<{ state: StepState; label: ReactNode; waiting?: boolean }> = [
-    reached
-      ? { state: "done", label: `Connected to ${gateway}` }
-      : { state: "current", label: `Connecting to ${gateway}` },
-    loadingBots || (connection.paired && !pairing)
-      ? { state: "done", label: "This device is paired" }
-      : pairing
-        ? { state: "current", label: pairingText ?? "Waiting for approval", waiting: true }
-        : { state: "pending", label: "Pair this device" },
-    loadingBots
-      ? { state: "current", label: "Loading bots" }
-      : { state: "pending", label: "Load bots" },
-  ];
+  const steps = setupSteps(connection, loadingBots);
   return (
-    <ol className="setup-steps" aria-label="Setting up" data-testid="setup-steps">
+    <ol className="setup-steps" aria-label={W.setupLabel} data-testid="setup-steps">
       {steps.map((step, index) => (
         <li
           key={index}
@@ -121,27 +111,14 @@ function SetupSteps({
               aria-hidden="true"
             />
           )}
-          <span role={step.state === "current" ? "status" : undefined}>{step.label}</span>
+          <span role={step.state === "current" ? "status" : undefined}>
+            {step.label ?? pairingText ?? W.waitingStep}
+          </span>
         </li>
       ))}
     </ol>
   );
 }
-
-/** A connection failure's title. */
-export function failureTitle(code: string | null | undefined): string {
-  switch (code) {
-    case "PAIRING_ENDED":
-      return "The pairing request is no longer pending";
-    default:
-      return "Could not connect";
-  }
-}
-
-/** What a requested scope lets this device do, in plain words. */
-const SCOPE_WORDS: Record<string, string> = {
-  "operator.read": "Read bots, tasks and conversations",
-};
 
 function PairingPanel({ connection }: { connection: ConnectionState }) {
   const send = useCommand();
@@ -162,28 +139,25 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
   };
   return (
     <section className="panel" aria-labelledby="pair-title">
-      <h2 id="pair-title">Approve this device</h2>
-      <p className="panel-lede">
-        {gatewayLabel(connection.gatewayUrl)} has not seen this device before. Approve it once on
-        the gateway's machine and {PRODUCT_NAME} connects by itself.
-      </p>
+      <h2 id="pair-title">{W.approveTitle}</h2>
+      <p className="panel-lede">{pairingLede(connection.gatewayUrl)}</p>
       {pairing.approveNote && <p className="approve-note">{pairing.approveNote}</p>}
-      <CommandLine command={pairing.approveCommand} label="Copy approve command" />
+      <CommandLine command={pairing.approveCommand} label={W.copyApprove} />
       <SetupSteps
         connection={connection}
         loadingBots={false}
         pairingText={
           <>
-            {checked ? "Not approved yet, checking again" : "Waiting for approval, checking again"}
+            {checked ? W.notYet : W.waiting}
             <Countdown until={connection.retryAt} />
           </>
         }
       />
-      <ul className="scopes" aria-label="This device asks to">
+      <ul className="scopes" aria-label={W.scopesLabel}>
         {pairing.requestedScopes.map((scope) => (
           <li key={scope} data-scope={scope}>
             <EyeIcon />
-            {SCOPE_WORDS[scope] ?? scope}
+            {scopeWords(scope)}
           </li>
         ))}
       </ul>
@@ -195,7 +169,7 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
           aria-disabled={checking || undefined}
           onClick={() => void check()}
         >
-          {checking ? "Checking…" : "Check now"}
+          {checking ? W.checking : W.checkNow}
         </button>
         <button
           type="button"
@@ -204,7 +178,7 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
           data-size="lg"
           onClick={() => void send({ type: "disconnect" })}
         >
-          Use another gateway
+          {W.useAnother}
         </button>
       </div>
     </section>
@@ -222,16 +196,13 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!url.trim()) {
-      setSubmitError({
-        title: "Enter the gateway's address",
-        message: "It looks like ws://host:port or wss://host.",
-      });
+      setSubmitError(W.missingAddress);
       return;
     }
     setSubmitError(null);
     send({ type: "connect", url: url.trim(), token: token || null }).catch((error: unknown) =>
       setSubmitError({
-        title: "Could not connect",
+        title: failureTitle(null),
         message: error instanceof Error ? error.message : String(error),
       }),
     );
@@ -256,30 +227,30 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
   return (
     <section className="panel" aria-labelledby="connect-title">
       <h2 id="connect-title" className="visually-hidden">
-        Connect to your gateway
+        {W.connectTitle}
       </h2>
       <form onSubmit={submit} noValidate ref={formRef}>
         <label className="field">
-          <span className="visually-hidden">Gateway address</span>
+          <span className="visually-hidden">{W.address}</span>
           <input
             className="input"
             name="url"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
-            placeholder="Gateway address"
+            placeholder={W.address}
             autoComplete="off"
             spellCheck={false}
           />
         </label>
         <label className="field">
-          <span className="visually-hidden">Gateway token, needed for the first pairing only</span>
+          <span className="visually-hidden">{W.tokenLabel}</span>
           <input
             className="input"
             name="token"
             type="password"
             value={token}
             onChange={(event) => setToken(event.target.value)}
-            placeholder="Token, for the first pairing only"
+            placeholder={W.token}
             autoComplete="off"
           />
         </label>
@@ -290,7 +261,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             {error.hint && ` ${error.hint}`}
             {error.code && <span className="form-error-code">{error.code}</span>}
             <button type="button" className="button" data-size="sm" onClick={tryAgain}>
-              Try again
+              {W.tryAgain}
             </button>
           </div>
         )}
@@ -302,7 +273,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             data-size="lg"
             disabled={busy}
           >
-            {busy ? "Connecting…" : "Connect a gateway"}
+            {busy ? W.connecting : W.connect}
           </button>
           {info.devGateway && (
             <button
@@ -314,14 +285,11 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
               title={`${gatewayLabel(info.devGateway.url)}, started with pnpm dev-gateway up`}
               onClick={() => void send({ type: "connectDevGateway" })}
             >
-              Use the development gateway
+              {W.devGateway}
             </button>
           )}
         </div>
-        <p className="field-hint">
-          {PRODUCT_NAME} works with an OpenClaw gateway you already run. It asks for read access
-          only, and the token is used once.
-        </p>
+        <p className="field-hint">{W.hint}</p>
       </form>
     </section>
   );
@@ -354,7 +322,7 @@ function SetupPanel({
             data-size="sm"
             onClick={() => void send({ type: "retry" })}
           >
-            Try again
+            {W.tryAgain}
           </button>
         </div>
       )}
@@ -366,7 +334,7 @@ function SetupPanel({
           data-size="lg"
           onClick={() => void send({ type: "disconnect" })}
         >
-          Use another gateway
+          {W.useAnother}
         </button>
       </div>
     </section>
@@ -382,18 +350,11 @@ function ProtocolNotice({
   error: ConnectionError;
 }) {
   const send = useCommand();
-  const protocol = error.protocol;
   const retrying = connection.status === "connecting" || connection.status === "reconnecting";
-  const gateway = gatewayLabel(connection.gatewayUrl);
   return (
     <section className="panel" aria-labelledby="protocol-title" data-testid="protocol-notice">
-      <h2 id="protocol-title">This gateway speaks another protocol</h2>
-      <p className="panel-lede">
-        {protocol?.gateway === null || protocol?.gateway === undefined
-          ? `${gateway} does not speak protocol ${protocol?.client ?? ""}, the one this version of ${PRODUCT_NAME} speaks.`
-          : `${gateway} speaks protocol ${protocol.gateway}. This version of ${PRODUCT_NAME} speaks protocol ${protocol.client}.`}{" "}
-        Update the one that is older, then retry.
-      </p>
+      <h2 id="protocol-title">{W.protocolTitle}</h2>
+      <p className="panel-lede">{protocolLede(connection.gatewayUrl, error.protocol)}</p>
       <div className="actions">
         <button
           type="button"
@@ -404,7 +365,7 @@ function ProtocolNotice({
             if (!retrying) void send({ type: "retry" });
           }}
         >
-          {retrying ? "Retrying…" : "Retry"}
+          {retrying ? W.retrying : W.retry}
         </button>
         <button
           type="button"
@@ -413,7 +374,7 @@ function ProtocolNotice({
           data-size="lg"
           onClick={() => void send({ type: "disconnect" })}
         >
-          Choose another gateway
+          {W.chooseAnother}
         </button>
       </div>
     </section>
@@ -540,7 +501,7 @@ export function ConnectScreen({
             <p className="connect-foot">
               {connection.deviceId
                 ? `This device ${connection.deviceId.slice(0, 8)}`
-                : "Preparing device identity…"}
+                : W.preparingIdentity}
               {" · "}
               {host}
             </p>

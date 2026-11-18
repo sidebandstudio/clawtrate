@@ -1,0 +1,36 @@
+// The conversation's stamps and the words of its empty, loading and failed
+// states (docs/design/visual-language.md, section 8). The desktop's
+// `Conversation.tsx` and the iOS app's transcript both read them from here.
+// Pure: no DOM and no React.
+
+import { daysAgo } from "./format.ts";
+
+/** More than this between two messages puts a stamp between them. */
+export const STAMP_GAP_MS = 10 * 60_000;
+
+/**
+ * Whether a centred stamp goes before a message at `at`: before the first
+ * message, and wherever more than ten minutes pass or the day changes.
+ * `previous` is the time of the last message with a time.
+ */
+export function stampBefore(previous: number | null, at: number | null): boolean {
+  return (
+    at !== null &&
+    (previous === null || at - previous > STAMP_GAP_MS || daysAgo(previous, at) !== 0)
+  );
+}
+
+export const CONVERSATION_WORDS = {
+  waitingTitle: "Waiting for the gateway",
+  waitingBody: "This conversation loads when the connection returns.",
+  loadFailed: "Could not load this conversation",
+  tryAgain: "Try again",
+  emptyTitle: "Nothing here yet",
+  refreshFailed: "Couldn't refresh this conversation. Showing what was loaded before.",
+  loading: "Loading conversation",
+} as const;
+
+/** A task with no messages yet, on a connection that reads. */
+export function emptyBody(botName: string): string {
+  return `Messages between you and ${botName} in this task will appear here.`;
+}

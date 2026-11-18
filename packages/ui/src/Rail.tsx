@@ -20,7 +20,7 @@ import {
 import { Avatar } from "./Avatar.tsx";
 import { useBridge, useCommand } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
-import { gatewayLabel, rowTime } from "./format.ts";
+import { gatewayLabel } from "./format.ts";
 import {
   ArchiveIcon,
   ArrowDownIcon,
@@ -55,18 +55,24 @@ import {
   type DialogSpec,
 } from "./RailActions.tsx";
 import { arrange, rosterScope, SORT_ORDERS, useRoster } from "./roster.ts";
+import type { SelectionModel } from "./selection.ts";
 import {
   botLabel,
+  botPreview,
+  botTime,
   summarize,
+  taskLabel,
   taskState,
+  taskTime,
   TASK_CAP,
   TASK_CAP_ONE_PANE,
   visibleTasks,
-  type BotSummary,
+  waitingWords,
   type RunState,
-  type SelectionModel,
-} from "./selection.ts";
+} from "./summary.ts";
 import { isUnread } from "./unread.ts";
+
+export { waitingWords } from "./summary.ts";
 
 /** The gateway's state in words, for the footer, its menu and its accessible name. */
 export function presenceWords(connection: ConnectionState, catchingUp: boolean): string {
@@ -157,15 +163,6 @@ function MoreButton({ label, onOpen }: { label: string; onOpen: (trigger: HTMLEl
 }
 
 /** How a task's state ends its row's accessible name (conversation.md, section 20). */
-const SPOKEN: Record<RunState, string> = {
-  working: ", working",
-  waiting: ", needs you",
-  blocked: ", blocked",
-  failed: ", last run failed",
-  "done-with-failures": ", done with failures",
-  stopped: ", stopped",
-  queued: ", queued",
-};
 
 /** What a bot's rows can do: set only when the connection writes. */
 type TaskActions = {
@@ -225,10 +222,7 @@ function TaskRows({
         const unread =
           (!current || selection.keptUnread.has(task.key)) && isUnread(task, selection.unreadSeen);
         const state = taskState(task, selection.seen, selection.task?.key ?? null);
-        const spoken =
-          task.title +
-          (task.pinned ? ", pinned" : "") +
-          (state ? SPOKEN[state] : unread ? ", unread" : "");
+        const spoken = taskLabel(task, state, unread);
         if (actions?.renaming === task.key) {
           return (
             <li key={task.key}>
@@ -254,9 +248,7 @@ function TaskRows({
               aria-current={current ? "true" : undefined}
               aria-label={spoken}
               aria-description={
-                task.updatedAt === null
-                  ? undefined
-                  : `Last activity ${task.status === "running" ? "now" : rowTime(task.updatedAt, now)}`
+                task.updatedAt === null ? undefined : `Last activity ${taskTime(task, now)}`
               }
               onClick={() => onOpenTask(bot.id, task.key)}
               onDoubleClick={actions ? () => actions.onRename(task) : undefined}
@@ -274,7 +266,7 @@ function TaskRows({
               <span className="task-title">{task.title}</span>
               {task.updatedAt !== null && (
                 <time className="task-time" aria-hidden="true">
-                  {task.status === "running" ? "now" : rowTime(task.updatedAt, now)}
+                  {taskTime(task, now)}
                 </time>
               )}
               {/* One slot for at most one mark, kept even when empty so times line up. */}
@@ -358,18 +350,6 @@ type MenuState =
   | { kind: "move"; botId: string; trigger: HTMLElement; x: number; y: number }
   | { kind: "task"; botId: string; key: string; trigger: HTMLElement; x: number; y: number }
   | { kind: "archived"; task: ArchivedTask; trigger: HTMLElement; x: number; y: number };
-
-/** What a bot's line two says while one of its tasks waits for the person (F-021). */
-export function waitingWords(tasks: Task[]): string | null {
-  const waiting = tasks.filter((task) => task.status === "waiting");
-  if (waiting.length === 0) return null;
-  const first = waiting.reduce((a, b) => ((b.waitingSince ?? 0) < (a.waitingSince ?? 0) ? b : a));
-  return first.waitingFor === "question"
-    ? "Waiting for you: a question"
-    : first.waitingFor === "approval"
-      ? "Waiting for you: approve a command"
-      : "Waiting for you";
-}
 
 /** Drop the separators a menu would start or end with, or show twice in a row. */
 function tidy(entries: MenuEntry[]): MenuEntry[] {
@@ -1523,18 +1503,6 @@ export function Rail({
 
   const gatewayName = `${gateway}, ${words.replace("…", "").toLowerCase()}. Open the gateway menu.`;
 
-  // Since it began waiting, while a task waits for the person (conversation.md,
-  // section 20); "now" while any of the bot's tasks runs; else the latest activity.
-  const time = (tasks: Task[], summary: BotSummary) => {
-    const waiting = tasks
-      .filter((task) => task.status === "waiting" && task.waitingSince !== undefined)
-      .map((task) => task.waitingSince!);
-    if (waiting.length > 0) return rowTime(Math.min(...waiting), now);
-    return tasks.some((task) => task.status === "running")
-      ? "now"
-      : rowTime(summary.latest?.updatedAt ?? null, now);
-  };
-
   const onContextMenu = (bot: Bot) => (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     openBotMenu(bot.id, event.currentTarget, event.clientX, event.clientY);
@@ -1572,7 +1540,6 @@ export function Rail({
     const open = place !== "search" && selection.isOpen(bot.id);
     const several = tasks.length > 1;
     const selected = bot.id === selection.bot?.id;
-    const latest = summary.latest;
     return (
       <li
         key={bot.id}
@@ -1617,16 +1584,11 @@ export function Rail({
             <span className="bot-line">
               <span className="bot-name">{bot.name}</span>
               {bot.theme && <span className="bot-label">{bot.theme}</span>}
-              <time className="bot-time">{time(tasks, summary)}</time>
+              <time className="bot-time">{botTime(tasks, summary, now)}</time>
             </span>
             <span className="bot-line">
               <span className="bot-preview" data-tone={waiting ? "warn" : undefined}>
-                {waiting ??
-                  (latest
-                    ? (latest.preview ?? latest.title)
-                    : discovery.status === "loading"
-                      ? "Loading tasks"
-                      : "No tasks yet")}
+                {botPreview(tasks, summary, discovery.status === "loading")}
               </span>
               {summary.unread && <span className="unread-dot" />}
             </span>

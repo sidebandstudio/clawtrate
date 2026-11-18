@@ -5,6 +5,16 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./access": "./src/access.ts",
+    "./character": "./src/character.ts",
+    "./connect-words": "./src/connect-words.ts",
+    "./conversation-words": "./src/conversation-words.ts",
+    "./format": "./src/format.ts",
+    "./gateway-state": "./src/gateway-state.ts",
+    "./screen": "./src/screen.ts",
+    "./strip": "./src/strip.ts",
+    "./summary": "./src/summary.ts",
+    "./unread": "./src/unread.ts",
     "./styles.css": "./src/styles/index.css"
   },
   "scripts": {
