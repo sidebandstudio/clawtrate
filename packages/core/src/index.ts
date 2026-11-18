@@ -47,6 +47,8 @@ export {
   DEFAULT_MAX_PAYLOAD_BYTES,
   DEFAULT_TURN_LIMIT_MS,
   defaultApprovalInstructions,
+  GATEWAY_REQUEST_ID,
+  NO_APPROVE_COMMAND,
   GatewayNotAllowedError,
   MAX_FILE_READS,
   MAX_MESSAGE_CHARS,

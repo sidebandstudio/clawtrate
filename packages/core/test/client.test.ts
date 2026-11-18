@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
-import { ClawtrateClient, MAX_SESSION_PAGES, REQUESTED_SCOPES } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  defaultApprovalInstructions,
+  MAX_SESSION_PAGES,
+  NO_APPROVE_COMMAND,
+  REQUESTED_SCOPES,
+} from "../src/client.ts";
 import {
   FakeGateway,
   GatewayError,
@@ -127,14 +133,14 @@ describe("allowed gateways on every reconnect (A2)", () => {
 });
 
 describe("pairing instructions (A3)", () => {
-  function pairingGateway() {
+  function pairingGateway(requestId = "req-123") {
     const gateway = new FakeGateway();
     gateway.connectReply = () => ({
       ok: false,
       error: {
         code: "NOT_PAIRED",
         message: "pairing required",
-        details: { code: "PAIRING_REQUIRED", requestId: "req-123", deviceId: "device-1" },
+        details: { code: "PAIRING_REQUIRED", requestId, deviceId: "device-1" },
       },
     });
     return gateway;
@@ -160,15 +166,35 @@ describe("pairing instructions (A3)", () => {
   });
 
   it("falls back to the gateway owner's command with a note", async () => {
-    const gateway = pairingGateway();
+    const id = "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55";
+    const gateway = pairingGateway(id);
     const client = new ClawtrateClient(testHost(gateway), FAST);
     await client.connect({ url: URL_B, token: "t" });
     await until(() => client.state.connection.status === "pairing");
-    expect(client.state.connection.pairing?.approveCommand).toBe(
-      "openclaw devices approve req-123",
-    );
+    expect(client.state.connection.pairing?.approveCommand).toBe(`openclaw devices approve ${id}`);
     expect(client.state.connection.pairing?.approveNote).toMatch(/gateway's owner/);
     client.stop();
+  });
+
+  it("builds no command from a request id that is not in the gateway's own form", async () => {
+    for (const id of [
+      "req-123",
+      "x; rm -rf ~",
+      "$(id)",
+      "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55 && true",
+    ]) {
+      const gateway = pairingGateway(id);
+      const client = new ClawtrateClient(testHost(gateway), FAST);
+      await client.connect({ url: URL_B, token: "t" });
+      await until(() => client.state.connection.status === "pairing");
+      expect(client.state.connection.pairing?.approveCommand).toBeNull();
+      expect(client.state.connection.pairing?.approveNote).toBe(NO_APPROVE_COMMAND);
+      client.stop();
+    }
+    expect(defaultApprovalInstructions("wss://g.example", "$(id)")).toEqual({
+      command: null,
+      note: NO_APPROVE_COMMAND,
+    });
   });
 });
 

@@ -143,7 +143,9 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
       <h2 id="pair-title">{W.approveTitle}</h2>
       <p className="panel-lede">{pairingLede(connection.gatewayUrl)}</p>
       {pairing.approveNote && <p className="approve-note">{pairing.approveNote}</p>}
-      <CommandLine command={pairing.approveCommand} label={W.copyApprove} />
+      {pairing.approveCommand && (
+        <CommandLine command={pairing.approveCommand} label={W.copyApprove} />
+      )}
       <SetupSteps
         connection={connection}
         loadingBots={false}

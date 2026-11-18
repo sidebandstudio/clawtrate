@@ -25,8 +25,11 @@ export type PairingRequest = {
   requestId: string;
   deviceId: string;
   message: string;
-  /** What the person approving runs. The host chooses it, because it knows which gateway this is. */
-  approveCommand: string;
+  /**
+   * What the person approving runs. The host chooses it, because it knows which gateway this is;
+   * null when the gateway's request id is not in its own form, so no command is built from it.
+   */
+  approveCommand: string | null;
   /** Where and by whom the command is run, when that is not obvious. */
   approveNote: string | null;
   requestedScopes: string[];

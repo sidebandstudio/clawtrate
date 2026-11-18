@@ -572,7 +572,20 @@ export function validateGatewayUrl(raw: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
+/** A pairing or re-pairing request id in the gateway's own form: a UUID. */
+export const GATEWAY_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** What to do when the gateway's request id is not in its form: no command, only the way. */
+export const NO_APPROVE_COMMAND =
+  "The gateway's owner approves this device among the gateway's pending requests, on the machine where the gateway runs.";
+
+/**
+ * The generic approve command. The request id goes into a shell command the
+ * gateway's owner runs, so it is used only in the gateway's own form; any other
+ * string from the gateway gives no command.
+ */
 export function defaultApprovalInstructions(_url: string, requestId: string): ApprovalInstructions {
+  if (!GATEWAY_REQUEST_ID.test(requestId)) return { command: null, note: NO_APPROVE_COMMAND };
   return {
     command: `openclaw devices approve ${requestId}`,
     note: "The gateway's owner runs this on the machine where the gateway runs.",

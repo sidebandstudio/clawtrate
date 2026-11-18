@@ -40,7 +40,8 @@ export type ClientIdentity = {
   platform: string;
 };
 
-export type ApprovalInstructions = { command: string; note: string | null };
+/** What the person approving runs; no command when none can be given safely, only the note. */
+export type ApprovalInstructions = { command: string | null; note: string | null };
 
 export type ClawtrateHost = {
   createWebSocket: WebSocketFactory;
