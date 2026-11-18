@@ -48,6 +48,7 @@ import {
   SEEDED_THREAD,
   T3_CODE_SERVER,
   T3_LINK_BASE,
+  TOOLS as T3_CODE_TOOLS,
 } from "./t3-code-mcp.ts";
 import { FILES_BOT, PICTURE_PATH, trailMap } from "./seed-files.ts";
 import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
@@ -1015,6 +1016,10 @@ export const EXPECTED_OFFERED_TOOLS = [
   "apply_patch",
   "ask_user",
   ...CODING_AGENT_TOOLS.map((tool) => `${CODING_AGENT_SERVER}__${tool.name}`),
+  // The T3 Code stand-in's tools, by the names the gateway gives them.
+  ...T3_CODE_TOOLS.map((tool) =>
+    tool.name === DECOY_TOOL ? DECOY_EFFECTIVE : `${T3_CODE_SERVER}__${tool.name}`,
+  ),
   "edit",
   "exec",
   "ls",
