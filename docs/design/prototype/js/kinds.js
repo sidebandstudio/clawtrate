@@ -1239,9 +1239,16 @@
   };
 
   const latestLink = (calls) => [...calls].reverse().map((c) => (CT.structured(c) || {}).link || (CT.structured(c) || {}).thread?.link).find(Boolean);
+  // What the thread is for (11.2): its title (the launch's, else one a later result reports), else
+  // the first line of the launch's message, else that of the latest message sent.
   const sentFirst = (calls) => {
+    const launch = calls.find((x) => x.name.endsWith("t3_thread_launch"));
+    const reportedTitle = [...calls].reverse().map((x) => (CT.structured(x) || {}).thread?.title).find(Boolean);
+    const title = (launch && launch.args.title) || reportedTitle;
+    if (title) return firstLine(title);
+    if (launch && launch.args.message) return firstLine(launch.args.message);
     const c = [...calls].reverse().find((x) => x.args.message) || calls[0];
-    return firstLine(c.args.message || c.args.title || "");
+    return firstLine(c.args.message || "");
   };
 
   // A thread's card: every call on it, in order, each with its own Raw.

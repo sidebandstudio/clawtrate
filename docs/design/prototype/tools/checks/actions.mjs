@@ -309,6 +309,10 @@ check(
   "M4 Read to the end only when there are no more pages and no item is cut",
   await q(p, () => { const t = box("One thread, one card: every call on it, each with its own Raw").innerText; return t.includes("Read to the end") && !t.includes("Part of the reply only"); }),
 );
+check(
+  "M5 the folded thread says what it is for: the launch's title, the count apart from it",
+  await q(p, () => { const line = box("One thread, one card: every call on it, each with its own Raw").querySelector(".messaged > summary"); const first = line.querySelector(".messaged-first"); return first.firstChild.textContent === "Exclude the transcode cache" && /calls/.test(line.querySelector(".t3-count").textContent); }),
+);
 const threadStates = await lines(p, "The thread's state, from its calls", ":scope > .messaged");
 check(
   "M5 the thread's state: an open call, then what T3 Code reported, never changed by a failed read",

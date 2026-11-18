@@ -872,7 +872,7 @@ T3 Code offers an outside client seven tools (`docs/research/provider-accounts-a
 
 So a failed check, or a refused follow-up, shows on its own item and does not change the thread's word. The reported status is a snapshot, not a live state: it changes only when another call on the thread returns, and the opened card says when: "T3 Code reported Running at 5:41 PM." Keeping the card's word to what a call's result reported, rather than polling T3 Code, is a presentation decision: the results do carry T3 Code's status, and the card shows it with its time.
 
-**The folded line** reads "Messaged T3 Code", the T3 Code mark, the first line of the latest message sent on the thread (the launch's `message`, else its `title`, or a follow-up's `message`), and the thread's state. When the thread holds more than one call, the detail ends with their number, "· 3 calls".
+**The folded line** reads "Messaged T3 Code", the T3 Code mark, what the thread is for, and the thread's state. What it is for is the thread's title when the record has one (the launch's `title`, or the title a later result reports), else the first line of the launch's `message`, else the first line of the latest message T3 Code took on the thread; the latest message stays in the opened card. A follow-up that was refused or failed is not a message taken. When the thread holds more than one call, their number follows, "· 3 calls", apart from the title: the title gives way first, and the count is never cut.
 
 ### 11.3 Opened: every call, each with its own Raw
 
