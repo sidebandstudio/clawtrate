@@ -1391,6 +1391,27 @@ test("F-097: a typed /stop stops the run, and the note does not say it came from
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
+test("F-097: a typed Stop now stops the run through the gateway, as the Stop button does", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { key } = await ownTask(page, "Typed stop now");
+  await composer(page).fill("Go through the old logs. #slow 15");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  const runId = await inFlightRunId(key);
+  await composer(page).fill("Stop now");
+  await page.keyboard.press("Enter");
+  const note = stopNote(page, runId);
+  await expect(note).toContainText("Completed actions are not undone.", { timeout: 30_000 });
+  await expect(note).not.toContainText("another device");
+  await expect(page.getByTestId("status-line")).toHaveCount(0);
+  // The words were Stop, not a message: none reached the task.
+  await expect(page.getByTestId("outgoing").filter({ hasText: "Stop now" })).toHaveCount(0);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+  expect(await gatewayHasMessage(key, "Stop now")).toBe(false);
+});
+
 test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
   page,
 }) => {

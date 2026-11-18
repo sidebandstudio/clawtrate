@@ -1,4 +1,10 @@
-import type { AttachmentInfo, Bot, Run, Transcript } from "@clawtrate/core";
+import {
+  isStopNow,
+  type AttachmentInfo,
+  type Bot,
+  type Run,
+  type Transcript,
+} from "@clawtrate/core";
 import {
   useCallback,
   useEffect,
@@ -175,6 +181,14 @@ export function Composer({
       : "Remove the files that are too large to send."
     : null;
 
+  const stop = useCallback(
+    (run: Run) => {
+      void bridge.send({ type: "stopRun", key: taskKey, runId: run.id }).catch(() => {});
+      onAnnounce("Stopping");
+    },
+    [bridge, taskKey, onAnnounce],
+  );
+
   // One submit sends once: while a send is on its way, another does nothing.
   const submitting = useRef(false);
 
@@ -193,6 +207,12 @@ export function Composer({
           title: "Couldn't start a new task.",
           reason: "A new task can't take files yet. Send them in this task, or remove them first.",
         });
+        return;
+      }
+      // "Stop now" typed during a run is Stop, as the button is: it is not sent as words.
+      if (how !== "new-task" && view.stoppable && files.length === 0 && isStopNow(text)) {
+        setText("");
+        stop(view.stoppable);
         return;
       }
       submitting.current = true;
@@ -239,15 +259,20 @@ export function Composer({
         submitting.current = false;
       }
     },
-    [canSend, text, files, bridge, bot.id, taskKey, draftKey, setText, onAnnounce, onNotice, view],
-  );
-
-  const stop = useCallback(
-    (run: Run) => {
-      void bridge.send({ type: "stopRun", key: taskKey, runId: run.id }).catch(() => {});
-      onAnnounce("Stopping");
-    },
-    [bridge, taskKey, onAnnounce],
+    [
+      canSend,
+      text,
+      files,
+      bridge,
+      bot.id,
+      taskKey,
+      draftKey,
+      setText,
+      onAnnounce,
+      onNotice,
+      view,
+      stop,
+    ],
   );
 
   // Window-wide keys: ⌘. stops, ⌘↵ sends from anywhere except inside a card

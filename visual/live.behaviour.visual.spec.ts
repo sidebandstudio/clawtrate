@@ -817,17 +817,24 @@ test.describe("steering, queueing and holding", () => {
     await expect(steer.locator(".msg-caption")).toHaveText("Steer");
   });
 
-  test("F-096 F-106: a typed Stop now and a quick second message are steers, said as such, and nothing claims a stop or a reply each", async ({
+  test("F-097: a typed Stop now during a run stops it as Stop does, and is not sent as words", async ({
     page,
   }) => {
     await open(page, "run-working");
+    await answers(page, "hold");
+    await field(page).fill("Stop now.");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("status-phrase")).toHaveText("Stopping…");
+    await expect(page.getByRole("button", { name: "Stop Otto" })).toHaveCount(0);
+    await expect(field(page)).toHaveValue("");
+    await expect(page.getByTestId("outgoing").filter({ hasText: "Stop now" })).toHaveCount(0);
+    await expect(announcer(page)).toHaveText("Stopping");
+    await answers(page, "release");
+    await expect(page.getByTestId("stop-note")).toContainText("Completed actions are not undone.");
+    // With no run, the same words are an ordinary message.
     await field(page).fill("Stop now");
     await page.keyboard.press("Enter");
-    const typed = page.getByTestId("outgoing").filter({ hasText: "Stop now" });
-    await expect(typed.locator(".msg-caption")).toHaveText("Steer");
-    await expect(page.getByTestId("status-phrase")).not.toHaveText("Stopping…");
-    await expect(page.getByRole("button", { name: "Stop Otto" })).toBeVisible();
-    await expect(page.getByTestId("stop-note")).toHaveCount(0);
+    await expect(page.getByTestId("outgoing").filter({ hasText: "Stop now" })).toHaveCount(1);
   });
 
   test("F-061: the mode word's menu is keyboard operable; Queue after this turn queues as a shelf row", async ({
