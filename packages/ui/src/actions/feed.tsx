@@ -46,6 +46,7 @@ import {
   useStepHandover,
   type CardRef,
 } from "../cards/index.ts";
+import { useClawtrateState } from "../bridge.tsx";
 import { fullDate } from "../format.ts";
 import { Markdown } from "../Markdown.tsx";
 import {
@@ -759,8 +760,23 @@ export function RunLine({ run }: { run: Run }) {
   // Read as the cards read it, with what the gateway said of the task's tools.
   const ctx = useContext(ActionEnvContext)?.ctx;
   const line = isTerminal(run.state) ? runLineOf(run, calls, ctx, drawn?.account) : null;
+  // What the turn ran with (conversation.md 25.5): the model the gateway reported, and the effort
+  // this app asked for when it started the turn.
+  const taskKey = useContext(ActionEnvContext)?.taskKey;
+  const requested = useClawtrateState().taskModels[taskKey ?? ""]?.requested.find(
+    (each) => each.runId === run.id,
+  );
   if (!line) return null;
-  return <RunLineView runId={run.id} line={line} model={run.model} />;
+  return (
+    <RunLineView
+      runId={run.id}
+      line={line}
+      model={run.model}
+      provider={run.provider ?? null}
+      modelFrom={run.modelFrom ?? null}
+      effort={requested?.effort ?? null}
+    />
+  );
 }
 
 /** The calls of a run, for the status line's phrase. */

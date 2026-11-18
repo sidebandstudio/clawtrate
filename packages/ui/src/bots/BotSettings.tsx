@@ -115,6 +115,17 @@ export function BotSettings({
       void bridge.send({ type: "refreshAccounts" }).catch(() => {});
   }, [shown, accounts.status, unread, bot.id, bridge]);
 
+  // The models listed for the bot's latest task, which the gateway projects through the account
+  // that task's conversation selected (section 9): read when the tab is shown for a bot.
+  const latestTask = tasks.reduce<Task | null>(
+    (latest, task) => ((task.updatedAt ?? 0) > (latest?.updatedAt ?? -1) ? task : latest),
+    null,
+  );
+  useEffect(() => {
+    if (shown && connection.status === "connected")
+      void bridge.send({ type: "readBotCatalog", botId: bot.id }).catch(() => {});
+  }, [shown, connection.status, bot.id, latestTask?.key, bridge]);
+
   // Another bot: back to the tab's first page.
   const [forBot, setForBot] = useState(bot.id);
   if (forBot !== bot.id) {
@@ -252,6 +263,15 @@ export function BotSettings({
           : "";
     const wordText = bindingWord(binding, age);
     const model = binding.model ?? defaultRef(accounts)?.model ?? null;
+    // The latest task's catalogue, when that task's conversation carries the bot's own account.
+    const taskCatalog =
+      binding.mode === "account" &&
+      accounts.botCatalog?.botId === bot.id &&
+      accounts.botCatalog.account !== null &&
+      accounts.botCatalog.account === binding.account
+        ? accounts.botCatalog.models
+        : null;
+    const listed = taskCatalog ? { ...accounts, models: taskCatalog } : accounts;
     const saveModel = async (nextModel: string, nextEffort: string | null) => {
       setError(null);
       try {
@@ -266,6 +286,8 @@ export function BotSettings({
         setError(
           `Couldn't save the model: ${failure instanceof Error ? failure.message : String(failure)}`,
         );
+        // The select keeps what the gateway has; a save that crossed another change shows it.
+        void bridge.send({ type: "refreshAccounts" }).catch(() => {});
       }
     };
     return (
@@ -305,16 +327,16 @@ export function BotSettings({
           <>
             <div style={{ marginTop: 8 }}>
               <ModelPair
-                accounts={accounts}
+                accounts={listed}
                 provider={provider}
                 model={model}
-                effort={binding.effort ?? firstEffort(accounts, provider, model)}
+                effort={binding.effort ?? firstEffort(listed, provider, model)}
                 disabled={!admin}
                 onModel={(next) => {
                   const levels =
-                    modelsOf(accounts, provider).find((m) => m.id === next)?.levels ?? [];
+                    modelsOf(listed, provider).find((m) => m.id === next)?.levels ?? [];
                   const was = binding.effort;
-                  const effort = firstEffort(accounts, provider, next, was);
+                  const effort = firstEffort(listed, provider, next, was);
                   if (was && levels.length > 0 && !levels.includes(was) && effort) {
                     setEffortNote(
                       `Effort is now ${levelWord(effort)}: ${next} doesn't offer ${levelWord(was)}.`,
@@ -329,7 +351,9 @@ export function BotSettings({
             <p className="b-hint" id="b-model-line">
               {error ??
                 effortNote ??
-                `${who}'s models, as the gateway lists them. Which ones ${binding.mode === "account" ? "this account" : "an account"} may use is ${who}'s decision.`}
+                (taskCatalog
+                  ? `The models ${label} offers, as the gateway lists them for ${name}'s latest task.`
+                  : `${who}'s models, as the gateway lists them. Which ones ${binding.mode === "account" ? "this account" : "an account"} may use is ${who}'s decision.`)}
             </p>
           </>
         )}

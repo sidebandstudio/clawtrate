@@ -1,0 +1,125 @@
+/* A task's model and effort (conversation.md section 25): the model chip at the
+   top left of the conversation's header band, its menu, the Model group in the
+   task's Details, and the line a change leaves. Tokens only. */
+
+.conversation-header > .header-side:first-child {
+  min-width: 0;
+}
+
+/* new: a pill like the title pill, 36 px, with the model's id, a dot and the effort. */
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  height: 36px;
+  margin: 0;
+  padding: 0 10px 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+p.model-chip {
+  cursor: default;
+}
+
+.model-chip:disabled {
+  cursor: default;
+  color: var(--text-muted);
+}
+
+.model-chip:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
+.model-chip-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-chip-dot {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.model-chip-effort {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.model-chip .icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--text-muted);
+}
+
+.model-chip-chevron {
+  transform: rotate(90deg);
+}
+
+.model-menu {
+  z-index: 40;
+  width: 280px;
+  max-width: calc(100vw - 24px);
+}
+
+.menu-group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.menu-item[aria-disabled="true"] {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.task-model {
+  margin-top: 18px;
+}
+
+.task-model .work-group {
+  margin: 0 2px 8px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text-faint);
+}
+
+.task-model .b-hint .button {
+  margin-left: 4px;
+}
+
+.task-model-refused {
+  color: var(--danger);
+}
+
+.model-line[data-tone="warn"] .icon {
+  color: var(--warn);
+}
+
+.run-raw .card-actions {
+  margin-top: 2px;
+}
+
+/* One pane: Back takes the header's left side, and the task's Details hold the control. */
+@container app (max-width: 687px) {
+  .model-chip {
+    display: none;
+  }
+}
+
+[data-input="touch"] .model-menu .menu-item {
+  min-height: 44px;
+}

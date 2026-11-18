@@ -11,17 +11,23 @@ export type MenuEntry =
       /** A second line saying what the item does beyond its name; also its accessible description. */
       note?: string;
     }
-  | {
-      kind: "radio";
-      label: string;
-      checked: boolean;
-      onSelect: () => void;
-      note?: string;
-      hint?: string;
-    }
+  | MenuRadio
   | { kind: "head"; title: string; lines: string[] }
+  /** A `group` of choices, named by its word, which is shown above them. */
+  | { kind: "group"; label: string; entries: MenuRadio[] }
   | { kind: "label"; text: string }
   | { kind: "rule" };
+
+type MenuRadio = {
+  kind: "radio";
+  label: string;
+  checked: boolean;
+  onSelect: () => void;
+  note?: string;
+  hint?: string;
+  /** Shown, not chosen: `aria-disabled`, and arrows pass over it. */
+  disabled?: boolean;
+};
 
 /**
  * A menu: role `menu` with `menuitem`s and `menuitemradio`s. It opens with focus
@@ -65,7 +71,10 @@ export function Menu({
   }, [onClose, trigger]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLUListElement>) => {
-    const items = [...(ref.current?.querySelectorAll<HTMLElement>(".menu-item") ?? [])];
+    const items = [
+      ...(ref.current?.querySelectorAll<HTMLElement>('.menu-item:not([aria-disabled="true"])') ??
+        []),
+    ];
     const index = items.indexOf(document.activeElement as HTMLElement);
     let next: number | null = null;
     if (event.key === "ArrowDown") next = (index + 1) % items.length;
@@ -115,6 +124,37 @@ export function Menu({
             );
           case "rule":
             return <li key={index} className="menu-rule" role="separator" />;
+          case "group":
+            return (
+              <li key={index} role="none">
+                <ul className="menu-group" role="group" aria-label={entry.label}>
+                  <li className="menu-label" role="presentation">
+                    {entry.label}
+                  </li>
+                  {entry.entries.map((each, at) => (
+                    <li key={at} role="none">
+                      <button
+                        type="button"
+                        className="menu-item"
+                        role="menuitemradio"
+                        aria-checked={each.checked}
+                        aria-label={each.label}
+                        aria-description={each.note}
+                        aria-disabled={each.disabled || undefined}
+                        tabIndex={-1}
+                        onClick={each.disabled ? undefined : each.onSelect}
+                      >
+                        <span className="menu-item-text">
+                          {each.label}
+                          {each.note && <span className="menu-note">{each.note}</span>}
+                        </span>
+                        <span className="glyph" data-state="check" aria-hidden="true" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            );
           case "radio":
             return (
               <li key={index} role="none">
@@ -125,8 +165,9 @@ export function Menu({
                   aria-checked={entry.checked}
                   aria-label={entry.label}
                   aria-description={entry.note}
+                  aria-disabled={entry.disabled || undefined}
                   tabIndex={-1}
-                  onClick={entry.onSelect}
+                  onClick={entry.disabled ? undefined : entry.onSelect}
                 >
                   <span className="menu-item-text">
                     {entry.label}

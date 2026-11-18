@@ -865,14 +865,46 @@ export function RunLineView({
   runId,
   line,
   model,
+  provider = null,
+  modelFrom = null,
+  effort = null,
 }: {
   runId: string;
   line: RunLine;
   model: string | null;
+  /** The provider the gateway reported with the model. */
+  provider?: string | null;
+  /** Which report the model comes from: the run's `model` event, or its history row. */
+  modelFrom?: "lifecycle" | "history" | null;
+  /** The `thinking` this app sent with the message that started the turn (conversation.md 25.5). */
+  effort?: string | null;
 }) {
   const env = useActionEnv();
   const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.run(runId), false);
-  const record = `${model ?? actionWords.RUN_LINE.modelNotReported} · ${actionWords.RUN_LINE.effort(env.effort)}`;
+  const named = model ? (provider ? `${provider}/${model}` : model) : null;
+  const record = `${named ?? actionWords.RUN_LINE.modelNotReported} · ${actionWords.RUN_LINE.effort(effort)}`;
+  const disclosure = useRawDisclosure();
+  // What the record is made of, each part labelled; a part with nothing behind it is absent.
+  const events: Array<[string, unknown]> = [];
+  if (model)
+    events.push(
+      modelFrom === "history"
+        ? ["Model, from the history row", provider ? { provider, model } : { model }]
+        : [
+            "Model, as the gateway sends it",
+            provider ? { phase: "model", provider, model } : { phase: "model", model },
+          ],
+    );
+  if (effort) events.push(["Sent", { method: "chat.send", params: { thinking: effort } }]);
+  const raw: RawContent = {
+    state: "loaded",
+    events,
+    ids: [
+      { label: "Run", value: runId },
+      { label: "Session", value: env.sessionKey },
+    ],
+    ...(events.length ? {} : { notes: ["The gateway reported no model for this turn."] }),
+  };
   return (
     <details
       className="run-line"
@@ -913,6 +945,9 @@ export function RunLineView({
         <span className="mono">{runId}</span>
         <CopyButton what="run id" text={runId} />
       </p>
+      <div className="run-raw">
+        <CardFoot disclosure={disclosure} raw={raw} />
+      </div>
     </details>
   );
 }

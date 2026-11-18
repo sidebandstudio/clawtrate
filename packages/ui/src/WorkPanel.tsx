@@ -12,6 +12,7 @@ import { useBridge } from "./bridge.tsx";
 import { stampTime } from "./format.ts";
 import { CloseIcon, ScreenIcon } from "./icons.tsx";
 import { BotSettings } from "./bots/BotSettings.tsx";
+import { TaskModelDetails } from "./TaskModel.tsx";
 import { FilesTab } from "./work/FilesTab.tsx";
 import type { FileRequest } from "./work/links.tsx";
 import { TabBar } from "./work/TabBar.tsx";
@@ -141,17 +142,20 @@ export function WorkPanel({
             <>
               <p className="work-task">{task.title}</p>
               <dl className="facts">
-                {bot?.model && (
-                  <div>
-                    <dt>Model</dt>
-                    <dd>{bot.model}</dd>
-                  </div>
-                )}
                 <div>
                   <dt>Last activity</dt>
                   <dd>{task.updatedAt === null ? "Unknown" : stampTime(task.updatedAt)}</dd>
                 </div>
               </dl>
+              {bot && (
+                <TaskModelDetails
+                  task={task}
+                  bot={bot}
+                  interactive={connection.canWrite}
+                  connected={online}
+                  onAnnounce={announce}
+                />
+              )}
             </>
           ) : (
             <p className="work-note">
