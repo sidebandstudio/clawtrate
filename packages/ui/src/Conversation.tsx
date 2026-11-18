@@ -33,6 +33,7 @@ import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
 import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
+import { MessageArtifacts } from "./artifacts/cards.tsx";
 
 /**
  * One transcript item. Your message is a bubble; the bot's item is its
@@ -44,7 +45,10 @@ function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?:
   return (
     <div className="turn" data-role={role} data-testid="transcript-turn">
       {role === "assistant" ? (
-        <ItemFeed itemId={item.id} />
+        <>
+          <ItemFeed itemId={item.id} />
+          <MessageArtifacts item={item} />
+        </>
       ) : (
         item.blocks.map((block, i) =>
           block.kind === "text" && block.text.trim() ? (

@@ -89,7 +89,7 @@ function crc32(bytes: Uint8Array): number {
   return ~crc >>> 0;
 }
 
-function png(
+export function png(
   width: number,
   height: number,
   pixel: (x: number, y: number) => [number, number, number],

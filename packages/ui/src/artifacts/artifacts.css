@@ -1,0 +1,639 @@
+/* What a bot hands over (work-pane.md, Part 2): cards under the bot's bubble,
+   pictures and their grid, the link preview, the pane's view and the media
+   viewer. The card frame is the conversation's: --bg-bubble, radius 18, no
+   outline, no shadow; nothing is coloured but the media itself. */
+
+.artifacts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 0;
+}
+
+.artifact {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: min(240px, 100%);
+  max-width: min(360px, 100%);
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+}
+
+.artifact-main,
+.artifact-play {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 64px;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.artifact-main {
+  flex: 1;
+}
+
+.artifact-play {
+  flex: none;
+  padding-right: 0;
+}
+
+button.artifact-main:hover {
+  background: color-mix(in srgb, var(--bg-bubble) 94%, var(--text));
+}
+
+.artifact-main:focus-visible,
+.artifact-play:focus-visible,
+.media-cell:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
+.artifact[data-kind="refused"] .artifact-main {
+  cursor: default;
+}
+
+.artifact-tile {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-pane);
+  color: var(--text-muted);
+}
+
+.artifact-tile[data-round="true"] {
+  border-radius: 50%;
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+}
+
+.artifact-tile[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.artifact-text {
+  display: grid;
+  min-width: 0;
+}
+
+.artifact-name {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.artifact-name .name-start {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.artifact-name .name-end {
+  flex: none;
+}
+
+.artifact-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.artifact-open {
+  margin-left: auto;
+  padding: 0 14px;
+  line-height: 30px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-selected);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+/* More: shown on hover and keyboard focus, always on touch. */
+.artifact-more {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-right: 10px;
+  opacity: 0;
+}
+
+.artifact:hover .artifact-more,
+.artifact:focus-within .artifact-more,
+.artifact-more[aria-expanded="true"] {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .artifact-more,
+  .media-more {
+    opacity: 1;
+  }
+
+  .artifact-main {
+    min-height: 68px;
+  }
+}
+
+/* Pictures: by themselves at their aspect, or a two-column grid. */
+.media-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  width: min(320px, 78%);
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+}
+
+.media-grid[data-count="1"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.media-slot {
+  position: relative;
+  min-width: 0;
+}
+
+.media-cell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  background: var(--bg-bubble);
+  color: var(--text-muted);
+  font: inherit;
+  cursor: zoom-in;
+}
+
+.media-grid[data-count="1"] .media-cell {
+  aspect-ratio: auto;
+  min-height: 120px;
+  max-height: 320px;
+}
+
+.media-cell > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.media-cell > img[data-single] {
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
+}
+
+.media-cell[data-kind="video"] {
+  cursor: pointer;
+}
+
+.media-quiet {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 8px;
+  font-size: var(--text-xs);
+  text-align: center;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.media-quiet .icon {
+  margin-bottom: 4px;
+  color: var(--text-muted);
+}
+
+.media-play {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+}
+
+.media-extra {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  color: #fff;
+  pointer-events: none;
+}
+
+.media-more {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  opacity: 0;
+}
+
+.media-more:hover {
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+}
+
+.media-grid:hover .media-more,
+.media-grid:focus-within .media-more,
+.media-more[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.audio-track {
+  display: inline-block;
+  width: 96px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-selected);
+}
+
+.audio-track > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--text-muted);
+}
+
+/* The link card's preview, fetched by the device on hover. */
+.link-preview {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  gap: 4px;
+  width: min(320px, 90vw);
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.link-preview img {
+  width: 100%;
+  max-height: 160px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+
+.link-preview p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.link-preview span {
+  color: var(--text-faint);
+}
+
+.artifact-menu {
+  z-index: 40;
+}
+
+/* Show in chat: the card is filled and fades (files.css holds the motion). */
+.media-cell[data-flash="true"] {
+  animation: flash 1.6s var(--ease-out) forwards;
+}
+
+/* In the pane. */
+.file-thumb {
+  overflow: hidden;
+  padding: 0;
+}
+
+.file-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.audio-player .artifact {
+  max-width: none;
+  width: 100%;
+}
+
+.audio-player .artifact-play {
+  padding-right: 0;
+}
+
+.reader-quiet {
+  min-height: 160px;
+  place-content: center;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+}
+
+.artifact-picture,
+.artifact-video {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.artifact-video {
+  min-height: 180px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  cursor: pointer;
+}
+
+.artifact-picture img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.artifact-raw {
+  margin-top: 14px;
+}
+
+.raw-panel pre {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* The media viewer: a dark ground in either theme, the dark theme's tokens. */
+.viewer {
+  color-scheme: dark;
+  --bg: #101112;
+  --bg-pane: #101112;
+  --bg-raised: #1c1d1f;
+  --bg-bubble: #1f2022;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-selected: rgba(255, 255, 255, 0.1);
+  --bg-inverse: #f3f3f2;
+  --text: #f3f3f2;
+  --text-muted: #b4b6b9;
+  --text-faint: #9d9fa2;
+  --text-inverse: #111213;
+  --accent-line: #3ee6c1;
+  --danger: #ff8a80;
+  --danger-soft: rgba(255, 138, 128, 0.12);
+  --shadow-button: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-pop: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 16px 44px rgba(0, 0, 0, 0.6);
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-rows: 56px minmax(0, 1fr) auto;
+  background: var(--bg);
+  color: var(--text);
+  animation: viewer-in var(--dur-quick) var(--ease-out);
+}
+
+@keyframes viewer-in {
+  from {
+    opacity: 0;
+  }
+}
+
+[data-motion="reduce"] .viewer {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewer {
+    animation: none;
+  }
+}
+
+.viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 20px;
+}
+
+.viewer-title {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.viewer-title strong {
+  overflow: hidden;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.viewer-title span {
+  flex: none;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.viewer-stage {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  padding: 8px 72px 20px;
+  overflow: hidden;
+}
+
+.viewer-image {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  cursor: zoom-in;
+}
+
+.viewer-image img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.viewer-image[data-zoom="actual"] {
+  place-items: start center;
+  overflow: auto;
+  cursor: zoom-out;
+}
+
+.viewer-image[data-zoom="actual"] img {
+  max-width: none;
+  max-height: none;
+}
+
+.viewer-loading {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.viewer-loading img {
+  max-width: min(100%, 480px);
+  opacity: 0.6;
+  border-radius: var(--radius-sm);
+}
+
+.viewer-loading .glyph {
+  position: absolute;
+}
+
+.viewer-failed {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  max-width: 420px;
+  text-align: center;
+}
+
+.viewer-failed p {
+  margin: 0;
+}
+
+.viewer-nav {
+  position: absolute;
+  top: 50%;
+  width: 40px;
+  height: 40px;
+}
+
+.viewer-nav[data-side="start"] {
+  left: 16px;
+}
+
+.viewer-nav[data-side="end"] {
+  right: 16px;
+}
+
+.viewer-strip {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px 16px;
+}
+
+.viewer-thumb {
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-bubble);
+  cursor: pointer;
+}
+
+.viewer-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.viewer-thumb[aria-current="true"] {
+  box-shadow: 0 0 0 2px var(--accent-line);
+}
+
+.viewer-video {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  width: min(100%, 960px);
+}
+
+.viewer-video video {
+  width: 100%;
+  max-height: calc(100vh - 200px);
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+
+.video-bar {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.speed-button {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.speed-menu {
+  position: absolute;
+  right: 0;
+  bottom: 40px;
+  width: 140px;
+  min-width: 140px;
+}
+
+.viewer-page {
+  width: min(100%, 880px);
+  height: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+}
+
+@container app (max-width: 687px) {
+  .viewer-stage {
+    padding: 8px 12px 16px;
+  }
+
+  .viewer-nav {
+    display: none;
+  }
+}
+
+@media (max-width: 687px) {
+  .viewer-stage {
+    padding: 8px 12px 16px;
+  }
+
+  .viewer-nav {
+    display: none;
+  }
+}

@@ -46,6 +46,12 @@ import {
 } from "./data.ts";
 import { FILE_COMMANDS, fileAnswers, withFileRuns, type FileParams } from "./files.ts";
 import {
+  ARTIFACT_COMMANDS,
+  artifactAnswers,
+  withArtifactTask,
+  type ArtifactParams,
+} from "./artifacts.ts";
+import {
   accountCommand,
   fixtureAccounts,
   NO_ACCOUNT_PARAMS,
@@ -457,7 +463,7 @@ function answerStrings(
 
 export function createFixtureBridge(
   name: SceneName,
-  options: { files?: FileParams; accounts?: AccountParams } = {},
+  options: { files?: FileParams; accounts?: AccountParams; artifacts?: ArtifactParams } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   /** Every command the interface sent, for tests that check what was asked of the host. */
@@ -486,6 +492,9 @@ export function createFixtureBridge(
     fileParams.state === null
       ? initial
       : { ...initial, transcripts: withFileRuns(initial.transcripts, now, fileParams) };
+  // Juniper's task with every kind of card, when the address asks for it.
+  const artifactAnswer = options.artifacts ? artifactAnswers(options.artifacts) : null;
+  if (options.artifacts?.on && state.bots.length > 0) state = withArtifactTask(state, now);
   // Every scene with bots has the gateway's accounts; the address can give it more access.
   if (state.bots.length > 0)
     state = withAccess({ ...state, accounts: fixtureAccounts(now, accountParams) }, accountParams);
@@ -550,6 +559,12 @@ export function createFixtureBridge(
     sent.push(command);
     if (live) return live;
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
+    if (ARTIFACT_COMMANDS.has(command.type))
+      return artifactAnswer
+        ? artifactAnswer(command)
+        : command.type === "listArtifacts"
+          ? { key: command.key, artifacts: [], omitted: 0, checkedAt: Date.now() }
+          : undefined;
     switch (command.type) {
       case "connect":
       case "connectDevGateway":

@@ -257,3 +257,22 @@ export const MoreIcon = (props: IconProps) => (
     <circle cx="12.5" cy="8" r="0.6" fill="currentColor" />
   </Icon>
 );
+
+export const PlayIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M5.25 3.5v9l7-4.5-7-4.5Z" fill="currentColor" />
+  </Icon>
+);
+
+export const PauseIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M5.5 3.75v8.5M10.5 3.75v8.5" />
+  </Icon>
+);
+
+export const LinkIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M6.75 9.25a2.75 2.75 0 0 0 3.9 0l2-2a2.75 2.75 0 0 0-3.9-3.9l-.75.75" />
+    <path d="M9.25 6.75a2.75 2.75 0 0 0-3.9 0l-2 2a2.75 2.75 0 0 0 3.9 3.9l.75-.75" />
+  </Icon>
+);

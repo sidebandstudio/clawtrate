@@ -540,7 +540,7 @@ function FactsBlock({
 }
 
 /** Code with line numbers. Lines scroll sideways; they wrap only when asked. */
-function CodeView({ text, wrap }: { text: string; wrap: boolean }) {
+export function CodeView({ text, wrap }: { text: string; wrap: boolean }) {
   const lines = text.endsWith("\n") ? text.slice(0, -1).split("\n") : text.split("\n");
   return (
     <pre className="code-view" data-wrap={wrap}>
