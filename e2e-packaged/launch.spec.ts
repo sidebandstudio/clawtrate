@@ -264,7 +264,7 @@ test("pairs with its own development gateway instance and shows the seeded bots"
   await expect(page.getByTestId("transcript-turn")).toHaveCount(4);
 });
 
-test("sends a key typed into it to the gateway once, and keeps it in none of its logs or data", async () => {
+test("sends a key typed into it to the gateway, and keeps it in none of its logs or data", async () => {
   test.skip(WINDOWS, NO_GATEWAY);
   // Admin access first: only admin connections start a sign-in.
   await page.keyboard.press("Meta+,");
