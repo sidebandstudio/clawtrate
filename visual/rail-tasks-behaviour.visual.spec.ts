@@ -61,7 +61,7 @@ test("F-012 F-054: on a writing connection a round + sits at the top right besid
   // Selected, first under Otto, and the composer has focus.
   await expect(page.locator(".title-pill-task")).toHaveText("New task");
   await expect(tasksOf(page, "Otto").first()).toHaveAttribute("aria-current", "true");
-  await expect(tasksOf(page, "Otto").first()).toHaveAccessibleName("New task");
+  await expect(tasksOf(page, "Otto").first()).toHaveAccessibleName("New task, idle");
   await expect(page.locator(".composer-input")).toBeFocused();
   expect(await sent(page, "newTask")).toEqual([{ type: "newTask", botId: "otto", label: null }]);
 });
@@ -149,7 +149,7 @@ test("F-022: a refused unread change leaves the rail and the badge as the gatewa
     "Couldn't mark it unread. The gateway refused the change.",
   );
   await expect(taskRow(page, "Certificate renewal")).toHaveAccessibleName(
-    "Certificate renewal warning",
+    "Certificate renewal warning, done",
   );
   expect(await badge()).toBe(before);
   await taskMenu(page, "Weekly backup check");
@@ -597,13 +597,13 @@ test("F-022: Mark as unread and Mark as read in a task's menu, sent to the host;
   await taskMenu(page, "Certificate renewal");
   await page.getByRole("menuitem", { name: "Mark as unread" }).click();
   await expect(taskRow(page, "Certificate renewal")).toHaveAccessibleName(
-    "Certificate renewal warning, unread",
+    "Certificate renewal warning, done, unread",
   );
   await expect(taskRow(page, "Certificate renewal")).toBeFocused();
   await taskMenu(page, "Certificate renewal");
   await page.getByRole("menuitem", { name: "Mark as read" }).click();
   await expect(taskRow(page, "Certificate renewal")).toHaveAccessibleName(
-    "Certificate renewal warning",
+    "Certificate renewal warning, done",
   );
   expect(await sent(page, "markTask")).toEqual(
     expect.arrayContaining([
