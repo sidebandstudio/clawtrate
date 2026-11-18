@@ -124,6 +124,11 @@ export function newState() {
     waiters: new Set(),
     /** profile -> { registration, pending: Promise<watch | null>, watch } */
     watches: new Map(),
+    /**
+     * profile -> { browserUrl, guids }: downloads a lost watch had seen begin
+     * and not end, carried to the next watch of the same browser.
+     */
+    unfinishedDownloads: new Map(),
   };
 }
 
@@ -271,7 +276,11 @@ export function createComputer(api, options = {}) {
     if (known?.pending) return known.pending;
     const entry = { registration, watch: null, pending: null };
     // Set up on the opener's behalf: each setup command only while `allow` holds.
-    entry.pending = watchBrowser(bot, { ...net, onChange: changed, allow })
+    const carried = (browserUrl) => {
+      const known = state.unfinishedDownloads.get(bot.profile);
+      return known?.browserUrl === browserUrl ? known.guids : [];
+    };
+    entry.pending = watchBrowser(bot, { ...net, onChange: changed, allow, carried })
       .then((watch) => {
         if (state.watches.get(bot.profile) !== entry || stopped) {
           watch.close();
@@ -283,6 +292,11 @@ export function createComputer(api, options = {}) {
         entry.watch = watch;
         watch.onClose(() => {
           if (state.watches.get(bot.profile) === entry) state.watches.delete(bot.profile);
+          // Remembered for the next watch of this same browser.
+          const guids = watch.inProgress();
+          if (guids.length > 0) {
+            state.unfinishedDownloads.set(bot.profile, { browserUrl: watch.browserUrl, guids });
+          } else state.unfinishedDownloads.delete(bot.profile);
           changed();
         });
         return watch;

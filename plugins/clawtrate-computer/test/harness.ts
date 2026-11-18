@@ -55,6 +55,8 @@ export class FakeBrowser {
   stallConnect = false;
   connectDelayMs = 0;
   replyDelayMs = 0;
+  /** The browser's own id in its debugger address; a restarted browser has another. */
+  browserId = "fake-browser-0001";
   /** The browser gives no debugger address of its own, so it cannot be watched. */
   noBrowserEndpoint = false;
   /** Commands that are never answered. */
@@ -81,7 +83,7 @@ export class FakeBrowser {
     if (!list) throw new TypeError("fetch failed");
     if (u.pathname === "/json/version") {
       if (this.noBrowserEndpoint) return new Response("{}", { status: 200 });
-      const ws = `${base.replace("http", "ws")}/devtools/browser/fake-browser-0001`;
+      const ws = `${base.replace("http", "ws")}/devtools/browser/${this.browserId}`;
       return new Response(JSON.stringify({ webSocketDebuggerUrl: ws }), { status: 200 });
     }
     return new Response(JSON.stringify(list), { status: 200 });
@@ -117,6 +119,20 @@ export class FakeBrowser {
     return this.sockets.find(
       (s) => !s.closed && s.url.startsWith(`${base.replace("http", "ws")}/devtools/browser/`),
     );
+  }
+
+  /** A tab closing, as the browser tells a watch. */
+  tabDetached(base: string, targetId: string) {
+    this.lists.set(
+      base,
+      (this.lists.get(base) ?? []).filter((t) => t.id !== targetId),
+    );
+    this.watchSocket(base)?.emit("message", {
+      data: JSON.stringify({
+        method: "Target.detachedFromTarget",
+        params: { sessionId: `S-${targetId}`, targetId },
+      }),
+    });
   }
 
   /** An event from a tab, as the browser sends it to a watch (by the tab's session). */

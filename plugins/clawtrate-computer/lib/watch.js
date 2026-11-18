@@ -42,8 +42,16 @@ export async function watchBrowser(bot, options = {}) {
   };
   /** sessionId -> { targetId, loading: Set<frameId>, enabling: boolean } */
   const tabs = new Map();
-  /** download guid -> sessionId */
+  /**
+   * download guid -> sessionId of the tab that started it. A download belongs
+   * to the browser, not to that tab: it stays here until the browser reports
+   * it finished or cancelled, also after the tab closes (Chromium then no
+   * longer reports it to the plugin at all). Downloads an earlier watch of
+   * this same browser left unfinished are carried over (`carried`).
+   */
   const downloads = new Map();
+  const browserUrl = cdp.target.url;
+  for (const guid of options.carried?.(browserUrl) ?? []) downloads.set(guid, null);
   const changed = () => {
     try {
       onChange();
@@ -73,12 +81,8 @@ export async function watchBrowser(bot, options = {}) {
       return;
     }
     if (method === "Target.detachedFromTarget") {
-      if (tabs.delete(params.sessionId)) {
-        // A closed tab's downloads can no longer be observed through it.
-        for (const [guid, owner] of downloads)
-          if (owner === params.sessionId) downloads.delete(guid);
-        changed();
-      }
+      // Its downloads stay: they go on in the browser.
+      if (tabs.delete(params.sessionId)) changed();
       return;
     }
     const tab = tabs.get(sessionId);
@@ -110,6 +114,10 @@ export async function watchBrowser(bot, options = {}) {
     get closed() {
       return cdp.closed;
     },
+    /** The browser's own debugger address: another browser, another address. */
+    browserUrl,
+    /** The downloads it has seen begin and not end. */
+    inProgress: () => [...downloads.keys()],
     /** Replace what allows the watch's later commands (for tabs opened later). */
     setAllow(fn) {
       allow = fn;

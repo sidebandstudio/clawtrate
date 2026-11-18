@@ -425,3 +425,62 @@ describe("the grant is the last thing that happens", () => {
     await h.stop();
   });
 });
+
+describe("a download belongs to the browser, not to the tab that started it", () => {
+  const SOURCE = "F".repeat(32);
+  const withSource = async (h: ReturnType<typeof load>) => {
+    h.browser.lists.set(ATLAS, [page(ATLAS, ATLAS_TAB), page(ATLAS, SOURCE)]);
+    await h.before("atlas", "run-d", "c-d", { action: "tabs" });
+    await h.after("atlas", "run-d", "c-d");
+    h.browser.tabEvent(ATLAS, SOURCE, "Page.downloadWillBegin", { guid: "g", url: "x" });
+    h.browser.tabEvent(ATLAS, SOURCE, "Page.downloadProgress", { guid: "g", state: "inProgress" });
+  };
+  const opts = { quietWindowMs: 50, quietTimeoutMs: 400 };
+  const reason = (h: ReturnType<typeof load>) =>
+    h.events.filter((e) => e.state === "busy").at(-1)?.reason;
+
+  it("a take on another tab is refused after the source tab closes, while the download was not seen to end", async () => {
+    const h = load(opts);
+    await withSource(h);
+    h.browser.tabDetached(ATLAS, SOURCE);
+    const answer = await h.call("control.take", tab);
+    expect(answer.payload?.state).toBe("busy");
+    expect(reason(h)).toBe("download-in-progress");
+    await h.stop();
+  });
+
+  it("is granted once the browser reports the download finished or cancelled, before its tab closed", async () => {
+    for (const end of ["completed", "canceled"]) {
+      const h = load(opts);
+      await withSource(h);
+      h.browser.tabEvent(ATLAS, SOURCE, "Page.downloadProgress", { guid: "g", state: end });
+      h.browser.tabDetached(ATLAS, SOURCE);
+      expect((await h.call("control.take", tab)).payload?.state, end).toBe("granted");
+      await h.stop();
+    }
+  });
+
+  it("is still waited for by the next watch of the same browser, and forgotten with a browser that was replaced", async () => {
+    const h = load(opts);
+    await withSource(h);
+    h.browser.tabDetached(ATLAS, SOURCE);
+    h.browser.watchSocket(ATLAS)!.close();
+    await until(() => h.state.watches.size === 0);
+    expect((await h.call("control.take", tab)).payload?.state).toBe("busy");
+    expect(reason(h)).toBe("download-in-progress");
+    // The browser restarted: its downloads ended with it.
+    h.browser.watchSocket(ATLAS)!.close();
+    await until(() => h.state.watches.size === 0);
+    h.browser.browserId = "fake-browser-0002";
+    expect((await h.call("control.take", tab)).payload?.state).toBe("granted");
+    await h.stop();
+  });
+});
+
+it("the plugin's page says exactly which downloads a take waits for", () => {
+  const text = readFileSync(join(import.meta.dirname, "../README.md"), "utf8").replace(/\s+/g, " ");
+  expect(text).toContain(
+    "**the downloads a take waits for**: every download the plugin has seen begin in the bot's browser, from when it began until the browser reports it finished or cancelled, also after the tab that started it has closed.",
+  );
+  expect(text).not.toContain("a download in progress anywhere in the bot's browser");
+});
