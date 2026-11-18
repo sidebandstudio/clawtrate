@@ -364,7 +364,8 @@ const BOT_RANK: Record<BotMessageState, number> = {
 };
 
 /**
- * §6.1 precedence (Started stands for Sending): forward only; Working and Recipient waiting alternate;
+ * §6.1 precedence: forward only, except that Waiting for approval goes back to Call started when
+ * the approval is allowed; Working and Recipient waiting alternate;
  * No reply yet rests until a terminal state; Unknown can move anywhere; a
  * terminal state is final.
  */
@@ -374,6 +375,8 @@ export function advanceBotMessageState(
 ): BotMessageState {
   if (previous === undefined || previous === "unknown") return next;
   if (BOT_RANK[previous] === 5) return previous;
+  // An approval allowed lets the same call go on: the one move back the graph has (section 10).
+  if (previous === "waiting-for-approval" && next === "started") return next;
   // A call that closed without a delivery result becomes Unknown; a known delivery never does.
   if (next === "unknown") return BOT_RANK[previous] <= 1 ? next : previous;
   return BOT_RANK[next] >= BOT_RANK[previous] ? next : previous;
