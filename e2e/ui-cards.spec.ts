@@ -196,9 +196,14 @@ function sendFacts(runId: string): { toolCallId: string; recipientRunId: string 
   };
 }
 
-/** A new task the test clients follow, named for what it checks; its title is the key's last part. */
+/**
+ * A new task the test clients follow, named for what it checks; its title is the key's last
+ * part. New on every call, so a repeated check never meets an earlier one's task.
+ */
+let clientTasks = 0;
 async function clientTask(botId: string, slug: string): Promise<{ key: string; title: string }> {
-  const title = `${slug}-${STAMP}`;
+  clientTasks += 1;
+  const title = `${slug}-${STAMP}${clientTasks > 1 ? `-${clientTasks}` : ""}`;
   const key = `agent:${botId}:${title}`;
   for (const op of Object.values(clients)) {
     await op.request("sessions.messages.subscribe", { key });
