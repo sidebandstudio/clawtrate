@@ -143,7 +143,8 @@ export function flowWords(flow: SignInFlow): string {
 export function bindingWord(binding: BotBinding): string {
   switch (accountWord(binding)) {
     case "locked":
-      return binding.evidence.status === "failed" && binding.evidence.lastMatchAt !== null
+      return (binding.evidence.status === "failed" || binding.evidence.status === "unavailable") &&
+        binding.evidence.lastMatchAt !== null
         ? `Locked, as of ${clock(binding.evidence.lastMatchAt)}`
         : "Locked";
     case "stale":

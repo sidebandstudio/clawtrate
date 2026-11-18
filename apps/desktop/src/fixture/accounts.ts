@@ -7,6 +7,7 @@
 //   access=read|write|admin   what the connection may do (default: the scene's)
 //   accounts=none|loading|error   no account yet, still loading, or a failed read
 //   lock=locked|bound|stale|gone|failed|multi|old|gateway|retained|none|watching|differs|lost|unwritten
+//        |configured|unavailable|elsewhere
 //                             the open bot's binding and evidence
 //   signin=<stage>            where a sign-in that starts goes: waiting (default),
 //                             failed, expired, cancelled, ended, busy, unconfirmed, saving,
@@ -76,6 +77,8 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
 };
 
 const MINUTE = 60_000;
+/** When the fixture's accounts were read: after its connection was made (`connectedAt` is 1 s ago). */
+const READ_AGO = 500;
 const DAY = 86_400_000;
 
 const account = (
@@ -140,7 +143,7 @@ const bound = (
     mode: acct ? "account" : "gateway",
     fallbacks: [],
     effort,
-    evidence: evidence({ status: "none", checkedAt: now - MINUTE }),
+    evidence: evidence({ status: "none", checkedAt: now - READ_AGO }),
     ...patch,
   });
 };
@@ -170,8 +173,8 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
       ];
   const locked = evidence({
     status: "matched",
-    checkedAt: now - MINUTE,
-    lastMatchAt: now - MINUTE,
+    checkedAt: now - READ_AGO,
+    lastMatchAt: now - READ_AGO,
   });
   const bindings: BotBinding[] = none
     ? [
@@ -194,7 +197,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
   const state: AccountsState = {
     ...initialAccountsState,
     status: "ready",
-    readAt: now - MINUTE,
+    readAt: now - READ_AGO,
     labels: params.access === "admin",
     defaultModel: params.defacct ? "openai/gpt-5.5@openai:work" : "openai/gpt-5.5",
     mainShared: !params.kept,
@@ -352,7 +355,7 @@ function withLock(state: AccountsState, params: AccountParams, now: number): Acc
     bindings: state.bindings.map((b) => (b.botId === id ? { ...b, ...change } : b)),
   });
   const work = "openai/gpt-5.5@openai:work";
-  const at = now - MINUTE;
+  const at = now - READ_AGO;
   switch (lock) {
     case "locked":
       return patch({
@@ -483,6 +486,44 @@ function withLock(state: AccountsState, params: AccountParams, now: number): Acc
         order: null,
         evidence: evidence({ status: "none", checkedAt: at }),
       });
+    case "configured":
+      // An order the gateway's settings give OpenAI's accounts: not Otto's own, so never a lock.
+      return patch({
+        primary: work,
+        account: "openai:work",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        order: { ids: ["openai:work"], stored: false, configured: "auth-config" },
+        evidence: evidence({ status: "configured", checkedAt: at }),
+      });
+    case "unavailable":
+      return patch({
+        primary: work,
+        account: "openai:work",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        order: { ids: ["openai:work"], stored: true, configured: null },
+        evidence: evidence({
+          status: "unavailable",
+          checkedAt: at - 11 * MINUTE,
+          lastMatchAt: at - 11 * MINUTE,
+          error: "PREPARED_MODEL_AUTH_UNAVAILABLE",
+        }),
+      });
+    case "elsewhere":
+      // Bound to an account only Pip's own store keeps: Otto cannot use it.
+      return patch({
+        primary: "anthropic/claude-sonnet-5.5@anthropic:pip",
+        account: "anthropic:pip",
+        provider: "anthropic",
+        model: "claude-sonnet-5.5",
+        mode: "account",
+        accountMissing: true,
+        order: { ids: ["anthropic:pip"], stored: true, configured: null },
+        evidence: evidence({ status: "none", checkedAt: at }),
+      });
     case "differs":
       return patch({
         primary: work,
@@ -598,7 +639,7 @@ export function accountCommand(
       put((a) => ({
         ...a,
         bindings: a.bindings.map((b) =>
-          b.botId === command.botId && b.evidence.status !== "failed"
+          b.botId === command.botId && !["failed", "unavailable"].includes(b.evidence.status)
             ? {
                 ...b,
                 evidence: {

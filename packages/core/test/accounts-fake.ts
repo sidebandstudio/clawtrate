@@ -103,6 +103,10 @@ export class AccountsGateway {
     otto: [{ id: "acme:studio", provider: "acme", type: "api_key" }],
   };
   orders: Record<string, Record<string, string[]>> = {};
+  /** An order the gateway's settings give a provider (`auth.order`): reported for every bot, not stored. */
+  configuredOrders: Record<string, string[]> = {};
+  /** Answer `models.authStatus` as the gateway does when its account status is unavailable. */
+  unavailable = false;
   prefs: Json = {};
   sessions = new Map<string, Session>();
   /** The ending the next sign-in gets. */
@@ -178,6 +182,8 @@ export class AccountsGateway {
       const { agentId } = params as { agentId: string };
       if (agentId === this.failStatusFor)
         throw new GatewayError({ code: "UNAVAILABLE", message: "status unavailable" });
+      if (this.unavailable)
+        return { providers: [], unavailable: { code: "PREPARED_MODEL_AUTH_UNAVAILABLE" } };
       return this.status(agentId);
     };
     g.handlers["agents.create"] = (params) => {
@@ -281,7 +287,11 @@ export class AccountsGateway {
             logoutSupported: true,
             ...(this.admin ? { displayName: this.label(p.id) } : {}),
           })),
-        ...(order ? { profileOrder: order, profileOrderStored: true } : {}),
+        ...(order
+          ? { profileOrder: order, profileOrderStored: true }
+          : this.configuredOrders[provider]
+            ? { profileOrder: this.configuredOrders[provider], profileOrderLocked: "auth-config" }
+            : {}),
       };
     });
     return {

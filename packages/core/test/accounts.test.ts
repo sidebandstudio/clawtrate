@@ -159,6 +159,78 @@ describe("a bot's account: bound, locked, and the gateway choosing", () => {
     client.stop();
   });
 
+  it("an order from the gateway's settings, not the bot's own store, is never a lock, even naming only the bound account", async () => {
+    const fake = new AccountsGateway();
+    fake.configuredOrders.acme = ["acme:work"];
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const otto = binding(accounts(), "otto");
+    expect(otto.order).toEqual({ ids: ["acme:work"], stored: false, configured: "auth-config" });
+    expect(otto.evidence.status).toBe("configured");
+    expect(otto.evidence.lastMatchAt).toBeNull();
+    expect(accountWord(otto)).toBe("bound");
+    // The bot's own stored order then decides.
+    fake.orders.otto = { acme: ["acme:work"] };
+    await client.checkLock("otto");
+    expect(accountWord(binding(accounts(), "otto"))).toBe("locked");
+    client.stop();
+  });
+
+  it("an account only another bot can see is not this bot's: no account, never a lock", async () => {
+    const fake = new AccountsGateway();
+    (
+      (fake.config.agents as Record<string, unknown>).entries as Record<
+        string,
+        Record<string, unknown>
+      >
+    ).pip!.model = {
+      primary: "acme/dev-1@acme:studio",
+      fallbacks: [],
+    };
+    fake.orders.pip = { acme: ["acme:studio"] };
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    for (const read of ["the first read", "a check of the lock"]) {
+      const pip = binding(accounts(), "pip");
+      expect({
+        read,
+        missing: pip.accountMissing,
+        word: accountWord(pip),
+        status: pip.evidence.status,
+      }).toEqual({
+        read,
+        missing: true,
+        word: "no-account",
+        status: "none",
+      });
+      await client.checkLock("pip");
+    }
+    // The account Otto keeps is listed, as Otto's: Pip's binding does not make it Pip's.
+    expect(accounts().accounts.find((a) => a.id === "acme:studio")?.keptBy).toBe("otto");
+    client.stop();
+  });
+
+  it("an answer that account status is unavailable is not an empty reading: the last good read stands", async () => {
+    const fake = new AccountsGateway();
+    fake.orders.otto = { acme: ["acme:work"] };
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const ids = accounts().accounts.map((a) => a.id);
+    const confirmed = binding(accounts(), "otto").evidence.lastMatchAt;
+    fake.unavailable = true;
+    await client.refreshAccounts();
+    expect(accounts()).toMatchObject({ status: "error" });
+    expect(accounts().error).toMatch(/unavailable \(PREPARED_MODEL_AUTH_UNAVAILABLE\)/);
+    expect(accounts().accounts.map((a) => a.id)).toEqual(ids);
+    await client.checkLock("otto");
+    const evidence = binding(accounts(), "otto").evidence;
+    expect(evidence).toMatchObject({
+      status: "unavailable",
+      error: "PREPARED_MODEL_AUTH_UNAVAILABLE",
+      lastMatchAt: confirmed,
+    });
+    // The last confirmation stands, as of its time; the page says the status is unavailable.
+    expect(accountWord(binding(accounts(), "otto"))).toBe("locked");
+    client.stop();
+  });
+
   it("a read that fails keeps the last confirmation, with its time, and says the read failed", async () => {
     const fake = new AccountsGateway();
     fake.orders.otto = { acme: ["acme:work"] };

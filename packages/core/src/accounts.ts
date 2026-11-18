@@ -136,10 +136,22 @@ export type LockEvidence = {
   /**
    * The last read: `matched` (a one-account order naming the bound account),
    * `multi` (it lists the bound account and others), `other` (it names only
-   * another account of the provider), `none` (no order), `failed` (the read
-   * failed), `unread`.
+   * another account of the provider), `configured` (an order the gateway's
+   * settings give, not one the bot's own store holds: never a lock), `none`
+   * (no order), `failed` (the read failed), `unavailable` (the gateway answered
+   * that its account status is unavailable), `unread`. Only a stored order
+   * counts as the bot's own (`profileOrderStored`).
    */
-  status: "unread" | "reading" | "matched" | "multi" | "other" | "none" | "failed";
+  status:
+    | "unread"
+    | "reading"
+    | "matched"
+    | "multi"
+    | "other"
+    | "configured"
+    | "none"
+    | "failed"
+    | "unavailable";
   /** The last read that answered. */
   checkedAt: number | null;
   /** The last read that matched. */
@@ -388,7 +400,18 @@ export type BotView = {
   /** Providers with a key configured or saved: `apiKey` set, or an `api_key` profile. */
   keyed: string[];
   capabilities: RawRecord[];
+  /** The gateway answered that its account status is unavailable: nothing here is a reading. */
+  unavailable: string | null;
 };
+
+/** The gateway's reason when it says account status is unavailable, or null. */
+export function unavailableReason(answer: unknown): string | null {
+  const value = asRecord(answer)?.unavailable;
+  if (value === undefined || value === null || value === false) return null;
+  const record = asRecord(value);
+  const code = str(record?.code) ?? str(record?.message) ?? str(value);
+  return (code ?? "unavailable").slice(0, 128);
+}
 
 export function readBotView(answer: unknown): BotView {
   const record = asRecord(answer) ?? {};
@@ -434,7 +457,13 @@ export function readBotView(answer: unknown): BotView {
     .map(asRecord)
     .filter((each): each is RawRecord => each !== null)
     .slice(0, MAX_KEY_PROVIDERS);
-  return { profiles, orders, keyed: [...keyed], capabilities };
+  return {
+    profiles,
+    orders,
+    keyed: [...keyed],
+    capabilities,
+    unavailable: unavailableReason(answer),
+  };
 }
 
 /**
@@ -598,7 +627,11 @@ export function evaluateOrder(
   let status: LockEvidence["status"];
   const ids = order?.ids ?? [];
   if (binding.mode !== "account" || !binding.account || ids.length === 0) status = "none";
-  else if (ids.length === 1 && ids[0] === binding.account && accountListed) status = "matched";
+  // An order the bot's own store does not hold is the gateway's, from its settings or inherited.
+  else if (!order?.stored) status = "configured";
+  // The bound account is not in this bot's own view: its order is about an account it cannot use.
+  else if (!accountListed) status = "none";
+  else if (ids.length === 1 && ids[0] === binding.account) status = "matched";
   else if (ids.includes(binding.account)) status = "multi";
   else if (ids.length === 1) status = "other";
   else status = "none";
@@ -606,7 +639,9 @@ export function evaluateOrder(
   // Matched before: the last answer matched, or a failed read since kept that confirmation.
   const wasMatched =
     previous.status === "matched" ||
-    (previous.status === "failed" && previous.lastMatchAt !== null && previous.lostAt === null);
+    ((previous.status === "failed" || previous.status === "unavailable") &&
+      previous.lastMatchAt !== null &&
+      previous.lostAt === null);
   return {
     status,
     checkedAt: at,
@@ -626,7 +661,11 @@ export function accountWord(binding: BotBinding): AccountWord {
   const evidence = binding.evidence;
   if (evidence.status === "matched") return "locked";
   // A read that failed keeps the last confirmation, with its time.
-  if (evidence.status === "failed" && evidence.lastMatchAt !== null && evidence.lostAt === null)
+  if (
+    (evidence.status === "failed" || evidence.status === "unavailable") &&
+    evidence.lastMatchAt !== null &&
+    evidence.lostAt === null
+  )
     return "locked";
   if (evidence.status === "other" && binding.order?.stored) return "stale";
   return "bound";

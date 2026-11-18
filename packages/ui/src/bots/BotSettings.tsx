@@ -83,7 +83,16 @@ export function BotSettings({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [effortNote, setEffortNote] = useState<string | null>(null);
-  const [now] = useState(() => Date.now());
+  // The page's clock: evidence ages while the page stays open, and with every change of the connection.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setNow(Date.now()));
+    const timer = setInterval(() => setNow(Date.now()), 15_000);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearInterval(timer);
+    };
+  }, [connection.status, connection.connectedAt]);
   const rootRef = useRef<HTMLDivElement>(null);
   const granted = useGranted(connection);
   const admin = connection.canAdmin;
@@ -213,10 +222,17 @@ export function BotSettings({
       </h3>
     </div>
   );
+  // Evidence that is not a reading of the gateway as it is now: read while the connection is down,
+  // or before the present connection was made. Either is shown as what it is, with its time.
+  const checkedAt = binding.evidence.checkedAt;
+  const offline = connection.status !== "connected";
+  const beforeConnection =
+    !offline &&
+    checkedAt !== null &&
+    connection.connectedAt !== null &&
+    checkedAt < connection.connectedAt;
   const evidenceOld =
-    connection.status !== "connected" &&
-    binding.evidence.checkedAt !== null &&
-    now - binding.evidence.checkedAt > OLD_MS;
+    checkedAt !== null && (offline || beforeConnection || now - checkedAt > OLD_MS * 6);
 
   // --- The tab's first page --------------------------------------------------------------
   if (view === "main") {
@@ -230,7 +246,9 @@ export function BotSettings({
           : "";
     const wordText =
       bindingWord(binding) +
-      (evidenceOld && word === "locked" ? `, as of ${clock(binding.evidence.checkedAt!)}` : "");
+      (evidenceOld && word === "locked" && !bindingWord(binding).includes(", as of")
+        ? `, as of ${clock(binding.evidence.checkedAt!)}`
+        : "");
     const model = binding.model ?? defaultRef(accounts)?.model ?? null;
     const saveModel = async (nextModel: string, nextEffort: string | null) => {
       setError(null);
@@ -346,7 +364,10 @@ export function BotSettings({
     const running = tasks.some((task) =>
       transcripts[task.key]?.runs.some((run) => run.state === "running" || run.state === "waiting"),
     );
-    const ready = changed && targetProvider !== null && model !== null;
+    // Only a choice in the list as it stands now: an account the last read lost cannot be saved.
+    const listedNow =
+      toGateway || (accounts.status === "ready" && list.some((each) => each.id === chosen));
+    const ready = changed && listedNow && targetProvider !== null && model !== null;
     const save = async () => {
       if (!ready || !targetProvider || !model) return;
       setSaving(true);
@@ -595,10 +616,16 @@ export function BotSettings({
       </button>
     );
     let line: ReactNode;
-    if (evidenceOld)
+    // A read that failed, or a gateway that says status is unavailable: its note says so, alone.
+    if (e.status === "failed" || e.status === "unavailable") line = null;
+    else if (evidenceOld)
       line = (
-        <p className="b-hint" role="status" style={{ margin: 0 }}>
-          Last checked at {clock(e.checkedAt!)}. Clawtrate checks again when it reconnects.
+        <p className="b-hint" role="status" style={{ margin: 0 }} data-testid="evidence">
+          {offline
+            ? `Last checked at ${clock(e.checkedAt!)}. Clawtrate checks again when it reconnects.`
+            : beforeConnection
+              ? `Last checked at ${clock(e.checkedAt!)}, before the connection was made again. Checking again…`
+              : `Last checked at ${clock(e.checkedAt!)}. Check now to read the gateway's order again.`}
         </p>
       );
     else if (e.status === "unread" || (e.status === "reading" && e.checkedAt === null))
@@ -616,7 +643,20 @@ export function BotSettings({
           {binding.order!.ids.length - 1 === 1 ? "" : "s"}, so it is not a lock.
         </p>
       );
-    else if (e.status === "failed") line = null;
+    else if (e.status === "configured")
+      line = (
+        <p className="b-hint" role="status" style={{ margin: 0 }} data-testid="evidence">
+          The gateway's settings order {who}'s accounts as{" "}
+          {(binding.order?.ids ?? [])
+            .map((id) => {
+              const listed = accounts.accounts.find((a) => a.id === id);
+              return listed ? accountName(listed, accounts.labels) : id;
+            })
+            .join(", ")}
+          . That order is the gateway's, not {name}'s own, so it is not a lock. Checked at{" "}
+          {e.checkedAt ? clock(e.checkedAt) : "—"}.
+        </p>
+      );
     else if (watching)
       line = <Wait>Checking the gateway for the lock, again in {WATCH_MS / 1000}s</Wait>;
     else
@@ -632,12 +672,39 @@ export function BotSettings({
       </div>
     );
     const warnings: ReactNode[] = [];
-    if (e.lostAt !== null && e.status !== "matched" && e.status !== "failed")
+    if (
+      e.lostAt !== null &&
+      e.status !== "matched" &&
+      e.status !== "failed" &&
+      e.status !== "unavailable"
+    )
       warnings.push(
         <Note key="gone" tone="warn">
           <p>
             The lock is gone: the gateway's order for {name} changed at or before {clock(e.lostAt)}.
           </p>
+        </Note>,
+      );
+    if (e.status === "unavailable")
+      warnings.push(
+        <Note key="unavailable" tone="warn" testId="evidence-unavailable">
+          <p>
+            The gateway says its account status is unavailable ({e.error}), so Clawtrate can't read{" "}
+            {name}'s order now.{" "}
+            {e.lastMatchAt !== null && e.lostAt === null
+              ? `Last confirmed locked at ${clock(e.lastMatchAt)}.`
+              : "Never confirmed."}
+          </p>
+          <div className="b-actions">
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              onClick={() => void bridge.send({ type: "checkLock", botId: bot.id })}
+            >
+              Try again
+            </button>
+          </div>
         </Note>,
       );
     if (e.status === "failed")
@@ -688,7 +755,11 @@ export function BotSettings({
     );
     if (word === "locked") {
       const asOf =
-        e.status === "failed" && e.lastMatchAt !== null ? `, as of ${clock(e.lastMatchAt)}` : "";
+        (e.status === "failed" || e.status === "unavailable") && e.lastMatchAt !== null
+          ? `, as of ${clock(e.lastMatchAt)}`
+          : evidenceOld && e.checkedAt !== null
+            ? `, as of ${clock(e.checkedAt)}`
+            : "";
       page.push(
         <Note key="s" icon={<LockIcon />} testId="locked-note">
           <p>

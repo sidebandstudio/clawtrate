@@ -322,6 +322,9 @@ const SCENES: Scene[] = [
   { name: "bot-account-lost", query: page$("lost"), ready: accountPage },
   { name: "bot-account-none", query: page$("none"), ready: accountPage },
   { name: "bot-account-differs", query: page$("differs"), ready: accountPage },
+  { name: "bot-account-configured", query: page$("configured"), ready: accountPage },
+  { name: "bot-account-unavailable", query: page$("unavailable"), ready: accountPage },
+  { name: "bot-account-elsewhere", query: page$("elsewhere"), ready: accountPage },
   { name: "bot-account-unwritten", query: page$("unwritten"), ready: accountPage },
   { name: "bot-account-read-only", query: page$("locked", "read"), ready: accountPage },
   {

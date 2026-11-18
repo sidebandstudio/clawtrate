@@ -176,7 +176,15 @@ export class AccountsEngine {
       const answers = await Promise.all(
         chunk.map((agentId) => this.ctx.request("models.authStatus", { agentId, refresh: true })),
       );
-      for (let j = 0; j < chunk.length; j += 1) views.set(chunk[j]!, readBotView(answers[j]));
+      for (let j = 0; j < chunk.length; j += 1) {
+        const view = readBotView(answers[j]);
+        // Not a reading: the last good one stands, and the screens say why there is none.
+        if (view.unavailable)
+          throw new Error(
+            `The gateway says its account status is unavailable (${view.unavailable}).`,
+          );
+        views.set(chunk[j]!, view);
+      }
     }
     return views;
   }
@@ -217,12 +225,11 @@ export class AccountsEngine {
     const defaults = asRecord(agents.defaults) ?? {};
     const defaultModel = readModelConfig(defaults.model).primary;
     const accounts = mergeAccounts(views, this.kinds);
-    const listed = new Set(accounts.map((account) => account.id));
     const main = asRecord(entries.main);
     const anyView = views.get("main") ?? [...views.values()][0];
     const bindings = [...views.keys()].map((botId) => {
       const before = previous.bindings.find((each) => each.botId === botId);
-      return this.binding(botId, asRecord(entries[botId]), views.get(botId)!, listed, before, at);
+      return this.binding(botId, asRecord(entries[botId]), views.get(botId)!, before, at);
     });
     return {
       ...previous,
@@ -245,10 +252,11 @@ export class AccountsEngine {
     botId: string,
     entry: RawRecord | null,
     view: BotView,
-    listed: Set<string>,
     before: BotBinding | undefined,
     at: number,
   ): BotBinding {
+    // An account counts for a bot only if that bot's own view lists it: one another bot keeps is not its.
+    const listed = new Set(view.profiles.map((profile) => profile.id));
     const { primary, fallbacks } = readModelConfig(entry?.model);
     const ref = parseModelRef(primary);
     const intent = this.intents.get(botId) ?? null;
@@ -306,15 +314,23 @@ export class AccountsEngine {
         ctx.request("config.get", {}).then(asRecord),
       ]);
       const view = readBotView(answer);
+      if (view.unavailable) {
+        const reason = view.unavailable;
+        ctx.update((a) =>
+          this.patchBinding(a, botId, (b) => ({
+            ...b,
+            evidence: { ...b.evidence, status: "unavailable", error: reason },
+          })),
+        );
+        return;
+      }
       const entry = asRecord(
         asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId],
       );
       const at = ctx.now();
       ctx.update((a) => {
-        const listed = new Set(a.accounts.map((each) => each.id));
-        for (const profile of view.profiles) listed.add(profile.id);
         const current = a.bindings.find((each) => each.botId === botId) ?? before;
-        const next = this.binding(botId, entry, view, listed, current, at);
+        const next = this.binding(botId, entry, view, current, at);
         return { ...a, bindings: a.bindings.map((each) => (each.botId === botId ? next : each)) };
       });
     } catch (error) {
@@ -650,6 +666,8 @@ export class AccountsEngine {
           ? ctx.request("models.authStatus", { agentId: other, refresh: true }).then(readBotView)
           : Promise.resolve(null),
       ]);
+      if (target.unavailable || second?.unavailable)
+        throw new Error("The gateway says its account status is unavailable.");
       const known = new Set(before);
       result.added = target.profiles
         .filter((p) => p.provider === signIn.provider && !known.has(p.id))

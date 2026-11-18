@@ -187,10 +187,15 @@ export function NewBot({
     choose(named);
   }
 
+  // A choice counts only while the list as it stands shows it: an account the last read lost,
+  // or a list that failed to load, cannot be created on.
+  const listedChoice =
+    draft.account === GATEWAY_CHOICE ||
+    (accounts.status === "ready" && shared.some((a) => a.id === draft.account));
   const creation = accounts.creation;
   const busy = creation?.status === "creating" || creation?.status === "checking";
   const create = async () => {
-    if (!draft.account || !provider || !draft.model || busy) return;
+    if (!draft.account || !listedChoice || !provider || !draft.model || busy) return;
     announce("Creating the bot");
     try {
       const { botId } = await bridge.invoke({
@@ -484,7 +489,7 @@ export function NewBot({
           className="button"
           data-variant="primary"
           data-size="lg"
-          disabled={busy || !draft.account || !draft.model}
+          disabled={busy || !draft.account || !listedChoice || !draft.model}
           onClick={() => void create()}
           data-testid="create"
         >
@@ -493,6 +498,18 @@ export function NewBot({
         {!draft.account && !busy && (
           <p className="b-hint" style={{ textAlign: "center", margin: 0 }}>
             Choose an account, or let the gateway choose.
+          </p>
+        )}
+        {draft.account && !listedChoice && !busy && (
+          <p
+            className="b-hint"
+            role="status"
+            style={{ textAlign: "center", margin: 0 }}
+            data-testid="choice-gone"
+          >
+            {accounts.status === "ready"
+              ? "The account chosen is no longer on the gateway. Choose another, or let the gateway choose."
+              : "The gateway's accounts aren't loaded, so the account chosen can't be used. Try again, or let the gateway choose."}
           </p>
         )}
         {creation?.status === "checking" && (

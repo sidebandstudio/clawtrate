@@ -467,3 +467,124 @@ test.describe("phone", () => {
     await settle(page);
   });
 });
+
+/** Change the fixture's state, as the engine would. */
+const change = (page: Page, run: string) =>
+  page.evaluate((body) => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (change: (state: unknown) => unknown) => void };
+      }
+    ).clawtrateFixture;
+    fixture.setState(new Function("state", body) as (state: unknown) => unknown);
+  }, run);
+
+const SETTINGS_TAB = `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin`;
+
+test("F-490: an order from the gateway's settings is named as that, never as a lock", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=configured`, "light");
+  await page.getByRole("button", { name: /^Account: OpenAI · Work, Bound\. Open\.$/ }).click();
+  await expect(page.getByTestId("bound-note")).toBeVisible();
+  await expect(page.getByTestId("locked-note")).toHaveCount(0);
+  await expect(page.getByTestId("evidence")).toContainText(
+    "The gateway's settings order OpenAI's accounts as OpenAI · Work. That order is the gateway's, not Otto's own, so it is not a lock.",
+  );
+  await expect(
+    page.getByText(/The gateway's settings also set an order for OpenAI accounts\./),
+  ).toBeVisible();
+});
+
+test("F-490: an answer that account status is unavailable is stated as that, with the last confirmation and its time", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=unavailable`, "light");
+  await page
+    .getByRole("button", { name: /^Account: OpenAI · Work, Locked, as of 5:28 PM\. Open\.$/ })
+    .click();
+  await expect(page.getByTestId("locked-note")).toContainText("Locked, as of 5:28 PM.");
+  await expect(page.getByTestId("evidence-unavailable")).toContainText(
+    "The gateway says its account status is unavailable (PREPARED_MODEL_AUTH_UNAVAILABLE), so Clawtrate can't read Otto's order now. Last confirmed locked at 5:28 PM.",
+  );
+  await expect(page.getByTestId("evidence-failed")).toHaveCount(0);
+});
+
+test("F-490: evidence ages: an open page that goes offline, or reconnects, says when it last checked", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=locked`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await expect(page.getByTestId("evidence")).toContainText("Checked with the gateway at 5:40 PM.");
+  await page.clock.setFixedTime(new Date("2026-11-16T17:47:00-05:00"));
+  await change(
+    page,
+    `return { ...state, connection: { ...state.connection, status: "reconnecting" } };`,
+  );
+  await expect(page.getByTestId("evidence")).toHaveText(
+    "Last checked at 5:40 PM. Clawtrate checks again when it reconnects.",
+  );
+  await expect(page.getByTestId("locked-note")).toContainText("Locked, as of 5:40 PM.");
+  // Connected again: the page does not keep evidence from before this connection; it reads the order again.
+  await change(
+    page,
+    `return { ...state, connection: { ...state.connection, status: "connected", connectedAt: Date.now() } };`,
+  );
+  await expect(page.getByTestId("evidence")).toHaveText("Checked with the gateway at 5:47 PM.");
+  expect(
+    (await sent(page)).filter((each) => each.type === "checkLock").length,
+  ).toBeGreaterThanOrEqual(2);
+});
+
+test("F-490 F-476: an account only another bot keeps is no account for this bot, whatever its order", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=elsewhere`, "light");
+  await page.getByRole("button", { name: /^Account: .*No account\. Open\.$/ }).click();
+  await expect(page.getByText(/^No account\. Otto's account was disconnected\./)).toBeVisible();
+  await expect(page.getByTestId("locked-note")).toHaveCount(0);
+});
+
+test("F-472: Create and Save take only a choice the list shows now: a failed read, or an account gone, disables them", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await expect(page.getByTestId("create")).toBeEnabled();
+  await change(
+    page,
+    `return { ...state, accounts: { ...state.accounts, status: "error", error: "timed out" } };`,
+  );
+  await expect(page.getByText("Couldn't load the gateway's accounts.")).toBeVisible();
+  await expect(page.getByRole("radio", { name: /^OpenAI · Home/ })).toHaveCount(0);
+  await expect(page.getByTestId("create")).toBeDisabled();
+  await expect(page.getByTestId("choice-gone")).toBeVisible();
+  // Read again, and the account is gone from the gateway.
+  await change(
+    page,
+    `return { ...state, accounts: { ...state.accounts, status: "ready", error: null, accounts: state.accounts.accounts.filter((a) => a.id !== "openai:home") } };`,
+  );
+  await expect(page.getByTestId("create")).toBeDisabled();
+  await expect(page.getByTestId("choice-gone")).toHaveText(
+    "The account chosen is no longer on the gateway. Choose another, or let the gateway choose.",
+  );
+  await page.getByRole("radio", { name: /^Let the gateway choose/ }).click();
+  await expect(page.getByTestId("create")).toBeEnabled();
+  await page.keyboard.press("Escape");
+  // Change account: the same rule for Save.
+  await page.keyboard.press("ControlOrMeta+\\");
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^xAI · Personal/ }).click();
+  await page.getByTestId("model-select").click();
+  await page.getByRole("menuitemradio", { name: "grok-4.7" }).click();
+  await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
+  await change(
+    page,
+    `return { ...state, accounts: { ...state.accounts, status: "error", error: "timed out" } };`,
+  );
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+});
