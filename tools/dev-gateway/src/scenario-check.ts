@@ -42,6 +42,15 @@ import {
 } from "./scenarios.ts";
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
 import { FILES_BOT, PICTURE_PATH, trailMap } from "./seed-files.ts";
+import {
+  HANDOVER,
+  HANDOVER_BOT,
+  HANDOVER_LINK,
+  handoverFiles,
+  PAGE_ID,
+  REPORT_TEXT,
+  trailGuidePage,
+} from "./handover.ts";
 import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
 import { OFFERED_TOOLS_PATH, QUIET_TURNS_PATH } from "./fake-provider.ts";
 import { COMPUTER_CHECKS } from "./computer-checks.ts";
@@ -575,6 +584,11 @@ export type Harness = {
   ownerRun(botId: string, key: string, message: string): Promise<RunView>;
   /** The tool names the scripted model received in the session's latest request. */
   offeredTools(key: string): Promise<string[] | null>;
+  /**
+   * The instance's gateway over HTTP, and how to make it lose the note
+   * `#hand-gone` handed over (handover.ts); absent where the runner gives none.
+   */
+  instance?: { httpOrigin: string; forgetHandover: () => number };
   /**
    * The turns the gateway started itself in the session that the scripted
    * model answered quietly: for each, the gateway prompt it recognized.
@@ -3463,11 +3477,270 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
   },
 ];
 
+/** The bot's items in a task, once the gateway has attached them: a few seconds after the run ends. */
+async function handedOver(h: Harness, key: string, count: number): Promise<JsonRecord[]> {
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const list = await h.op("plain").request<{ artifacts: JsonRecord[] }>("artifacts.list", {
+      sessionKey: key,
+      messageRole: "assistant",
+    });
+    if (list.artifacts.length >= count) return list.artifacts;
+    if (Date.now() > deadline)
+      throw new CheckFailure(`artifacts.list listed ${list.artifacts.length} of ${count} items`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
+/** The bot's last reply in history, once it carries something besides text. */
+async function lastReply(h: Harness, key: string, has: (block: JsonRecord) => boolean) {
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const history = await h.op("plain").request<{ messages: JsonRecord[] }>("chat.history", {
+      sessionKey: key,
+    });
+    const reply = history.messages.filter((m) => m.role === "assistant").at(-1);
+    const blocks = Array.isArray(reply?.content) ? (reply.content as JsonRecord[]) : [];
+    if (blocks.some(has)) return blocks;
+    if (Date.now() > deadline) throw new CheckFailure("the reply never carried the item");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
+/** An item's bytes through the address `artifacts.download` gives: the gateway's own, with a ticket. */
+async function downloaded(h: Harness, key: string, artifactId: string) {
+  expect(h.instance, "this harness does not know the gateway's HTTP address");
+  const answer = await h.op("plain").request<JsonRecord>("artifacts.download", {
+    sessionKey: key,
+    artifactId,
+    transport: "http",
+  });
+  const url = String(answer.url);
+  expect(
+    url.startsWith("/api/chat/media/outgoing/") && url.includes("?mediaTicket="),
+    `address ${url}`,
+  );
+  const response = await fetch(`${h.instance!.httpOrigin}${url}`, { redirect: "error" });
+  const bare = await fetch(`${h.instance!.httpOrigin}${url.split("?")[0]}`, { redirect: "error" });
+  await bare.arrayBuffer();
+  same(bare.status, 401, "the address without its ticket");
+  return {
+    status: response.status,
+    type: response.headers.get("content-type"),
+    bytes: Buffer.from(await response.arrayBuffer()),
+    url,
+  };
+}
+
+/** A call whose result's text and details the check reads elsewhere: its name, arguments and title. */
+const plainCall = (
+  name: string,
+  args: Record<string, unknown>,
+  title: string,
+): CallExpectation => ({
+  name,
+  args,
+  isError: false,
+  content: (texts: string[], where: string) => expect(texts.length > 0, `${where} has text`),
+  details: () => {},
+  title,
+});
+const reportWrite = () =>
+  plainCall(
+    "write",
+    { path: "notes/trail-report.md", content: REPORT_TEXT },
+    `Write to notes/trail-report.md (${REPORT_TEXT.length} chars)`,
+  );
+
+const item = (artifact: JsonRecord) => [
+  artifact.type,
+  artifact.title,
+  artifact.mimeType,
+  artifact.sizeBytes,
+  rec(artifact.download).mode,
+];
+
+const HANDOVER_CHECKS: ScenarioCheck[] = [
+  {
+    name: "a file handed over",
+    covers: ["#hand-file"],
+    run: async (h) => {
+      const key = await h.session(HANDOVER_BOT, "hand-file");
+      const view = await h.run("plain", key, "#hand-file");
+      view.expectCalls([reportWrite()]);
+      view.expectEnd("final", "Here is the trail report.");
+      const [report] = await handedOver(h, key, 1);
+      same(
+        item(report!),
+        ["file", "trail-report.md", "text/markdown", Buffer.byteLength(REPORT_TEXT), "url"],
+        "the report's record",
+      );
+      expect(String(report!.id).startsWith("artifact_managed_media_"), "a managed id");
+      const got = await downloaded(h, key, String(report!.id));
+      same([got.status, got.bytes.toString("utf8")], [200, REPORT_TEXT], "the report's bytes");
+      // The gateway's record for Raw has neither data nor address.
+      const record = await h.op("plain").request<{ artifact: JsonRecord }>("artifacts.get", {
+        sessionKey: key,
+        artifactId: report!.id,
+      });
+      same(
+        ["data" in record.artifact, "url" in record.artifact],
+        [false, false],
+        "artifacts.get leaves out data and address",
+      );
+    },
+  },
+  {
+    name: "a picture and a recording handed over, with the thumbnail the gateway makes",
+    covers: ["#hand-picture", "#hand-audio"],
+    run: async (h) => {
+      const files = handoverFiles();
+      const key = await h.session(HANDOVER_BOT, "hand-picture");
+      const shown = await h.run("plain", key, "#hand-picture");
+      shown.expectCalls([]);
+      shown.expectEnd("final", "Here is the ridge's profile.");
+      const [picture] = await handedOver(h, key, 1);
+      same(
+        item(picture!),
+        ["image", "ridge-profile.png", "image/png", files[HANDOVER.picture]!.length, "url"],
+        "the picture's record",
+      );
+      const got = await downloaded(h, key, String(picture!.id));
+      same(got.bytes.equals(files[HANDOVER.picture]!), true, "the picture's bytes");
+      // The same ticket opens the picture's thumbnail: a PNG.
+      const thumb = await fetch(
+        `${h.instance!.httpOrigin}${got.url.replace("/full?", "/thumbnail?")}`,
+      );
+      await thumb.arrayBuffer();
+      same([thumb.status, thumb.headers.get("content-type")], [200, "image/png"], "the thumbnail");
+      const voice = await h.session(HANDOVER_BOT, "hand-audio");
+      const heard = await h.run("plain", voice, "#hand-audio");
+      heard.expectCalls([]);
+      heard.expectEnd("final", "Here is the chime from the trailhead.");
+      const [chime] = await handedOver(h, voice, 1);
+      same(
+        item(chime!),
+        ["audio", "trail-chime.wav", "audio/wav", files[HANDOVER.audio]!.length, "url"],
+        "the recording's record",
+      );
+      same(
+        (await downloaded(h, voice, String(chime!.id))).bytes.equals(files[HANDOVER.audio]!),
+        true,
+        "the recording's bytes",
+      );
+    },
+  },
+  {
+    name: "a link, a page, several items, one too large and one the gateway loses",
+    covers: ["#hand-link", "#hand-page", "#hand-several", "#hand-large", "#hand-gone"],
+    run: async (h) => {
+      const link = await h.session(HANDOVER_BOT, "hand-link");
+      const linked = await h.run("plain", link, "#hand-link");
+      linked.expectCalls([]);
+      linked.expectEnd(
+        "final",
+        `The park keeps this week's trail conditions here: ${HANDOVER_LINK}`,
+      );
+
+      const page = await h.session(HANDOVER_BOT, "hand-page");
+      const made = await h.run("plain", page, "#hand-page");
+      made.expectCalls([
+        plainCall(
+          `${CODING_AGENT_SERVER}__share_page`,
+          { docId: PAGE_ID, title: "Trail guide" },
+          "Coder Share Page",
+        ),
+      ]);
+      made.expectEnd("final", "I made a page with Saturday's routes.");
+      const blocks = await lastReply(h, page, (block) => block.type === "canvas");
+      const canvas = rec(blocks.find((block) => block.type === "canvas")!.preview);
+      same([canvas.viewId, canvas.title], [PAGE_ID, "Trail guide"], "the page's canvas block");
+      const viewed = await h
+        .op("plain")
+        .request<JsonRecord>("canvas.document.view", { docId: PAGE_ID });
+      same(viewed.html, trailGuidePage(), "the page's HTML");
+      same(
+        (
+          await h.op("plain").request<{ artifacts: unknown[] }>("artifacts.list", {
+            sessionKey: page,
+            messageRole: "assistant",
+          })
+        ).artifacts,
+        [],
+        "a page is not an artifact",
+      );
+
+      const several = await h.session(HANDOVER_BOT, "hand-several");
+      const all = await h.run("plain", several, "#hand-several");
+      all.expectCalls([reportWrite()]);
+      all.expectEnd("final", "Here is everything from Saturday.");
+      const four = await handedOver(h, several, 4);
+      same(
+        four.map((each) => [each.type, each.title]),
+        [
+          ["file", "trail-report.md"],
+          ["image", "ridge-profile.png"],
+          ["image", "trail-photo.png"],
+          ["audio", "trail-chime.wav"],
+        ],
+        "the four items, in order",
+      );
+      same(new Set(four.map((each) => each.messageSeq)).size, 1, "one message holds all four");
+      h.observe(
+        `The 2400 x 1600 photo was attached as ${four[2]!.mimeType}, ${four[2]!.sizeBytes} bytes: the gateway fits pictures before it keeps them.`,
+      );
+
+      const large = await h.session(HANDOVER_BOT, "hand-large");
+      const big = await h.run("plain", large, "#hand-large");
+      big.expectCalls([]);
+      big.expectEnd("final", "Here is the elevation log.");
+      const refused = await lastReply(h, large, (block) => block.type === "attachment_error");
+      same(
+        rec(refused.find((block) => block.type === "attachment_error")!.attachment).code,
+        "delivery-failed",
+        "the refusal's code",
+      );
+      same(
+        (
+          await h.op("plain").request<{ artifacts: unknown[] }>("artifacts.list", {
+            sessionKey: large,
+            messageRole: "assistant",
+          })
+        ).artifacts,
+        [],
+        "nothing listed for the refused file",
+      );
+
+      const gone = await h.session(HANDOVER_BOT, "hand-gone");
+      const lost = await h.run("plain", gone, "#hand-gone");
+      lost.expectCalls([]);
+      lost.expectEnd("final", "Here is the old route.");
+      const [note] = await handedOver(h, gone, 1);
+      expect(h.instance, "this harness cannot make the gateway lose a file");
+      same(h.instance!.forgetHandover(), 1, "stored copies removed");
+      try {
+        await h
+          .op("plain")
+          .request("artifacts.download", { sessionKey: gone, artifactId: note!.id });
+        throw new CheckFailure("the lost note still downloads");
+      } catch (error) {
+        if (error instanceof CheckFailure) throw error;
+        same(
+          rec((error as { details?: unknown }).details).type,
+          "artifact_not_found",
+          "the refusal of a lost copy",
+        );
+      }
+      same((await handedOver(h, gone, 1)).length, 1, "a lost copy is still listed");
+    },
+  },
+];
+
 /** Directives of the scripted model that no scenario check claims to send. */
 export function uncoveredDirectives(): string[] {
   // The browser directives are sent by the computer checks, on an instance of their own.
   const covered = new Set(
-    [...SCENARIO_CHECKS, ...COMPUTER_CHECKS].flatMap((check) => check.covers),
+    [...SCENARIO_CHECKS, ...HANDOVER_CHECKS, ...COMPUTER_CHECKS].flatMap((check) => check.covers),
   );
   return SCENARIOS.map((s) => `#${s.name}`).filter((directive) => !covered.has(directive));
 }
@@ -3480,14 +3753,17 @@ export async function runScenarioChecks(
     only?: (check: ScenarioCheck) => boolean;
     ownerAgent?: (botId: string, key: string, message: string) => Promise<void>;
     providerUrl?: string;
+    instance?: Harness["instance"];
   } = {},
 ): Promise<{ passed: number; failed: number; notes: string[] }> {
   const log = options.log ?? console.log;
-  const harness = createHarness(clients, options.ownerAgent, options.providerUrl);
+  const harness = createHarness(clients, options.ownerAgent, options.providerUrl, options.instance);
   await prepareRecipient(harness);
   let passed = 0;
   let failed = 0;
-  for (const check of SCENARIO_CHECKS.filter(options.only ?? (() => true))) {
+  for (const check of [...SCENARIO_CHECKS, ...HANDOVER_CHECKS].filter(
+    options.only ?? (() => true),
+  )) {
     try {
       await runCheck(harness, check);
       passed += 1;
@@ -3517,12 +3793,14 @@ export function createHarness(
   clients: Record<ClientName, OperatorSession>,
   ownerAgent?: (botId: string, key: string, message: string) => Promise<void>,
   providerUrl?: string,
+  instance?: Harness["instance"],
 ): Harness & { notes: string[] } {
   let counter = 0;
   const notes: string[] = [];
   const stamp = Date.now().toString(36);
   const harness = {
     notes,
+    ...(instance ? { instance } : {}),
     op: (client: ClientName) => clients[client],
     async session(botId: string, tag: string) {
       counter += 1;

@@ -279,12 +279,38 @@ describe("the planner", () => {
 });
 
 describe("the stand-in coding agent", () => {
+  it("names a page of the canvas as the gateway's history reads a canvas preview", async () => {
+    const agent = createCodingAgent();
+    const shared = await agent.handle({
+      id: 1,
+      method: "tools/call",
+      params: { name: "share_page", arguments: { docId: "trail-guide", title: "Trail guide" } },
+    });
+    const [part] = (shared!.result as { content: { text: string }[] }).content;
+    expect(JSON.parse(part!.text)).toEqual({
+      kind: "canvas",
+      view: {
+        id: "trail-guide",
+        url: "/__openclaw__/canvas/documents/trail-guide/index.html",
+        title: "Trail guide",
+      },
+      presentation: { target: "assistant_message", title: "Trail guide" },
+    });
+  });
+
   it("answers MCP requests without touching anything outside itself", async () => {
     const agent = createCodingAgent();
     const tools = await agent.handle({ id: 1, method: "tools/list" });
     expect(
       ((tools!.result as { tools: { name: string }[] }).tools ?? []).map((t) => t.name),
-    ).toEqual(["send_message", "run_checks", "slow_task", "long_output", "received_notifications"]);
+    ).toEqual([
+      "send_message",
+      "run_checks",
+      "slow_task",
+      "long_output",
+      "received_notifications",
+      "share_page",
+    ]);
     const sent = await agent.handle({
       id: 2,
       method: "tools/call",

@@ -31,6 +31,7 @@ import {
   type ComputerClient,
 } from "../tools/dev-gateway/src/computer-checks.ts";
 import { loadDevPlugin } from "../tools/dev-gateway/src/dev-plugins.ts";
+import { forgetHandover } from "../tools/dev-gateway/src/handover.ts";
 import { PLUGIN_RULE } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import {
@@ -116,6 +117,10 @@ async function main(): Promise<number> {
       const { passed, failed, notes } = await runScenarioChecks(clients, {
         ownerAgent: (botId, key, message) => ownerAgent(inst, botId, key, message),
         providerUrl,
+        instance: {
+          httpOrigin: `http://127.0.0.1:${instancePorts(inst).gatewayPort}`,
+          forgetHandover: () => forgetHandover(inst.stateDir),
+        },
       });
       for (const row of FAMILY_ROWS) console.log(`family ${JSON.stringify(row)}`);
       for (const note of notes) console.log(`note  ${note}`);
