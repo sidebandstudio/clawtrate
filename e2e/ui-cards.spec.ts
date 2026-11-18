@@ -1110,6 +1110,8 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     await expect(
       c.getByText("The call was made. Work handed to T3 Code may continue there."),
     ).toBeVisible();
+    // The note is added; the thread's last reported status stays its word.
+    await expect(word(page)).toHaveText("Running");
     await shot(c, "t3-stopped");
   });
 
