@@ -267,6 +267,22 @@ test("F-472: a bot created with Let the gateway choose is stored with no account
   await page.keyboard.press("ControlOrMeta+\\");
 });
 
+test("F-424: a bot New bot made has exactly one task, Main, selected; the gateway lists that one task, the bot's canonical main", async () => {
+  // The bot the check before made, with nothing sent to it.
+  await expect(botRow("Chooser")).toHaveAttribute("aria-current", "true", { timeout: 20_000 });
+  await expect(botRow("Chooser")).toHaveAccessibleName(/^Chooser, 1 task\b/);
+  await expect(page.getByRole("heading", { level: 1, name: "Main" })).toBeVisible();
+  const listed = await admin.request<{ sessions: Array<{ key: string; label?: string }> }>(
+    "sessions.list",
+    { agentId: "chooser", limit: 50 },
+  );
+  expect(
+    listed.sessions
+      .filter((row) => row.key.startsWith("agent:chooser:"))
+      .map((row) => [row.key, row.label]),
+  ).toEqual([["agent:chooser:main", "Main"]]);
+});
+
 /** Open Settings on Accounts, and the connect component. */
 async function connectFromSettings() {
   await page.keyboard.press("ControlOrMeta+,");
