@@ -880,8 +880,8 @@ export function finishRun(
 
 /**
  * A run whose end this client inferred (`outcomeKnown: false`: nothing showed how it ended),
- * taken back to where it stood before that inference, so that whatever the gateway sends or
- * stores about it next settles it as it really ended: `stopping` if a Stop was asked, otherwise
+ * taken back to where it stood before that inference, so that the end the gateway sends or
+ * stores settles it as it really ended: `stopping` if a Stop was asked, otherwise
  * `running`. A run whose end is known is returned as it is.
  */
 export function reopenInferred(run: Run): Run {
@@ -1676,13 +1676,14 @@ export function applyChatEvent(
   if (!own) return activity;
   activity = own;
   const existing = findRun(activity, runId);
+  const state = payload.state;
   if (existing && isTerminal(existing.state)) {
-    // An end this client only inferred gives way to what the gateway says of the run.
-    if (existing.outcomeKnown) return activity;
+    // An end this client only inferred gives way to the end the gateway sends.
+    const ends = state === "final" || state === "aborted" || state === "error";
+    if (existing.outcomeKnown || !ends) return activity;
     activity = replaceRun(activity, reopenInferred(existing));
   }
   let next = ensureRun(activity, runId, ctx);
-  const state = payload.state;
   next = updateRun(next, runId, (run) => {
     switch (state) {
       case "status":
@@ -1739,8 +1740,9 @@ export function applyAgentEvent(
     return { activity };
   const replacement = stream === "tool" && data.phase === "result" && data.replace === true;
   if (existing && isTerminal(existing.state) && !replacement) {
-    // An end this client only inferred gives way to what the gateway says of the run.
-    if (existing.outcomeKnown) return { activity };
+    // An end this client only inferred gives way to the end the gateway sends.
+    const ends = stream === "lifecycle" && (data.phase === "end" || data.phase === "error");
+    if (existing.outcomeKnown || !ends) return { activity };
     activity = replaceRun(activity, reopenInferred(existing));
   }
 

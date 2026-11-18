@@ -192,6 +192,26 @@ describe("a Stop through any number of disconnects, and an end only inferred", (
     client.stop();
   });
 
+  it("a frame that is no end leaves an end only inferred as it is", async () => {
+    const gateway = grantingGateway();
+    let history: Record<string, unknown> = { messages: [], inFlightRun: { runId: "r1" } };
+    gateway.handlers["chat.history"] = () => history;
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().runs.some((run) => run.id === "r1" && run.state === "running"));
+    history = { messages: [] };
+    gateway.dropAll();
+    await until(() => transcript().runs.find((run) => run.id === "r1")?.outcomeKnown === false);
+    // A late start and a late status say nothing of how it ended.
+    gateway.emit("agent", agentEvent("r1", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("chat", { runId: "r1", sessionKey: KEY, seq: 2, state: "status", phase: "model" });
+    await sleep(50);
+    expect(transcript().runs.find((run) => run.id === "r1")).toMatchObject({
+      state: "completed",
+      outcomeKnown: false,
+    });
+    client.stop();
+  });
+
   it("an ordinary run settled as completed with no known outcome takes the failure history records", async () => {
     const gateway = grantingGateway();
     let history: Record<string, unknown> = { messages: [], inFlightRun: { runId: "r1" } };
