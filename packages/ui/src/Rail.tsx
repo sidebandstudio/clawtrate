@@ -60,6 +60,7 @@ import {
   botLabel,
   botPreview,
   botTime,
+  LIST_WORDS,
   summarize,
   taskLabel,
   taskState,
@@ -1769,11 +1770,13 @@ export function Rail({
         {bots.length === 0 &&
           (discovery.status === "loading" ? (
             <li className="rail-empty">
-              <strong>Loading bots</strong>Loading this gateway's bots.
+              <strong>{LIST_WORDS.loadingTitle}</strong>
+              {LIST_WORDS.loadingBody}
             </li>
           ) : (
             <li className="rail-empty">
-              <strong>No bots</strong>Bots appear here once the gateway has one.
+              <strong>{LIST_WORDS.emptyTitle}</strong>
+              {LIST_WORDS.emptyBody}
             </li>
           ))}
         {matches ? (
@@ -1846,7 +1849,7 @@ export function Rail({
             )}
           </>
         )}
-        {discovery.partial && <li className="list-note">Showing the most recent tasks only.</li>}
+        {discovery.partial && <li className="list-note">{LIST_WORDS.partial}</li>}
       </ul>
       <p className="visually-hidden" role="status">
         {announcement}

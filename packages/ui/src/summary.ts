@@ -195,3 +195,12 @@ export function taskLabel(task: Task, state: RunState | null, unread: boolean): 
     (state ? SPOKEN[state] : unread ? ", unread" : "")
   );
 }
+
+/** The list's own notes: while the bots load, with none, and when the gateway's task list was cut short. */
+export const LIST_WORDS = {
+  loadingTitle: "Loading bots",
+  loadingBody: "Loading this gateway's bots.",
+  emptyTitle: "No bots",
+  emptyBody: "Bots appear here once the gateway has one.",
+  partial: "Showing the most recent tasks only.",
+} as const;
