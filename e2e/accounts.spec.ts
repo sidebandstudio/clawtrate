@@ -271,7 +271,9 @@ test("F-424: a bot New bot made has exactly one task, Main, selected; the gatewa
   // The bot the check before made, with nothing sent to it.
   await expect(botRow("Chooser")).toHaveAttribute("aria-current", "true", { timeout: 20_000 });
   await expect(botRow("Chooser")).toHaveAccessibleName(/^Chooser, 1 task\b/);
-  await expect(page.getByRole("heading", { level: 1, name: "Main" })).toBeVisible();
+  // Its one task is on screen, titled Main, with nothing in it yet.
+  await expect(page.locator(".title-pill-task")).toHaveText("Main");
+  await expect(page.getByRole("heading", { level: 1, name: "Nothing here yet" })).toBeVisible();
   const listed = await admin.request<{ sessions: Array<{ key: string; label?: string }> }>(
     "sessions.list",
     { agentId: "chooser", limit: 50 },

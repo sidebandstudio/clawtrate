@@ -73,6 +73,39 @@ for (const size of SIZES) {
         await expect(full.locator("summary")).toHaveText(/Show full request/);
       });
 
+      test("F-094: a stop note, a failed turn's card and the run line each have Raw with the event behind it", async ({
+        page,
+      }) => {
+        const raw = (target: Locator) =>
+          target.getByRole("region", { name: "What the gateway sent" });
+        await openFixture(
+          page,
+          "scene=run-stopped&bot=otto&task=agent:otto:disk-space&panel=closed",
+          theme,
+        );
+        const note = page.getByTestId("stop-note");
+        await note.getByRole("button", { name: "Raw" }).click();
+        await expect(raw(note)).toContainText(
+          "The event, as the gateway sent it (agent (lifecycle end))",
+        );
+        await expect(raw(note)).toContainText('"aborted": true');
+        await fitsWidth(page, note);
+        const line = page.getByTestId("run-line").last();
+        await line.locator("summary").click();
+        await line.getByRole("button", { name: "Raw" }).click();
+        await expect(raw(line)).toContainText("(agent (lifecycle start))");
+        await openFixture(
+          page,
+          "scene=run-failed&bot=otto&task=agent:otto:disk-space&panel=closed",
+          theme,
+        );
+        const error = page.getByTestId("turn-error");
+        await error.getByRole("button", { name: "Raw" }).click();
+        await expect(raw(error)).toContainText("(agent (lifecycle error))");
+        await expect(raw(error)).toContainText("The model provider is overloaded.");
+        await fitsWidth(page, error);
+      });
+
       test("F-057 F-295: a task whose run finished with a failed action shows the failed mark and says so, and its bot says Finished with 1 failed action until it is opened; a blocked task says blocked", async ({
         page,
       }) => {
