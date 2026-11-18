@@ -266,13 +266,25 @@ export class RunView {
    * Every chat and agent event of the run matches the protocol schema, but one:
    * for a turn it ran from its queue the gateway sends an `agent` event on
    * stream `error` with `data.reason: "seq gap"` and no `seq`, its own note of
-   * a gap in the run's numbering. The schema requires `seq`; the event is
-   * counted in `SEQ_GAP_NOTES` and set aside.
+   * a gap in the run's numbering. The schema requires `seq`. It is set aside,
+   * and counted in `SEQ_GAP_NOTES`, only for a run this client saw the gateway
+   * pair with an id of its own (`sessions.changed` naming the run as
+   * `clientRunId` beside another `runId`); for any other run it fails.
    */
   validate(): void {
+    const queued = this.op.events.some((e) => {
+      const p = rec(e.payload);
+      return (
+        e.event === "sessions.changed" &&
+        p.clientRunId === this.runId &&
+        typeof p.runId === "string" &&
+        p.runId !== this.runId
+      );
+    });
     for (const e of this.events) {
       const p = rec(e.payload);
       if (
+        queued &&
         e.event === "agent" &&
         p.stream === "error" &&
         p.seq === undefined &&
@@ -306,6 +318,16 @@ export type CallExpectation = {
   /** The item's end status; completed, or failed for an error. */
   status?: string;
 };
+
+/** The reply text a run's `agent` assistant events have shown so far: the longest whole text, or the deltas joined. */
+function streamedText(view: RunView): string {
+  const events = view.agent("assistant").map((e) => view.data(e));
+  const whole = events
+    .map((data) => (typeof data.text === "string" ? data.text : ""))
+    .reduce((longest, text) => (text.length > longest.length ? text : longest), "");
+  const deltas = events.map((data) => (typeof data.delta === "string" ? data.delta : "")).join("");
+  return whole.length >= deltas.length ? whole : deltas;
+}
 
 /** Runs for which the gateway sent its "seq gap" error event (see RunView.validate). */
 export const SEQ_GAP_NOTES = new Set<string>();
@@ -1316,21 +1338,22 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
-    name: "a slow stream, stopped mid-run",
-    covers: ["#slow"],
+    name: "a streamed reply, stopped mid-run",
+    covers: ["#stream"],
     run: async (h) => {
-      const key = await h.session("main", "slow-abort");
-      const view = await h.start("plain", key, "#slow 20");
-      // The barrier is the run's own reasoning, which comes first. The gateway passes the
-      // reply's text on in one piece only as the turn settles (observed: reasoning in the first
-      // half second, then nothing until the whole text and the end together), so no point
-      // "mid-stream" can be observed; after the reasoning, twenty seconds of the turn remain.
+      const key = await h.session("main", "stream-abort");
+      const view = await h.start("plain", key, "#stream 20");
+      // Stopped once this run's own text has been seen: `#stream` sends its reply in pieces
+      // for twenty seconds (a reply that follows reasoning, as `#slow`'s, the gateway passes on
+      // only in one piece as the turn settles, so no point mid-reply can be observed there).
       await h
         .op("plain")
         .waitFor(
-          "the run's reasoning",
-          (e) => isAgent("thinking")(e) && rec(e.payload).runId === view.runId,
+          "the run's streamed text",
+          (e) => isAgent("assistant")(e) && rec(e.payload).runId === view.runId,
         );
+      const observed = streamedText(view);
+      expect(observed !== "", "text was seen before the stop");
       const out = await h.op("plain").request("chat.abort", { sessionKey: key });
       same(out, { ok: true, aborted: true, runIds: [view.runId] }, "chat.abort result");
       await h.wait(view, 30_000);
@@ -1343,11 +1366,16 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         ["cancelled", true],
         "lifecycle end status",
       );
-      // What the aborted event carries is the reply as far as the model had got: the start of
-      // the scripted reply, empty if the stop came before its first piece.
+      // The aborted event carries the reply as far as the model had got: at least all that was
+      // seen before the stop, and a start of the scripted reply.
+      const partial = view.finalText();
       expect(
-        scriptedFinalText("#slow 20").startsWith(view.finalText()),
-        "the aborted event carries the partial text, a start of the reply",
+        partial.startsWith(observed),
+        `the aborted event carries the text seen before the stop (${JSON.stringify(observed)}), got ${JSON.stringify(partial)}`,
+      );
+      expect(
+        scriptedFinalText("#stream 20").startsWith(partial),
+        "the partial text is a start of the reply",
       );
       view.expectCalls([]);
       view.expectEnd("aborted", null);
