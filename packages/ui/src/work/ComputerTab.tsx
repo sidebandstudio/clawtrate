@@ -280,7 +280,9 @@ export function ComputerTab(props: ComputerTabProps) {
           name={name}
           taskKey={taskKey}
           transcript={transcript}
-          online={online}
+          // Read only while the tab is in front of the person: nothing is asked of the gateway
+          // for a tab no one is looking at.
+          online={online && shown}
           browser={
             pane?.availability === "ready"
               ? `The gateway's machine, in ${name}'s own browser`

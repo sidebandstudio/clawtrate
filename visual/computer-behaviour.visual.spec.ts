@@ -288,6 +288,24 @@ test.describe("the computer button, recovery and the machine", () => {
     );
   });
 
+  test("the Computer tab asks the gateway nothing while another tab of the pane is shown", async ({
+    page,
+  }) => {
+    await openFixture(
+      page,
+      `${COMPUTER.replace("tab=computer", "tab=files")}&computer=watching`,
+      "light",
+    );
+    await expect(page.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
+    await page.waitForTimeout(500);
+    for (const type of ["readMachine", "computerShow", "computerTabs", "computerWatch"])
+      expect(await sentOf(page, type), type).toEqual([]);
+    await page.getByRole("tab", { name: "Computer" }).click();
+    await tileReady(page);
+    expect(await sentOf(page, "computerShow")).toHaveLength(1);
+    expect((await sentOf(page, "readMachine")).length).toBeGreaterThan(0);
+  });
+
   test("F-139: a task that never used the browser has no computer button", async ({ page }) => {
     await openFixture(page, `${COMPUTER}&computer=unused`, "light");
     await expect(page.getByTestId("computer-button")).toHaveCount(0);
