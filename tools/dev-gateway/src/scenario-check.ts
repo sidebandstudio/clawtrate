@@ -3272,6 +3272,70 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
+    name: "a shell command that prints as it goes, with the gateway's warning, approved once",
+    covers: ["#count"],
+    run: async (h) => {
+      const key = await h.session(SHELL_BOT, "count");
+      const view = await h.start("approvals", key, "#count");
+      const approval = await approvalFor(h, view);
+      // Inline code has no reusable rule: the gateway offers allow once and deny only.
+      checkApprovalRequest(approval, view, SHELL_COMMANDS.count, ["allow-once", "deny"]);
+      const request = rec(approval.request);
+      same(request.ask, "on-miss", "the approval's ask");
+      same(request.unavailableDecisions, ["allow-always"], "unavailableDecisions");
+      same(
+        rec(request.commandAnalysis).warningLines,
+        ["Contains inline-eval: perl -e"],
+        "the gateway's warning about the command",
+      );
+      await h
+        .op("approvals")
+        .request("exec.approval.resolve", { id: approval.id, decision: "allow-once" });
+      await h.wait(view);
+      // The output streams while the command runs: updates that grow, each before the result.
+      const updates = view.tool("update", "exec");
+      const texts = updates.map((e) =>
+        String(rec((rec(view.data(e).partialResult).content as JsonRecord[])?.[0]).text ?? ""),
+      );
+      expect(texts.length >= 2, `the command's output arrived in updates (${texts.length})`);
+      expect(texts[0]!.startsWith("Step 1 of 4"), "the first update holds the first line");
+      for (let i = 1; i < texts.length; i += 1) {
+        expect(texts[i]!.startsWith(texts[i - 1]!), "each update holds the output so far");
+      }
+      const resultAt = view.tool("result", "exec")[0]!.at;
+      expect(
+        updates.every((e) => e.at < resultAt),
+        "every update came before the command's result",
+      );
+      const deltas = view.agent("command_output").filter((e) => view.data(e).phase === "delta");
+      expect(deltas.length >= 2, "command_output deltas while it ran");
+      const output = "Step 1 of 4\nStep 2 of 4\nStep 3 of 4\nStep 4 of 4";
+      const result = view.result("exec");
+      same(
+        [result.isError, result.details.status, result.details.exitCode, result.text],
+        [false, "completed", 0, output],
+        "the exec result",
+      );
+      view.expectCalls([
+        execCall(scriptedArgs("#count", "exec", SHELL_BOT) as JsonRecord, {
+          isError: false,
+          content: [output],
+          details: {
+            status: "completed",
+            exitCode: 0,
+            exitSignal: null,
+            exitReason: "exit",
+            durationMs: isNumberAtLeast(3000),
+            aggregated: output,
+            noOutputTimedOut: false,
+          },
+          title: `Exec ${SHELL_COMMANDS.count} (in .)`,
+        }),
+      ]);
+      view.expectEnd("final", scriptedFinalText("#count"));
+    },
+  },
+  {
     name: "the list of scenarios",
     covers: ["#help"],
     run: async (h) => {

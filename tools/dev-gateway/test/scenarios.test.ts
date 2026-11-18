@@ -104,6 +104,7 @@ describe("shell commands", () => {
       SHELL_COMMANDS.list,
       SHELL_COMMANDS.print,
       SHELL_COMMANDS.missing,
+      SHELL_COMMANDS.count,
       ...[5, 20, 120].map(SHELL_COMMANDS.sleep),
     ]);
     const all = SCENARIOS.flatMap((s) => shellSteps(s.name)).flatMap((step) =>
@@ -115,7 +116,7 @@ describe("shell commands", () => {
       arguments: { command: "sleep 120" },
     });
     expect(SHELL_SCENARIOS.sort()).toEqual(
-      ["approve", "approve-once", "exit-code", "exec-timeout", "sleep"].sort(),
+      ["approve", "approve-once", "count", "exit-code", "exec-timeout", "sleep"].sort(),
     );
   });
 

@@ -150,6 +150,14 @@ export const SHELL_COMMANDS = {
   print: "echo 'Hello from Otto.'",
   missing: "ls missing-folder",
   sleep: (seconds: number) => `sleep ${seconds}`,
+  /**
+   * Prints a line a second for four seconds: its output streams while it runs. One program
+   * call, since the gateway refuses to ask about shell syntax it cannot bind to a plan (a
+   * `for` loop is "Exec denied (SYSTEM_RUN_DENIED: approval cannot safely bind this
+   * command)"); its analysis marks `perl -e` as inline code, a warning on the request. `-l`
+   * ends each line, so the command holds no backslash for the gateway's display to rewrite.
+   */
+  count: `perl -le '$|=1; for my $i (1..4) { print "Step $i of 4"; sleep 1 }'`,
 } as const;
 
 /** The large write's file and size: over the 262,144-byte preview limit of the gateway's readers. */
@@ -598,6 +606,18 @@ export const SCENARIOS: Scenario[] = [
       think("I will run a slow shell command."),
       exec(SHELL_COMMANDS.sleep(seconds)),
       afterExec("The slow command finished."),
+    ],
+  },
+  {
+    name: "count",
+    phrase: "run a command that prints as it goes",
+    bots: "Otto",
+    summary:
+      "Asks to run a four-second loop that prints a line each second: its output streams while it runs, and the gateway's request carries a warning about the command.",
+    steps: () => [
+      think("I will run a command that prints a line each second."),
+      exec(SHELL_COMMANDS.count),
+      afterExec("The command printed four lines."),
     ],
   },
   {
