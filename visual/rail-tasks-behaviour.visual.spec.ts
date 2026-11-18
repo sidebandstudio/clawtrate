@@ -158,6 +158,25 @@ test("F-022: a refused unread change leaves the rail and the badge as the gatewa
   expect(await badge()).toBe(before);
 });
 
+test("F-022: two clicks at once on an unread task open it with one read", async ({ page }) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  // Both clicks dispatched in the same moment, before any answer.
+  await taskRow(page, "Weekly backup check").evaluate((row: HTMLElement) => {
+    row.click();
+    row.click();
+  });
+  await expect(page.locator(".title-pill-task")).toHaveText("Weekly backup check");
+  const reads = async () =>
+    (await sent(page, "markTask")).filter(
+      (command) => "key" in command && command.key === "agent:otto:backup-check",
+    );
+  await expect.poll(async () => (await reads()).length).toBe(1);
+  await page.waitForFunction(() => document.querySelector(".composer-input") !== null);
+  expect(await reads()).toEqual([
+    { type: "markTask", key: "agent:otto:backup-check", unread: false, opened: true },
+  ]);
+});
+
 test("F-022: a refused read on opening leaves the task unread in the rail and the badge, as the gateway has it", async ({
   page,
 }) => {
