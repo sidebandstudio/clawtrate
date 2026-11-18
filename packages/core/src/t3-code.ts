@@ -461,3 +461,23 @@ export function readLines(d: ReadDimensions): string[] {
     ...(!d.replyCut && d.otherCut ? [T3_WORDS.otherCut] : []),
   ];
 }
+
+/**
+ * The thread's link, for "Open thread" (11.3): the latest a result carried,
+ * offered only for an `http:` or `https:` address, with its host to show
+ * beside it. Loopback is an address like any other: a thread can live on the
+ * person's own machine. Any other scheme, or a value that is not an address,
+ * gives no link.
+ */
+export function threadLink(calls: readonly T3Call[]): { href: string; host: string } | null {
+  const link = [...calls].reverse().find((c) => c.facts?.link)?.facts?.link ?? null;
+  if (!link) return null;
+  let url: URL;
+  try {
+    url = new URL(link);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  return { href: url.href, host: url.host };
+}

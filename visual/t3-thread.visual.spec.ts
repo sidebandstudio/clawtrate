@@ -168,9 +168,10 @@ async function withoutMap(page: Page): Promise<void> {
   }, CARD_TASK);
 }
 
+const THREAD = "mcp:3f9c2a1e-7b4d-4c8a-9e2f-6a1b5c3d8e70";
 const LAUNCHED = {
   read: true,
-  threadId: "mcp:3f9c2a1e-7b4d-4c8a-9e2f-6a1b5c3d8e70",
+  threadId: THREAD,
   status: "running",
   link: "https://t3-code.example/threads/local/x",
 };
@@ -291,6 +292,7 @@ test.describe("T3 Code thread cards", () => {
     await expect(thread(page).locator(":scope > summary .state")).toHaveText("Checking");
     await resultFor(page, "call_t3w", "t3_thread_wait", {
       read: true,
+      threadId: THREAD,
       status: "completed",
       timedOut: false,
     });
@@ -310,6 +312,7 @@ test.describe("T3 Code thread cards", () => {
     await expect(line).toHaveAttribute("open", "");
     await resultFor(page, "call_t3w", "t3_thread_wait", {
       read: true,
+      threadId: THREAD,
       status: "completed",
       timedOut: false,
     });
@@ -357,7 +360,7 @@ test.describe("T3 Code thread cards", () => {
     await expect(card).not.toHaveAttribute("open", "");
   });
 
-  test("F-132: the folded card shows Clawtrate's own mark, the label T3 Code, the latest line sent, its calls and the thread's state", async ({
+  test("F-132: the folded card shows Clawtrate's own mark, the label T3 Code, what the thread is for, its calls and the thread's state", async ({
     page,
   }) => {
     await openFixture(page, "scene=t3-thread", "light");
@@ -366,9 +369,9 @@ test.describe("T3 Code thread cards", () => {
     await expect(line.locator(".messaged-who")).toHaveText("T3 Code");
     await expect(line.locator(".agent-mark svg")).toBeVisible();
     await expect(line.locator("img")).toHaveCount(0);
-    await expect(line.locator(".messaged-first")).toHaveText(
-      "Also add a test for machines that wake up late. · 4 calls",
-    );
+    // What the thread is for: the launch's title; the count stands apart and is never cut.
+    await expect(line.locator(".t3-title")).toHaveText("Skip machines that are asleep");
+    await expect(line.locator(".t3-count")).toHaveText("· 4 calls");
     await expect(line.locator(".state")).toHaveText("Completed");
   });
 
@@ -421,9 +424,6 @@ test.describe("T3 Code thread cards", () => {
       "t3-checking": "Checking",
       "t3-thread": "Completed",
       "t3-refused": "Running",
-      "t3-failed": "Failed",
-      "t3-not-sent": "Not sent",
-      "t3-delivery-unknown": "Delivery unknown",
       "t3-work-may-continue": "Running",
       "t3-before-record": "Running",
     };
@@ -431,11 +431,37 @@ test.describe("T3 Code thread cards", () => {
       await openFixture(page, `scene=${scene}`, "light");
       await expect(thread(page).locator(":scope > summary .state"), scene).toHaveText(state);
     }
+    // A launch T3 Code refused names no thread: a card of its own, saying what was asked and why not.
+    await openFixture(page, "scene=t3-failed", "light");
+    const failed = page.locator('.card.action[data-call="call_t3"]');
+    await expect(failed).toHaveAttribute("data-kind", "t3");
+    await expect(failed.locator(":scope > summary .action-state")).toHaveText("Failed");
+    await expect(failed.locator(":scope > summary")).toContainText("Couldn't message");
+    await expect(failed.locator(":scope > summary .action-detail")).toContainText(
+      "target_required",
+    );
+    await expect(page.getByTestId("t3-card")).toHaveCount(0);
+    // A launch denied, or cut short by a stop before it returned: what was asked, and its state.
+    for (const [scene, state] of [
+      ["t3-not-sent", "Not sent"],
+      ["t3-delivery-unknown", "Delivery unknown"],
+    ] as const) {
+      await openFixture(page, `scene=${scene}`, "light");
+      const own = page.locator('.card.action[data-call="call_t3"]');
+      await expect(own.locator(":scope > summary .action-state"), scene).toHaveText(state);
+      await expect(own.locator(":scope > summary"), scene).toContainText("Asked");
+      await expect(page.getByTestId("t3-card"), scene).toHaveCount(0);
+    }
     await openFixture(page, "scene=t3-refused", "light");
-    const card = await openCard(page);
-    const refused = card.locator('[data-item-call="call_t3s"]');
-    await expect(refused.locator(":scope > summary .state")).toHaveText("Failed");
+    // A refused follow-up is no item of the thread: a card of its own, the thread's word unchanged.
+    const refused = page.locator('.card.action[data-call="call_t3s"]');
+    await expect(refused.locator(":scope > summary .action-state")).toHaveText("Failed");
+    await expect(refused.locator(":scope > summary")).toContainText("Couldn't follow up with");
+    await expect(thread(page).locator('[data-item-call="call_t3s"]')).toHaveCount(0);
+    await refused.locator(":scope > summary").click();
     await expect(refused.locator("pre[data-tone=danger]")).toContainText("thread_not_sendable");
+    await refused.getByRole("button", { name: "Show this thread's card" }).click();
+    await expect(thread(page).locator(":scope > summary")).toBeFocused();
     await openFixture(page, "scene=t3-work-may-continue", "light");
     await expect(
       (await openCard(page)).getByText(
@@ -466,5 +492,67 @@ test.describe("T3 Code thread cards", () => {
     await expect(card).toContainText(
       "This thread was started before this conversation's record begins.",
     );
+  });
+});
+
+test.describe("the thread's link", () => {
+  test.use(contextFor(SIZES[0]!, "light"));
+
+  test("F-135: Open thread is offered only for an http or https address, with its host beside it; any other scheme gives no link", async ({
+    page,
+  }) => {
+    for (const [link, host] of [
+      ["http://127.0.0.1:43123/threads/one", "127.0.0.1:43123"],
+      ["https://t3-code.example/threads/local/x", "t3-code.example"],
+      ["javascript:alert(1)", null],
+      ["file:///etc/hosts", null],
+      ["t3code://thread/1", null],
+      ["not an address", null],
+    ] as const) {
+      await openFixture(page, "scene=t3-general", "light");
+      await resultFor(page, "call_t3", "t3_thread_launch", { ...LAUNCHED, link });
+      const card = await openCard(page);
+      const open = card.getByRole("link", { name: /^Open the T3 Code thread in your browser/ });
+      if (host === null) {
+        await expect(open, link).toHaveCount(0);
+        await expect(card.locator("a"), link).toHaveCount(0);
+      } else {
+        await expect(open, link).toHaveAttribute("href", link);
+        await expect(open, link).toHaveAccessibleName(
+          `Open the T3 Code thread in your browser, at ${host}`,
+        );
+        await expect(card.locator(".t3-link-host"), link).toHaveText(host);
+      }
+    }
+  });
+});
+
+test.describe("T3 Code at 390 px", () => {
+  test.use(contextFor(SIZES[3]!, "light"));
+
+  test("F-313: a line's verb, the mark and the name stay on one line, the name giving way first, and the thread's count is never clipped", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=t3-thread", "light");
+    const lines = page.locator('.card.action[data-kind="t3"]');
+    await expect(lines).toHaveCount(2);
+    for (const each of await lines.all()) {
+      const parts = each.locator(":scope > summary .action-sentence");
+      const verb = (await parts.locator(".action-verb").boundingBox())!;
+      const mark = (await parts.locator(".agent-mark").boundingBox())!;
+      const name = (await parts.locator(".action-object").boundingBox())!;
+      const middle = (box: { y: number; height: number }) => box.y + box.height / 2;
+      expect(Math.abs(middle(verb) - middle(mark))).toBeLessThanOrEqual(3);
+      expect(Math.abs(middle(verb) - middle(name))).toBeLessThanOrEqual(3);
+    }
+    const count = thread(page).locator(":scope > summary .t3-count");
+    await expect(count).toHaveText("· 4 calls");
+    expect(await count.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    const summary = (await thread(page).locator(":scope > summary").boundingBox())!;
+    const box = (await count.boundingBox())!;
+    expect(box.x + box.width).toBeLessThanOrEqual(summary.x + summary.width);
+    // The title is what gives way.
+    const title = thread(page).locator(":scope > summary .t3-title");
+    expect(await title.evaluate((el) => getComputedStyle(el).textOverflow)).toBe("ellipsis");
   });
 });

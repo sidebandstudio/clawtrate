@@ -9,8 +9,9 @@
 
 import {
   actionWords,
-  latestSent,
   readDimensions,
+  threadLink,
+  threadTitle,
   readLines,
   statusWords,
   threadStateOf,
@@ -148,6 +149,14 @@ function CameBack({ call }: { call: T3Call }) {
         {text}
       </p>,
     );
+  if (call.state === "made" && call.unread) {
+    // Nothing that named its thread is left: say what is not known, not what it might have said.
+    say(
+      readLines(readDimensions(null, call.call.cut === true))[0] ??
+        "This result could not be read here.",
+    );
+    return <>{lines}</>;
+  }
   if (call.state !== "made") {
     if (call.state === "failed") {
       say("The call failed.");
@@ -189,7 +198,7 @@ function CameBack({ call }: { call: T3Call }) {
       break;
     case "read": {
       if (status) say(`The thread: ${status}.`);
-      for (const line of readLines(readDimensions(f))) say(line, "strong");
+      for (const line of readLines(readDimensions(f, call.call.cut === true))) say(line, "strong");
       if (f?.reply)
         lines.push(
           <div className="exchange-text" key="reply">
@@ -229,10 +238,9 @@ function CameBack({ call }: { call: T3Call }) {
 export function T3CallBody({ call }: { call: T3Call }) {
   const env = useCardEnv();
   const sender = env.bot?.name ?? "The bot";
+  // What was sent as the engine kept it; marked where it was shortened here.
   const sent =
-    call.role === "launch" || call.role === "send"
-      ? (call.call.args.message as string | undefined)
-      : undefined;
+    call.role === "launch" || call.role === "send" ? (call.sent ?? undefined) : undefined;
   const c = chips(call);
   return (
     <ol className="exchange">
@@ -245,7 +253,13 @@ export function T3CallBody({ call }: { call: T3Call }) {
               <span>{call.state === "made" ? "sent" : "asked to send"}</span>
               {call.call.startedAt !== null && <time>{clock(call.call.startedAt)}</time>}
             </div>
-            {sent && <div className="exchange-text">{sent}</div>}
+            {sent && (
+              <div className="exchange-text">
+                {sent}
+                {call.sentShort ? "…" : ""}
+              </div>
+            )}
+            {sent && call.sentShort && <p className="exchange-note">{W.shortened}</p>}
             {c.length > 0 && (
               <div className="chips" aria-label="Where it was sent">
                 {c.map((chip) => (
@@ -327,7 +341,9 @@ function Item({ call, line, thought }: { call: T3Call; line: boolean; thought: T
   const card = useCardEnv();
   const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.item(call.id), true);
   const sender = card.bot?.name ?? "The bot";
-  const head = (W.itemHead[call.tool] ?? ((bot: string) => `${bot} called T3 Code`))(sender);
+  // A call that was made says what was done; any other, what was tried.
+  const heads = call.state === "made" ? W.itemHead : W.itemTried;
+  const head = (heads[call.tool] ?? ((bot: string) => `${bot} called T3 Code`))(sender);
   const word = CALL_WORDS[call.state];
   const at = clock(call.call.startedAt);
   return (
@@ -395,12 +411,15 @@ export function T3ThreadCard({ headId, thought }: { headId: string; thought: Rea
   );
   const state = threadStateOf(info.calls);
   const word = threadWord(state, lost);
-  const first = latestSent(items.length ? items : [info.head]);
-  const count = items.length > 1 ? ` · ${W.calls(items.length)}` : "";
-  const link = [...items].reverse().find((c) => c.facts?.link)?.facts?.link ?? null;
+  // What the thread is for: its title, else its launch's message, else the latest sent (11.2).
+  const first = threadTitle(items.length ? items : [info.head]);
+  const count = items.length > 1 ? `· ${W.calls(items.length)}` : "";
+  const link = threadLink(items);
   const reported =
     state?.type === "reported" ? W.reportedAt(statusWords(state.status), clock(state.at)) : null;
-  const beforeRecord = info.key !== null && info.head.role !== "launch";
+  // Only a head whose own result named the thread: a call T3 Code refused proves no thread.
+  const beforeRecord =
+    info.key !== null && info.head.role !== "launch" && info.head.state === "made";
   const mayContinue = workMayContinue(info.calls);
   return (
     <details
@@ -423,14 +442,18 @@ export function T3ThreadCard({ headId, thought }: { headId: string; thought: Rea
         if (event.currentTarget.open !== open) setOpen(event.currentTarget.open);
       }}
     >
-      <summary aria-label={`Messaged T3 Code: ${first}${count}. ${word.word}.`} title={first}>
+      <summary
+        aria-label={`Messaged T3 Code: ${first}${count ? ` ${count}` : ""}. ${word.word}.`}
+        title={first}
+      >
         <span className="messaged-verb">Messaged</span>
         <span className="messaged-who">
           <AgentMark />
           T3 Code
         </span>
-        <span className="messaged-first">
-          {first}
+        {/* The count stands apart from the title, so the title gives way and the count never does. */}
+        <span className="messaged-first t3-first">
+          <span className="t3-title">{first}</span>
           {count && <span className="t3-count">{count}</span>}
         </span>
         <StateWord word={word} />
@@ -453,16 +476,18 @@ export function T3ThreadCard({ headId, thought }: { headId: string; thought: Rea
         </ol>
         {link && (
           <div className="card-actions">
+            {/* Opened in the system browser when chosen, like every link; its host says where. */}
             <a
               className="link-button"
-              href={link}
+              href={link.href}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="Open the T3 Code thread in your browser"
+              aria-label={`Open the T3 Code thread in your browser, at ${link.host}`}
             >
               Open thread
               <ExternalIcon />
             </a>
+            <span className="t3-link-host">{link.host}</span>
           </div>
         )}
       </div>
@@ -475,13 +500,16 @@ export function ShowTheThread({ callId }: { callId: string }) {
   const env = useActionEnv();
   const feed = useContext(T3FeedContext);
   const placement = feed.placements.get(callId);
-  if (placement?.type !== "line") return null;
+  // A line of a thread, or a call of its own whose arguments asked for a thread that is shown.
+  const head =
+    placement?.type === "line" ? placement.head : placement?.type === "own" ? placement.head : null;
+  if (!head) return null;
   return (
     <button
       type="button"
       className="link-button"
       aria-label="Show this thread's card"
-      onClick={() => showThread(env.taskKey, placement.head, callId)}
+      onClick={() => showThread(env.taskKey, head, callId)}
     >
       Show the thread
     </button>
@@ -503,11 +531,17 @@ export function showThread(taskKey: string, headId: string, callId: string): boo
     const item = card?.querySelector<HTMLDetailsElement>(
       `[data-item-call="${CSS.escape(callId)}"]`,
     );
-    if (!card || !item) {
+    if (!card) {
       if (tries > 0) requestAnimationFrame(() => focus(tries - 1));
       return;
     }
     card.open = true;
+    // A call of its own is no item of the thread it asked for: the card's line takes focus.
+    if (!item) {
+      card.scrollIntoView({ block: "nearest" });
+      card.querySelector<HTMLElement>(":scope > summary")?.focus({ preventScroll: true });
+      return;
+    }
     item.open = true;
     item.scrollIntoView({ block: "nearest" });
     item.querySelector<HTMLElement>(":scope > summary")?.focus({ preventScroll: true });

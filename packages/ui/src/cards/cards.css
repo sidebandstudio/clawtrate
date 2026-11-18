@@ -1428,3 +1428,31 @@
     display: none;
   }
 }
+
+/* The count of a thread's calls never gives way; its title does (11.2). */
+.t3-thread > summary .t3-first {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.t3-thread > summary .t3-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.t3-thread > summary .t3-count {
+  flex: none;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
+
+/* Where "Open thread" goes, beside it. */
+.t3-thread .t3-link-host {
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
