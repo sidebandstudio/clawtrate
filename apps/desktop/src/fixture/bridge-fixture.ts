@@ -483,7 +483,15 @@ export function createFixtureBridge(
     state = next;
     for (const listener of listeners) listener(state);
   };
-  for (const step of steps) setTimeout(() => set(step.change(state)), step.after);
+  // A scene's later steps are timed from when the interface first listens, after it has drawn
+  // the first state: timed from here, a slow machine could draw its first frame after them,
+  // and never show the state the scene starts from.
+  let started = false;
+  const startSteps = () => {
+    if (started) return;
+    started = true;
+    for (const step of steps) setTimeout(() => set(step.change(state)), step.after);
+  };
   let pairingChecks = 0;
   const sent: BridgeCommand[] = [];
   // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
@@ -766,6 +774,7 @@ export function createFixtureBridge(
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);
+      startSteps();
       return () => listeners.delete(listener);
     },
     send: async (command) => {
