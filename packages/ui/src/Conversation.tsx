@@ -31,6 +31,7 @@ import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { FindBar } from "./Find.tsx";
 import { CONVERSATION_WORDS as W, emptyBody, stampBefore } from "./conversation-words.ts";
 import { contextWords, fullDate, stampTime } from "./format.ts";
+import { noTasksBody, TASK_WORDS } from "./summary.ts";
 import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
@@ -888,13 +889,7 @@ export function Conversation({
         <EmptyState title="No bots to show" body="This gateway has no bots yet." />
       );
   } else if (taskCount === 0) {
-    body = (
-      <EmptyState
-        bot={bot}
-        title="No tasks yet"
-        body={`Conversations with ${bot.name} will be listed here.`}
-      />
-    );
+    body = <EmptyState bot={bot} title={TASK_WORDS.none} body={noTasksBody(bot.name)} />;
   } else if (!task) {
     body = (
       <EmptyState
@@ -982,8 +977,8 @@ export function Conversation({
             type="button"
             className="icon-button back-button"
             onClick={onBack}
-            aria-label="Back to bots"
-            title="Back to bots"
+            aria-label={TASK_WORDS.back}
+            title={TASK_WORDS.back}
           >
             <BackIcon />
           </button>

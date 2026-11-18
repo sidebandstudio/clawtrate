@@ -167,7 +167,7 @@ export function botPreview(tasks: Task[], summary: BotSummary, loading: boolean)
   const latest = summary.latest;
   return (
     waitingWords(tasks) ??
-    (latest ? (latest.preview ?? latest.title) : loading ? "Loading tasks" : "No tasks yet")
+    (latest ? (latest.preview ?? latest.title) : loading ? TASK_WORDS.loading : TASK_WORDS.none)
   );
 }
 
@@ -204,3 +204,15 @@ export const LIST_WORDS = {
   emptyBody: "Bots appear here once the gateway has one.",
   partial: "Showing the most recent tasks only.",
 } as const;
+
+/** A bot's tasks, in words: while they load, with none, and the way back to the bots. */
+export const TASK_WORDS = {
+  loading: "Loading tasks",
+  none: "No tasks yet",
+  back: "Back to bots",
+} as const;
+
+/** A bot with no tasks, on a connection that reads. */
+export function noTasksBody(botName: string): string {
+  return `Conversations with ${botName} will be listed here.`;
+}
