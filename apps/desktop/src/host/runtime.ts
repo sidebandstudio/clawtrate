@@ -180,7 +180,16 @@ export async function startHostRuntime(options: {
       kind: options.kind,
       version: APP_VERSION,
       deviceName: options.displayName,
-      devGateway: devGateway ? { url: devGateway.url } : null,
+      // How a command reaches that instance on its machine, for the commands the app shows.
+      devGateway: dev
+        ? {
+            url: dev.url,
+            cli:
+              dev.instance === null
+                ? "openclaw --dev"
+                : `openclaw --profile clawtrate-dev-${dev.instance}`,
+          }
+        : null,
       ...(options.readOnly ? { readOnly: true } : {}),
     },
     // Files viewers add before sending, held in this process until a message takes them.

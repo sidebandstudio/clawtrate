@@ -1,9 +1,17 @@
-import type { Bot, Task, Transcript } from "@clawtrate/core";
+import type {
+  AccountsState,
+  Bot,
+  ConnectionState,
+  HostInfo,
+  Task,
+  Transcript,
+} from "@clawtrate/core";
 import { useCallback, useState, type ReactNode, type RefObject } from "react";
 import { Avatar } from "./Avatar.tsx";
 import { useBridge } from "./bridge.tsx";
 import { stampTime } from "./format.ts";
 import { CloseIcon, ScreenIcon } from "./icons.tsx";
+import { BotSettings } from "./bots/BotSettings.tsx";
 import { FilesTab } from "./work/FilesTab.tsx";
 import type { FileRequest } from "./work/links.tsx";
 import { TabBar } from "./work/TabBar.tsx";
@@ -52,6 +60,12 @@ export function WorkPanel({
   fileRequest,
   onShowInChat,
   onFilePath,
+  accounts,
+  bots,
+  tasks,
+  transcripts,
+  connection,
+  info,
 }: {
   bot: Bot | undefined;
   task: Task | null;
@@ -69,6 +83,13 @@ export function WorkPanel({
   fileRequest: FileRequest | null;
   onShowInChat: (stepId: string, from: { path: string }) => void;
   onFilePath: (path: string | null) => void;
+  accounts: AccountsState;
+  bots: readonly Bot[];
+  /** The bot's tasks, for a run in progress when its account changes. */
+  tasks: readonly Task[];
+  transcripts: Record<string, Transcript>;
+  connection: ConnectionState;
+  info: HostInfo;
 }) {
   const bridge = useBridge();
   // Row times are relative to when the pane opened.
@@ -191,7 +212,21 @@ export function WorkPanel({
           tabIndex={0}
           hidden={tab !== "settings"}
         >
-          <p className="work-note">{name}'s settings arrive in a later version of Clawtrate.</p>
+          {bot ? (
+            <BotSettings
+              bot={bot}
+              accounts={accounts}
+              bots={bots}
+              tasks={tasks}
+              transcripts={transcripts}
+              connection={connection}
+              info={info}
+              visible={tab === "settings"}
+              announce={announce}
+            />
+          ) : (
+            <p className="work-note">Pick a bot to see its settings.</p>
+          )}
         </div>
       </div>
       <p className="visually-hidden" role="status" aria-live="polite" data-testid="work-announcer">

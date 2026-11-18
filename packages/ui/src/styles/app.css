@@ -2675,7 +2675,7 @@ textarea {
   background: var(--text-faint);
 }
 
-/* Settings: a dialog over either screen. */
+/* The rail's dialogs (RailActions.tsx): a layer over either screen, its scrim and its surface. */
 .settings-layer {
   position: absolute;
   inset: 0;
@@ -2705,27 +2705,8 @@ textarea {
   box-shadow: var(--shadow-pop);
 }
 
-.settings-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 14px;
-}
-
-.settings-head h2 {
-  margin: 0;
-  font-size: var(--text-lg);
-  font-weight: var(--weight-medium);
-}
-
-.settings-pane h3 {
-  margin: 0 0 8px;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-regular);
-  color: var(--text-faint);
-}
-
-.settings .facts dd {
+/* Settings: the Gateway pane's own parts; its frame is the two-pane dialog of bots.css. */
+.b-settings .facts dd {
   text-align: right;
 }
 
