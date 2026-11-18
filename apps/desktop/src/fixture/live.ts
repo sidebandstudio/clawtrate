@@ -822,6 +822,51 @@ export function liveCommand(
       return Promise.resolve();
     case "createTask":
       return Promise.resolve({ key: "agent:otto:new-task" });
+    case "readComposerMenu":
+      // As the gateway lists them for Otto: its skills and commands, or the bots and a routine.
+      return Promise.resolve(
+        command.trigger === "/"
+          ? [
+              {
+                kind: "skill",
+                name: "healthcheck",
+                description: "Check the health of this machine and its services.",
+                insert: "/healthcheck",
+              },
+              {
+                kind: "skill",
+                name: "weather",
+                description: "Get the weather for a place.",
+                insert: "/weather",
+              },
+              {
+                kind: "action",
+                name: "status",
+                description: "Show the session's status.",
+                insert: "/status",
+              },
+              {
+                kind: "action",
+                name: "compact",
+                description: "Compact the session's context.",
+                insert: "/compact",
+              },
+            ]
+          : [
+              ...get().bots.map((bot) => ({
+                kind: "bot" as const,
+                name: bot.name,
+                description: null,
+                insert: `@${bot.name}`,
+              })),
+              {
+                kind: "routine",
+                name: "Morning disk check",
+                description: null,
+                insert: "@Morning disk check",
+              },
+            ],
+      );
     case "setReaction":
       // As the gateway answers: the message's reactions now, this person's marked.
       update((transcript) => {

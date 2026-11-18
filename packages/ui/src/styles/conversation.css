@@ -1500,3 +1500,87 @@ button.reaction {
 [data-motion="reduce"] .msg-actions {
   transition: none;
 }
+
+/* The "/" and "@" menus: rows above the pill, each tagged with its kind (F-071, F-070). */
+.composer-box {
+  position: relative;
+}
+
+.composer-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 5;
+  max-height: min(320px, 50vh);
+  padding: 5px;
+  overflow-y: auto;
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+}
+
+.composer-menu ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.composer-menu-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+
+.composer-menu-row[aria-selected="true"],
+.composer-menu-row:hover {
+  background: var(--bg-hover);
+}
+
+.composer-menu-name {
+  font-weight: var(--weight-medium);
+}
+
+.composer-menu-description {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-menu-tag {
+  grid-column: 3;
+  justify-self: end;
+}
+
+.composer-menu-tag,
+.chip-tag {
+  color: var(--text-faint);
+  font-size: var(--text-xs, 12px);
+}
+
+.composer-menu-note {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--text-muted);
+  font-size: var(--text-md);
+}
+
+.composer-tokens {
+  margin: 0 0 4px;
+  padding: 2px 4px 0;
+}
+
+[data-input="touch"] .composer-menu-row {
+  min-height: 48px;
+}
+
+[data-input="touch"] .composer-menu-description {
+  display: none;
+}

@@ -2,6 +2,7 @@ import {
   isStopNow,
   type AttachmentInfo,
   type Bot,
+  type MenuRow,
   type Run,
   type SendLimits,
   type Transcript,
@@ -44,6 +45,14 @@ export const DEFAULT_LIMITS: SendLimits = {
 };
 /** Room in a frame for the request around the files and words, as the engine counts it. */
 const FRAME_SLACK_BYTES = 1024;
+/** The tag each kind of "/" or "@" row carries (F-071, F-070). */
+const TAG: Record<MenuRow["kind"], string> = {
+  skill: "Skill",
+  action: "Action",
+  bot: "Bot",
+  routine: "Routine",
+};
+
 /** How long a touch on Send is held before its menu opens. */
 const LONG_PRESS_MS = 500;
 
@@ -184,6 +193,18 @@ export function Composer({
     [draftKey],
   );
   const [files, setFiles] = useState<Attached[]>([]);
+  // Skills, actions, bots and routines chosen from the "/" and "@" menus: chips sent before the words.
+  const [tokens, setTokens] = useState<MenuRow[]>([]);
+  /** The menu the words before the caret open: its trigger, what follows it, and where it starts. */
+  const [picker, setPicker] = useState<{ trigger: "/" | "@"; query: string; start: number } | null>(
+    null,
+  );
+  const [menuRows, setMenuRows] = useState<{
+    trigger: "/" | "@";
+    rows: MenuRow[] | null;
+    error: string | null;
+  } | null>(null);
+  const [active, setActive] = useState(0);
   const [menu, setMenuState] = useState<null | "mode" | "send">(null);
   const [trigger, setTrigger] = useState<HTMLElement | null>(null);
   /** Open a menu; focus returns to `from` when it closes (Send, for a long press). */
@@ -217,7 +238,7 @@ export function Composer({
   const tooMuch = whole !== null;
   const refused = files.some((file) => file.refusal) || tooMuch;
   const uploading = files.some((file) => file.uploading);
-  const hasContent = text.trim().length > 0 || files.length > 0;
+  const hasContent = text.trim().length > 0 || files.length > 0 || tokens.length > 0;
   const canSend = hasContent && !refused && !uploading;
   const refusalReason = refused ? (whole ?? "Remove the files that are too large to send.") : null;
 
@@ -256,11 +277,16 @@ export function Composer({
         return;
       }
       submitting.current = true;
-      const body = text;
+      const words = text;
+      const chips = tokens;
+      // The chips go first, as their own text: the gateway runs a command or skill named so.
+      const body = [...chips.map((chip) => chip.insert), words.trim()].filter(Boolean).join(" ");
       const taken = files;
       const attachmentIds = taken.flatMap((file) => (file.info ? [file.info.id] : []));
       setText("");
       setFiles([]);
+      setTokens([]);
+      setPicker(null);
       try {
         if (how === "new-task") {
           const { key } = await bridge.invoke({
@@ -286,11 +312,12 @@ export function Composer({
         else if (how === "queue" || view.stopping) onAnnounce("Queued");
       } catch (error) {
         setTextState((current) => {
-          const back = current.trim() ? `${body}\n${current}` : body;
+          const back = current.trim() ? `${words}\n${current}` : words;
           writeDraft(draftKey, back);
           return back;
         });
         setFiles((current) => [...taken, ...current]);
+        setTokens((current) => [...chips, ...current]);
         onNotice({
           title: how === "new-task" ? "Couldn't start a new task." : "Couldn't send this message.",
           reason: error instanceof Error ? error.message : String(error),
@@ -303,6 +330,7 @@ export function Composer({
       canSend,
       text,
       files,
+      tokens,
       bridge,
       bot.id,
       taskKey,
@@ -346,7 +374,114 @@ export function Composer({
     return () => window.removeEventListener("keydown", onKey);
   }, [view, stop, sendAs, focusRef, setText, text]);
 
+  // The "/" and "@" menus (F-071, F-070): what the words before the caret open, read once per opening.
+  const shownRows =
+    picker && menuRows?.trigger === picker.trigger && menuRows.rows
+      ? menuRows.rows
+          .filter((row) => {
+            const query = picker.query.toLowerCase();
+            return (
+              !query ||
+              row.name.toLowerCase().includes(query) ||
+              row.insert.toLowerCase().includes(query)
+            );
+          })
+          .slice(0, 50)
+      : [];
+  const pickerOpen =
+    picker !== null &&
+    (menuRows === null ||
+      menuRows.trigger !== picker.trigger ||
+      menuRows.rows === null ||
+      menuRows.error !== null ||
+      shownRows.length > 0);
+  const watchCaret = (value: string, caret: number) => {
+    const before = value.slice(0, caret);
+    const found = /(^|\s)([/@])([^\s/@]*)$/.exec(before);
+    if (!found) {
+      setPicker(null);
+      return;
+    }
+    const trigger = found[2] as "/" | "@";
+    // "/" opens the menu only at the start of the message, as a command is written.
+    if (trigger === "/" && before.slice(0, before.length - found[3]!.length - 1).trim() !== "") {
+      setPicker(null);
+      return;
+    }
+    const start = before.length - found[3]!.length - 1;
+    if (!picker || picker.trigger !== trigger || picker.start !== start) setActive(0);
+    setPicker({ trigger, query: found[3]!, start });
+    if (menuRows?.trigger !== trigger) {
+      setMenuRows({ trigger, rows: null, error: null });
+      void bridge.invoke({ type: "readComposerMenu", key: taskKey, trigger }).then(
+        (rows) => setMenuRows({ trigger, rows, error: null }),
+        (error: unknown) =>
+          setMenuRows({
+            trigger,
+            rows: [],
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      );
+    }
+  };
+  const choose = (row: MenuRow) => {
+    if (!picker) return;
+    const caret = focusRef.current?.selectionStart ?? text.length;
+    if (row.kind === "bot" || row.kind === "routine") {
+      // A mention stays where it was typed, as text: the gateway's mentions are people only.
+      const inserted = `${row.insert} `;
+      const next = text.slice(0, picker.start) + inserted + text.slice(caret).replace(/^\s+/, "");
+      setText(next);
+      const at = picker.start + inserted.length;
+      requestAnimationFrame(() => focusRef.current?.setSelectionRange(at, at));
+    } else {
+      // The typed trigger and query leave the words; the skill or action becomes a chip.
+      setText((text.slice(0, picker.start) + text.slice(caret)).replace(/^\s+/, ""));
+      setTokens((current) => [...current, row]);
+    }
+    setPicker(null);
+    onAnnounce(`${row.insert} added`);
+    focusRef.current?.focus();
+  };
+
   const onFieldKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (pickerOpen && !event.nativeEvent.isComposing) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setPicker(null);
+        return;
+      }
+      if (shownRows.length > 0) {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          const step = event.key === "ArrowDown" ? 1 : -1;
+          setActive((current) => (current + step + shownRows.length) % shownRows.length);
+          return;
+        }
+        if (
+          (event.key === "Enter" && !event.shiftKey && !event.altKey && !command(event)) ||
+          event.key === "Tab"
+        ) {
+          event.preventDefault();
+          choose(shownRows[Math.min(active, shownRows.length - 1)]!);
+          return;
+        }
+      }
+    }
+    if (
+      event.key === "Backspace" &&
+      tokens.length > 0 &&
+      (event.currentTarget.selectionStart ?? 0) === 0 &&
+      (event.currentTarget.selectionEnd ?? 0) === 0
+    ) {
+      // Backspace at the start of the words takes the last chip away.
+      event.preventDefault();
+      const last = tokens.at(-1)!;
+      setTokens((current) => current.slice(0, -1));
+      onAnnounce(`${last.name} removed`);
+      return;
+    }
     if (event.key !== "Enter" || event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.shiftKey && !command(event)) return; // a new line
     event.preventDefault();
@@ -705,6 +840,74 @@ export function Composer({
           {rows}
         </div>
         <div className="composer-box" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+          {pickerOpen && (
+            <div className="composer-menu" data-testid="composer-menu">
+              {menuRows?.trigger !== picker!.trigger || menuRows.rows === null ? (
+                <p className="composer-menu-note" aria-busy="true">
+                  {picker!.trigger === "/"
+                    ? "Loading skills and actions…"
+                    : "Loading bots and routines…"}
+                </p>
+              ) : menuRows.error ? (
+                <p className="composer-menu-note" role="alert">
+                  Couldn't load the list: {menuRows.error}
+                </p>
+              ) : (
+                <ul
+                  id="composer-menu"
+                  role="listbox"
+                  aria-label={
+                    picker!.trigger === "/" ? "Skills and actions" : "Mention a bot or routine"
+                  }
+                >
+                  {shownRows.map((row, index) => (
+                    <li
+                      key={`${row.kind}:${row.insert}`}
+                      id={`composer-menu-${index}`}
+                      role="option"
+                      aria-selected={index === Math.min(active, shownRows.length - 1)}
+                      className="composer-menu-row"
+                      data-testid="composer-menu-row"
+                      onPointerDown={(event) => event.preventDefault()}
+                      onClick={() => choose(row)}
+                    >
+                      <span className="composer-menu-name">{row.insert}</span>
+                      {row.description && (
+                        <span className="composer-menu-description">{row.description}</span>
+                      )}
+                      <span className="composer-menu-tag">{TAG[row.kind]}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {tokens.length > 0 && (
+            <ul className="chips composer-tokens" aria-label="Sent first">
+              {tokens.map((token, index) => (
+                <li
+                  key={`${token.insert}:${index}`}
+                  className="chip"
+                  data-kind={token.kind}
+                  data-testid="token-chip"
+                >
+                  <span className="chip-tag">{TAG[token.kind]}</span>
+                  <b>{token.insert}</b>
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    aria-label={`Remove ${token.insert}`}
+                    onClick={() => {
+                      setTokens((current) => current.filter((_, at) => at !== index));
+                      focusRef.current?.focus();
+                    }}
+                  >
+                    <CloseIcon />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           {files.length > 0 && (
             <div className="attachments">
               <ul className="chips">
@@ -762,7 +965,26 @@ export function Composer({
               placeholder={view.placeholder}
               aria-label={view.placeholder}
               data-testid="composer-input"
-              onChange={(event) => setText(event.target.value)}
+              onChange={(event) => {
+                setText(event.target.value);
+                watchCaret(
+                  event.target.value,
+                  event.target.selectionStart ?? event.target.value.length,
+                );
+              }}
+              onSelect={(event) => {
+                const field = event.currentTarget;
+                if (picker) watchCaret(field.value, field.selectionStart ?? field.value.length);
+              }}
+              onBlur={() => setPicker(null)}
+              aria-autocomplete="list"
+              aria-controls={pickerOpen ? "composer-menu" : undefined}
+              aria-expanded={pickerOpen}
+              aria-activedescendant={
+                pickerOpen && shownRows.length > 0
+                  ? `composer-menu-${Math.min(active, shownRows.length - 1)}`
+                  : undefined
+              }
               onKeyDown={onFieldKey}
               onPaste={onPaste}
             />

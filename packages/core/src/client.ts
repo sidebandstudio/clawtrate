@@ -229,6 +229,7 @@ import {
   type TaskActionContext,
 } from "./task-actions.ts";
 import { fromActivity, WaitingIndex } from "./waiting.ts";
+import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
 import {
   initialConnectionState,
   initialScopeUpgrade,
@@ -3097,6 +3098,26 @@ export class ClawtrateClient {
       }
       return { ...current, reactions };
     });
+  }
+
+  /**
+   * What the composer's "/" or "@" menu lists for a task (`composer-menus.ts`), read now and
+   * kept nowhere (F-071, F-070). Each read is `operator.read`.
+   */
+  async readComposerMenu(key: string, trigger: "/" | "@"): Promise<MenuRow[]> {
+    if (this.state.connection.status !== "connected")
+      throw new Error("Not connected to the gateway.");
+    if (trigger === "@") {
+      const routines = await this.request("cron.list", {}).catch(() => null);
+      return mentionRows(this.state.bots, routines);
+    }
+    const agentId = botIdFromSessionKey(key);
+    const [skills, metadata] = await Promise.all([
+      agentId ? this.request("skills.status", { agentId }).catch(() => null) : null,
+      this.request("chat.metadata", { sessionKey: key }).catch(() => null),
+    ]);
+    if (skills === null && metadata === null) throw new Error("The gateway did not list them.");
+    return slashRows(skills, metadata);
   }
 
   /** Who this connection acts for (`users.self`), for which reactions are the person's own. */

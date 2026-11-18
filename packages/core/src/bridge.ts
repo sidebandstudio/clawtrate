@@ -20,6 +20,7 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
+import type { MenuRow } from "./composer-menus.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -49,6 +50,8 @@ export type BridgeCommand =
     }
   /** Add, or with `remove` take back, this person's reaction on a message the task shows (F-283). */
   | { type: "setReaction"; key: string; messageId: string; emoji: string; remove: boolean }
+  /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
+  | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
   | { type: "retryMessage"; key: string; messageId: string }
   | { type: "deleteMessage"; key: string; messageId: string }
   | { type: "cancelQueued"; key: string; messageId: string }
@@ -224,7 +227,9 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                       ? ArchiveResult
                                       : C extends { type: "listArchived" }
                                         ? ArchivedList
-                                        : void;
+                                        : C extends { type: "readComposerMenu" }
+                                          ? MenuRow[]
+                                          : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -604,6 +609,9 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           : {}),
       };
     }
+    case "readComposerMenu":
+      if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
+      return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
     case "setReaction": {
       const emoji = command.emoji;
       if (typeof emoji !== "string" || emoji.length === 0 || emoji.length > 64)
@@ -1025,6 +1033,8 @@ class ViewerSession implements BridgeSession {
         );
       case "stopRun":
         return client.stopRun(this.mine(command.key), command.runId, { owner });
+      case "readComposerMenu":
+        return client.readComposerMenu(this.mine(command.key), command.trigger);
       case "setReaction":
         return client.setReaction(
           this.mine(command.key),
