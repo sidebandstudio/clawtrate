@@ -1447,6 +1447,22 @@ describe("the engine keeps what the reading needs, within its bound", () => {
       callFromStep(step, { ...run, state: "failed", error: { message: "x", kind: "turn-limit" } })
         .status,
     ).toBe("cut-off");
+    // The engine closes such a step as `unknown` when its run ends: it reads exactly as the open
+    // step does at that end, with no result, no error and no end of its own.
+    const unended = { ...step, status: "unknown" as const, endedAt: 20 };
+    for (const end of [
+      { ...run, state: "completed" as const },
+      { ...run, state: "stopped" as const },
+      { ...run, state: "failed" as const, error: { message: "x", kind: "turn-limit" } },
+    ]) {
+      expect(callFromStep(unended, end)).toMatchObject({
+        status: callFromStep(step, end).status,
+        isError: false,
+        text: null,
+        endedAt: null,
+      });
+    }
+    expect(callFromStep(unended, { ...run, state: "completed" }).status).toBe("unreturned");
   });
 });
 

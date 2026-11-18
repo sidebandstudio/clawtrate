@@ -2082,7 +2082,12 @@ export class ClawtrateClient {
     }
   }
 
-  /** `chat.abort` for one run the gateway has named, its exact id. */
+  /**
+   * `chat.abort` for one run the gateway has named, its exact id. Only the gateway's refusal
+   * gives the Stop up. An abort that was not sent, or whose answer the connection lost, leaves
+   * the run stopping: once the connection is back, the run is aborted again if it still is, as
+   * many times as the connection drops, until the gateway answers or the run's end arrives.
+   */
   private async abortRun(key: string, runId: string): Promise<void> {
     try {
       const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
@@ -2090,7 +2095,22 @@ export class ClawtrateClient {
       if (result?.aborted === false) this.scheduleHistory(key);
     } catch (error) {
       this.noteMissingScope(error);
-      this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(error)));
+      if (error instanceof GatewayProtocolRequestError) {
+        this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(error)));
+        return;
+      }
+      // Let the connection's own handling of a drop run first, so a lost connection is seen as one.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      // A client that was stopped sends nothing more.
+      if (!this.protocol) return;
+      try {
+        await this.ensureScope(WRITE_SCOPE);
+      } catch (waiting) {
+        this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(waiting)));
+        return;
+      }
+      const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
+      if (run?.state === "stopping" && run.bound) await this.abortRun(key, runId);
     }
   }
 
@@ -2926,6 +2946,54 @@ export class ClawtrateClient {
     const current = this.state.transcripts[key];
     if (!current || current.workspaceRoot === workspaceRoot) return;
     this.setTranscript(key, () => ({ ...this.state.transcripts[key]!, workspaceRoot }));
+  }
+
+  /**
+   * A recipient run a task's sends name that this client follows nowhere: its task was let go
+   * while the sender's was not open, or it was never seen. The recipient's own history says
+   * where it stands (in flight, or ended as its rows show), and from then on it is followed as
+   * a session nobody has open, so the sender's card shows what the gateway established and
+   * keeps up with it, rather than reading Sent. One read per recipient session, after each of
+   * the sender's history reads, for the newest `MAX_LINKED_RUNS` recipients.
+   */
+  private async readRecipients(key: string, generation: number): Promise<void> {
+    const transcript = this.state.transcripts[key];
+    if (!transcript) return;
+    const rawOf = (step: Run["steps"][number]) => step.raw ?? this.raw.get(key, step.id);
+    const missing = new Map<string, Set<string>>();
+    for (const link of recipientLinks(transcript.runs, rawOf).slice(-MAX_LINKED_RUNS)) {
+      if (!link.runId || !link.sessionKey) continue;
+      const runId = capId(link.runId, MAX_ID_CHARS);
+      const sessionKey = capId(link.sessionKey, MAX_ID_CHARS);
+      if (transcript.linkedRuns[runId] || this.tracked(sessionKey)) continue;
+      if (this.foreign.get(sessionKey)?.runs.some((run) => run.id === runId)) continue;
+      missing.set(sessionKey, (missing.get(sessionKey) ?? new Set()).add(runId));
+    }
+    for (const [sessionKey, ids] of missing) {
+      let history: RawRecord | null;
+      try {
+        history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
+      } catch {
+        continue;
+      }
+      if (generation !== this.generation || !this.tracked(key) || this.tracked(sessionKey)) return;
+      const aliases = Object.fromEntries(historyQueuePairs(history?.messages));
+      const { messages, inFlight } = throughRunAliases(
+        history?.messages,
+        asRecord(history?.inFlightRun),
+        aliases,
+      );
+      const found = runsFromHistory(messages, inFlight, {
+        sessionKey,
+        now: this.now(),
+        raw: this.foreignRaw,
+      }).filter((run) => ids.has(run.id));
+      if (found.length === 0) continue;
+      this.updateForeign(sessionKey, (activity) => ({
+        ...activity,
+        runs: [...activity.runs.filter((run) => !ids.has(run.id)), ...found],
+      }));
+    }
   }
 
   /** Copy the state of every recipient run a task's `sessions_send` results name, where it is known. */
@@ -4324,9 +4392,10 @@ export class ClawtrateClient {
     const empty = this.emptyTranscript(key);
     // Only a run known to wait on a question is carried; history rebuilds every other run.
     const waiting = known ? runsWithQuestionMarkers(known) : [];
-    if (waiting.length === 0) return empty;
-    // The task holds them now, so they are not kept twice.
+    // The task holds them now: none is kept twice, and no copy left here goes stale while the
+    // task's own events update the task. Letting the task go keeps what another task links to.
     this.foreign.delete(sessionKey);
+    if (waiting.length === 0) return empty;
     return { ...empty, runs: waiting };
   }
 
@@ -4434,10 +4503,10 @@ export class ClawtrateClient {
       if (stale()) return;
       // A resync starts every stream of this task again from what the gateway sends next.
       if (resync) this.streams.retire(key);
-      // A queued turn's two ids, as history pairs them: kept, so a pairing frame missed in a
-      // gap still makes one run, and later frames under either id update that run.
-      const shown = new Set((this.state.transcripts[key]?.runs ?? []).map((run) => run.id));
-      const pairs = historyQueuePairs(history?.messages, shown);
+      // A queued turn's two ids, as history pairs them, whatever this client holds: kept, so a
+      // pairing frame missed in a gap, or a transcript built from history alone, still makes
+      // one run, and later frames under either id update that run.
+      const pairs = historyQueuePairs(history?.messages);
       if (pairs.length > 0) {
         this.updateActivity(key, (activity) =>
           pairs.reduce(
@@ -4518,11 +4587,8 @@ export class ClawtrateClient {
       this.afterActivity(key);
       // A run settled from history may be a recipient another open task's card follows.
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
-      for (const run of toStop) {
-        this.request("chat.abort", { sessionKey: key, runId: run.id }).catch((error: unknown) =>
-          this.noteMissingScope(error),
-        );
-      }
+      for (const run of toStop) void this.abortRun(key, run.id);
+      void this.readRecipients(key, generation);
       void this.backfillQuestions(key, generation);
       void this.backfillApprovals(key, generation);
       void this.readToolMap(key, generation);

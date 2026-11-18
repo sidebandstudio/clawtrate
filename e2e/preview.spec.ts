@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { protocolMismatch } from "../packages/core/src/connect-errors.ts";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
-import { SCENARIO_EXAMPLES, SEED_BOTS } from "../tools/dev-gateway/src/seed-data.ts";
 import {
   devGateway,
   FORBIDDEN_PORTS,
@@ -16,14 +15,6 @@ import {
   stopChild,
 } from "./global-setup.ts";
 import { leaveIdle } from "./teardown.ts";
-
-/** A bot's tasks after the seed: its seeded tasks and the live examples seeded with it. */
-function seededTaskCount(botId: string): number {
-  return new Set([
-    ...SEED_BOTS.find((bot) => bot.id === botId)!.tasks.map((task) => task.slug),
-    ...SCENARIO_EXAMPLES.filter((example) => example.botId === botId).map((e) => e.slug),
-  ]).size;
-}
 
 /** This run's own development gateway instance, created by global setup. */
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -116,15 +107,58 @@ async function openTask(page: Page, bot: string, task: string) {
 }
 
 /**
- * A task of Otto's for one check alone, made on the gateway: no other check's run, stop or
+ * A bot's task for one check alone, made on the gateway with its label as its title: no other
+ * check's run, stop or message is in it, and no seeded task changes. New on every run, so a
+ * repeated check never meets an earlier run's task.
+ */
+async function gatewayTask(botId: string, label: string): Promise<{ key: string; title: string }> {
+  const suffix = Math.random().toString(16).slice(2, 6);
+  const title = `${label} ${suffix}`;
+  const key = `agent:${botId}:check-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${suffix}`;
+  await gatewayCall("sessions.create", { key, agentId: botId, label: title });
+  return { key, title };
+}
+
+/** A run in a task, as the gateway's owner starts one; resolves when it has ended. */
+async function runOnGateway(botId: string, key: string, message: string): Promise<void> {
+  await openclaw([
+    "agent",
+    "--agent",
+    botId,
+    "--session-key",
+    key,
+    "--message",
+    message,
+    "--thinking",
+    "low",
+    "--json",
+  ]);
+}
+
+/** A bot's task rows, all of them: past six the rail lists the newest, the rest behind Show all. */
+async function allTasks(page: Page, bot: string) {
+  await openBot(page, bot);
+  const list = page.getByRole("list", { name: `${bot}'s tasks` });
+  const showAll = list.getByRole("button", { name: /^Show all/ });
+  if ((await showAll.count()) > 0) await showAll.click();
+  return list.getByTestId("task");
+}
+
+/** How many tasks the gateway lists for a bot now, as the rail counts them. */
+async function gatewayTaskCount(botId: string): Promise<number> {
+  const { sessions } = await gatewayCall<{ sessions: SessionRow[] }>("sessions.list", {
+    ...SESSION_LIST,
+    limit: 500,
+  });
+  return sessions.filter((row) => row.agentId === botId && !row.archived).length;
+}
+
+/**
+ * A task of Otto's for one check alone, opened in the page: no other check's run, stop or
  * queued message can be in it. Its title is its label.
  */
 async function ownTask(page: Page, label: string): Promise<{ key: string; title: string }> {
-  // New on every run, so a repeated check never meets an earlier run's task.
-  const suffix = Math.random().toString(16).slice(2, 6);
-  const title = `${label} ${suffix}`;
-  const key = `agent:otto:check-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${suffix}`;
-  await gatewayCall("sessions.create", { key, agentId: "otto", label: title });
+  const { key, title } = await gatewayTask("otto", label);
   await expect(
     page.getByRole("list", { name: "Otto's tasks" }).or(page.getByTestId("bot-list")),
   ).not.toHaveCount(0);
@@ -172,14 +206,82 @@ async function inFlightRunId(key: string): Promise<string> {
 
 /** When the running check began: a check that fails leaves nothing it started after this. */
 let checkStarted = 0;
+/** The preview hosts the running check started for itself, stopped when it ends. */
+let ownHosts: Array<() => Promise<void>> = [];
 test.beforeEach(() => {
   checkStarted = Date.now();
+  ownHosts = [];
 });
 // Playwright reads its fixtures from the first argument's pattern; this hook needs none.
 // eslint-disable-next-line no-empty-pattern
 test.afterEach(async ({}, testInfo) => {
   test.setTimeout(testInfo.timeout + 120_000);
+  for (const stop of ownHosts) await stop();
   if (testInfo.status !== testInfo.expectedStatus) await leaveIdle(gatewayCall, checkStarted);
+});
+
+/**
+ * A preview host of the running check's own, with no device and no pairing yet: a check that
+ * pairs, or that asks for access, does it here, and leaves the shared host as it was.
+ */
+async function freshHost(): Promise<string> {
+  const data = mkdtempSync(join(tmpdir(), "clawtrate-e2e-fresh-"));
+  const started = startHost(INSTANCE, process.env.CLAWTRATE_E2E_STATIC!, data);
+  started.gated.release();
+  ownHosts.push(async () => {
+    await stopChild(started.host);
+    rmSync(data, { recursive: true, force: true });
+  });
+  const url = await started.url;
+  expect(FORBIDDEN_PORTS).not.toContain(Number(new URL(url).port));
+  return url;
+}
+
+/** Pair a page's host with the gateway, as its owner approves the request. */
+async function pairOn(page: Page, url: string): Promise<void> {
+  await page.goto(url);
+  await page.getByRole("button", { name: "Use the development gateway" }).click();
+  await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect
+    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
+    .toMatch(/^Approved /m);
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+}
+
+/**
+ * The shared preview host, paired and with interactive access, whichever checks run and in
+ * whatever order: done here when it is not done yet, so no check relies on another's having
+ * done it.
+ */
+test.beforeAll(async ({ browser }) => {
+  test.setTimeout(180_000);
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  try {
+    const page = await context.newPage();
+    await page.goto(process.env.CLAWTRATE_E2E_URL!);
+    const connect = page.getByRole("button", { name: "Use the development gateway" });
+    const bots = page.getByTestId("bot");
+    await expect
+      .poll(async () => (await connect.isVisible()) || (await bots.count()) === 4, {
+        timeout: 30_000,
+      })
+      .toBe(true);
+    if (await connect.isVisible()) await pairOn(page, process.env.CLAWTRATE_E2E_URL!);
+    await openTask(page, "Otto", "Disk almost full on the media box");
+    const bar = page.getByRole("region", { name: "Access" });
+    const asking = bar.getByRole("button", { name: /^Request (access|again)$/ });
+    if ((await asking.count()) > 0) {
+      await asking.click();
+      await expect
+        .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
+        .toMatch(/^Approved /m);
+    }
+    await expect(composer(page)).toBeVisible({ timeout: 30_000 });
+  } finally {
+    await context.close();
+  }
 });
 
 /** The stop note of one run, by its id: never another run's note left from earlier. */
@@ -218,7 +320,8 @@ test("F-002 F-003 F-009: pairs with the development gateway in steps, says when 
     Object.defineProperty(window, "isSecureContext", { get: () => false });
     Object.defineProperty(Navigator.prototype, "clipboard", { get: () => undefined });
   });
-  await page.goto(process.env.CLAWTRATE_E2E_URL!);
+  // A host of this check's own, never paired: the pairing it checks starts from nothing.
+  await page.goto(await freshHost());
 
   await expect(page.getByRole("heading", { name: "Clawtrate" })).toBeVisible();
   await page.getByRole("button", { name: "Use the development gateway" }).click();
@@ -283,10 +386,12 @@ test("F-002 F-003 F-009: pairs with the development gateway in steps, says when 
     "Pip",
   ]);
 
-  await openBot(page, "Otto");
-  const tasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
-  // The three scripted tasks and the seeded approval example.
-  await expect(tasks).toHaveCount(4);
+  // Every task the gateway lists for Otto: the three scripted tasks and the seeded approval
+  // example, and any task another check has made.
+  const tasks = await allTasks(page, "Otto");
+  await expect
+    .poll(async () => (await tasks.count()) === (await gatewayTaskCount("otto")))
+    .toBe(true);
   await expect(tasks).toContainText([
     "List the workspace (approved)",
     "Certificate renewal warning",
@@ -318,6 +423,26 @@ test("F-002 F-003 F-009: pairs with the development gateway in steps, says when 
   const gateway = page.getByRole("button", { name: /, connected\. Open the gateway menu\.$/ });
   await expect(gateway).toBeVisible();
   await expect(gateway.locator(".status-dot")).toHaveAttribute("data-status", "connected");
+});
+
+test("two tabs on one host each show a task's transcript: one opened while the other has it open, and one reloaded while the other holds it", async ({
+  page,
+}) => {
+  const TASK = "Disk almost full on the media box";
+  const ASKED = "The media box says the disk is 94% full. What is eating the space?";
+  await openShell(page);
+  await openTask(page, "Otto", TASK);
+  await expect(page.locator(".transcript")).toContainText(ASKED, { timeout: 20_000 });
+  // A second tab opens the task the first has open: the host follows it already.
+  const second = await page.context().newPage();
+  await openShell(second);
+  await openTask(second, "Otto", TASK);
+  await expect(second.locator(".transcript")).toContainText(ASKED, { timeout: 20_000 });
+  // Reloaded while the first tab holds the task, it shows it again.
+  await openShell(second);
+  await openTask(second, "Otto", TASK);
+  await expect(second.locator(".transcript")).toContainText(ASKED, { timeout: 20_000 });
+  await second.close();
 });
 
 test("a task stays read after it was opened", async ({ page }) => {
@@ -380,10 +505,10 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
   await expect(page.getByTestId("primary-star")).toHaveCount(1);
 
   // F-425: a bot's tasks show their titles and times, and its fold is remembered.
-  await openBot(page, "Otto");
-  const ottoTasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
+  const ottoTasks = await allTasks(page, "Otto");
+  await expect(ottoTasks.first()).toBeVisible();
   await expect(ottoTasks.locator(".task-time")).toHaveText(
-    Array(seededTaskCount("otto")).fill(/^(\d{1,2}:\d{2}\s[AP]M|Yesterday)$/),
+    Array(await ottoTasks.count()).fill(/^(\d{1,2}:\d{2}\s[AP]M|Yesterday)$/),
   );
   await botRow(page, "Pip").focus();
   await page.keyboard.press("ArrowRight");
@@ -550,11 +675,10 @@ test("the rail names every bot", async ({ page }) => {
   }
   // A task title truncated in the 248px rail shows in full on keyboard focus,
   // and each task row shows the time of its latest activity.
-  await openBot(page, "Otto");
-  const ottoTasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
+  const ottoTasks = await allTasks(page, "Otto");
   await ottoTasks.filter({ hasText: "Disk almost full on the media box" }).focus();
   await expect(page.getByTestId("rail-tooltip")).toHaveText("Disk almost full on the media box");
-  await expect(ottoTasks.locator(".task-time")).toHaveCount(4);
+  await expect(ottoTasks.locator(".task-time")).toHaveCount(await ottoTasks.count());
   await expect(ottoTasks.first().locator(".task-time")).not.toHaveText("");
   // A title that fits shows no tooltip. Beside its time it fits the 280px rail.
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -839,7 +963,8 @@ test("tool calls open to their arguments, result and error", async ({ page }) =>
 test("F-227 F-387 F-457: Settings shows the gateway, this device and its granted scopes; Disconnect keeps the pairing until Reconnect", async ({
   page,
 }) => {
-  await openShell(page);
+  // A host of this check's own, paired for reading only: its scopes are exactly that.
+  await pairOn(page, await freshHost());
   await page.keyboard.press("ControlOrMeta+,");
   const dialog = page.getByRole("dialog", { name: "Settings" });
   const state = dialog.getByTestId("gateway-state");
@@ -888,20 +1013,8 @@ test("F-017 F-020: a run started on the gateway shows its bot working, then the 
     });
   });
   await openShell(page);
-  const key = "agent:marlow:newsletter-intro";
-  const prompt = "A note from the end-to-end run: is anything new?";
-  await openclaw([
-    "agent",
-    "--agent",
-    "marlow",
-    "--session-key",
-    key,
-    "--message",
-    prompt,
-    "--thinking",
-    "low",
-    "--json",
-  ]);
+  const { key } = await gatewayTask("marlow", "Anything new");
+  await runOnGateway("marlow", key, "A note from the end-to-end run: is anything new?");
   const task = (state: (typeof seen)[number]) =>
     state.tasksByBot?.marlow?.find((t) => t.key === key);
   await expect.poll(() => seen.some((state) => task(state)?.status === "running")).toBe(true);
@@ -910,8 +1023,9 @@ test("F-017 F-020: a run started on the gateway shows its bot working, then the 
   await expect(botRow(page, "Marlow").locator(".bot-preview")).toContainText(
     "This is the scripted development model",
   );
+  // Its count is every task the gateway lists for Marlow now, this check's own included.
   await expect(botRow(page, "Marlow")).toHaveAccessibleName(
-    new RegExp(`^Marlow, ${seededTaskCount("marlow")} tasks`),
+    new RegExp(`^Marlow, ${await gatewayTaskCount("marlow")} tasks`),
   );
 });
 
@@ -919,32 +1033,21 @@ test("F-323: work goes on after the page is closed, and reopening shows where it
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Pip", "Saturday errands route");
+  const { key, title } = await gatewayTask("pip", "Errands");
+  await runOnGateway("pip", key, "Plan the errands for Saturday.");
+  await openTask(page, "Pip", title);
   // Counted once the transcript has loaded; count() does not wait for it.
   await expect(page.getByTestId("transcript-turn").first()).toBeVisible();
   const before = await page.getByTestId("transcript-turn").count();
   const context = page.context();
   // Ask the gateway for a run, and leave the preview while it works.
-  const run = openclaw([
-    "agent",
-    "--agent",
-    "pip",
-    "--session-key",
-    "agent:pip:errands-saturday",
-    "--message",
-    "One more stop: the post office.",
-    "--thinking",
-    "low",
-    "--json",
-  ]);
+  const run = runOnGateway("pip", key, "One more stop: the post office.");
   await page.close();
   await run;
   const again = await context.newPage();
   await again.goto(process.env.CLAWTRATE_E2E_URL!);
   await expect(again.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
-  await expect(
-    again.getByRole("heading", { level: 1, name: "Saturday errands route" }),
-  ).toBeVisible();
+  await expect(again.getByRole("heading", { level: 1, name: title })).toBeVisible();
   await expect(again.getByTestId("transcript-turn")).toHaveCount(before + 2);
   await expect(again.getByTestId("transcript-turn").last()).toContainText(
     "This is the scripted development model",
@@ -978,18 +1081,8 @@ test("F-027: a hidden bot keeps working: a run on the gateway shows in the Hidde
     });
   });
   const prompt = "From the end-to-end run, while hidden: anything new?";
-  await openclaw([
-    "agent",
-    "--agent",
-    "marlow",
-    "--session-key",
-    "agent:marlow:newsletter-intro",
-    "--message",
-    prompt,
-    "--thinking",
-    "low",
-    "--json",
-  ]);
+  const { key } = await gatewayTask("marlow", "While hidden");
+  await runOnGateway("marlow", key, prompt);
   await expect(hidden.locator(".bot-preview")).toContainText(
     "This is the scripted development model",
   );
@@ -1006,21 +1099,11 @@ test("F-088: a gateway run that narrates between its tool calls shows each narra
   page,
 }) => {
   await openShell(page);
-  await openclaw([
-    "agent",
-    "--agent",
-    "pip",
-    "--session-key",
-    "agent:pip:weeknight-meals",
-    "--message",
-    // Composed directives: a round ends after each tool call, and the text
-    // after it opens the next, so the reply narrates between its two calls.
-    "#text #list #write",
-    "--thinking",
-    "low",
-    "--json",
-  ]);
-  await openTask(page, "Pip", "Five weeknight dinners");
+  const { key, title } = await gatewayTask("pip", "Narrated");
+  // Composed directives: a round ends after each tool call, and the text
+  // after it opens the next, so the reply narrates between its two calls.
+  await runOnGateway("pip", key, "#text #list #write");
+  await openTask(page, "Pip", title);
   const turn = page.getByTestId("transcript-turn").last();
   await expect(turn).toContainText("I wrote notes/scratch.md.");
   const parts = await turn
@@ -1063,19 +1146,9 @@ test("F-323: a client quit while a run is in progress, and opened again, shows t
     let page = await context.newPage();
     await page.goto(await start());
     await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
-    const run = openclaw([
-      "agent",
-      "--agent",
-      "pip",
-      "--session-key",
-      "agent:pip:weekend-trip",
-      "--message",
-      // About eleven seconds of slowly streamed text, with no reasoning first.
-      "#stream 8",
-      "--thinking",
-      "low",
-      "--json",
-    ]);
+    const { key, title } = await gatewayTask("pip", "Mountain days");
+    // About eleven seconds of slowly streamed text, with no reasoning first.
+    const run = runOnGateway("pip", key, "#stream 8");
     await expect(botRow(page, "Pip")).toHaveAccessibleName(/^Pip, working/, { timeout: 15_000 });
     // Quit the client while the run goes on.
     await page.close();
@@ -1086,7 +1159,7 @@ test("F-323: a client quit while a run is in progress, and opened again, shows t
     await page.goto(await start());
     await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
     await expect(botRow(page, "Pip")).toHaveAccessibleName(/^Pip, working/);
-    await openTask(page, "Pip", "Two days in the mountains");
+    await openTask(page, "Pip", title);
     // The reply so far, still being written.
     const live = page.getByTestId("live-turn");
     await expect(live).toContainText("Here is a long answer, streamed slowly.");
@@ -1196,7 +1269,8 @@ const composer = (page: Page) => page.getByTestId("composer-input");
 test("F-456: a refused request leaves the read tier as it was; an approved one gives the composer", async ({
   page,
 }) => {
-  await openShell(page);
+  // A host of this check's own, paired for reading only: the shared one has access already.
+  await pairOn(page, await freshHost());
   await openTask(page, "Otto", "Disk almost full on the media box");
   const bar = page.getByRole("region", { name: "Access" });
   await expect(bar).toContainText("Read-only.");
@@ -1234,7 +1308,7 @@ test("F-081 F-082 F-083 F-085 F-089 F-095 F-433: a sent message shows the status
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Otto", "Weekly backup check");
+  await ownTask(page, "Status line");
   const seen = await watchRun(page);
   // A reply that streams for a few seconds, so it is on screen while the run goes on.
   await composer(page).fill("How full is the backup disk this week? #stream 3");
@@ -1371,15 +1445,15 @@ test("F-096: a message sent while the run works is steered into it and captioned
 
 test("F-058: two tasks of one bot run at the same time", async ({ page }) => {
   await openShell(page);
-  await openTask(page, "Otto", "Disk almost full on the media box");
+  const first = await ownTask(page, "First of two");
   await composer(page).fill("First of two at once. #stream 5");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
-  await openTask(page, "Otto", "Certificate renewal warning");
+  const second = await ownTask(page, "Second of two");
   await composer(page).fill("Second of two at once.");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
-  await openTask(page, "Otto", "Disk almost full on the media box");
+  await openTask(page, "Otto", first.title);
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
   // The gateway's own record: the second task's message arrived before the
   // first task's reply to its own message was recorded.
@@ -1396,16 +1470,13 @@ test("F-058: two tasks of one bot run at the same time", async ({ page }) => {
   };
   let firstReplied = Number.NaN;
   await expect
-    .poll(
-      async () => (firstReplied = at(replyTo(await rows("agent:otto:disk-space"), "First of two"))),
-      {
-        timeout: 30_000,
-      },
-    )
+    .poll(async () => (firstReplied = at(replyTo(await rows(first.key), "First of two"))), {
+      timeout: 30_000,
+    })
     .not.toBeNaN();
-  const second = await rows("agent:otto:cert-renewal");
+  const secondRows = await rows(second.key);
   const secondAsked = at(
-    second.findLast((row) => row.role === "user" && said(row, "Second of two")),
+    secondRows.findLast((row) => row.role === "user" && said(row, "Second of two")),
   );
   expect(secondAsked).toBeLessThan(firstReplied);
   await expect(
@@ -1422,25 +1493,35 @@ test("F-282: Start as new task runs the message in a new task under the same bot
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Otto", "Weekly backup check");
-  const tasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
-  const before = await tasks.count();
+  const { title } = await ownTask(page, "Restore plans");
+  const titles = async () =>
+    (await allTasks(page, "Otto")).locator(".task-title").allTextContents();
+  const before = new Set(await titles());
   await composer(page).fill("Plan the next restore test.");
   await page.keyboard.press("ControlOrMeta+Shift+Enter");
   await expect(page.getByTestId("announcer")).toHaveText("Started as a new task");
   await expect(composer(page)).toHaveValue("");
-  await expect(page.getByRole("heading", { level: 1, name: "Weekly backup check" })).toBeVisible();
-  await expect(tasks).toHaveCount(before + 1, { timeout: 20_000 });
-  // The new task holds the message, and the bot ran it there.
-  const titles = await tasks.allTextContents();
-  const known = ["Weekly backup check", "Certificate renewal warning", "Disk almost full"];
-  const fresh = titles.findIndex((title) => !known.some((each) => title.includes(each)));
-  expect(fresh).toBeGreaterThan(-1);
-  await tasks.nth(fresh).click();
+  // The task it was typed in stays open.
+  await expect(page.getByRole("button", { name: `Otto, ${title}. Show details.` })).toBeVisible();
+  // The new task is the one the rail did not list before: it holds the message, and the bot
+  // ran it there. Another check's task made meanwhile is told apart by what it holds.
+  let fresh: string[] = [];
+  await expect
+    .poll(async () => (fresh = (await titles()).filter((each) => !before.has(each))).length, {
+      timeout: 20_000,
+    })
+    .toBeGreaterThan(0);
   const turns = page.getByTestId("transcript-turn");
-  await expect(turns.filter({ hasText: "Plan the next restore test." }).first()).toBeVisible({
-    timeout: 20_000,
-  });
+  const mine = turns.filter({ hasText: "Plan the next restore test." }).first();
+  for (const candidate of fresh) {
+    await (await allTasks(page, "Otto")).filter({ hasText: candidate }).first().click();
+    const shown = await mine
+      .waitFor({ state: "visible", timeout: 20_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (shown) break;
+  }
+  await expect(mine).toBeVisible();
   await expect(page.locator(".transcript")).toContainText(
     "This is the scripted development model",
     {
@@ -1549,7 +1630,7 @@ test("F-468: a real question holds a message typed while it is pending, and answ
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Otto", "Disk almost full on the media box");
+  const { key } = await ownTask(page, "Held behind a question");
   await composer(page).fill("#ask");
   await page.keyboard.press("Enter");
   const card = page.getByTestId("question-card");
@@ -1562,13 +1643,11 @@ test("F-468: a real question holds a message typed while it is pending, and answ
   await expect(row).toContainText("Held until you answer");
   await expect(row.getByRole("button", { name: "Send now" })).toHaveCount(0);
   await expect(page.getByTestId("needs-you")).toContainText("Otto asked you a question");
-  expect(await gatewayHasMessage("agent:otto:disk-space", text)).toBe(false);
+  expect(await gatewayHasMessage(key, text)).toBe(false);
   // Answering the question, the last one pending, releases the held message.
   await card.locator(".option").first().click();
   await expect(row).toHaveCount(0, { timeout: 30_000 });
-  await expect
-    .poll(() => gatewayHasMessage("agent:otto:disk-space", text), { timeout: 30_000 })
-    .toBe(true);
+  await expect.poll(() => gatewayHasMessage(key, text), { timeout: 30_000 }).toBe(true);
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("transcript-turn").filter({ hasText: text })).not.toHaveCount(0);
 });

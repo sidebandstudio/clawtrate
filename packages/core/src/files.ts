@@ -1279,7 +1279,7 @@ export function finishedChanges(transcript: Pick<Transcript, "runs">): number {
         step.kind === "tool" &&
         step.files &&
         isChangeTool(step.toolName) &&
-        (step.status === "done" || step.status === "failed")
+        (step.status === "done" || step.status === "failed" || step.status === "unknown")
       )
         count += 1;
   return count;
@@ -1369,7 +1369,10 @@ export function fileSteps(transcript: Pick<Transcript, "runs">, path: string): F
 
 /** The step that last touched the file in this task (section 6's source line), or null. */
 export function fileSource(transcript: Pick<Transcript, "runs">, path: string): FileSource | null {
-  const steps = fileSteps(transcript, path).filter((step) => step.status !== "failed");
+  // A step that failed, or whose outcome is not known, is no file's source.
+  const steps = fileSteps(transcript, path).filter(
+    (step) => step.status !== "failed" && step.status !== "unknown",
+  );
   const changed = steps.filter((step) => step.action !== "read");
   return changed.at(-1) ?? steps.at(-1) ?? null;
 }
