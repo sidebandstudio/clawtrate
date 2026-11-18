@@ -3,7 +3,7 @@
 // development gateway runs, the tests that need one are skipped.
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -30,8 +30,11 @@ const TYPED_KEY = "clawtrate-dev-key.acme.packaged";
 /** Whether a file, or any file under a folder, holds the value, as UTF-8 or UTF-16 text. */
 function holds(path: string, value: string): string[] {
   if (!existsSync(path)) return [];
-  if (statSync(path).isDirectory())
+  const stat = lstatSync(path);
+  if (stat.isDirectory())
     return readdirSync(path).flatMap((name) => holds(join(path, name), value));
+  // Sockets and links (the single-instance lock's) hold no text of their own.
+  if (!stat.isFile()) return [];
   const bytes = readFileSync(path);
   return bytes.includes(Buffer.from(value, "utf8")) || bytes.includes(Buffer.from(value, "utf16le"))
     ? [path]
