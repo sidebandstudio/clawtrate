@@ -2244,8 +2244,11 @@ export class ClawtrateClient {
    * A request still pending after its own run completed or failed is closed by
    * denying it, so its action is not taken after the run it belonged to
    * (conversation.md section 12, "When the run has already ended"; F-418).
-   * The deny goes through `resolveApproval` like any other, once: only while
-   * nothing was ever decided for the approval here (`attempt` 0), and only on a
+   * The run's end must be its own `lifecycle` `end` or `error` event, received
+   * on the live stream; an end inferred from history or a reconnect never
+   * withdraws anything. The deny goes through `resolveApproval` like any
+   * other, once: only while nothing was ever decided for the approval here
+   * (`attempt` 0), and only on a
    * connection that already holds `operator.approvals`, so it never asks for
    * access by itself. Its outcome keeps why it was sent (`reason`), and a
    * decision that raced it shows as the gateway reports it. A stopped run is
@@ -2258,6 +2261,13 @@ export class ClawtrateClient {
       if (approval.status !== "pending" || !approval.runEnded || !approval.runId) continue;
       const run = findRun(transcript, approval.runId);
       if (!run || (run.state !== "completed" && run.state !== "failed")) continue;
+      // Only on the run's own end, as the gateway sent it: never on an end this client inferred
+      // from history or a reconnect, while the gateway may still be waiting on the request.
+      if (
+        !run.outcomeKnown ||
+        !run.lifecycle?.some((each) => /lifecycle (end|error)\)$/.test(each.via))
+      )
+        continue;
       if (this.attemptsFor(approval.id).attempt !== 0 || this.attemptsFull(approval.id)) continue;
       void this.resolveApproval(key, approval.id, "deny", {
         reason: run.state === "failed" ? "run-failed" : "run-ended",

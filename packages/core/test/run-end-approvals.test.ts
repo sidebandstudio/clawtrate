@@ -128,4 +128,26 @@ describe("F-418: a request still pending after its run ended", () => {
     expect(transcript().approvals[0]!.reason).not.toBe("run-ended");
     client.stop();
   });
+
+  it("an end known only from history, or from a reconnect, withdraws nothing: the gateway may still wait on the request", async () => {
+    const gateway = gatewayWith([item("ap-9", "run-9")]);
+    gateway.handlers["chat.history"] = () => ({
+      sessionKey: KEY,
+      messages: [
+        { role: "user", content: [{ type: "text", text: "go" }], __openclaw: { id: "u9" } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Done for now." }],
+          stopReason: "stop",
+          __openclaw: { id: "a9", runId: "run-9" },
+        },
+      ],
+    });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().approvals.length === 1);
+    await sleep(50);
+    expect(gateway.calls("exec.approval.resolve")).toEqual([]);
+    expect(transcript().approvals[0]!.status).toBe("pending");
+    client.stop();
+  });
 });
