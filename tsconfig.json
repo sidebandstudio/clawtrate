@@ -2,13 +2,17 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "types": ["node"],
-    "lib": ["ES2024", "DOM"]
+    "lib": ["ES2024", "DOM"],
+    // The plugins are plain JavaScript; their tests import them as they are.
+    "allowJs": true,
+    "checkJs": false
   },
   "include": [
     "e2e/**/*.ts",
     "visual/**/*.ts",
     "e2e-packaged/**/*.ts",
     "test/**/*.ts",
+    "plugins/*/test/**/*.ts",
     "playwright.config.ts",
     "playwright.visual.config.ts",
     "playwright.packaged.config.ts",

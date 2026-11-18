@@ -50,6 +50,8 @@ export type FakeProviderOptions = {
   log?: (line: string) => void;
   /** When set, the last request body is written here for debugging. */
   dumpPath?: string;
+  /** The scripted pages' origin, for the browser scenarios. */
+  pagesOrigin?: string;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -314,7 +316,9 @@ export function startFakeProvider(options: FakeProviderOptions) {
           return;
         }
         if (session) offered.set(session, [...toolNames].sort());
-        const steps = planReply(messages, new Set(toolNames));
+        const steps = planReply(messages, new Set(toolNames), {
+          pagesOrigin: options.pagesOrigin ?? null,
+        });
         if (
           session &&
           steps.length === 1 &&
