@@ -59,8 +59,8 @@ export async function settle(page: Page): Promise<void> {
 
 /**
  * The frame a screenshot is to show is the final one: every font face the page uses is
- * loaded and none is loading, every image is decoded, and the transcript, at its end, and
- * the shelf keep the same geometry for three frames in a row. Text on screen alone does not
+ * loaded and none is loading, every image is decoded, no finite animation is running, and the
+ * transcript, at its end, and the shelf keep the same geometry for five frames in a row. Text on screen alone does not
  * say so: a font, an image or the follow-to-end scroll can still move what is drawn.
  */
 export async function paintedFinal(
@@ -132,11 +132,21 @@ export async function paintedFinal(
                   transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 1
                 );
               };
+              // A finite animation still running (a card rising in, a line closing up) can still
+              // move what is drawn; the spinning working mark never ends and moves nothing.
+              const settled = () =>
+                document
+                  .getAnimations()
+                  .every(
+                    (each) =>
+                      each.playState !== "running" ||
+                      each.effect?.getComputedTiming().iterations === Infinity,
+                  );
               const seen = [geometry()];
               const frame = () => {
                 seen.push(geometry());
-                if (seen.length < 4) requestAnimationFrame(frame);
-                else resolve(new Set(seen).size === 1 && (!toEnd || atEnd()));
+                if (seen.length < 6) requestAnimationFrame(frame);
+                else resolve(new Set(seen).size === 1 && settled() && (!toEnd || atEnd()));
               };
               requestAnimationFrame(frame);
             }),
@@ -144,8 +154,8 @@ export async function paintedFinal(
         ),
       {
         message: toEnd
-          ? "the transcript at its end and the shelf, unchanged for three frames"
-          : "the transcript and the shelf, unchanged for three frames",
+          ? "the transcript at its end and the shelf, unchanged for five frames, no animation running"
+          : "the transcript and the shelf, unchanged for five frames, no animation running",
       },
     )
     .toBe(true);

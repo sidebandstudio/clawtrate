@@ -5,7 +5,15 @@
 // (apps/desktop/src/fixture/actions.ts).
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ClawtrateState } from "../packages/core/src/index.ts";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import {
+  contextFor,
+  openFixture,
+  OTTO_DISK,
+  paintedFinal,
+  settle,
+  SIZES,
+  THEMES,
+} from "./fixture.ts";
 
 const open = (page: Page, scene: string, theme: "light" | "dark" = "light", extra = "") =>
   openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed${extra}`, theme);
@@ -99,7 +107,10 @@ for (const size of SIZES) {
             page.locator(".transcript :is(details.card.action, .thought)").first(),
           ).toBeVisible();
           if (view.prepare) await view.prepare(page);
-          await settle(page);
+          // The final frame: fonts loaded, images decoded, no animation running, and the
+          // transcript where it ends up (at its end, or where a scene put an opened card),
+          // unchanged for several frames. Two frames are not enough on a slow machine.
+          await paintedFinal(page, { atEnd: view.prepare === undefined });
           await expect(page).toHaveScreenshot(`actions-${name}-${theme}-${size.name}.png`);
         });
       }
