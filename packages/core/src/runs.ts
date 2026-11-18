@@ -1264,7 +1264,7 @@ function canonicalRunId(activity: TaskActivity, runId: string): string {
 /**
  * An event under a steer's own run id. A bare acknowledgement (a `chat` final
  * with no message, all a joined steer gets) is dropped. Anything showing a run
- * of its own removes the alias: the steer is a run of its own, kept under its
+ * of its own, an error that ends it included, removes the alias: the steer is a run of its own, kept under its
  * own id. Null when the event is to be dropped.
  */
 function steerOwnRun(
@@ -1282,7 +1282,8 @@ function steerOwnRun(
         )
       : payload.state === "delta"
         ? contentText(message?.content) !== "" || typeof payload.deltaText === "string"
-        : message !== null && contentText(message.content) !== "";
+        : // An error ends a run of its own: a joined steer is acknowledged by a bare final only.
+          payload.state === "error" || (message !== null && contentText(message.content) !== "");
   if (!own) return null;
   const steerAliases = { ...activity.steerAliases };
   delete steerAliases[runId];

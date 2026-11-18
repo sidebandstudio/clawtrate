@@ -456,6 +456,33 @@ describe("a steer the gateway admits as a run of its own", () => {
     expect(runIds(transcript().runs)).toEqual([["base", "completed"]]);
     client.stop();
   });
+
+  it("a steer admitted as a run of its own whose only frame here is its error is shown as that failed run", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.send"] = () => ({ runId: "steer-own", status: "started" });
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("base", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs[0]?.state === "running");
+    client.sendMessage(KEY, "And the documents too.");
+    await until(() => transcript().steerAliases["steer-own"] === "base");
+    // Its start and text did not reach this client; its end did.
+    gateway.emit("chat", {
+      runId: "steer-own",
+      sessionKey: KEY,
+      seq: 1,
+      state: "error",
+      errorMessage: "The model refused this run",
+    });
+    await until(() => transcript().runs.some((run) => run.id === "steer-own"));
+    expect(transcript().runs.find((run) => run.id === "steer-own")).toMatchObject({
+      state: "failed",
+      error: { message: "The model refused this run" },
+    });
+    expect(transcript().steerAliases).toEqual({});
+    // The run it was sent into is untouched.
+    expect(transcript().runs.find((run) => run.id === "base")?.state).toBe("running");
+    client.stop();
+  });
 });
 
 describe("a recipient's run settled from history while its sender's task is open", () => {
