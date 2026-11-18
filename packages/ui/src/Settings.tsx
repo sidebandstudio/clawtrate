@@ -327,7 +327,8 @@ export function Settings({
       <p className="settings-note">
         The gateway decides which commands need your approval, from each bot's policy on the machine
         it runs commands on: by that policy a command runs, asks first, or is refused. Clawtrate
-        shows each request the gateway makes and never decides one by itself.
+        shows each request the gateway makes and never allows one by itself; it denies a request
+        only when the run that asked has ended without an answer.
       </p>
       <p className="settings-note">
         "Always allow" adds a command to that machine's allowlist. Changing a bot's policy, or
