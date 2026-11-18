@@ -2,6 +2,7 @@
 // ready and the parity rows it illustrates. Shared by the baseline and the
 // legibility checks.
 import { expect, type Page } from "@playwright/test";
+import { paintedFinal } from "./fixture.ts";
 
 /** Each scene, and what shows once it is ready. */
 export const LIVE_VIEWS: Array<{
@@ -139,7 +140,12 @@ export const LIVE_VIEWS: Array<{
   {
     scene: "queued-refused",
     rows: "F-061",
-    ready: (page) => expect(page.getByTestId("shelf-row")).toContainText("Couldn't start"),
+    // The one refused start on the shelf, and the frame final around it.
+    ready: async (page) => {
+      await expect(page.getByTestId("shelf-row")).toHaveCount(1);
+      await expect(page.getByTestId("shelf-row")).toContainText("Couldn't start");
+      await paintedFinal(page);
+    },
   },
   {
     scene: "send-unknown",
