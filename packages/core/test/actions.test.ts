@@ -1152,8 +1152,13 @@ describe("F-091 F-092 folding (7.4)", () => {
     const partial = () =>
       call("memory_search", { query: "boiler" }, { details: { results: [], partial: true } });
     const f = fold([partial(), partial()]);
-    expect(`${f.verb} ${f.object}`).toBe("Searched memory 2 times");
+    // Partial is not Done: no done plural, the neutral one, with both counted as partial.
+    expect(`${f.verb} ${f.object}`).toBe("Memory search · 2 calls");
     expect(f.state).toMatchObject({ type: "counts", words: "2 partial" });
+    const done = call("memory_search", { query: "boiler" }, { details: { results: [] } });
+    const mixed = fold([done, partial()]);
+    expect(`${mixed.verb} ${mixed.object}`).toBe("Searched memory 1 time");
+    expect(mixed.spoken).toMatch(/^Searched memory 1 time, .*, 1 partial$/);
   });
   it("image listings fold as a look-up, never as Made", () => {
     const list = () => call("image_generate", { action: "list" }, { details: { providers: [] } });

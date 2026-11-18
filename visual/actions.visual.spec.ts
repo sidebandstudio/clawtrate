@@ -346,7 +346,7 @@ test.describe("action cards", () => {
     // A mixed fold: the first problem in row order, its count, and a waiting member waits.
     await open(page, "actions-mixed");
     await expect(line(cards(page).nth(0))).toHaveAccessibleName(
-      'Searched memory 2 times, couldn\'t search memory for "loft insulation", 1 unavailable, 1 partial',
+      'Searched memory 1 time, couldn\'t search memory for "loft insulation", 1 unavailable, 1 partial',
     );
     await expect(line(cards(page).nth(2))).toHaveAccessibleName(
       "Commands · 3 calls, 1 failed: couldn't run mv, waiting for you",

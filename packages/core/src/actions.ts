@@ -633,7 +633,11 @@ function errorOutcome(call: ActionCall, kind: KindInfo): OutcomeOf {
   const status = str(d.status);
   if (status === "forbidden") return { outcome: "refused", word: STATE_WORDS.notRun };
   if (status === "blocked") return { outcome: "blocked", word: "policy" };
-  if (d.timedOut === true || str(d.failureKind) === "overall-timeout")
+  if (
+    d.timedOut === true ||
+    str(d.failureKind) === "overall-timeout" ||
+    /^Command timed out after \d+ seconds/.test(text)
+  )
     return { outcome: "failed", word: STATE_WORDS.timedOut };
   // A call cut short by a stop: what it did is unknown when its effect leaves the gateway.
   if (
@@ -647,6 +651,25 @@ function errorOutcome(call: ActionCall, kind: KindInfo): OutcomeOf {
 }
 
 type Adapter = (call: ActionCall) => OutcomeOf | Outcome;
+
+/**
+ * The installed tools' own sentences that say what a call established, read
+ * the same live and from history, where the gateway keeps the text but not
+ * the details (OpenClaw 2026.10.6: `read`'s no-contents diagnostics, exec's
+ * pending approval, media generation's result and background admission).
+ */
+const READ_GAVE_NO_CONTENTS =
+  /^(Read did not return file contents because|File contains no readable text \(|Offset \d+ is beyond end of file|Cursor \d+ is at or beyond the end of line)/;
+/** The gateway's own words for a call it blocked before launch (its agent loop, 2026.10.6). */
+const GATEWAY_BLOCKED =
+  /^(Tool execution was blocked before launch\.|OpenClaw stopped this run because tool-loop recovery encountered another critical loop\. No blocked tool action was executed\.)$/;
+const EXEC_ASKS_APPROVAL = /(^|\n)Approval required \(id /;
+const MEDIA_STARTED = /^Background task started for .+ generation \(/;
+/** How many items "Generated 2 images with …" says were made; 0 when the text says none. */
+function mediaMade(text: unknown): number {
+  const m = /^Generated (\d+) (?:image|track|video)s? with /.exec(str(text));
+  return m ? Number(m[1]) : 0;
+}
 
 const PHONE_REFUSALS: Record<string, true> = {
   target_stale: true,
@@ -664,7 +687,13 @@ const OBSERVE: Record<string, true> = {
 
 /** Each kind's own reading of a result without an error flag: its "Done needs" (8.1). */
 const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
-  read: (c) => (c.text ? "done" : "made"),
+  read: (c) => {
+    // The read tool's own sentence for a file it returned no contents of (OpenClaw 2026.10.6).
+    if (READ_GAVE_NO_CONTENTS.test(str(c.text).trim()))
+      return { outcome: "unavailable", word: STATE_WORDS.noContents };
+    if (/^Optional file not found: /.test(str(c.text))) return "notfound";
+    return c.text ? "done" : "made";
+  },
   list: (c) => (c.text ? "done" : "made"),
   edit: (c) => {
     const d = c.details;
@@ -695,7 +724,7 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
   },
   command: (c) => {
     const d = c.details;
-    if (d?.status === "approval-pending") return "waiting";
+    if (d?.status === "approval-pending" || EXEC_ASKS_APPROVAL.test(str(c.text))) return "waiting";
     if (c.name === "code_execution") return c.text ? "done" : "made";
     // A non-zero exit is the command's answer, not a failure (8.4).
     return num(d?.exitCode) !== null ? "done" : "made";
@@ -779,12 +808,27 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
   media: (c) => {
     const d = c.details;
     if (c.args.action === "list" || c.args.action === "status") return carries(c) ? "done" : "made";
-    if (d?.async === true && d.status === "started") return "started";
-    if (c.name === "tts") return d?.audioPath ? "done" : "made";
-    return list(d?.media).length || list(d?.paths).length ? "done" : "made";
+    if ((d?.async === true && d.status === "started") || MEDIA_STARTED.test(str(c.text)))
+      return "started";
+    if (c.name === "tts") return d?.audioPath || /^\(spoken\) /.test(str(c.text)) ? "done" : "made";
+    return list(d?.media).length || list(d?.paths).length || mediaMade(c.text) > 0
+      ? "done"
+      : "made";
   },
   look: (c) => {
-    const e = c.details?.error;
+    // The refusal's code, or the tool's own sentence for it where only the text was kept.
+    const text = str(c.text);
+    const e =
+      c.details?.error ??
+      (/^Too many PDFs: /.test(text)
+        ? "too_many_pdfs"
+        : /^Too many images: /.test(text)
+          ? "too_many_images"
+          : /^Unsupported PDF reference: /.test(text)
+            ? "unsupported_pdf_reference"
+            : /^Unsupported image reference: /.test(text)
+              ? "unsupported_image_reference"
+              : undefined);
     if (e === "too_many_pdfs" || e === "too_many_images")
       return { outcome: "refused", word: STATE_WORDS.tooMany };
     if (e === "unsupported_pdf_reference" || e === "unsupported_image_reference")
@@ -836,6 +880,8 @@ export function outcomeOf(call: ActionCall, ctx: ReadingContext = {}): OutcomeOf
     case "returned":
       break;
   }
+  // The gateway's own sentences for a call it blocked before launch, kept in history as text.
+  if (GATEWAY_BLOCKED.test(str(call.text).trim())) return { outcome: "blocked", word: "policy" };
   if (call.isError) return errorOutcome(call, kind);
   const adapter = ADAPTERS[kind.kind];
   const norm = (o: OutcomeOf | Outcome): OutcomeOf => (typeof o === "string" ? { outcome: o } : o);
@@ -1271,7 +1317,8 @@ function wordsOf(call: ActionCall, kind: ActionKind, ctx: ReadingContext): Words
       if (a.action === "list") return { ...three(VERBS.lookAt, mediaModels(one)), icon };
       if (a.action === "status") return { ...three(VERBS.check, mediaGeneration(one)), icon };
       // The count is the result's, never the request's.
-      const made = list(d.paths).length || num(d.count) || list(d.media).length || 0;
+      const made =
+        list(d.paths).length || num(d.count) || list(d.media).length || mediaMade(call.text);
       const asked = num(a.count) ?? 1;
       return {
         ...three(VERBS.make, mediaCount(made, one, many), firstWords(a.prompt)),
@@ -1596,12 +1643,17 @@ export function lineOf(call: ActionCall, ctx: ReadingContext = {}): ActionLine {
   }
   const proposed = str(call.details?.proposedEffect);
   if (o.outcome === "refused" && proposed) detail = FORMS.wouldDo(proposed);
-  if (o.outcome === "refused" && call.details?.error && typeof call.details.error !== "object")
-    detail = reasonOf(call);
+  // A refusal's or an unavailable result's reason: from its details where they were kept, else
+  // from its text, which history keeps, so the line reads the same live and reloaded.
+  if (o.outcome === "refused" && !proposed) {
+    const reason = reasonOf(call) || textReason(call.text);
+    if (reason) detail = reason;
+  }
   if (o.outcome === "unavailable") {
     const d = call.details ?? {};
     if (d.warning) detail = str(d.warning);
-    if (d.error) detail = (str(d.message) || str(d.error)).split(/[.\n]/)[0] ?? "";
+    else if (d.error) detail = (str(d.message) || str(d.error)).split(/[.\n]/)[0] ?? "";
+    else detail = (textReason(call.text).split(/\. /)[0] ?? "").replace(/\.$/, "");
   }
   const exit = o.outcome === "done" ? (w.exit ?? "") : "";
   const mark = stateMark(call, info, o);
@@ -1703,7 +1755,7 @@ function pluralOf(kind: ActionKind, calls: ActionCall[], ctx: ReadingContext): P
           (list(c.details?.paths).length ||
             num(c.details?.count) ||
             list(c.details?.media).length ||
-            0),
+            mediaMade(c.text)),
         0,
       );
       return [PLURALS.made, made ? count(made, one, many) : `${many} · ${PLURALS.times(n)}`];
@@ -1848,11 +1900,9 @@ export function foldLineOf(calls: ActionCall[], ctx: ReadingContext = {}): FoldL
     !asks && outcomes.every((o) => o === "done" || o === "partial" || problemOf(o) !== null);
   const neutral: Pair = [neutralOf(kind, calls, ctx), `· ${PLURALS.calls(calls.length)}`];
   const started = allStarted ? startedPluralOf(kind, calls) : null;
-  // The done plural counts the Done and Partial members only: "Read 1 file · 1 failed" (7.4).
-  const doneCalls = calls.filter((_, i) => {
-    const o = lines[i]!.outcome;
-    return o === "done" || o === "partial";
-  });
+  // The done plural counts the Done members only: "Read 1 file · 1 failed", "Searched memory
+  // 1 time · 1 partial". A partial member is counted as partial, never as done (7.4).
+  const doneCalls = calls.filter((_, i) => lines[i]!.outcome === "done");
   const [verb, object] =
     doneCalls.length > 0 && (allDone || (problems.length > 0 && doneOrProblem))
       ? pluralOf(kind, doneCalls, ctx)

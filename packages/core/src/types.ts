@@ -153,7 +153,16 @@ export type TaskContext = {
   fresh: boolean;
 };
 
-export type ToolResult = { isError: boolean; text: string };
+export type ToolResult = {
+  isError: boolean;
+  text: string;
+  /**
+   * What the reading reads of the few `details` the gateway's history keeps
+   * (`exitCode`, `ok`, `changed`, `created`, and a diff's line counts), so a
+   * call history alone holds reads as its step does. Absent when none was kept.
+   */
+  facts?: Record<string, unknown>;
+};
 
 export type TranscriptBlock =
   | { kind: "text"; text: string }

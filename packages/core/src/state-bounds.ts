@@ -138,6 +138,8 @@ export const MAX_ATTEMPT_ERROR_COUNT = 5;
 /** Items of a task's history page (`chat.history` limit) and blocks across them. */
 export const MAX_HISTORY_ITEMS = 200;
 /** As many as the page holds: a run of many actions keeps every block the page can, in one item. */
+/** The facts a history block keeps of its result's details (`ToolResult.facts`). */
+export const MAX_TOOL_FACTS_CHARS = 160;
 export const MAX_BLOCKS_PER_ITEM = 300;
 export const MAX_HISTORY_BLOCKS = 300;
 /** Inter-session messages kept per task, newest. */
@@ -407,7 +409,12 @@ export const APPROVAL: Bound = flagged<ApprovalCard>()({
   stillOpen: FLAG,
   raw: json(MAX_RECORD_CHARS),
 });
-const toolResult = object<ToolResult>()({ isError: FLAG, text: text(MAX_ITEM_TOOL_CHARS) });
+const toolResult = object<ToolResult>()({
+  isError: FLAG,
+  text: text(MAX_ITEM_TOOL_CHARS),
+  // Five small facts: an exit code, three flags and two line counts.
+  facts: json(MAX_TOOL_FACTS_CHARS),
+});
 const block = union<TranscriptBlock, "kind">("kind")({
   text: object<Extract<TranscriptBlock, { kind: "text" }>>()({
     kind: ENUM,

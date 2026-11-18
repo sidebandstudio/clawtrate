@@ -356,7 +356,8 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
               ? `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n… (${text.length - MAX_TOOL_RESULT_CHARS} more characters)`
               : text,
         };
-        call.result = result;
+        const facts = historyFacts(message.details);
+        call.result = facts ? { ...result, facts } : result;
         const holder = callItems.get(callId!);
         if (cutByGateway && holder) holder.truncated = true;
         return;
@@ -371,4 +372,26 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
 /** Visible text from a streaming `chat` event's message snapshot. */
 export function liveTextFromChatMessage(message: unknown): string {
   return textOf(asRecord(message)?.content);
+}
+
+/**
+ * The detail keys of a history row the reading reads: those the gateway's
+ * chat display projection keeps that say how a call ended, and a diff's line
+ * counts (the diff itself is in the step's raw payload).
+ */
+function historyFacts(details: unknown): Record<string, unknown> | null {
+  const d = asRecord(details);
+  if (!d) return null;
+  const out: Record<string, unknown> = {};
+  if (typeof d.exitCode === "number" && Number.isFinite(d.exitCode)) out.exitCode = d.exitCode;
+  for (const key of ["ok", "changed", "created"] as const)
+    if (typeof d[key] === "boolean") out[key] = d[key];
+  if (typeof d.diff === "string") {
+    const rows = d.diff.split("\n");
+    out.diffStat = {
+      added: rows.filter((l) => l.startsWith("+") && !l.startsWith("+++")).length,
+      removed: rows.filter((l) => l.startsWith("-") && !l.startsWith("---")).length,
+    };
+  }
+  return Object.keys(out).length ? out : null;
 }

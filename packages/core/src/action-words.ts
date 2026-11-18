@@ -205,6 +205,8 @@ export const NOUNS = {
 
 /** The state word at the right of a card, for each outcome that has one. */
 export const STATE_WORDS = {
+  /** A read whose result says it returned no contents of the file. */
+  noContents: "No contents",
   callStarted: "Call started",
   waitingForYou: "Waiting for you",
   waitingForApproval: "Waiting for approval",
