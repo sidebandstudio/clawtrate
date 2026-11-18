@@ -1118,9 +1118,13 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     await expect(c.locator(`[data-item-call="${launch}"] > summary .state`)).toHaveText(
       "Call made",
     );
-    await expect(c.locator(`[data-item-call="${wait}"] > summary .state`)).toHaveText(
-      "Delivery unknown",
-    );
+    // The wait ended with no result naming the thread: it joins none, and is a card of its own,
+    // Delivery unknown, that can bring the reader to the thread its arguments name.
+    const own = page.locator(`.card.action[data-call="${wait}"]`);
+    await expect(own.locator(":scope > summary .action-state")).toHaveText("Delivery unknown");
+    await expect(c.locator(`[data-item-call="${wait}"]`)).toHaveCount(0);
+    await own.locator(":scope > summary").click();
+    await expect(own.getByRole("button", { name: "Show this thread's card" })).toBeVisible();
     await expect(
       c.getByText("The call was made. Work handed to T3 Code may continue there."),
     ).toBeVisible();
@@ -1190,16 +1194,23 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     await clients.plain.terminal(t.runId);
     const [send] = callIds(t.runId);
     await openTask(page, "Juniper", t.title);
-    await expect(word(page)).toHaveText("Failed");
-    const c = await openCard(page);
-    await expect(c).toContainText(
-      "This thread was started before this conversation's record begins.",
-    );
-    const item = c.locator(`[data-item-call="${send}"]`);
-    await expect(item.locator("pre[data-tone=danger]")).toContainText("thread_not_sendable");
-    await shot(c, "t3-refused");
+    // Its result names no thread, so it joins none: a card of its own, saying what was asked,
+    // that it failed and T3 Code's reason. No thread is said to exist before the record.
+    const check = async () => {
+      const own = page.locator(`.card.action[data-call="${send}"]`);
+      await expect(own).toHaveAttribute("data-kind", "t3");
+      await expect(own.locator(":scope > summary .action-state")).toHaveText("Failed");
+      await expect(own.locator(":scope > summary")).toContainText("Couldn't follow up with");
+      await expect(own.locator(":scope > summary .action-detail")).toContainText(
+        "thread_not_sendable",
+      );
+      await expect(card(page, "t3-card")).toHaveCount(0);
+      await expect(page.getByText("started before this conversation's record")).toHaveCount(0);
+      return own;
+    };
+    await shot(await check(), "t3-refused");
     await reload(page, "Juniper", t.title);
-    await expect(word(page)).toHaveText("Failed");
+    await check();
   });
 
   test("F-313: T3 Code's listings are lines of their own that fold, never a thread's card", async () => {
