@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, w1-windows-ci]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
