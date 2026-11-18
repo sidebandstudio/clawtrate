@@ -5,6 +5,7 @@
 // machines and text here are invented.
 
 import {
+  askUserQuestionId,
   admitApproval,
   applyAgentEvent,
   applyApprovalRequested,
@@ -37,6 +38,8 @@ import {
 export const CARD_TASK = "agent:otto:transcode-cache";
 export const RECEIVING_TASK = "agent:marlow:house-log";
 export const CARD_RUN = "run_7f3a91c2";
+/** The id the gateway gives the question of this run's `ask_user` call `call_ask` (`askUserQuestionId`). */
+export const QUESTION_ID = askUserQuestionId(CARD_RUN, "call_ask");
 const USER_ITEM = "u-7f3a:0";
 const MINUTE = 60_000;
 
@@ -362,7 +365,7 @@ const WHEN = {
 
 function questionRecord(now: number, questions: unknown[]) {
   return {
-    id: "qst_81f0",
+    id: QUESTION_ID,
     questions,
     agentId: "otto",
     sessionKey: CARD_TASK,
@@ -386,18 +389,18 @@ export const questionEvent =
 
 /** Answered from this app: what it sent, the gateway's reply, and its event. */
 const answer = (answers: Record<string, string[]>) => (activity: TaskActivity) => {
-  const params = { id: "qst_81f0", answers: { answers } };
-  const sent = markQuestion(activity, "qst_81f0", {
+  const params = { id: QUESTION_ID, answers: { answers } };
+  const sent = markQuestion(activity, QUESTION_ID, {
     submitting: true,
     error: null,
     sent: { method: "question.resolve", params },
   });
   const replied = applyQuestionResolved(
     sent,
-    { id: "qst_81f0", status: "answered", answers: { answers } },
+    { id: QUESTION_ID, status: "answered", answers: { answers } },
     { via: "question.resolve", record: { status: "answered", answers: { answers } } },
   );
-  return questionEvent({ id: "qst_81f0", status: "answered", answers: { answers } })(replied);
+  return questionEvent({ id: QUESTION_ID, status: "answered", answers: { answers } })(replied);
 };
 
 // Messages to other bots ----------------------------------------------------------
@@ -743,11 +746,11 @@ function build(
       return { b: asked(now, [MACHINES]).update(answer({ machines: ["media-box", "attic-nas"] })) };
     case "question-dismissed":
       return {
-        b: asked(now).update((a) => questionEvent({ id: "qst_81f0", status: "cancelled" })(a)),
+        b: asked(now).update((a) => questionEvent({ id: QUESTION_ID, status: "cancelled" })(a)),
       };
     case "question-expired":
       return {
-        b: asked(now).update((a) => questionEvent({ id: "qst_81f0", status: "expired" })(a)),
+        b: asked(now).update((a) => questionEvent({ id: QUESTION_ID, status: "expired" })(a)),
       };
     case "question-cancelled":
       return {
@@ -760,7 +763,7 @@ function build(
               stopRequestedAt: ago(1),
             })),
           }))
-          .update((a) => questionEvent({ id: "qst_81f0", status: "cancelled" })(a)),
+          .update((a) => questionEvent({ id: QUESTION_ID, status: "cancelled" })(a)),
       };
     case "question-closed-ended":
       return { b: asked(now).end(ago(1)).update(closeQuestions) };
@@ -1106,7 +1109,15 @@ export function cardScene(name: CardSceneName, now: number): CardScene {
       plugin: "ready",
       "system-agent": "ready",
     },
-    runs: b.activity.runs.map((run) => ({ ...run, anchorItemId: anchor })),
+    // In the return scene the task has moved on since: the sender's run finished, so its
+    // card stays at its run's place in history, above the later messages.
+    runs: b.activity.runs.map((run) => ({
+      ...run,
+      anchorItemId: anchor,
+      ...(name === "messaged-return"
+        ? { state: "completed" as const, endedAt: now - 2 * MINUTE }
+        : {}),
+    })),
   };
   const items = receiving
     ? receiverItems(now)

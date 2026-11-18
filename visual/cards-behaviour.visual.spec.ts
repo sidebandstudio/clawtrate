@@ -4,6 +4,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { contextFor, openFixture, settle, SIZES } from "./fixture.ts";
 
+/** The gateway's id for the fixture's question: run `run_7f3a91c2`, call `call_ask` (`askUserQuestionId`). */
+const QUESTION_ID = "ask_26e18573cf5e61d9e5d65618d22de594";
+
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
 
@@ -658,6 +661,8 @@ test.describe("approval cards", () => {
 
   test("F-163: ⌘J moves focus to the oldest pending card", async ({ page }) => {
     await openFixture(page, "scene=approval-pending", "light");
+    // The card is drawn before the shortcut is pressed, so the key never lands before it.
+    await expect(approvalCard(page)).toBeVisible();
     await page.locator("body").click();
     await page.keyboard.press("ControlOrMeta+j");
     await expect(approvalCard(page)).toBeFocused();
@@ -699,7 +704,7 @@ test.describe("question cards", () => {
       {
         type: "answerQuestion",
         key: "agent:otto:transcode-cache",
-        questionId: "qst_81f0",
+        questionId: QUESTION_ID,
         answers: { keep_cache: [{ option: 0 }] },
       },
     ]);
@@ -825,7 +830,7 @@ test.describe("question cards", () => {
     expect((await sent(page)).at(-1)).toEqual({
       type: "dismissQuestion",
       key: "agent:otto:transcode-cache",
-      questionId: "qst_81f0",
+      questionId: QUESTION_ID,
     });
     expect((await transcript(page)).runs[0]!.state).toBe("running");
   });
@@ -1437,7 +1442,6 @@ test.describe("Messaged T3 Code cards", () => {
     // No map from the gateway: the call is an ordinary step until its result names it.
     await historyStep(page, false);
     const step = page.getByTestId("tool-call");
-    await page.locator(".steps > summary").click();
     await step.locator("summary").click();
     await expect(step).toHaveAttribute("open", "");
     // The card below, open; the reader at a marked line: the approval's title at the reading line.
@@ -1496,21 +1500,38 @@ test.describe("Messaged T3 Code cards", () => {
     await settle(page);
     expect(Math.abs((await marked.boundingBox())!.y - before)).toBeLessThanOrEqual(1);
     await expect(approval.locator(".request-full")).toHaveAttribute("open", "");
-    // The ordinary step again, in its group, open and focused as the card was.
+    // The ordinary action card again, in its run's column, open and focused as the card was.
     const step = page.getByTestId("tool-call");
     await expect(step).toHaveCount(1);
-    await expect(page.locator("details.steps").first()).toHaveAttribute("open", "");
     await expect(step).toHaveAttribute("open", "");
     await expect(step.locator("summary")).toBeFocused();
+  });
+
+  test("F-132 F-134: a T3 Code card read on Raw, with focus on Copy arguments, becomes the ordinary action on its Raw tab with focus on its Copy arguments", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=t3-approval", "light");
+    await historyStep(page, true);
+    const card = page.getByTestId("t3-card");
+    await card.locator("summary").click();
+    await card.getByRole("button", { name: "Raw" }).click();
+    const copy = card.getByRole("button", { name: "Copy arguments" });
+    await copy.focus();
+    await expect(copy).toBeFocused();
+    await resultNaming(page, "t3_project_list_v2");
+    await expect(card).toHaveCount(0);
+    const step = page.getByTestId("tool-call");
+    await expect(step).toHaveAttribute("open", "");
+    await expect(step.getByRole("tab", { name: "Raw" })).toHaveAttribute("aria-selected", "true");
+    await expect(step.getByRole("button", { name: "Copy arguments" })).toBeFocused();
   });
 
   test("a closed step or card that has focus hands focus over as it is replaced, and stays closed", async ({
     page,
   }) => {
-    // Step to card: the step closed in its open group, focus on its line.
+    // Step to card: the call's action card closed, focus on its line.
     await openFixture(page, "scene=t3-approval", "light");
     await historyStep(page, false);
-    await page.locator(".steps > summary").click();
     const step = page.getByTestId("tool-call");
     await step
       .locator("summary")

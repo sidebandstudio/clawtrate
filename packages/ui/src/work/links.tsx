@@ -3,6 +3,7 @@
 // `<StepFileLinks callId=… />`, and the Work pane uses `showInChat`.
 
 import { createContext, useContext } from "react";
+import { readView, viewKeys, writeView } from "../actions/view-state.ts";
 
 /** What "Open file" asks the pane to show. */
 export type FileRequest = {
@@ -61,33 +62,45 @@ export function StepFileLinks({ callId }: { callId: string | null }) {
   );
 }
 
-/** Where a step is in the conversation, by its tool call id. */
+/** Where a call is in the conversation, by its tool call id: its card, or its row in a fold. */
 export function stepElement(callId: string): HTMLElement | null {
-  return document.querySelector<HTMLElement>(`.transcript [data-call-id="${CSS.escape(callId)}"]`);
+  return document.querySelector<HTMLElement>(`.transcript [data-call="${CSS.escape(callId)}"]`);
 }
 
 /**
- * Bring a step into view the way section 10 says: open its fold and the
- * step, scroll its first line just under the protected band, fill it for
- * 1.6 s and move focus to its summary. False when the conversation does not
- * show the step on its own (a run still under way draws its steps as one line).
+ * Bring a call into view the way section 10 says: open its fold and the call
+ * itself through the conversation's view state, on its Readable view so
+ * "Back to <file>" is there, then scroll its line just under the protected
+ * band, fill it for 1.6 s and move focus to its summary. False when the
+ * conversation does not show the call.
  */
-export function revealStep(callId: string): boolean {
-  const step = stepElement(callId);
-  if (!step) return false;
-  const fold = step.closest<HTMLDetailsElement>("details.steps");
-  if (fold) fold.open = true;
-  if (step instanceof HTMLDetailsElement) step.open = true;
-  const scroller = step.closest<HTMLElement>(".transcript");
-  if (scroller) {
-    const band = 100;
-    const top = step.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-    scroller.scrollTop += top - band;
-  }
-  step.dataset.flash = "true";
-  const clear = () => delete step.dataset.flash;
-  step.addEventListener("animationend", clear, { once: true });
-  step.addEventListener("focusout", clear, { once: true });
-  (step.querySelector<HTMLElement>("summary") ?? step).focus({ preventScroll: true });
+export function revealStep(taskKey: string, callId: string): boolean {
+  const fold = readView(taskKey, viewKeys.member(callId));
+  const shown =
+    stepElement(callId) !== null ||
+    (typeof fold === "string" &&
+      document.querySelector(`.transcript [data-first="${CSS.escape(fold)}"]`) !== null);
+  if (!shown) return false;
+  if (typeof fold === "string") writeView(taskKey, viewKeys.fold(fold), true);
+  writeView(taskKey, viewKeys.call(callId), true);
+  writeView(taskKey, viewKeys.view(callId), "readable");
+  // Once the fold and the row are drawn open.
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      const step = stepElement(callId);
+      if (!step) return;
+      const scroller = step.closest<HTMLElement>(".transcript");
+      if (scroller) {
+        const band = 100;
+        const top = step.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+        scroller.scrollTop += top - band;
+      }
+      step.dataset.flash = "true";
+      const clear = () => delete step.dataset.flash;
+      step.addEventListener("animationend", clear, { once: true });
+      step.addEventListener("focusout", clear, { once: true });
+      (step.querySelector<HTMLElement>(":scope > summary") ?? step).focus({ preventScroll: true });
+    }),
+  );
   return true;
 }

@@ -6,7 +6,6 @@ import {
   type Transcript,
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { stepsLabel } from "../src/Conversation.tsx";
 import { rowTime, stampTime } from "../src/format.ts";
 import { stripFor, taskInSync } from "../src/StatusStrip.tsx";
 
@@ -102,22 +101,6 @@ describe("the status strip (visual-language.md, section 11)", () => {
       tone: "danger",
       action: "retry",
     });
-  });
-});
-
-describe("folded work", () => {
-  it("counts what is inside", () => {
-    const thought = { kind: "reasoning", text: "x" } as const;
-    const tool = {
-      kind: "tool-call",
-      callId: "c",
-      name: "ls",
-      argumentsText: "{}",
-      result: null,
-    } as const;
-    expect(stepsLabel([thought, tool, tool])).toBe("Thought, used 2 tools");
-    expect(stepsLabel([tool])).toBe("Used 1 tool");
-    expect(stepsLabel([thought])).toBe("Thought");
   });
 });
 

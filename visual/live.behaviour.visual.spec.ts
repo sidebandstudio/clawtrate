@@ -191,7 +191,7 @@ test.describe("sending", () => {
     expect(Date.now() - sent).toBeLessThan(1000);
     await expect(line.getByTestId("status-phrase")).toHaveText("Thinking");
     await expect(line.locator(".presence")).toHaveAttribute("data-state", "thinking");
-    await expect(line).toHaveAccessibleName("Otto, thinking: Thinking. No steps yet.");
+    await expect(line).toHaveAccessibleName("Otto, thinking. Nothing running to show.");
     // The gateway has not reported when the run started: no clock.
     await expect(line.locator(".status-elapsed")).toHaveCount(0);
   });
@@ -392,7 +392,7 @@ test.describe("the status line", () => {
     await expect(line.locator(".presence")).toHaveAttribute("data-state", "working");
     await expect(line).toHaveAttribute("title", "Reading backup-2026-11-15.log");
     await expect(line).toHaveAccessibleName(
-      "Otto, working: Reading backup-2026-11-15.log. Show steps.",
+      "Otto, working: Reading backup-2026-11-15.log. Show the action.",
     );
   });
 
@@ -668,25 +668,25 @@ test.describe("Stop", () => {
     await expect(page.getByRole("button", { name: "Stop Otto" })).toHaveCount(0);
     await expect(page.locator(".composer-status")).toHaveText("Stopping…");
     await answers(page, "release");
-    await expect(page.getByTestId("stop-note")).toContainText("Completed steps are not undone.");
+    await expect(page.getByTestId("stop-note")).toContainText("Completed actions are not undone.");
     await expect(page.getByTestId("status-line")).toHaveCount(0);
     await expect(announcer(page)).toHaveText("Stopped");
   });
 
-  test("F-299: the stop note says how long the run took and that completed steps are not undone", async ({
+  test("F-299: the stop note says how long the run took and that completed actions are not undone", async ({
     page,
   }) => {
     await open(page, "run-stopped");
     await expect(page.getByTestId("stop-note")).toHaveText(
-      "Stopped after 40s. Completed steps are not undone.",
+      "Stopped after 40s. Completed actions are not undone.",
     );
     await open(page, "run-stopped-elsewhere");
     await expect(page.getByTestId("stop-note")).toContainText(
-      "from another device or session. Completed steps are not undone.",
+      "from another device or session. Completed actions are not undone.",
     );
   });
 
-  test("F-299: after a stop, completed steps and their results stay in the transcript, under the note", async ({
+  test("F-299: after a stop, completed actions and their results stay in the transcript, under the note", async ({
     page,
   }) => {
     await open(page, "run-stopped");
@@ -746,10 +746,12 @@ test.describe("Stop", () => {
         };
       });
     });
-    await expect(page.getByTestId("stop-note")).toContainText("Completed steps are not undone.");
+    await expect(page.getByTestId("stop-note")).toContainText("Completed actions are not undone.");
     const turn = page.getByTestId("transcript-turn").filter({ hasText: "wrote 41 GB" }).last();
-    await turn.locator("details.steps > summary").click();
     const call = turn.getByTestId("tool-call");
+    await expect(call.locator(":scope > summary")).toHaveAccessibleName(
+      /^Read backup-2026-11-15\.log/,
+    );
     await call.locator("summary").click();
     await expect(call).toContainText("02:14 backup finished, 41 GB written");
     await expect(page.locator(".transcript")).toContainText(

@@ -234,6 +234,30 @@ export function mcpToolMap(value: unknown, max: number): Record<string, McpToolI
   return out;
 }
 
+/**
+ * The built-in and plugin tools of a `tools.effective` answer, by effective
+ * name (`source` `core` or `plugin`): the tools a general card may fold by
+ * name (8.3). A tool the session is denied is left out; past `max`, the rest
+ * are not kept.
+ */
+export function builtinToolNames(value: unknown, max: number): string[] {
+  const out = new Set<string>();
+  const groups = asRecord(value)?.groups;
+  for (const group of Array.isArray(groups) ? groups : []) {
+    const tools = asRecord(group)?.tools;
+    for (const entry of Array.isArray(tools) ? tools : []) {
+      const tool = asRecord(entry);
+      if ((tool?.source !== "core" && tool?.source !== "plugin") || tool.deniedBySession === true)
+        continue;
+      const name = str(tool.id);
+      if (!name) continue;
+      if (out.size >= max) return [...out];
+      out.add(name);
+    }
+  }
+  return [...out];
+}
+
 export type CardOptions = {
   /**
    * Exact tool names known to be MCP tools, with their server and tool, for
