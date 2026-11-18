@@ -13,6 +13,7 @@ import { useCardEnv, useMinuteClock } from "./context.tsx";
 import {
   allowLabel,
   approvalLine,
+  askReason,
   approvalView,
   decisionPhase,
   expiryLine,
@@ -30,6 +31,7 @@ import {
   type RawContent,
 } from "./parts.tsx";
 import { settlingRaw } from "./raw.ts";
+import { openSettings } from "../settings-link.ts";
 
 /** The list method whose items carry the same record as the requested event. */
 const LIST_NAMES: Record<Approval["kind"], string> = {
@@ -125,6 +127,7 @@ function FullRequest({
   onToggle?: (open: boolean) => void;
 }) {
   const rows = view.rows.filter((row) => !row.list && !(whole && row.label === "Folder"));
+  const reason = askReason(card);
   return (
     <details
       className="request-full"
@@ -169,6 +172,23 @@ function FullRequest({
           </p>
         )}
         <Fields rows={rows} />
+        {reason && (
+          <p className="request-why">
+            {reason.text}
+            {reason.policy && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => openSettings("permissions")}
+                >
+                  Manage settings
+                </button>
+              </>
+            )}
+          </p>
+        )}
       </div>
     </details>
   );

@@ -246,6 +246,36 @@ function possessive(name: string): string {
   return name === "the gateway's machine" ? "the gateway's" : `${name}'s`;
 }
 
+/**
+ * Why the gateway asked, from the request's own fields, and whether the host's
+ * policy asked (then "Manage settings" goes with it). Null when the request
+ * does not say. A command asks when the host's policy for it is "ask every
+ * time" (`ask: "always"`), or when it is not on the host's allowlist and the
+ * policy asks on a miss (`security: "allowlist"`, `ask: "on-miss"`).
+ */
+export function askReason(card: ApprovalCard): { text: string; policy: boolean } | null {
+  if (card.exec) {
+    const machine = machineOf(card);
+    if (card.exec.ask === "always") {
+      return {
+        text: `The gateway asked because commands ${machine ? `on ${machine}` : "here"} are set to ask every time.`,
+        policy: true,
+      };
+    }
+    if (card.exec.security === "allowlist" && card.exec.ask === "on-miss") {
+      return {
+        text: `The gateway asked because this command is not on ${machine ? `${possessive(machine)} allowlist` : "the host's allowlist"}.`,
+        policy: true,
+      };
+    }
+    return null;
+  }
+  if (card.plugin?.pluginId) {
+    return { text: `The plugin ${card.plugin.pluginId} asked for this approval.`, policy: false };
+  }
+  return null;
+}
+
 /** Characters of a command the summary shows; the full request holds the rest. */
 export const SUMMARY_COMMAND_CHARS = 72;
 
@@ -333,6 +363,17 @@ export function resolvedView(
       }
       return { tag: "Allowed", tone: "accent", sentence: `Allowed. ${can}`, saved: null, winner };
     case "denied":
+      // This client denied it because its run ended first (F-418): it closed with the run.
+      if (card.reason === "run-ended" || card.reason === "run-failed") {
+        const failed = card.reason === "run-failed";
+        return {
+          tag: failed ? "Closed: the run failed" : "Closed: the run ended",
+          tone: null,
+          sentence: `The run ${failed ? "failed" : "ended"} before this was answered. ${notRun}`,
+          saved: null,
+          winner,
+        };
+      }
       return {
         tag: "Denied",
         tone: null,
