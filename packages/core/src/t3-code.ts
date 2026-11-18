@@ -58,13 +58,24 @@ export type T3Call = {
   server: string;
   /** Known only from the gateway's name map: no result has named its tool. */
   mapped: boolean;
-  /** Null when the thread cannot be known: a listing, a launch without a result, a failed launch. */
+  /**
+   * The thread the call belongs to: while it runs, the one its arguments name;
+   * once it has ended, only the one its own result names. Null for a listing, a
+   * launch without a result, and a call that ended without a result naming a
+   * thread (aborted, refused, failed, or one whose result cannot be read).
+   */
   thread: T3Thread | null;
+  /** The thread the call's arguments asked for, whether or not anything named it after. */
+  asked: T3Thread | null;
   state: T3CallState;
   /** T3 Code's status in the call's returned, non-error result, as sent; null without one. */
   reported: string | null;
   /** What was sent: a launch's `message` (else its `title`), a follow-up's `message`. */
   sent: string | null;
+  /** The sent text here is shorter than what was sent: Raw has all of it. */
+  sentShort: boolean;
+  /** The call returned, but its result could not be read here: what it reported is not known. */
+  unread: boolean;
   error: { code: string | null; message: string | null } | null;
   facts: T3Facts | null;
   call: ActionCall;
@@ -101,15 +112,38 @@ function stateOf(call: ActionCall, ctx: ReadingContext): T3CallState {
   }
 }
 
+/** The result shape each tool returns (B.2), for a result whose tool the gateway did not name. */
+const SHAPES: Record<T3Tool, T3Facts["shape"]> = {
+  t3_project_list: "projects",
+  t3_thread_list: "threads",
+  t3_thread_launch: "launch",
+  t3_thread_send: "send",
+  t3_thread_read: "read",
+  t3_thread_wait: "wait",
+  t3_thread_interrupt: "interrupt",
+};
+
+/** The gateway's reason a failed call gives: T3 Code's `{code, message}`, else its text's first line. */
+function reasonOf(call: ActionCall, facts: T3Facts | null): T3Call["error"] {
+  const code = facts?.code ?? null;
+  const message = facts?.message ?? null;
+  if (code || message) return { code, message };
+  const text = (call.text ?? "").trim();
+  const first = text.startsWith("structuredContent:") ? "" : (text.split("\n")[0] ?? "");
+  return { code: null, message: first || null };
+}
+
 /**
  * A call as T3 Code's, or null when it is not (11.1). It is T3 Code's when its
  * result names one of the seven tools, whatever the server is called. Before
  * a result, the gateway's map is the evidence, and a result that names another
- * tool overrules it. A result that names no tool (history keeps no `details`
- * for a tool server) leaves the map's word only where something else says it
- * is T3 Code's: T3 Code's structured content, an error, or a refusal. Live,
- * the map alone never makes a call Call made; from history it does, since
- * history keeps no `details` for any tool server.
+ * tool overrules it. Where the gateway did not name the tool (history keeps no
+ * `details` for a tool server), a structured result is evidence only when it
+ * has the shape of the mapped tool's result: one of another shape is another
+ * tool's, and never re-attributed by the current map. Live, a result that names
+ * no tool and carries nothing of T3 Code's leaves the call ordinary; from
+ * history, where nothing named it, the map stands and the call is known less
+ * well: its result could not be read.
  */
 export function t3CallOf(call: ActionCall, ctx: ReadingContext = {}): T3Call | null {
   const identity = toolServerOf(call, ctx);
@@ -118,28 +152,28 @@ export function t3CallOf(call: ActionCall, ctx: ReadingContext = {}): T3Call | n
   const role = ROLES[tool];
   const facts = call.t3 ?? null;
   const state = stateOf(call, ctx);
-  // Live, a result names its tool: one that names none and carries nothing of T3 Code's leaves
-  // the map's word unproven. History keeps no details for a tool server, so there the map stands,
-  // and a result whose rendering cannot be read is a card of its own (11.1).
+  const ended = state !== "started" && state !== "waiting";
+  if (identity.mapped && ended && facts?.read) {
+    const shape = facts.shape ?? null;
+    if (shape !== SHAPES[tool] && !(shape === "failure" && state === "failed")) return null;
+  }
   if (identity.mapped && state === "made" && !facts?.read && !call.fromHistory) return null;
-  const a = call.args;
-  const environmentId = facts?.argEnvironment ?? str(a.environmentId);
-  const threadId =
-    role === "listing"
-      ? null
-      : role === "launch"
-        ? state === "made"
-          ? (facts?.threadId ?? null)
-          : null
-        : (facts?.argThread ?? str(a.threadId) ?? facts?.threadId ?? null);
-  const thread = threadId
-    ? {
-        key: threadKey(identity.server, environmentId, threadId),
-        server: identity.server,
-        environmentId,
-        threadId,
-      }
-    : null;
+  const unread = state === "made" && !facts?.read;
+  const environmentId = facts?.argEnvironment ?? null;
+  const key = (threadId: string) => ({
+    key: threadKey(identity.server, environmentId, threadId),
+    server: identity.server,
+    environmentId,
+    threadId,
+  });
+  // The arguments' ids, kept whole as they arrived; never a cut copy of them.
+  const askedId = facts?.argTooLong ? null : (facts?.argThread ?? null);
+  const asked = role === "listing" || !askedId ? null : key(askedId);
+  // Its own result names the thread once it has ended; in flight, its arguments do.
+  const namedId = state === "made" && !facts?.argTooLong ? (facts?.threadId ?? null) : null;
+  const thread = role === "listing" ? null : !ended ? asked : namedId ? key(namedId) : null;
+  const sentText =
+    role === "launch" || role === "send" ? (facts?.argMessage ?? str(call.args.message)) : null;
   return {
     id: call.id,
     tool,
@@ -147,16 +181,13 @@ export function t3CallOf(call: ActionCall, ctx: ReadingContext = {}): T3Call | n
     server: identity.server,
     mapped: identity.mapped,
     thread,
+    asked,
     state,
     reported: state === "made" ? (facts?.status ?? null) : null,
-    sent:
-      role === "launch"
-        ? (str(a.message) ?? str(a.title))
-        : role === "send"
-          ? str(a.message)
-          : null,
-    error:
-      state === "failed" ? { code: facts?.code ?? null, message: facts?.message ?? null } : null,
+    sent: role === "launch" ? (sentText ?? facts?.argTitle ?? str(call.args.title)) : sentText,
+    sentShort: facts?.argMessageShort === true,
+    unread,
+    error: state === "failed" ? reasonOf(call, facts) : null,
     facts,
     call,
   };
@@ -174,24 +205,31 @@ export type T3Sequence = Array<
 >;
 
 export type T3Placement =
-  /** The thread's card, at its first call in the record; or a call with no known thread, on its own. */
+  /** The thread's card, at its first call in the record; or a launch still running, on its own. */
   | { type: "card"; thread: T3Thread | null; head: string }
   /** Joined the card directly: its line closed up and it is an item of the card (11.4). */
   | { type: "joined"; thread: T3Thread; head: string }
   /** A line of its own where it happened, and an item of the card too. */
   | { type: "line"; thread: T3Thread; head: string }
+  /**
+   * A card of its own, in no thread: a call that ended without a result naming
+   * one. `head` is the card of the thread its arguments asked for, when shown.
+   */
+  | { type: "own"; asked: T3Thread | null; head: string | null }
   /** A listing: an ordinary line in T3 Code's family, never a thread's (11.2). */
   | { type: "listing" };
 
 /**
  * Where each T3 Code call of a task's record goes (11.2, 11.4). The first call
  * of a thread in the record is its card. A later call joins it directly only
- * once its result names the tool and the thread, when the card is the item
- * just above it in the same column (the card itself, or a call that already
- * joined it), with nothing shown between, and when the reader did not hold
- * its line (`keptLine`: the line was open or focused, or the reader was not
- * following the end, when its result came). Every other later call keeps a
- * line of its own. A call whose thread cannot be known is a card on its own.
+ * once its own result names the thread, when the card is the item just above
+ * it in the same column (the card itself, or a call that already joined it),
+ * with nothing shown between, and when the reader did not hold its line
+ * (`keptLine`: the line was open or focused, or the reader was not following
+ * the end, when its result came; that is a fact of one view, so a view rebuilt
+ * from the record never has it). A call still running shows with the thread
+ * its arguments name, on a line of its own. A call that ended without a result
+ * naming a thread is a card of its own.
  */
 export function placeT3(
   sequence: T3Sequence,
@@ -213,7 +251,14 @@ export function placeT3(
       continue;
     }
     if (!c.thread) {
-      out.set(c.id, { type: "card", thread: null, head: c.id });
+      const ended = c.state !== "started" && c.state !== "waiting";
+      if (!ended) out.set(c.id, { type: "card", thread: null, head: c.id });
+      else
+        out.set(c.id, {
+          type: "own",
+          asked: c.asked,
+          head: (c.asked && heads.get(c.asked.key)) ?? null,
+        });
       above = null;
       continue;
     }
@@ -256,9 +301,25 @@ const SENDING: Record<T3Role, boolean> = {
 };
 
 /**
- * A thread's state, worked out from its calls in their order (11.2): a call
- * that is open first; else the status in the latest returned, non-error
- * result of any call on the thread; else the latest sending call's state. A
+ * The calls that reported, in the order the gateway recorded their results:
+ * by the result's time live, by its history row's time from history, and in
+ * the record's order where neither is known. Not the order the calls started.
+ */
+function byResult(calls: readonly T3Call[]): T3Call[] {
+  return calls
+    .map((call, index) => ({ call, index }))
+    .sort((a, b) => {
+      const x = a.call.call.resultAt ?? null;
+      const y = b.call.call.resultAt ?? null;
+      return x !== null && y !== null && x !== y ? x - y : a.index - b.index;
+    })
+    .map((each) => each.call);
+}
+
+/**
+ * A thread's state, worked out from its calls (11.2): a call that is open
+ * first; else the status in the last returned, non-error result the gateway
+ * recorded for any call on the thread; else the latest sending call's state. A
  * failed check or a refused follow-up shows on its own item and does not
  * change the thread's word. Null for a thread with no calls.
  */
@@ -268,7 +329,9 @@ export function threadStateOf(calls: readonly T3Call[]): T3ThreadState | null {
   if (open.some((c) => c.state === "waiting")) return { type: "open", word: "waiting" };
   if (open.some((c) => SENDING[c.role])) return { type: "open", word: "call-started" };
   if (open.length > 0) return { type: "open", word: "checking" };
-  const reported = [...calls].reverse().find((c) => c.state === "made" && c.reported !== null);
+  const reported = byResult(calls)
+    .reverse()
+    .find((c) => c.state === "made" && c.reported !== null);
   if (reported)
     return {
       type: "reported",
@@ -285,26 +348,56 @@ export function statusWords(status: string): string {
   return T3_WORDS.status[status] ?? status.replace(/_/g, " ");
 }
 
-/** The first line of the latest message sent on a thread, for its folded line (11.2). */
+const firstLine = (text: string | null | undefined) =>
+  ((text ?? "").split("\n").find((line) => line.trim()) ?? "").trim();
+
+/**
+ * The first line of the latest message T3 Code took on a thread: a launch's or
+ * a follow-up's whose call was made. A refused or failed follow-up is not one.
+ */
 export function latestSent(calls: readonly T3Call[]): string {
-  const sent = [...calls].reverse().find((c) => c.sent !== null)?.sent ?? "";
-  return (sent.split("\n").find((line) => line.trim()) ?? "").trim();
+  const sent = [...calls].reverse().find((c) => c.sent !== null && c.state === "made")?.sent;
+  return firstLine(sent);
 }
 
 /**
- * Whether the bot was stopped after the thread's latest sending call was made
- * (11, F-137): its run reads as stopped, or a later call on the thread was cut
- * short by the stop, as the gateway's own "Aborted" result says. History holds
- * no end for a run another client stopped while a call was open, only that
- * call's "Aborted".
+ * What a thread is for, for its folded line (11.2): its title when the record
+ * has one (the launch's `title`, or the title a later result reports), else
+ * the first line of the launch's message, else that of the latest message sent.
+ */
+export function threadTitle(calls: readonly T3Call[]): string {
+  const launch = calls.find((c) => c.role === "launch");
+  const title =
+    launch?.facts?.argTitle ??
+    str(launch?.call.args.title) ??
+    [...calls].reverse().find((c) => c.facts?.title)?.facts?.title ??
+    null;
+  if (title) return firstLine(title);
+  const message = launch?.facts?.argMessage ?? str(launch?.call.args.message);
+  return firstLine(message) || latestSent(calls);
+}
+
+/**
+ * Whether the run that made the thread's latest sending call was stopped after
+ * that call was made (11, F-137): that run reads as stopped, or a later call of
+ * the same gateway run was cut short by the stop, as the gateway's own
+ * "Aborted" says. An abort in another run says nothing of this handoff.
  */
 export function workMayContinue(calls: readonly T3Call[]): boolean {
   const at = calls.findLastIndex((c) => SENDING[c.role]);
   const sending = calls[at];
   if (sending?.state !== "made") return false;
-  const abortedAfter = calls
-    .slice(at + 1)
-    .some((c) => c.state === "unknown" && /^aborted\.?$/i.test((c.call.text ?? "").trim()));
+  const run = sending.call.runId ?? null;
+  const abortedAfter =
+    run !== null &&
+    calls
+      .slice(at + 1)
+      .some(
+        (c) =>
+          c.call.runId === run &&
+          c.state === "unknown" &&
+          /^aborted\.?$/i.test((c.call.text ?? "").trim()),
+      );
   return sending.call.runStopped === true || abortedAfter;
 }
 
@@ -319,18 +412,32 @@ export type ReadDimensions = {
   replyCut: boolean;
   /** Another item of that run (a user message, a tool item) was cut. */
   otherCut: boolean;
-  /** The structured content could not be read: how much was read is not known. */
+  /** The result's fields could not be read: how much was read is not known. */
   unknown: boolean;
+  /** The result as stored was cut (the gateway's own mark): the reason it could not be read. */
+  storedCut?: boolean;
+  /** The read asked for a later page, or the rest of one item: not the thread's first page. */
+  continuation?: boolean;
 };
 
 /**
  * A read's two dimensions (11.1, 11.3): the pages of items, and the text of
  * each item of the run it read. It says it read to the end only when both are
  * complete: no more pages, and no item of that run cut, whatever its type.
+ * `storedCut` is the call's own mark that what is kept of its result was cut.
  */
-export function readDimensions(facts: T3Facts | null): ReadDimensions {
+export function readDimensions(facts: T3Facts | null, storedCut = false): ReadDimensions {
+  const continuation = facts?.argAfter === true || facts?.argItem === true;
   if (!facts?.read || facts.hasMore === undefined)
-    return { toEnd: false, morePages: false, replyCut: false, otherCut: false, unknown: true };
+    return {
+      toEnd: false,
+      morePages: false,
+      replyCut: false,
+      otherCut: false,
+      unknown: true,
+      ...(storedCut ? { storedCut: true } : {}),
+      ...(continuation ? { continuation: true } : {}),
+    };
   const morePages = facts.hasMore === true;
   const replyCut = facts.replyCut === true;
   const otherCut = facts.otherCut === true;
@@ -340,15 +447,16 @@ export function readDimensions(facts: T3Facts | null): ReadDimensions {
     replyCut,
     otherCut,
     unknown: false,
+    ...(continuation ? { continuation: true } : {}),
   };
 }
 
 /** The lines a read's item shows on how much it read, together (11.3). */
 export function readLines(d: ReadDimensions): string[] {
-  if (d.unknown) return [T3_WORDS.storedCut];
+  if (d.unknown) return [d.storedCut ? T3_WORDS.storedCut : T3_WORDS.unreadable];
   if (d.toEnd) return [T3_WORDS.readToEnd];
   return [
-    ...(d.morePages ? [T3_WORDS.firstPage] : []),
+    ...(d.morePages ? [d.continuation ? T3_WORDS.laterPage : T3_WORDS.firstPage] : []),
     ...(d.replyCut ? [T3_WORDS.replyCut] : []),
     ...(!d.replyCut && d.otherCut ? [T3_WORDS.otherCut] : []),
   ];

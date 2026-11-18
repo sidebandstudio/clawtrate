@@ -529,6 +529,23 @@ export const T3_WORDS = {
     t3_project_list: "T3 Code projects",
     t3_thread_list: "T3 Code threads",
   } as Record<string, string>,
+  /** A call that ended without being made: what the bot asked for, not what happened. */
+  askedVerb: "Asked",
+  asked: {
+    t3_thread_launch: "T3 Code to start a thread",
+    t3_thread_send: "T3 Code to take a follow-up",
+    t3_thread_read: "to read a T3 Code thread",
+    t3_thread_wait: "to wait for T3 Code",
+    t3_thread_interrupt: "T3 Code to stop",
+  } as Record<string, string>,
+  /** The head of an item whose call was not made: what was tried (11.3). */
+  itemTried: {
+    t3_thread_launch: (bot: string) => `${bot} tried to start a thread`,
+    t3_thread_send: (bot: string) => `${bot} tried to follow up`,
+    t3_thread_read: (bot: string) => `${bot} tried to read the thread`,
+    t3_thread_wait: (bot: string) => `${bot} tried to wait for a result`,
+    t3_thread_interrupt: (bot: string) => `${bot} tried to ask T3 Code to stop`,
+  } as Record<string, (bot: string) => string>,
   /** Listings fold with each other: "Looked through T3 Code 2 times". */
   listingPlural: (n: number) => ["Looked through", `T3 Code · ${n} times`] as const,
   listingNeutral: "T3 Code listing",
@@ -575,6 +592,9 @@ export const T3_WORDS = {
   replyCut: "Part of the reply only: its text was cut, and the rest was not read",
   otherCut: "Part of the run only: an item's text was cut, and the rest was not read",
   storedCut: "The stored result was cut: how much was read is not known here.",
+  unreadable: "This result could not be read here: what it reported is not known.",
+  laterPage: "More pages after this one: the reply may continue",
+  shortened: "Shortened here; Raw has all of it.",
   noReplyOnPage: "No reply of the latest run on this page.",
   waitEndedFirst: "The wait ended before the run finished",
   resultRun: (run: string) => `Its result is in run ${run}`,

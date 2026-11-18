@@ -111,6 +111,13 @@ export type ActionCall = {
    * reads (`t3-facts.ts`), kept by the engine from the whole values.
    */
   t3?: T3Facts | null;
+  /** The gateway's run the call was made in, when the engine knows it. */
+  runId?: string | null;
+  /**
+   * When the gateway recorded the call's result: the result event's time live,
+   * its history row's time when rebuilt. For ordering results, not for display.
+   */
+  resultAt?: number | null;
 };
 
 /** What the reading needs to know beyond the call. */
@@ -2122,8 +2129,16 @@ export function lineOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): Acti
       break;
   }
   // T3 Code's lines keep their operation's words in every state; the state word says the rest (11).
+  // A call that was not made is said as what was asked; a failure as what was tried (11, 11.4).
+  const t3Tool = info.kind === "t3" ? (toolServerOf(call, ctx)?.tool ?? "") : "";
   if (info.kind === "t3")
-    pair = isOpenOutcome(o.outcome) ? w.run : o.outcome === "failed" ? w.fail : w.done;
+    pair = isOpenOutcome(o.outcome)
+      ? w.run
+      : o.outcome === "failed"
+        ? w.fail
+        : o.outcome === "done" || o.outcome === "made"
+          ? w.done
+          : [T3_WORDS.askedVerb, T3_WORDS.asked[t3Tool] ?? OBJECTS.t3Code];
   let [verb, object] = pair;
   let detail = w.detail;
   let mono = Boolean(w.mono);
@@ -2139,6 +2154,12 @@ export function lineOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): Acti
     detail = timedOut
       ? FORMS.itsLimit(num(call.args.timeoutSeconds) ?? num(call.args.timeout))
       : FORMS.runLimit;
+    mono = false;
+  } else if (o.outcome === "failed" && info.kind === "t3") {
+    // T3 Code's own reason: its failure's code and message, else the gateway's text.
+    const t = call.t3 ?? null;
+    const said = [t?.code, t?.message].filter(Boolean).join(": ");
+    detail = (said || textReason(call.text)).slice(0, 120);
     mono = false;
   } else if (o.outcome === "failed") {
     // A failure's detail is what went wrong, never a count from a result it did not give.

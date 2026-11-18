@@ -15,11 +15,32 @@ type Rec = Record<string, unknown>;
 export const MAX_T3_FACTS_CHARS = 2_048;
 /** The most of a read's reply text kept for the card; the whole is in the raw payload. */
 const MAX_REPLY_CHARS = 900;
+/** The most of a launch's or a follow-up's message kept for the card; the whole is in Raw. */
+const MAX_MESSAGE_CHARS = 1_000;
+/**
+ * The longest thread or environment id kept: an id is never cut, since a cut
+ * id would name another thread. A longer one leaves the thread unknown.
+ */
+export const MAX_T3_ID_CHARS = 512;
 
 export type T3Facts = {
-  /** The `threadId` and `environmentId` the call's arguments give. */
+  /** The `threadId` and `environmentId` the call's arguments give, whole. */
   argThread?: string;
   argEnvironment?: string;
+  /** An id in the arguments was longer than `MAX_T3_ID_CHARS`: the thread cannot be known. */
+  argTooLong?: true;
+  /** A launch's `title`, and the `message` sent, shortened here (`argMessageShort`) to fit. */
+  argTitle?: string;
+  argMessage?: string;
+  argMessageShort?: true;
+  /** A read asked for a later page (`afterPosition`) or the rest of one item (`itemId`). */
+  argAfter?: true;
+  argItem?: true;
+  /**
+   * Which operation's result the structured content has the shape of: what a
+   * result says of the tool it came from where the gateway does not name it.
+   */
+  shape?: T3Shape;
   /** The result's structured content was read. */
   read?: true;
   threadId?: string;
@@ -80,16 +101,68 @@ export function structuredFromText(text: string | null | undefined): Rec | null 
   }
 }
 
-/** The thread and environment a call's arguments name. */
+export type T3Shape =
+  "launch" | "send" | "read" | "wait" | "interrupt" | "projects" | "threads" | "failure";
+
+/** The shape of a result's structured content, by the fields each of T3 Code's results carries (B.2). */
+function shapeOf(s: Rec): T3Shape | null {
+  if (s._tag === "OrchestratorMcpFailure" || (typeof s.code === "string" && "message" in s))
+    return "failure";
+  if (Array.isArray(s.projects)) return "projects";
+  if (Array.isArray(s.threads)) return "threads";
+  if (rec(s.thread) && Array.isArray(s.items)) return "read";
+  if (typeof s.delivery === "string" && typeof s.threadId === "string") return "send";
+  if (typeof s.timedOut === "boolean" && typeof s.threadId === "string") return "wait";
+  if (typeof s.threadId === "string" && "modelSelection" in s && "projectId" in s) return "launch";
+  if (
+    typeof s.threadId === "string" &&
+    typeof s.status === "string" &&
+    [
+      "interrupt_requested",
+      "no_active_run",
+      "completed",
+      "failed",
+      "cancelled",
+      "interrupted",
+      "rolled_back",
+    ].includes(s.status)
+  )
+    return "interrupt";
+  return null;
+}
+
+/** What a call's arguments say that a T3 Code card reads, from the whole arguments. */
 export function t3ArgFacts(args: unknown): T3Facts | null {
-  const a = rec(args);
-  const thread = str(a?.threadId);
-  const environment = str(a?.environmentId);
-  if (!thread && !environment) return null;
-  return {
-    ...(thread ? { argThread: thread } : {}),
-    ...(environment ? { argEnvironment: environment } : {}),
-  };
+  let value = args;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  const a = rec(value);
+  if (!a) return null;
+  const out: T3Facts = {};
+  const thread = str(a.threadId);
+  const environment = str(a.environmentId);
+  if ((thread?.length ?? 0) > MAX_T3_ID_CHARS || (environment?.length ?? 0) > MAX_T3_ID_CHARS)
+    out.argTooLong = true;
+  else {
+    if (thread) out.argThread = thread;
+    if (environment) out.argEnvironment = environment;
+  }
+  const title = str(a.title);
+  if (title) out.argTitle = title.slice(0, 256);
+  const message = str(a.message);
+  if (message) {
+    out.argMessage =
+      message.length > MAX_MESSAGE_CHARS ? message.slice(0, MAX_MESSAGE_CHARS) : message;
+    if (message.length > MAX_MESSAGE_CHARS) out.argMessageShort = true;
+  }
+  if (a.afterPosition !== undefined && a.afterPosition !== null) out.argAfter = true;
+  if (str(a.itemId)) out.argItem = true;
+  return Object.keys(out).length ? out : null;
 }
 
 /** The facts of a result's structured content; for a failure, its `code` and `message`. */
@@ -100,6 +173,8 @@ export function t3ResultFacts(structured: unknown, isError: boolean): T3Facts | 
   const put = <K extends keyof T3Facts>(key: K, value: T3Facts[K] | null | undefined) => {
     if (value !== null && value !== undefined) out[key] = value;
   };
+  const shape = shapeOf(s);
+  if (shape) out.shape = shape;
   if (isError || s._tag === "OrchestratorMcpFailure") {
     put("code", str(s.code));
     put("message", str(s.message));
@@ -156,13 +231,18 @@ export function mergeT3Facts(...parts: Array<T3Facts | null | undefined>): T3Fac
 export function fitT3Facts(facts: T3Facts): T3Facts | null {
   const out: T3Facts = { ...facts };
   const size = () => JSON.stringify(out).length;
+  if (size() > MAX_T3_FACTS_CHARS && out.argMessage) {
+    const over = size() - MAX_T3_FACTS_CHARS;
+    out.argMessage = out.argMessage.slice(0, Math.max(0, out.argMessage.length - over - 16));
+    out.argMessageShort = true;
+  }
   if (size() > MAX_T3_FACTS_CHARS && out.reply) {
     const over = size() - MAX_T3_FACTS_CHARS;
     out.reply = out.reply.slice(0, Math.max(0, out.reply.length - over - 16));
     out.replyShort = true;
     if (!out.reply) delete out.reply;
   }
-  for (const key of ["message", "title", "model", "link", "projectId"] as const) {
+  for (const key of ["message", "title", "argTitle", "model", "link", "projectId"] as const) {
     if (size() <= MAX_T3_FACTS_CHARS) break;
     delete out[key];
   }

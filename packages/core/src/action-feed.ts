@@ -227,7 +227,7 @@ function cutOff(run: Pick<Run, "state" | "error" | "ending">): boolean {
 /** A tool step as the reading takes it. */
 export function callFromStep(
   step: Step,
-  run: Pick<Run, "state" | "error" | "ending" | "origin">,
+  run: Pick<Run, "state" | "error" | "ending" | "origin"> & { id?: string },
 ): ActionCall {
   const open = step.status === "running" || step.status === "waiting";
   // A step whose run ended before its result arrived here (`unknown`): no result is known, so it
@@ -271,6 +271,9 @@ export function callFromStep(
     runStopped: run.state === "stopped" || run.state === "cancelled",
     ...(step.gatewayTitle ? { gatewayTitle: step.gatewayTitle } : {}),
     ...(step.t3 ? { t3: step.t3 } : {}),
+    ...(run.id ? { runId: run.id } : {}),
+    // The order results were recorded in: the result's own time, or its history row's.
+    ...(!open && !unended ? { resultAt: step.endedAt } : {}),
   };
 }
 
@@ -278,7 +281,7 @@ export function callFromStep(
 export function callFromBlock(
   block: Extract<TranscriptBlock, { kind: "tool-call" }>,
   step: Step | undefined,
-  run: Pick<Run, "state" | "error" | "ending" | "origin"> | undefined,
+  run: (Pick<Run, "state" | "error" | "ending" | "origin"> & { id?: string }) | undefined,
 ): ActionCall {
   if (step && run) {
     const fromStep = callFromStep(step, run);
