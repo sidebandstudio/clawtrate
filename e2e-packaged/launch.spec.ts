@@ -12,6 +12,7 @@ import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
+import { fuseMismatches } from "../apps/desktop/packaging/fuse-check.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
 import { appEnv, packagedExecutable } from "./global-setup.ts";
 import {
@@ -226,6 +227,12 @@ test("runs its renderer in the operating system's sandbox", () => {
   }
   // The same query tells an unsandboxed process apart: the main process is not sandboxed.
   expect(kernelSaysSandboxed(APP_PID), "sandbox_check for the main process").toBe(0);
+});
+
+test("keeps the fuses it was packaged with", async () => {
+  // Read from the binary as it was built or installed: Node's own entry points
+  // off, and only its archive loaded, checked against its hash.
+  expect(await fuseMismatches(packagedExecutable(APP), process.platform)).toEqual([]);
 });
 
 test("pairs with its own development gateway instance and shows the seeded bots", async () => {

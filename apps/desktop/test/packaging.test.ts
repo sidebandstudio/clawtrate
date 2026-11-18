@@ -1,10 +1,13 @@
 // The packaging configuration: what is shipped, and that signing is chosen by
 // the environment alone.
 import { FuseV1Options } from "@electron/fuses";
-import { readFileSync } from "node:fs";
+import { SENTINEL } from "@electron/fuses/dist/constants.js";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { APP_ID, builderConfig, fuses, macSigningRequested } from "../packaging/config.ts";
+import { fuseMismatches } from "../packaging/fuse-check.ts";
 import { windowsAppUserModelId } from "../src/main/identity.ts";
 
 const APP = join(import.meta.dirname, "..");
@@ -98,6 +101,39 @@ describe("packaging configuration", () => {
       expect(config[FuseV1Options.RunAsNode]).toBe(false);
       expect(config[FuseV1Options.EnableNodeOptionsEnvironmentVariable]).toBe(false);
       expect(config[FuseV1Options.EnableNodeCliInspectArguments]).toBe(false);
+    }
+  });
+
+  it("reads a binary's fuses and names those packaging did not set as it asks", async () => {
+    // A binary as small as the reader needs: the sentinel, wire version 1, its
+    // length and one character per fuse, "1" on and "0" off.
+    const dir = mkdtempSync(join(tmpdir(), "clawtrate-fuses-"));
+    const binary = (wire: string) => {
+      const path = join(dir, `${wire}.exe`);
+      writeFileSync(
+        path,
+        Buffer.concat([
+          Buffer.from("MZ"),
+          Buffer.from(SENTINEL),
+          Buffer.from([1, wire.length]),
+          Buffer.from(wire),
+        ]),
+      );
+      return path;
+    };
+    try {
+      // As packaging flips them: Node's entry points off, archive only and its integrity on.
+      expect(await fuseMismatches(binary("00001101"), "win32")).toEqual([]);
+      // Electron's defaults, as a binary nobody flipped has them.
+      expect(await fuseMismatches(binary("10110001"), "win32")).toEqual([
+        "RunAsNode",
+        "EnableNodeOptionsEnvironmentVariable",
+        "EnableNodeCliInspectArguments",
+        "EnableEmbeddedAsarIntegrityValidation",
+        "OnlyLoadAppFromAsar",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
