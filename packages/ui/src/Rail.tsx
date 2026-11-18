@@ -1145,7 +1145,7 @@ export function Rail({
                   title: `Rename “${only.title}”`,
                   body: <p>The new name shows in the list and at the top of the conversation.</p>,
                   confirm: { label: "Rename" },
-                  field: { label: "Name", placeholder: only.title },
+                  field: { label: "Name", placeholder: only.title, maxLength: 512 },
                   onConfirm: async (label) => {
                     await bridge.invoke({ type: "renameTask", key: only.key, label });
                     setAnnouncement(`Renamed to ${label.trim()}.`);
@@ -1268,7 +1268,7 @@ export function Rail({
             title: "Move to a new section",
             body: <p>{bot.name} moves into the section; others can join it with Move to.</p>,
             confirm: { label: "Create section" },
-            field: { label: "Section name", placeholder: "Work" },
+            field: { label: "Section name", placeholder: "Work", maxLength: 64 },
             onConfirm: async (name) => {
               await roster.moveToSection(bot.id, name);
               setRefocus({ bot: bot.id });

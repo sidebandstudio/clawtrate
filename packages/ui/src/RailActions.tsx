@@ -28,7 +28,7 @@ export type DialogSpec = {
   /** The confirming action. */
   confirm: { label: string; tone?: "danger" };
   /** A name to type (a new section). */
-  field?: { label: string; placeholder?: string };
+  field?: { label: string; placeholder?: string; maxLength: number };
   /** Runs the action; a refusal stays in the dialog as its error. */
   onConfirm: (value: string) => Promise<void>;
   /** Where focus goes when the dialog closes without acting. */
@@ -142,7 +142,7 @@ export function RailDialog({
             <input
               type="text"
               value={value}
-              maxLength={64}
+              maxLength={spec.field.maxLength}
               placeholder={spec.field.placeholder}
               autoComplete="off"
               spellCheck={false}
