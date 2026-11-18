@@ -245,7 +245,7 @@ button.c-log:hover {
 .c-filters .input {
   height: 32px;
   width: auto;
-  padding: 0 12px;
+  padding: 0 32px 0 12px;
   font-size: var(--text-sm);
 }
 
@@ -460,6 +460,8 @@ button.c-mem:hover {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
+  box-sizing: border-box;
+  width: 100%;
   margin: 0 auto 8px;
   max-width: var(--column, 720px);
   padding: 10px 14px;
