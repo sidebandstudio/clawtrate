@@ -158,15 +158,25 @@ async function gatewayTaskCount(botId: string): Promise<number> {
  * queued message can be in it. Its title is its label.
  */
 async function ownTask(page: Page, label: string): Promise<{ key: string; title: string }> {
-  const { key, title } = await gatewayTask("otto", label);
+  return ownTaskOf(page, "otto", "Otto", label);
+}
+
+/** A new task of a bot's own, opened in the page. */
+async function ownTaskOf(
+  page: Page,
+  botId: string,
+  bot: string,
+  label: string,
+): Promise<{ key: string; title: string }> {
+  const { key, title } = await gatewayTask(botId, label);
   await expect(
-    page.getByRole("list", { name: "Otto's tasks" }).or(page.getByTestId("bot-list")),
+    page.getByRole("list", { name: `${bot}'s tasks` }).or(page.getByTestId("bot-list")),
   ).not.toHaveCount(0);
   await expect
     .poll(
       async () => {
-        await openBot(page, "Otto");
-        const list = page.getByRole("list", { name: "Otto's tasks" });
+        await openBot(page, bot);
+        const list = page.getByRole("list", { name: `${bot}'s tasks` });
         const showAll = list.getByRole("button", { name: /^Show all/ });
         if ((await showAll.count()) > 0) await showAll.click();
         return list.getByTestId("task").filter({ hasText: title }).count();
@@ -175,13 +185,13 @@ async function ownTask(page: Page, label: string): Promise<{ key: string; title:
     )
     .toBeGreaterThan(0);
   await page
-    .getByRole("list", { name: "Otto's tasks" })
+    .getByRole("list", { name: `${bot}'s tasks` })
     .getByTestId("task")
     .filter({ hasText: title })
     .first()
     .click();
   // A task with no message yet has no title heading ("Nothing here yet"); its title pill names it.
-  await expect(page.getByRole("button", { name: `Otto, ${title}. Show details.` })).toBeVisible();
+  await expect(page.getByRole("button", { name: `${bot}, ${title}. Show details.` })).toBeVisible();
   return { key, title };
 }
 
@@ -1643,6 +1653,58 @@ test("F-099: a run stuck on a tool call that never returns reaches stopped withi
   await expect(note).toContainText("Completed actions are not undone.", { timeout: 30_000 });
   expect(Date.now() - pressed).toBeLessThan(30_000);
   await expect(page.getByTestId("status-line")).toHaveCount(0);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+});
+
+test("F-296 F-298: Stop also stops the run of the bot this run messaged, and the note names it", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { key } = await ownTaskOf(page, "pip", "Pip", "Stop the messaged bot");
+  // Pip messages Marlow, whose answer takes 15 seconds, then keeps writing.
+  await composer(page).fill("Ask Marlow, then write slowly. #message-slow #slow 30");
+  await page.keyboard.press("Enter");
+  const runId = await inFlightRunId(key);
+  type Row = { role: string; toolName?: string; details?: { runId?: string; sessionKey?: string } };
+  // The recipient's run, as the send's result names it.
+  let recipient: { runId: string; sessionKey: string } | null = null;
+  await expect
+    .poll(
+      async () => {
+        const history = await gatewayCall<{
+          inFlightRun?: {
+            events?: Array<{
+              stream?: string;
+              data?: { phase?: string; name?: string; result?: { details?: Row["details"] } };
+            }>;
+          };
+        }>("chat.history", { sessionKey: key, limit: 5 });
+        const result = (history.inFlightRun?.events ?? []).find(
+          (event) =>
+            event.stream === "tool" &&
+            event.data?.phase === "result" &&
+            event.data.name === "sessions_send",
+        );
+        const details = result?.data?.result?.details;
+        if (details?.runId && details.sessionKey)
+          recipient = { runId: details.runId, sessionKey: details.sessionKey };
+        return recipient !== null;
+      },
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  const peer = recipient as unknown as { runId: string; sessionKey: string };
+  // Marlow is working on it when Stop is pressed.
+  await expect.poll(() => gatewayIdle(peer.sessionKey), { timeout: 30_000 }).toBe(false);
+  await page.getByRole("button", { name: "Stop Pip" }).click();
+  const note = stopNote(page, runId);
+  await expect(note).toContainText("Completed actions are not undone.", { timeout: 30_000 });
+  await expect(note.getByTestId("stopped-with")).toContainText(
+    "Stopped with it: Marlow's run for this message.",
+    { timeout: 30_000 },
+  );
+  // Marlow's run ended on the gateway, long before its 15 seconds.
+  await expect.poll(() => gatewayIdle(peer.sessionKey), { timeout: 10_000 }).toBe(true);
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
