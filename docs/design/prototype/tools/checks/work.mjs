@@ -868,6 +868,17 @@ await p.click('[data-cmp="zoom-in"]');
 check("M10 Zoom in enlarges the picture on the device, sending nothing", await q(p, () => document.querySelector(".screen-view .screen-frame").getBoundingClientRect().width > 600 && window.CT.work.computer.typed === ""));
 check("M10 zoom, keyboard and dock controls have 44-point hit areas or more", await q(p, () =>
   [...document.querySelectorAll(".zoom-controls button, .keyboard-button, .control-dock .button")].every((x) => x.getBoundingClientRect().height >= 44 && x.getBoundingClientRect().width >= 44)));
+check("R3 phone, in control: the dock says You have control with its second line together, full width, above its buttons, all on screen", await q(p, () => {
+  const dock = document.querySelector(".control-dock");
+  const title = dock.querySelector(".control-bar > strong").getBoundingClientRect();
+  const line = dock.querySelector(".control-paused");
+  const paused = line.getBoundingClientRect();
+  const first = dock.querySelector(".button").getBoundingClientRect();
+  return dock.querySelector(".control-bar > strong").textContent === "You have control" && title.height > 0 &&
+    line.textContent === "Juniper's new browser actions are paused. Something it already started can still change this page." &&
+    paused.top >= title.bottom && paused.top - title.bottom < 16 && paused.bottom <= first.top &&
+    paused.width > 300 && paused.bottom <= innerHeight;
+}));
 check("M10 the dock: the first answer full width, then Skip and Give back control", await q(p, () => {
   const buttons = [...document.querySelectorAll(".control-dock .button")];
   return buttons.map((x) => x.textContent).join() === "I'm done,Skip,Give back control" && buttons[0].getBoundingClientRect().width > buttons[1].getBoundingClientRect().width;

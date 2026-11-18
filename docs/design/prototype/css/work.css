@@ -1971,16 +1971,27 @@
   color: var(--text-faint);
 }
 
-/* In the dock the mode is already in the top bar: the first answer is full
-   width, the others share one row. */
+/* In the dock, "You have control" and its second line come first, full
+   width and together, then the first answer full width, the others sharing
+   one row. */
 .control-dock .control-bar[data-state="control"] {
   display: grid;
   grid-template-columns: 1fr 1fr;
 }
 
-.control-dock .control-bar[data-state="control"] > .icon,
-.control-dock .control-bar[data-state="control"] > strong {
+.control-dock .control-bar[data-state="control"] > .icon {
   display: none;
+}
+
+.control-dock .control-bar[data-state="control"] > strong {
+  grid-column: 1 / -1;
+  order: -2;
+}
+
+.control-dock .control-bar[data-state="control"] > .control-paused {
+  grid-column: 1 / -1;
+  order: -1;
+  text-align: center;
 }
 
 .control-dock .control-bar[data-state="control"] > .button[data-variant="primary"] {

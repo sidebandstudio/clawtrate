@@ -752,7 +752,8 @@ top bar      avatar · "Juniper's browser" · mode · tabs · Close
 page         the live picture, zoomable and pannable
              [−] [Fit] [+]  zoom, bottom left           [⌨] keyboard, bottom right
 help         "What reaches the page" (folded)
-dock         the question's answers, full width · Give back control   (or: Take control)
+dock         "You have control" and its second line, full width ·
+             the question's answers, full width · Give back control   (or: Take control)
 ```
 
 - **Top bar**, 56 pt: the avatar, "Juniper's browser", the mode ("Watching" or "You have control"), and, when there are several tabs, a "2 tabs" pill that opens a sheet listing them; then Close. The page's title is in the tabs sheet, not in the bar.
@@ -761,7 +762,7 @@ dock         the question's answers, full width · Give back control   (or: Take
 - **Gestures in control**: one finger tapping is a click at that point of the page; one finger dragging scrolls the page, and is sent as scrolling. So the page's scrolling and the picture's panning never mix: one finger acts on the page, two fingers move the view of it. Watching, one finger pans too, and nothing is sent.
 - **The keyboard**: a 44-point round button with the keyboard icon at the page's bottom right, shown in control. It opens a field above the system keyboard, "Type into the page", with "Done". Each character typed is sent as text as it is typed; the field shows what was typed so the person can see it, clears when it closes, and is never stored. Return in the field shows "Enter isn't sent to the page. Tap the page's button instead."
 - **What reaches the page** is folded into one line above the dock; tapping it opens the full text of section 18's line, unchanged.
-- **The dock**: in control, the question's first answer as a full-width 48-point button (primary); the next row holds its other answer and "Give back control" (quiet), side by side, each 48 points tall. With no question, "Give back control" is the dock's one full-width primary button. Watching, "Take control" is the dock's one button. The mode is in the top bar, so the dock does not repeat it. The hand-back steps, their messages and Cancel while waiting are the desktop's, in the dock.
+- **The dock**: in control, first "You have control" and, right under it and full width, its standing second line, "Juniper's new browser actions are paused. Something it already started can still change this page." (section 18); then the question's first answer as a full-width 48-point button (primary); the next row holds its other answer and "Give back control" (quiet), side by side, each 48 points tall. With no question, "Give back control" is the dock's one full-width primary button. Watching, "Take control" is the dock's one button. The mode is in the top bar, so the dock does not repeat it. The hand-back steps, their messages and Cancel while waiting are the desktop's, in the dock.
 - When the app goes to the background, the view is covered before the system's snapshot (section 17), and control is given back as for any other way of leaving.
 
 **Keyboard and names.** In the full view, Tab moves through the bar's controls and the picture; the picture is one focusable region named "Juniper's browser, live" (and "…, you have control"). While in control and focused, typing goes to the page; Escape does not leave control, it moves focus to "Give back control", so that a reflex never hands back by accident and never sends Escape to the page either. ⌘↵ chooses the bar's primary button.
