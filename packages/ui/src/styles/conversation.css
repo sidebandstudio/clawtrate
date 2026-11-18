@@ -1604,3 +1604,33 @@ button.reaction {
 .turn-limit-field > span {
   color: var(--text-muted);
 }
+
+/* A send with files while the connection writes it out (F-286). */
+.upload-bar {
+  position: relative;
+  display: inline-block;
+  width: 120px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--bg-selected);
+  vertical-align: middle;
+}
+
+.upload-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--accent-line);
+  transition: width var(--dur-quick) linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .upload-bar > span {
+    transition: none;
+  }
+}
+
+[data-motion="reduce"] .upload-bar > span {
+  transition: none;
+}

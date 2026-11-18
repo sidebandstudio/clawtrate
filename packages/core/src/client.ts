@@ -83,7 +83,7 @@ import {
   type TaskFileList,
   type WorkspacePage,
 } from "./files.ts";
-import type { ApprovalInstructions, ClawtrateHost } from "./host.ts";
+import type { ApprovalInstructions, ClawtrateHost, WebSocketLike } from "./host.ts";
 import {
   asRecord,
   botIdFromSessionKey,
@@ -345,6 +345,8 @@ export const REQUEST_TIMEOUT_MS = 60_000;
 export const MAX_MESSAGE_CHARS = 32_000;
 /** The gateway's frame ceiling after `connect` when `hello-ok.policy.maxPayload` is absent (25 MiB). */
 export const DEFAULT_MAX_PAYLOAD_BYTES = 26_214_400;
+/** How often a send with files is sampled as the socket writes it (F-286). */
+const UPLOAD_SAMPLE_MS = 100;
 /** A process started this long before its run's reported start still counts as the run's. */
 const PROCESS_START_SLACK_MS = 1_000;
 /** Room left in a frame for the request envelope around the params. */
@@ -710,6 +712,8 @@ export class ClawtrateClient {
    * the gateway names nobody.
    */
   private selfId: string | null = null;
+  /** The socket of the attempt under way, for how much of a large send it has written (F-286). */
+  private socket: WebSocketLike | null = null;
   private rows = new Map<string, RawRecord>();
   /** Which tasks wait for the person, across every bot (`waiting.ts`), for the rail. */
   private readonly waiting = new WaitingIndex();
@@ -1496,6 +1500,29 @@ export class ClawtrateClient {
     };
   }
 
+  /**
+   * Follow a send with files as the socket writes it (F-286): from the frame's size and the
+   * socket's `bufferedAmount`, every `UPLOAD_SAMPLE_MS`, until the buffer is empty, the
+   * connection changes or the attempt is over. Nothing is shown where the socket does not say.
+   */
+  private followUpload(key: string, messageId: string, params: unknown): void {
+    const socket = this.socket;
+    if (!socket || typeof socket.bufferedAmount !== "number") return;
+    const totalBytes = utf8Length(JSON.stringify(params));
+    const sample = () => {
+      const message = this.outgoing(key, messageId);
+      const live = this.socket === socket && socket.readyState === 1;
+      if (!message || message.status !== "sending" || !live) return;
+      const buffered = Math.min(socket.bufferedAmount ?? 0, totalBytes);
+      const sentBytes = totalBytes - buffered;
+      this.updateActivity(key, (activity) =>
+        updateMessage(activity, messageId, { upload: { sentBytes, totalBytes } }),
+      );
+      if (sentBytes < totalBytes) setTimeout(sample, UPLOAD_SAMPLE_MS);
+    };
+    sample();
+  }
+
   /** What one message may carry: the smaller of Clawtrate's own ceilings and the gateway's. */
   private sendLimits(): SendLimits {
     const { maxPayload, maxImageBytes, maxFileBytes } = this.payloadLimits;
@@ -2109,6 +2136,7 @@ export class ClawtrateClient {
       const starts = message.mode !== "steer";
       const sent = this.request("chat.send", params, {
         onSent: (requestId) => {
+          if (params.attachments) this.followUpload(key, messageId, params);
           if (!starts) return;
           this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
         },
@@ -4344,6 +4372,7 @@ export class ClawtrateClient {
         // An attempt is under way: no retry is waiting any more.
         if (this.state.connection.retryAt !== null) this.setConnection({ retryAt: null });
         const socket = this.host.createWebSocket(settings.url);
+        this.socket = socket;
         socket.onopen = () => handlers.open();
         socket.onmessage = (event) => handlers.message(String(event.data));
         socket.onclose = (event) => handlers.close(event.code, event.reason);

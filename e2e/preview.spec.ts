@@ -1741,6 +1741,56 @@ test("F-101: after three of the run's tool calls in a row time out, the run is s
   expect(JSON.stringify(history.messages)).not.toContain("part 240 of 240");
 });
 
+test("F-286: a large file sent to the gateway: any Sending… bar only fills, it is gone once the frame has left, and the file arrives whole", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { key } = await ownTask(page, "Large upload");
+  // Every value the bar shows, as the page draws it: loopback may write the frame too fast to see.
+  await page.evaluate(() => {
+    const seen: number[] = [];
+    (window as unknown as { uploadSeen: number[] }).uploadSeen = seen;
+    new MutationObserver(() => {
+      const bar = document.querySelector('[data-testid="upload-bar"]');
+      if (bar) seen.push(Number(bar.getAttribute("aria-valuenow")));
+    }).observe(document.body, { subtree: true, childList: true, attributes: true });
+  });
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Attach files" }).click();
+  const bytes = 15 * 1024 * 1024;
+  await (
+    await chooser
+  ).setFiles([
+    { name: "archive.bin", mimeType: "application/octet-stream", buffer: Buffer.alloc(bytes, 7) },
+  ]);
+  await expect(page.locator(".attachments .chip")).not.toHaveAttribute("aria-busy", "true", {
+    timeout: 60_000,
+  });
+  await composer(page).fill("The archive. #text");
+  await page.keyboard.press("Enter");
+  type Media = { fileName?: string; sizeBytes?: number };
+  await expect
+    .poll(
+      async () => {
+        const history = await gatewayCall<{
+          messages: Array<{ role: string; __openclaw?: { media?: Media[] } }>;
+        }>("chat.history", { sessionKey: key, limit: 10 });
+        return history.messages
+          .flatMap((row) => row.__openclaw?.media ?? [])
+          .map((media) => [media.fileName, media.sizeBytes]);
+      },
+      { timeout: 120_000 },
+    )
+    .toEqual([["archive.bin", bytes]]);
+  await expect(page.getByTestId("upload-bar")).toHaveCount(0);
+  const seen = await page.evaluate(
+    () => (window as unknown as { uploadSeen: number[] }).uploadSeen,
+  );
+  for (let i = 1; i < seen.length; i += 1) expect(seen[i]!).toBeGreaterThanOrEqual(seen[i - 1]!);
+  console.log(`F-286: the bar showed ${seen.length} values: ${seen.join(", ")}`);
+  await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+});
+
 test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
   page,
 }) => {

@@ -53,6 +53,7 @@ export const LIVE_SCENES = [
   "message-actions-read",
   "run-stopped-with",
   "run-stopped-timeouts",
+  "send-uploading",
 ] as const;
 
 export type LiveScene = (typeof LIVE_SCENES)[number];
@@ -621,6 +622,24 @@ export function liveScene(
               runId: null,
               error:
                 "No answer came from the gateway, and its history does not show this message. Whether it was received is not known.",
+            }),
+          ],
+        })),
+        steps: [],
+      };
+    case "send-uploading":
+      // A message with a scan, two fifths of its frame written out.
+      return {
+        initial: withTranscript(interactive(base), (transcript) => ({
+          ...transcript,
+          outbox: [
+            message("msg-scan", "Here is the scan of the invoice.", now - SECOND, {
+              status: "sending",
+              runId: null,
+              attachments: [
+                { fileName: "invoice-scan.pdf", mimeType: "application/pdf", sizeBytes: 7_340_032 },
+              ],
+              upload: { sentBytes: 3_914_000, totalBytes: 9_785_000 },
             }),
           ],
         })),
