@@ -790,7 +790,12 @@ describe("steps from tool events (F-090, F-091, F-093, F-294, F-432)", () => {
       activity,
     ).activity;
     const done = only(activity).steps[0]!;
-    expect(done.result).toEqual({ text: huge.slice(0, MAX_STEP_TEXT), totalChars: huge.length });
+    // Its start, and its end and line count as they arrived, where a tool writes its notices.
+    expect(done.result).toMatchObject({
+      text: huge.slice(0, MAX_STEP_TEXT),
+      totalChars: huge.length,
+      tail: huge.slice(-400),
+    });
     // Too large to travel inline; the exact payload stays in the raw table.
     expect(done.raw).toBeNull();
     expect(done.rawSize).toBeGreaterThan(RAW_INLINE_LIMIT);

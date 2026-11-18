@@ -94,6 +94,12 @@ export type ActionCall = {
    */
   cut?: boolean;
   /**
+   * Where this app kept only the start of a long text: its end, where tools
+   * write their notices, and its line count, both read from the whole text.
+   */
+  textTail?: string;
+  textLines?: number | null;
+  /**
    * The arguments as history's row holds them, where no engine step does:
    * absent when the row had none, or the value as sent (`null` included).
    */
@@ -182,12 +188,17 @@ export function programOf(command: unknown): string {
  * is here, the part its capped notice names, or the count the tool's own
  * sentence gives; never a count of a sentence, of notes, or of a cut text (8.6).
  */
-function readCount(call: Pick<ActionCall, "text" | "isError" | "cut">): string {
+function readCount(
+  call: Pick<ActionCall, "text" | "isError" | "cut" | "textTail" | "textLines">,
+): string {
   if (!call.text || call.isError) return "";
-  const r = readText(call.text);
+  const r = readText(call.text, call.textTail);
   if (r.counted) return r.counted;
   if (r.shown) return r.shown;
   if (r.said || r.capped || call.cut || !r.body.trim()) return "";
+  // The whole text's lines, counted as it arrived; a page asked for is not counted from a part.
+  if (call.textTail !== undefined)
+    return r.page || !call.textLines ? "" : PLURALS.lines(call.textLines);
   return PLURALS.lines(lineCount(r.body));
 }
 
@@ -851,8 +862,9 @@ export type ReadText = {
   counted: string | null;
 };
 
-export function readText(text: unknown): ReadText {
-  let lines = str(text).split("\n");
+export function readText(text: unknown, tail?: string): ReadText {
+  // A long text kept short: its start for the tool's sentences, its end for its notices.
+  let lines = (tail !== undefined ? `${str(text)}\n${tail}` : str(text)).split("\n");
   // The note that the tool read another filename than the one asked for.
   while (lines.length && /^\[Resolved filename: .*\]$/.test(lines[0]!.trim()))
     lines = lines.slice(1);
@@ -918,7 +930,7 @@ const OBSERVE: Record<string, true> = {
 /** Each kind's own reading of a result without an error flag: its "Done needs" (8.1). */
 const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
   read: (c) => {
-    const r = readText(c.text);
+    const r = readText(c.text, c.textTail);
     switch (r.said) {
       case "no-contents":
         return { outcome: "unavailable", word: STATE_WORDS.noContents };

@@ -81,6 +81,8 @@ export const MAX_NAME_CHARS = 256;
 export const MAX_TITLE_CHARS = 256;
 /** Each of a step's arguments, output and result as displayed; the raw table holds them whole. */
 export const MAX_STEP_BODY_CHARS = 2_048;
+/** How much of a long step text's end a step keeps (`StepText.tail`): where tools write notices. */
+export const MAX_TEXT_TAIL = 400;
 /** An error message, on a step, a run or a card. */
 export const MAX_ERROR_JSON_CHARS = 2_048;
 /** Each retried-attempt error and a failed Stop's message on a run. */
@@ -193,7 +195,12 @@ const FLAG = scalar(5);
 const ENUM = scalar(32);
 
 const digest = object<Digest>()({ length: NUMBER, a: NUMBER, b: NUMBER });
-const stepText = object<StepText>()({ text: text(MAX_STEP_BODY_CHARS), totalChars: NUMBER });
+const stepText = object<StepText>()({
+  text: text(MAX_STEP_BODY_CHARS),
+  totalChars: NUMBER,
+  tail: text(MAX_TEXT_TAIL + 48),
+  lines: NUMBER,
+});
 export const STEP: Bound = flagged<Step>()({
   id: ID,
   kind: ENUM,
@@ -222,6 +229,7 @@ export const STEP: Bound = flagged<Step>()({
   commandBearing: FLAG,
   rowTimes: FLAG,
   omittedBefore: NUMBER,
+  resultCut: FLAG,
   gatewayTitle: text(MAX_NAME_CHARS),
   // A path is an id: never cut, since a cut path would name another file.
   files: object<StepFiles>()({

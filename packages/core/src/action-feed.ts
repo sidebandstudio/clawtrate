@@ -249,10 +249,11 @@ export function callFromStep(
     isError: step.status === "failed",
     text: open ? null : (step.result?.text ?? ""),
     details: step.details ?? null,
-    // Cut by the gateway (its flag) or by this app's cap: the text is not the whole result.
-    ...(!open &&
-    (step.truncated || (step.result && step.result.totalChars > step.result.text.length))
-      ? { cut: true }
+    // The gateway cut what it stored of the result: what only the cut part said is not known.
+    ...(!open && step.resultCut ? { cut: true } : {}),
+    // Kept short here: the text's end and line count, read from the whole text as it arrived.
+    ...(!open && step.result?.tail !== undefined
+      ? { textTail: step.result.tail, textLines: step.result.lines ?? null }
       : {}),
     commandBearing: step.commandBearing === true,
     // History rows' times are not the call's own: no duration is read from them.
@@ -282,13 +283,18 @@ export function callFromBlock(
     if (!block.result && call.isError && !call.text)
       return { ...call, status: "unreturned", isError: false, text: null };
     // History holds a result the engine's step does not have yet (history is newer), or more of
-    // its text than the step kept: read the fuller text.
-    if (
-      block.result &&
-      (call.status !== "returned" || !call.text || block.result.text.length > call.text.length)
-    )
+    // the same text than the step kept short: read the fuller text.
+    const shortCopy =
+      step.result !== null &&
+      step.result.totalChars > step.result.text.length &&
+      !!block.result &&
+      block.result.text.length > step.result.text.length &&
+      block.result.text.startsWith(step.result.text.slice(0, 200));
+    if (block.result && (call.status !== "returned" || !call.text || shortCopy)) {
+      // History's text replaces the engine's short copy, its kept end and count with it.
+      const { textTail: _tail, textLines: _lines, ...rest } = call;
       return {
-        ...call,
+        ...rest,
         status: "returned",
         isError: block.result.isError,
         text: block.result.text,
@@ -296,6 +302,7 @@ export function callFromBlock(
         cut: block.result.clipped === true,
         partial: null,
       };
+    }
     return call;
   }
   return {

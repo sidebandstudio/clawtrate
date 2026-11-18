@@ -23,6 +23,7 @@ import {
   MAX_INLINE_RAW_CHARS,
   MAX_PENDING_QUESTIONS_PER_TASK,
   MAX_PREAMBLES_PER_RUN,
+  MAX_TEXT_TAIL,
   MAX_QUESTION_OPTIONS,
   MAX_RUN_LIST,
   MAX_SETTLED_APPROVAL_COUNT,
@@ -92,7 +93,17 @@ export function isOpenStep(step: Step): boolean {
 }
 
 /** Display text, capped so long output never bloats every state snapshot. */
-export type StepText = { text: string; totalChars: number };
+export type StepText = {
+  text: string;
+  totalChars: number;
+  /**
+   * When the text is longer than this app keeps: its last characters, where a
+   * tool writes its notices ("[Read output capped …]"), and its line count,
+   * read from the whole text as it arrived.
+   */
+  tail?: string;
+  lines?: number;
+};
 
 /**
  * Exactly what the gateway sent for a step. Live tool steps keep the `tool`
@@ -202,6 +213,8 @@ export type Step = {
   rowTimes?: boolean;
   /** Tool steps dropped to keep the run within its bounds directly before this one. */
   omittedBefore?: number;
+  /** The gateway cut this step's result text when it stored it (history's `__openclaw.truncated`). */
+  resultCut?: boolean;
   /**
    * For a file tool's call (`read`, `write`, `edit`, `apply_patch`): the paths
    * its arguments name, as the gateway's file list reads them, and what its
@@ -767,9 +780,12 @@ function capRunError(error: RunError | null): RunError | null {
 }
 
 export function capText(text: string): StepText {
+  if (text.length <= MAX_STEP_TEXT) return { text, totalChars: text.length };
   return {
-    text: text.length > MAX_STEP_TEXT ? text.slice(0, MAX_STEP_TEXT) : text,
+    text: text.slice(0, MAX_STEP_TEXT),
     totalChars: text.length,
+    tail: text.slice(-MAX_TEXT_TAIL),
+    lines: text.replace(/\n$/, "").split("\n").length,
   };
 }
 
@@ -2491,6 +2507,8 @@ export function runsFromHistory(
                 error: isError ? capError(text || "The tool reported an error.") : null,
                 failureKind: isError ? str(asRecord(message.details)?.failureKind) : null,
                 truncated: step.truncated || meta(message).truncated === true,
+                // The gateway cut this result's stored text.
+                ...(meta(message).truncated === true ? { resultCut: true } : {}),
                 details: projectDetails(message.details),
               },
               asRecord(message.details),

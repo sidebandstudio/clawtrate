@@ -675,6 +675,23 @@ const CASES: Case[] = [
     outcome: "partial",
     history: "made",
   },
+  // read: longer than this app keeps of a step's text, whole in history (a workspace file)
+  {
+    name: "read: longer than the engine's copy, whole",
+    tool: "read",
+    args: { path: "AGENTS.md" },
+    text: "A line of the workspace guide.\n".repeat(200),
+    details: { kind: "file" },
+    outcome: "done",
+  },
+  {
+    name: "read: longer than the engine's copy, capped at its end",
+    tool: "read",
+    args: { path: "long.md" },
+    text: `${"A line of the long file.\n".repeat(200)}\n[Showing lines 1-200 of 3400 (50KB limit). Use offset=201 to continue.]`,
+    details: { kind: "truncated" },
+    outcome: "partial",
+  },
   // command: backgrounded
   {
     name: "exec: returned to the background",
@@ -1040,6 +1057,7 @@ describe("every kind's outcome is the same live and from history", () => {
       for (const reading of readings) {
         expect(reading.outcome).toBe(c.history ?? c.outcome);
         // The same words as live, the duration aside, where history can say what live said.
+        // (A read's line count included: "200 lines" from the whole text, however it was kept.)
         if (!c.history) expect(said(reading.spoken)).toBe(said(liveLine.spoken));
         // Never more than live: a cut result is never Done from history when live was not.
         if (liveLine.outcome !== "done") expect(reading.outcome).not.toBe("done");
