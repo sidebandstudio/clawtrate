@@ -12,7 +12,7 @@ import {
   type ComputerPane,
   type QuestionCard,
 } from "@clawtrate/core";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Avatar } from "../Avatar.tsx";
 import { CollapseIcon, HandIcon, KeyboardIcon, MinusIcon, PlusIcon } from "../icons.tsx";
@@ -96,11 +96,19 @@ export function ScreenView(props: ScreenViewProps) {
     };
   }, []);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !live) return;
-    return frames.attach(canvas);
-  }, [frames, live, phone]);
+  // Every canvas the picture is drawn on, as it mounts: the phone's layout mounts a new one per mode.
+  const showOn = useCallback(
+    (canvas: HTMLCanvasElement | null) => {
+      canvasRef.current = canvas;
+      if (!canvas) return;
+      const stop = frames.attach(canvas);
+      return () => {
+        stop();
+        if (canvasRef.current === canvas) canvasRef.current = null;
+      };
+    },
+    [frames],
+  );
 
   // A grant moves focus to the first answer or to Give back control.
   useEffect(() => {
@@ -161,11 +169,14 @@ export function ScreenView(props: ScreenViewProps) {
     return () => element.removeEventListener("wheel", onWheel);
   });
 
-  const onKeyDown = (event: React.KeyboardEvent) => {
+  const onKeyDown = (event: KeyboardEvent) => {
     const inFrame = event.target === frameRef.current;
+    // While the full view is open its keys are its own: the shell's Escape (which closes the
+    // drawer) and its focus trap never see them, so a reflex never leaves the tab or hands back.
+    if (event.key === "Escape" || event.key === "Tab" || event.metaKey || event.ctrlKey)
+      event.stopImmediatePropagation();
     if (event.key === "Escape") {
       event.preventDefault();
-      event.stopPropagation();
       // In control, Escape never hands back and is never sent to the page.
       if (holding)
         dialogRef.current
@@ -215,6 +226,17 @@ export function ScreenView(props: ScreenViewProps) {
     }
   };
 
+  // Caught before anything else on the page sees it (the shell listens on the window).
+  const keys = useRef(onKeyDown);
+  useLayoutEffect(() => {
+    keys.current = onKeyDown;
+  });
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => keys.current(event);
+    window.addEventListener("keydown", listener, true);
+    return () => window.removeEventListener("keydown", listener, true);
+  }, []);
+
   // A paste goes to the page only as an explicit paste, while in control.
   const onPaste = (event: React.ClipboardEvent) => {
     if (!inputAllowed()) return;
@@ -247,7 +269,7 @@ export function ScreenView(props: ScreenViewProps) {
       onPaste={onPaste}
     >
       {live ? (
-        <canvas ref={canvasRef} className="screen-canvas" data-frame={view?.frame ?? 0} />
+        <canvas ref={showOn} className="screen-canvas" data-frame={view?.frame ?? 0} />
       ) : (
         <div className="screen-blank">
           {view?.status === "ended" ? (
@@ -341,7 +363,6 @@ export function ScreenView(props: ScreenViewProps) {
       aria-label={`${name}'s browser`}
       data-layout={phone ? "phone" : undefined}
       data-testid="screen-view"
-      onKeyDown={onKeyDown}
     >
       {content}
     </div>,
@@ -498,6 +519,8 @@ function ControlBar(props: ScreenViewProps & { phone: boolean }) {
             <>
               <HandIcon />
               <strong>You have control</strong>
+              {/* Read with it, right after it: what a grant guarantees, and no more. */}
+              <span className="control-paused">{words.pausedLine(name)}</span>
               {control.questionGone && (
                 <span className="control-gone">
                   {words.questionGoneLine(name, control.questionGone)}
@@ -511,7 +534,6 @@ function ControlBar(props: ScreenViewProps & { phone: boolean }) {
                 question && !control.questionGone && canAnswer ? "quiet" : "primary",
                 "release",
               )}
-              <span className="control-paused">{words.pausedLine(name)}</span>
             </>,
           )}
           {control.stillHeld && (
@@ -596,6 +618,14 @@ function PhoneLayout(
   // Each mode starts its own layout (the component is keyed by it): the zoom, the field, the sheet.
   const [zoom, setZoom] = useState(() => (granted ? Math.max(0, levels.indexOf(pageWidth)) : 0));
   const width = levels[Math.min(zoom, levels.length - 1)]!;
+  // In control the page opens at its own size, centred: this device does not know where the bot
+  // last acted, so the middle of the page stands for it.
+  useLayoutEffect(() => {
+    const box = zoomRef.current;
+    if (!box || !granted) return;
+    box.scrollLeft = Math.max(0, (box.scrollWidth - box.clientWidth) / 2);
+    box.scrollTop = Math.max(0, (box.scrollHeight - box.clientHeight) / 2);
+  }, [granted, width]);
   return (
     <>
       <div className="viewer-bar screen-bar">

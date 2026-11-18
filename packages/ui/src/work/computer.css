@@ -478,6 +478,7 @@
 /* The standing second line under "You have control": what control does not stop. */
 .control-bar .control-paused {
   flex-basis: 100%;
+  order: 10;
   color: var(--text-muted);
 }
 

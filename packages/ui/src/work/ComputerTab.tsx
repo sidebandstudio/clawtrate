@@ -281,7 +281,7 @@ export function ComputerTab(props: ComputerTabProps) {
           transcript={transcript}
           online={online}
           browser={
-            pane?.availability === "ready" || pane?.availability === "not-allowed"
+            pane?.availability === "ready"
               ? `The gateway's machine, in ${name}'s own browser`
               : null
           }
@@ -633,13 +633,10 @@ function Tile({
   const url = view?.url || tab.url;
   const control = pane.control;
   const elsewhere = elsewhereOf(name, pane, computer, pane.botId);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const live = view?.status === "live";
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !live) return;
-    return frames.attach(canvas);
-  }, [frames, live]);
+  const showOn = useCallback(
+    (canvas: HTMLCanvasElement | null) => (canvas ? frames.attach(canvas) : undefined),
+    [frames],
+  );
 
   let tile: ReactNode;
   if (view && view.status === "live") {
@@ -651,7 +648,7 @@ function Tile({
         aria-label={`${name}'s browser, live: ${title}`}
         data-testid="computer-tile"
       >
-        <canvas ref={canvasRef} className="screen-canvas" data-frame={view.frame} />
+        <canvas ref={showOn} className="screen-canvas" data-frame={view.frame} />
         <span className="screen-live">Live</span>
         {!full && (
           <span className="screen-actions">
@@ -874,6 +871,21 @@ function MachineSection({
   const nodeIds = [...new Set([...named, ...(setting?.node ? [setting.node] : [])])];
   return (
     <div data-testid="computer-machine">
+      {nodeIds.map((id) => {
+        const got = facts?.nodes[id];
+        if (typeof got !== "object" || got.connected) return null;
+        // Above the machine: the node is not connected, and the one thing to do about it.
+        return (
+          <p key={id} className="files-alert" role="alert" data-testid="computer-node-offline">
+            {id} isn't connected to the gateway. Nodes reconnect by themselves when they can; check
+            that it's on and online.
+            <button type="button" className="button" data-size="sm" onClick={() => read(true)}>
+              {checking ? "Checking…" : "Check again"}
+            </button>
+            {checked && <span className="machine-sub">Checked {clockTime(checked)}</span>}
+          </p>
+        );
+      })}
       <dl className="facts">
         <div>
           <dt>Command approval target</dt>
@@ -936,21 +948,10 @@ function MachineSection({
         const record = typeof got === "object" ? got : null;
         const unknown = got === "unknown";
         const last = lastGood[id];
-        const off = record !== null && !record.connected;
         const stats = record?.stats;
         const statsAt = stats?.updatedAtMs ?? null;
         return (
           <div key={id} data-testid="computer-node">
-            {off && (
-              <p className="files-alert" role="alert">
-                {id} isn't connected to the gateway. Nodes reconnect by themselves when they can;
-                check that it's on and online.
-                <button type="button" className="button" data-size="sm" onClick={() => read(true)}>
-                  {checking ? "Checking…" : "Check again"}
-                </button>
-                {checked && <span className="machine-sub">Checked {clockTime(checked)}</span>}
-              </p>
-            )}
             <p className="machine-name">
               <MachineIcon />
               {record?.name ?? id}
