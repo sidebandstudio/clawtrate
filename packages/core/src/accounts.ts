@@ -198,6 +198,10 @@ export type SignInStage =
   | "cancelled"
   | "ended"
   | "unconfirmed"
+  /** It finished, and the read after it failed: where the account landed is not known. */
+  | "unverified"
+  /** It finished, and no new account appeared: the gateway may have refreshed one it has. */
+  | "refreshed"
   | "busy";
 
 /** What a step of the gateway's sign-in shows. Never the person's answer. */
@@ -254,6 +258,10 @@ export type SignInState = {
   result: SignInResult | null;
   /** The person's own key went in through this sign-in: it is named "Key saved". */
   byKey: boolean;
+  /** The provider's accounts before it started: what the read after it compares against. */
+  known: string[];
+  /** A cancel was asked for and the gateway's answer did not say whether it took. */
+  cancelUnknown: boolean;
 };
 
 export type BotCreationState = {

@@ -267,6 +267,28 @@ const SCENES: Scene[] = [
     ),
   },
   {
+    name: "signin-unverified",
+    query: `${ADMIN}&signin=unverified`,
+    ready: signIn(/^xAI · /, (page) =>
+      expect(page.getByRole("heading", { name: "Signed in, not confirmed" })).toBeVisible(),
+    ),
+  },
+  {
+    name: "signin-cancel-unknown",
+    query: `${ADMIN}&signin=cancel-unknown`,
+    ready: signIn(/^xAI · /, (page) => expect(page.getByTestId("cancel-unknown")).toBeVisible()),
+  },
+  {
+    name: "bot-connect",
+    query: `${page$("bound")}&kept=1`,
+    ready: async (page) => {
+      await accountPage(page);
+      await page.getByRole("button", { name: "Change account" }).click();
+      await page.getByRole("button", { name: /^Connect an account/ }).click();
+      await expect(page.getByTestId("kept-note")).toBeVisible();
+    },
+  },
+  {
     name: "signin-unconfirmed",
     query: `${ADMIN}&signin=unconfirmed`,
     ready: signIn(/^xAI · /, (page) =>

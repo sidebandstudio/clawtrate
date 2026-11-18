@@ -11,7 +11,8 @@
 //                             the open bot's binding and evidence
 //   signin=<stage>            where a sign-in that starts goes: waiting (default),
 //                             failed, expired, cancelled, ended, busy, unconfirmed, saving,
-//                             checking (an answer stays checking)
+//                             checking (an answer stays checking), unverified (the read after
+//                             it failed), cancel-unknown (the cancel's answer says nothing)
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
 //   create=failed|slow|checking   how New bot's Create goes
@@ -592,10 +593,12 @@ export function accountCommand(
   const later = (ms: number, run: () => void) => setTimeout(run, ms);
   const signIn = (patch: Partial<SignInState>) =>
     put((a) => (a.signIn ? { ...a, signIn: { ...a.signIn, ...patch } } : a));
+  // Where a sign-in landed: with `kept=1` in the store of the bot it was started for.
+  const keeper = () => (params.kept ? (accounts().signIn?.forBot ?? "otto") : null);
   const result = (added: string[]) => ({
     added,
     landed: params.kept ? ("kept" as const) : ("shared" as const),
-    keptBy: params.kept ? "otto" : null,
+    keptBy: keeper(),
     readFailed: false,
     locks: [],
   });
@@ -660,7 +663,7 @@ export function accountCommand(
         provider: method.provider,
         label: method.label,
         flow: method.flow,
-        forBot: params.kept ? "otto" : "main",
+        forBot: params.kept ? (command.botId ?? "otto") : "main",
         keptOnly: params.kept,
         stage: "starting",
         step: null,
@@ -670,6 +673,8 @@ export function accountCommand(
         startedAt: Date.now(),
         result: null,
         byKey: false,
+        known: [],
+        cancelUnknown: false,
       };
       put((a) => ({ ...a, signIn: base }));
       const stage = params.signin ?? "waiting";
@@ -699,6 +704,28 @@ export function accountCommand(
           later(500, () => connected());
           return;
         }
+        if (stage === "unverified")
+          return signIn({
+            stage: "unverified",
+            result: { ...result([]), readFailed: true },
+          });
+        if (stage === "cancel-unknown")
+          return signIn({
+            stage: "waiting",
+            cancelUnknown: true,
+            error: "The gateway did not answer the cancel within 60 seconds.",
+            step: {
+              id: "code",
+              type: "progress",
+              title: null,
+              message: null,
+              url: "https://sign-in.example/device",
+              code: "QK4F-7PZD",
+              expiresInMinutes: 15,
+              placeholder: null,
+              sensitive: false,
+            },
+          });
         if (["failed", "expired", "cancelled", "ended", "unconfirmed"].includes(stage)) {
           return signIn({
             stage: stage as SignInState["stage"],
@@ -800,14 +827,27 @@ export function accountCommand(
       return Promise.resolve();
     }
     case "cancelSignIn":
+      // signin=cancel-unknown: the gateway's answer to the cancel says nothing.
+      if (params.signin === "cancel-unknown") {
+        signIn({ cancelUnknown: true });
+        return Promise.resolve({ cancelled: false });
+      }
       signIn({
         stage: "cancelled",
         step: null,
         result: result(params.saved ? ["openai:second"] : []),
       });
-      return Promise.resolve();
-    case "dismissSignIn":
+      return Promise.resolve({ cancelled: true });
+    case "dismissSignIn": {
+      const current = accounts().signIn;
+      if (params.signin === "cancel-unknown" && current && current.result === null)
+        return Promise.resolve({ dismissed: false });
       put((a) => ({ ...a, signIn: null }));
+      return Promise.resolve({ dismissed: true });
+    }
+    case "recheckSignIn":
+      signIn({ stage: "checking", result: null });
+      later(300, () => connected());
       return Promise.resolve();
     case "saveApiKey": {
       const id = `${command.provider}:manual`;
@@ -959,7 +999,7 @@ export function accountCommand(
               null,
               current.flow === "key" ? "api_key" : "oauth",
               "subscription",
-              params.kept ? { keptBy: "otto" } : {},
+              params.kept ? { keptBy: current.forBot } : {},
             ),
           ],
       signIn: a.signIn

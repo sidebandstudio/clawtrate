@@ -1293,3 +1293,10 @@ button.b-open > .icon {
 [data-motion="reduce"] .b-disclosure > summary .icon {
   transition: none;
 }
+
+/* The connect component inside a bot's Settings tab: its actions under its content. */
+.b-tab .b-connect-foot {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}

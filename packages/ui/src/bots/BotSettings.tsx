@@ -24,10 +24,12 @@ import {
   ChevronIcon,
   ClockIcon,
   LockIcon,
+  PlusIcon,
   ShieldIcon,
   WarnIcon,
 } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
+import { Connect } from "./Connect.tsx";
 import { ModelPair } from "./ModelPair.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
 import {
@@ -51,7 +53,7 @@ export const CHECK_MS = 30_000;
 /** Evidence older than this, with the connection down, is shown as old. */
 const OLD_MS = 5 * 60_000;
 
-type View = "main" | "account" | "change";
+type View = "main" | "account" | "change" | "connect";
 
 export function BotSettings({
   bot,
@@ -339,6 +341,54 @@ export function BotSettings({
     );
   }
 
+  // --- Connecting an account, for this bot (bots.md section 5) ---------------------------------
+  if (view === "connect") {
+    return (
+      <div ref={rootRef} className="b-tab" data-testid="bot-settings">
+        <Connect
+          from="settings"
+          draftName={null}
+          forBot={bot.id}
+          accounts={accounts}
+          bots={bots}
+          connection={connection}
+          info={info}
+          announce={announce}
+          onDone={(added) => {
+            // Back to the choice, with the new account chosen; Save takes it once it is listed.
+            setPick(added);
+            setPickModel(null);
+            setPickEffort(null);
+            setView("change");
+            focusIn("[data-bs-focus]");
+          }}
+          onLeave={() => go("change", "[data-bs='connect']")}
+        >
+          {(page) => (
+            <>
+              <div className="b-subhead">
+                <button
+                  type="button"
+                  className="icon-button"
+                  data-variant="quiet"
+                  aria-label={page.backLabel}
+                  onClick={page.onBack}
+                >
+                  <BackIcon />
+                </button>
+                <h3 tabIndex={-1} data-bs-focus="">
+                  {page.title}
+                </h3>
+              </div>
+              {page.body}
+              {page.foot && <div className="b-actions b-connect-foot">{page.foot}</div>}
+            </>
+          )}
+        </Connect>
+      </div>
+    );
+  }
+
   // --- Change account ----------------------------------------------------------------------
   if (view === "change") {
     const list = accounts.accounts.filter((a) => a.keptBy === null || a.keptBy === bot.id);
@@ -419,6 +469,29 @@ export function BotSettings({
           now={now}
           keptToo
         />
+        {admin && (
+          <ul className="b-choices" style={{ marginTop: 12 }}>
+            <li>
+              <button
+                type="button"
+                className="b-choice"
+                data-kind="add"
+                data-bs="connect"
+                onClick={() => go("connect")}
+              >
+                <PlusIcon />
+                <span className="b-choice-text">
+                  <span className="b-choice-title">Connect an account</span>
+                  <span className="b-choice-sub">
+                    {accounts.mainShared
+                      ? "A sign-in here is shared with every bot."
+                      : `A sign-in here is kept for ${name}.`}
+                  </span>
+                </span>
+              </button>
+            </li>
+          </ul>
+        )}
         {needModel && targetProvider && (
           <>
             <h4 className="b-group">Model</h4>

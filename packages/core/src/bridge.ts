@@ -118,6 +118,8 @@ export type BridgeCommand =
   | { type: "answerSignIn"; value: string }
   | { type: "cancelSignIn" }
   | { type: "dismissSignIn" }
+  /** Read again where a finished sign-in's account landed, after that read failed. */
+  | { type: "recheckSignIn" }
   /** An API key the person typed. Sent once to the gateway and kept nowhere. */
   | { type: "saveApiKey"; provider: string; key: string; botId: string | null }
   | { type: "setAccountLabel"; profileId: string; label: string }
@@ -171,11 +173,15 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                         ? CheckoutDiff
                         : C extends { type: "readFileChunk" }
                           ? { data: string }
-                          : C extends { type: "saveApiKey" }
-                            ? { profileId: string | null }
-                            : C extends { type: "createBot" }
-                              ? { botId: string }
-                              : void;
+                          : C extends { type: "cancelSignIn" }
+                            ? { cancelled: boolean }
+                            : C extends { type: "dismissSignIn" }
+                              ? { dismissed: boolean }
+                              : C extends { type: "saveApiKey" }
+                                ? { profileId: string | null }
+                                : C extends { type: "createBot" }
+                                  ? { botId: string }
+                                  : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -407,6 +413,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "refreshAccounts":
     case "cancelSignIn":
     case "dismissSignIn":
+    case "recheckSignIn":
     case "dismissBotCreation":
       return { type: command.type };
     case "checkLock":
@@ -787,6 +794,8 @@ class ViewerSession implements BridgeSession {
         return client.cancelSignIn();
       case "dismissSignIn":
         return client.dismissSignIn();
+      case "recheckSignIn":
+        return client.recheckSignIn();
       case "saveApiKey":
         return client.saveApiKey(command.provider, command.key, command.botId);
       case "setAccountLabel":

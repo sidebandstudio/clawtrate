@@ -395,6 +395,8 @@ export class AccountsEngine {
         startedAt: this.ctx.now(),
         result: null,
         byKey: method.flow === "key",
+        known: [],
+        cancelUnknown: false,
       },
       null,
       false,
@@ -410,7 +412,7 @@ export class AccountsEngine {
     const before = this.accountsOf(signIn.provider);
     this.forgetSecrets();
     if (key !== null) this.holdSecret(key);
-    ctx.update((a) => ({ ...a, signIn }));
+    ctx.update((a) => ({ ...a, signIn: { ...signIn, known: before } }));
     try {
       await ctx.request("models.authLogin", {
         sessionId: signIn.id,
@@ -611,33 +613,64 @@ export class AccountsEngine {
     await this.paused((pause) => this.follow(signIn.id, { stepId, value }, null, before, pause));
   }
 
-  /** Cancel the sign-in under way (`wizard.cancel`). Once the gateway saves, it refuses. */
-  async cancelSignIn(): Promise<void> {
+  /**
+   * Cancel the sign-in under way (`wizard.cancel`). It is reported cancelled
+   * only when the gateway says so; a refusal that says it is saving is "too
+   * late to cancel"; any other answer leaves it unknown, and the accounts are
+   * read again.
+   */
+  async cancelSignIn(): Promise<{ cancelled: boolean }> {
     const signIn = this.ctx.get().signIn;
-    if (!signIn || !isActive(signIn)) return;
-    this.setSignIn(signIn.id, { cancelling: true });
+    if (!signIn || !isActive(signIn)) return { cancelled: signIn?.stage === "cancelled" };
+    this.setSignIn(signIn.id, { cancelling: true, cancelUnknown: false });
+    let answer: RawRecord | null = null;
+    let failure: unknown = null;
     try {
-      const answer = asRecord(await this.ctx.request("wizard.cancel", { sessionId: signIn.id }));
-      if (answer?.status === "cancelled") {
-        this.signInAbort?.abort();
-        this.signInAbort = null;
-        this.setSignIn(signIn.id, { stage: "cancelled", step: null, cancelling: false });
-        void this.afterSignIn(signIn.id, this.accountsOf(signIn.provider));
-        return;
-      }
-      this.setSignIn(signIn.id, { cancelling: false, saving: true });
-    } catch {
-      // Refused: the gateway is saving the sign-in (row 6).
-      this.setSignIn(signIn.id, { cancelling: false, saving: true });
+      answer = asRecord(await this.ctx.request("wizard.cancel", { sessionId: signIn.id }));
+    } catch (error) {
+      failure = error;
     }
+    if (answer?.status === "cancelled") {
+      this.signInAbort?.abort();
+      this.signInAbort = null;
+      this.setSignIn(signIn.id, { stage: "cancelled", step: null, cancelling: false });
+      void this.afterSignIn(signIn.id, signIn.known);
+      return { cancelled: true };
+    }
+    const words = failure ? errorText(failure) : String(answer?.error ?? answer?.status ?? "");
+    if (isRefusal(failure) && /sav(e|ing)|too late|cannot cancel/i.test(words)) {
+      // The gateway refused because it is saving the sign-in (row 6).
+      this.setSignIn(signIn.id, { cancelling: false, saving: true });
+    } else {
+      this.setSignIn(signIn.id, {
+        cancelling: false,
+        cancelUnknown: true,
+        error: words ? this.scrub(words) : null,
+      });
+      void this.load();
+    }
+    return { cancelled: false };
   }
 
-  /** Forget a sign-in that has ended. One still under way is cancelled first. */
-  async dismissSignIn(): Promise<void> {
+  /** Read again where a finished sign-in's account landed, after that read failed. */
+  async recheckSignIn(): Promise<void> {
     const signIn = this.ctx.get().signIn;
-    if (signIn && isActive(signIn)) await this.cancelSignIn();
+    if (!signIn || signIn.stage !== "unverified") return;
+    this.setSignIn(signIn.id, { stage: "checking", result: null });
+    await this.afterSignIn(signIn.id, signIn.known);
+  }
+
+  /**
+   * Forget a sign-in that has ended. One still under way is cancelled first,
+   * and kept when the gateway did not confirm the cancel.
+   */
+  async dismissSignIn(): Promise<{ dismissed: boolean }> {
+    const signIn = this.ctx.get().signIn;
+    if (signIn && isActive(signIn) && !(await this.cancelSignIn()).cancelled)
+      return { dismissed: false };
     this.forgetSecrets();
     this.ctx.update((a) => ({ ...a, signIn: null }));
+    return { dismissed: true };
   }
 
   /**
@@ -695,12 +728,16 @@ export class AccountsEngine {
     if (ctx.get().signIn?.id !== id) return;
     const ended = ctx.get().signIn!;
     this.forgetSecrets();
-    this.setSignIn(id, {
-      result,
-      stage: ended.stage === "checking" ? "connected" : ended.stage,
-      saving: false,
-      cancelling: false,
-    });
+    // "Connected" only when the read after it shows the account; otherwise what is known.
+    const stage =
+      ended.stage !== "checking"
+        ? ended.stage
+        : result.readFailed
+          ? "unverified"
+          : result.added.length > 0
+            ? "connected"
+            : "refreshed";
+    this.setSignIn(id, { result, stage, saving: false, cancelling: false });
     await this.load();
   }
 
@@ -781,6 +818,8 @@ export class AccountsEngine {
           startedAt: this.ctx.now(),
           result: null,
           byKey: true,
+          known: [],
+          cancelUnknown: false,
         },
         key,
         true,
@@ -1206,7 +1245,7 @@ export class AccountsEngine {
     }
     const ended = this.ctx.get().signIn;
     if (ended?.stage === "ended" && ended.result === null) {
-      void this.afterSignIn(ended.id, this.accountsOf(ended.provider));
+      void this.afterSignIn(ended.id, ended.known);
     } else if (this.ctx.get().status !== "idle") {
       // Only once a screen has asked: the accounts are read for the screens that show them.
       void this.load();

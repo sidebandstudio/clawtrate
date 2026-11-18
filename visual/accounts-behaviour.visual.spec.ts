@@ -588,3 +588,69 @@ test("F-472: Create and Save take only a choice the list shows now: a failed rea
   );
   await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 });
+
+/** New bot, connecting an account, on the sign-in methods. */
+async function connectFromNewBot(page: Page) {
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Connect another account" }).click();
+}
+
+test("F-474: a sign-in whose read afterwards failed says so, and Check again reads it", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=unverified`, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^xAI · / })
+    .click();
+  await expect(page.getByRole("heading", { name: "Signed in, not confirmed" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Connected to/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "Check again" }).click();
+  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  expect((await sent(page)).some((each) => each.type === "recheckSignIn")).toBe(true);
+});
+
+test("F-474: a cancel the gateway did not confirm stays on screen and says so; Back does not let it go", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=cancel-unknown`, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^xAI · / })
+    .click();
+  await expect(page.getByTestId("cancel-unknown")).toContainText(
+    "Clawtrate couldn't tell whether the gateway cancelled the sign-in",
+  );
+  await page.getByRole("button", { name: "Back to sign-in methods" }).click();
+  await expect(page.getByRole("heading", { name: "Sign in to xAI", level: 2 })).toBeVisible();
+  await expect(page.getByText("Sign-in cancelled")).toHaveCount(0);
+});
+
+test("F-474: where the gateway keeps sign-ins per bot, a bot connects an account from its own Change account page", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound&kept=1&signin=connected`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  const connect = page.getByRole("button", { name: /^Connect an account/ });
+  await expect(connect).toContainText("A sign-in here is kept for Otto.");
+  await connect.click();
+  await expect(page.getByTestId("kept-note")).toContainText(
+    "This gateway keeps this sign-in for Otto only.",
+  );
+  await page.getByRole("button", { name: /^xAI · / }).click();
+  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await expect(page.getByTestId("landed")).toHaveText(
+    "Saved for Otto only. Other bots can't use it.",
+  );
+  const start = (await sent(page)).find((each) => each.type === "startSignIn");
+  expect(start).toMatchObject({ botId: "otto" });
+  await page.getByRole("textbox", { name: "Label" }).fill("Side");
+  await page.getByRole("button", { name: "Done" }).click();
+  // Back on the choice, with the new account chosen, kept by Otto.
+  await expect(page.getByRole("heading", { name: "Change account", level: 3 })).toBeVisible();
+  await expect(
+    page.getByRole("radio", { name: /^xAI · Side, Subscription, Only Otto can use it/ }),
+  ).toHaveAttribute("aria-checked", "true");
+});

@@ -101,19 +101,12 @@ export function useConnect({
   const [seen, setSeen] = useState<{ stage: string | null; result: unknown }>({ stage, result });
   if (seen.stage !== stage || seen.result !== result) {
     setSeen({ stage, result });
-    if (
-      where.view === "flow" &&
-      signIn &&
-      signIn.method === where.method &&
-      stage === "connected" &&
-      result
-    ) {
+    // Connected: the read after it showed the account. Refreshed: it finished with no new one.
+    if (where.view === "flow" && signIn && signIn.method === where.method && result) {
       const added = result.added[0];
-      setWhere(
-        added
-          ? { view: "label", account: added, byKey: signIn.byKey }
-          : { view: "same", provider: signIn.provider },
-      );
+      if (stage === "connected" && added)
+        setWhere({ view: "label", account: added, byKey: signIn.byKey });
+      else if (stage === "refreshed") setWhere({ view: "same", provider: signIn.provider });
     }
   }
   useEffect(() => {
@@ -147,11 +140,14 @@ export function useConnect({
   useEffect(() => {
     requestAnimationFrame(() => {
       const dialogs = document.querySelectorAll<HTMLElement>("dialog[open]");
-      const top = dialogs[dialogs.length - 1];
+      // In a dialog (New bot, Settings), or in a bot's Settings tab.
+      const top =
+        dialogs[dialogs.length - 1] ??
+        document.querySelector<HTMLElement>('[data-testid="bot-settings"]');
       if (!top) return;
       (
         top.querySelector<HTMLElement>("[data-b-focus]:not([disabled])") ??
-        top.querySelector<HTMLElement>("#create-title, #b-section-title")
+        top.querySelector<HTMLElement>("#create-title, #b-section-title, [data-bs-focus]")
       )?.focus();
     });
   }, [shownView]);
@@ -161,8 +157,14 @@ export function useConnect({
     if (startedWith) void begin(startedWith);
   }, [startedWith, begin]);
   const toMethods = async () => {
-    if (signIn && isSignInActive(signIn))
-      await bridge.send({ type: "cancelSignIn" }).catch(() => {});
+    // A sign-in under way is left only once the gateway confirms its cancel: otherwise it stays
+    // on screen, saying the cancel is not known.
+    if (signIn && isSignInActive(signIn)) {
+      const answer = await bridge
+        .invoke({ type: "cancelSignIn" })
+        .catch(() => ({ cancelled: false }));
+      if (!answer.cancelled) return;
+    }
     await bridge.send({ type: "dismissSignIn" }).catch(() => {});
     setWhere({ view: "methods" });
   };
@@ -388,9 +390,16 @@ export function useConnect({
     const typed = normalizeLabel(label);
     const problem = typed ? labelProblem(accounts.accounts, where.account, typed) : null;
     const needed = others.length > 0;
-    const keptBy = account?.keptBy
-      ? (bots.find((bot) => bot.id === account.keptBy)?.name ?? account.keptBy)
-      : null;
+    // Where it landed, from the read after the sign-in when it has one, else from the account list.
+    const landing =
+      signIn?.result && signIn.result.added.includes(where.account) ? signIn.result : null;
+    const keeper = landing ? landing.keptBy : (account?.keptBy ?? null);
+    const keptBy = keeper ? (bots.find((bot) => bot.id === keeper)?.name ?? keeper) : null;
+    const landedText = keptBy
+      ? `Saved for ${keptBy} only. Other bots can't use it.`
+      : landing?.landed === "shared" || (!landing && account)
+        ? "Every bot can use it: the gateway shows it to other bots as shared."
+        : "Clawtrate hasn't seen it in the gateway's lists yet, so it can't say which bots can use it.";
     const locks = signIn?.result?.locks ?? [];
     const done = async () => {
       if (!typed) {
@@ -423,9 +432,7 @@ export function useConnect({
             {where.byKey ? "Your gateway keeps the key." : "Your gateway keeps the sign-in."}
           </Result>
           <p className="b-hint" role="status" style={{ textAlign: "center" }} data-testid="landed">
-            {keptBy
-              ? `Saved for ${keptBy} only. Other bots can't use it.`
-              : "Every bot can use it: the gateway shows it to other bots as shared."}
+            {landedText}
           </p>
           <label className="b-field">
             <span>Label</span>
@@ -809,6 +816,27 @@ export function useConnect({
         {another}
       </>
     );
+  } else if (current.stage === "unverified") {
+    body = (
+      <Result tone="warn" mark="clock" title="Signed in, not confirmed">
+        The sign-in finished, but Clawtrate couldn't read the gateway's accounts afterwards, so it
+        can't say whether {who} has a new account or where it is.
+      </Result>
+    );
+    foot = (
+      <>
+        <button
+          type="button"
+          className="button"
+          data-variant="primary"
+          data-size="lg"
+          onClick={() => void bridge.send({ type: "recheckSignIn" }).catch(() => {})}
+        >
+          Check again
+        </button>
+        {another}
+      </>
+    );
   } else if (current.stage === "unconfirmed") {
     const added = current.result?.added[0];
     body = (
@@ -832,6 +860,21 @@ export function useConnect({
     );
   } else {
     body = <Wait>Finishing the sign-in with {who}…</Wait>;
+  }
+
+  if (current?.cancelUnknown && isSignInActive(current)) {
+    body = (
+      <>
+        <Note tone="warn" testId="cancel-unknown">
+          <p>
+            Clawtrate couldn't tell whether the gateway cancelled the sign-in
+            {current.error ? ` (${current.error})` : ""}. It is reading the gateway's accounts
+            again. Cancel again, or wait for the sign-in to end.
+          </p>
+        </Note>
+        {body}
+      </>
+    );
   }
 
   if (confirmDrop) {

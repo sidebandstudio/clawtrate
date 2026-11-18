@@ -610,6 +610,58 @@ describe("sign-ins, through the gateway's own methods", () => {
     client.stop();
   });
 
+  it("a sign-in whose read afterwards fails is not called connected: it is unverified until a read shows the account", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.device, null);
+    fake.failStatusFor = "main";
+    fake.answerDevice();
+    await until(() => accounts().signIn?.result != null);
+    expect(accounts().signIn).toMatchObject({
+      stage: "unverified",
+      result: { readFailed: true, added: [] },
+    });
+    // Read again, now that the gateway answers: the account is there.
+    fake.failStatusFor = null;
+    await client.recheckSignIn();
+    expect(accounts().signIn).toMatchObject({
+      stage: "connected",
+      result: { readFailed: false, added: ["acme:travel"], landed: "shared" },
+    });
+    client.stop();
+  });
+
+  it("a sign-in that finishes with no new account is refreshed, not connected", async () => {
+    const fake = new AccountsGateway();
+    fake.nextEnding = { outcome: "approve", account: "work" };
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await client.startSignIn(CHOICES.device, null);
+    fake.answerDevice();
+    await until(() => accounts().signIn?.result != null);
+    expect(accounts().signIn).toMatchObject({ stage: "refreshed", result: { added: [] } });
+    client.stop();
+  });
+
+  it("a cancel the gateway does not confirm is reported as unknown, never as cancelled or saving; the accounts are read again and the sign-in is kept", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.device, null);
+    fake.gateway.handlers["wizard.cancel"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "Cancel status unavailable" });
+    };
+    const reads = fake.gateway.calls("models.authStatus").length;
+    expect(await client.cancelSignIn()).toEqual({ cancelled: false });
+    expect(accounts().signIn).toMatchObject({
+      stage: "waiting",
+      saving: false,
+      cancelUnknown: true,
+      error: "Cancel status unavailable",
+    });
+    await until(() => fake.gateway.calls("models.authStatus").length > reads);
+    // Letting it go would hide a sign-in that may still be running on the gateway.
+    expect(await client.dismissSignIn()).toEqual({ dismissed: false });
+    expect(accounts().signIn?.stage).toBe("waiting");
+    client.stop();
+  });
+
   it("too late to cancel: the gateway refuses because it is saving", async () => {
     const { client, fake, accounts } = await accountsClient();
     await client.startSignIn(CHOICES.device, null);

@@ -3197,12 +3197,19 @@ export class ClawtrateClient {
     return this.accounts.answerSignIn(value);
   }
 
-  cancelSignIn(): Promise<void> {
+  /** Cancel the sign-in under way; `cancelled` only when the gateway confirmed it. */
+  cancelSignIn(): Promise<{ cancelled: boolean }> {
     return this.accounts.cancelSignIn();
   }
 
-  dismissSignIn(): Promise<void> {
+  /** Let go of a sign-in that has ended; one under way is kept unless the gateway confirms its cancel. */
+  dismissSignIn(): Promise<{ dismissed: boolean }> {
     return this.accounts.dismissSignIn();
+  }
+
+  /** Read again where a finished sign-in's account landed, after that read failed. */
+  recheckSignIn(): Promise<void> {
+    return this.accounts.recheckSignIn();
   }
 
   /** An API key the person typed: sent once to the gateway, kept nowhere. */

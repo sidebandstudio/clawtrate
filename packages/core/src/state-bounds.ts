@@ -738,6 +738,8 @@ const signIn = object<SignInState>()({
   startedAt: NUMBER,
   result: signInResult,
   byKey: FLAG,
+  known: list(MAX_ACCOUNTS, ID),
+  cancelUnknown: FLAG,
 });
 const botCreation = object<BotCreationState>()({
   name: NAME,
