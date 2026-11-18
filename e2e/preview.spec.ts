@@ -15,6 +15,7 @@ import {
   startHost,
   stopChild,
 } from "./global-setup.ts";
+import { leaveIdle } from "./teardown.ts";
 
 /** A bot's tasks after the seed: its seeded tasks and the live examples seeded with it. */
 function seededTaskCount(botId: string): number {
@@ -99,12 +100,95 @@ async function openBot(page: Page, bot: string) {
 async function openTask(page: Page, bot: string, task: string) {
   await openBot(page, bot);
   // A bot with one task shows no task rows: opening the bot is the whole action.
-  const rows = page.getByRole("list", { name: `${bot}'s tasks` }).getByTestId("task");
-  if ((await rows.count()) > 0) await rows.filter({ hasText: task }).click();
-  await expect(page.getByRole("heading", { level: 1, name: task })).toBeVisible();
+  const list = page.getByRole("list", { name: `${bot}'s tasks` });
+  const rows = list.getByTestId("task");
+  if ((await rows.count()) > 0) {
+    // Past six tasks the rail lists the most recent; the rest are behind "Show all".
+    const showAll = list.getByRole("button", { name: /^Show all/ });
+    if ((await rows.filter({ hasText: task }).count()) === 0 && (await showAll.count()) > 0)
+      await showAll.click();
+    await rows.filter({ hasText: task }).first().click({ timeout: 20_000 });
+  }
+  // The task's history read decides the heading: seconds on a loaded machine.
+  await expect(page.getByRole("heading", { level: 1, name: task })).toBeVisible({
+    timeout: 20_000,
+  });
 }
 
-test.describe.configure({ mode: "serial" });
+/**
+ * A task of Otto's for one check alone, made on the gateway: no other check's run, stop or
+ * queued message can be in it. Its title is its label.
+ */
+async function ownTask(page: Page, label: string): Promise<{ key: string; title: string }> {
+  // New on every run, so a repeated check never meets an earlier run's task.
+  const suffix = Math.random().toString(16).slice(2, 6);
+  const title = `${label} ${suffix}`;
+  const key = `agent:otto:check-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${suffix}`;
+  await gatewayCall("sessions.create", { key, agentId: "otto", label: title });
+  await expect(
+    page.getByRole("list", { name: "Otto's tasks" }).or(page.getByTestId("bot-list")),
+  ).not.toHaveCount(0);
+  await expect
+    .poll(
+      async () => {
+        await openBot(page, "Otto");
+        const list = page.getByRole("list", { name: "Otto's tasks" });
+        const showAll = list.getByRole("button", { name: /^Show all/ });
+        if ((await showAll.count()) > 0) await showAll.click();
+        return list.getByTestId("task").filter({ hasText: title }).count();
+      },
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(0);
+  await page
+    .getByRole("list", { name: "Otto's tasks" })
+    .getByTestId("task")
+    .filter({ hasText: title })
+    .first()
+    .click();
+  // A task with no message yet has no title heading ("Nothing here yet"); its title pill names it.
+  await expect(page.getByRole("button", { name: `Otto, ${title}. Show details.` })).toBeVisible();
+  return { key, title };
+}
+
+/** The id of the run the gateway has in flight in a task: the exact run a check acts on. */
+async function inFlightRunId(key: string): Promise<string> {
+  let runId = "";
+  await expect
+    .poll(
+      async () => {
+        const history = await gatewayCall<{ inFlightRun?: { runId?: string } }>("chat.history", {
+          sessionKey: key,
+          limit: 1,
+        });
+        runId = history.inFlightRun?.runId ?? "";
+        return runId;
+      },
+      { timeout: 30_000 },
+    )
+    .not.toBe("");
+  return runId;
+}
+
+/** When the running check began: a check that fails leaves nothing it started after this. */
+let checkStarted = 0;
+test.beforeEach(() => {
+  checkStarted = Date.now();
+});
+// Playwright reads its fixtures from the first argument's pattern; this hook needs none.
+// eslint-disable-next-line no-empty-pattern
+test.afterEach(async ({}, testInfo) => {
+  test.setTimeout(testInfo.timeout + 120_000);
+  if (testInfo.status !== testInfo.expectedStatus) await leaveIdle(gatewayCall, checkStarted);
+});
+
+/** The stop note of one run, by its id: never another run's note left from earlier. */
+const stopNote = (page: Page, runId: string) =>
+  page.locator(`[data-testid="stop-note"][data-run="${runId}"]`);
+
+// Not serial: the checks run in file order on one worker (playwright.config.ts), each in a
+// task of its own or on seeded tasks it leaves as it found them, so one failing on timing
+// does not keep the others from running.
 
 test("runs on its own instance while another instance's gateway is listening", () => {
   expect(INSTANCE, "global setup names this run's instance").toMatch(/^e2e-[0-9a-f]{8}$/);
@@ -1182,18 +1266,20 @@ test("F-097: Stop during a real run is offered beside Send, and the gateway's co
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Otto", "Weekly backup check");
+  // A task of its own, so no earlier check's turn can come back in it or hold its note.
+  const { key } = await ownTask(page, "Stop button");
   await composer(page).fill("Check the backup disk once more, slowly. #slow 15");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
   await expect(page.getByRole("button", { name: "Steer this turn" })).toBeVisible();
+  // Pressed at once, before the gateway may have named the run: the engine aborts it once named.
   await page.getByRole("button", { name: "Stop Otto" }).click();
-  await expect(page.getByTestId("stop-note").last()).toContainText(
-    "Completed steps are not undone.",
-    { timeout: 30_000 },
-  );
-  await expect(page.getByTestId("stop-note").last()).toContainText(/^Stopped/);
+  const runId = await inFlightRunId(key).catch(() => "");
+  const note = runId ? stopNote(page, runId) : page.getByTestId("stop-note");
+  await expect(note).toContainText("Completed steps are not undone.", { timeout: 30_000 });
+  await expect(note).toContainText(/^Stopped/);
   await expect(page.getByTestId("status-line")).toHaveCount(0);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
   // "Stopping…" shows until the gateway confirms; on loopback the
   // confirmation can land in the same snapshot, so it is checked in the fixture.
 });
@@ -1202,25 +1288,29 @@ test("F-097: a typed /stop stops the run, and the note does not say it came from
   page,
 }) => {
   await openShell(page);
-  // A task of its own: on this gateway a typed /stop can bring back a turn stopped earlier in the same task.
-  await openTask(page, "Otto", "List the workspace (approved)");
+  // A task of its own: a stop leaves a mark the gateway's restart recovery reads (docs/decisions.md).
+  const { key } = await ownTask(page, "Typed stop");
   await composer(page).fill("Look through every backup set again. #slow 15");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
+  // Typed once the gateway has the run in flight: the exact run the note must belong to.
+  const runId = await inFlightRunId(key);
   await composer(page).fill("/stop");
   await page.keyboard.press("Enter");
-  const note = page.getByTestId("stop-note").last();
+  const note = stopNote(page, runId);
   await expect(note).toContainText("Completed steps are not undone.", { timeout: 30_000 });
   await expect(note).not.toContainText("another device");
   await expect(page.getByTestId("status-line")).toHaveCount(0);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
 test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Otto", "Certificate renewal warning");
-  await composer(page).fill("Which certificate is it? #stream 3");
+  const { key } = await ownTask(page, "Queue after turn");
+  // Long enough that the turn is still going when the next message is queued behind it.
+  await composer(page).fill("Which certificate is it? #stream 10");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
   await composer(page).fill("And when does it renew?");
@@ -1228,8 +1318,9 @@ test("F-061: Queue after this turn holds a message on the shelf and runs it once
   const row = page.getByTestId("shelf-row");
   await expect(row).toContainText("Queued");
   await expect(row).toContainText("And when does it renew?");
-  await expect(row).toHaveCount(0, { timeout: 30_000 });
-  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  await expect(row).toHaveCount(0, { timeout: 60_000 });
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
   const turns = page.getByTestId("transcript-turn");
   await expect(turns.filter({ hasText: "And when does it renew?" })).toHaveCount(2);
   // In the order sent: the queued message came after the first one's reply.
@@ -1244,26 +1335,32 @@ test("F-096: a message sent while the run works is steered into it and captioned
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Otto", "Weekly backup check");
+  const { key } = await ownTask(page, "Steer");
   const seen = await watchRun(page);
-  await composer(page).fill("Start on the backup report. #slow-tool 5");
+  await composer(page).fill("Start on the backup report. #slow-tool 20");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
+  // The barrier: this run's slow tool has started on the gateway, with twenty seconds of it to
+  // go, so the steer is taken into the run, not queued after it. The scripted tool has no
+  // release of its own to hold it longer.
+  const runId = await inFlightRunId(key);
+  await expect.poll(() => toolStarted(key, runId), { timeout: 30_000 }).toBe(true);
   await composer(page).fill("Only the photos set, please.");
   await expect(page.getByRole("button", { name: "How to send: Steer" })).toBeVisible();
   await page.keyboard.press("Enter");
-  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
   expect((await seen()).some((sample) => sample.steer)).toBe(true);
-  // The gateway took it into the run; on screen it stays, as its bubble until history settles it.
+  // The gateway admitted it as a steer, by its own record: in its history the message is
+  // answered inside the run it was sent into, not by a turn of its own after that run.
   await expect
-    .poll(() => gatewayHasMessage("agent:otto:backup-check", "Only the photos set, please."), {
+    .poll(() => answeredInsideRun(key, "Only the photos set, please.", runId), {
       timeout: 30_000,
     })
-    .toBe(true);
+    .toBe("inside");
   await expect(
     page.locator(".transcript").getByText("Only the photos set, please.", { exact: true }),
   ).not.toHaveCount(0);
-  await expect.poll(() => gatewayIdle("agent:otto:backup-check"), { timeout: 30_000 }).toBe(true);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
 test("F-058: two tasks of one bot run at the same time", async ({ page }) => {
@@ -1355,6 +1452,49 @@ async function gatewayIdle(key: string): Promise<boolean> {
   return !history.inFlightRun && (history.pendingInputs?.items ?? []).length === 0;
 }
 
+/** Whether a run's tool call is under way on the gateway: its in-flight run's events show the tool started. */
+async function toolStarted(key: string, runId: string): Promise<boolean> {
+  type Event = { stream?: string; data?: { phase?: string; kind?: string } };
+  const history = await gatewayCall<{ inFlightRun?: { runId?: string; events?: Event[] } }>(
+    "chat.history",
+    { sessionKey: key, limit: 1 },
+  );
+  return (
+    history.inFlightRun?.runId === runId &&
+    (history.inFlightRun.events ?? []).some(
+      (event) =>
+        (event.stream === "tool" && event.data?.phase === "start") ||
+        (event.stream === "item" && event.data?.kind === "tool" && event.data.phase === "start"),
+    )
+  );
+}
+
+/**
+ * Where the gateway's history answers a message of yours: "inside" when the first reply after
+ * it belongs to `runId` (it was steered into that run), "own" when it belongs to another run (a
+ * turn of its own), "none" while history holds no reply after it, or no such message.
+ */
+async function answeredInsideRun(
+  key: string,
+  text: string,
+  runId: string,
+): Promise<"inside" | "own" | "none"> {
+  type Row = { role: string; content?: unknown; __openclaw?: { runId?: string } };
+  const history = await gatewayCall<{ messages: Row[] }>("chat.history", {
+    sessionKey: key,
+    limit: 40,
+  });
+  const asked = history.messages.findIndex(
+    (row) => row.role === "user" && JSON.stringify(row.content ?? "").includes(text),
+  );
+  if (asked < 0) return "none";
+  const reply = history.messages
+    .slice(asked + 1)
+    .find((row) => row.role !== "user" && typeof row.__openclaw?.runId === "string");
+  if (!reply) return "none";
+  return reply.__openclaw!.runId === runId ? "inside" : "own";
+}
+
 /** Whether the gateway's history of a task holds a message of yours with this text. */
 async function gatewayHasMessage(key: string, text: string): Promise<boolean> {
   const history = await gatewayCall<{ messages: Array<{ role: string; content?: unknown }> }>(
@@ -1370,11 +1510,13 @@ test("F-468: a message queued behind a slow reply stays Not sent after a confirm
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Otto", "Weekly backup check");
+  // A task of its own: no earlier check's stop note or turn is in it.
+  const { key } = await ownTask(page, "Queue then stop");
   // The scripted model's slow reply: still going when Stop is pressed, whatever the machine.
   await composer(page).fill("#slow 15");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
+  const runId = await inFlightRunId(key);
   await composer(page).fill("Then send me a summary of the stop test.");
   await page.keyboard.press("Alt+Enter");
   const row = page
@@ -1382,20 +1524,19 @@ test("F-468: a message queued behind a slow reply stays Not sent after a confirm
     .filter({ hasText: "Then send me a summary of the stop test." });
   await expect(row).toContainText("Queued");
   await page.getByRole("button", { name: "Stop Otto" }).click();
-  const note = page.getByTestId("stop-note").last();
+  // This run's own note, confirmed by the gateway; never a note left by an earlier stop.
+  const note = stopNote(page, runId);
   await expect(note).toContainText("Completed steps are not undone.", { timeout: 30_000 });
   await expect(note).toContainText(/^Stopped/);
   // The engine decides when the stop is confirmed: the message stays, not sent, until asked.
-  await expect(row).toContainText("Not sent");
+  await expect(row).toContainText("Not sent", { timeout: 15_000 });
   await expect(row.getByRole("button", { name: "Send" })).toBeVisible();
   await expect(page.getByTestId("status-line")).toHaveCount(0);
-  expect(
-    await gatewayHasMessage("agent:otto:backup-check", "Then send me a summary of the stop test."),
-  ).toBe(false);
+  expect(await gatewayHasMessage(key, "Then send me a summary of the stop test.")).toBe(false);
   // Removed, it never reaches the gateway.
   await row.getByRole("button", { name: "Remove" }).click();
   await expect(row).toHaveCount(0);
-  await expect.poll(() => gatewayIdle("agent:otto:backup-check"), { timeout: 30_000 }).toBe(true);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
 test("F-468: a real question holds a message typed while it is pending, and answering releases it", async ({

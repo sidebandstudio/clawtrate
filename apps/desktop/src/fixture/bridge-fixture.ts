@@ -450,6 +450,13 @@ export function createFixtureBridge(
   sent: BridgeCommand[];
   /** The last unread count the interface gave for the dock badge. */
   badge: number | null;
+  /**
+   * Hold the fixture's delayed answers (a decision applied, refused, or read
+   * back; a reconnect answered) until `release`: a test that must see a state lasting only until the
+   * answer comes holds it, looks, then lets the answer through.
+   */
+  hold(): void;
+  release(): void;
 } {
   const now = Date.now();
   const { initial, steps } = scene(name, now);
@@ -470,8 +477,15 @@ export function createFixtureBridge(
   const sent: BridgeCommand[] = [];
   // How this scene's gateway answers a decision: it applies it, refuses it, or never answers.
   const decisions: DecisionMode = isCardScene(name) ? cardScene(name, now).decisions : "apply";
+  let held: Array<() => void> | null = null;
+  /** A delayed answer, run after `ms`, or once released if a test holds answers then. */
+  const deferred = (run: () => void, ms: number) =>
+    void setTimeout(() => {
+      if (held) held.push(run);
+      else run();
+    }, ms);
   const later = (ms: number, change: (state: ClawtrateState) => ClawtrateState) =>
-    setTimeout(() => set(change(state)), ms);
+    deferred(() => set(change(state)), ms);
   const approval = (key: string, id: string): ApprovalCard | undefined =>
     state.transcripts[key]?.approvals.find((each) => each.id === id);
 
@@ -483,6 +497,7 @@ export function createFixtureBridge(
       () => state,
       (next) => set(next),
       files,
+      deferred,
     );
     sent.push(command);
     if (live) return live;
@@ -528,12 +543,13 @@ export function createFixtureBridge(
         // An attempt is under way, then the gateway answers; in "offline-down"
         // it still does not, and the next retry is scheduled.
         set(withConnection(state, { status: "reconnecting", retryAt: null, error: null }));
+        // The gateway's answer to the attempt is a delayed answer a test can hold.
         if (name === "offline-down") {
-          await new Promise((resolve) => setTimeout(resolve, 300));
+          await new Promise<void>((resolve) => deferred(resolve, 300));
           set(withConnection(state, { retryAt: Date.now() + 4000, error: UNREACHABLE }));
           return;
         }
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        await new Promise<void>((resolve) => deferred(resolve, 300));
         set(catchingUp(state));
         setTimeout(() => set(caughtUp(state)), 700);
         return;
@@ -743,5 +759,13 @@ export function createFixtureBridge(
     setState: (change) => set(change(state)),
     sent,
     badge: null,
+    hold() {
+      held ??= [];
+    },
+    release() {
+      const waiting = held ?? [];
+      held = null;
+      for (const apply of waiting) apply();
+    },
   };
 }

@@ -57,6 +57,87 @@ export async function settle(page: Page): Promise<void> {
   );
 }
 
+/**
+ * The frame a screenshot is to show is the final one: every font face the page uses is
+ * loaded and none is loading, every image is decoded, and the transcript, at its end, and
+ * the shelf keep the same geometry for three frames in a row. Text on screen alone does not
+ * say so: a font, an image or the follow-to-end scroll can still move what is drawn.
+ */
+export async function paintedFinal(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          await document.fonts.ready;
+          const faces = [...document.fonts];
+          const used = new Set(
+            [...document.querySelectorAll<HTMLElement>("body *")]
+              .filter((element) => element.childNodes.length > 0 && element.checkVisibility())
+              .map((element) => getComputedStyle(element).fontFamily.split(",")[0]!.trim())
+              .map((family) => family.replace(/^["']|["']$/g, "")),
+          );
+          const loaded = faces.every((face) => face.status !== "loading");
+          const usedLoaded = [...used].every(
+            (family) =>
+              !faces.some((face) => face.family.replace(/^["']|["']$/g, "") === family) ||
+              faces.some(
+                (face) =>
+                  face.family.replace(/^["']|["']$/g, "") === family && face.status === "loaded",
+              ),
+          );
+          const images = await Promise.all(
+            [...document.images].map((image) =>
+              image
+                .decode()
+                .then(() => image.complete && image.naturalWidth > 0)
+                .catch(() => false),
+            ),
+          );
+          return loaded && usedLoaded && images.every(Boolean);
+        }),
+      { message: "fonts loaded and images decoded" },
+    )
+    .toBe(true);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            new Promise<boolean>((resolve) => {
+              const geometry = () => {
+                const transcript = document.querySelector<HTMLElement>("[data-testid=transcript]");
+                const rows = [...document.querySelectorAll("[data-testid=shelf-row]")];
+                return JSON.stringify([
+                  transcript
+                    ? [transcript.scrollTop, transcript.scrollHeight, transcript.clientHeight]
+                    : null,
+                  rows.map((row) => {
+                    const box = row.getBoundingClientRect();
+                    return [box.top, box.height];
+                  }),
+                ]);
+              };
+              const atEnd = () => {
+                const transcript = document.querySelector<HTMLElement>("[data-testid=transcript]");
+                return (
+                  !transcript ||
+                  transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 1
+                );
+              };
+              const seen = [geometry()];
+              const frame = () => {
+                seen.push(geometry());
+                if (seen.length < 4) requestAnimationFrame(frame);
+                else resolve(new Set(seen).size === 1 && atEnd());
+              };
+              requestAnimationFrame(frame);
+            }),
+        ),
+      { message: "the transcript at its end and the shelf, unchanged for three frames" },
+    )
+    .toBe(true);
+}
+
 /** On a phone the conversation covers the list; show the list. */
 export async function showList(page: Page): Promise<void> {
   const back = page.getByRole("button", { name: "Back to bots" });

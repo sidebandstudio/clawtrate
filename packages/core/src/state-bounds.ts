@@ -163,6 +163,8 @@ export const MAX_MCP_TOOLS = 128;
 export const MAX_TOOL_NAME_CHARS = 128;
 /** Steer aliases per task (also `MAX_STEER_ALIASES`). */
 export const MAX_STEER_ALIAS_COUNT = 16;
+/** Queue aliases per task (also `MAX_QUEUE_ALIASES`). */
+export const MAX_QUEUE_ALIAS_COUNT = 16;
 /** Bots listed, and tasks listed across bots. */
 export const MAX_BOTS = 32;
 export const MAX_LISTED_TASKS = 500;
@@ -435,6 +437,7 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   approvalAccess: ENUM,
   approvalSources: map(3, 16, ENUM),
   steerAliases: map(MAX_STEER_ALIAS_COUNT, MAX_ID_CHARS, ID),
+  queueAliases: map(MAX_QUEUE_ALIAS_COUNT, MAX_ID_CHARS, ID),
   caughtUp,
   questionsOmitted: NUMBER,
   runsOmitted: NUMBER,

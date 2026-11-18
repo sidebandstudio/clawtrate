@@ -5,6 +5,7 @@ import {
   RunView,
   runCheck,
   SCENARIO_CHECKS,
+  scriptedFinalText,
   uncoveredDirectives,
 } from "../src/scenario-check.ts";
 import type { OperatorSession } from "../src/operator.ts";
@@ -331,6 +332,8 @@ describe("a check cannot skip a run", () => {
     const op = {
       events: events.map((e, i) => ({ ...e, seq: i + 1, at: 0 })),
       lastSeq: 0,
+      // Nothing in flight: a failed check's drain finds every task idle.
+      request: async () => ({}),
     } as unknown as OperatorSession;
     return createHarness({ plain: op, approvals: op, questions: op });
   };
@@ -357,5 +360,222 @@ describe("a check cannot skip a run", () => {
         view.expectEnd("final", "");
       },
     });
+  });
+});
+
+describe("a failed check is drained before the next one starts", () => {
+  /** A client whose events and answers the test controls; `busy` says which tasks have work. */
+  const controlled = (busy: Set<string>) => {
+    const calls: Array<[string, unknown]> = [];
+    const op = {
+      events: [] as unknown[],
+      lastSeq: 0,
+      request: async (method: string, params: { sessionKey?: string }) => {
+        calls.push([method, params]);
+        if (method === "chat.abort") return { ok: true, aborted: false, runIds: [] };
+        if (method === "chat.history")
+          return busy.has(params.sessionKey ?? "") ? { inFlightRun: { runId: "late" } } : {};
+        return {};
+      },
+      send: async () => {
+        throw new Error("no answer");
+      },
+    } as unknown as OperatorSession;
+    return { h: createHarness({ plain: op, approvals: op, questions: op }), calls };
+  };
+
+  it("drains a task the check submitted to even when no event of its run arrived", async () => {
+    const busy = new Set<string>();
+    const { h, calls } = controlled(busy);
+    let key = "";
+    await expect(
+      runCheck(
+        h,
+        {
+          name: "send then fail",
+          covers: [],
+          run: async () => {
+            key = await h.session("main", "late-first-event");
+            await h.start("plain", key, "#text");
+          },
+        },
+        { drainTimeoutMs: 200 },
+      ),
+    ).rejects.toThrow(/no answer/);
+    expect(calls).toContainEqual(["chat.abort", { sessionKey: key }]);
+    expect(calls).toContainEqual(["chat.history", { sessionKey: key, limit: 1 }]);
+  });
+
+  it("does not start the next check while the failed one's work goes on, and says why", async () => {
+    const busy = new Set<string>();
+    const { h } = controlled(busy);
+    let key = "";
+    await expect(
+      runCheck(
+        h,
+        {
+          name: "leaves work",
+          covers: [],
+          run: async () => {
+            key = await h.session("main", "still-busy");
+            busy.add(key);
+            throw new Error("failed while its run goes on");
+          },
+        },
+        { drainTimeoutMs: 200 },
+      ),
+    ).rejects.toThrow(/failed while its run goes on/);
+    let ran = false;
+    await expect(
+      runCheck(
+        h,
+        {
+          name: "next",
+          covers: [],
+          run: async () => {
+            ran = true;
+          },
+        },
+        { drainTimeoutMs: 200 },
+      ),
+    ).rejects.toThrow(/not started: the check before it \("leaves work"\) failed/);
+    expect(ran).toBe(false);
+    // Once that work has ended, checks run again.
+    busy.clear();
+    await runCheck(h, { name: "after", covers: [], run: async () => {} }, { drainTimeoutMs: 200 });
+  });
+
+  it("drains when the only failure is a run left unasserted", async () => {
+    const busy = new Set<string>();
+    const { h, calls } = controlled(busy);
+    const op = h.op("plain") as unknown as { events: unknown[] };
+    await expect(
+      runCheck(
+        h,
+        {
+          name: "lazy",
+          covers: [],
+          run: async () => {
+            op.events.push({
+              event: "chat",
+              seq: 1,
+              at: 0,
+              payload: { runId: "r9", sessionKey: "agent:marlow:main", seq: 1, state: "delta" },
+            });
+          },
+        },
+        { drainTimeoutMs: 200 },
+      ),
+    ).rejects.toThrow(/were not asserted/);
+    expect(calls).toContainEqual(["chat.abort", { sessionKey: "agent:marlow:main" }]);
+  });
+});
+
+describe("the stopped stream's partial text and the queue-only schema exception", () => {
+  const key = "agent:main:check-stream-abort";
+  /** A client that replays a stopped `#stream 20` run, its aborted event carrying `partial`. */
+  const replay = (partial: string, extra: Array<{ event: string; payload: unknown }> = []) => {
+    const run = "r";
+    const at = (event: string, payload: Record<string, unknown>) => ({ event, payload });
+    const list = [
+      at("agent", {
+        runId: run,
+        sessionKey: key,
+        seq: 1,
+        ts: 1,
+        stream: "lifecycle",
+        data: { phase: "start" },
+      }),
+      at("agent", {
+        runId: run,
+        sessionKey: key,
+        seq: 2,
+        ts: 2,
+        stream: "assistant",
+        data: { text: "Here is a long", delta: "Here is a long" },
+      }),
+      at("chat", {
+        runId: run,
+        sessionKey: key,
+        seq: 3,
+        state: "aborted",
+        stopReason: "rpc",
+        ...(partial
+          ? {
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: partial }],
+                timestamp: 3,
+              },
+            }
+          : {}),
+      }),
+      at("agent", {
+        runId: run,
+        sessionKey: key,
+        seq: 4,
+        ts: 4,
+        stream: "lifecycle",
+        data: { phase: "end", status: "cancelled", aborted: true, stopReason: "rpc" },
+      }),
+      ...extra,
+    ].map((e, i) => ({ ...e, seq: i + 1, at: 0 }));
+    const op = {
+      events: [] as typeof list,
+      get lastSeq() {
+        return op.events.length;
+      },
+      send: async () => {
+        op.events.push(...list);
+        return { runId: run, status: "started" };
+      },
+      request: async (method: string) =>
+        method === "chat.abort" ? { ok: true, aborted: true, runIds: [run] } : {},
+      waitFor: async (_label: string, match: (e: unknown) => boolean) => op.events.find(match),
+      terminal: async () => ({}),
+    } as unknown as OperatorSession;
+    return createHarness({ plain: op, approvals: op, questions: op });
+  };
+  const check = SCENARIO_CHECKS.find((each) => each.name === "a streamed reply, stopped mid-run")!;
+
+  it("fails when the aborted event carries no partial text", async () => {
+    await expect(runCheck(replay(""), check, { drainTimeoutMs: 100 })).rejects.toThrow(
+      /carries the text seen before the stop/,
+    );
+  });
+
+  it("passes when it carries what was seen, and more of the reply", async () => {
+    const partial = scriptedFinalText("#stream 20").slice(0, 40);
+    await runCheck(replay(partial), check, { drainTimeoutMs: 100 });
+  });
+
+  it("admits the missing-seq error event only for a run the gateway paired with an id of its own", () => {
+    const gap = {
+      event: "agent",
+      payload: {
+        runId: "q",
+        sessionKey: key,
+        stream: "error",
+        ts: 1,
+        data: { reason: "seq gap", expected: 3, received: 4 },
+      },
+    };
+    const viewOf = (events: Array<{ event: string; payload: unknown }>) =>
+      new RunView(
+        {
+          events: events.map((e, i) => ({ ...e, seq: i + 1, at: 0 })),
+        } as unknown as OperatorSession,
+        "q",
+        key,
+        0,
+      );
+    expect(() => viewOf([gap]).validate()).toThrow(
+      /agent error does not match the protocol schema/,
+    );
+    const paired = {
+      event: "sessions.changed",
+      payload: { sessionKey: key, runId: "own", clientRunId: "q", phase: "model" },
+    };
+    expect(() => viewOf([paired, gap]).validate()).not.toThrow();
   });
 });

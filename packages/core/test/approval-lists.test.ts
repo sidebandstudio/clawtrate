@@ -522,3 +522,41 @@ describe("a failed list leaves state as it was (A10, ruling 4)", () => {
     client.stop();
   });
 });
+
+describe("an approval this client closed by inference is read back for how it ended", () => {
+  it("F-164: one no longer listed takes the gateway's outcome and terminal reason from approval.get", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["exec.approval.list"] = () => [execItem("ap")];
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().approvals[0]?.status === "pending");
+    // Recorded shape: approval.get of a settled request answers its terminal snapshot, whose
+    // `reason` is the gateway's terminal reason (`record.terminalReason`).
+    gateway.handlers["approval.get"] = () => ({
+      approval: {
+        id: "ap",
+        status: "expired",
+        presentation: { kind: "exec", commandText: "uname -s", host: "gateway", agentId: "otto" },
+        createdAtMs: 2_000,
+        expiresAtMs: 1_802_000,
+        resolvedAtMs: 1_802_000,
+        reason: "timeout",
+        source: { agentId: "otto", sessionKey: KEY },
+      },
+    });
+    gateway.handlers["exec.approval.list"] = () => [];
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => gateway.calls("approval.get").length === 1);
+    expect(gateway.calls("approval.get")[0]).toEqual({ id: "ap" });
+    await until(() => transcript().approvals[0]?.inferred === false);
+    expect(transcript().approvals[0]).toMatchObject({
+      status: "expired",
+      reason: "timeout",
+      resolvedAt: 1_802_000,
+    });
+    // Asked once, when the inference was made: a later list does not ask again.
+    gateway.emit("session.message", { sessionKey: KEY });
+    await sleep(300);
+    expect(gateway.calls("approval.get")).toHaveLength(1);
+    client.stop();
+  });
+});

@@ -14,6 +14,19 @@ const open = (page: Page, scene: string, extra = "") =>
 const field = (page: Page) => page.getByTestId("composer-input");
 const announcer = (page: Page) => page.getByTestId("announcer");
 
+/**
+ * Hold the fixture's delayed answers, or let them through: a state that lasts only until the
+ * answer (Stopping…) is held while the check looks at it, never timed.
+ */
+const answers = (page: Page, action: "hold" | "release") =>
+  page.evaluate(
+    (name) =>
+      (window as unknown as { clawtrateFixture: Record<string, () => void> }).clawtrateFixture[
+        name
+      ]!(),
+    action,
+  );
+
 /** Change the fixture's state from the test, as the host's next snapshot would. */
 async function setRun(page: Page, change: Record<string, unknown>) {
   await page.evaluate((patch) => {
@@ -649,10 +662,12 @@ test.describe("Stop", () => {
     await expect(page.getByRole("button", { name: "Stop Otto" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Steer this turn" })).toBeVisible();
     await page.getByTestId("transcript").focus();
+    await answers(page, "hold");
     await page.keyboard.press("ControlOrMeta+.");
     await expect(page.getByTestId("status-phrase")).toHaveText("Stopping…");
     await expect(page.getByRole("button", { name: "Stop Otto" })).toHaveCount(0);
     await expect(page.locator(".composer-status")).toHaveText("Stopping…");
+    await answers(page, "release");
     await expect(page.getByTestId("stop-note")).toContainText("Completed steps are not undone.");
     await expect(page.getByTestId("status-line")).toHaveCount(0);
     await expect(announcer(page)).toHaveText("Stopped");

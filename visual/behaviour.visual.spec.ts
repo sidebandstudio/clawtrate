@@ -1,7 +1,9 @@
 // The shell's behaviour on fixed state (visual-language.md, section 14, step 9).
 // These need no gateway; e2e/preview.spec.ts checks the same shell against one.
 import { expect, test, type Page } from "@playwright/test";
+import { DOCK_FROM } from "../packages/ui/src/layout.ts";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
+import { markReadingLine, readingLineSamples, watchReadingLine } from "./reading-line.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
@@ -216,14 +218,51 @@ test.describe("the Work pane", () => {
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openFixture(page, `scene=main&${OTTO_DISK}&panel=open`, "light");
-    const before = await readFrom(page, 450);
+    const transcript = page.getByTestId("transcript");
+    await transcript.evaluate((e) => (e.scrollTop = 450));
+    await settle(page);
+    expect(
+      await transcript.evaluate((e) => e.scrollHeight - e.scrollTop - e.clientHeight),
+      "the reader is above the follow threshold",
+    ).toBeGreaterThan(96);
+    // The place as the conversation itself holds it, not a point of the check's choosing.
+    const before = await markReadingLine(page);
     expect(before.text.trim()).not.toBe("");
+    const panel = page.getByTestId("work-panel");
     for (const width of [1240, 1100, 1440]) {
+      await watchReadingLine(page);
       await page.setViewportSize({ width, height: 900 });
+      // The pane's state for this width, established before anything is measured: docked beside
+      // the conversation, or a modal drawer over it that holds focus. The layout (the
+      // stylesheet's container query) and the semantics (the Shell's measured width) agree.
+      const docked = await page
+        .locator(".main-pane")
+        .evaluate((main, from) => main.clientWidth >= from, DOCK_FROM);
+      expect(docked, `docked at ${width}px`).toBe(width !== 1100);
+      await expect
+        .poll(() => panel.evaluate((element) => getComputedStyle(element).position))
+        .toBe(docked ? "relative" : "absolute");
+      if (docked) {
+        await expect(panel).not.toHaveAttribute("role", "dialog");
+        await expect(page.getByRole("region", { name: "Conversation" })).not.toHaveAttribute(
+          "inert",
+          "",
+        );
+      } else {
+        await expect(panel).toHaveAttribute("role", "dialog");
+        await expect(panel).toHaveAttribute("aria-modal", "true");
+        await expect
+          .poll(() => panel.evaluate((element) => element.contains(document.activeElement)))
+          .toBe(true);
+      }
       await settle(page);
+      await settle(page);
+      // Every painted frame of the change, and where it is now.
+      const { samples, now } = await readingLineSamples(page);
+      const worst = Math.max(...[...samples, now].map((top) => Math.abs(top - before.top)));
       expect(
-        Math.abs((await readingMarkTop(page)) - before.top),
-        `text at the reading line, ${width}px`,
+        worst,
+        `text at the reading line, ${width}px, from ${before.top}: ${[...samples, now].map((top) => top.toFixed(1)).join(" ")}`,
       ).toBeLessThanOrEqual(2);
     }
   });
