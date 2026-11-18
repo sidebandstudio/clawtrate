@@ -168,6 +168,34 @@ async function openTask(on: Page, bot: string, title: string): Promise<void> {
   });
 }
 
+/**
+ * A bot-to-bot send's identities, from the sending run's own events on the test client: the
+ * `sessions_send` call id, and the recipient run its result names (in its details, or, where
+ * those are empty, in its text object).
+ */
+function sendFacts(runId: string): { toolCallId: string; recipientRunId: string } {
+  const result = clients.plain
+    .runEvents(runId)
+    .map((e) => e.payload as { stream?: string; data?: Record<string, unknown> })
+    .find(
+      (p) => p.stream === "tool" && p.data?.phase === "result" && p.data?.name === "sessions_send",
+    );
+  const sentResult = (result?.data?.result ?? {}) as {
+    details?: { runId?: string };
+    content?: Array<{ text?: string }>;
+  };
+  let fromText: string | undefined;
+  try {
+    fromText = (JSON.parse(sentResult.content?.[0]?.text ?? "{}") as { runId?: string }).runId;
+  } catch {
+    fromText = undefined;
+  }
+  return {
+    toolCallId: typeof result?.data?.toolCallId === "string" ? result.data.toolCallId : "",
+    recipientRunId: sentResult.details?.runId ?? fromText ?? "",
+  };
+}
+
 /** A new task the test clients follow, named for what it checks; its title is the key's last part. */
 async function clientTask(botId: string, slug: string): Promise<{ key: string; title: string }> {
   const title = `${slug}-${STAMP}`;
@@ -546,60 +574,64 @@ test.describe("Messaged cards on a real gateway", () => {
     await expect(state(page)).toHaveText("Failed");
   });
 
-  test("F-122 F-469: a slow recipient: Sent or Working while it works, never Working once it has ended, and its reply arrives in the task", async () => {
+  test("F-122 F-469: a slow recipient: Sent, Working while its run is seen, then No reply yet, in that order, and its reply arrives in the task", async () => {
+    test.setTimeout(180_000);
     const t = await sent("message-slow", "#message-slow");
     await clients.plain.terminal(t.runId);
-    // The recipient's run, by the id the send's result names.
-    const result = clients.plain
-      .runEvents(t.runId)
-      .map((e) => e.payload as { stream?: string; data?: Record<string, unknown> })
-      .find((p) => p.stream === "tool" && p.data?.phase === "result");
-    // Its details name it, or, where details are empty, the result's text object does.
-    const sentResult = (result?.data?.result ?? {}) as {
-      details?: { runId?: string };
-      content?: Array<{ text?: string }>;
-    };
-    const fromText = (() => {
-      try {
-        return (JSON.parse(sentResult.content?.[0]?.text ?? "{}") as { runId?: string }).runId;
-      } catch {
-        return undefined;
-      }
-    })();
-    const recipientRunId = sentResult.details?.runId ?? fromText ?? "";
+    const { recipientRunId } = sendFacts(t.runId);
     expect(recipientRunId).not.toBe("");
     await openTask(page, "Pip", t.title);
     // The host follows every session (sessions.subscribe), so the recipient's run reaches it
-    // whenever its events come: until then the card is Sent, from then on Working. Which one
-    // shows first depends only on when they arrive, so either is right here.
-    await expect(state(page)).toHaveText(/^(Sent|Working)$/);
-    await shot(card(page, "messaged-card"), "messaged-slow-sent");
-    // The reply arrives later in the same task, as a message from Marlow. Nothing in it names
-    // the send it answers (its provenance names only Marlow's task).
+    // whenever its events come. Every state the card shows is recorded, in order, until the
+    // gateway has ended that run and its reply has arrived.
+    const states: string[] = [];
+    const sample = async () => {
+      const now = (await state(page).count()) > 0 ? await state(page).innerText() : "";
+      if (now && states.at(-1) !== now) states.push(now);
+    };
+    const recipientEnded = async () =>
+      (
+        await clients.plain.request<{ inFlightRun?: { runId?: string } }>("chat.history", {
+          sessionKey: "agent:marlow:main",
+          limit: 1,
+        })
+      ).inFlightRun?.runId !== recipientRunId;
     const incoming = page.getByTestId("incoming-line").or(page.getByTestId("received-card"));
-    await expect(incoming).toHaveCount(1, { timeout: 60_000 });
+    const deadline = Date.now() + 90_000;
+    while (Date.now() < deadline) {
+      await sample();
+      if ((await incoming.count()) === 1 && (await recipientEnded())) break;
+      await page.waitForTimeout(250);
+    }
+    // Then a moment more: a state lost after the end would show here.
+    for (let i = 0; i < 8; i += 1) {
+      await sample();
+      await page.waitForTimeout(250);
+    }
     await expect(incoming).toContainText("Marlow");
-    // Once the gateway has ended the recipient's run, the card never still says Working: Sent
-    // if this connection never saw the run, No reply yet if it did.
-    await expect
-      .poll(
-        async () =>
-          (
-            await clients.plain.request<{ inFlightRun?: { runId?: string } }>("chat.history", {
-              sessionKey: "agent:marlow:main",
-              limit: 1,
-            })
-          ).inFlightRun?.runId === recipientRunId,
-        { timeout: 60_000 },
-      )
-      .toBe(false);
-    await expect(state(page)).toHaveText(/^(Sent|No reply yet)$/, { timeout: 30_000 });
+    // In lifecycle order only: Sent before the run is seen, Working while it is, No reply yet
+    // once it ended without a reply. Never back to an earlier state, and never Sent again once
+    // the run was seen: what was known of the recipient is not lost. The host follows every
+    // session from before the send, so it sees the recipient's run: once the gateway has ended
+    // it, the card says so, and a card still Sent has lost it.
+    const order = ["Sent", "Working", "No reply yet"];
+    expect(
+      states.every((each) => order.includes(each)),
+      states.join(" → "),
+    ).toBe(true);
+    expect(
+      states.every((each, k) => k === 0 || order.indexOf(each) > order.indexOf(states[k - 1]!)),
+      states.join(" → "),
+    ).toBe(true);
+    expect(states.at(-1), states.join(" → ")).toBe("No reply yet");
     await shot(page, "messaged-slow-reply-arrived");
   });
 
   test("F-122: a recipient that asks its own user: its question is answered in its task", async () => {
     const t = await sent("message-ask", "#message-ask");
     await clients.plain.terminal(t.runId);
+    const { recipientRunId } = sendFacts(t.runId);
+    expect(recipientRunId).not.toBe("");
     await openTask(page, "Pip", t.title);
     // The host follows every session (sessions.subscribe), so whether it has seen Marlow's run
     // yet, and so whether the card says Sent or how that run stands, depends only on when its
