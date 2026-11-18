@@ -904,13 +904,23 @@ test.describe("action cards", () => {
   test("an open card becomes a fold with its first row open in its view; focus stays on the same control; nothing above moves", async ({
     page,
   }) => {
-    await open(page, "actions-becoming-fold");
+    // The second read comes when the check has the first one open, not after a time.
+    await open(page, "actions-becoming-fold", "light", "&steps=manual");
     const first = cards(page).last();
     await expect(line(first)).toHaveAccessibleName(/^Read backup-2026-11-15\.log/);
     await line(first).click();
     await first.getByRole("tab", { name: "Raw" }).click();
     await expect(first.getByRole("tab", { name: "Raw" })).toBeFocused();
+    // The opened view is final before its place is taken: Raw's content in, nothing moving. Opened
+    // while following the end, the card is held at the top once its content is in (section 18).
+    await expect(first.getByRole("region", { name: "What the gateway sent" })).not.toContainText(
+      "Loading",
+    );
+    await paintedFinal(page, { atEnd: false });
     const top = (await line(first).boundingBox())!.y;
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: { runSteps(): void } }).clawtrateFixture.runSteps(),
+    );
     // The second read arrives: one fold, open, its first row open on Raw, focus on that Raw tab.
     const fold = page.locator(".transcript details.card.action[data-fold]");
     await expect(fold).toHaveCount(1, { timeout: 5000 });

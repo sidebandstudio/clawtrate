@@ -73,6 +73,8 @@ document.documentElement.dataset.host = "web";
 const sceneName = params.get("scene");
 const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   files: fileParams(params),
+  // `steps=manual`: the scene's later steps wait for `clawtrateFixture.runSteps()`.
+  manualSteps: params.get("steps") === "manual",
 });
 // For tests and manual checks: change the state from the console.
 Object.assign(window, { clawtrateFixture: bridge });

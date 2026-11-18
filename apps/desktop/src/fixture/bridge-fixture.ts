@@ -450,9 +450,14 @@ function answerStrings(
 
 export function createFixtureBridge(
   name: SceneName,
-  options: { files?: FileParams } = {},
+  options: { files?: FileParams; manualSteps?: boolean } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
+  /**
+   * With `steps=manual`, a scene's later steps wait for this: a check that must
+   * act on the scene's first state calls it once it has, instead of racing a timer.
+   */
+  runSteps(): void;
   /** Every command the interface sent, for tests that check what was asked of the host. */
   sent: BridgeCommand[];
   /** The last unread count the interface gave for the dock badge. */
@@ -487,8 +492,8 @@ export function createFixtureBridge(
   // the first state: timed from here, a slow machine could draw its first frame after them,
   // and never show the state the scene starts from.
   let started = false;
-  const startSteps = () => {
-    if (started) return;
+  const startSteps = (asked = false) => {
+    if (started || (options.manualSteps && !asked)) return;
     started = true;
     for (const step of steps) setTimeout(() => set(step.change(state)), step.after);
   };
@@ -792,6 +797,7 @@ export function createFixtureBridge(
       return info;
     },
     setState: (change) => set(change(state)),
+    runSteps: () => startSteps(true),
     sent,
     badge: null,
     refuse: (type: string) => void railRefused.add(type),
