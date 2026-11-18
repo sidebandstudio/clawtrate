@@ -521,6 +521,96 @@ describe("a bot left half-made", () => {
     effort: null,
   } as const;
 
+  it("Finish writes everything Create would have: the model with its empty fallback list and its effort", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.failPatch = "the gateway refused the patch";
+    const made = await client.createBot({ ...input, effort: "high" });
+    expect(made).toEqual({ botId: "viral", missing: ["fallbacks"] });
+    expect(accounts().creation?.error).toMatch(
+      /its model with an empty fallback list and its effort were not written/,
+    );
+    expect(await client.finishBot("viral")).toEqual({ botId: "viral", missing: [] });
+    const entries = (fake.config.agents as { entries: Record<string, Record<string, unknown>> })
+      .entries;
+    expect(entries.viral).toMatchObject({
+      model: { primary: "acme/dev-1@acme:work", fallbacks: [] },
+      thinkingDefault: "high",
+    });
+    client.stop();
+  });
+
+  it("a record of the bot's account that is not saved leaves it partial, and Finish saves it", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const save = fake.gateway.handlers["users.prefs.set"]!;
+    fake.gateway.handlers["users.prefs.set"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "preferences unavailable" });
+    };
+    expect(await client.createBot({ ...input })).toEqual({
+      botId: "viral",
+      missing: ["preference"],
+    });
+    expect(accounts().creation).toMatchObject({ status: "partial", botId: "viral" });
+    expect(fake.prefs["clawtrate.bot-account.viral"]).toBeUndefined();
+    fake.gateway.handlers["users.prefs.set"] = save;
+    expect(await client.finishBot("viral")).toEqual({ botId: "viral", missing: [] });
+    expect(fake.prefs["clawtrate.bot-account.viral"]).toEqual({
+      mode: "account",
+      account: "acme:work",
+    });
+    client.stop();
+  });
+
+  it("a bot list that can't be read after the write is no proof it was created: partial until a read shows it", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const list = fake.gateway.handlers["agents.list"]!;
+    fake.gateway.handlers["agents.list"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "cannot list bots" });
+    };
+    const made = await client.createBot({ ...input });
+    expect(made.missing).toContain("listed");
+    expect(accounts().creation).toMatchObject({ status: "partial", botId: "viral" });
+    expect(accounts().creation?.error).toMatch(/reading the gateway's bot list afterwards failed/);
+    fake.gateway.handlers["agents.list"] = list;
+    expect((await client.finishBot("viral")).missing).toEqual([]);
+    expect(client.state.bots.some((bot) => bot.id === "viral")).toBe(true);
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("after an answer in doubt, a retry adopts only a bot that was not there before: never an older one of that name", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const create = fake.gateway.handlers["agents.create"]!;
+    fake.gateway.handlers["agents.create"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
+    };
+    // Otto existed before: a Create named Otto that got no answer cannot have made it.
+    await expect(client.createBot({ ...input, name: "Otto" })).rejects.toThrow();
+    expect(accounts().creation).toMatchObject({ status: "failed", uncertain: true });
+    fake.gateway.handlers["agents.create"] = () => {
+      throw new GatewayError({ code: "INVALID_REQUEST", message: "agent already exists" });
+    };
+    await expect(client.createBot({ ...input, name: "Otto" })).rejects.toThrow();
+    expect(fake.gateway.calls("config.patch")).toHaveLength(0);
+    expect(fake.gateway.calls("sessions.create")).toHaveLength(0);
+    expect(fake.prefs["clawtrate.bot-account.otto"]).toBeUndefined();
+    // One the first Create made, absent before it and present now, is the one it made.
+    const list = fake.gateway.handlers["agents.list"]!;
+    fake.gateway.handlers["agents.create"] = async (params) => {
+      await create(params);
+      fake.gateway.handlers["agents.list"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
+      };
+      throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
+    };
+    await expect(client.createBot({ ...input })).rejects.toThrow();
+    expect(accounts().creation).toMatchObject({ status: "failed", uncertain: true });
+    fake.gateway.handlers["agents.list"] = list;
+    fake.gateway.handlers["agents.create"] = create;
+    expect((await client.createBot({ ...input })).botId).toBe("viral");
+    expect(fake.gateway.calls("agents.create")).toHaveLength(3);
+    client.stop();
+  });
+
   it("a bot written whose first task fails is reported with what exists and what is missing, and is finished by its id", async () => {
     const { client, fake, accounts } = await accountsClient();
     fake.gateway.handlers["sessions.create"] = () => {

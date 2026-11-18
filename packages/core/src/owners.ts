@@ -47,6 +47,7 @@ import { emptyActivity } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   APPROVAL_ATTEMPTS,
+  MAX_BOTS,
   APPROVAL_OUTCOME,
   MAX_CREATIONS,
   MAX_FILE_NAME_CHARS,
@@ -213,6 +214,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   "accounts.unwritten": { max: MAX_ACCOUNTS, each: ID, row: "bookkeeping" },
+  // The bots there before the first Create of the bot being made, while its answer is in doubt.
+  "accounts.before": { max: MAX_BOTS, each: ID, row: "bookkeeping" },
   // What the person typed into the one sign-in under way, in the forms it may come back in, while
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },

@@ -518,18 +518,21 @@ export function NewBot({
               >
                 Finish {partial.name}
               </button>
-              <button
-                type="button"
-                className="button"
-                data-variant="quiet"
-                data-size="sm"
-                onClick={() => {
-                  void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
-                  onCreated(partial.botId!);
-                }}
-              >
-                Open {partial.name} as it is
-              </button>
+              {/* A bot the gateway's list doesn't show yet can't be opened. */}
+              {!partial.missing.includes("listed") && (
+                <button
+                  type="button"
+                  className="button"
+                  data-variant="quiet"
+                  data-size="sm"
+                  onClick={() => {
+                    void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
+                    onCreated(partial.botId!);
+                  }}
+                >
+                  Open {partial.name} as it is
+                </button>
+              )}
             </div>
           </Note>
         )}

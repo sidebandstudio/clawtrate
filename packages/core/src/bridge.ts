@@ -11,6 +11,7 @@ import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts"
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
 import type { QuestionAnswer, StepRead } from "./runs.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
+import type { MissingStep } from "./accounts.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -183,7 +184,7 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                               : C extends { type: "saveApiKey" }
                                 ? { profileId: string | null }
                                 : C extends { type: "createBot" | "finishBot" }
-                                  ? { botId: string; missing: Array<"fallbacks" | "task"> }
+                                  ? { botId: string; missing: MissingStep[] }
                                   : void;
 
 export type HostInfo = {

@@ -305,6 +305,13 @@ export type SignInState = {
   cancelUnknown: boolean;
 };
 
+/**
+ * A step of creating a bot that did not land: Clawtrate's record of its
+ * account (`preference`), its model with the empty fallback list and effort
+ * (`fallbacks`), the gateway's bot list showing it (`listed`), its first task.
+ */
+export type MissingStep = "preference" | "fallbacks" | "listed" | "task";
+
 export type BotCreationState = {
   name: string;
   /**
@@ -315,8 +322,8 @@ export type BotCreationState = {
   slow: boolean;
   botId: string | null;
   error: string | null;
-  /** What a partial creation lacks: its empty fallback list, its first task. */
-  missing: Array<"fallbacks" | "task">;
+  /** What a partial creation lacks, each finished by the bot's id. */
+  missing: MissingStep[];
   /**
    * The gateway's answer did not settle whether the bot was made, and no new
    * bot of that name was found: the next Create looks for it again first.

@@ -796,7 +796,7 @@ const botCreation = object<BotCreationState>()({
   slow: FLAG,
   botId: ID,
   error: text(MAX_MESSAGE_LINE_CHARS),
-  missing: list(2, ENUM),
+  missing: list(4, ENUM),
   uncertain: FLAG,
 });
 const accountWrite = object<AccountWrite>()({
