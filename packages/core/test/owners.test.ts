@@ -43,6 +43,7 @@ const WALKED = new Set([
   "ObservableStore",
   "FileTransfers",
   "PendingSaves",
+  "AccountsEngine",
   "WaitingIndex",
 ]);
 /** Classes whose instances hold no collection of their own: handles. */

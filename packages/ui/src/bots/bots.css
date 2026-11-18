@@ -1,0 +1,1335 @@
+/* Bots and accounts: the components docs/design/bots.md adds, from its
+   prototype (docs/design/prototype/css/bots.css), without the T3 Code
+   screens and the conversation's lines, which other work builds. Every value
+   is a token from tokens.css. New components are marked "new"; everything
+   else places an existing component (the access bar, the fact block, the
+   menu) in a new screen. */
+
+/* Dialogs --------------------------------------------------------------------- */
+
+/* new: a dialog. The stage's surface, floating, radius 18. A new bot is a
+   narrow column, Settings a two-pane window, a confirmation a small card. */
+.b-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-width: none;
+  max-height: min(720px, calc(100dvh - 48px));
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg-pane);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+
+.b-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.b-dialog::backdrop {
+  background: var(--bg-scrim);
+}
+
+.b-dialog[data-kind="settings"] {
+  width: min(800px, calc(100vw - 48px));
+  height: min(640px, calc(100dvh - 48px));
+}
+
+.b-dialog[data-kind="confirm"] {
+  width: min(380px, calc(100vw - 32px));
+}
+
+.b-sheet {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* The header is a band with floating round buttons, not a bar: no fill, no rule. */
+.b-head {
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  align-items: center;
+  flex: none;
+  min-height: 56px;
+  padding: 0 12px;
+}
+
+.b-head h2 {
+  grid-column: 2;
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  text-align: center;
+}
+
+.b-head h2:focus {
+  outline: none;
+}
+
+.b-head .b-close {
+  grid-column: 3;
+  justify-self: end;
+}
+
+.b-head .b-back {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.b-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px var(--space-6) var(--space-5);
+}
+
+.b-foot {
+  display: grid;
+  gap: 10px;
+  flex: none;
+  padding: 12px var(--space-6) var(--space-6);
+}
+
+.b-foot .access-bar {
+  margin: 0;
+}
+
+/* A sentence under a title, or between blocks. */
+.b-lead {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+  text-align: center;
+  text-wrap: balance;
+}
+
+.b-hint {
+  margin: 10px 2px 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.b-hint code,
+.b-lead code,
+.b-note code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+/* A small grey word above a group, as in the rail and the Work pane. */
+.b-group {
+  margin: 18px 2px 8px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text-faint);
+}
+
+/* new: a note on a soft fill, for something to know before choosing. */
+.b-note {
+  display: flex;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+.b-note > .icon {
+  flex: none;
+  margin-top: 3px;
+  color: var(--text-muted);
+}
+
+.b-note[data-tone="warn"] {
+  background: var(--warn-soft);
+}
+
+.b-note[data-tone="warn"] > .icon {
+  color: var(--warn);
+}
+
+.b-note[data-tone="danger"] {
+  background: var(--danger-soft);
+}
+
+.b-note[data-tone="danger"] > .icon {
+  color: var(--danger);
+}
+
+.b-note p {
+  margin: 0;
+}
+
+.b-note p + p,
+.b-note p + .b-actions,
+.b-note .command-line {
+  margin-top: 8px;
+}
+
+.b-note b {
+  font-weight: var(--weight-medium);
+}
+
+.b-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.b-actions .spacer {
+  flex: 1;
+}
+
+/* The picture: a live character over the name ---------------------------------- */
+
+.b-preview {
+  display: block;
+  width: var(--avatar-create);
+  height: var(--avatar-create);
+  margin: 8px auto 20px;
+}
+
+.b-preview svg {
+  width: 100%;
+  height: 100%;
+}
+
+.b-name {
+  height: 52px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  text-align: center;
+}
+
+.b-label {
+  margin: 20px 2px 8px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* new: the body and colour pickers. One radio group each; the chosen item has
+   a neutral fill and a ring, never the accent. */
+.b-shapes {
+  display: grid;
+  grid-template-columns: repeat(4, 56px);
+  justify-content: center;
+  gap: 6px 14px;
+}
+
+.b-colors {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.b-shape {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+}
+
+.b-shape svg {
+  width: 36px;
+  height: 36px;
+}
+
+.b-shape:hover {
+  background: var(--bg-hover);
+}
+
+.b-shape[aria-checked="true"] {
+  background: var(--bg-selected);
+  box-shadow: inset 0 0 0 1.5px var(--border-strong);
+}
+
+.b-color {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--swatch);
+  cursor: pointer;
+}
+
+.b-color[aria-checked="true"] {
+  box-shadow:
+    0 0 0 3px var(--bg-pane),
+    0 0 0 4.5px var(--text-muted);
+}
+
+/* Choices: accounts and sign-in methods --------------------------------------- */
+
+/* new: a list of choices in one soft block, with hairlines between rows, as
+   in the Work pane's facts. A chosen row has the neutral selected fill and a
+   check at its end. */
+.b-choices {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  list-style: none;
+}
+
+.b-choices > li + li {
+  border-top: 1px solid var(--border);
+}
+
+.b-choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 58px;
+  padding: 9px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+button.b-choice:hover {
+  background: var(--bg-hover);
+}
+
+.b-choice[aria-checked="true"] {
+  background: var(--bg-selected);
+}
+
+.b-choice[aria-disabled="true"] {
+  cursor: default;
+}
+
+.b-choice-with {
+  display: flex;
+  align-items: center;
+  padding-right: 10px;
+}
+
+.b-choice-with > .b-choice {
+  flex: 1;
+  min-width: 0;
+}
+
+.b-choice-with > .button {
+  flex: none;
+}
+
+.b-choice-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 1px;
+}
+
+.b-choice-title {
+  overflow: hidden;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  line-height: 20px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.b-choice-title span {
+  font-weight: var(--weight-regular);
+  color: var(--text-muted);
+}
+
+/* An account's title: its name on one line, giving way; its id, when needed, on the next, whole. */
+.b-choice-title > .b-choice-name {
+  display: block;
+  overflow: hidden;
+  font-weight: var(--weight-medium);
+  color: inherit;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.b-choice-title > .b-choice-id {
+  display: block;
+  font-size: var(--text-sm);
+  line-height: 18px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.b-choice-sub {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-faint);
+}
+
+.b-choice-sub [data-tone="warn"] {
+  color: var(--warn);
+}
+
+.b-choice-sub [data-tone="danger"] {
+  color: var(--danger);
+}
+
+.b-choice .b-tick {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--text);
+  visibility: hidden;
+}
+
+.b-choice[aria-checked="true"] .b-tick {
+  visibility: visible;
+}
+
+.b-choice > .icon:not(.b-tick) {
+  flex: none;
+  color: var(--text-faint);
+}
+
+/* "Let the gateway choose": set apart from the accounts, its whole line readable. */
+.b-choices.b-gw {
+  margin-top: 12px;
+}
+
+.b-choice-sub.b-wrap {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+/* A row that does something rather than chooses: a plus and the words. */
+.b-choice[data-kind="add"] .b-choice-title {
+  font-weight: var(--weight-regular);
+  color: var(--text-muted);
+}
+
+.b-choice[data-kind="add"] > .icon {
+  width: 16px;
+  height: 16px;
+  margin: 0 2px;
+  color: var(--text-muted);
+}
+
+/* new: model and effort, side by side. Two pill buttons that open menus. */
+.b-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.b-select {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  min-height: 52px;
+  padding: 7px 34px 7px 16px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+}
+
+.b-select:hover {
+  background: color-mix(in srgb, var(--bg-bubble) 92%, var(--text));
+}
+
+.b-select small {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.b-select span {
+  overflow: hidden;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.b-select .icon {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+  transform: translateY(-50%) rotate(90deg);
+}
+
+.b-select:disabled {
+  cursor: default;
+}
+
+.b-select:disabled .icon {
+  display: none;
+}
+
+/* The menu a select opens: the shell's .menu, under its button. */
+.b-menu {
+  position: fixed;
+  z-index: 40;
+  width: auto;
+  min-width: 200px;
+}
+
+.b-menu .menu-item small {
+  margin-left: auto;
+  padding-left: 12px;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+/* Sign-in stages ------------------------------------------------------------------ */
+
+/* new: the code a person types on the provider's page. Large, in mono, on an inset. */
+.b-code {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 14px 10px 14px 18px;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+.b-code code {
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.b-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: b-step;
+}
+
+.b-steps > li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 4px 10px;
+  padding: 0 0 16px;
+  counter-increment: b-step;
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+.b-steps > li::before {
+  content: counter(b-step);
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-bubble);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+
+.b-steps > li > * {
+  grid-column: 2;
+  margin: 0;
+}
+
+.b-steps > li > p:first-child {
+  grid-row: 1;
+  padding-top: 2px;
+}
+
+.b-steps .button {
+  justify-self: start;
+}
+
+/* The waiting line: the pairing screen's .waiting, flush left. */
+.b-wait {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 4px 0 0;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+
+/* new: how a stage ended. The Work pane's empty mark with a state in it. */
+.b-result {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 12px 0 8px;
+  text-align: center;
+}
+
+.b-result h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.b-result p {
+  max-width: 34ch;
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.b-result .empty-mark[data-tone="ok"] {
+  color: var(--accent);
+}
+
+.b-result .empty-mark[data-tone="danger"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.b-result .empty-mark[data-tone="warn"] {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.b-field {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0 0;
+}
+
+.b-field > span {
+  padding: 0 4px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.b-field .input {
+  height: 44px;
+}
+
+.b-field-error {
+  margin: 0;
+  padding: 0 4px;
+  font-size: var(--text-sm);
+  color: var(--danger);
+}
+
+select.input {
+  appearance: none;
+  padding-right: 36px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 20px) 50%,
+    calc(100% - 15px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+/* The secondary path: a disclosure, closed until it is chosen. */
+.b-disclosure {
+  margin: 18px 0 0;
+}
+
+.b-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  min-height: 32px;
+  padding: 0 10px 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-md);
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.b-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.b-disclosure > summary:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.b-disclosure > summary .icon {
+  width: 13px;
+  height: 13px;
+  transition: transform var(--dur-quick) var(--ease-out);
+}
+
+.b-disclosure[open] > summary .icon {
+  transform: rotate(90deg);
+}
+
+.b-disclosure-body {
+  padding: 4px 0 0;
+}
+
+/* A row of a fact block that holds a switch or opens something. */
+.facts > .b-row {
+  min-height: 48px;
+  padding: 8px 0;
+}
+
+.b-row-main {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.b-row-main > span {
+  color: var(--text);
+}
+
+.b-row-main small {
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+.facts dd small {
+  display: block;
+}
+
+/* A value that must stay whole wraps instead of being cut. */
+.facts dd.b-wrap-value {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.facts dd.b-wrap-value .b-state {
+  display: inline;
+  white-space: normal;
+}
+
+.facts dd.b-wrap-value .b-state .icon {
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+
+.facts > div:has(> dd.b-wrap-value) {
+  align-items: flex-start;
+  padding: 11px 0;
+  line-height: 1.4;
+}
+
+.facts .mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+button.b-open {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: calc(100% + 28px);
+  min-height: 48px;
+  margin: 0 -14px;
+  padding: 6px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+button.b-open:hover {
+  background: var(--bg-hover);
+}
+
+.facts > div:first-child button.b-open {
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.facts > div:last-child button.b-open {
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.facts > div:only-child button.b-open {
+  border-radius: var(--radius-lg);
+}
+
+button.b-open > .icon {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.b-open-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+.b-open-value > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The state word never shortens: the account's name gives way first. */
+.b-open-value > .b-state {
+  flex: none;
+  overflow: visible;
+}
+
+/* A label and its Edit: the label wraps, Edit stays in view under it. */
+.facts dd.b-label-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.facts dd.b-label-value .button {
+  margin-right: -10px;
+}
+
+.facts > .b-edit-row {
+  flex-wrap: wrap;
+}
+
+.facts dd.b-edit {
+  display: flex;
+  flex: 1 1 220px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  overflow: visible;
+}
+
+.facts dd.b-edit .input {
+  flex: 1 1 140px;
+  height: 36px;
+}
+
+/* new: a short state word with its mark, for an account or a sign-in. */
+.b-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.b-state[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.b-state[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.b-state[data-tone="ok"] .icon {
+  color: var(--accent);
+}
+
+.b-state .icon {
+  width: 13px;
+  height: 13px;
+}
+
+/* Settings ------------------------------------------------------------------------ */
+
+/* new: Settings is two panes: the section list on the rail's surface, and the
+   section. On a phone it is one pane at a time. */
+.b-settings {
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.b-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 10px;
+  background: var(--bg-rail);
+}
+
+.b-nav-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* The list's own Close shows only where the list stands alone (the phone). */
+.b-nav-head .b-close {
+  display: none;
+}
+
+.b-nav h2 {
+  margin: 4px 10px 12px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.b-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  cursor: pointer;
+}
+
+.b-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.b-nav-item[aria-current="page"] {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+.b-nav-item .icon {
+  display: none;
+  margin-left: auto;
+  color: var(--text-faint);
+}
+
+.b-section {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.b-section > .b-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+}
+
+.b-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  min-height: 56px;
+  padding: 12px 60px 0 var(--space-6);
+}
+
+.b-section-head h3 {
+  margin: 0;
+  font-size: var(--text-title-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1.25;
+}
+
+.b-section-head h3:focus {
+  outline: none;
+}
+
+.b-section-head .b-back {
+  margin-left: -6px;
+}
+
+/* Back to the section list exists only where the list is not beside the section. */
+.b-section-head [data-b="to-nav"] {
+  display: none;
+}
+
+.b-choice-title .mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.b-section-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px var(--space-6) var(--space-6);
+}
+
+.b-section-body > .b-lead,
+.b-headrow .b-lead {
+  text-align: left;
+}
+
+.b-section-foot {
+  flex: none;
+  padding: 0 var(--space-6) var(--space-5);
+}
+
+.b-headrow {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.b-headrow .b-group {
+  margin-bottom: 8px;
+}
+
+/* Narrow: the sentence over its button, not squeezed beside it. */
+@media (max-width: 687px) {
+  .b-headrow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* Confirmation: a small card with a title, a sentence and two buttons. */
+.b-confirm {
+  padding: var(--space-6);
+}
+
+.b-confirm h2 {
+  margin: 0 0 8px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.b-confirm p {
+  margin: 0 0 var(--space-5);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.b-confirm .b-actions {
+  justify-content: flex-end;
+}
+
+.button[data-tone="danger"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.button[data-tone="danger"][data-variant="quiet"] {
+  background: transparent;
+}
+
+.button[data-tone="danger"]:hover {
+  background: color-mix(in srgb, var(--danger-soft) 70%, var(--danger) 12%);
+}
+
+/* A bot's settings, in the Work pane ------------------------------------------- */
+
+/* The tab's groups: the Work pane's group word. */
+.b-tabgroup {
+  margin: 18px 2px 8px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text-faint);
+}
+
+.b-tab > .b-tabgroup:first-child {
+  margin-top: 6px;
+}
+
+/* new: a page inside the tab: Back and a title, no band. */
+.b-subhead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px -8px;
+}
+
+.b-subhead h3 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.b-subhead h3:focus {
+  outline: none;
+}
+
+.b-tab .b-lead {
+  margin-bottom: 10px;
+}
+
+.b-tab .command-line {
+  margin: 0 0 8px;
+}
+
+/* A command breaks between words, never inside a flag. */
+.b-tok {
+  white-space: nowrap;
+}
+
+.b-tab .command-line code,
+.access-bar .command-line code,
+.b-dialog .command-line code {
+  overflow-wrap: break-word;
+}
+
+.b-step {
+  margin: 0 2px 8px;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.b-faint {
+  color: var(--text-faint);
+}
+
+.b-note p.b-faint {
+  font-size: var(--text-sm);
+}
+
+.b-list {
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.b-list li + li {
+  margin-top: 6px;
+}
+
+.b-lockwait {
+  min-height: 32px;
+}
+
+.b-lockwait .b-hint {
+  flex: 1;
+}
+
+.b-panel-foot {
+  margin-top: 18px;
+}
+
+/* Phone and narrow windows ------------------------------------------------------- */
+
+/* Below the one-pane width a dialog is a full-height sheet, as on the phone. */
+@media (max-width: 687px) {
+  .b-dialog,
+  .b-dialog[data-kind="settings"] {
+    width: 100vw;
+    height: calc(100dvh - 8px);
+    max-height: none;
+    margin: 8px 0 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+
+  /* A confirmation stays a card, as tall as its content, at the foot of the screen.
+     A modal dialog is pinned top and bottom, so its height must be fit-content. */
+  .b-dialog[data-kind="confirm"] {
+    width: calc(100vw - 24px);
+    height: fit-content;
+    max-height: calc(100dvh - 24px);
+    margin: auto auto 12px;
+    border-radius: var(--radius-lg);
+  }
+
+  .b-confirm .b-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .b-body,
+  .b-foot {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+
+  .b-settings {
+    grid-template-columns: 1fr;
+  }
+
+  .b-settings[data-pane="nav"] .b-section,
+  .b-settings[data-pane="section"] .b-nav {
+    display: none;
+  }
+
+  .b-nav {
+    padding: 16px var(--space-4);
+    background: var(--bg-pane);
+  }
+
+  .b-nav h2 {
+    margin: 2px 0 16px;
+    font-size: var(--text-title-sm);
+  }
+
+  .b-nav-head .b-close {
+    display: grid;
+    margin-top: -14px;
+  }
+
+  .b-nav-item {
+    height: 52px;
+    padding: 0 16px;
+    border-radius: var(--radius-md);
+    background: var(--bg-bubble);
+    color: var(--text);
+    font-size: var(--text-base);
+  }
+
+  .b-nav-item[aria-current="page"] {
+    background: var(--bg-bubble);
+  }
+
+  .b-nav-item .icon {
+    display: block;
+  }
+
+  .b-section-head,
+  .b-section-body,
+  .b-section-foot {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+
+  .b-section-head {
+    padding-right: 56px;
+  }
+
+  .b-section-head [data-b="to-nav"] {
+    display: grid;
+  }
+
+  .b-pair {
+    grid-template-columns: 1fr;
+  }
+}
+
+[data-input="touch"] .b-choice {
+  min-height: 64px;
+}
+
+/* Touch: every control is at least 44 px to hit; fields are 56 px at 17 px text. */
+[data-input="touch"] .b-dialog .button[data-size="sm"],
+[data-input="touch"] .b-tab .button[data-size="sm"],
+[data-input="touch"] .b-confirm .button {
+  min-height: var(--tap-min);
+  font-size: var(--text-base);
+}
+
+[data-input="touch"] .b-field .input,
+[data-input="touch"] .facts dd.b-edit .input {
+  height: 56px;
+  font-size: var(--text-lg);
+}
+
+[data-input="touch"] .b-disclosure > summary {
+  min-height: var(--tap-min);
+}
+
+[data-input="touch"] .b-dialog .copy,
+[data-input="touch"] .b-tab .copy,
+[data-input="touch"] .b-color {
+  position: relative;
+}
+
+[data-input="touch"] .b-dialog .copy::after,
+[data-input="touch"] .b-tab .copy::after,
+[data-input="touch"] .b-color::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+
+/* Long names on touch get two lines before they shorten; the full text is in the row's name. */
+[data-input="touch"] .b-choice-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+
+[data-input="touch"] .b-name {
+  height: 56px;
+}
+
+[data-input="touch"] .b-shapes {
+  grid-template-columns: repeat(4, 60px);
+}
+
+[data-input="touch"] .b-shape {
+  width: 60px;
+  height: 60px;
+}
+
+[data-input="touch"] .b-color {
+  width: 36px;
+  height: 36px;
+}
+
+[data-input="touch"] button.b-open,
+[data-input="touch"] .facts > .b-row {
+  min-height: 52px;
+}
+
+[data-input="touch"] .b-select {
+  min-height: 56px;
+}
+
+[data-input="touch"] .b-switch::before {
+  content: "";
+  position: absolute;
+  inset: -10px -2px;
+}
+
+[data-input="touch"] .b-dialog .button:not([data-size="sm"]) {
+  height: 48px;
+}
+
+/* Motion: nothing here loops except the waiting dot, which the shell already stops. */
+@media (prefers-reduced-motion: reduce) {
+  .b-switch::after,
+  .b-disclosure > summary .icon {
+    transition: none;
+  }
+}
+
+[data-motion="reduce"] .b-switch::after,
+[data-motion="reduce"] .b-disclosure > summary .icon {
+  transition: none;
+}
+
+/* The connect component inside a bot's Settings tab: its actions under its content. */
+.b-tab .b-connect-foot {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}

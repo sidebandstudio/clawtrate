@@ -57,10 +57,12 @@ export function readRecord(path: string): RunRecord | null {
       (record.host === null || isProc(record.host)) &&
       (record.hostPending === undefined || record.hostPending === true) &&
       Array.isArray(record.instances) &&
-      // Only this run's own two instances, each with a run id of the tool's format.
+      // Only this run's own instances, each with a run id of the tool's format.
       record.instances.every(
         (entry) =>
-          (entry?.name === `e2e-${record.run}` || entry?.name === `e2e-${record.run}-other`) &&
+          (entry?.name === `e2e-${record.run}` ||
+            entry?.name === `e2e-${record.run}-other` ||
+            entry?.name === `e2e-${record.run}-acct`) &&
           typeof entry.runId === "string" &&
           /^[0-9a-f]{48}$/.test(entry.runId),
       ) &&

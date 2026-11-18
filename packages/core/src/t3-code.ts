@@ -479,5 +479,5 @@ export function threadLink(calls: readonly T3Call[]): { href: string; host: stri
     return null;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-  return { href: url.href, host: url.host };
+  return { href: url.toString(), host: url.host };
 }

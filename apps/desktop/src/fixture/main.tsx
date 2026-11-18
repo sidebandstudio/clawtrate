@@ -12,6 +12,7 @@
 //   &sort=name             the rail's sort order: recent, name or manual
 //   &files=loaded          the Work pane's Files states (files.ts), with &checkout=1, &fileload=failed
 //   &tab=files             the Work pane's tab
+//   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
 
 import { App, BridgeProvider, rosterKey, rosterScope } from "@clawtrate/ui";
 import { StrictMode } from "react";
@@ -20,6 +21,7 @@ import { createFixtureBridge, GATEWAY_ID, GATEWAY_URL, isScene } from "./bridge-
 import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
+import { accountParams } from "./accounts.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -73,6 +75,7 @@ document.documentElement.dataset.host = "web";
 const sceneName = params.get("scene");
 const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   files: fileParams(params),
+  accounts: accountParams(params),
   // `steps=manual`: the scene's later steps wait for `clawtrateFixture.runSteps()`.
   manualSteps: params.get("steps") === "manual",
 });

@@ -46,6 +46,13 @@ import {
   withTaskStates,
 } from "./data.ts";
 import { FILE_COMMANDS, fileAnswers, withFileRuns, type FileParams } from "./files.ts";
+import {
+  accountCommand,
+  fixtureAccounts,
+  NO_ACCOUNT_PARAMS,
+  withAccess,
+  type AccountParams,
+} from "./accounts.ts";
 import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
@@ -124,6 +131,7 @@ function loaded(now: number): ClawtrateState {
     unroutedApprovals: [],
     unroutedApprovalsOmitted: 0,
     creations: [],
+    accounts: initialState.accounts,
     retention: initialState.retention,
   };
 }
@@ -450,7 +458,7 @@ function answerStrings(
 
 export function createFixtureBridge(
   name: SceneName,
-  options: { files?: FileParams; manualSteps?: boolean } = {},
+  options: { files?: FileParams; accounts?: AccountParams; manualSteps?: boolean } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   /**
@@ -479,10 +487,14 @@ export function createFixtureBridge(
   // The Work pane's Files scenes add the disk task's file runs, and answer the file commands.
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);
+  const accountParams = options.accounts ?? NO_ACCOUNT_PARAMS;
   let state =
     fileParams.state === null
       ? initial
       : { ...initial, transcripts: withFileRuns(initial.transcripts, now, fileParams) };
+  // Every scene with bots has the gateway's accounts; the address can give it more access.
+  if (state.bots.length > 0)
+    state = withAccess({ ...state, accounts: fixtureAccounts(now, accountParams) }, accountParams);
   const listeners = new Set<(state: ClawtrateState) => void>();
   const set = (next: ClawtrateState) => {
     state = next;
@@ -520,6 +532,11 @@ export function createFixtureBridge(
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
   async function apply(command: BridgeCommand): Promise<unknown> {
+    const account = accountCommand(command, () => state, set, accountParams);
+    if (account) {
+      sent.push(command);
+      return account;
+    }
     const rail = railCommand(
       command,
       () => state,

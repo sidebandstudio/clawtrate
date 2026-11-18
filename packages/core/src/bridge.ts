@@ -19,6 +19,7 @@ import {
 } from "./sidebar.ts";
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
+import type { MissingStep } from "./accounts.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -31,7 +32,8 @@ export type BridgeCommand =
   | { type: "openSession"; key: string }
   | { type: "closeSession"; key: string }
   /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
-  | { type: "requestAccess" }
+  /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
+  | { type: "requestAccess"; tier?: "admin" }
   /**
    * Send to a task this viewer has open. Files are not carried in the command:
    * they are added first (web upload path or Electron IPC) and named by id.
@@ -114,6 +116,47 @@ export type BridgeCommand =
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
   | { type: "releaseFile"; id: string }
+  // Provider accounts (bots.md sections 3 to 11). Writes need admin.
+  /** Read the accounts, sign-ins, bindings and catalogue again. */
+  | { type: "refreshAccounts" }
+  /** Read one bot's stored order again: the lock's evidence. */
+  | { type: "checkLock"; botId: string }
+  /** Start one of the gateway's sign-ins, for the bot the person works on (or null). */
+  | { type: "startSignIn"; methodId: string; botId: string | null }
+  /** The code or address pasted back, or a company address. Sent once and kept nowhere. */
+  | { type: "answerSignIn"; value: string }
+  | { type: "cancelSignIn" }
+  | { type: "dismissSignIn" }
+  /** Read again where a finished sign-in's account landed, after that read failed. */
+  | { type: "recheckSignIn" }
+  | { type: "chooseSignInAccount"; profileId: string }
+  /** An API key the person typed. Sent once to the gateway and kept nowhere. */
+  | { type: "saveApiKey"; provider: string; key: string; botId: string | null }
+  | { type: "setAccountLabel"; profileId: string; label: string }
+  | { type: "disconnectAccount"; profileId: string }
+  /** New bot: its name and picture, and the account it runs on (null: the gateway chooses). */
+  | {
+      type: "createBot";
+      name: string;
+      avatar: string | null;
+      account: string | null;
+      provider: string;
+      model: string;
+      effort: string | null;
+    }
+  | { type: "dismissBotCreation" }
+  /** Finish a bot whose creation is partial, by its id. */
+  | { type: "finishBot"; botId: string }
+  | {
+      type: "changeBotAccount";
+      botId: string;
+      account: string | null;
+      provider: string;
+      model: string;
+      effort: string | null;
+    }
+  | { type: "setBotModel"; botId: string; model: string; effort: string | null }
+  | { type: "removeBotFallbacks"; botId: string }
   /**
    * The rail's task actions (`task-actions.ts`). They act on any task the rail
    * lists, open in this view or not, and each stays at `operator.write`.
@@ -163,19 +206,31 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                         ? CheckoutDiff
                         : C extends { type: "readFileChunk" }
                           ? { data: string }
-                          : C extends { type: "newTask" | "newMainTask" }
-                            ? { key: string }
-                            : C extends { type: "archiveTask" }
-                              ? ArchiveResult
-                              : C extends { type: "listArchived" }
-                                ? ArchivedList
-                                : void;
+                          : C extends { type: "cancelSignIn" }
+                            ? { cancelled: boolean }
+                            : C extends { type: "dismissSignIn" }
+                              ? { dismissed: boolean }
+                              : C extends { type: "saveApiKey" }
+                                ? { profileId: string | null }
+                                : C extends { type: "createBot" | "finishBot" }
+                                  ? { botId: string; missing: MissingStep[] }
+                                  : C extends { type: "newTask" | "newMainTask" }
+                                    ? { key: string }
+                                    : C extends { type: "archiveTask" }
+                                      ? ArchiveResult
+                                      : C extends { type: "listArchived" }
+                                        ? ArchivedList
+                                        : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
   version: string;
-  /** Set when the host was started against the local development gateway. */
-  devGateway: { url: string } | null;
+  /**
+   * Set when the host was started against the local development gateway.
+   * `cli` is how a command reaches that instance on its machine
+   * (`openclaw --profile <profile>`), for the commands the app shows.
+   */
+  devGateway: { url: string; cli?: string } | null;
   /** The name this device gives the gateway when it pairs, for example "Clawtrate Desktop". */
   deviceName?: string;
   /**
@@ -383,6 +438,35 @@ function answers(value: unknown): Record<string, QuestionAnswer[]> {
   return out;
 }
 
+const PROVIDER_PATTERN = /^[\w.-]{1,128}$/;
+const PROFILE_PATTERN = /^[\w.-]{1,128}:[^\s]{1,256}$/;
+
+function providerId(value: unknown): string {
+  if (typeof value !== "string" || !PROVIDER_PATTERN.test(value))
+    throw new Error("invalid provider");
+  return value;
+}
+
+function profileId(value: unknown): string {
+  if (typeof value !== "string" || !PROFILE_PATTERN.test(value)) throw new Error("invalid account");
+  return value;
+}
+
+function shortText(value: unknown, max: number, what: string): string {
+  if (typeof value !== "string" || value.length > max) throw new Error(`invalid ${what}`);
+  return value;
+}
+
+/**
+ * A code, an address or a key the person typed. Its value is never part of
+ * an error, so a refusal can be shown or logged without it.
+ */
+function secretText(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 8_192)
+    throw new Error("invalid entry");
+  return value;
+}
+
 /** Validate an untrusted command from a renderer before it reaches the client. */
 export function parseBridgeCommand(value: unknown): BridgeCommand {
   if (value === null || typeof value !== "object") throw new Error("invalid command");
@@ -401,11 +485,93 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       }
       return { type: "connect", url: command.url, token: token ?? null };
     }
+    case "requestAccess":
+      return command.tier === "admin"
+        ? { type: "requestAccess", tier: "admin" }
+        : { type: "requestAccess" };
+    case "refreshAccounts":
+    case "cancelSignIn":
+    case "dismissSignIn":
+    case "recheckSignIn":
+    case "dismissBotCreation":
+      return { type: command.type };
+    case "checkLock":
+    case "finishBot":
+    case "removeBotFallbacks":
+      return { type: command.type, botId: botId(command.botId) };
+    case "startSignIn":
+      return {
+        type: "startSignIn",
+        methodId: id(command.methodId, "sign-in method"),
+        botId: command.botId === null || command.botId === undefined ? null : botId(command.botId),
+      };
+    case "answerSignIn":
+      return { type: "answerSignIn", value: secretText(command.value) };
+    case "saveApiKey":
+      return {
+        type: "saveApiKey",
+        provider: providerId(command.provider),
+        key: secretText(command.key),
+        botId: command.botId === null || command.botId === undefined ? null : botId(command.botId),
+      };
+    case "chooseSignInAccount":
+      return { type: "chooseSignInAccount", profileId: profileId(command.profileId) };
+    case "setAccountLabel":
+      return {
+        type: "setAccountLabel",
+        profileId: profileId(command.profileId),
+        label: shortText(command.label, 128, "label"),
+      };
+    case "disconnectAccount":
+      return { type: "disconnectAccount", profileId: profileId(command.profileId) };
+    case "createBot":
+      return {
+        type: "createBot",
+        name: shortText(command.name, 128, "name"),
+        avatar:
+          command.avatar === null || command.avatar === undefined
+            ? null
+            : shortText(command.avatar, 32_768, "picture"),
+        account:
+          command.account === null || command.account === undefined
+            ? null
+            : profileId(command.account),
+        provider: providerId(command.provider),
+        model: id(command.model, "model"),
+        effort:
+          command.effort === null || command.effort === undefined
+            ? null
+            : id(command.effort, "effort"),
+      };
+    case "changeBotAccount":
+      return {
+        type: "changeBotAccount",
+        botId: botId(command.botId),
+        account:
+          command.account === null || command.account === undefined
+            ? null
+            : profileId(command.account),
+        provider: providerId(command.provider),
+        model: id(command.model, "model"),
+        effort:
+          command.effort === null || command.effort === undefined
+            ? null
+            : id(command.effort, "effort"),
+      };
+    case "setBotModel":
+      return {
+        type: "setBotModel",
+        botId: botId(command.botId),
+        model: id(command.model, "model"),
+        effort:
+          command.effort === null || command.effort === undefined
+            ? null
+            : id(command.effort, "effort"),
+      };
     case "connectDevGateway":
     case "disconnect":
     case "suspend":
     case "retry":
-    case "requestAccess":
       return { type: command.type };
     case "sendMessage": {
       const ids = command.attachmentIds ?? [];
@@ -735,7 +901,54 @@ class ViewerSession implements BridgeSession {
         if (this.open.delete(command.key)) client.closeSession(command.key);
         return;
       case "requestAccess":
-        return client.requestAccess();
+        return client.requestAccess(command.tier === "admin" ? "admin" : "interactive");
+      case "refreshAccounts":
+        return client.refreshAccounts();
+      case "checkLock":
+        return client.checkLock(command.botId);
+      case "startSignIn":
+        return client.startSignIn(command.methodId, command.botId);
+      case "answerSignIn":
+        return client.answerSignIn(command.value);
+      case "cancelSignIn":
+        return client.cancelSignIn();
+      case "dismissSignIn":
+        return client.dismissSignIn();
+      case "recheckSignIn":
+        return client.recheckSignIn();
+      case "chooseSignInAccount":
+        return client.chooseSignInAccount(command.profileId);
+      case "saveApiKey":
+        return client.saveApiKey(command.provider, command.key, command.botId);
+      case "setAccountLabel":
+        return client.setAccountLabel(command.profileId, command.label);
+      case "disconnectAccount":
+        return client.disconnectAccount(command.profileId);
+      case "createBot":
+        return client.createBot({
+          name: command.name,
+          avatar: command.avatar,
+          account: command.account,
+          provider: command.provider,
+          model: command.model,
+          effort: command.effort,
+        });
+      case "dismissBotCreation":
+        return client.dismissBotCreation();
+      case "finishBot":
+        return client.finishBot(command.botId);
+      case "changeBotAccount":
+        return client.changeBotAccount(
+          command.botId,
+          command.account,
+          command.provider,
+          command.model,
+          command.effort,
+        );
+      case "setBotModel":
+        return client.setBotModel(command.botId, command.model, command.effort);
+      case "removeBotFallbacks":
+        return client.removeBotFallbacks(command.botId);
       case "sendMessage": {
         const key = this.mine(command.key);
         if (command.attachmentIds.length > 0 && !policy.attachments) {
