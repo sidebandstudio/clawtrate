@@ -55,6 +55,8 @@ export class FakeBrowser {
   stallConnect = false;
   connectDelayMs = 0;
   replyDelayMs = 0;
+  /** The browser gives no debugger address of its own, so it cannot be watched. */
+  noBrowserEndpoint = false;
   /** Commands that are never answered. */
   stalledMethods = new Set<string>();
   sockets: FakeSocket[] = [];
@@ -74,8 +76,14 @@ export class FakeBrowser {
       );
     }
     const u = new URL(url);
-    const list = this.lists.get(`${u.protocol}//${u.host}`);
+    const base = `${u.protocol}//${u.host}`;
+    const list = this.lists.get(base);
     if (!list) throw new TypeError("fetch failed");
+    if (u.pathname === "/json/version") {
+      if (this.noBrowserEndpoint) return new Response("{}", { status: 200 });
+      const ws = `${base.replace("http", "ws")}/devtools/browser/fake-browser-0001`;
+      return new Response(JSON.stringify({ webSocketDebuggerUrl: ws }), { status: 200 });
+    }
     return new Response(JSON.stringify(list), { status: 200 });
   };
 
@@ -92,6 +100,30 @@ export class FakeBrowser {
   /** The CDP commands sent so far, by method. */
   sent(prefix = ""): LogEntry[] {
     return this.log.filter((e) => e.kind === "send" && e.method?.startsWith(prefix));
+  }
+
+  /** The CDP commands sent to tabs (not to the browser itself), by method. */
+  sentToTabs(prefix = ""): LogEntry[] {
+    return this.sent(prefix).filter((e) => e.url.includes("/devtools/page/"));
+  }
+
+  /** Connections to tabs, not the plugin's watch on the browser itself. */
+  get tabSockets(): FakeSocket[] {
+    return this.sockets.filter((s) => s.url.includes("/devtools/page/"));
+  }
+
+  /** The open watch connection on a browser, if any. */
+  watchSocket(base: string): FakeSocket | undefined {
+    return this.sockets.find(
+      (s) => !s.closed && s.url.startsWith(`${base.replace("http", "ws")}/devtools/browser/`),
+    );
+  }
+
+  /** An event from a tab, as the browser sends it to a watch (by the tab's session). */
+  tabEvent(base: string, targetId: string, method: string, params: Json) {
+    this.watchSocket(base)?.emit("message", {
+      data: JSON.stringify({ method, params, sessionId: `S-${targetId}` }),
+    });
   }
 }
 
@@ -135,6 +167,22 @@ export class FakeSocket extends EventEmitter {
       method: message.method,
       params: message.params,
     });
+    if (message.method === "Target.setAutoAttach" && this.url.includes("/devtools/browser/")) {
+      // Chromium reports every tab open now before it answers.
+      const base = this.url.slice(0, this.url.indexOf("/devtools/")).replace("ws", "http");
+      for (const target of this.browser.lists.get(base) ?? []) {
+        this.emit("message", {
+          data: JSON.stringify({
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: `S-${target.id}`,
+              targetInfo: { targetId: target.id, type: "page", url: target.url },
+              waitingForDebugger: false,
+            },
+          }),
+        });
+      }
+    }
     if (this.browser.stalledMethods.has(message.method)) return;
     setTimeout(() => {
       if (!this.closed)

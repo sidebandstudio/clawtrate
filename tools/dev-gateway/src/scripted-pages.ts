@@ -14,6 +14,8 @@ export const PAGES_RECORD_PATH = "/scripted/pages/record";
 export const REFUSED_TITLE = "Refused by the development gateway";
 /** How long the slow page takes to answer. */
 export const SLOW_PAGE_MS = 8000;
+/** How long the scripted download takes to arrive, a piece at a time. */
+export const SLOW_DOWNLOAD_MS = 8000;
 
 export type PageEvent = { seq: number; at: number; page: string; kind: string; value: string };
 export type Refusal = { seq: number; at: number; host: string; method: string; path: string };
@@ -169,6 +171,31 @@ export function startScriptedPages(options: { port: number; log?: (line: string)
           SLOW_PAGE_MS,
         );
         req.socket.once("close", () => clearTimeout(timer));
+        return;
+      }
+      if (req.method === "GET" && url.pathname === `${PAGES_PREFIX}download`) {
+        // An attachment that arrives slowly, so the browser keeps downloading for a while.
+        // The first part at once, more than the browser reads before it decides
+        // the response is a download; the rest over SLOW_DOWNLOAD_MS.
+        const piece = "A piece of the scripted download, for the computer checks.\n";
+        const first = piece.repeat(64);
+        res.writeHead(200, {
+          "content-type": "text/plain; charset=utf-8",
+          "content-disposition": 'attachment; filename="scripted-download.txt"',
+          "content-length": String(Buffer.byteLength(first) + 16 * Buffer.byteLength(piece)),
+          "cache-control": "no-store",
+        });
+        res.write(first);
+        let sent = 0;
+        const timer = setInterval(() => {
+          res.write(piece);
+          sent += 1;
+          if (sent === 16) {
+            clearInterval(timer);
+            res.end();
+          }
+        }, SLOW_DOWNLOAD_MS / 16);
+        req.socket.once("close", () => clearInterval(timer));
         return;
       }
       if (req.method === "GET" && url.pathname === `${PAGES_PREFIX}welcome`) {

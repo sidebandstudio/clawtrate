@@ -6,7 +6,8 @@
 // Clients: two paired operators with read and write (the holder and another
 // device) and a read-only one. A further operator is opened and closed by the
 // check of a caller that leaves. Bots act through the scripted model's
-// browser directives (#browse, #browse-read, #browse-slow, #browse-outside).
+// browser directives (#browse, #browse-read, #browse-slow, #browse-download,
+// #browse-outside).
 
 import { spawnSync } from "node:child_process";
 import { browserProcesses, listProcesses } from "./cli.ts";
@@ -270,6 +271,64 @@ async function watchTab(cdpPort: number, targetId: string) {
   );
   socket.send(JSON.stringify({ id: 1, method: "Page.enable", params: {} }));
   return { seen, close: () => socket.close() };
+}
+
+/**
+ * The check's own watch on a bot's browser, through its debugging port on
+ * loopback: attached to every tab with page events on, it records when each
+ * download begins and ends. It sends nothing else.
+ */
+async function watchDownloads(cdpPort: number) {
+  const version = rec(
+    await (
+      await fetch(`http://127.0.0.1:${cdpPort}/json/version`, {
+        signal: AbortSignal.timeout(10_000),
+      })
+    ).json(),
+  );
+  const url = String(version.webSocketDebuggerUrl ?? "");
+  expect(
+    url.startsWith(`ws://127.0.0.1:${cdpPort}/devtools/browser/`),
+    `unexpected browser address ${url}`,
+  );
+  const socket = new WebSocket(url);
+  const began = new Map<string, number>();
+  const ended = new Map<string, number>();
+  let id = 0;
+  socket.addEventListener("message", (event) => {
+    const message = rec(JSON.parse(String(event.data)));
+    const params = rec(message.params);
+    if (message.method === "Target.attachedToTarget" && rec(params.targetInfo).type === "page") {
+      socket.send(
+        JSON.stringify({
+          id: ++id,
+          method: "Page.enable",
+          params: {},
+          sessionId: params.sessionId,
+        }),
+      );
+    } else if (message.method === "Page.downloadWillBegin") {
+      began.set(String(params.guid), Date.now());
+    } else if (message.method === "Page.downloadProgress" && params.state !== "inProgress") {
+      ended.set(String(params.guid), Date.now());
+    }
+  });
+  await withTimeout(
+    new Promise<void>((resolve, reject) => {
+      socket.addEventListener("open", () => resolve(), { once: true });
+      socket.addEventListener("error", () => reject(new ComputerCheckFailure("no CDP connection")));
+    }),
+    10_000,
+    "the check's connection to the browser",
+  );
+  socket.send(
+    JSON.stringify({
+      id: ++id,
+      method: "Target.setAutoAttach",
+      params: { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
+    }),
+  );
+  return { began, ended, close: () => socket.close() };
 }
 
 /** Whether an address as `lsof -nP` prints it is on loopback. */
@@ -847,6 +906,94 @@ export const COMPUTER_CHECKS: ComputerCheck[] = [
       } finally {
         tab.close();
         if (generation) {
+          await call(holder, "control.release", { sessionKey: key, targetId, generation });
+        }
+      }
+    },
+  },
+  {
+    name: "a take is not granted while a download the bot started is still in progress",
+    covers: ["#browse-download"],
+    async run(ctx, world) {
+      const { holder, reader } = ctx.clients;
+      const bot = ctx.bots[0]!;
+      const { key, targetId } = world.tabs.get(bot.id)!;
+      const downloads = await watchDownloads(bot.cdpPort);
+      const held: string[] = [];
+      try {
+        await sleep(500); // attached to the tabs open now
+        const from = holder.lastSeq;
+        const sent = await holder.send(key, "#browse-download");
+        const runId = String(sent.runId);
+        await until("Chromium to begin the bot's download", () => downloads.began.size > 0, 30_000);
+        const [guid] = [...downloads.began.keys()];
+        // Stopped: the call no longer runs, but the download goes on in the browser.
+        await holder.request("chat.abort", { sessionKey: key, runId });
+        await holder
+          .waitFor(
+            "the stopped run to end",
+            (e) =>
+              e.event === "chat" &&
+              rec(e.payload).runId === runId &&
+              rec(e.payload).state === "aborted",
+            30_000,
+            from,
+          )
+          .catch(() => undefined);
+        // Every take answered before the download ended is busy; the first grant follows its end.
+        const deadline = Date.now() + 40_000;
+        let granted: JsonRecord | null = null;
+        let busyForDownload = 0;
+        while (!granted && Date.now() < deadline) {
+          const answer = answered(
+            await call(holder, "control.take", { sessionKey: key, targetId }),
+            "control.take during the download",
+          );
+          const at = Date.now();
+          if (answer.state === "granted") {
+            held.push(String(answer.generation));
+            granted = answer;
+            const end = downloads.ended.get(guid!);
+            expect(
+              end !== undefined && end <= at,
+              `granted at ${at} while the download was still in progress`,
+            );
+          } else {
+            same(answer.state, "busy", "a take during the download");
+            if (answer.reason === "a download in the bot's browser is still in progress")
+              busyForDownload += 1;
+            const event = rec(
+              (await controlEvent(reader, String(answer.generation), "busy")).payload,
+            );
+            expect(
+              ["download-in-progress", "browser-not-quiet", "bot-still-acting"].includes(
+                String(event.reason),
+              ),
+              `busy for ${String(event.reason)}`,
+            );
+          }
+        }
+        expect(granted, "no take was granted after the download ended");
+        expect(
+          busyForDownload > 0 || (downloads.ended.get(guid!) ?? Infinity) < Date.now(),
+          "no take was refused for the download",
+        );
+        same(
+          answered(
+            await call(holder, "control.release", {
+              sessionKey: key,
+              targetId,
+              generation: String(granted.generation),
+            }),
+            "control.release",
+          ).state,
+          "released",
+          "the release",
+        );
+        held.length = 0;
+      } finally {
+        downloads.close();
+        for (const generation of held) {
           await call(holder, "control.release", { sessionKey: key, targetId, generation });
         }
       }

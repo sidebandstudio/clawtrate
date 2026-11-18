@@ -5,8 +5,11 @@
 // (The real case, a cancelled navigation on a real gateway, is a computer
 // check in `pnpm scenarios`.)
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ATLAS_TAB, load, until } from "./harness.ts";
+import { GRANT_GUARANTEE } from "../index.js";
+import { ATLAS, ATLAS_TAB, load, page, until } from "./harness.ts";
 
 const tab = { targetId: ATLAS_TAB };
 
@@ -17,14 +20,14 @@ describe("a take waits for a quiet tab", () => {
     const answer = await h.call("control.take", tab);
     const answered = performance.now();
     expect(answer.payload?.state).toBe("granted");
-    const stops = h.browser.sent("Page.stopLoading");
+    const stops = h.browser.sentToTabs("Page.stopLoading");
     // On the lease's own connection to this tab: a stop before Page.enable
     // (which Chromium holds back while a navigation is pending), and one after.
     expect(stops.map((e) => e.url)).toEqual([
       `ws://127.0.0.1:19113/devtools/page/${ATLAS_TAB}`,
       `ws://127.0.0.1:19113/devtools/page/${ATLAS_TAB}`,
     ]);
-    const enable = h.browser.sent("Page.enable")[0]!;
+    const enable = h.browser.sentToTabs("Page.enable")[0]!;
     expect(stops[0]!.t).toBeGreaterThan(asked);
     expect(stops[0]!.t).toBeLessThan(enable.t);
     expect(enable.t).toBeLessThan(stops[1]!.t);
@@ -40,7 +43,7 @@ describe("a take waits for a quiet tab", () => {
     let stops = 2;
     for (const method of ["Page.frameStartedLoading", "Page.frameNavigated"]) {
       await until(() => h.browser.sent("Page.stopLoading").length >= stops);
-      h.browser.sockets.at(-1)!.event(method, { frameId: "f", frame: { id: "f", url: "x" } });
+      h.browser.tabSockets.at(-1)!.event(method, { frameId: "f", frame: { id: "f", url: "x" } });
       stops += 1;
     }
     const answer = await take;
@@ -52,8 +55,8 @@ describe("a take waits for a quiet tab", () => {
   it("refuses the take, busy because the browser is not quiet, when the tab keeps loading", async () => {
     const h = load({ quietWindowMs: 100, quietTimeoutMs: 600 });
     const take = h.call("control.take", tab);
-    await until(() => h.browser.sockets.length > 0);
-    const socket = h.browser.sockets.at(-1)!;
+    await until(() => h.browser.tabSockets.length > 0);
+    const socket = h.browser.tabSockets.at(-1)!;
     const keepLoading = setInterval(
       () => socket.event("Page.frameStartedLoading", { frameId: "f" }),
       30,
@@ -110,7 +113,7 @@ describe("a take waits for a quiet tab", () => {
     const h = load({ quietWindowMs: 120 });
     const take = h.call("control.take", tab);
     await until(() => h.browser.sent("Page.stopLoading").length >= 2);
-    h.browser.sockets.at(-1)!.event("Page.frameStoppedLoading", { frameId: "f" });
+    h.browser.tabSockets.at(-1)!.event("Page.frameStoppedLoading", { frameId: "f" });
     expect((await take).payload?.state).toBe("granted");
     expect(h.browser.sent("Page.stopLoading")).toHaveLength(2);
     await h.stop();
@@ -132,7 +135,7 @@ describe("a take waits for a quiet tab", () => {
     const h = load();
     const answer = await h.call("control.take", tab);
     expect(answer.payload?.state).toBe("granted");
-    const socket = h.browser.sockets.at(-1)!;
+    const socket = h.browser.tabSockets.at(-1)!;
     // A person's own navigation after the grant changes nothing.
     socket.event("Page.frameStartedLoading", { frameId: "f" });
     socket.event("Page.frameNavigated", { frame: { id: "f", url: "x" } });
@@ -151,7 +154,7 @@ describe("a grant hands over a live connection", () => {
     const take = h.call("control.take", tab);
     await until(() => h.browser.sent("Page.stopLoading").length === 2);
     h.browser.stallDiscovery = true;
-    h.browser.sockets.at(-1)!.close();
+    h.browser.tabSockets.at(-1)!.close();
     const answer = await take;
     expect([answer.ok, answer.error?.details?.reason]).toEqual([false, "control_request_ended"]);
     expect(h.events.some((e) => e.state === "granted")).toBe(false);
@@ -178,4 +181,149 @@ describe("a grant hands over a live connection", () => {
     expect(page.slice(lastStop + 1).map((e) => e.method)).toEqual(["Page.getFrameTree"]);
     await h.stop();
   });
+});
+
+describe("what the plugin can see in the bot's browser, a take does not grant over", () => {
+  const SECOND = "D".repeat(32);
+  const watched = async (h: ReturnType<typeof load>) => {
+    // A bot call is admitted only once the plugin watches its browser.
+    await h.before("atlas", "run-w", "c-w", { action: "tabs" });
+    await h.after("atlas", "run-w", "c-w");
+    expect(h.browser.watchSocket(ATLAS), "no watch on the bot's browser").toBeDefined();
+  };
+
+  it("refuses while a download in that browser is in progress, and grants once it has finished", async () => {
+    const h = load({ quietWindowMs: 60, quietTimeoutMs: 500 });
+    await watched(h);
+    h.browser.tabEvent(ATLAS, ATLAS_TAB, "Page.downloadWillBegin", { guid: "g1", url: "x" });
+    h.browser.tabEvent(ATLAS, ATLAS_TAB, "Page.downloadProgress", {
+      guid: "g1",
+      state: "inProgress",
+    });
+    const refused = await h.call("control.take", tab);
+    expect(refused.payload).toMatchObject({
+      state: "busy",
+      reason: "a download in the bot's browser is still in progress",
+    });
+    expect(h.events.find((e) => e.state === "busy")?.reason).toBe("download-in-progress");
+    h.browser.tabEvent(ATLAS, ATLAS_TAB, "Page.downloadProgress", {
+      guid: "g1",
+      state: "completed",
+    });
+    expect((await h.call("control.take", tab)).payload?.state).toBe("granted");
+    await h.stop();
+  });
+
+  it("waits for a download that ends before the deadline, and grants only after it", async () => {
+    const h = load({ quietWindowMs: 60, quietTimeoutMs: 2000 });
+    await watched(h);
+    h.browser.tabEvent(ATLAS, ATLAS_TAB, "Page.downloadWillBegin", { guid: "g2", url: "x" });
+    let finishedAt = 0;
+    setTimeout(() => {
+      finishedAt = performance.now();
+      h.browser.tabEvent(ATLAS, ATLAS_TAB, "Page.downloadProgress", {
+        guid: "g2",
+        state: "canceled",
+      });
+    }, 300);
+    const answer = await h.call("control.take", tab);
+    expect(answer.payload?.state).toBe("granted");
+    expect(finishedAt).toBeGreaterThan(0);
+    await h.stop();
+  });
+
+  it("a download that begins in the quiet window starts it over", async () => {
+    const h = load({ quietWindowMs: 150, quietTimeoutMs: 600 });
+    await watched(h);
+    const take = h.call("control.take", tab);
+    await until(() => h.browser.sentToTabs("Page.stopLoading").length === 2);
+    h.browser.tabEvent(ATLAS, ATLAS_TAB, "Page.downloadWillBegin", { guid: "g3", url: "x" });
+    expect((await take).payload?.state).toBe("busy");
+    expect(h.events.some((e) => e.state === "granted")).toBe(false);
+    await h.stop();
+  });
+
+  it("refuses while another tab of that browser is still loading, and grants once it has stopped", async () => {
+    const h = load({ quietWindowMs: 60, quietTimeoutMs: 500 });
+    h.browser.lists.set(ATLAS, [page(ATLAS, ATLAS_TAB), page(ATLAS, SECOND)]);
+    await watched(h);
+    h.browser.tabEvent(ATLAS, SECOND, "Page.frameStartedLoading", { frameId: "f2" });
+    const refused = await h.call("control.take", tab);
+    expect(refused.payload).toMatchObject({
+      state: "busy",
+      reason: "the bot's browser is still loading a page",
+    });
+    h.browser.tabEvent(ATLAS, SECOND, "Page.frameStoppedLoading", { frameId: "f2" });
+    expect((await h.call("control.take", tab)).payload?.state).toBe("granted");
+    await h.stop();
+  });
+
+  it("refuses when the plugin cannot watch the bot's browser", async () => {
+    const h = load();
+    h.browser.noBrowserEndpoint = true;
+    const answer = await h.call("control.take", tab);
+    expect(answer.payload).toMatchObject({
+      state: "busy",
+      reason: "the plugin cannot see what the bot's browser is doing",
+    });
+    expect(h.events.find((e) => e.state === "busy")?.reason).toBe("browser-not-watched");
+    await h.stop();
+  });
+
+  it("watches again after the watch lost the browser", async () => {
+    const h = load();
+    await watched(h);
+    h.browser.watchSocket(ATLAS)!.close();
+    await until(() => !h.browser.watchSocket(ATLAS));
+    expect((await h.call("control.take", tab)).payload?.state).toBe("granted");
+    expect(h.browser.watchSocket(ATLAS)).toBeDefined();
+    await h.stop();
+  });
+
+  it("the watch changes nothing in the browser: it attaches without pausing tabs and turns on page events", async () => {
+    const h = load();
+    await watched(h);
+    const toBrowser = h.browser.log
+      .filter((e) => e.kind === "send" && e.url.includes("/devtools/browser/"))
+      .map((e) => [e.method, e.params]);
+    expect(toBrowser).toEqual([
+      ["Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }],
+      ["Page.enable", {}],
+    ]);
+    await h.stop();
+  });
+
+  it("a bot call waits for the watch, and is refused if a take began meanwhile", async () => {
+    const h = load();
+    h.browser.connectDelayMs = 120;
+    const call = h.before("atlas", "run-x", "c-x", { action: "tabs" });
+    await until(() => h.browser.sockets.length > 0);
+    const take = h.call("control.take", tab);
+    const result = await call;
+    expect(result?.block).toBe(true);
+    expect(h.state.inflight.size).toBe(0);
+    expect((await take).payload?.state).toBe("granted");
+    await h.stop();
+  });
+
+  it("a granted take says exactly what it guarantees, and that the bot's earlier work can still act", async () => {
+    const h = load();
+    const answer = await h.call("control.take", tab);
+    expect(answer.payload?.guarantee).toEqual([
+      "Input from the person reaches the page.",
+      "New browser calls from this bot are refused while control is held.",
+      "Work the bot had already started can still affect the page.",
+    ]);
+    await h.stop();
+  });
+});
+
+it("the plugin's page states the same guarantee, and that earlier work can still act", () => {
+  const page = readFileSync(join(import.meta.dirname, "../README.md"), "utf8").replace(/\s+/g, " ");
+  expect(page).toContain(
+    `exactly these three statements: ${GRANT_GUARANTEE.map((line) => `"${line}"`).join(" ")}`,
+  );
+  expect(page).toContain(
+    "**Work the bot had already started can still affect the page after a grant.**",
+  );
 });

@@ -181,7 +181,7 @@ describe("control.take", () => {
       const access = new Access();
       h.browser.connectDelayMs = 80;
       const take = h.call("control.take", tab, { access });
-      await until(() => h.browser.sockets.length > 0);
+      await until(() => h.browser.tabSockets.length > 0);
       if (quiet) access.revoked = true;
       else access.revoke();
       const result = await take;
@@ -190,7 +190,7 @@ describe("control.take", () => {
       expect(h.events.some((e) => e.state === "granted")).toBe(false);
       expect(h.events.at(-1)?.state).toBe("revoked");
       expect(h.state.leases.size).toBe(0);
-      expect(h.browser.sockets.every((s) => s.closed)).toBe(true);
+      expect(h.browser.tabSockets.every((s) => s.closed)).toBe(true);
       expect(access.releases).toBe(1);
       await h.stop();
     });
@@ -205,7 +205,7 @@ describe("the stream", () => {
       const view = await h.call("view.open", tab, { access });
       h.browser.connectDelayMs = 80;
       const upgrade = h.upgrade(String(view.payload!.wsPath));
-      await until(() => h.browser.sockets.length > 0);
+      await until(() => h.browser.tabSockets.length > 0);
       if (quiet) access.revoked = true;
       else access.revoke();
       const socket = await upgrade;
@@ -224,7 +224,7 @@ describe("the stream", () => {
     const view = await h.call("view.open", tab, { access });
     const socket = await h.upgrade(String(view.payload!.wsPath));
     await until(() => h.browser.sent("Page.startScreencast").length === 1);
-    const cdp = h.browser.sockets.at(-1)!;
+    const cdp = h.browser.tabSockets.at(-1)!;
     expect(texts(socket)).toHaveLength(1);
     access.revoked = true;
     cdp.event("Page.frameNavigated", { frame: { id: "f", url: "http://127.0.0.1:9/after" } });
@@ -247,7 +247,7 @@ describe("no command to the browser, and no confirmation, once access has gone",
     const access = new Access();
     h.browser.connectDelayMs = 60;
     const take = h.call("control.take", tab, { access });
-    await until(() => h.browser.sockets.length > 0);
+    await until(() => h.browser.tabSockets.length > 0);
     access.revoked = true;
     const answer = await take;
     expect(ended(answer)).toEqual([false, "FORBIDDEN", "session_access_ended"]);
@@ -264,7 +264,7 @@ describe("no command to the browser, and no confirmation, once access has gone",
     await until(() => h.browser.sent("Page.stopLoading").length === 2);
     access.revoked = true;
     // Activity in the window would make the take stop loading again.
-    h.browser.sockets.at(-1)!.event("Page.frameStartedLoading", { frameId: "f" });
+    h.browser.tabSockets.at(-1)!.event("Page.frameStartedLoading", { frameId: "f" });
     const answer = await take;
     expect(ended(answer)).toEqual([false, "FORBIDDEN", "session_access_ended"]);
     expect(h.browser.sent("Page.stopLoading")).toHaveLength(2);
@@ -335,7 +335,7 @@ describe("no command to the browser, and no confirmation, once access has gone",
     const socket = await h.upgrade(String(view.payload!.wsPath));
     await until(() => h.browser.sent("Page.startScreencast").length === 1);
     access.revoked = true;
-    h.browser.sockets.at(-1)!.event("Page.screencastFrame", { data: "AA==", sessionId: 3 });
+    h.browser.tabSockets.at(-1)!.event("Page.screencastFrame", { data: "AA==", sessionId: 3 });
     expect(h.browser.sent("Page.screencastFrameAck")).toEqual([]);
     expect(socket.closeCode()).toEqual({ code: 4006, reason: "authority_revoked" });
     await h.stop();

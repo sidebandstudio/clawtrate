@@ -213,7 +213,17 @@ describe("C-05c: only a debugger URL on the same address and port", () => {
     const opened = await h.call("view.open", { targetId: ATLAS_TAB });
     await h.upgrade(String(opened.payload!.wsPath));
     const urls = new Set(h.browser.log.filter((e) => e.kind === "connect").map((e) => e.url));
-    expect(urls).toEqual(new Set([`ws://127.0.0.1:19113/devtools/page/${ATLAS_TAB}`]));
-    expect(h.browser.fetches.every((f) => f.url === "http://127.0.0.1:19113/json/list")).toBe(true);
+    // The tab, and the plugin's watch on the browser itself, on the same endpoint.
+    expect(urls).toEqual(
+      new Set([
+        `ws://127.0.0.1:19113/devtools/page/${ATLAS_TAB}`,
+        "ws://127.0.0.1:19113/devtools/browser/fake-browser-0001",
+      ]),
+    );
+    expect(
+      h.browser.fetches.every((f) =>
+        ["http://127.0.0.1:19113/json/list", "http://127.0.0.1:19113/json/version"].includes(f.url),
+      ),
+    ).toBe(true);
   });
 });

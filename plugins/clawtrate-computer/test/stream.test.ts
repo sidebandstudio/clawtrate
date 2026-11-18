@@ -17,7 +17,7 @@ async function watching(h: ReturnType<typeof load>, caller = {}) {
   expect(view.ok).toBe(true);
   const socket = await h.upgrade(String(view.payload!.wsPath));
   await until(() => h.browser.sent("Page.startScreencast").length === started + 1);
-  const cdp = h.browser.sockets.at(-1)!;
+  const cdp = h.browser.tabSockets.at(-1)!;
   return { view: view.payload!, socket, cdp };
 }
 

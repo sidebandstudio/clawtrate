@@ -94,13 +94,13 @@ describe("cancellation", () => {
     h.browser.connectDelayMs = 300;
     const connection = new AbortController();
     const take = h.call("control.take", tab, { connection });
-    await until(() => h.browser.sockets.length === 1);
+    await until(() => h.browser.tabSockets.length === 1);
     connection.abort();
     expect((await take).ok).toBe(false);
     await sleep(400);
-    const [socket] = h.browser.sockets;
+    const [socket] = h.browser.tabSockets;
     expect(socket!.closed).toBe(true);
-    expect(h.browser.sent()).toEqual([]);
+    expect(h.browser.sentToTabs()).toEqual([]);
     expect(h.state.leases.size).toBe(0);
   });
 
@@ -118,7 +118,7 @@ describe("cancellation", () => {
     expect(h.events.at(-1)!.reason).toBe("connection-closed");
     await h.after("atlas", "run-1", "c1");
     expect(h.state.leases.size).toBe(0);
-    expect(h.browser.sockets).toEqual([]);
+    expect(h.browser.tabSockets).toEqual([]);
   });
 
   it("a holder whose connection closes loses its lease at once, and its views end", async () => {
@@ -242,7 +242,7 @@ describe("replacing a browser or a profile", () => {
     const h = load();
     const generation = (await h.call("control.take", tab)).payload!.generation;
     h.browser.lists.set(ATLAS, []);
-    h.browser.sockets[0]!.close();
+    h.browser.tabSockets[0]!.close();
     await until(() => h.statesOf(generation).includes("tab-closed"));
     expect(h.events.at(-1)!.reason).toBe("target-closed");
   });
@@ -252,7 +252,7 @@ describe("replacing a browser or a profile", () => {
       const h = load();
       const generation = (await h.call("control.take", tab)).payload!.generation;
       if (browserGone) h.browser.lists.delete(ATLAS);
-      h.browser.sockets[0]!.close();
+      h.browser.tabSockets[0]!.close();
       await until(() => h.statesOf(generation).includes("revoked"));
       expect(h.events.at(-1)!.reason, String(browserGone)).toBe("browser-unavailable");
       expect(h.statesOf(generation)).not.toContain("tab-closed");

@@ -782,6 +782,17 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: "browse-download",
+    phrase: "download the scripted file",
+    summary:
+      "Navigates the current tab to a scripted file that downloads slowly, over eight seconds.",
+    bots: "a bot with a browser of its own",
+    steps: () => [
+      browserCall((origin) => ({ action: "navigate", url: `${origin}${PAGES}download` })),
+      afterBrowser("Started the download."),
+    ],
+  },
+  {
     name: "browse-outside",
     phrase: "open an outside address",
     summary: `Navigates to ${OUTSIDE_ADDRESS}, then to another loopback port (${OTHER_LOOPBACK}), and reads what the tab shows; both are refused.`,

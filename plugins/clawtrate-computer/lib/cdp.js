@@ -10,6 +10,7 @@ export const TIMEOUTS = Object.freeze({ discoveryMs: 3000, connectMs: 3000, comm
 /** The largest target list accepted from a browser. */
 const MAX_LIST_BYTES = 1024 * 1024;
 const TARGET_ID = /^[A-Za-z0-9]{8,64}$/;
+const BROWSER_ID = /^[A-Za-z0-9-]{8,64}$/;
 
 /** A failure with a stable reason a caller can act on. */
 export class CdpError extends Error {
@@ -52,16 +53,12 @@ async function readLimited(response, limit, signal) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/**
- * The live page targets of one bot's browser. Redirects are refused; a target
- * is kept only when its debugger URL is exactly this endpoint and this
- * target: `ws://<same host>:<same port>/devtools/page/<id>`.
- */
-export async function cdpTargets(bot, options = {}) {
+/** GET one of the browser's JSON endpoints on its own address, with no redirect and a deadline. */
+async function browserJson(bot, path, options) {
   const { signal, timeouts = TIMEOUTS, fetchImpl = globalThis.fetch } = options;
   if (signal?.aborted) throw aborted(signal);
   const limit = deadline(signal, timeouts.discoveryMs);
-  const url = `${bot.base}/json/list`;
+  const url = `${bot.base}${path}`;
   let response;
   try {
     response = await fetchImpl(url, { redirect: "error", signal: limit });
@@ -76,14 +73,22 @@ export async function cdpTargets(bot, options = {}) {
     void response.body?.cancel().catch(() => {});
     throw new CdpError("discovery_failed", `the browser answered ${response.status}`);
   }
-  let list;
   try {
-    list = JSON.parse(await readLimited(response, MAX_LIST_BYTES, limit));
+    return JSON.parse(await readLimited(response, MAX_LIST_BYTES, limit));
   } catch (error) {
     if (signal?.aborted) throw aborted(signal);
     if (error instanceof CdpError) throw error;
     throw new CdpError("discovery_failed", "the target list is not JSON");
   }
+}
+
+/**
+ * The live page targets of one bot's browser. Redirects are refused; a target
+ * is kept only when its debugger URL is exactly this endpoint and this
+ * target: `ws://<same host>:<same port>/devtools/page/<id>`.
+ */
+export async function cdpTargets(bot, options = {}) {
+  const list = await browserJson(bot, "/json/list", options);
   const out = [];
   for (const target of Array.isArray(list) ? list : []) {
     if (target?.type !== "page" || typeof target.id !== "string" || !TARGET_ID.test(target.id)) {
@@ -103,16 +108,47 @@ export async function cdpTargets(bot, options = {}) {
 }
 
 /**
+ * The browser's own debugger URL, `ws://<same host>:<same port>/devtools/browser/<id>`,
+ * or a CdpError when the browser does not give exactly that.
+ */
+export async function browserEndpoint(bot, options = {}) {
+  const version = await browserJson(bot, "/json/version", options);
+  const url = version?.webSocketDebuggerUrl;
+  const prefix = `ws://${bot.host}:${bot.port}/devtools/browser/`;
+  if (
+    typeof url !== "string" ||
+    !url.startsWith(prefix) ||
+    !BROWSER_ID.test(url.slice(prefix.length))
+  ) {
+    throw new CdpError("discovery_failed", "the browser's own debugger address is not its own");
+  }
+  return url;
+}
+
+/**
  * Connect to one validated page target. The session closes itself when
  * `signal` aborts; every command has its own reply deadline and may take a
  * further signal of its own.
  */
 export async function openCdp(bot, targetId, options = {}) {
-  const { signal, timeouts = TIMEOUTS, WebSocketImpl = globalThis.WebSocket } = options;
   const target = (await cdpTargets(bot, options)).find((t) => t.id === targetId);
   if (!target) throw new CdpError("target_gone", "the tab is not in this bot's browser");
+  return connect(target.ws, target, options);
+}
+
+/**
+ * Connect to the bot's browser itself, for commands and events of every tab
+ * through flattened sessions (`sessionId`).
+ */
+export async function openBrowserCdp(bot, options = {}) {
+  const url = await browserEndpoint(bot, options);
+  return connect(url, { url }, options);
+}
+
+async function connect(url, target, options) {
+  const { signal, timeouts = TIMEOUTS, WebSocketImpl = globalThis.WebSocket } = options;
   if (signal?.aborted) throw aborted(signal);
-  const ws = new WebSocketImpl(target.ws);
+  const ws = new WebSocketImpl(url);
   await new Promise((resolve, reject) => {
     let settled = false;
     const finish = (error) => {
@@ -223,6 +259,7 @@ export async function openCdp(bot, targetId, options = {}) {
     /** Send one command and wait for its reply, at most `commandMs`. */
     send(method, params = {}, sendOptions = {}) {
       const commandSignal = sendOptions.signal;
+      const { sessionId } = sendOptions;
       return new Promise((resolve, reject) => {
         if (closed) return reject(new CdpError("closed", "the connection to the tab closed"));
         if (commandSignal?.aborted) return reject(aborted(commandSignal));
@@ -252,7 +289,7 @@ export async function openCdp(bot, targetId, options = {}) {
         commandSignal?.addEventListener("abort", onAbort, { once: true });
         pending.set(id, entry);
         try {
-          ws.send(JSON.stringify({ id, method, params }));
+          ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
         } catch {
           pending.delete(id);
           entry.fail(new CdpError("closed", "the connection to the tab closed"));

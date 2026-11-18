@@ -34,6 +34,7 @@ import {
   toolString,
 } from "./lib/config.js";
 import { CdpError, TIMEOUTS, cdpTargets, openCdp } from "./lib/cdp.js";
+import { watchBrowser } from "./lib/watch.js";
 import {
   acceptUpgrade,
   binaryFrame,
@@ -80,6 +81,28 @@ const GENERATION = /^[0-9a-f]{32}$/;
 const COORDINATE_LIMIT = 100000;
 const TEXT_LIMIT = 2000;
 
+/** How long a bot's browser call waits for the plugin to start watching its browser. */
+const WATCH_WAIT_MS = 2000;
+
+/**
+ * What a granted take guarantees, exactly, in the answer and on the plugin's
+ * page. Nothing more is promised: work the bot started before the take, such
+ * as a timer or script on the page, can still change it.
+ */
+export const GRANT_GUARANTEE = Object.freeze([
+  "Input from the person reaches the page.",
+  "New browser calls from this bot are refused while control is held.",
+  "Work the bot had already started can still affect the page.",
+]);
+
+/** Why a take was refused as busy: the event's reason and the answer's words. */
+const UNRESOLVED = {
+  calls: ["bot-still-acting", "the bot is still acting in this browser"],
+  loading: ["browser-not-quiet", "the bot's browser is still loading a page"],
+  download: ["download-in-progress", "a download in the bot's browser is still in progress"],
+  closed: ["browser-not-watched", "the plugin cannot see what the bot's browser is doing"],
+};
+
 /** Thrown inside a sequence of browser commands when the caller's access has gone. */
 const STALE = Symbol("stale");
 
@@ -99,6 +122,8 @@ export function newState() {
     tickets: new Map(),
     /** callbacks run whenever a call or a lease changes */
     waiters: new Set(),
+    /** profile -> { registration, pending: Promise<watch | null>, watch } */
+    watches: new Map(),
   };
 }
 
@@ -203,6 +228,7 @@ export function createComputer(api, options = {}) {
   const warn = (message) => logger.warn?.(`${PLUGIN_ID}: ${message}`);
   const registration = Symbol("registration");
   let emitEvent = () => {};
+  let stopped = false;
 
   const currentConfig = () => {
     try {
@@ -231,6 +257,41 @@ export function createComputer(api, options = {}) {
       state.waiters.add(check);
       signal?.addEventListener("abort", onAbort, { once: true });
     });
+  /**
+   * The plugin's watch on a bot's browser, opened if needed; null when the
+   * browser cannot be watched (not running, or not answering in time).
+   */
+  function ensureWatch(bot, ms = timeouts.discoveryMs + timeouts.connectMs + timeouts.commandMs) {
+    const known = state.watches.get(bot.profile);
+    if (known?.watch && !known.watch.closed) return Promise.resolve(known.watch);
+    if (known?.pending) return known.pending;
+    const entry = { registration, watch: null, pending: null };
+    entry.pending = watchBrowser(bot, { ...net, onChange: changed })
+      .then((watch) => {
+        if (state.watches.get(bot.profile) !== entry || stopped) {
+          watch.close();
+          return null;
+        }
+        entry.watch = watch;
+        watch.onClose(() => {
+          if (state.watches.get(bot.profile) === entry) state.watches.delete(bot.profile);
+          changed();
+        });
+        return watch;
+      })
+      .catch(() => {
+        if (state.watches.get(bot.profile) === entry) state.watches.delete(bot.profile);
+        return null;
+      })
+      .finally(() => (entry.pending = null));
+    state.watches.set(bot.profile, entry);
+    let timer;
+    return Promise.race([
+      entry.pending,
+      new Promise((resolve) => (timer = unref(setTimeout(() => resolve(null), ms)))),
+    ]).finally(() => clearTimeout(timer));
+  }
+
   const emitControl = (lease, eventState, reason) =>
     emitEvent("control", {
       agentId: lease.agentId,
@@ -302,7 +363,7 @@ export function createComputer(api, options = {}) {
    * deadline, when a command fails or is not answered, or when the lease
    * ends.
    */
-  async function quiesce(lease, current) {
+  async function quiesce(lease, current, watch) {
     const { cdp } = lease;
     const { signal } = lease.abort;
     // Every command goes out on the caller's behalf, so only while its access holds.
@@ -327,9 +388,19 @@ export function createComputer(api, options = {}) {
       for (;;) {
         const seen = activity;
         await send("Page.stopLoading");
+        // What the plugin cannot stop, a download or another tab loading, it
+        // waits for, and refuses at the deadline.
+        const settled = await waitUntil(
+          () => watch.unresolved() === null || lease.ending,
+          deadline - Date.now(),
+          signal,
+        );
+        if (lease.ending || signal.aborted) return false;
+        if (!settled) return watch.unresolved() ?? false;
+        if (activity !== seen) continue;
         if (Date.now() + quietWindowMs > deadline) return false;
         const disturbed = await waitUntil(
-          () => activity !== seen || lease.ending,
+          () => activity !== seen || watch.unresolved() !== null || lease.ending,
           quietWindowMs,
           signal,
         );
@@ -423,6 +494,11 @@ export function createComputer(api, options = {}) {
 
   /** End every lease and view of a bot whose browser config no longer matches. */
   function retireBot(bot, reason) {
+    const watched = state.watches.get(bot.profile);
+    if (watched) {
+      state.watches.delete(bot.profile);
+      watched.watch?.close();
+    }
     for (const lease of state.leases.values()) {
       if (lease.profile === bot.profile) void endLease(lease, "revoked", reason);
     }
@@ -781,7 +857,7 @@ export function createComputer(api, options = {}) {
       await endLease(lease, "revoked", "access-revoked");
       accessEnded();
     }
-    if (!drained) return busy("bot-still-acting", "the bot is still acting in this browser");
+    if (!drained) return busy(...UNRESOLVED.calls);
     // The lease's own connection to the tab: input goes through it, and the
     // lease ends when it closes (the tab or the browser went away).
     try {
@@ -807,7 +883,16 @@ export function createComputer(api, options = {}) {
     });
     if (lease.ending)
       refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
-    const quiet = await quiesce(lease, current);
+    // What the plugin can see in the bot's browser, it must not grant over.
+    const watch = await ensureWatch(bot);
+    if (lease.ending)
+      refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
+    if (!current()) {
+      await endLease(lease, "revoked", "access-revoked");
+      accessEnded();
+    }
+    if (!watch) return busy(...UNRESOLVED.closed);
+    const quiet = await quiesce(lease, current, watch);
     if (lease.ending)
       refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
     if (quiet === "stale" || !current()) {
@@ -819,8 +904,8 @@ export function createComputer(api, options = {}) {
       await endLease(lease, "revoked", "browser-unavailable");
       refuse("UNAVAILABLE", "control_request_ended", "the connection to the tab closed");
     }
-    // Never granted while the tab may still be loading what the bot started.
-    if (!quiet) return busy("browser-not-quiet", "the bot's browser is still loading a page");
+    // Never granted while the bot's browser may still be loading or downloading what the bot started.
+    if (quiet !== true) return busy(...(UNRESOLVED[quiet] ?? UNRESOLVED.loading));
     // Connecting waited: the grant goes out only while the access still holds.
     if (!current()) {
       await endLease(lease, "revoked", "access-revoked");
@@ -838,6 +923,7 @@ export function createComputer(api, options = {}) {
       generation: lease.generation,
       renewWithinMs: renewTimeoutMs,
       targetId,
+      guarantee: GRANT_GUARANTEE,
     });
   });
 
@@ -1113,13 +1199,39 @@ export function createComputer(api, options = {}) {
             "A browser call without a run and call id cannot be tracked, so it is refused.",
         };
       }
-      if (leaseOnProfile(bot.profile)) return { block: true, blockReason: BLOCKED_WHILE_HELD };
-      if (browserConfigProblems(currentConfig(), config, env).length > 0) {
-        return {
-          block: true,
-          blockReason: "This bot's browser is not set up as the computer plugin expects.",
-        };
-      }
+      const refusal = () => {
+        if (leaseOnProfile(bot.profile)) return { block: true, blockReason: BLOCKED_WHILE_HELD };
+        if (browserConfigProblems(currentConfig(), config, env).length > 0) {
+          return {
+            block: true,
+            blockReason: "This bot's browser is not set up as the computer plugin expects.",
+          };
+        }
+        return null;
+      };
+      const early = refusal();
+      if (early) return early;
+      // The plugin watches the bot's browser before the call runs, so that a
+      // later take can see a download or a load the call starts. A browser not
+      // running yet is watched once the call has started it (after_tool_call).
+      return ensureWatch(bot, WATCH_WAIT_MS).then(() => {
+        // The hold and the config can have changed while it waited.
+        const late = refusal();
+        if (late) return late;
+        return admitCall(bot, runId, toolCallId, ctx, {
+          ...params,
+          action,
+          profile: bot.profile,
+          target: "host",
+        });
+      });
+    },
+    { matcher: ["browser"], priority: 1000 },
+  );
+
+  /** Track an admitted bot call until its result, and return its pinned parameters. */
+  function admitCall(bot, runId, toolCallId, ctx, pinned) {
+    {
       const key = callKey(runId, toolCallId);
       const record = { agentId: bot.agentId, profile: bot.profile, unbind: () => {} };
       state.inflight.set(key, record);
@@ -1142,10 +1254,9 @@ export function createComputer(api, options = {}) {
       }
       // target "host": never a node or sandbox browser; when host control is
       // not allowed for the session, the browser tool refuses the call.
-      return { params: { ...params, action, profile: bot.profile, target: "host" } };
-    },
-    { matcher: ["browser"], priority: 1000 },
-  );
+      return { params: pinned };
+    }
+  }
 
   api.on(
     "after_tool_call",
@@ -1161,6 +1272,9 @@ export function createComputer(api, options = {}) {
         state.inflight.delete(key);
         record.unbind();
         changed();
+        // A call can have started the browser: watch it from now on.
+        const bot = bots.get(record.agentId);
+        if (bot) void ensureWatch(bot);
         const ran = profileSelector(event.params?.profile);
         if (ran !== undefined && ran !== record.profile) {
           warn(`a browser call of ${record.agentId} ran with profile ${ran}, not its own`);
@@ -1173,6 +1287,12 @@ export function createComputer(api, options = {}) {
   // ---- events and shutdown ----
 
   async function stop() {
+    stopped = true;
+    for (const [profile, entry] of state.watches) {
+      if (entry.registration !== registration) continue;
+      state.watches.delete(profile);
+      entry.watch?.close();
+    }
     const endings = [];
     for (const lease of state.leases.values()) {
       if (lease.registration === registration)
