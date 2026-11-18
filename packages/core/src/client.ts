@@ -317,6 +317,9 @@ export const MAX_PENDING_APPROVALS_PER_TASK = MAX_PENDING_APPROVAL_COUNT;
  * Waits the gateway answers late by design (`device.scopes.waitUpgrade`) opt out.
  */
 export const REQUEST_TIMEOUT_MS = 60_000;
+/** How many times a failed read of a task's tool map is tried again, and the first wait. */
+export const TOOL_MAP_RETRIES = 3;
+export const TOOL_MAP_RETRY_MS = 1_000;
 
 /** Longest message text the client sends. */
 export const MAX_MESSAGE_CHARS = 32_000;
@@ -2912,16 +2915,25 @@ export class ClawtrateClient {
     const read = { again: false };
     this.toolReads.set(key, read);
     try {
+      let failures = 0;
       do {
         read.again = false;
-        await this.readToolMapOnce(key, generation);
+        // A read that failed is tried again, a few times, a little later: without the map a
+        // tool-server call history holds reads as a general card, and nothing else would read
+        // the map again until the gateway's plugins change.
+        if (!(await this.readToolMapOnce(key, generation)) && failures < TOOL_MAP_RETRIES) {
+          failures += 1;
+          await new Promise<void>((resolve) => setTimeout(resolve, TOOL_MAP_RETRY_MS * failures));
+          read.again = true;
+        }
       } while (read.again && generation === this.generation && this.tracked(key));
     } finally {
       if (this.toolReads.get(key) === read) this.toolReads.delete(key);
     }
   }
 
-  private async readToolMapOnce(key: string, generation: number): Promise<void> {
+  /** One read of a task's tool map; false when the read failed, so it may be tried again. */
+  private async readToolMapOnce(key: string, generation: number): Promise<boolean> {
     const incarnation = this.incarnations.get(key);
     let answer: unknown;
     try {
@@ -2929,14 +2941,14 @@ export class ClawtrateClient {
     } catch (error) {
       if (generation === this.generation)
         this.log("warn", `tools.effective failed: ${errorMessage(error)}`);
-      return;
+      return false;
     }
     if (
       generation !== this.generation ||
       !this.tracked(key) ||
       this.incarnations.get(key) !== incarnation
     ) {
-      return;
+      return true;
     }
     const map = mcpToolMap(answer, MAX_MCP_TOOLS);
     const builtin = builtinToolNames(answer, MAX_BUILTIN_TOOLS);
@@ -2946,12 +2958,13 @@ export class ClawtrateClient {
       (JSON.stringify(current.mcpTools) === JSON.stringify(map) &&
         JSON.stringify(current.builtinTools) === JSON.stringify(builtin))
     )
-      return;
+      return true;
     this.setTranscript(key, () => ({
       ...this.state.transcripts[key]!,
       mcpTools: map,
       builtinTools: builtin,
     }));
+    return true;
   }
 
   /**

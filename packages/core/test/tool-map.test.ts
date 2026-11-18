@@ -95,6 +95,30 @@ describe("the tool map from tools.effective", () => {
     }
   });
 
+  it("tries a failed first read again, so a task opened while the gateway was busy still gets its map", async () => {
+    let failures = 1;
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["tools.effective"] = () => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      }
+      return answer([entry("coder__slow_task", "coder", "slow_task")]);
+    };
+    try {
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      // Without the map, history's tool-server call would read as a general card until the
+      // gateway's plugins changed: the read is tried again a little later.
+      await until(() => "coder__slow_task" in (transcript()?.mcpTools ?? {}), 5_000);
+      expect(transcript().mcpTools).toEqual({
+        coder__slow_task: { server: "coder", tool: "slow_task" },
+      });
+    } finally {
+      client.stop();
+    }
+  });
+
   it("reads a task's map one read at a time, so the map after a change is the one kept", async () => {
     const answers: Array<(value: unknown) => void> = [];
     const { client, gateway, transcript } = await openTask();
