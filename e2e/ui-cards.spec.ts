@@ -734,10 +734,34 @@ test.describe("Messaged cards sent from this app on a real gateway", () => {
     expect(states.at(-1)).toBe("Recipient waiting");
     await shot(card(page, "messaged-card"), "messaged-recipient-waiting");
     await openTask(page, "Marlow", "Notes for Pip");
-    // Marlow's main task is shared: this check's question is the one pending there, by its id.
-    const pending = page.locator('[data-testid="question-card"][data-state="pending"]');
-    await expect(pending).toHaveCount(1, { timeout: 60_000 });
-    const question = page.locator(`[id="${await pending.getAttribute("id")}"]`);
+    // Marlow's main task is shared: this check's question is the one the gateway lists as
+    // pending there, asked since this check began, and its card is found by that id.
+    let questionId = "";
+    await expect
+      .poll(
+        async () => {
+          const listed = await clients.questions.request<{
+            questions?: Array<{
+              id: string;
+              sessionKey?: string;
+              status?: string;
+              createdAtMs?: number;
+            }>;
+          }>("question.list", {});
+          questionId =
+            listed.questions?.find(
+              (each) =>
+                each.sessionKey === "agent:marlow:main" &&
+                each.status === "pending" &&
+                (each.createdAtMs ?? 0) >= checkStarted,
+            )?.id ?? "";
+          return questionId;
+        },
+        { timeout: 60_000 },
+      )
+      .not.toBe("");
+    const question = page.locator(`#card-question-${questionId.replace(/[^\w-]/g, "_")}`);
+    await expect(question).toHaveAttribute("data-state", "pending", { timeout: 30_000 });
     await question.getByRole("radio", { name: /Lake loop/ }).click();
     await expect(question).toHaveAttribute("data-state", "answered", { timeout: 30_000 });
     await openTask(page, "Pip", title);
