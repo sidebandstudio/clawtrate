@@ -18,6 +18,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { canWrite } from "../src/access.ts";
 import { messageRefusal, refusalFor, size } from "../src/Composer.tsx";
+import { stoppedWithLines } from "../src/LiveTurn.tsx";
 import {
   composerFor,
   currentRun,
@@ -496,4 +497,36 @@ describe("F-468: what the transition tables leave on screen", () => {
     ],
   ];
   it.each(cases)("F-468: %s", (_name, t, check) => check(t));
+});
+
+describe("what a stop also ended (F-298)", () => {
+  const names = (key: string) => (key.includes("marlow") ? "Marlow" : "Pip");
+  it("F-298 F-296 F-297: the note lists each helper run, bot run and process the gateway stopped, and a message whose delivery is unknown", () => {
+    const stopped = run({
+      state: "stopped",
+      stoppedWith: {
+        helpers: 2,
+        bots: ["agent:marlow:main"],
+        processes: ["sleep 60", "tail -f log"],
+        uncertain: ["agent:pip:main"],
+      },
+    });
+    expect(stoppedWithLines(stopped, names)).toEqual([
+      "Stopped with it: 2 helper runs, Marlow's run for this message and the processes sleep 60 and tail -f log.",
+      "The message to Pip may or may not have been delivered.",
+    ]);
+  });
+
+  it("F-298: nothing the gateway did not report is claimed", () => {
+    expect(stoppedWithLines(run({ state: "stopped" }), names)).toEqual([]);
+    expect(
+      stoppedWithLines(
+        run({
+          state: "stopped",
+          stoppedWith: { helpers: 0, bots: [], processes: ["sleep 60"], uncertain: [] },
+        }),
+        names,
+      ),
+    ).toEqual(["Stopped with it: the process sleep 60."]);
+  });
 });

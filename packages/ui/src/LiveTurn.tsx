@@ -12,7 +12,7 @@ import {
   type Transcript,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useBridge } from "./bridge.tsx";
+import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { useAnnounce } from "./cards/parts.tsx";
 import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
@@ -154,6 +154,41 @@ export function IncompleteCaption() {
   );
 }
 
+/** A bot's name from one of its session keys (`agent:<bot>:…`), or the key's bot id. */
+function botOfSession(bots: readonly Bot[], key: string): string {
+  const id = /^agent:([^:]+):/.exec(key)?.[1] ?? key;
+  return bots.find((each) => each.id === id)?.name ?? id;
+}
+
+/** "a, b and c". */
+function listed(words: string[]): string {
+  return words.length <= 1
+    ? (words[0] ?? "")
+    : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+}
+
+/**
+ * The lines under a stop's note: every helper run, bot run and process the gateway reported
+ * stopped with the run, and each message whose delivery is not known (F-298).
+ */
+export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => string): string[] {
+  const also = run.stoppedWith;
+  if (!also) return [];
+  const lines: string[] = [];
+  const stopped: string[] = [];
+  if (also.helpers > 0)
+    stopped.push(also.helpers === 1 ? "1 helper run" : `${also.helpers} helper runs`);
+  for (const key of also.bots) stopped.push(`${nameOf(key)}'s run for this message`);
+  if (also.processes.length > 0)
+    stopped.push(
+      `${also.processes.length === 1 ? "the process" : "the processes"} ${listed(also.processes)}`,
+    );
+  if (stopped.length > 0) lines.push(`Stopped with it: ${listed(stopped)}.`);
+  for (const key of also.uncertain)
+    lines.push(`The message to ${nameOf(key)} may or may not have been delivered.`);
+  return lines;
+}
+
 /** The text of the message that started a run, for "Try again". */
 export function messageTextOf(run: Run, transcript: Transcript): string | null {
   const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
@@ -184,6 +219,7 @@ export function RunEnding({
 }) {
   const bridge = useBridge();
   const announce = useAnnounce();
+  const bots = useClawtrateState().bots;
   const [dismissed, setDismissed] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
@@ -204,17 +240,27 @@ export function RunEnding({
   const ending = endingOf(run, transcript);
   if (!ending) return null;
   if (ending.kind === "stopped") {
+    const also = stoppedWithLines(run, (key) => botOfSession(bots, key));
     return (
       <div className="turn-note" data-testid="stop-note" data-run={run.id}>
         <span className="glyph" data-state="stopped" aria-hidden="true" />
-        <p>
-          <b>
-            {ending.after ? `Stopped after ${ending.after}` : "Stopped"}
-            {ending.elsewhere ? "," : "."}
-          </b>{" "}
-          {ending.elsewhere ? "from another device or session. " : ""}
-          Completed actions are not undone.
-        </p>
+        <div>
+          <p>
+            <b>
+              {ending.after ? `Stopped after ${ending.after}` : "Stopped"}
+              {ending.elsewhere ? "," : "."}
+            </b>{" "}
+            {ending.elsewhere ? "from another device or session. " : ""}
+            Completed actions are not undone.
+          </p>
+          {also.length > 0 && (
+            <ul className="turn-note-list" data-testid="stopped-with">
+              {also.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     );
   }

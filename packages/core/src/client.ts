@@ -118,6 +118,7 @@ import {
   runsWithQuestionMarkers,
   bindRun,
   noteRunRequest,
+  noteStoppedWith,
   cancelQueuedRun,
   dropUnboundRun,
   dropUnboundRunUnlessStopping,
@@ -193,6 +194,7 @@ import {
   MAX_OUTBOX,
   MAX_PENDING_APPROVAL_COUNT,
   MAX_REACTIONS_PER_MESSAGE,
+  MAX_STOPPED_NAMED,
   MAX_RUN_TEXT_CHARS,
   MAX_TASK_LINE_CHARS,
   MAX_TRACKED_TASKS as TRACKED_TASKS,
@@ -340,6 +342,8 @@ export const REQUEST_TIMEOUT_MS = 60_000;
 export const MAX_MESSAGE_CHARS = 32_000;
 /** The gateway's frame ceiling after `connect` when `hello-ok.policy.maxPayload` is absent (25 MiB). */
 export const DEFAULT_MAX_PAYLOAD_BYTES = 26_214_400;
+/** A process started this long before its run's reported start still counts as the run's. */
+const PROCESS_START_SLACK_MS = 1_000;
 /** Room left in a frame for the request envelope around the params. */
 const FRAME_SLACK_BYTES = 1024;
 const SESSION_LIST_PARAMS = {
@@ -2255,6 +2259,7 @@ export class ClawtrateClient {
       const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
       // Nothing was aborted: the run ended already. Its terminal event or history settles it.
       if (result?.aborted === false) this.scheduleHistory(key);
+      else if (result?.aborted === true) void this.stopCompanions(key, runId, result);
     } catch (error) {
       this.noteMissingScope(error);
       if (error instanceof GatewayProtocolRequestError) {
@@ -2274,6 +2279,107 @@ export class ClawtrateClient {
       const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
       if (run?.state === "stopping" && run.bound) await this.abortRun(key, runId);
     }
+  }
+
+  /**
+   * What a Stop this client's gateway confirmed also ends (F-296, F-297, F-298): the helper runs
+   * the gateway aborted with it (its answer's other `runIds`), the runs of other bots this run's
+   * messages started (`chat.abort` on each recipient's session, by the run its `sessions_send`
+   * result named), and the processes it started on its machine (`sessions.processes.list`, then
+   * `sessions.processes.stop` for each still running that started while the run did). Each is
+   * recorded only as the gateway reported it; a recipient whose run is not named is uncertain.
+   */
+  private async stopCompanions(key: string, runId: string, answer: RawRecord): Promise<void> {
+    const generation = this.generation;
+    const transcript = this.state.transcripts[key];
+    const run = transcript && findRun(transcript, runId);
+    if (!transcript || !run) return;
+    const helpers = (Array.isArray(answer.runIds) ? answer.runIds : []).filter(
+      (id) => typeof id === "string" && id !== runId,
+    ).length;
+    if (helpers > 0)
+      this.updateActivity(key, (activity) =>
+        noteStoppedWith(activity, runId, (now) => ({ ...now, helpers: now.helpers + helpers })),
+      );
+    const rawOf = (step: Run["steps"][number]) => step.raw ?? this.raw.get(key, step.id);
+    const links = recipientLinks([run], rawOf).slice(0, MAX_STOPPED_NAMED);
+    const recipients = links.map(async (link) => {
+      if (!link.sessionKey) return;
+      const known = link.runId ? transcript.linkedRuns[link.runId] : undefined;
+      if (known && isTerminal(known.state)) return;
+      if (!link.runId) {
+        this.updateActivity(key, (activity) =>
+          noteStoppedWith(activity, runId, (now) => ({
+            ...now,
+            uncertain: [...now.uncertain, link.sessionKey!],
+          })),
+        );
+        return;
+      }
+      try {
+        const stopped = asRecord(
+          await this.request("chat.abort", { sessionKey: link.sessionKey, runId: link.runId }),
+        );
+        if (generation !== this.generation || stopped?.aborted !== true) return;
+        this.updateActivity(key, (activity) =>
+          noteStoppedWith(activity, runId, (now) => ({
+            ...now,
+            bots: [...now.bots, link.sessionKey!],
+          })),
+        );
+      } catch (error) {
+        this.log("warn", `chat.abort of a recipient failed: ${errorMessage(error)}`);
+      }
+    });
+    const processes = (async () => {
+      let listed: RawRecord | null;
+      try {
+        listed = asRecord(await this.request("sessions.processes.list", { key }));
+      } catch (error) {
+        this.log("warn", `sessions.processes.list failed: ${errorMessage(error)}`);
+        return;
+      }
+      if (generation !== this.generation) return;
+      const sessionId = typeof listed?.sessionId === "string" ? listed.sessionId : null;
+      const since = (run.reportedStartAt ?? run.startedAt ?? 0) - PROCESS_START_SLACK_MS;
+      const rows = (Array.isArray(listed?.processes) ? listed.processes : [])
+        .map((each) => asRecord(each))
+        .filter(
+          (row): row is RawRecord =>
+            row !== null &&
+            row.status === "running" &&
+            row.canStop === true &&
+            typeof row.processId === "string" &&
+            typeof row.instanceId === "string" &&
+            typeof row.startedAt === "number" &&
+            row.startedAt >= since,
+        )
+        .slice(0, MAX_STOPPED_NAMED);
+      if (!sessionId) return;
+      for (const row of rows) {
+        try {
+          const stopped = asRecord(
+            await this.request("sessions.processes.stop", {
+              key,
+              sessionId,
+              processId: row.processId,
+              instanceId: row.instanceId,
+            }),
+          );
+          if (generation !== this.generation || stopped?.requested !== true) continue;
+          const name = typeof row.name === "string" && row.name ? row.name : String(row.processId);
+          this.updateActivity(key, (activity) =>
+            noteStoppedWith(activity, runId, (now) => ({
+              ...now,
+              processes: [...now.processes, name],
+            })),
+          );
+        } catch (error) {
+          this.log("warn", `sessions.processes.stop failed: ${errorMessage(error)}`);
+        }
+      }
+    })();
+    await Promise.all([...recipients, processes]);
   }
 
   // Approvals -------------------------------------------------------------------

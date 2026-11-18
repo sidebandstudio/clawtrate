@@ -73,6 +73,7 @@ import type {
   RunError,
   Step,
   StepFiles,
+  StoppedWith,
   StepText,
 } from "./runs.ts";
 import { MAX_STEP_PATH_CHARS, MAX_STEP_PATHS } from "./file-paths.ts";
@@ -221,6 +222,8 @@ export const MAX_UNROUTED = 16;
 export const MAX_CREATIONS = 8;
 /** Scopes in a grant or request. */
 export const MAX_SCOPES = 16;
+/** What a stop's note names of each kind it also stopped (`Run.stoppedWith`). */
+export const MAX_STOPPED_NAMED = 8;
 /** The gateway's preview of a message replied to, as kept on the reply (F-067). */
 export const MAX_REPLY_PREVIEW_CHARS = 512;
 /** Messages whose reactions a task keeps: at most one per history row shown. */
@@ -338,6 +341,12 @@ export const RUN: Bound = flagged<Run>()({
   nextReasoning: NUMBER,
   reasoningRevision: NUMBER,
   requestId: ID,
+  stoppedWith: object<StoppedWith>()({
+    helpers: NUMBER,
+    bots: list(MAX_STOPPED_NAMED, ID),
+    processes: list(MAX_STOPPED_NAMED, NAME),
+    uncertain: list(MAX_STOPPED_NAMED, ID),
+  }),
 });
 const attachmentInfo = object<OutgoingAttachmentInfo>()({
   fileName: text(MAX_FILE_NAME_CHARS),

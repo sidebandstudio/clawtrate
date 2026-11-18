@@ -51,6 +51,7 @@ export const LIVE_SCENES = [
   "offline-send",
   "message-actions",
   "message-actions-read",
+  "run-stopped-with",
 ] as const;
 
 export type LiveScene = (typeof LIVE_SCENES)[number];
@@ -450,6 +451,24 @@ export function liveScene(
           endedAt: now - 2 * SECOND,
           text: REPLY,
           steps: [readStep(now - 30 * SECOND, { status: "done", endedAt: now - 29 * SECOND })],
+        }),
+        steps: [],
+      };
+    case "run-stopped-with":
+      // As the gateway reported what stopped with it: helpers, Marlow's run, a process.
+      return {
+        initial: withRun(base, now, {
+          state: "stopped",
+          stopRequestedAt: now - 2 * SECOND,
+          endedAt: now - 2 * SECOND,
+          text: REPLY,
+          steps: [readStep(now - 30 * SECOND, { status: "done", endedAt: now - 29 * SECOND })],
+          stoppedWith: {
+            helpers: 1,
+            bots: ["agent:marlow:main"],
+            processes: ["sleep 60"],
+            uncertain: ["agent:pip:main"],
+          },
         }),
         steps: [],
       };

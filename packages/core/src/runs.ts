@@ -32,6 +32,7 @@ import {
   MAX_QUEUE_ALIAS_COUNT,
   MAX_STEER_ALIAS_COUNT,
   MAX_STEPS_PER_TASK,
+  MAX_STOPPED_NAMED,
 } from "./state-bounds.ts";
 
 export type RunState =
@@ -258,6 +259,38 @@ function settleFiles(step: Step, details: RawRecord | null, isError: boolean): S
  * How a run failed. `kind` is the gateway's own classification where it sends
  * one (`chat` `errorKind`, for example `timeout`), never parsed from the text.
  */
+/** What a confirmed Stop of this client's ended beside the run itself, each as the gateway said. */
+export type StoppedWith = {
+  /** Helper runs the gateway aborted with it (`chat.abort` `runIds` other than the run's own). */
+  helpers: number;
+  /** The session keys of other bots' runs this run's messages started, aborted with it. */
+  bots: string[];
+  /** Processes it started on its machine that the gateway stopped (`sessions.processes.stop`), by name. */
+  processes: string[];
+  /** Session keys of messages to other bots whose run could not be stopped or named. */
+  uncertain: string[];
+};
+
+/** Record what a confirmed Stop also ended. */
+export function noteStoppedWith(
+  activity: TaskActivity,
+  runId: string,
+  change: (current: StoppedWith) => StoppedWith,
+): TaskActivity {
+  return updateRun(activity, runId, (run) => {
+    const next = change(run.stoppedWith ?? { helpers: 0, bots: [], processes: [], uncertain: [] });
+    return {
+      ...run,
+      stoppedWith: {
+        helpers: next.helpers,
+        bots: next.bots.slice(0, MAX_STOPPED_NAMED),
+        processes: next.processes.slice(0, MAX_STOPPED_NAMED),
+        uncertain: next.uncertain.slice(0, MAX_STOPPED_NAMED),
+      },
+    };
+  });
+}
+
 export type RunError = {
   message: string;
   kind: string | null;
@@ -374,6 +407,11 @@ export type Run = {
    * client did not start, or whose send's frame has not left.
    */
   requestId?: string;
+  /**
+   * What stopped with this run when this client stopped it, as the gateway reported each
+   * (F-296, F-297, F-298). Absent until a Stop of this client's is confirmed.
+   */
+  stoppedWith?: StoppedWith;
   /** Paths of fields cut to their bound; a cut `text` is not extended by later deltas. */
   cut?: string[];
 };

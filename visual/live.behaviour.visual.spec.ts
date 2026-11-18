@@ -850,6 +850,22 @@ test.describe("steering, queueing and holding", () => {
     await expect(steer.locator(".msg-caption")).toHaveText("Steer");
   });
 
+  test("F-298 F-296 F-297: after a Stop the note lists what stopped with the run, named, and what may not have been delivered", async ({
+    page,
+  }) => {
+    await open(page, "run-stopped-with");
+    const note = page.getByTestId("stop-note");
+    await expect(note.locator("p")).toContainText("Completed actions are not undone.");
+    await expect(note.getByTestId("stopped-with").getByRole("listitem")).toHaveText([
+      "Stopped with it: 1 helper run, Marlow's run for this message and the process sleep 60.",
+      "The message to Pip may or may not have been delivered.",
+    ]);
+    // A plain stop claims nothing more.
+    await open(page, "run-stopped");
+    await expect(page.getByTestId("stop-note")).toBeVisible();
+    await expect(page.getByTestId("stopped-with")).toHaveCount(0);
+  });
+
   test("F-097: a typed Stop now during a run stops it as Stop does, and is not sent as words", async ({
     page,
   }) => {

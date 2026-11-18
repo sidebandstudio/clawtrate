@@ -393,6 +393,11 @@
   margin: 0;
 }
 
+.turn-note-list {
+  margin: 2px 0 0;
+  padding-left: 18px;
+}
+
 .turn-note b {
   font-weight: var(--weight-medium);
   color: var(--text);
