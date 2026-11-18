@@ -167,6 +167,18 @@ describe("which tasks wait for the person", () => {
       },
       1,
     );
+    // An id within 1,024 characters whose JSON is longer than that is not kept, as a key or a run.
+    const escaped = '"'.repeat(1_000);
+    for (const [sessionKey, runId] of [
+      [escaped, "r"],
+      [key, escaped],
+    ])
+      expect(
+        index.onAgent(
+          { sessionKey, runId, stream: "lifecycle", data: { phase: "waiting-approval" } },
+          1,
+        ),
+      ).toBe(false);
     const kept = index as unknown as {
       sessions: Map<string, Map<string, unknown>>;
       runs: Map<string, unknown>;
