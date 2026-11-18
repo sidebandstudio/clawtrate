@@ -116,81 +116,15 @@ jobs:
           $entry = Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall |
             Get-ItemProperty | Where-Object { $_.DisplayName -like 'Clawtrate*' }
           if (@($entry).Count -ne 1) { throw "expected one uninstall entry for Clawtrate, found $(@($entry).Count)" }
-          $entry | Select-Object DisplayName, DisplayVersion, InstallLocation, Publisher | Format-List
+          $entry | Select-Object DisplayName, DisplayVersion, Publisher | Format-List
           # The silent install must not start the app; the check starts its own.
           $running = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$dir\*" }
           if ($running) { throw "the installer left the app running: $($running.ProcessId -join ', ')" }
           "dir=$dir" >> $env:GITHUB_OUTPUT
-      # Temporary: what the runner's taskbar shows for the installed app.
-      - continue-on-error: true
-        run: |
-          $dir = '${{ steps.install.outputs.dir }}'
-          "this shell's session: $((Get-Process -Id $PID).SessionId)"
-          Get-Process explorer -ErrorAction SilentlyContinue | Format-Table Id, SessionId
-          $ud = Join-Path $env:RUNNER_TEMP 'diag-user-data'
-          $app = Start-Process (Join-Path $dir 'Clawtrate.exe') -ArgumentList "--user-data-dir=$ud" -PassThru
-          Start-Sleep -Seconds 10
-          "app session: $($app.SessionId), title: $((Get-Process -Id $app.Id).MainWindowTitle)"
-          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
-          $ae = [Windows.Automation.AutomationElement]
-          $all = [Windows.Automation.Condition]::TrueCondition
-          foreach ($top in $ae::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $all)) {
-            "top: $($top.Current.ClassName) | $($top.Current.Name)"
-            if ($top.Current.ClassName -in 'Shell_TrayWnd', 'Shell_SecondaryTrayWnd') {
-              foreach ($el in $top.FindAll([Windows.Automation.TreeScope]::Descendants, $all)) {
-                "  $($el.Current.ControlType.ProgrammaticName) | $($el.Current.ClassName) | id=$($el.Current.AutomationId) | name=$($el.Current.Name) | help=$($el.Current.HelpText)"
-              }
-            }
-          }
-          $env:CHECK_EXE = Join-Path $dir 'Clawtrate.exe'
-          "--- the check's own function, from node:"
-          node --input-type=module -e "const m = await import('./e2e-packaged/windows.ts'); const t = Date.now(); console.log(JSON.stringify(m.taskbarOverlayDescription(process.env.CHECK_EXE)), Date.now() - t, 'ms')"
-          $variant = @'
-          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
-          $ae = [Windows.Automation.AutomationElement]
-          $all = [Windows.Automation.Condition]::TrueCondition
-          $bar = $ae::RootElement.FindFirst([Windows.Automation.TreeScope]::Children, (New-Object Windows.Automation.PropertyCondition($ae::ClassNameProperty, 'Shell_TrayWnd')))
-          "PS $($PSVersionTable.PSVersion) bar: $([bool]$bar)"
-          foreach ($el in $bar.FindAll([Windows.Automation.TreeScope]::Descendants, $all)) { if ($el.Current.AutomationId -like 'Appid:*') { "  all: [$($el.Current.AutomationId)]" } }
-          $want = 'Appid: ' + $env:CHECK_EXE
-          "want: [$want]"
-          $exact = $bar.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition($ae::AutomationIdProperty, $want)))
-          "exact: $([bool]$exact)"
-          $nocase = $bar.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition($ae::AutomationIdProperty, $want, [Windows.Automation.PropertyConditionFlags]::IgnoreCase)))
-          "ignorecase: $([bool]$nocase)"
-          '@
-          $variant | Set-Content (Join-Path $env:RUNNER_TEMP 'variant.ps1')
-          "--- Windows PowerShell:"
-          powershell.exe -NoProfile -NonInteractive -File (Join-Path $env:RUNNER_TEMP 'variant.ps1')
-          "--- PowerShell 7:"
-          pwsh -NoProfile -NonInteractive -File (Join-Path $env:RUNNER_TEMP 'variant.ps1')
-          taskkill /F /T /PID $app.Id
-          Start-Sleep -Seconds 3
-          "--- the check's own setup, outside Playwright:"
-          $env:CLAWTRATE_PACKAGED_APP = $dir
-          node --input-type=module -e "const g = await import('./e2e-packaged/global-setup.ts'); const w = await import('./e2e-packaged/windows.ts'); const { execFileSync } = await import('node:child_process'); const teardown = await g.default(); await new Promise((r) => setTimeout(r, 8000)); const exe = g.packagedExecutable(process.env.CLAWTRATE_PACKAGED_APP); console.log('title', w.mainWindowTitle(Number(process.env.CLAWTRATE_PACKAGED_PID))); console.log('lookup', JSON.stringify(w.taskbarOverlayDescription(exe))); execFileSync('powershell.exe', ['-NoProfile', '-File', process.env.RUNNER_TEMP + '/variant.ps1'], { stdio: 'inherit', env: { ...process.env, CHECK_EXE: exe } }); await teardown();"
-          Remove-Item Env:CLAWTRATE_PACKAGED_APP
-          # Log the taskbar's buttons every two seconds while the check runs.
-          $logger = @'
-          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
-          $ae = [Windows.Automation.AutomationElement]
-          $all = [Windows.Automation.Condition]::TrueCondition
-          while ($true) {
-            $bar = $ae::RootElement.FindFirst([Windows.Automation.TreeScope]::Children, (New-Object Windows.Automation.PropertyCondition($ae::ClassNameProperty, 'Shell_TrayWnd')))
-            $ids = foreach ($el in $bar.FindAll([Windows.Automation.TreeScope]::Descendants, $all)) { if ($el.Current.AutomationId -like 'Appid:*') { "[$($el.Current.AutomationId) | $($el.Current.Name) | help=$($el.Current.HelpText)]" } }
-            "$(Get-Date -Format HH:mm:ss.fff) $($ids -join ' ')" | Add-Content (Join-Path $env:RUNNER_TEMP 'taskbar.log')
-            Start-Sleep -Seconds 2
-          }
-          '@
-          $logger | Set-Content (Join-Path $env:RUNNER_TEMP 'logger.ps1')
-          Start-Process powershell.exe -ArgumentList '-NoProfile', '-File', (Join-Path $env:RUNNER_TEMP 'logger.ps1') -WindowStyle Hidden
       - name: Run the launch check against the installed app
         env:
           CLAWTRATE_PACKAGED_APP: ${{ steps.install.outputs.dir }}
         run: pnpm check:packaged
-      - if: always()
-        continue-on-error: true
-        run: Get-Content (Join-Path $env:RUNNER_TEMP 'taskbar.log')
       - name: Uninstall silently and check nothing is left
         run: |
           $dir = '${{ steps.install.outputs.dir }}'
@@ -213,26 +147,3 @@ jobs:
           name: packaged-results
           path: test-results/
           retention-days: 3
-
-  # Temporary: whether the development gateway can run on Windows.
-  windows-gateway-probe:
-    runs-on: windows-2025
-    timeout-minutes: 25
-    steps:
-      - run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 26
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-      - run: npm install --global --foreground-scripts openclaw@2026.10.6
-        timeout-minutes: 15
-      - run: openclaw --version
-      - continue-on-error: true
-        run: pnpm dev-gateway start --instance probe-windows
-      - continue-on-error: true
-        run: pnpm dev-gateway reset --instance probe-windows
