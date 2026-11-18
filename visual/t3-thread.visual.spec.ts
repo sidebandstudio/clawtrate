@@ -26,6 +26,14 @@ const openCard = async (page: Page) => {
 /** The column of the scene's run: its cards and lines together. */
 const column = (page: Page) => page.locator(".turn, [data-testid='transcript']").last();
 
+/** The launch's own card, opened. */
+const openOwn = async (page: Page) => {
+  const own = page.locator('.card.action[data-call="call_t3"]');
+  await own.locator(":scope > summary").click();
+  await expect(own).toHaveAttribute("open", "");
+  return own;
+};
+
 const SHOTS: Shot[] = [
   { name: "closed", scene: "t3-thread", rows: T3, prepare: async (page) => thread(page) },
   { name: "open", scene: "t3-thread", rows: `${T3} F-135`, prepare: openCard },
@@ -65,9 +73,10 @@ const SHOTS: Shot[] = [
   { name: "approval", scene: "t3-approval", rows: "F-134", prepare: async (page) => thread(page) },
   { name: "checking", scene: "t3-checking", rows: "F-134", prepare: async (page) => column(page) },
   { name: "refused", scene: "t3-refused", rows: "F-314", prepare: openCard },
-  { name: "failed", scene: "t3-failed", rows: "F-314", prepare: openCard },
-  { name: "not-sent", scene: "t3-not-sent", rows: "F-470", prepare: openCard },
-  { name: "delivery-unknown", scene: "t3-delivery-unknown", rows: "F-470", prepare: openCard },
+  // A launch that ended without naming a thread is a card of its own, opened.
+  { name: "failed", scene: "t3-failed", rows: "F-314", prepare: openOwn },
+  { name: "not-sent", scene: "t3-not-sent", rows: "F-470", prepare: openOwn },
+  { name: "delivery-unknown", scene: "t3-delivery-unknown", rows: "F-470", prepare: openOwn },
   { name: "work-may-continue", scene: "t3-work-may-continue", rows: "F-137", prepare: openCard },
   {
     name: "two-threads",
