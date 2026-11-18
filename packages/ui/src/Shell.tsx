@@ -85,7 +85,7 @@ export function Shell({
     return () => document.removeEventListener("focusin", onFocus);
   }, []);
 
-  const selection = useSelection(state);
+  const selection = useSelection(state, interactive);
   const { bot, task } = selection;
   const [panelOpen, setPanelOpen] = useState(() => readPreference("panel") === "open");
   // In the one-pane layout the rail and the conversation take turns.
@@ -179,7 +179,7 @@ export function Shell({
   }, [togglePanel, drawerOpen, setPanel]);
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
-  const unread = unreadCount(state.tasksByBot, selection.seen, task?.key ?? null);
+  const unread = unreadCount(state.tasksByBot, selection.unreadSeen, task?.key ?? null);
   useEffect(() => {
     onUnreadCount?.(unread);
   }, [unread, onUnreadCount]);

@@ -222,7 +222,7 @@ function TaskRows({
       {visibleTasks(tasks, currentKey, all, cap).map((task) => {
         const current = task.key === currentKey;
         const unread =
-          (!current || selection.keptUnread.has(task.key)) && isUnread(task, selection.seen);
+          (!current || selection.keptUnread.has(task.key)) && isUnread(task, selection.unreadSeen);
         const state = taskState(task, selection.seen, selection.task?.key ?? null);
         const spoken =
           task.title +
@@ -1074,7 +1074,7 @@ export function Rail({
       setMenu(null);
       setRefocus({ bot: bot.id });
     };
-    const unreadTasks = tasks.filter((each) => isUnread(each, selection.seen));
+    const unreadTasks = tasks.filter((each) => isUnread(each, selection.unreadSeen));
     const only = tasks.length === 1 ? tasks[0]! : null;
     return tidy([
       ...(interactive
@@ -1349,7 +1349,7 @@ export function Rail({
   /** A task's menu: on its row, by right-click, Shift+F10 or the Menu key. */
   const taskEntries = (bot: Bot, task: Task): MenuEntry[] => {
     const unread =
-      isUnread(task, selection.seen) &&
+      isUnread(task, selection.unreadSeen) &&
       (task.key !== selection.task?.key || selection.keptUnread.has(task.key));
     const trigger = menu?.trigger ?? null;
     const close = () => setMenu(null);
@@ -1519,7 +1519,7 @@ export function Rail({
 
   const renderRow = (bot: Bot, place: "list" | "section" | "hidden" | "search") => {
     const tasks = tasksByBot[bot.id] ?? [];
-    const summary = summarize(tasks, selection.seen, onScreenKey);
+    const summary = summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen);
     const waiting = waitingWords(tasks);
     const open = place !== "search" && selection.isOpen(bot.id);
     const several = tasks.length > 1;
@@ -1622,7 +1622,7 @@ export function Rail({
 
   const renderPin = (bot: Bot) => {
     const tasks = tasksByBot[bot.id] ?? [];
-    const summary = summarize(tasks, selection.seen, onScreenKey);
+    const summary = summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen);
     const several = tasks.length > 1;
     return (
       <li key={bot.id}>

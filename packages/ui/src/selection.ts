@@ -62,7 +62,13 @@ const URGENCY: RunState[] = [
  * What a bot's row says about all of its tasks. The three signals are
  * independent, so a folded bot never hides work in an older task.
  */
-export function summarize(tasks: Task[], seen: SeenMap, onScreenKey: string | null): BotSummary {
+export function summarize(
+  tasks: Task[],
+  seen: SeenMap,
+  onScreenKey: string | null,
+  /** What this viewer read, for unread: the gateway's word alone on a connection that writes. */
+  unreadSeen: SeenMap = seen,
+): BotSummary {
   let latest: Task | null = null;
   for (const task of tasks) {
     if (!latest || (task.updatedAt ?? 0) > (latest.updatedAt ?? 0)) latest = task;
@@ -70,7 +76,7 @@ export function summarize(tasks: Task[], seen: SeenMap, onScreenKey: string | nu
   const states = new Set(tasks.map((task) => taskState(task, seen, onScreenKey)));
   return {
     latest,
-    unread: tasks.some((task) => task.key !== onScreenKey && isUnread(task, seen)),
+    unread: tasks.some((task) => task.key !== onScreenKey && isUnread(task, unreadSeen)),
     // Failed and blocked share a place; failed is named first.
     state: URGENCY.find((state) => states.has(state)) ?? null,
   };
@@ -142,7 +148,17 @@ const SEEN_KEY = "seen";
  * are unfolded. A bot with several tasks unfolds while it is open, unless it was
  * folded by hand; a bot unfolded by hand stays unfolded until it is folded.
  */
-export function useSelection(state: ClawtrateState) {
+/** No local reads: unread is the gateway's alone. */
+const NOTHING_SEEN: SeenMap = Object.freeze({}) as SeenMap;
+
+/**
+ * `gatewayOwnsUnread`: the connection writes, so reading a task is a change the
+ * gateway accepts or refuses. Then the dot and the badge are what the gateway
+ * reports (`unreadSeen` is empty) and nothing this viewer does locally clears
+ * them; a read-only connection, whose reads the gateway never hears, keeps its
+ * own memory of what it read.
+ */
+export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
   const [botId, setBotId] = useState<string | null>(() => readPreference("bot"));
   const [taskByBot, setTaskByBot] = useState<Record<string, string>>(() => readJson("tasks"));
   const [seen, setSeen] = useState<SeenMap>(() => readJson(SEEN_KEY));
@@ -335,6 +351,7 @@ export function useSelection(state: ClawtrateState) {
     tasks,
     task,
     seen,
+    unreadSeen: gatewayOwnsUnread ? NOTHING_SEEN : seen,
     showAll,
     isOpen,
     selectBot,
