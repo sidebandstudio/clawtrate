@@ -1,0 +1,124 @@
+/* A task's model and effort (conversation.md section 25): the model chip at the
+   top left of the conversation's header band, its menu, the event line a
+   change posts, and the turn's record. Tokens only. */
+
+.t-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  height: 36px;
+  margin: 0;
+  padding: 0 10px 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+p.t-chip {
+  cursor: default;
+}
+
+.conversation-header .header-side:first-child {
+  min-width: 0;
+}
+
+.t-chip-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.t-chip-dot {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.t-chip-effort {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.t-chip .icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--text-muted);
+}
+
+.t-chip .t-chev {
+  transform: rotate(90deg);
+}
+
+.t-chip[aria-busy="true"] {
+  color: var(--text-muted);
+}
+
+.t-chip:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
+.t-menu {
+  position: absolute;
+  z-index: 20;
+  width: 280px;
+  max-width: calc(100% - 24px);
+}
+
+.t-group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.t-note {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.t-menu-foot,
+.t-menu-wait {
+  padding: 6px 10px 4px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.t-event[data-tone="warn"] .icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  color: var(--warn);
+  vertical-align: -2px;
+}
+
+.t-refused {
+  color: var(--danger);
+}
+
+.t-run .run-record .button {
+  margin-left: 4px;
+}
+
+.t-raw {
+  margin: 6px 0 0;
+}
+
+/* One pane: Back takes the header's left side; the task's Details hold the control. */
+@container app (max-width: 687px) {
+  .t-chip {
+    display: none;
+  }
+}
+
+[data-input="touch"] .t-menu .menu-item {
+  min-height: 44px;
+}

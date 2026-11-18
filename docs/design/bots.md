@@ -339,6 +339,8 @@ A model the gateway lists as unavailable is shown in the menu, disabled, with "N
 - A save the gateway refuses puts the select back to its saved value, with "Couldn't save the model: <the gateway's reason>." under the pair, and focus stays on the select. A save that crossed another person's change shows what the gateway now has.
 - On a phone the two stack, Model first.
 
+A task's own model and effort, which change that task alone from its next turn, are chosen in the conversation's header and in the task's Details, need only the interactive tier, and are `conversation.md` section 25.
+
 ## 10. The bot's account: bound and locked
 
 The account row reads the account's name and, after it, one of these words; the word never shortens (section 19). Opening the row shows the **Account** page.
