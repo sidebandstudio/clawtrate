@@ -1480,6 +1480,71 @@ test("F-301: a turn the gateway fails offers Copy request ID, which copies the i
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
+test("F-066 F-283 F-067: on a real reply, the actions show beside it, a reaction is set and taken back on the gateway, and a reply sent from its thread names it", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { key } = await ownTask(page, "React and reply");
+  await composer(page).fill("Say something short. #text");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+  type Row = { role: string; __openclaw?: { id?: string; replyToId?: string } };
+  const rows = async () =>
+    (await gatewayCall<{ messages: Row[] }>("chat.history", { sessionKey: key, limit: 20 }))
+      .messages;
+  const replyRow = (await rows()).filter((row) => row.role === "assistant").at(-1)!;
+  const messageId = replyRow.__openclaw!.id!;
+  const turn = page.locator(`[data-testid="transcript-turn"][data-message="${messageId}"]`);
+  await expect(turn).toBeVisible({ timeout: 30_000 });
+  await turn.locator(".msg > .bubble").last().hover();
+  const actions = turn.getByTestId("message-actions");
+  await expect.poll(() => actions.evaluate((el) => Number(getComputedStyle(el).opacity))).toBe(1);
+
+  // F-283: a reaction, as the gateway records it, and taken back.
+  const listed = async () => {
+    const answer = await gatewayCall<{ reactions: Record<string, Array<{ emoji: string }>> }>(
+      "session.reactions.list",
+      { sessionKey: key },
+    );
+    return (answer.reactions[messageId] ?? []).map((each) => each.emoji);
+  };
+  await actions.getByRole("button", { name: "Add a reaction" }).click();
+  await page
+    .getByRole("menu", { name: "Add a reaction" })
+    .getByRole("menuitem", { name: /Thumbs up/ })
+    .click();
+  const badge = turn.getByTestId("reaction");
+  await expect(badge).toHaveText("👍1", { timeout: 30_000 });
+  await expect(badge).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(listed, { timeout: 30_000 }).toEqual(["👍"]);
+  await badge.click();
+  await expect(turn.getByTestId("reactions")).toHaveCount(0, { timeout: 30_000 });
+  await expect.poll(listed, { timeout: 30_000 }).toEqual([]);
+
+  // F-067: Reply opens the thread on the message, and the reply names it on the gateway.
+  await turn.locator(".msg > .bubble").last().hover();
+  await actions.getByRole("button", { name: "Reply in a thread" }).click();
+  const thread = page.getByRole("dialog", { name: "Thread" });
+  await expect(thread.getByTestId("thread-message").first()).toContainText(
+    await turn.locator(".msg > .bubble").last().innerText(),
+  );
+  await thread.getByTestId("thread-input").fill("A reply to that. #text");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(
+      async () =>
+        (await rows()).some(
+          (row) => row.role === "user" && row.__openclaw?.replyToId === messageId,
+        ),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  await expect(thread).toContainText("1 reply", { timeout: 30_000 });
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("reply-quote")).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+});
+
 test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
   page,
 }) => {

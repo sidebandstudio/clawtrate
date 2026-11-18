@@ -942,7 +942,10 @@ export function noteRunRequest(
   runId: string,
   requestId: string,
 ): TaskActivity {
-  return updateRun(activity, runId, (run) => ({ ...run, requestId: capId(requestId, MAX_ID_CHARS) }));
+  return updateRun(activity, runId, (run) => ({
+    ...run,
+    requestId: capId(requestId, MAX_ID_CHARS),
+  }));
 }
 
 function updateRun(activity: TaskActivity, runId: string, fn: (run: Run) => Run): TaskActivity {

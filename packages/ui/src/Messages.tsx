@@ -85,9 +85,10 @@ export function MessageActions({
   const [held, setHeld] = useState(false);
   const bar = useRef<HTMLDivElement>(null);
   const reactRef = useRef<HTMLButtonElement>(null);
-  const replyRef = useRef<HTMLButtonElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
   const [current, setCurrent] = useState(0);
+  /** The button whose menu is open, for focus to go back to. */
+  const [trigger, setTrigger] = useState<HTMLElement | null>(null);
 
   // Beside the message's last bubble: to its right for the bot's, to its left for yours.
   const measure = useCallback(() => {
@@ -162,19 +163,15 @@ export function MessageActions({
 
   if (!env || !item.messageId) return null;
   const messageId = item.messageId;
-  const buttons = [env.canWrite ? reactRef : null, env.canWrite ? replyRef : null, moreRef].filter(
-    (each): each is RefObject<HTMLButtonElement | null> => each !== null,
-  );
+  const order = env.canWrite ? ["react", "reply", "more"] : ["more"];
   const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
     event.preventDefault();
-    const next =
-      (current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+    const next = (current + (event.key === "ArrowRight" ? 1 : -1) + order.length) % order.length;
     setCurrent(next);
-    buttons[next]!.current?.focus();
+    event.currentTarget.querySelectorAll<HTMLButtonElement>(":scope > button")[next]?.focus();
   };
-  const tab = (ref: RefObject<HTMLButtonElement | null>) =>
-    buttons.indexOf(ref) === current ? 0 : -1;
+  const tab = (name: string) => (order.indexOf(name) === current ? 0 : -1);
 
   const reactEntries: MenuEntry[] = REACTIONS.map(({ emoji, name }) => ({
     kind: "item",
@@ -240,21 +237,23 @@ export function MessageActions({
           title="Add a reaction"
           aria-haspopup="menu"
           aria-expanded={menu === "react"}
-          tabIndex={tab(reactRef)}
-          onClick={() => setMenu(menu === "react" ? null : "react")}
+          tabIndex={tab("react")}
+          onClick={(event) => {
+            setTrigger(event.currentTarget);
+            setMenu(menu === "react" ? null : "react");
+          }}
         >
           <SmileIcon />
         </button>
       )}
       {env.canWrite && (
         <button
-          ref={replyRef}
           type="button"
           className="icon-button"
           aria-label="Reply in a thread"
           title="Reply in a thread"
-          tabIndex={tab(replyRef)}
-          onClick={() => env.openThread(messageId, replyRef.current)}
+          tabIndex={tab("reply")}
+          onClick={(event) => env.openThread(messageId, event.currentTarget)}
         >
           <ReplyIcon />
         </button>
@@ -267,8 +266,11 @@ export function MessageActions({
         title="More"
         aria-haspopup="menu"
         aria-expanded={menu === "more"}
-        tabIndex={tab(moreRef)}
-        onClick={() => setMenu(menu === "more" ? null : "more")}
+        tabIndex={tab("more")}
+        onClick={(event) => {
+          setTrigger(event.currentTarget);
+          setMenu(menu === "more" ? null : "more");
+        }}
       >
         <MoreIcon />
       </button>
@@ -277,9 +279,9 @@ export function MessageActions({
           label={menu === "react" ? "Add a reaction" : "More"}
           className="msg-actions-menu"
           entries={menu === "react" ? reactEntries : moreEntries}
-          trigger={(menu === "react" ? reactRef : moreRef).current}
+          trigger={trigger}
           onClose={(refocus) => {
-            if (refocus) (menu === "react" ? reactRef : moreRef).current?.focus();
+            if (refocus) trigger?.focus();
             setMenu(null);
           }}
         />
