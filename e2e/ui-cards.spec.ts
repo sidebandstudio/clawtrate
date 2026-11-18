@@ -864,8 +864,8 @@ test.describe("tool-server calls on a real gateway", () => {
     const map = mcpToolMap(answer, MAX_MCP_TOOLS);
     expect(map["coder__send_message"]).toEqual({ server: "coder", tool: "send_message" });
     expect(map["coder__run_checks"]).toEqual({ server: "coder", tool: "run_checks" });
-    // Built-in tools are not tool-server tools.
-    expect(Object.keys(map).every((name) => name.startsWith("coder__"))).toBe(true);
+    // Built-in tools are not tool-server tools: every entry is one of the two stand-ins'.
+    expect(Object.keys(map).every((name) => /^(coder|t3code)__/.test(name))).toBe(true);
   });
 
   test("F-314: an error result is an ordinary failed step", async () => {
