@@ -1195,16 +1195,19 @@ export function registerRunAlias(
 }
 
 /**
- * The pairs a history page shows of a queued turn's two ids: a user row keyed
- * `<send id>:user` (OpenClaw 2026.10.6) followed by rows under another run id,
- * where the send's run is one this task shows. The pairing frame may have been
- * missed (a reconnect), and history alone still ties them.
+ * The pairs a history page shows of a queued turn's two ids, read from the page alone,
+ * whatever this client holds (a reconnect that missed the pairing frame, or a transcript
+ * built from history only): a user row keyed `<send id>:user` (OpenClaw 2026.10.6) followed
+ * by rows under a run id the page has not shown before. A steer's user row is followed by
+ * the rows of the run it was sent into, which came before it, and an ordinary turn's by
+ * rows under the send's own id: neither pairs.
  */
 export function historyQueuePairs(
   messages: unknown,
-  shownRunIds: ReadonlySet<string>,
 ): Array<[gatewayRunId: string, clientRunId: string]> {
   const pairs: Array<[string, string]> = [];
+  // Run ids the page has shown so far, sends and their rows alike.
+  const seen = new Set<string>();
   let sendId: string | null = null;
   for (const entry of Array.isArray(messages) ? messages : []) {
     const message = asRecord(entry);
@@ -1212,11 +1215,13 @@ export function historyQueuePairs(
     if (message.role === "user") {
       const key = rowIdempotencyKey(message);
       sendId = key?.endsWith(":user") ? key.slice(0, -":user".length) : null;
+      if (sendId) seen.add(sendId);
       continue;
     }
     const runId = str(meta(message).runId);
-    if (!runId || !sendId) continue;
-    if (runId !== sendId && shownRunIds.has(sendId)) pairs.push([runId, sendId]);
+    if (!runId) continue;
+    if (sendId && runId !== sendId && !seen.has(runId)) pairs.push([runId, sendId]);
+    seen.add(runId);
     sendId = null;
   }
   return pairs;

@@ -4411,10 +4411,10 @@ export class ClawtrateClient {
       if (stale()) return;
       // A resync starts every stream of this task again from what the gateway sends next.
       if (resync) this.streams.retire(key);
-      // A queued turn's two ids, as history pairs them: kept, so a pairing frame missed in a
-      // gap still makes one run, and later frames under either id update that run.
-      const shown = new Set((this.state.transcripts[key]?.runs ?? []).map((run) => run.id));
-      const pairs = historyQueuePairs(history?.messages, shown);
+      // A queued turn's two ids, as history pairs them, whatever this client holds: kept, so a
+      // pairing frame missed in a gap, or a transcript built from history alone, still makes
+      // one run, and later frames under either id update that run.
+      const pairs = historyQueuePairs(history?.messages);
       if (pairs.length > 0) {
         this.updateActivity(key, (activity) =>
           pairs.reduce(

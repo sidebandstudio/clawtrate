@@ -325,6 +325,69 @@ describe("a queued turn's two ids stay one run", () => {
     expect(transcript().runs).toHaveLength(1);
     client.stop();
   });
+
+  it("a transcript built from history alone pairs them, from history itself: one run, in flight", async () => {
+    const gateway = grantingGateway();
+    // The gateway ran the turn from its queue: the earlier turn, then the queued one's user row
+    // under the send's key and its rows under the gateway's own id, in flight under the send's.
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        { role: "user", content: "first", __openclaw: { id: "u0", idempotencyKey: "first:user" } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "First done" }],
+          stopReason: "stop",
+          __openclaw: { id: "a0", runId: "first" },
+        },
+        { role: "user", content: "queued", __openclaw: { id: "u1", idempotencyKey: `${C}:user` } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Working on it" }],
+          __openclaw: { id: "a1", runId: X },
+        },
+      ],
+      inFlightRun: { runId: C },
+    });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().runs.length > 0 && transcript().status === "ready");
+    expect(runIds(transcript().runs)).toEqual([
+      ["first", "completed"],
+      [C, "running"],
+    ]);
+    expect(transcript().queueAliases).toEqual({ [X]: C });
+    // A late frame under either id is that one run.
+    gateway.emit("agent", agentEvent(X, 2, "run_status", { phase: "model" }));
+    gateway.emit("agent", agentEvent(C, 3, "lifecycle", { phase: "end" }));
+    await until(() => transcript().runs.find((run) => run.id === C)?.state === "completed");
+    expect(transcript().runs).toHaveLength(2);
+    client.stop();
+  });
+
+  it("a steer's user row inside the run it was sent into pairs nothing", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        { role: "user", content: "start", __openclaw: { id: "u0", idempotencyKey: "base:user" } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Looking" }],
+          __openclaw: { id: "a0", runId: "base" },
+        },
+        { role: "user", content: "steer", __openclaw: { id: "u1", idempotencyKey: "steer:user" } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Only the photos, then" }],
+          stopReason: "stop",
+          __openclaw: { id: "a1", runId: "base" },
+        },
+      ],
+    });
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => transcript().status === "ready" && transcript().runs.length > 0);
+    expect(transcript().queueAliases).toEqual({});
+    expect(runIds(transcript().runs)).toEqual([["base", "completed"]]);
+    client.stop();
+  });
 });
 
 describe("a steer the gateway admits as a run of its own", () => {
