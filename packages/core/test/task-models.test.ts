@@ -431,3 +431,29 @@ describe("the client around a task's model", () => {
     client.stop();
   });
 });
+
+describe("a bot's model and effort", () => {
+  it("F-042 F-043: an effort saved right after a model keeps that model, also when the read after the model's save fails", async () => {
+    const { AccountsGateway, accountsClient } = await import("./accounts-fake.ts");
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await client.setBotModel("otto", "dev-2", null);
+    expect(accounts().bindings.find((b) => b.botId === "otto")?.model).toBe("dev-2");
+    // The gateway reloads after a write to a bot's entry: the read after the next save fails.
+    const authStatus = fake.gateway.handlers["models.authStatus"]!;
+    fake.gateway.handlers["models.authStatus"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "reloading" });
+    };
+    await client.setBotModel("otto", "dev-1", null);
+    fake.gateway.handlers["models.authStatus"] = authStatus;
+    // The person chooses an effort next, from what the settings show.
+    const shown = accounts().bindings.find((b) => b.botId === "otto")!;
+    expect(shown.model).toBe("dev-1");
+    await client.setBotModel("otto", shown.model!, "high");
+    const otto = (fake.config.agents as { entries: Record<string, Record<string, unknown>> })
+      .entries.otto!;
+    expect(otto.model).toEqual({ primary: "acme/dev-1@acme:work", fallbacks: [] });
+    expect(otto.thinkingDefault).toBe("high");
+    client.stop();
+  });
+});

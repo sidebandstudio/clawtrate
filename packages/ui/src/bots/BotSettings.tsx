@@ -331,7 +331,7 @@ export function BotSettings({
                 provider={provider}
                 model={model}
                 effort={binding.effort ?? firstEffort(listed, provider, model)}
-                disabled={!admin}
+                disabled={!admin || connection.status !== "connected"}
                 onModel={(next) => {
                   const levels =
                     modelsOf(listed, provider).find((m) => m.id === next)?.levels ?? [];

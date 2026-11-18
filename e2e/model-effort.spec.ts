@@ -193,6 +193,9 @@ test("F-042 F-043: a bot's model and effort chosen in its settings are saved on 
   await settings.getByTestId("model-select").click();
   await page.getByRole("menuitemradio", { name: "dev-2" }).click();
   await expect(page.getByTestId("work-announcer")).toHaveText("Model saved", { timeout: 30_000 });
+  await expect(settings.getByTestId("model-select")).toHaveAccessibleName("Model: dev-2");
+  // A write to a bot's entry can make the gateway reload: the next choice waits for the connection.
+  await expect(settings.getByTestId("effort-select")).toBeEnabled({ timeout: 60_000 });
   await settings.getByTestId("effort-select").click();
   await page.getByRole("menuitemradio", { name: "High" }).click();
   await expect(page.getByTestId("work-announcer")).toHaveText("Effort saved", { timeout: 30_000 });
@@ -209,11 +212,13 @@ test("F-042 F-043: a bot's model and effort chosen in its settings are saved on 
   expect(quill.thinkingDefault).toBe("high");
 
   // Put back as the task checks below expect it: dev-1 and Low, the gateway's default effort.
+  await expect(settings.getByTestId("model-select")).toBeEnabled({ timeout: 60_000 });
   await settings.getByTestId("model-select").click();
   await page.getByRole("menuitemradio", { name: "dev-1" }).click();
   await expect(settings.getByTestId("model-select")).toHaveAccessibleName("Model: dev-1", {
     timeout: 30_000,
   });
+  await expect(settings.getByTestId("effort-select")).toBeEnabled({ timeout: 60_000 });
   await settings.getByTestId("effort-select").click();
   await page.getByRole("menuitemradio", { name: "Low" }).click();
   await expect(settings.getByTestId("effort-select")).toHaveAccessibleName("Effort: Low", {

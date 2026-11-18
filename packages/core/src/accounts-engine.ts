@@ -1477,11 +1477,18 @@ export class AccountsEngine {
       at: this.ctx.now(),
     });
     try {
-      await this.writeModel(
-        botId,
-        { provider: binding.provider, model, account: binding.account },
-        effort,
-        false,
+      const ref = { provider: binding.provider, model, account: binding.account };
+      await this.writeModel(botId, ref, effort, false);
+      // What the gateway took, at once: a write to a bot's entry can make the gateway reload, and
+      // the read after it then fails, so the next save must not start from the model before it.
+      this.ctx.update((a) =>
+        this.patchBinding(a, botId, (b) => ({
+          ...b,
+          primary: formatModelRef(ref),
+          model,
+          effort: effort ?? b.effort,
+          fallbacks: [],
+        })),
       );
       this.setWrite({
         what: "model",
