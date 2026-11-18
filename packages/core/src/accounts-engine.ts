@@ -73,6 +73,8 @@ export type AccountsContext = {
   admin(): boolean;
   /** Read the bot list again (`agents.list`). */
   refreshBots(): Promise<void>;
+  /** The bot's most recently active task, as the task list has it. */
+  latestTask(botId: string): string | null;
   /** Give a new bot its first, empty task, "Main" (bots.md section 3), and read the task list. */
   createMainTask(botId: string): Promise<void>;
   now(): number;
@@ -1430,6 +1432,36 @@ export class AccountsEngine {
       throw error;
     }
     await this.checkLock(botId);
+  }
+
+  /**
+   * The models the gateway lists for a bot's latest task, which it projects
+   * through the account that task's conversation selected (bots.md section 9,
+   * section 20 row 20). A bot with no task has none; its settings show the
+   * provider's models then.
+   */
+  async readBotCatalog(botId: string): Promise<void> {
+    const { ctx } = this;
+    const sessionKey = ctx.latestTask(botId);
+    if (!sessionKey) {
+      ctx.update((a) => (a.botCatalog?.botId === botId ? { ...a, botCatalog: null } : a));
+      return;
+    }
+    try {
+      const answer = await ctx.request("models.list", { sessionKey });
+      const selection = asRecord(asRecord(answer)?.accountSelection);
+      const account =
+        selection?.kind === "shared" && typeof selection.authProfileId === "string"
+          ? selection.authProfileId
+          : null;
+      ctx.update((a) => ({
+        ...a,
+        botCatalog: { botId, sessionKey, account, models: readCatalog(answer) },
+      }));
+    } catch (error) {
+      this.log(`the models of ${botId}'s latest task were not read: ${errorText(error)}`);
+      ctx.update((a) => (a.botCatalog?.botId === botId ? { ...a, botCatalog: null } : a));
+    }
   }
 
   /** The bot's model and effort, keeping its account. */

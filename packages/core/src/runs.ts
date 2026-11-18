@@ -285,6 +285,14 @@ export type Run = {
   /** Latest preparation phase from `chat` status or `agent` run_status events. */
   phase: string | null;
   model: string | null;
+  /**
+   * The provider that served the model, as the gateway reported it with the
+   * model: `lifecycle` `phase:"model"` `{provider, model}`, or the history row's
+   * `provider` and `model` (conversation.md 25.5). Absent when neither said.
+   */
+  provider?: string;
+  /** Which report the model and provider come from, for Raw. */
+  modelFrom?: "lifecycle" | "history";
   /** Reply text streaming right now. The durable transcript owns it after the run. */
   text: string;
   /** Which projection the text comes from. The map says a run's text arrives as one or the other. */
@@ -1876,7 +1884,18 @@ function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContex
       };
     case "model":
       // Each model call starts a new reasoning segment.
-      return closeReasoning({ ...run, model: str(data.model) ?? run.model }, ctx, ts);
+      return closeReasoning(
+        str(data.model)
+          ? {
+              ...run,
+              model: str(data.model),
+              ...(str(data.provider) ? { provider: str(data.provider)! } : {}),
+              modelFrom: "lifecycle",
+            }
+          : run,
+        ctx,
+        ts,
+      );
     case "waiting-approval": {
       if (run.state !== "running" && run.state !== "waiting") return run;
       const id =
@@ -2451,7 +2470,17 @@ export function runsFromHistory(
       );
     if (message.role === "assistant") {
       lastAssistant.set(runId, message);
-      run = { ...run, model: str(message.model) ?? run.model, endedAt: at ?? run.endedAt };
+      run = {
+        ...run,
+        ...(str(message.model)
+          ? {
+              model: str(message.model),
+              ...(str(message.provider) ? { provider: str(message.provider)! } : {}),
+              modelFrom: "history" as const,
+            }
+          : {}),
+        endedAt: at ?? run.endedAt,
+      };
       const content = Array.isArray(message.content) ? message.content : [];
       if (typeof message.content === "string" && message.content.trim())
         trailingThinking.set(runId, false);
@@ -2842,6 +2871,12 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
         : {}),
       anchorItemId: fromRun.anchorItemId ?? current.anchorItemId,
       model: current.model ?? fromRun.model,
+      ...(current.model === null && fromRun.model !== null
+        ? {
+            ...(fromRun.provider !== undefined ? { provider: fromRun.provider } : {}),
+            ...(fromRun.modelFrom !== undefined ? { modelFrom: fromRun.modelFrom } : {}),
+          }
+        : {}),
       ...mergedAnchor(current, fromRun, steps),
       reasoningRevision: current.reasoningRevision + (reasoningIdsChanged(current, steps) ? 1 : 0),
     };

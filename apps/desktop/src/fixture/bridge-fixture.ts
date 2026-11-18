@@ -131,6 +131,7 @@ function loaded(now: number): ClawtrateState {
     unroutedApprovalsOmitted: 0,
     creations: [],
     accounts: initialState.accounts,
+    taskModels: {},
     retention: initialState.retention,
   };
 }

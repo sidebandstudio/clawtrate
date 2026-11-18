@@ -339,6 +339,14 @@ export type BotCreationState = {
   uncertain: boolean;
 };
 
+/** The catalogue of a bot's latest task, and the account its conversation selected. */
+export type BotCatalog = {
+  botId: string;
+  sessionKey: string;
+  account: string | null;
+  models: CatalogModel[];
+};
+
 /** The last write to a bot's settings or an account, for the line that says how it went. */
 export type AccountWrite = {
   what: "account" | "model" | "fallbacks" | "label" | "disconnect" | "key";
@@ -363,6 +371,12 @@ export type AccountsState = {
   methods: SignInMethod[];
   keyProviders: KeyProvider[];
   models: CatalogModel[];
+  /**
+   * The models the gateway lists for one bot's latest task (`models.list
+   * {sessionKey}`), and the account that task's conversation selected, for the
+   * bot whose settings are open (bots.md section 9). Null until read.
+   */
+  botCatalog: BotCatalog | null;
   bindings: BotBinding[];
   signIn: SignInState | null;
   creation: BotCreationState | null;
@@ -380,6 +394,7 @@ export const initialAccountsState: AccountsState = {
   methods: [],
   keyProviders: [],
   models: [],
+  botCatalog: null,
   bindings: [],
   signIn: null,
   creation: null,

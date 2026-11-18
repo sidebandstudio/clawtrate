@@ -16,6 +16,7 @@ import {
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
+import { TASK_MODEL_LOG_PREFIX, TaskModelsEngine } from "./task-models.ts";
 import {
   admitApproval,
   applyApprovalRequested,
@@ -230,6 +231,7 @@ import {
   type ConnectionState,
   type DiscoveryState,
   type ScopeUpgradeState,
+  type Task,
   type TaskCreation,
   type TranscriptItem,
   type Transcript,
@@ -804,6 +806,11 @@ export class ClawtrateClient {
     connected: () => this.state.connection.status === "connected",
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
     refreshBots: () => this.refreshBots(),
+    latestTask: (botId) => {
+      const tasks = this.state.tasksByBot[botId] ?? [];
+      const latest = [...tasks].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+      return latest?.key ?? null;
+    },
     createMainTask: async (botId) => {
       const generation = this.generation;
       await this.request("sessions.create", {
@@ -812,6 +819,49 @@ export class ClawtrateClient {
         label: "Main",
       });
       if (generation === this.generation) await this.refreshSessions(generation);
+    },
+    now: () => this.now(),
+    randomId: () => this.randomId(),
+    log: (message) => this.log("warn", message),
+  });
+  /** A task's model and effort (`task-models.ts`); its state is `taskModels`. */
+  private readonly taskModels = new TaskModelsEngine({
+    request: (method, params) => this.request(method, params),
+    get: () => this.state.taskModels,
+    update: (change) =>
+      this.store.update((state) => ({ ...state, taskModels: change(state.taskModels) })),
+    task: (key) => this.taskRow(key),
+    botAccount: (botId) => {
+      const binding = this.state.accounts.bindings.find((each) => each.botId === botId);
+      return binding?.mode === "account" ? binding.account : null;
+    },
+    active: (key) => {
+      const transcript = this.state.transcripts[key];
+      return transcript ? activeRun(transcript) !== undefined : false;
+    },
+    lastTurnEnd: (key) => {
+      const transcript = this.state.transcripts[key];
+      if (!transcript) return null;
+      const times = [
+        ...transcript.runs.map((run) => run.endedAt ?? run.startedAt ?? null),
+        ...transcript.items.map((item) => item.timestamp),
+      ].filter((at): at is number => at !== null);
+      return times.length > 0 ? Math.max(...times) : null;
+    },
+    connected: () => this.state.connection.status === "connected",
+    canWrite: () => this.state.connection.canWrite,
+    ensureWrite: () => this.ensureScope(WRITE_SCOPE),
+    applyRow: (key, fields) => this.applyRowFields(key, fields),
+    refreshTasks: () => this.scheduleRefresh(this.generation),
+    released: (key) => this.afterActivity(key),
+    storage: {
+      get: (key) => this.host.storage.get(key),
+      set: (key, value) => this.host.storage.set(key, value),
+      delete: (key) => this.host.storage.delete(key),
+    },
+    storageKey: () => {
+      const id = this.state.connection.gatewayId ?? this.state.connection.gatewayUrl;
+      return id ? `${TASK_MODEL_LOG_PREFIX}${id}` : null;
     },
     now: () => this.now(),
     randomId: () => this.randomId(),
@@ -941,6 +991,7 @@ export class ClawtrateClient {
     if (!kept || !this.incarnations.has(key))
       this.incarnations.set(key, (this.nextIncarnation += 1));
     this.setTranscript(key, (current) => current ?? this.openedTranscript(key));
+    this.taskModels.open(key);
     // An approval waiting for a task that can show it may belong here now.
     this.routeUnrouted();
     if (this.state.connection.status === "connected") void this.loadTranscript(key, !kept, null);
@@ -971,7 +1022,7 @@ export class ClawtrateClient {
     }
     this.openSessions.delete(key);
     const transcript = this.state.transcripts[key];
-    if (transcript && hasUnsettledWork(transcript)) {
+    if ((transcript && hasUnsettledWork(transcript)) || this.taskModels.hasWork(key)) {
       this.retained.add(key);
       return;
     }
@@ -984,6 +1035,7 @@ export class ClawtrateClient {
   }
 
   private releaseTask(key: string): void {
+    this.taskModels.close(key);
     this.retained.delete(key);
     this.incarnations.delete(key);
     this.loads.delete(key);
@@ -1428,6 +1480,7 @@ export class ClawtrateClient {
     idempotencyKey: string,
     queueMode: "steer" | "followup",
     attachments: OutgoingAttachment[],
+    thinking: string | null = null,
   ) {
     return {
       sessionKey: key,
@@ -1436,6 +1489,7 @@ export class ClawtrateClient {
       // Always the mode meant: with none the gateway steers.
       queueMode,
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(thinking ? { thinking } : {}),
     };
   }
 
@@ -1981,6 +2035,8 @@ export class ClawtrateClient {
       this.failDelivery(key, messageId, error, true);
       return;
     }
+    // A change of model or effort on its way lands first: the turn this starts uses it (25.3).
+    if (this.outgoing(key, messageId)?.mode !== "steer") await this.taskModels.settled(key);
     let message = this.outgoing(key, messageId);
     if (!message || (message.status !== "sending" && message.status !== "awaiting-access")) return;
 
@@ -2028,6 +2084,9 @@ export class ClawtrateClient {
     message = this.outgoing(key, messageId)!;
 
     let result: RawRecord | null;
+    // The effort the chip shows, sent with a message that starts a turn, so the turn's record can
+    // say what was asked for (25.5). A steer joins a turn as it is.
+    const thinking = message.mode === "steer" ? null : this.taskModels.effortToSend(key);
     try {
       const params = this.sendParams(
         key,
@@ -2035,6 +2094,7 @@ export class ClawtrateClient {
         message.id,
         message.mode === "steer" ? "steer" : "followup",
         this.attachmentContent.get(messageId)?.files ?? [],
+        thinking,
       );
       this.checkSize(params);
       const sent = this.request("chat.send", params);
@@ -2074,6 +2134,7 @@ export class ClawtrateClient {
     const runId = typeof result?.runId === "string" ? result.runId : null;
     const messageSeq = typeof result?.messageSeq === "number" ? result.messageSeq : null;
     const steeredInto = message.mode === "steer" ? message.runId : null;
+    if (thinking && runId) this.taskModels.recordRequested(key, runId, thinking);
     // A stop command (`/stop`) is answered `{ok, aborted, runIds}` before any
     // run or turn is recorded: the gateway handled it, and no run or history
     // row will follow.
@@ -3421,6 +3482,11 @@ export class ClawtrateClient {
   // Provider accounts (`accounts.ts`, `accounts-engine.ts`; bots.md sections 3 to 11) ----------
 
   /** Read the accounts, sign-ins, bindings and catalogue the account screens show. */
+  /** The models listed for a bot's latest task, for its settings (bots.md section 9). */
+  readBotCatalog(botId: string): Promise<void> {
+    return this.accounts.readBotCatalog(botId);
+  }
+
   refreshAccounts(): Promise<void> {
     if (this.state.connection.status !== "connected") return Promise.resolve();
     return this.accounts.load();
@@ -3503,6 +3569,47 @@ export class ClawtrateClient {
 
   setBotModel(botId: string, model: string, effort: string | null): Promise<void> {
     return this.accounts.setModel(botId, model, effort);
+  }
+
+  /**
+   * A task's model, effort or both, for that task alone (conversation.md 25.3):
+   * saved now, or held while a turn of the task is active and saved once it settles.
+   */
+  setTaskModel(
+    key: string,
+    model: string | null,
+    effort: string | null,
+  ): Promise<"saved" | "held" | "unchanged"> {
+    return this.taskModels.choose(key, { model, effort });
+  }
+
+  /** "Keep": let go of a held change of a task's model or effort. */
+  keepTaskModel(key: string): void {
+    this.taskModels.keep(key);
+  }
+
+  /** Read the models the gateway lists for a task again ("Try again"). */
+  readTaskModels(key: string): Promise<void> {
+    return this.taskModels.readCatalog(key);
+  }
+
+  /** A task's row as the gateway last listed it. */
+  private taskRow(key: string): Task | null {
+    for (const tasks of Object.values(this.state.tasksByBot)) {
+      const found = tasks.find((task) => task.key === key);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  /** What the gateway's answer to a patch says the task's row now holds. */
+  private applyRowFields(key: string, fields: RawRecord): void {
+    const id = capId(key, MAX_ID_CHARS);
+    const cached = this.rows.get(id);
+    if (!cached) return;
+    const merged = mergeSessionRow(cached, fields);
+    if (isTaskSession(merged)) this.rows.set(id, SESSION_ROW(merged));
+    this.publishTasks();
   }
 
   removeBotFallbacks(botId: string): Promise<void> {
@@ -3811,9 +3918,10 @@ export class ClawtrateClient {
     }
     const current = this.state.transcripts[key];
     if (!current) return;
-    const next = activeRun(current)
-      ? undefined
-      : current.runs.find((run) => run.state === "queued");
+    // A change of model or effort held during the turn is saved before anything queued starts.
+    const saving = this.taskModels.release(key);
+    const next =
+      activeRun(current) || saving ? undefined : current.runs.find((run) => run.state === "queued");
     if (next) {
       this.updateActivity(key, (activity) =>
         // It keeps `mode: "queue"`: if the gateway refuses to start it, the
@@ -3824,7 +3932,11 @@ export class ClawtrateClient {
       );
       this.enqueueDelivery(key, next.id);
     }
-    if (this.retained.has(key) && !hasUnsettledWork(this.state.transcripts[key] ?? emptyActivity)) {
+    if (
+      this.retained.has(key) &&
+      !hasUnsettledWork(this.state.transcripts[key] ?? emptyActivity) &&
+      !this.taskModels.hasWork(key)
+    ) {
       this.releaseTask(key);
     }
   }
@@ -4423,6 +4535,7 @@ export class ClawtrateClient {
     for (const key of Object.keys(this.state.transcripts)) {
       if (this.tracked(key)) void this.loadTranscript(key, true, resync);
     }
+    this.taskModels.reconnected();
     void this.loadSidebar(generation);
     void this.loadWaitingQuestions(generation);
     void this.loadWaitingApprovals(generation);

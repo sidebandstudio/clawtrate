@@ -1,6 +1,7 @@
 // View models the interface renders. Gateway payloads are mapped into these in
 // mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
 
+import type { TaskModelView } from "./task-models.ts";
 import { initialAccountsState, type AccountsState } from "./accounts.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
@@ -165,6 +166,16 @@ export type Task = {
    * row), as the gateway names it. Absent when the task records none.
    */
   effort?: string;
+  /**
+   * The level the gateway uses when the task asks for none (`thinkingDefault`
+   * on its row), for its present model.
+   */
+  effortDefault?: string;
+  /**
+   * The model the task uses, as its row names it: `<provider>/<model>`
+   * (`modelProvider` and `model`). Absent when the row names none.
+   */
+  model?: string;
   /** Paths of fields cut to their bound. */
   cut?: string[];
 };
@@ -296,6 +307,13 @@ export type ClawtrateState = {
    */
   accounts: AccountsState;
   /**
+   * Each followed task's model and effort as this app handles them
+   * (`task-models.ts`): the models the gateway lists for it, a change held or
+   * on its way, its last refusal, the lines its changes left and the effort
+   * each turn this app started asked for.
+   */
+  taskModels: Record<string, TaskModelView>;
+  /**
    * A secondary alarm: roughly what the state takes, against the arithmetic
    * bound of `state-bounds.ts`. The bound holds by construction; `near` only
    * says it is being approached.
@@ -391,6 +409,7 @@ export const initialState: ClawtrateState = {
   unroutedApprovalsOmitted: 0,
   creations: [],
   accounts: initialAccountsState,
+  taskModels: {},
   retention: { estimated: 0, bound: 0, near: false },
   sidebar: { status: "unknown", prefs: null },
 };

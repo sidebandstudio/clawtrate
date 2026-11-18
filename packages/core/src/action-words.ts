@@ -382,8 +382,8 @@ export const RUN_LINE = {
   stopped: (after: string | null) => (after ? `Stopped after ${after}` : "Stopped"),
   failed: (after: string | null) => (after ? `Failed after ${after}` : "Failed"),
   failedCount: (n: number) => `${n} failed`,
-  /** The run line's record: the effort the task asks for, or that none is reported. */
-  effort: (level: string | null) => (level ? `requested effort ${level}` : "effort not reported"),
+  /** The run line's record: the effort this app asked for when it started the turn, or none. */
+  effort: (level: string | null) => (level ? `${level} effort requested` : "effort not reported"),
   modelNotReported: "model not reported",
   actions: (n: number) => `${n} ${n === 1 ? "action" : "actions"}`,
   /** Of the run's actions, those kept here when some were not. */

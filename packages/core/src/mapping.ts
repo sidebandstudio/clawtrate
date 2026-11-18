@@ -194,6 +194,14 @@ export function mapSessionRow(row: RawRecord): Task | null {
     ...(row.markedUnreadAt !== undefined ? { unreadMarker: num(row.markedUnreadAt) } : {}),
     ...contextOf(row),
     ...(str(row.thinkingLevel) ? { effort: str(row.thinkingLevel)! } : {}),
+    ...(str(row.thinkingDefault) ? { effortDefault: str(row.thinkingDefault)! } : {}),
+    ...(str(row.model)
+      ? {
+          model: str(row.modelProvider)
+            ? `${str(row.modelProvider)}/${str(row.model)}`
+            : str(row.model)!,
+        }
+      : {}),
   };
 }
 

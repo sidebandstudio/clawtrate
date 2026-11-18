@@ -241,6 +241,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // What the person typed into the one sign-in under way, in the forms it may come back in, while
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },
+  // A task's model and effort (`task-models.ts`): the save on its way for each followed task, which
+  // a message to that task waits for. Its view, lines and efforts are the state's `taskModels`.
+  "taskModels.saves": { max: T, each: ID, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.
   "fileTransfers.held": {
@@ -262,6 +265,8 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "store.value": "the state, bounded by its schema (`state-bounds.ts`) and counted in `state`",
   "accounts.ctx": "the client's own functions, handed to the accounts engine",
   "accounts.signInAbort": "a handle that ends the one sign-in request that waits",
+  "taskModels.ctx": "the client's own functions, handed to the task models engine",
+  "taskModels.storing": "the one read or write of this device's record under way",
 };
 
 /** The class of each client property whose own collections are named under it. */
@@ -272,6 +277,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   store: "ObservableStore",
   fileTransfers: "FileTransfers",
   accounts: "AccountsEngine",
+  taskModels: "TaskModelsEngine",
   waiting: "WaitingIndex",
 };
 

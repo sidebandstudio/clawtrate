@@ -17,6 +17,7 @@ import {
   type AccountsState,
   type AccountWrite,
   type BotBinding,
+  type BotCatalog,
   type BotCreationState,
   type CatalogModel,
   type GatewayAccount,
@@ -29,6 +30,16 @@ import {
   type SignInStep,
   type StoredOrder,
 } from "./accounts.ts";
+import {
+  MAX_REQUESTED_EFFORTS,
+  MAX_TASK_MODEL_ERROR_CHARS,
+  MAX_TASK_MODEL_EVENTS,
+  MAX_TASK_MODEL_ID_CHARS,
+  MAX_TASK_MODELS,
+  type RequestedEffort,
+  type TaskModelEvent,
+  type TaskModelView,
+} from "./task-models.ts";
 import type {
   ApprovalAttempts,
   ApprovalCard,
@@ -295,6 +306,8 @@ export const RUN: Bound = flagged<Run>()({
   anchorItemId: ID,
   phase: NAME,
   model: NAME,
+  provider: NAME,
+  modelFrom: ENUM,
   text: text(MAX_RUN_TEXT_CHARS),
   textSource: ENUM,
   textItemId: ID,
@@ -606,6 +619,8 @@ const task = flagged<Task>()({
   unreadMarker: NUMBER,
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
   effort: NAME,
+  effortDefault: NAME,
+  model: NAME,
 });
 /** The rail's arrangement as the gateway keeps it (`sidebar.ts`). */
 const sidebarId = id(MAX_SIDEBAR_ID_CHARS);
@@ -691,11 +706,15 @@ const SESSION_ROW_FIELDS = [
   "lastMessagePreview",
   "lastRunError",
   "markedUnreadAt",
+  "model",
+  "modelProvider",
   "pinned",
   "sessionId",
   "sessionKey",
   "spawnedBy",
   "status",
+  "thinkingDefault",
+  "thinkingLevel",
   "totalTokens",
   "totalTokensFresh",
   "unread",
@@ -853,10 +872,53 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   methods: list(MAX_SIGNIN_METHODS, signInMethod),
   keyProviders: list(MAX_KEY_PROVIDERS, keyProvider),
   models: list(MAX_CATALOG_MODELS, catalogModel),
+  botCatalog: object<BotCatalog>()({
+    botId: ID,
+    sessionKey: ID,
+    account: ID,
+    models: list(MAX_CATALOG_MODELS, catalogModel),
+  }),
   bindings: list(MAX_BOTS, binding),
   signIn,
   creation: botCreation,
   write: accountWrite,
+});
+
+// A task's model and effort (task-models.ts).
+const taskModelId = id(MAX_TASK_MODEL_ID_CHARS);
+const taskModelEvent = object<TaskModelEvent>()({
+  id: taskModelId,
+  outcome: ENUM,
+  at: NUMBER,
+  after: NUMBER,
+  model: taskModelId,
+  effort: taskModelId,
+  wasModel: taskModelId,
+  wasEffort: taskModelId,
+  followed: FLAG,
+  error: text(MAX_TASK_MODEL_ERROR_CHARS),
+});
+export const TASK_MODEL: Bound = object<TaskModelView>()({
+  catalog: ENUM,
+  catalogError: text(MAX_TASK_MODEL_ERROR_CHARS),
+  models: list(MAX_TASK_MODELS, catalogModel),
+  account: taskModelId,
+  held: object<NonNullable<TaskModelView["held"]>>()({
+    model: taskModelId,
+    effort: taskModelId,
+    at: NUMBER,
+    sessionId: ID,
+  }),
+  saving: FLAG,
+  refused: object<NonNullable<TaskModelView["refused"]>>()({
+    error: text(MAX_TASK_MODEL_ERROR_CHARS),
+    at: NUMBER,
+  }),
+  events: list(MAX_TASK_MODEL_EVENTS, taskModelEvent),
+  requested: list(
+    MAX_REQUESTED_EFFORTS,
+    object<RequestedEffort>()({ runId: taskModelId, effort: taskModelId }),
+  ),
 });
 
 /** Every part of the state but the transcripts, and the transcripts as one map. */
@@ -870,6 +932,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   unroutedApprovalsOmitted: NUMBER,
   creations: list(MAX_CREATIONS, CREATION),
   accounts: ACCOUNTS,
+  taskModels: map(MAX_TRACKED_TASKS, MAX_ID_CHARS, TASK_MODEL),
   retention: retentionAlarm,
   sidebar,
 });
