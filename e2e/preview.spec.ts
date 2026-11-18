@@ -315,6 +315,26 @@ test("F-002 F-003 F-009: pairs with the development gateway in steps, says when 
   await expect(gateway.locator(".status-dot")).toHaveAttribute("data-status", "connected");
 });
 
+test("two tabs on one host each show a task's transcript: one opened while the other has it open, and one reloaded while the other holds it", async ({
+  page,
+}) => {
+  const TASK = "Disk almost full on the media box";
+  const ASKED = "The media box says the disk is 94% full. What is eating the space?";
+  await openShell(page);
+  await openTask(page, "Otto", TASK);
+  await expect(page.locator(".transcript")).toContainText(ASKED, { timeout: 20_000 });
+  // A second tab opens the task the first has open: the host follows it already.
+  const second = await page.context().newPage();
+  await openShell(second);
+  await openTask(second, "Otto", TASK);
+  await expect(second.locator(".transcript")).toContainText(ASKED, { timeout: 20_000 });
+  // Reloaded while the first tab holds the task, it shows it again.
+  await openShell(second);
+  await openTask(second, "Otto", TASK);
+  await expect(second.locator(".transcript")).toContainText(ASKED, { timeout: 20_000 });
+  await second.close();
+});
+
 test("a task stays read after it was opened", async ({ page }) => {
   await openShell(page);
   await openTask(page, "Otto", "Weekly backup check");
