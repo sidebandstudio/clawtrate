@@ -102,7 +102,7 @@ test("F-057: each task row shows its own state as a mark", async ({ page }) => {
   expect(await mark("Otto", "Certificate renewal")).toEqual({
     mark: null,
     dot: 0,
-    name: "Certificate renewal warning",
+    name: "Certificate renewal warning, done",
   });
   // Marlow has one task, so its blocked state is on its row's avatar.
   await expect(bot(page, "Marlow").locator(".presence > .glyph")).toHaveAttribute(
