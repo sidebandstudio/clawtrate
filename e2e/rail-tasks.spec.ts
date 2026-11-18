@@ -800,6 +800,8 @@ test("F-424: a bot's canonical main stays and offers neither Archive nor Delete;
   // Two bots of this check's own, made on the gateway with no main session.
   const archiving = await ownBot(`Scout${STAMP}`);
   const deleting = await ownBot(`Ranger${STAMP}`);
+  /** Each bot's one task, by bot. */
+  const onlyTask = new Map<string, string>();
   try {
     for (const botId of [archiving, deleting]) {
       // Each bot's one task of its own, made once the gateway lists the bot.
@@ -810,6 +812,7 @@ test("F-424: a bot's canonical main stays and offers neither Archive nor Delete;
         label: `Only task ${STAMP}`,
       })) as { key: string };
       made.add(only.key);
+      onlyTask.set(botId, only.key);
     }
     await railShowsBot(page, `Scout${STAMP}`, true);
     await railShowsBot(page, `Ranger${STAMP}`, true);
@@ -857,6 +860,10 @@ test("F-424: a bot's canonical main stays and offers neither Archive nor Delete;
     ]);
     await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
     await other;
+    // The delete completed: the dialog closed with no error, and the task is gone from the
+    // gateway, not only archived.
+    await expect(page.getByRole("dialog")).toHaveCount(0, { timeout: 30_000 });
+    await gateway.poll(async () => await describe(onlyTask.get(deleting)!)).toBeNull();
     await expect(page.locator(".title-pill-task")).toHaveText("Main", { timeout: 20_000 });
     await onlyMain(deleting);
   } finally {
