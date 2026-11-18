@@ -832,14 +832,14 @@ export const SCENARIOS: Scenario[] = [
     name: "hand-picture",
     phrase: "hand me the ridge profile",
     summary: `Hands over a small picture (${HANDOVER.picture}).`,
-    bots: "Juniper",
+    bots: "Marlow",
     steps: () => [say(handOver("Here is the ridge's profile.", [HANDOVER.picture]))],
   },
   {
     name: "hand-audio",
     phrase: "hand me the chime",
     summary: `Hands over a two-second recording (${HANDOVER.audio}).`,
-    bots: "Juniper",
+    bots: "Marlow",
     steps: () => [say(handOver("Here is the chime from the trailhead.", [HANDOVER.audio]))],
   },
   {
@@ -852,7 +852,7 @@ export const SCENARIOS: Scenario[] = [
     name: "hand-page",
     phrase: "make me a trail page",
     summary: `Names a page of the gateway's canvas (${PAGE_ID}) through the coding agent's share_page: a page card.`,
-    bots: "Juniper",
+    bots: "Marlow",
     steps: () => [
       mcp("share_page", { docId: PAGE_ID, title: PAGE_TITLE }),
       say("I made a page with Saturday's routes."),
@@ -862,7 +862,7 @@ export const SCENARIOS: Scenario[] = [
     name: "hand-several",
     phrase: "hand me everything",
     summary: `Writes the report, then hands over four items at once: it, two pictures (one over 256 KB, ${HANDOVER.photo}) and the recording.`,
-    bots: "Juniper",
+    bots: "Marlow",
     steps: () => [
       tool("write", { path: REPORT_PATH, content: REPORT_TEXT }),
       say(
@@ -879,14 +879,14 @@ export const SCENARIOS: Scenario[] = [
     name: "hand-large",
     phrase: "hand me the elevation log",
     summary: `Hands over a 6 MB file (${HANDOVER.large}), over the 5 MB the gateway attaches: it attaches none, and puts an \`attachment_error\` on the reply instead.`,
-    bots: "Juniper",
+    bots: "Marlow",
     steps: () => [say(handOver("Here is the elevation log.", [HANDOVER.large]))],
   },
   {
     name: "hand-gone",
     phrase: "hand me the old route",
     summary: `Hands over a note (${HANDOVER.gone}); \`pnpm dev-gateway forget-handover\` then removes the gateway's stored copy, so opening it fails.`,
-    bots: "Juniper",
+    bots: "Marlow",
     steps: () => [say(handOver("Here is the old route.", [HANDOVER.gone]))],
   },
 ];

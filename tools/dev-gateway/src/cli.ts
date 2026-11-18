@@ -1112,7 +1112,7 @@ export async function start(
     const filesWorkspace = join(inst.stateDir, "workspaces", FILES_BOT);
     assertInside(filesWorkspace, inst.stateDir);
     seedWorkspaceFiles(filesWorkspace);
-    // Juniper's workspace holds what the artifact scenarios hand over, and the
+    // Marlow's workspace holds what the artifact scenarios hand over, and the
     // instance's canvas the page `#hand-page` names.
     const handoverWorkspace = botWorkspace(inst.stateDir, HANDOVER_BOT);
     assertInside(handoverWorkspace, inst.stateDir);

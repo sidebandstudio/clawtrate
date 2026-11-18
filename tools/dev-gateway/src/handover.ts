@@ -1,7 +1,7 @@
-// What Juniper can hand over in the artifact scenarios (`#hand-*`): a picture,
+// What Marlow can hand over in the artifact scenarios (`#hand-*`): a picture,
 // a large picture, a recording, a file over Clawtrate's limit, a note that the
 // gateway later loses, and a page. Every byte is made here; nothing is copied
-// from anywhere. The files go into Juniper's workspace at start, and the page
+// from anywhere. The files go into Marlow's workspace (no check lists it) at start, and the page
 // into the instance's canvas documents, where the gateway's `canvas.document.view`
 // reads it.
 //
@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 
 /** The bot whose workspace holds the handover files. */
-export const HANDOVER_BOT = "main";
+export const HANDOVER_BOT = "marlow";
 
 /** Where each file is, relative to the bot's workspace. */
 export const HANDOVER = {
