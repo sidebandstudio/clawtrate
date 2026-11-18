@@ -1129,6 +1129,47 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     await shot(c, "t3-stopped");
   });
 
+  test("F-313: a held occurrence keeps the reader's focus on its Raw through the result and the run's end; reloaded, the record's own placement shows the call in its thread with its Raw", async () => {
+    test.setTimeout(240_000);
+    // Started by the host, so its results reach the host live; the wait takes six seconds.
+    const { title, key } = await hostTask("main", "T3 held", "#t3-start #t3-wait");
+    await clients.plain.request("sessions.messages.subscribe", { key });
+    const waiting = await clients.plain.waitFor(
+      "the wait's start",
+      (e) => {
+        const p = e.payload as { sessionKey?: string; stream?: string; data?: { name?: string } };
+        return (
+          p.sessionKey === key && p.stream === "item" && p.data?.name === "t3code__t3_thread_wait"
+        );
+      },
+      60_000,
+    );
+    const runId = String((waiting.payload as { runId: string }).runId);
+    await openTask(page, "Juniper", title);
+    const [, wait] = callIds(runId);
+    const line = page.locator(`.card.action[data-call="${wait}"]`);
+    await line.locator(":scope > summary").click();
+    const raw = line.getByRole("tab", { name: "Raw" });
+    await raw.click();
+    await expect(raw).toBeFocused();
+    // The result comes and the run ends: the line the reader holds stays, open, Raw still focused.
+    await clients.plain.terminal(runId);
+    await expect(word(page)).toHaveText("Completed", { timeout: 45_000 });
+    await expect(line).toHaveCount(1);
+    await expect(line).toHaveAttribute("open", "");
+    await expect(raw).toBeFocused();
+    // A view rebuilt from the record shows the record's own placement: the wait joined its thread,
+    // its Raw on the thread's card.
+    await inHistory(key, 2);
+    await reload(page, "Juniper", title);
+    await expect(word(page)).toHaveText("Completed");
+    await expect(line).toHaveCount(0);
+    const c = await openCard(page);
+    const item = c.locator(`[data-item-call="${wait}"]`);
+    await item.getByRole("button", { name: "Raw for this call" }).click();
+    await expect(item.getByRole("region", { name: "What the gateway sent" })).toContainText(wait!);
+  });
+
   test("F-134: a slow run waited on briefly, then asked to stop: the card reads Stop requested, and the wait says it ended first", async () => {
     test.setTimeout(120_000);
     const t = await called("t3-interrupt", "#t3-start #t3-wait-short #t3-stop");

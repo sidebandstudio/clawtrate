@@ -643,18 +643,30 @@ function useKeepFocus() {
     if (active && active !== document.body) return;
     const id = CSS.escape(held.call);
     // The line's heading is the card's; a control inside is its item's when the call is an item.
+    // Of the places that draw the call (its own line or card, its item on a thread's card), focus
+    // goes to the one where the control can be seen: a call with a line of its own is also an
+    // item, perhaps inside a folded thread card, and its line is where the reader was.
+    const summary = held.control === ":scope > summary";
     const card = document.querySelector<HTMLElement>(`[data-call="${id}"]`);
     const item = document.querySelector<HTMLElement>(`[data-item-call="${id}"]`);
-    const holder =
-      (held.control === ":scope > summary" ? card : (item ?? card)) ??
-      item ??
-      document.querySelector<HTMLElement>(`[data-first="${id}"]`);
-    if (!holder) return;
-    const target =
-      holder.querySelector<HTMLElement>(
-        held.control === ":scope > summary" ? ":scope > summary" : held.control,
-      ) ?? holder.querySelector<HTMLElement>(":scope > summary");
-    target?.focus({ preventScroll: true });
+    const first = document.querySelector<HTMLElement>(`[data-first="${id}"]`);
+    const holders = (summary ? [card, item, first] : [item, card, first]).filter(
+      (each): each is HTMLElement => each !== null,
+    );
+    const controlIn = (holder: HTMLElement) =>
+      holder.querySelector<HTMLElement>(held.control) ??
+      holder.querySelector<HTMLElement>(":scope > summary");
+    const shown = holders.map(controlIn).find((each) => each?.checkVisibility());
+    if (shown) {
+      shown.focus({ preventScroll: true });
+      return;
+    }
+    // Only an item inside a folded thread card holds it now: open what encloses it, then focus.
+    const target = holders.map(controlIn).find(Boolean) ?? null;
+    if (!target) return;
+    for (let at = target.parentElement; at; at = at.parentElement)
+      if (at instanceof HTMLDetailsElement && !at.open) at.open = true;
+    requestAnimationFrame(() => target.focus({ preventScroll: true }));
   });
 }
 
