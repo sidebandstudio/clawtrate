@@ -326,3 +326,71 @@ describe("a queued turn's two ids stay one run", () => {
     client.stop();
   });
 });
+
+describe("a steer the gateway admits as a run of its own", () => {
+  it("keeps its own id, its own history and its own anchor, apart from the run it was sent into", async () => {
+    const gateway = grantingGateway();
+    const answer = deferred<unknown>();
+    gateway.handlers["chat.send"] = () => answer.promise;
+    gateway.handlers["chat.history"] = () => ({ messages: [] });
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("base", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs[0]?.state === "running");
+    const id = client.sendMessage(KEY, "Only the photos, please.");
+    await until(() => gateway.calls("chat.send").length === 1);
+    await client.stopRun(KEY, "base");
+    answer.resolve({ runId: id, status: "started" });
+    await until(() => transcript().outbox[0]?.status === "sent");
+    gateway.emit("chat", {
+      runId: "base",
+      sessionKey: KEY,
+      seq: 2,
+      state: "aborted",
+      stopReason: "rpc",
+    });
+    // Recorded: a steer racing a Stop admitted as a run of its own, which streams and ends.
+    gateway.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }));
+    gateway.emit("agent", agentEvent(id, 2, "assistant", { text: "On it.", delta: "On it." }));
+    await until(() => transcript().runs.some((run) => run.id === id));
+    expect(transcript().runs.find((run) => run.id === "base")?.state).toBe("stopped");
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        { role: "user", content: "first", __openclaw: { id: "u1" } },
+        { role: "assistant", content: "first partial", __openclaw: { id: "a1", runId: "base" } },
+        {
+          role: "user",
+          content: "Only the photos, please.",
+          __openclaw: { id: "u2", idempotencyKey: `${id}:user` },
+        },
+        { role: "assistant", content: "On it.", __openclaw: { id: "a2", runId: id } },
+      ],
+    });
+    gateway.emit("chat", {
+      runId: id,
+      sessionKey: KEY,
+      seq: 3,
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "On it." }] },
+    });
+    await until(() => transcript().items.length === 4);
+    await until(() => transcript().runs.find((run) => run.id === id)?.state === "completed");
+    expect(transcript().runs.find((run) => run.id === "base")?.state).toBe("stopped");
+    expect(transcript().runs.find((run) => run.id === id)?.anchorItemId).toBe("u2:2");
+    client.stop();
+  });
+
+  it("a steer the gateway joins to the run is acknowledged by one bare final, which shows nothing", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.send"] = () => ({ runId: "steer-ack", status: "started" });
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("base", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs[0]?.state === "running");
+    client.sendMessage(KEY, "And the documents too.");
+    await until(() => transcript().steerAliases["steer-ack"] === "base");
+    gateway.emit("chat", { runId: "base", sessionKey: KEY, seq: 2, state: "final" });
+    gateway.emit("chat", { runId: "steer-ack", sessionKey: KEY, seq: 1, state: "final" });
+    await sleep(50);
+    expect(runIds(transcript().runs)).toEqual([["base", "completed"]]);
+    client.stop();
+  });
+});

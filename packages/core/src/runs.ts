@@ -469,9 +469,12 @@ export type TaskActivity = {
   /** Whether each kind's list loaded: one kind failing leaves the others shown, and says so. */
   approvalSources: Record<ApprovalKind, ApprovalSourceAccess>;
   /**
-   * Run ids a steer send returned, mapped to the run the steer joined. The
-   * gateway settles them at once with an empty final; while the joined run is
-   * active their events are ignored. History is never read through these.
+   * Run ids a steer send returned, mapped to the run the steer was sent into.
+   * Tentative: a steer the gateway joins to that run is acknowledged by one bare
+   * `chat final` under its own id, which is dropped; any event showing a run of
+   * its own (lifecycle, reasoning, text, a tool, or a final with a message)
+   * removes the alias, and the steer is a run of its own. History is never read
+   * through these.
    */
   steerAliases: Record<string, string>;
   /**
@@ -1121,10 +1124,11 @@ export function revertStop(activity: TaskActivity, runId: string, error: string)
 }
 
 /**
- * A steer joined the active run. The gateway settles the send's own run id at
- * once; remember it so its empty final does not show as a run. A steer leaves
- * pending approvals and questions pending (capability map, run behavior), so
- * the joined run's state does not change here.
+ * A steer was sent into the active run, and the gateway answered with a run id
+ * of the steer's own. Whether it joined that run is known only from what comes
+ * under that id (`steerOwnRun`); until then its bare acknowledgement is not
+ * shown as a run. A steer leaves pending approvals and questions pending
+ * (capability map, run behavior), so the joined run's state does not change here.
  */
 export function registerSteerAlias(
   activity: TaskActivity,
@@ -1132,11 +1136,16 @@ export function registerSteerAlias(
   targetId: string,
 ): TaskActivity {
   if (aliasId === targetId) return activity;
-  const runs = activity.runs.filter(
-    (run) =>
-      !(run.id === aliasId && run.origin === "gateway" && run.steps.length === 0 && !run.text),
-  );
-  return { ...activity, runs, steerAliases: { ...activity.steerAliases, [aliasId]: targetId } };
+  // Its events may have come first: a run showing something of its own is its own run, and no
+  // alias is recorded; an empty one was only the bare acknowledgement, and goes.
+  const shown = findRun(activity, aliasId);
+  if (shown && (shown.steps.length > 0 || shown.text || shown.origin !== "gateway"))
+    return activity;
+  return {
+    ...activity,
+    runs: shown ? activity.runs.filter((run) => run !== shown) : activity.runs,
+    steerAliases: { ...activity.steerAliases, [aliasId]: targetId },
+  };
 }
 
 /**
@@ -1230,12 +1239,32 @@ function canonicalRunId(activity: TaskActivity, runId: string): string {
   return activity.queueAliases[runId] ?? runId;
 }
 
-/** Events for a steer's own run id are dropped while the run it joined is active. */
-function isSteerAlias(activity: TaskActivity, runId: string): boolean {
-  const target = activity.steerAliases[runId];
-  if (!target) return false;
-  const run = findRun(activity, target);
-  return run !== undefined && !isTerminal(run.state);
+/**
+ * An event under a steer's own run id. A bare acknowledgement (a `chat` final
+ * with no message, all a joined steer gets) is dropped. Anything showing a run
+ * of its own removes the alias: the steer is a run of its own, kept under its
+ * own id. Null when the event is to be dropped.
+ */
+function steerOwnRun(
+  activity: TaskActivity,
+  runId: string,
+  event: "chat" | "agent",
+  payload: RawRecord,
+): TaskActivity | null {
+  if (!Object.hasOwn(activity.steerAliases, runId)) return activity;
+  const message = asRecord(payload.message);
+  const own =
+    event === "agent"
+      ? ["lifecycle", "assistant", "thinking", "tool", "item", "command_output"].includes(
+          str(payload.stream) ?? "",
+        )
+      : payload.state === "delta"
+        ? contentText(message?.content) !== "" || typeof payload.deltaText === "string"
+        : message !== null && contentText(message.content) !== "";
+  if (!own) return null;
+  const steerAliases = { ...activity.steerAliases };
+  delete steerAliases[runId];
+  return { ...activity, steerAliases };
 }
 
 // Questions -----------------------------------------------------------------------
@@ -1626,7 +1655,9 @@ export function applyChatEvent(
   const raw = str(payload.runId);
   if (!raw) return activity;
   const runId = canonicalRunId(activity, raw);
-  if (isSteerAlias(activity, runId)) return activity;
+  const own = steerOwnRun(activity, runId, "chat", payload);
+  if (!own) return activity;
+  activity = own;
   const existing = findRun(activity, runId);
   if (existing && isTerminal(existing.state)) return activity;
   let next = ensureRun(activity, runId, ctx);
@@ -1675,7 +1706,9 @@ export function applyAgentEvent(
   const data = asRecord(payload.data) ?? {};
   if (!raw || !stream) return { activity };
   const runId = canonicalRunId(activity, raw);
-  if (isSteerAlias(activity, runId)) return { activity };
+  const own = steerOwnRun(activity, runId, "agent", payload);
+  if (!own) return { activity };
+  activity = own;
   const existing = findRun(activity, runId);
   const seq = num(payload.seq);
   // A repeated or older frame is dropped. Forward jumps are normal: the gateway
