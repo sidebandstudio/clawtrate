@@ -2080,7 +2080,12 @@ export class ClawtrateClient {
     }
   }
 
-  /** `chat.abort` for one run the gateway has named, its exact id. */
+  /**
+   * `chat.abort` for one run the gateway has named, its exact id. Only the gateway's refusal
+   * gives the Stop up. An abort that was not sent, or whose answer the connection lost, leaves
+   * the run stopping: once the connection is back, the run is aborted again if it still is, as
+   * many times as the connection drops, until the gateway answers or the run's end arrives.
+   */
   private async abortRun(key: string, runId: string): Promise<void> {
     try {
       const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
@@ -2088,7 +2093,22 @@ export class ClawtrateClient {
       if (result?.aborted === false) this.scheduleHistory(key);
     } catch (error) {
       this.noteMissingScope(error);
-      this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(error)));
+      if (error instanceof GatewayProtocolRequestError) {
+        this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(error)));
+        return;
+      }
+      // Let the connection's own handling of a drop run first, so a lost connection is seen as one.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // A client that was stopped sends nothing more.
+      if (!this.protocol) return;
+      try {
+        await this.ensureScope(WRITE_SCOPE);
+      } catch (waiting) {
+        this.updateActivity(key, (activity) => revertStop(activity, runId, errorMessage(waiting)));
+        return;
+      }
+      const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
+      if (run?.state === "stopping" && run.bound) await this.abortRun(key, runId);
     }
   }
 
@@ -4475,11 +4495,7 @@ export class ClawtrateClient {
       this.afterActivity(key);
       // A run settled from history may be a recipient another open task's card follows.
       this.refreshLinkersOf(key, current.runs, rebuilt.runs);
-      for (const run of toStop) {
-        this.request("chat.abort", { sessionKey: key, runId: run.id }).catch((error: unknown) =>
-          this.noteMissingScope(error),
-        );
-      }
+      for (const run of toStop) void this.abortRun(key, run.id);
       void this.backfillQuestions(key, generation);
       void this.backfillApprovals(key, generation);
       void this.readToolMap(key, generation);

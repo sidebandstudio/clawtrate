@@ -878,6 +878,23 @@ export function finishRun(
   };
 }
 
+/**
+ * A run whose end this client inferred (`outcomeKnown: false`: nothing showed how it ended),
+ * taken back to where it stood before that inference, so that whatever the gateway sends or
+ * stores about it next settles it as it really ended: `stopping` if a Stop was asked, otherwise
+ * `running`. A run whose end is known is returned as it is.
+ */
+export function reopenInferred(run: Run): Run {
+  if (!isTerminal(run.state) || run.outcomeKnown) return run;
+  return {
+    ...run,
+    state: run.stopRequestedAt !== null ? "stopping" : "running",
+    endedAt: null,
+    outcomeKnown: true,
+    finishedBeforeStop: false,
+  };
+}
+
 /** Find or create the run an event belongs to. Runs started elsewhere appear as `running`. */
 function ensureRun(activity: TaskActivity, runId: string, ctx: EngineContext): TaskActivity {
   const existing = findRun(activity, runId);
@@ -1659,7 +1676,11 @@ export function applyChatEvent(
   if (!own) return activity;
   activity = own;
   const existing = findRun(activity, runId);
-  if (existing && isTerminal(existing.state)) return activity;
+  if (existing && isTerminal(existing.state)) {
+    // An end this client only inferred gives way to what the gateway says of the run.
+    if (existing.outcomeKnown) return activity;
+    activity = replaceRun(activity, reopenInferred(existing));
+  }
   let next = ensureRun(activity, runId, ctx);
   const state = payload.state;
   next = updateRun(next, runId, (run) => {
@@ -1717,7 +1738,11 @@ export function applyAgentEvent(
   if (existing && seq !== null && existing.lastSeq !== null && seq <= existing.lastSeq)
     return { activity };
   const replacement = stream === "tool" && data.phase === "result" && data.replace === true;
-  if (existing && isTerminal(existing.state) && !replacement) return { activity };
+  if (existing && isTerminal(existing.state) && !replacement) {
+    // An end this client only inferred gives way to what the gateway says of the run.
+    if (existing.outcomeKnown) return { activity };
+    activity = replaceRun(activity, reopenInferred(existing));
+  }
 
   let next = ensureRun(activity, runId, ctx);
   const ts = num(payload.ts) ?? ctx.now;
@@ -2651,7 +2676,9 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
       ...mergedAnchor(current, fromRun, steps),
       reasoningRevision: current.reasoningRevision + (reasoningIdsChanged(current, steps) ? 1 : 0),
     };
-    if (!isTerminal(current.state) && isTerminal(fromRun.state)) {
+    // An end this client only inferred gives way to the end history establishes.
+    if (isTerminal(fromRun.state) && fromRun.outcomeKnown) run = reopenInferred(run);
+    if (!isTerminal(run.state) && isTerminal(fromRun.state)) {
       run = {
         ...finishRun(
           run,
