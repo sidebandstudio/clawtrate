@@ -93,7 +93,7 @@ check("25.4 a refused change posts a line with a warning mark", await p.evaluate
   const line = document.querySelector('.t-event[data-tone="warn"]');
   return line && line.textContent.startsWith("Couldn't change the effort to High") && !!line.querySelector(".icon");
 }));
-check("25.2 Details gives the gateway's reason", await p.evaluate(() => document.getElementById("t-details-line").textContent.includes("invalid thinkingLevel")));
+check("25.2 Details gives the gateway's reason", await p.evaluate(() => document.getElementById("t-details-line").textContent.includes("is not supported for acme/dev-lite")));
 await p.close();
 
 // The turn's record ----------------------------------------------------------------------------------

@@ -17,10 +17,12 @@ pnpm dev-gateway reset --instance acct     # when you are done
 
 Two scripted providers besides `scripted`, both served by the instance's scripted model, with no key in their config entry:
 
-| Provider | Models           | Model references           |
-| -------- | ---------------- | -------------------------- |
-| `acme`   | `dev-1`, `dev-2` | `acme/dev-1`, `acme/dev-2` |
-| `globex` | `dev-1`          | `globex/dev-1`             |
+| Provider | Models                       | Model references                            |
+| -------- | ---------------------------- | ------------------------------------------- |
+| `acme`   | `dev-1`, `dev-2`, `dev-lite` | `acme/dev-1`, `acme/dev-2`, `acme/dev-lite` |
+| `globex` | `dev-1`                      | `globex/dev-1`                              |
+
+Every model is declared with `reasoning: true` but `acme/dev-lite`, so the gateway's `models.list` offers it fewer effort levels than the others: `off` and `ultra` (the gateway adds its harness's `ultra` to every model), where the others have `off`, `minimal`, `low`, `medium`, `high` and `ultra`, and its default is `off` where theirs is `low`. A task changed to it from `high` takes its default, and `sessions.patch {thinkingLevel: "high"}` on a task that uses it is refused: `thinkingLevel "high" is not supported for acme/dev-lite (use off|ultra)`. The gateway's config has no key that lists a model's levels (`compat.thinkingLevels` is refused as unrecognized); only `reasoning` and the advanced efforts of `compat.supportedReasoningEfforts` change them.
 
 And four accounts, saved before the gateway first starts, each by the gateway's own command line (`openclaw models auth paste-api-key` or `paste-token`, the credential on stdin):
 

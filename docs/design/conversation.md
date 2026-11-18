@@ -1532,7 +1532,7 @@ The gateway's facts this rests on, observed on the development gateway (OpenClaw
 - `models.list {sessionKey}` (`operator.read`) lists the models for the task, each with its `thinkingLevels` and `thinkingDefault`, and `accountSelection`, which names the account the task's conversation selected, if it selected one.
 - A model change made during a run marks a pending live switch (`liveModelSwitchPending`): the running turn may adopt it, otherwise the next turn starts from it. When an effort change applies is not documented. Nothing in the task's history records either change.
 - A model written as `<provider>/<model>@<account>` keeps the task on that account (`authProfileOverride`); written without it, a model other than the bot's own is served by an account the gateway chooses (`bots.md` section 20, row 2).
-- A level the model does not offer is refused with the gateway's message ("invalid thinkingLevel (use off|ultra)"). A patch naming a session that no longer exists makes a new one, unless it carries `expectedSessionId`, which makes the gateway refuse it ("Session … changed before patch. Retry.").
+- A level the model does not offer is refused with the gateway's message (`thinkingLevel "high" is not supported for acme/dev-lite (use off|ultra)`). A patch naming a session that no longer exists makes a new one, unless it carries `expectedSessionId`, which makes the gateway refuse it ("Session … changed before patch. Retry.").
 - A turn's model is reported twice: `lifecycle` `phase:"model"` `{provider, model}` while it runs, and the history row's `provider` and `model` after it. No public field reports the effort a turn used (F-044); the app knows only the `thinking` it sent with the message that started the turn.
 
 ### 25.1 Where it is

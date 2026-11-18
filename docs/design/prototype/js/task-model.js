@@ -37,14 +37,14 @@
     state: params.get("tmodel") || "set",
     saved: { model: "dev-1", effort: "low" },
     held: null,
-    shown: params.get("tmodel") === "refused" ? "Couldn't change the effort: invalid thinkingLevel (use off|ultra)." : null,
+    shown: params.get("tmodel") === "refused" ? "Couldn't change the effort: thinkingLevel \"high\" is not supported for acme/dev-lite (use off|ultra)." : null,
     lines: params.get("tchange") === "0" ? [] : [{ text: "Model changed to acme/dev-2 · from the next turn", title: "Was acme/dev-1 · Low. Changed at 5:34 PM on this device." }],
     runModel: "acme/dev-2",
   };
   if (S.state === "held") S.held = { model: "dev-2", effort: "high" };
   if (S.state === "saving") S.held = { model: "dev-2", effort: "low" };
   if (S.state === "refused")
-    S.lines.push({ refused: true, text: "Couldn't change the effort to High: invalid thinkingLevel (use off|ultra)", title: "dev-lite doesn't offer High. Changed at 5:40 PM on this device." });
+    S.lines.push({ refused: true, text: "Couldn't change the effort to High: thinkingLevel \"high\" is not supported for acme/dev-lite (use off|ultra)", title: "dev-lite doesn't offer High. Changed at 5:40 PM on this device." });
   if (S.state === "refused") S.saved = { model: "dev-lite", effort: "off" };
 
   const readOnly = () => params.get("access") === "read" || app.model.access === "read";
