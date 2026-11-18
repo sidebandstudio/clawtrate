@@ -451,9 +451,15 @@ describe("T3 Code thread cards from the engine's state", () => {
     expect(word("t3-checking")).toEqual({ type: "open", word: "checking" });
     expect(word("t3-thread")).toMatchObject({ type: "reported", status: "completed" });
     expect(word("t3-refused")).toMatchObject({ type: "reported", status: "running" });
-    expect(word("t3-failed")).toMatchObject({ type: "call", state: "failed" });
-    expect(word("t3-not-sent")).toMatchObject({ type: "call", state: "not-sent" });
-    expect(word("t3-delivery-unknown")).toMatchObject({ type: "call", state: "unknown" });
+    // A launch that ended without a result naming a thread joins none: it is a card of its own,
+    // saying how the call itself ended.
+    const own = (name: CardSceneName) => {
+      const t = t3Of(name);
+      return [t.placed.get("call_t3")?.type, t.calls[0]!.state];
+    };
+    expect(own("t3-failed")).toEqual(["own", "failed"]);
+    expect(own("t3-not-sent")).toEqual(["own", "not-sent"]);
+    expect(own("t3-delivery-unknown")).toEqual(["own", "unknown"]);
     const refused = t3Of("t3-refused").calls[1]!;
     expect([refused.state, refused.error]).toEqual([
       "failed",
