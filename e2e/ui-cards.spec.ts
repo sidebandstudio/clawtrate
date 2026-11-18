@@ -304,7 +304,10 @@ test.describe("tasks this app creates", () => {
 });
 
 test.describe("approval cards on a real gateway", () => {
-  test("F-163: a command that needs approval, allowed once: the card, the decision, Raw, and after reading history again", async () => {
+  test("F-163: a command that needs approval, allowed once: the card, the decision, Raw, and read again from history on a host that never saw it", async ({
+    browser,
+  }) => {
+    test.setTimeout(180_000);
     const { title } = await hostTask("otto", "Approve once", "#sleep 2");
     await openTask(page, "Otto", title);
     const approval = card(page, "approval-card");
@@ -340,11 +343,16 @@ test.describe("approval cards on a real gateway", () => {
     await expect(raw).toContainText("(exec.approval.resolved)");
     await shot(approval, "approval-allowed-once");
 
-    // The page reloaded: the host let the task go and reads it again from history, which
-    // keeps no approval record; the gateway lists only pending requests.
-    await reload(page, "Otto", title);
-    await expect(transcript(page)).toContainText("The slow command finished.");
-    await expect(card(page, "approval-card")).toHaveCount(0);
+    // Read again from history, which keeps no approval record (the gateway lists only pending
+    // requests). A reload of this page would not show that: nothing makes this host let the task
+    // go, and another viewer can keep it. A host of its own never saw the approval live.
+    const fresh = await pairedPage(browser, await startOwnHost());
+    await openTask(fresh, "Otto", title);
+    await expect(transcript(fresh)).toContainText("The slow command finished.", {
+      timeout: 30_000,
+    });
+    await expect(card(fresh, "approval-card")).toHaveCount(0);
+    await fresh.context().close();
     later.push({ bot: "Otto", title, reply: "The slow command finished." });
   });
 
