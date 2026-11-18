@@ -604,6 +604,12 @@ test.describe("Messaged cards on a real gateway", () => {
         })
       ).inFlightRun?.runId !== recipientRunId;
     const incoming = page.getByTestId("incoming-line").or(page.getByTestId("received-card"));
+    // The card is first read while the gateway still has the recipient working: the slow
+    // recipient runs for about twenty seconds after the send ends.
+    await sample();
+    expect(await recipientEnded(), "the recipient still works when the card is first read").toBe(
+      false,
+    );
     const deadline = Date.now() + 90_000;
     while (Date.now() < deadline) {
       await sample();
@@ -621,7 +627,9 @@ test.describe("Messaged cards on a real gateway", () => {
     // the run was seen: what was known of the recipient is not lost. The host follows every
     // session from before the send, so it sees the recipient's run: once the gateway has ended
     // it, the card says so, and a card still Sent has lost it.
-    const order = ["Sent", "Working", "No reply yet"];
+    // Before the send's own result is read the card can say Unknown: the gateway sends a run's
+    // tool results to other clients as session.tool, and this host reads them from history.
+    const order = ["Unknown", "Sent", "Working", "No reply yet"];
     expect(
       states.every((each) => order.includes(each)),
       states.join(" → "),
@@ -630,6 +638,8 @@ test.describe("Messaged cards on a real gateway", () => {
       states.every((each, k) => k === 0 || order.indexOf(each) > order.indexOf(states[k - 1]!)),
       states.join(" → "),
     ).toBe(true);
+    // It was seen working: the card said so before it said how the run ended.
+    expect(states, states.join(" → ")).toContain("Working");
     expect(states.at(-1), states.join(" → ")).toBe("No reply yet");
     await shot(page, "messaged-slow-reply-arrived");
   });
