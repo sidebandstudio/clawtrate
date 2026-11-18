@@ -1,9 +1,11 @@
 // Keeping the Files tab's lists (work-pane.md, section 9): fetched when Files
-// is shown, 600 ms after the last of a burst of file-tool results, on Refresh
-// and when the connection returns. Never on a timer, and never while nobody
-// is looking at the list.
+// is shown, 600 ms after the last of a burst of file-tool results, after a
+// history read while a finished change is not in the list yet, on Refresh and
+// when the connection returns. Never on a timer, and never while nobody is
+// looking at the list.
 
 import {
+  changesUnlisted,
   finishedChanges,
   type ClawtrateBridge,
   type TaskFileList,
@@ -91,6 +93,23 @@ export function useTaskFiles({
   }, [changes, visible, online, fetchList]);
 
   const current = state.key === taskKey ? state : { list: null, loading: false, error: null };
+
+  // The gateway lists a file from its stored transcript, so a list read before it stored the
+  // tool's result, or one that failed, does not show the change. While a finished change is
+  // missing from the list, each history read (the gateway's signal that it stored more of the
+  // task) fetches the list again, 600 ms after the last; never on a timer.
+  const loadedAt = transcript?.loadedAt ?? null;
+  const unlisted =
+    transcript !== undefined && current.list !== null && changesUnlisted(transcript, current.list);
+  const seenLoad = useRef(loadedAt);
+  useEffect(() => {
+    if (loadedAt === seenLoad.current) return;
+    seenLoad.current = loadedAt;
+    if (!unlisted || !visible || !online) return;
+    const timer = setTimeout(fetchList, REFETCH_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [loadedAt, unlisted, visible, online, fetchList]);
+
   return { list: current.list, loading: current.loading, error: current.error, refresh: fetchList };
 }
 

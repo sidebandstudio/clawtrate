@@ -17,6 +17,7 @@ import {
   fileSource,
   FILE_TRANSFER_TTL_MS,
   FileTransfers,
+  changesUnlisted,
   finishedChanges,
   listTaskFiles,
   MAX_FILE_TRANSFERS,
@@ -1038,5 +1039,40 @@ describe("the run markers and the step behind a file", () => {
     const step = merged[0]!.steps.find((each) => each.id === "tool:c1")!;
     expect(step.files?.paths).toEqual(["notes/scratch.md"]);
     expect(finishedChanges({ runs: merged })).toBe(1);
+  });
+
+  it("F-448: a finished change is unlisted until a list holds one of its paths as modified", () => {
+    const written = run("r1", "completed", [
+      step("a", "write", ["notes/scratch.md"], "done", 10),
+      step("b", "edit", ["same.md"], "done", 11, {
+        files: { paths: ["same.md"], changed: false, created: null },
+      }),
+      step("c", "write", ["failed.md"], "failed", 12),
+      step("d", "read", ["read.md"], "done", 13),
+    ]);
+    const file = (path: string, kind: "modified" | "read") => ({
+      path,
+      workspacePath: path,
+      name: path,
+      kind,
+      missing: false,
+      size: 1,
+      updatedAt: 1,
+    });
+    expect(changesUnlisted({ runs: [written] }, { files: [], omitted: 0 })).toBe(true);
+    expect(
+      changesUnlisted(
+        { runs: [written] },
+        { files: [file("notes/scratch.md", "read")], omitted: 0 },
+      ),
+    ).toBe(true);
+    expect(
+      changesUnlisted(
+        { runs: [written] },
+        { files: [file("notes/scratch.md", "modified")], omitted: 0 },
+      ),
+    ).toBe(false);
+    // A list that left files out cannot say.
+    expect(changesUnlisted({ runs: [written] }, { files: [], omitted: 3 })).toBe(false);
   });
 });
