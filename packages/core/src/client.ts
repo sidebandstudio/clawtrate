@@ -63,6 +63,19 @@ import {
   type LinkedRun,
 } from "./cards.ts";
 import { MAX_FILE_BYTES, MAX_IMAGE_BYTES, validateAttachmentMeta } from "./attachments.ts";
+import {
+  listArtifacts,
+  previewLink,
+  readArtifact,
+  readArtifactRecord,
+  readPage,
+  type ArtifactContext,
+  type ArtifactList,
+  type ArtifactPart,
+  type ArtifactRead,
+  type ArtifactRecord,
+  type PageRead,
+} from "./artifacts.ts";
 import { ChatTextBaselines } from "./chat-text.ts";
 import { utf8Length } from "./encoding.ts";
 import {
@@ -3582,6 +3595,71 @@ export class ClawtrateClient {
     options: FileReadOptions = {},
   ): Promise<CheckoutDiff> {
     return this.fileRead((ctx) => readCheckoutDiff(ctx, key, path), options);
+  }
+
+  // What a bot handed over (`artifacts.ts`). All `operator.read`; nothing is kept in the state.
+
+  private async artifactRead<T>(
+    read: (ctx: ArtifactContext) => Promise<T>,
+    options: FileReadOptions,
+  ): Promise<T> {
+    const gatewayUrl = this.state.connection.gatewayUrl;
+    if (this.state.connection.status !== "connected" || !gatewayUrl)
+      throw new Error("Not connected to the gateway.");
+    if (this.fileReads >= MAX_FILE_READS)
+      throw new Error("Other files are being read; try again in a moment.");
+    this.fileReads += 1;
+    try {
+      return await read({
+        request: (method, params) => this.request(method, params),
+        fetch: this.host.fetch ?? null,
+        gatewayUrl,
+        transfers: this.fileTransfers,
+        owner: options.owner ?? DIRECT_CALLER,
+        ...(options.maxChars !== undefined ? { maxChars: options.maxChars } : {}),
+        now: () => this.now(),
+      });
+    } finally {
+      this.fileReads -= 1;
+    }
+  }
+
+  /** The task's items the bot handed over (`artifacts.list`, `messageRole: "assistant"`). */
+  listArtifacts(key: string, options: FileReadOptions = {}): Promise<ArtifactList> {
+    return this.artifactRead((ctx) => listArtifacts(ctx, key), options);
+  }
+
+  /** One item's content, or its preview, from where the gateway says it is. */
+  readArtifact(
+    key: string,
+    artifactId: string,
+    part: ArtifactPart,
+    options: FileReadOptions = {},
+  ): Promise<ArtifactRead> {
+    return this.artifactRead((ctx) => readArtifact(ctx, key, artifactId, part), options);
+  }
+
+  /** An item's record as `artifacts.get` returns it, for Raw. */
+  readArtifactRecord(key: string, artifactId: string): Promise<ArtifactRecord> {
+    return this.artifactRead((ctx) => readArtifactRecord(ctx, key, artifactId), {});
+  }
+
+  /**
+   * A page of the gateway's canvas that this task's transcript names: a page
+   * no message of the task names is not read for it.
+   */
+  readPage(key: string, docId: string, options: FileReadOptions = {}): Promise<PageRead> {
+    const named = this.state.transcripts[key]?.items.some((item) =>
+      item.blocks.some((block) => block.kind === "page" && block.docId === docId),
+    );
+    if (!named)
+      return Promise.resolve({ status: "failed", message: "This task names no such page." });
+    return this.artifactRead((ctx) => readPage(ctx, docId), options);
+  }
+
+  /** A link's preview, fetched by the host on the person's gesture (`LinkPreviewer`). */
+  previewLink(url: string) {
+    return previewLink(this.host.linkPreview ?? null, url);
   }
 
   /** The next part of a file on its way to this viewer. */

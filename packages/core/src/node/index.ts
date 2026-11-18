@@ -11,10 +11,12 @@ import {
 } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { createLinkPreviewer } from "./link-preview.ts";
 import type {
   ClawtrateHost,
   ClientIdentity,
   DeviceSigner,
+  HttpResponseLike,
   KeyValueStore,
   WebSocketLike,
 } from "../host.ts";
@@ -119,6 +121,13 @@ export type NodeHostOptions = {
   approvalInstructions?: ClawtrateHost["approvalInstructions"];
 };
 
+export {
+  createLinkPreviewer,
+  isPrivateAddress,
+  PREVIEW_IMAGE_BYTES,
+  readPreviewMeta,
+} from "./link-preview.ts";
+
 export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
   return {
     createWebSocket: (url) => new WebSocket(url) as unknown as WebSocketLike,
@@ -127,5 +136,9 @@ export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
     client: options.client,
     ...(options.log ? { log: options.log } : {}),
     ...(options.approvalInstructions ? { approvalInstructions: options.approvalInstructions } : {}),
+    // The gateway's own media addresses only (`artifacts.ts` checks the origin before asking).
+    // Node's Response is a superset of `HttpResponseLike`; its overloaded `getReader` defeats inference.
+    fetch: (url, init) => globalThis.fetch(url, init) as unknown as Promise<HttpResponseLike>,
+    linkPreview: createLinkPreviewer(),
   };
 }

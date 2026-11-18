@@ -9,6 +9,15 @@ import {
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
+import {
+  MAX_ADDRESS_CHARS,
+  type ArtifactList,
+  type ArtifactPart,
+  type ArtifactRead,
+  type ArtifactRecord,
+  type PageRead,
+} from "./artifacts.ts";
+import type { LinkPreview } from "./host.ts";
 import type { QuestionAnswer, StepRead } from "./runs.ts";
 import {
   MAX_SIDEBAR_BOTS,
@@ -116,6 +125,16 @@ export type BridgeCommand =
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
   | { type: "releaseFile"; id: string }
+  /** What the bot handed over in a task this viewer has open (`artifacts.list`). */
+  | { type: "listArtifacts"; key: string }
+  /** One item's content, or the preview a card draws, by the gateway's id. */
+  | { type: "readArtifact"; key: string; artifactId: string; part: ArtifactPart }
+  /** One item's record, for Raw (`artifacts.get`). */
+  | { type: "readArtifactRecord"; key: string; artifactId: string }
+  /** A page of the gateway's canvas that the open task names (`canvas.document.view`). */
+  | { type: "readPage"; key: string; docId: string }
+  /** A link's preview, on the person's gesture: `http:` and `https:` only. */
+  | { type: "previewLink"; url: string }
   // Provider accounts (bots.md sections 3 to 11). Writes need admin.
   /** Read the accounts, sign-ins, bindings and catalogue again. */
   | { type: "refreshAccounts" }
@@ -206,21 +225,31 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                         ? CheckoutDiff
                         : C extends { type: "readFileChunk" }
                           ? { data: string }
-                          : C extends { type: "cancelSignIn" }
-                            ? { cancelled: boolean }
-                            : C extends { type: "dismissSignIn" }
-                              ? { dismissed: boolean }
-                              : C extends { type: "saveApiKey" }
-                                ? { profileId: string | null }
-                                : C extends { type: "createBot" | "finishBot" }
-                                  ? { botId: string; missing: MissingStep[] }
-                                  : C extends { type: "newTask" | "newMainTask" }
-                                    ? { key: string }
-                                    : C extends { type: "archiveTask" }
-                                      ? ArchiveResult
-                                      : C extends { type: "listArchived" }
-                                        ? ArchivedList
-                                        : void;
+                          : C extends { type: "listArtifacts" }
+                            ? ArtifactList
+                            : C extends { type: "readArtifact" }
+                              ? ArtifactRead
+                              : C extends { type: "readArtifactRecord" }
+                                ? ArtifactRecord
+                                : C extends { type: "readPage" }
+                                  ? PageRead
+                                  : C extends { type: "previewLink" }
+                                    ? LinkPreview
+                                    : C extends { type: "cancelSignIn" }
+                                      ? { cancelled: boolean }
+                                      : C extends { type: "dismissSignIn" }
+                                        ? { dismissed: boolean }
+                                        : C extends { type: "saveApiKey" }
+                                          ? { profileId: string | null }
+                                          : C extends { type: "createBot" | "finishBot" }
+                                            ? { botId: string; missing: MissingStep[] }
+                                            : C extends { type: "newTask" | "newMainTask" }
+                                              ? { key: string }
+                                              : C extends { type: "archiveTask" }
+                                                ? ArchiveResult
+                                                : C extends { type: "listArchived" }
+                                                  ? ArchivedList
+                                                  : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -733,6 +762,34 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "releaseFile":
       return { type: "releaseFile", id: id(command.id, "transfer id") };
+    case "listArtifacts":
+      return { type: "listArtifacts", key: sessionKey(command.key) };
+    case "readArtifact":
+      if (command.part !== "full" && command.part !== "preview") throw new Error("invalid part");
+      return {
+        type: "readArtifact",
+        key: sessionKey(command.key),
+        artifactId: id(command.artifactId, "artifact id"),
+        part: command.part,
+      };
+    case "readArtifactRecord":
+      return {
+        type: "readArtifactRecord",
+        key: sessionKey(command.key),
+        artifactId: id(command.artifactId, "artifact id"),
+      };
+    case "readPage":
+      return {
+        type: "readPage",
+        key: sessionKey(command.key),
+        docId: id(command.docId, "page id"),
+      };
+    case "previewLink": {
+      const url = command.url;
+      if (typeof url !== "string" || url.length > MAX_ADDRESS_CHARS || !/^https?:\/\//i.test(url))
+        throw new Error("invalid link");
+      return { type: "previewLink", url };
+    }
     case "newTask": {
       const label = command.label;
       if (
@@ -1062,6 +1119,21 @@ class ViewerSession implements BridgeSession {
         return client.readFileChunk(command.id, command.index, owner);
       case "releaseFile":
         return client.releaseFile(command.id, owner);
+      case "listArtifacts":
+        return client.listArtifacts(this.mine(command.key), this.fileOptions());
+      case "readArtifact":
+        return client.readArtifact(
+          this.mine(command.key),
+          command.artifactId,
+          command.part,
+          this.fileOptions(),
+        );
+      case "readArtifactRecord":
+        return client.readArtifactRecord(this.mine(command.key), command.artifactId);
+      case "readPage":
+        return client.readPage(this.mine(command.key), command.docId, this.fileOptions());
+      case "previewLink":
+        return client.previewLink(command.url);
       case "newTask":
         return { key: await client.newTask(command.botId, { label: command.label, owner }) };
       case "newMainTask":

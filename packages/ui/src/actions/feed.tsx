@@ -267,7 +267,7 @@ function itemEntries(
           ? { ...segmentFromStep(step), text: block.text }
           : { id: `${item.id}:r${i}`, text: block.text, startedAt: null, endedAt: null },
       });
-    } else if (!skip.has(block.callId)) {
+    } else if (block.kind === "tool-call" && !skip.has(block.callId)) {
       const found = index.get(block.callId);
       // Calls the engine holds that history's rows here no longer do come first, in the run's order.
       if (record && found) record.before(found.step, entries);

@@ -476,6 +476,17 @@ const block = union<TranscriptBlock, "kind">("kind")({
     argumentsAbsent: FLAG,
     result: toolResult,
   }),
+  page: object<Extract<TranscriptBlock, { kind: "page" }>>()({
+    kind: ENUM,
+    docId: ID,
+    title: NAME,
+  }),
+  "attachment-error": object<Extract<TranscriptBlock, { kind: "attachment-error" }>>()({
+    kind: ENUM,
+    label: NAME,
+    code: NAME,
+    media: NAME,
+  }),
 });
 const item = flagged<TranscriptItem>()({
   id: ID,
@@ -483,6 +494,7 @@ const item = flagged<TranscriptItem>()({
   timestamp: NUMBER,
   blocks: list(MAX_BLOCKS_PER_ITEM, block, { pool: "blocks" }),
   model: NAME,
+  seq: NUMBER,
   truncated: FLAG,
 });
 const interSession = flagged<InterSessionMessage>()({
