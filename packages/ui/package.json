@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./access": "./src/access.ts",
+    "./arrangement": "./src/arrangement.ts",
     "./character": "./src/character.ts",
     "./connect-words": "./src/connect-words.ts",
     "./conversation-words": "./src/conversation-words.ts",
