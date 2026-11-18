@@ -43,6 +43,7 @@ import type {
   QuestionCard,
   QuestionItem,
   QuestionOption,
+  Preamble,
   Run,
   RunEnding,
   RunError,
@@ -52,6 +53,7 @@ import type {
 } from "./runs.ts";
 import { MAX_STEP_PATH_CHARS, MAX_STEP_PATHS } from "./file-paths.ts";
 import type { Digest } from "./bounds.ts";
+import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
 import type {
   Bot,
   ClawtrateState,
@@ -79,6 +81,8 @@ export const MAX_NAME_CHARS = 256;
 export const MAX_TITLE_CHARS = 256;
 /** Each of a step's arguments, output and result as displayed; the raw table holds them whole. */
 export const MAX_STEP_BODY_CHARS = 2_048;
+/** How much of a long step text's end a step keeps (`StepText.tail`): where tools write notices. */
+export const MAX_TEXT_TAIL = 400;
 /** An error message, on a step, a run or a card. */
 export const MAX_ERROR_JSON_CHARS = 2_048;
 /** Each retried-attempt error and a failed Stop's message on a run. */
@@ -129,11 +133,16 @@ export const MAX_STEPS_PER_TASK = 128;
 /** Cards a run holds pending, suspended by Stop, or closed. */
 export const MAX_PENDING_CARDS = 4;
 export const MAX_CLOSED_CARDS_PER_RUN = 8;
+/** Texts beside a tool call kept per run (`Run.preambles`). */
+export const MAX_PREAMBLES_PER_RUN = 8;
 /** Retried-attempt errors kept per run. */
 export const MAX_ATTEMPT_ERROR_COUNT = 5;
 /** Items of a task's history page (`chat.history` limit) and blocks across them. */
 export const MAX_HISTORY_ITEMS = 200;
-export const MAX_BLOCKS_PER_ITEM = 16;
+/** As many as the page holds: a run of many actions keeps every block the page can, in one item. */
+/** The facts a history block keeps of its result's details (`ToolResult.facts`). */
+export const MAX_TOOL_FACTS_CHARS = 160;
+export const MAX_BLOCKS_PER_ITEM = 300;
 export const MAX_HISTORY_BLOCKS = 300;
 /** Inter-session messages kept per task, newest. */
 export const MAX_INTER_SESSION = 64;
@@ -159,6 +168,8 @@ export const MAX_COMMAND_ARGS = 16;
 export const MAX_LINKED_RUNS = 32;
 /** Tool-server tools a task keeps from `tools.effective`, by effective name. */
 export const MAX_MCP_TOOLS = 128;
+/** Built-in and plugin tools a task keeps from `tools.effective`, by effective name. */
+export const MAX_BUILTIN_TOOLS = 256;
 /** A tool's effective name: the gateway cuts it to 64 characters (`buildSafeToolName`). */
 export const MAX_TOOL_NAME_CHARS = 128;
 /** Steer aliases per task (also `MAX_STEER_ALIASES`). */
@@ -184,7 +195,12 @@ const FLAG = scalar(5);
 const ENUM = scalar(32);
 
 const digest = object<Digest>()({ length: NUMBER, a: NUMBER, b: NUMBER });
-const stepText = object<StepText>()({ text: text(MAX_STEP_BODY_CHARS), totalChars: NUMBER });
+const stepText = object<StepText>()({
+  text: text(MAX_STEP_BODY_CHARS),
+  totalChars: NUMBER,
+  tail: text(MAX_TEXT_TAIL + 48),
+  lines: NUMBER,
+});
 export const STEP: Bound = flagged<Step>()({
   id: ID,
   kind: ENUM,
@@ -207,6 +223,14 @@ export const STEP: Bound = flagged<Step>()({
   // Inline only when its whole JSON fits; otherwise null and read with `readStepRaw`.
   raw: json(MAX_INLINE_RAW_CHARS),
   rawSize: NUMBER,
+  // What the reading of an action needs, projected to fit (`projectArgs`, `projectDetails`).
+  args: json(MAX_ACTION_FACTS_CHARS),
+  details: json(MAX_ACTION_FACTS_CHARS),
+  commandBearing: FLAG,
+  rowTimes: FLAG,
+  omittedBefore: NUMBER,
+  resultCut: FLAG,
+  gatewayTitle: text(MAX_NAME_CHARS),
   // A path is an id: never cut, since a cut path would name another file.
   files: object<StepFiles>()({
     paths: list(MAX_STEP_PATHS, id(MAX_STEP_PATH_CHARS)),
@@ -222,6 +246,12 @@ const runEnding = object<RunEnding>()({
   timeoutPhase: NAME,
   providerStarted: FLAG,
   status: NAME,
+});
+const preamble = object<Preamble>()({
+  id: ID,
+  text: text(MAX_BLOCK_CHARS),
+  ended: FLAG,
+  beforeCall: ID,
 });
 export const RUN: Bound = flagged<Run>()({
   id: ID,
@@ -252,6 +282,10 @@ export const RUN: Bound = flagged<Run>()({
   outcomeKnown: FLAG,
   attemptErrors: list(MAX_ATTEMPT_ERROR_COUNT, text(MAX_ATTEMPT_ERROR_CHARS)),
   omittedSteps: NUMBER,
+  omittedTools: NUMBER,
+  omittedToolsAtEnd: NUMBER,
+  endFromRows: FLAG,
+  preambles: list(MAX_PREAMBLES_PER_RUN, preamble),
   reasoningAnchor: ID,
   nextReasoning: NUMBER,
   reasoningRevision: NUMBER,
@@ -385,7 +419,13 @@ export const APPROVAL: Bound = flagged<ApprovalCard>()({
   stillOpen: FLAG,
   raw: json(MAX_RECORD_CHARS),
 });
-const toolResult = object<ToolResult>()({ isError: FLAG, text: text(MAX_ITEM_TOOL_CHARS) });
+const toolResult = object<ToolResult>()({
+  isError: FLAG,
+  text: text(MAX_ITEM_TOOL_CHARS),
+  // Five small facts: an exit code, three flags and two line counts.
+  facts: json(MAX_TOOL_FACTS_CHARS),
+  clipped: FLAG,
+});
 const block = union<TranscriptBlock, "kind">("kind")({
   text: object<Extract<TranscriptBlock, { kind: "text" }>>()({
     kind: ENUM,
@@ -400,6 +440,7 @@ const block = union<TranscriptBlock, "kind">("kind")({
     callId: ID,
     name: text(MAX_NAME_CHARS),
     argumentsText: text(MAX_ITEM_TOOL_CHARS),
+    argumentsAbsent: FLAG,
     result: toolResult,
   }),
 });
@@ -454,6 +495,9 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
     MAX_TOOL_NAME_CHARS,
     object<McpToolIdentity>()({ server: NAME, tool: NAME }),
   ),
+  // Names and a root are ids: a cut one would name another tool or folder.
+  builtinTools: list(MAX_BUILTIN_TOOLS, id(MAX_TOOL_NAME_CHARS)),
+  workspaceRoot: id(MAX_STEP_PATH_CHARS),
   loadedAt: NUMBER,
 });
 
@@ -522,6 +566,7 @@ const task = flagged<Task>()({
   status: ENUM,
   unread: FLAG,
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
+  effort: NAME,
 });
 /** A task creation as kept (`MAX_CREATIONS` of them). */
 export const CREATION: Bound = object<TaskCreation>()({

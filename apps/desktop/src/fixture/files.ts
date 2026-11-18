@@ -397,6 +397,8 @@ function fileStep(
             result: { role: "toolResult", details: patch ? { patch, created, changed: true } : {} },
           },
     rawSize: null,
+    // What the engine keeps of those details for the reading: the change they report.
+    ...(status === "running" || !patch ? {} : { details: { changed: true, created } }),
     files: {
       paths: [path],
       changed: status === "done" && toolName !== "read" ? true : null,

@@ -21,6 +21,7 @@ import {
   RawTable,
   reconcileOutbox,
   registerSteerAlias,
+  retainActivity,
   requestStop,
   revertStop,
   runsFromHistory,
@@ -789,7 +790,12 @@ describe("steps from tool events (F-090, F-091, F-093, F-294, F-432)", () => {
       activity,
     ).activity;
     const done = only(activity).steps[0]!;
-    expect(done.result).toEqual({ text: huge.slice(0, MAX_STEP_TEXT), totalChars: huge.length });
+    // Its start, and its end and line count as they arrived, where a tool writes its notices.
+    expect(done.result).toMatchObject({
+      text: huge.slice(0, MAX_STEP_TEXT),
+      totalChars: huge.length,
+      tail: huge.slice(-400),
+    });
     // Too large to travel inline; the exact payload stays in the raw table.
     expect(done.raw).toBeNull();
     expect(done.rawSize).toBeGreaterThan(RAW_INLINE_LIMIT);
@@ -1142,5 +1148,169 @@ describe("structured endings and best-effort reasoning segments", () => {
     );
     const merged = mergeHistoryRuns(live.runs, history, ctx()).runs;
     expect(merged[0]!.steps.map((step) => step.output?.text)).toEqual(["Looking"]);
+  });
+});
+
+describe("text beside a tool call (conversation.md 7.6)", () => {
+  it("keeps a preamble item before the call it came with, its updates in place, and the call's projections", () => {
+    let activity = emptyActivity;
+    const apply = (seq: number, stream: string, data: Record<string, unknown>) => {
+      activity = applyAgentEvent(activity, agent("run-1", seq, stream, data), ctx()).activity;
+    };
+    apply(1, "lifecycle", { phase: "start" });
+    apply(2, "item", { kind: "preamble", itemId: "p1", phase: "update", progressText: "Reading" });
+    apply(3, "item", {
+      kind: "preamble",
+      itemId: "p1",
+      phase: "update",
+      progressText: "Reading the log first.",
+    });
+    apply(4, "item", {
+      kind: "preamble",
+      itemId: "p1",
+      phase: "end",
+      progressText: "Reading the log first.",
+    });
+    apply(5, "item", {
+      kind: "tool",
+      toolCallId: "c1",
+      name: "exec",
+      phase: "start",
+      commandBearing: true,
+    });
+    apply(6, "tool", {
+      toolCallId: "c1",
+      name: "exec",
+      phase: "start",
+      args: { command: "du -sh /srv", content: "x".repeat(9000) },
+    });
+    apply(7, "tool", {
+      toolCallId: "c1",
+      name: "exec",
+      phase: "result",
+      result: {
+        content: [{ type: "text", text: "1G" }],
+        details: { status: "completed", exitCode: 0, aggregated: "y".repeat(9000) },
+      },
+    });
+    const run = only(activity);
+    expect(run.preambles).toEqual([
+      { id: "p1", text: "Reading the log first.", ended: true, beforeCall: "c1" },
+    ]);
+    expect(run.steps[0]).toMatchObject({
+      commandBearing: true,
+      args: { command: "du -sh /srv" },
+      details: { status: "completed", exitCode: 0 },
+    });
+    expect(run.steps[0]!.details).not.toHaveProperty("aggregated");
+  });
+});
+
+describe("retention says what it dropped, where (round 1, items 2 and 5)", () => {
+  /** A run of `n` finished reads, with text written before call `textBefore`. */
+  function longRun(n: number, textBefore: number) {
+    let activity = emptyActivity;
+    let seq = 0;
+    const apply = (stream: string, data: Record<string, unknown>) => {
+      seq += 1;
+      activity = applyAgentEvent(activity, agent("run-1", seq, stream, data), ctx()).activity;
+    };
+    apply("lifecycle", { phase: "start", startedAt: 1_000 });
+    for (let i = 1; i <= n; i += 1) {
+      if (i === textBefore)
+        apply("item", {
+          kind: "preamble",
+          itemId: "p",
+          phase: "end",
+          progressText: "Now the last ones.",
+        });
+      apply("tool", {
+        toolCallId: `c${i}`,
+        name: "read",
+        phase: "start",
+        args: { path: `f${i}.md` },
+      });
+      apply("tool", {
+        toolCallId: `c${i}`,
+        name: "read",
+        phase: "result",
+        result: { content: [{ type: "text", text: "x" }] },
+      });
+      activity = retainActivity(activity);
+    }
+    apply("lifecycle", { phase: "end", endedAt: 90_000 });
+    return only(retainActivity(activity));
+  }
+
+  it("keeps 128 of 400 calls and counts the 272 others, as actions and in line before the first kept", () => {
+    const run = longRun(400, 390);
+    const tools = run.steps.filter((step) => step.kind === "tool");
+    expect(tools).toHaveLength(128);
+    expect(run.omittedTools).toBe(272);
+    expect(tools[0]!.omittedBefore).toBe(272);
+    expect(tools.slice(1).every((step) => !step.omittedBefore)).toBe(true);
+  });
+
+  it("anchors text by its call's id, so dropping older calls never moves it", () => {
+    const run = longRun(400, 390);
+    expect(run.preambles).toEqual([
+      { id: "p", text: "Now the last ones.", ended: true, beforeCall: "c390" },
+    ]);
+    expect(run.steps.some((step) => step.toolCallId === "c390")).toBe(true);
+  });
+
+  it("moves text before a dropped call to the next call kept", () => {
+    const run = longRun(400, 5);
+    expect(run.preambles?.[0]?.beforeCall).toBe(
+      run.steps.find((s) => s.kind === "tool")!.toolCallId,
+    );
+  });
+});
+
+describe("times history rows give are not the call's own", () => {
+  it("marks steps and runs built from rows, so no duration is read from them", () => {
+    const rows = [
+      { role: "user", content: "Read it.", timestamp: 1_000, __openclaw: { id: "u1" } },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a.md" } }],
+        timestamp: 2_000,
+        __openclaw: { id: "a1", runId: "run-h" },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "read",
+        content: [{ type: "text", text: "x" }],
+        timestamp: 2_200,
+        __openclaw: { id: "r1", runId: "run-h" },
+      },
+    ];
+    const [run] = runsFromHistory(rows, null, ctx());
+    expect(run!.endFromRows).toBe(true);
+    expect(run!.steps[0]!.rowTimes).toBe(true);
+  });
+});
+
+describe("the gateway's title for a call", () => {
+  it("is kept from its item events, as sent", () => {
+    let activity = emptyActivity;
+    activity = applyAgentEvent(
+      activity,
+      agent("run-1", 1, "lifecycle", { phase: "start" }),
+      ctx(),
+    ).activity;
+    activity = applyAgentEvent(
+      activity,
+      agent("run-1", 2, "item", {
+        kind: "tool",
+        toolCallId: "c1",
+        name: "skills_search",
+        phase: "start",
+        title: "Skill Search",
+      }),
+      ctx(),
+    ).activity;
+    expect(only(activity).steps[0]!.gatewayTitle).toBe("Skill Search");
   });
 });
