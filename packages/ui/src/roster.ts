@@ -1,7 +1,11 @@
-// How this device arranges the rail: which bots are pinned, which are hidden,
-// the sort order and the manual order. The gateway can store none of it for a
-// read-only connection (`users.prefs.set` needs `operator.write`), so it is
-// kept per device, and the sort control says so for the manual order.
+// How the rail is arranged: which bots are pinned, which are hidden, the user's
+// sections, the sort order and the manual order. The gateway keeps the
+// arrangement for its user (`users.prefs`, `sidebar.ts` in the engine), so every
+// device sees it: once it holds one, the rail shows it, and a connection that
+// writes changes it there. Until it holds one, or where it keeps none (a
+// connection with no durable user), the rail keeps its arrangement per device,
+// and the first change a writing connection makes starts the gateway's from it.
+// The sort order is always this device's own.
 //
 // Bot ids belong to a gateway (every gateway has a `main`), so the arrangement
 // is kept per gateway: under the gateway's own identity, or under its address
@@ -9,8 +13,15 @@
 // moves to the identity. An arrangement saved before it was kept per gateway
 // names no gateway, so it is ignored and left where it is.
 
-import type { Bot, ConnectionState, Task } from "@clawtrate/core";
-import { useCallback, useState } from "react";
+import type {
+  Bot,
+  ConnectionState,
+  SidebarChange,
+  SidebarPrefs,
+  SidebarState,
+  Task,
+} from "@clawtrate/core";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { readPreference, writePreference } from "./preferences.ts";
 
 export type SortOrder = "recent" | "name" | "manual";
@@ -28,6 +39,8 @@ export type RosterPrefs = {
   sort: SortOrder;
   /** The manual order of the list. Bots not in it follow, in the gateway's order. */
   manual: string[];
+  /** The user's sections, each a name and its bots; a bot is in at most one. */
+  sections: Array<{ name: string; bots: string[] }>;
 };
 
 /** The preference key of one gateway's arrangement. */
@@ -74,12 +87,82 @@ function parseRoster(raw: string | null): RosterPrefs {
   const sort = SORT_ORDERS.some((order) => order.id === parsed.sort)
     ? (parsed.sort as SortOrder)
     : "recent";
+  const sections: RosterPrefs["sections"] = [];
+  for (const entry of Array.isArray(parsed.sections) ? parsed.sections : []) {
+    const section = entry as { name?: unknown; bots?: unknown };
+    if (typeof section?.name === "string" && section.name.trim()) {
+      const bots = ids(section.bots);
+      if (bots.length > 0) sections.push({ name: section.name, bots });
+    }
+  }
   return {
     pinned: ids(parsed.pinned),
     hidden: ids(parsed.hidden),
     sort,
     manual: ids(parsed.manual),
+    sections,
   };
+}
+
+/** This device's arrangement in the gateway's form, the base of its first change there. */
+export function toSidebar(prefs: RosterPrefs): SidebarPrefs {
+  return {
+    pins: prefs.pinned,
+    sections: prefs.sections,
+    hidden: prefs.hidden,
+    order: prefs.manual,
+  };
+}
+
+/** The gateway's arrangement, with this device's sort order. */
+function fromSidebar(prefs: SidebarPrefs, sort: SortOrder): RosterPrefs {
+  return {
+    pinned: prefs.pins,
+    hidden: prefs.hidden,
+    sort,
+    manual: prefs.order,
+    sections: prefs.sections,
+  };
+}
+
+/** One change applied to this device's own arrangement. */
+function applyLocal(prefs: RosterPrefs, change: SidebarChange): RosterPrefs {
+  switch (change.op) {
+    case "pin":
+      return {
+        ...prefs,
+        pinned: change.pinned
+          ? [...prefs.pinned.filter((x) => x !== change.botId), change.botId]
+          : prefs.pinned.filter((x) => x !== change.botId),
+      };
+    case "hide":
+      return {
+        ...prefs,
+        hidden: change.hidden
+          ? [...new Set([...prefs.hidden, change.botId])]
+          : prefs.hidden.filter((x) => x !== change.botId),
+      };
+    case "move": {
+      const order = [...prefs.manual];
+      for (const id of change.shown) if (!order.includes(id)) order.push(id);
+      const without = order.filter((id) => id !== change.botId);
+      const at = change.before === null ? -1 : without.indexOf(change.before);
+      without.splice(at === -1 ? without.length : at, 0, change.botId);
+      return { ...prefs, manual: without };
+    }
+    case "section": {
+      const sections = prefs.sections
+        .map((section) => ({ ...section, bots: section.bots.filter((x) => x !== change.botId) }))
+        .filter((section) => section.bots.length > 0);
+      const name = change.section?.replace(/\s+/g, " ").trim();
+      if (name) {
+        const existing = sections.find((section) => section.name === name);
+        if (existing) existing.bots.push(change.botId);
+        else sections.push({ name, bots: [change.botId] });
+      }
+      return { ...prefs, sections };
+    }
+  }
 }
 
 /** A bot's latest activity across its tasks, or null when it has none. */
@@ -93,11 +176,18 @@ export function latestActivity(tasks: Task[] | undefined): number | null {
   return latest;
 }
 
-export type Arrangement = { pinned: Bot[]; list: Bot[]; hidden: Bot[] };
+export type Arrangement = {
+  pinned: Bot[];
+  list: Bot[];
+  /** The user's sections, after the list, each in the chosen order. */
+  sections: Array<{ name: string; bots: Bot[] }>;
+  hidden: Bot[];
+};
 
 /**
  * Pinned bots first, in their pinned order; then the list in the chosen order;
- * hidden bots apart. Ties keep the gateway's order, so the order is stable.
+ * then each section; hidden bots apart. Ties keep the gateway's order, so the
+ * order is stable.
  */
 export function arrange(
   bots: Bot[],
@@ -121,8 +211,22 @@ export function arrange(
     name: (a: Bot, b: Bot) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
     manual: (a: Bot, b: Bot) => position(a.id) - position(b.id),
   }[prefs.sort];
-  const list = [...rest].sort((a, b) => compare(a, b) || gateway.get(a.id)! - gateway.get(b.id)!);
-  return { pinned, list, hidden: bots.filter((bot) => hidden.has(bot.id)) };
+  const sorted = [...rest].sort((a, b) => compare(a, b) || gateway.get(a.id)! - gateway.get(b.id)!);
+  const sectionOf = new Map<string, string>();
+  for (const section of prefs.sections)
+    for (const id of section.bots) if (!sectionOf.has(id)) sectionOf.set(id, section.name);
+  const sections = prefs.sections
+    .map((section) => ({
+      name: section.name,
+      bots: sorted.filter((bot) => sectionOf.get(bot.id) === section.name),
+    }))
+    .filter((section) => section.bots.length > 0);
+  return {
+    pinned,
+    list: sorted.filter((bot) => !sectionOf.has(bot.id)),
+    sections,
+    hidden: bots.filter((bot) => hidden.has(bot.id)),
+  };
 }
 
 /** Move one bot to a new place in the manual order of the list it is shown in. */
@@ -132,12 +236,25 @@ export function moveInOrder(shown: string[], id: string, toIndex: number): strin
   return [...without.slice(0, at), id, ...without.slice(at)];
 }
 
+/** How the rail reaches the gateway's arrangement. */
+export type RosterSync = {
+  sidebar: SidebarState | undefined;
+  /** The connection writes: a change goes to the gateway. */
+  interactive: boolean;
+  change: (change: SidebarChange, base: SidebarPrefs | null) => Promise<void>;
+};
+
 /**
- * The rail's per-device arrangement for one gateway, persisted on every
- * change. `scope` is from `rosterScope`; `fallback` is the gateway's address
- * scope, whose arrangement moves to `scope` the first time.
+ * The rail's arrangement for one gateway. `scope` is from `rosterScope`;
+ * `fallback` is the gateway's address scope, whose arrangement moves to `scope`
+ * the first time. With `sync`, the gateway's arrangement is shown once it holds
+ * one, and a writing connection changes it there.
  */
-export function useRoster(scope: string | null, fallback: string | null = null) {
+export function useRoster(
+  scope: string | null,
+  fallback: string | null = null,
+  sync: RosterSync | null = null,
+) {
   const [held, setHeld] = useState(() => ({ scope, prefs: readRoster(scope, fallback) }));
   let current = held;
   // Another gateway: its own arrangement.
@@ -152,26 +269,51 @@ export function useRoster(scope: string | null, fallback: string | null = null) 
       return { scope: now.scope, prefs: next };
     });
   }, []);
+  const gateway = sync?.sidebar?.status === "ok" ? sync.sidebar : null;
+  /** Where the arrangement lives: the gateway once it holds one, or once a writing connection would start it. */
+  const synced = gateway !== null && (gateway.prefs !== null || sync!.interactive);
+  const prefs = gateway?.prefs ? fromSidebar(gateway.prefs, current.prefs.sort) : current.prefs;
+  const latest = useRef({ sync, synced, local: current.prefs });
+  useLayoutEffect(() => {
+    latest.current = { sync, synced, local: current.prefs };
+  });
+
+  /** Apply a change where the arrangement lives. Read-only, on the gateway's: nothing to do. */
+  const apply = useCallback(
+    async (change: SidebarChange): Promise<void> => {
+      const { sync, synced, local } = latest.current;
+      if (!synced) return update((p) => applyLocal(p, change));
+      if (!sync?.interactive) return;
+      await sync.change(change, toSidebar(local));
+    },
+    [update],
+  );
+
   return {
-    prefs: current.prefs,
+    prefs,
+    /** The arrangement is the gateway's, shared by the user's devices. */
+    synced,
+    /** This connection may change the arrangement: always for its own, only when it writes for the gateway's. */
+    editable: !synced || sync?.interactive === true,
     setSort: useCallback((sort: SortOrder) => update((p) => ({ ...p, sort })), [update]),
     togglePin: useCallback(
-      (id: string) =>
-        update((p) => ({
-          ...p,
-          pinned: p.pinned.includes(id) ? p.pinned.filter((x) => x !== id) : [...p.pinned, id],
-        })),
-      [update],
+      (id: string) => apply({ op: "pin", botId: id, pinned: !prefs.pinned.includes(id) }),
+      [apply, prefs.pinned],
     ),
     setHidden: useCallback(
-      (id: string, hide: boolean) =>
-        update((p) => ({
-          ...p,
-          hidden: hide ? [...new Set([...p.hidden, id])] : p.hidden.filter((x) => x !== id),
-        })),
-      [update],
+      (id: string, hide: boolean) => apply({ op: "hide", botId: id, hidden: hide }),
+      [apply],
     ),
-    setManual: useCallback((manual: string[]) => update((p) => ({ ...p, manual })), [update]),
+    /** Move a bot before another in the manual order (null: to the end); `shown` is the list as shown. */
+    move: useCallback(
+      (id: string, before: string | null, shown: string[]) =>
+        apply({ op: "move", botId: id, before, shown }),
+      [apply],
+    ),
+    moveToSection: useCallback(
+      (id: string, section: string | null) => apply({ op: "section", botId: id, section }),
+      [apply],
+    ),
   };
 }
 

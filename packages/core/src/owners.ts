@@ -23,6 +23,7 @@ import {
   FOREIGN_RUNS_PER_SESSION,
   FOREIGN_SESSIONS,
   MAX_ACCESS_WAITERS,
+  MAX_OPENED_READS,
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
@@ -39,6 +40,14 @@ import {
 } from "./files.ts";
 import { emptyActivity } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
+import {
+  MAX_WAITING_ID_CHARS,
+  MAX_WAITING_MARKERS,
+  MAX_WAITING_SESSIONS,
+  WAITING_HELD_CHARS,
+  WAITING_MARKER_CHARS,
+  WAITING_RUN_CHARS,
+} from "./waiting.ts";
 import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
@@ -130,6 +139,19 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     opaque: "the raw table's budget, `MAX_RAW_BYTES`",
   },
   "raw.perTask": { max: T, each: ID + N, row: "rawPayloads" },
+  // Which tasks wait for the person (`waiting.ts`): a key, and its markers (counted below).
+  "waiting.sessions": {
+    max: MAX_WAITING_SESSIONS,
+    each: MAX_WAITING_ID_CHARS + MAX_WAITING_MARKERS * WAITING_MARKER_CHARS,
+    row: "bookkeeping",
+  },
+  "waiting.sessions.*": { max: MAX_WAITING_MARKERS, each: WAITING_MARKER_CHARS, row: null },
+  // Each task's latest run by id, and whether it was stopped.
+  "waiting.runs": { max: MAX_WAITING_SESSIONS, each: WAITING_RUN_CHARS, row: "bookkeeping" },
+  // Tasks the engine follows, as their runs describe them.
+  // A task's read on opening, while it is on its way.
+  openedReads: { max: MAX_OPENED_READS, each: ID, row: "bookkeeping" },
+  "waiting.held": { max: MAX_WAITING_SESSIONS, each: WAITING_HELD_CHARS, row: "bookkeeping" },
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
     max: FOREIGN_SESSIONS,
@@ -225,6 +247,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   streams: "ChatTextBaselines",
   store: "ObservableStore",
   fileTransfers: "FileTransfers",
+  waiting: "WaitingIndex",
 };
 
 /** One viewer's bridge session, per viewer (`MAX_WEB_VIEWERS` on the web host). */

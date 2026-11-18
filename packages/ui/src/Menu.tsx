@@ -8,6 +8,8 @@ export type MenuEntry =
       tone?: "danger";
       icon?: ReactNode;
       hint?: string;
+      /** A second line saying what the item does beyond its name; also its accessible description. */
+      note?: string;
     }
   | {
       kind: "radio";
@@ -147,11 +149,20 @@ export function Menu({
                   className="menu-item"
                   role="menuitem"
                   data-tone={entry.tone}
+                  aria-label={entry.note ? entry.label : undefined}
+                  aria-description={entry.note}
                   tabIndex={-1}
                   onClick={entry.onSelect}
                 >
                   {entry.icon}
-                  {entry.label}
+                  {entry.note ? (
+                    <span className="menu-item-text">
+                      {entry.label}
+                      <span className="menu-note">{entry.note}</span>
+                    </span>
+                  ) : (
+                    entry.label
+                  )}
                   {entry.hint && (
                     <kbd className="menu-hint" aria-hidden="true">
                       {entry.hint}

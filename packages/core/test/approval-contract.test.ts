@@ -412,7 +412,8 @@ describe("a resolution that arrives before its request or list entry (B3)", () =
       const slow = deferred<unknown>();
       gateway.handlers[source.list] = () => slow.promise;
       const { client, transcript } = await openTask({ gateway });
-      await until(() => gateway.calls(source.list).length === 1);
+      // The task's own read, and the rail's read of this device's pending approvals at the connect.
+      await until(() => gateway.calls(source.list).length === 2);
       gateway.emit(source.resolvedEvent, { id: "ap", decision: "deny", ts: 2 });
       await sleep(20);
       slow.resolve([source.item("ap")]);

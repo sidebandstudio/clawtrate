@@ -85,7 +85,7 @@ export function Shell({
     return () => document.removeEventListener("focusin", onFocus);
   }, []);
 
-  const selection = useSelection(state);
+  const selection = useSelection(state, interactive);
   const { bot, task } = selection;
   const [panelOpen, setPanelOpen] = useState(() => readPreference("panel") === "open");
   // In the one-pane layout the rail and the conversation take turns.
@@ -179,7 +179,7 @@ export function Shell({
   }, [togglePanel, drawerOpen, setPanel]);
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
-  const unread = unreadCount(state.tasksByBot, selection.seen, task?.key ?? null);
+  const unread = unreadCount(state.tasksByBot, selection.unreadSeen, task?.key ?? null);
   useEffect(() => {
     onUnreadCount?.(unread);
   }, [unread, onUnreadCount]);
@@ -192,6 +192,54 @@ export function Shell({
     void send({ type: "openSession", key: taskKey });
     return () => void send({ type: "closeSession", key: taskKey });
   }, [taskKey, send]);
+
+  // Opening a task reads it on the gateway too (F-022), and so do new replies while it
+  // is open and leaving it. The engine makes that read only while the connection
+  // already writes, never asking for access. A task marked unread here while open is
+  // left unread, and so is one another device marked unread while it was open here
+  // (the gateway's explicit marker), until it is opened again.
+  const keptRef = useRef(selection.keptUnread);
+  const taskUnread = task?.unread === true;
+  const marker = task?.unreadMarker ?? null;
+  // Each listed task's explicit marker, as it was, for the read made on leaving it.
+  const markersRef = useRef<Record<string, number | null>>({});
+  useEffect(() => {
+    keptRef.current = selection.keptUnread;
+    markersRef.current = Object.fromEntries(
+      Object.values(state.tasksByBot)
+        .flat()
+        .map((each) => [each.key, each.unreadMarker ?? null]),
+    );
+  });
+  // A read the gateway refused, or that failed, leaves the task unread here too, as the gateway has it.
+  const forgetRead = selection.forgetReadHere;
+  const readTask = useCallback(
+    (key: string, explicitToo: boolean) => {
+      if (keptRef.current.has(key) || (!explicitToo && (markersRef.current[key] ?? null) !== null))
+        return;
+      void send({ type: "markTask", key, unread: false, opened: true }).catch(() =>
+        forgetRead(key),
+      );
+    },
+    [send, forgetRead],
+  );
+  // One effect, so opening a task makes one read however its row changes meanwhile: the
+  // opening reads it once; later, a new reply while it is open reads it again; leaving does too.
+  const openedKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!taskKey || !connectedNow) return;
+    if (openedKey.current !== taskKey) {
+      openedKey.current = taskKey;
+      readTask(taskKey, true);
+    } else if (taskUnread && marker === null) readTask(taskKey, false);
+  }, [taskKey, taskUnread, marker, connectedNow, readTask]);
+  useEffect(() => {
+    if (!taskKey) return;
+    return () => {
+      openedKey.current = null;
+      readTask(taskKey, false);
+    };
+  }, [taskKey, readTask]);
 
   // The one place that moves focus for Work. As a drawer it takes focus, unless
   // focus is already inside it. When the pane closes, focus that was inside it
@@ -223,11 +271,15 @@ export function Shell({
   // One pane at a time: moving between the list and a conversation hides the
   // control that was used, so focus goes to the destination. Into a
   // conversation, its heading; back to the list, the row that opened it.
-  const navigatedTo = useRef<"list" | "detail" | null>(null);
-  const openDetail = useCallback(() => {
-    if (onePane) navigatedTo.current = "detail";
-    setView("detail");
-  }, [onePane]);
+  const navigatedTo = useRef<"list" | "detail" | "composer" | null>(null);
+  /** Into a conversation: its heading, or its composer for a task just made (New task). */
+  const openDetail = useCallback(
+    (options?: { composer?: boolean }) => {
+      if (onePane) navigatedTo.current = options?.composer ? "composer" : "detail";
+      setView("detail");
+    },
+    [onePane],
+  );
   const showList = useCallback(() => setView("list"), []);
   const backToList = useCallback(() => {
     navigatedTo.current = "list";
@@ -237,7 +289,10 @@ export function Shell({
     const target = navigatedTo.current;
     if (!target) return;
     navigatedTo.current = null;
-    if (target === "detail") {
+    const composer = mainRef.current?.querySelector<HTMLElement>(".composer-input");
+    if (target === "composer" && composer) {
+      composer.focus();
+    } else if (target === "detail" || target === "composer") {
       const conversation = mainRef.current?.querySelector(".conversation");
       const heading = conversation?.querySelector<HTMLElement>("h1");
       (heading ?? conversation?.querySelector<HTMLElement>(".back-button"))?.focus();
@@ -367,6 +422,9 @@ export function Shell({
         onBubbles={onBubbles}
         onOpenSettings={onOpenSettings}
         inert={drawerOpen || inert}
+        interactive={interactive}
+        sidebar={state.sidebar}
+        newTaskHint={info.kind === "desktop" ? "⌘T" : "⌥T"}
       />
       <div className="main-pane" ref={mainRef}>
         <OpenTaskContext.Provider value={selection.selectTask}>

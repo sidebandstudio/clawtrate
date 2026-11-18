@@ -185,3 +185,49 @@ export const MediaIcon = (props: IconProps) => (
     <path d="m6.75 6 3.25 2-3.25 2V6Z" />
   </Icon>
 );
+
+export const EditIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M9.75 3.75 12.25 6.25M3 13l.6-2.9 7.15-7.15a1.4 1.4 0 0 1 2 0l.3.3a1.4 1.4 0 0 1 0 2L5.9 12.4z" />
+  </Icon>
+);
+
+export const ArchiveIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="2.25" y="3" width="11.5" height="3" rx="1" />
+    <path d="M3.25 6v5.5a1.5 1.5 0 0 0 1.5 1.5h6.5a1.5 1.5 0 0 0 1.5-1.5V6M6.5 8.75h3" />
+  </Icon>
+);
+
+export const RestoreIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M3.25 6v5.5a1.5 1.5 0 0 0 1.5 1.5h6.5a1.5 1.5 0 0 0 1.5-1.5V6M8 11V5.25M5.75 7.5 8 5.25l2.25 2.25M2.25 3h11.5" />
+  </Icon>
+);
+
+export const TrashIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M2.75 4.25h10.5M6.25 4.25V3a.75.75 0 0 1 .75-.75h2a.75.75 0 0 1 .75.75v1.25M4 4.25l.6 8.1a1.5 1.5 0 0 0 1.5 1.4h3.8a1.5 1.5 0 0 0 1.5-1.4l.6-8.1" />
+  </Icon>
+);
+
+export const UnreadIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="8" cy="8" r="5.25" />
+    <circle cx="8" cy="8" r="1.75" fill="currentColor" stroke="none" />
+  </Icon>
+);
+
+export const SectionIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M2.75 4.25h10.5M2.75 8h6.5M2.75 11.75h6.5M11.75 9.5v4M9.75 11.5h4" />
+  </Icon>
+);
+
+export const MoreIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="3.5" cy="8" r="0.6" fill="currentColor" />
+    <circle cx="8" cy="8" r="0.6" fill="currentColor" />
+    <circle cx="12.5" cy="8" r="0.6" fill="currentColor" />
+  </Icon>
+);

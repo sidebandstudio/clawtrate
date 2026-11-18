@@ -522,7 +522,10 @@ test("F-013 F-027 F-266: this device keeps its pins and hidden bots under the ga
 }) => {
   const identity = await gatewayCall<{ deviceId: string }>("gateway.identity.get", {});
   expect(identity.deviceId).toMatch(/^[0-9a-f]{64}$/);
-  await openShell(page);
+  // A connection that only reads keeps its own arrangement while the gateway holds none: a
+  // host of this check's own, paired and nothing more. One that writes keeps it on the
+  // gateway for every device, which `rail-tasks.spec.ts` checks.
+  await pairOn(page, await freshHost());
   await botRow(page, "Otto").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Pin" }).click();
   await expect(page.locator('.pin-grid .pin[data-bot="otto"]')).toBeVisible();
@@ -614,6 +617,8 @@ test("the conversation keeps its width and the work panel becomes a drawer", asy
   const ottoTasks = page.getByRole("list", { name: "Otto's tasks" });
   await expect(ottoTasks).toBeVisible();
   await expect(page.locator(".conversation")).toBeHidden();
+  // One pane shows three of an unfolded bot's tasks, so the rest of the list stays in view.
+  await ottoTasks.getByRole("button", { name: /^Show all/ }).click();
   await ottoTasks.getByTestId("task").filter({ hasText: "Weekly backup check" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Weekly backup check" })).toBeVisible();
   await expect(ottoTasks).toBeHidden();
@@ -1058,7 +1063,9 @@ test("F-323: work goes on after the page is closed, and reopening shows where it
 test("F-027: a hidden bot keeps working: a run on the gateway shows in the Hidden bots section, then its reply", async ({
   page,
 }) => {
-  await openShell(page);
+  // Hidden on this device alone: a host of this check's own that only reads, so the gateway's
+  // arrangement, which the shared host would change for every later check, stays as it was.
+  await pairOn(page, await freshHost());
   await botRow(page, "Marlow").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Hide from sidebar" }).click();
   await page.getByRole("button", { name: /^Hidden bots/ }).click();
