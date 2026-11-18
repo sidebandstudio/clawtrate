@@ -161,7 +161,8 @@ describe("the view's ticket (section 17; docs/decisions.md, The computer)", () =
     stop();
     unsubscribe();
 
-    expect(snapshots.length).toBeGreaterThan(2);
+    // How many snapshots a host coalesces the writes into depends on timing; every write is searched.
+    expect(snapshots.length).toBeGreaterThan(0);
     expect(states.length).toBeGreaterThan(10);
     const everything = [
       ...snapshots,
