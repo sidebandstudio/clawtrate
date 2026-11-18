@@ -2675,6 +2675,36 @@ textarea {
   background: var(--text-faint);
 }
 
+/* The rail's dialogs (RailActions.tsx): a layer over either screen, its scrim and its surface. */
+.settings-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.settings-scrim {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: var(--bg-scrim);
+  cursor: default;
+}
+
+.settings {
+  position: relative;
+  width: min(520px, 100%);
+  max-height: calc(100% - 32px);
+  overflow: auto;
+  padding: 18px 20px 22px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+}
+
 /* Settings: the Gateway pane's own parts; its frame is the two-pane dialog of bots.css. */
 .b-settings .facts dd {
   text-align: right;

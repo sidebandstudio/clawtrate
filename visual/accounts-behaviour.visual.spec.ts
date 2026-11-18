@@ -19,15 +19,18 @@ const sent = (page: Page) =>
     ).clawtrateFixture.sent.map((each) => ({ ...each })),
   );
 
-test("F-034: the + menu offers New bot with ⌘N; New bot opens on its name, and Escape gives focus back to +", async ({
+test("F-034: the one + menu offers New task and New bot with ⌘N; New bot opens on its name, and Escape gives focus back to +", async ({
   page,
 }) => {
   await openFixture(page, ADMIN, "light");
   const plus = page.getByTestId("plus");
+  await expect(plus).toHaveCount(1);
   await plus.click();
   const menu = page.getByRole("menu", { name: "New" });
-  await expect(menu.getByRole("menuitem", { name: "New bot" })).toBeFocused();
-  await expect(menu).toContainText("⌘N");
+  await expect(menu.getByRole("menuitem")).toHaveText(["New task for Otto⌥T", "New bot⌘N"]);
+  await expect(menu.getByRole("menuitem").first()).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: /^New bot/ })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(newBot(page)).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Name" })).toBeFocused();

@@ -123,6 +123,9 @@ export const RAIL_TASK_SCENES: Scene[] = [
     query: `scene=main&${OTTO}`,
     prepare: async (page) => {
       await page.keyboard.press("ControlOrMeta+,");
+      // On a phone Settings opens on its list of sections.
+      const gateway = page.getByRole("button", { name: "Gateway", exact: true });
+      if (await gateway.isVisible()) await gateway.click();
       await page.getByRole("button", { name: "Re-pair" }).click();
       await expect(page.getByTestId("repair-pending")).toContainText("Request 7c41d09e");
     },
