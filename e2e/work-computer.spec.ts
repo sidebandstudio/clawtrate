@@ -216,8 +216,15 @@ test("F-139 F-142: a bot opens a scripted loopback page in its own browser; the 
     await expect(button).toHaveAccessibleName("Pip's computer. Show the computer");
     await button.click();
     await expect(page.getByRole("tab", { name: "Computer" })).toBeFocused();
+    // The precondition: the bot's own browser call opened the page on the gateway.
+    await expect(
+      panel(page).getByTestId("computer-actions"),
+      "Pip's browser call failed on the gateway, so there is no page to watch",
+    ).not.toContainText("Couldn't use the browser");
+    // The tab list is the plugin's answer, read from the bot's browser: wait for it.
     await expect(panel(page).getByTestId("computer-caption")).toContainText(
       "Pip's browser, used by all of its tasks",
+      { timeout: 30_000 },
     );
     await expect(panel(page).getByTestId("computer-caption")).toContainText(
       "Scripted sign-in · 127.0.0.1:",
