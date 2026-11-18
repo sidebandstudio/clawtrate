@@ -578,4 +578,42 @@ describe("the stopped stream's partial text and the queue-only schema exception"
     };
     expect(() => viewOf([paired, gap]).validate()).not.toThrow();
   });
+
+  it("does not admit it on a pairing of another session's, nor one made before the view began", () => {
+    const gap = {
+      event: "agent",
+      payload: {
+        runId: "q",
+        sessionKey: key,
+        stream: "error",
+        ts: 1,
+        data: { reason: "seq gap", expected: 3, received: 4 },
+      },
+    };
+    const elsewhere = {
+      event: "sessions.changed",
+      payload: { sessionKey: "agent:main:another", runId: "own", clientRunId: "q", phase: "model" },
+    };
+    const here = {
+      event: "sessions.changed",
+      payload: { sessionKey: key, runId: "own", clientRunId: "q", phase: "model" },
+    };
+    const viewOf = (events: Array<{ event: string; payload: unknown }>, from: number) =>
+      new RunView(
+        {
+          events: events.map((e, i) => ({ ...e, seq: i + 1, at: 0 })),
+        } as unknown as OperatorSession,
+        "q",
+        key,
+        from,
+      );
+    expect(() => viewOf([elsewhere, gap], 0).validate()).toThrow(
+      /agent error does not match the protocol schema/,
+    );
+    // An earlier check's pairing of the same ids, seen before this view's first frame.
+    expect(() => viewOf([here, gap], 1).validate()).toThrow(
+      /agent error does not match the protocol schema/,
+    );
+    expect(() => viewOf([gap, here], 0).validate()).not.toThrow();
+  });
 });

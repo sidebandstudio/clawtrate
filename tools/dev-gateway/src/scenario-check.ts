@@ -268,23 +268,33 @@ export class RunView {
    * stream `error` with `data.reason: "seq gap"` and no `seq`, its own note of
    * a gap in the run's numbering. The schema requires `seq`. It is set aside,
    * and counted in `SEQ_GAP_NOTES`, only for a run this client saw the gateway
-   * pair with an id of its own (`sessions.changed` naming the run as
-   * `clientRunId` beside another `runId`); for any other run it fails.
+   * pair with an id of its own in this run's own session, since this view
+   * began (`sessions.changed` for that session naming the run as `clientRunId`
+   * beside another `runId`), and only when the note itself is that session's,
+   * under the run or its paired id; for any other frame it fails.
    */
   validate(): void {
-    const queued = this.op.events.some((e) => {
-      const p = rec(e.payload);
-      return (
-        e.event === "sessions.changed" &&
-        p.clientRunId === this.runId &&
-        typeof p.runId === "string" &&
-        p.runId !== this.runId
-      );
-    });
+    const paired = new Set(
+      this.op.events
+        .filter((e) => {
+          const p = rec(e.payload);
+          return (
+            e.seq > this.from &&
+            e.event === "sessions.changed" &&
+            p.sessionKey === this.sessionKey &&
+            p.clientRunId === this.runId &&
+            typeof p.runId === "string" &&
+            p.runId !== this.runId
+          );
+        })
+        .map((e) => String(rec(e.payload).runId)),
+    );
     for (const e of this.events) {
       const p = rec(e.payload);
       if (
-        queued &&
+        paired.size > 0 &&
+        p.sessionKey === this.sessionKey &&
+        (p.runId === this.runId || paired.has(String(p.runId))) &&
         e.event === "agent" &&
         p.stream === "error" &&
         p.seq === undefined &&
