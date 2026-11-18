@@ -639,11 +639,26 @@ test.describe("Messaged cards on a real gateway", () => {
     await expect(state(page)).toHaveText(/^(Sent|Working|Recipient waiting|No reply yet)$/);
     await shot(card(page, "messaged-card"), "messaged-recipient-asked");
     await openTask(page, "Marlow", "Notes for Pip");
-    // Marlow's main task is shared by every check that messages Marlow: this check's question
-    // is the one pending there, pinned by its id once it shows.
-    const pending = page.locator('[data-testid="question-card"][data-state="pending"]');
-    await expect(pending).toHaveCount(1, { timeout: 60_000 });
-    const question = page.locator(`[id="${await pending.getAttribute("id")}"]`);
+    // Marlow's main task is shared by every check that messages Marlow: this check's question is
+    // the one the gateway lists for the recipient's run, and its card is found by that id.
+    let questionId = "";
+    await expect
+      .poll(
+        async () => {
+          const listed = await clients.questions.request<{
+            questions?: Array<{ id: string; runId?: string; status?: string }>;
+          }>("question.list", {});
+          questionId =
+            listed.questions?.find(
+              (each) => each.runId === recipientRunId && each.status === "pending",
+            )?.id ?? "";
+          return questionId;
+        },
+        { timeout: 60_000 },
+      )
+      .not.toBe("");
+    const question = page.locator(`#card-question-${questionId.replace(/[^\w-]/g, "_")}`);
+    await expect(question).toHaveAttribute("data-state", "pending", { timeout: 30_000 });
     await shot(question, "messaged-recipient-asks");
     await question.getByRole("radio", { name: /Town walk/ }).click();
     await expect(question).toHaveAttribute("data-state", "answered", { timeout: 30_000 });
