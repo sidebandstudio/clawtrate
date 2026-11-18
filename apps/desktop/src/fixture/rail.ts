@@ -284,10 +284,14 @@ export function railCommands(
               })),
             );
         });
-      case "markTask":
+      case "markTask": {
+        // A read covers the activity there was when it was sent, as the gateway reads it
+        // on arrival: activity that comes while its answer is on its way stays unread.
+        const sentAt = find(command.key)?.task.updatedAt;
         return later(() => {
           const found = find(command.key);
           if (!found || (command.opened && !found.task.unread)) return;
+          if (!command.unread && found.task.updatedAt !== sentAt) return;
           set(
             changeTask(get(), found.botId, command.key, (task) => ({
               ...task,
@@ -296,6 +300,7 @@ export function railCommands(
             })),
           );
         });
+      }
       case "archiveTask":
         return later(() => {
           const found = find(command.key);

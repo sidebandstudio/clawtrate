@@ -357,6 +357,54 @@ test("F-022: leaving a task whose opening read the gateway refused keeps its dot
   await expect.poll(badge).toBe(before);
 });
 
+test("F-022 F-023: a reply that comes while the read made on leaving a task is on its way keeps the task unread", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  const key = "agent:otto:backup-check";
+  const badge = () =>
+    page.evaluate(
+      () => (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.badge,
+    );
+  await taskRow(page, "Weekly backup check").click();
+  await expect(page.locator(".title-pill-task")).toHaveText("Weekly backup check");
+  const before = await badge();
+  // The new reply reaches the gateway after the leaving read was sent and before it is
+  // answered: the fixture records a command once it has taken it.
+  await page.evaluate((key) => {
+    const bridge = (window as unknown as { clawtrateFixture: Fixture & { sent: BridgeCommand[] } })
+      .clawtrateFixture;
+    const push = bridge.sent.push.bind(bridge.sent);
+    bridge.sent.push = (...commands: BridgeCommand[]) => {
+      const length = push(...commands);
+      if (commands.some((command) => command.type === "markTask" && command.key === key)) {
+        bridge.sent.push = push;
+        bridge.setState((state) => {
+          const tasksByBot = state.tasksByBot as Record<string, Array<Record<string, unknown>>>;
+          return {
+            ...state,
+            tasksByBot: {
+              ...tasksByBot,
+              otto: tasksByBot.otto!.map((task) =>
+                task.key === key
+                  ? { ...task, unread: true, updatedAt: (task.updatedAt as number) + 60_000 }
+                  : task,
+              ),
+            },
+          };
+        });
+      }
+      return length;
+    };
+  }, key);
+  await taskRow(page, "Disk almost full on the media box").click();
+  await expect(page.locator(".title-pill-task")).toHaveText("Disk almost full on the media box");
+  // Past the time the fixture takes to answer the read.
+  await page.evaluate(() => new Promise((done) => setTimeout(done, 400)));
+  await expect(taskRow(page, "Weekly backup check").locator(".unread-dot")).toHaveCount(1);
+  await expect.poll(badge).toBe((before ?? 0) + 1);
+});
+
 test("F-277: a task restored from the Archived group and archived again shows in the group again", async ({
   page,
 }) => {
