@@ -452,6 +452,11 @@ export type Run = {
    * (`TIMEOUTS_IN_A_ROW`; F-101). Absent otherwise.
    */
   stoppedForTimeouts?: number;
+  /**
+   * The gateway is retrying the model request by itself (`run_status` `retrying`): which attempt
+   * of how many, and why (`rate_limit`, …). Absent once the model answers again (F-082).
+   */
+  retry?: { attempt: number; of: number; reason: string | null };
   /** Paths of fields cut to their bound; a cut `text` is not extended by later deltas. */
   cut?: string[];
 };
@@ -1971,11 +1976,26 @@ export function applyAgentEvent(
   const ts = num(payload.ts) ?? ctx.now;
   next = updateRun(next, runId, (run) => {
     if (seq !== null && (run.lastSeq === null || seq > run.lastSeq)) run = { ...run, lastSeq: seq };
+    // The model answered again: a retry it was waiting on is over.
+    if (run.retry && (stream === "assistant" || stream === "thinking" || stream === "tool")) {
+      const { retry: _over, ...rest } = run;
+      run = rest;
+    }
     switch (stream) {
       case "lifecycle":
         return applyLifecycle(run, data, ts, ctx);
-      case "run_status":
-        return { ...run, phase: str(data.phase) ?? run.phase };
+      case "run_status": {
+        const phase = str(data.phase) ?? run.phase;
+        // The gateway retries a failed model request by itself and says which attempt (F-082).
+        const attempt = num(data.attempt);
+        const of = num(data.maxAttempts);
+        const retry =
+          phase === "retrying" && attempt !== null && of !== null
+            ? { attempt, of, reason: str(data.reason) }
+            : undefined;
+        const { retry: _was, ...rest } = run;
+        return retry ? { ...rest, phase, retry } : { ...rest, phase };
+      }
       case "thinking":
         return applyThinking(run, data, payload, ts, ctx);
       case "assistant":

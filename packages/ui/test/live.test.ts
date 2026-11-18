@@ -538,3 +538,18 @@ describe("a run stopped for timeouts (F-101)", () => {
     ).toMatchObject({ kind: "stopped", timeouts: 3 });
   });
 });
+
+describe("the status line while the gateway retries (F-082)", () => {
+  it("F-082: a retry says the attempt, ahead of Thinking, and a pending card still comes first", () => {
+    const retrying = run({ retry: { attempt: 2, of: 5, reason: "rate_limit" } });
+    expect(statusLineFor(retrying, transcript([retrying]), live).phrase).toBe(
+      "Rate limited. Retrying, attempt 2 of 5",
+    );
+    const waiting = run({
+      state: "waiting",
+      retry: { attempt: 2, of: 5, reason: "rate_limit" },
+      pendingCards: [{ id: "a-1", kind: "approval", since: NOW }],
+    });
+    expect(statusLineFor(waiting, transcript([waiting]), live).phrase).toBe("Waiting for you");
+  });
+});

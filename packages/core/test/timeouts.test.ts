@@ -72,3 +72,32 @@ describe("tool calls that keep timing out (F-101)", () => {
     task.client.stop();
   });
 });
+
+describe("a model request the gateway retries (F-082)", () => {
+  it("F-082: run_status retrying says which attempt of how many, until the model answers", async () => {
+    const task = await openTask();
+    task.gateway.emit("agent", agentEvent("run-y", 1, "lifecycle", { phase: "start" }));
+    // As OpenClaw 2026.10.6 sends it for a rate-limited provider.
+    task.gateway.emit(
+      "agent",
+      agentEvent("run-y", 2, "run_status", {
+        phase: "retrying",
+        message: "Retrying… 2/5",
+        retryAttempt: 1,
+        maxRetries: 4,
+        delayMs: 1000,
+        attempt: 2,
+        maxAttempts: 5,
+        reason: "rate_limit",
+      }),
+    );
+    await until(() => task.transcript().runs[0]?.retry !== undefined);
+    expect(task.transcript().runs[0]!.retry).toEqual({ attempt: 2, of: 5, reason: "rate_limit" });
+    task.gateway.emit(
+      "agent",
+      agentEvent("run-y", 3, "assistant", { text: "Here", delta: "Here" }),
+    );
+    await until(() => task.transcript().runs[0]?.retry === undefined);
+    task.client.stop();
+  });
+});

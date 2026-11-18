@@ -348,6 +348,7 @@ export const RUN: Bound = flagged<Run>()({
     uncertain: list(MAX_STOPPED_NAMED, ID),
   }),
   stoppedForTimeouts: NUMBER,
+  retry: object<NonNullable<Run["retry"]>>()({ attempt: NUMBER, of: NUMBER, reason: NAME }),
 });
 const attachmentInfo = object<OutgoingAttachmentInfo>()({
   fileName: text(MAX_FILE_NAME_CHARS),

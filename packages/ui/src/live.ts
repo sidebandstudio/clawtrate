@@ -118,6 +118,16 @@ export function statusLineFor(
       startedAt: null,
       callId: null,
     };
+  } else if (run.retry) {
+    // The gateway retries by itself first; the failed card comes only when the retries are used up.
+    view = {
+      state: "thinking",
+      badge: null,
+      phrase: `${run.retry.reason === "rate_limit" ? "Rate limited" : "The model provider is unavailable"}. Retrying, attempt ${run.retry.attempt} of ${run.retry.of}`,
+      tone: "live",
+      startedAt: null,
+      callId: null,
+    };
   } else if (call) {
     view = {
       state: "working",
