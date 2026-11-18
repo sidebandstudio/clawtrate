@@ -220,6 +220,40 @@ test.describe("action cards", () => {
     );
   });
 
+  test("F-093: Raw for a call history alone holds shows its arguments as received: none says they weren't kept, an explicit null stays null", async ({
+    page,
+  }) => {
+    await open(page, "actions-history");
+    await setState(
+      page,
+      `const key = "agent:otto:disk-space"; const t = state.transcripts[key];
+       const user = { id: "u-old", role: "user", timestamp: Date.now() - 1, model: null, blocks: [{ kind: "text", text: "Old calls." }] };
+       const done = { isError: false, text: "ok" };
+       return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, runs: [], items: [user,
+         { id: "a-absent", role: "assistant", timestamp: Date.now(), model: null, blocks: [
+           { kind: "tool-call", callId: "old-absent", name: "custom_lookup", argumentsText: "", argumentsAbsent: true, result: done }] },
+         { id: "a-between", role: "assistant", timestamp: Date.now(), model: null, blocks: [{ kind: "text", text: "Between." }] },
+         { id: "a-null", role: "assistant", timestamp: Date.now(), model: null, blocks: [
+           { kind: "tool-call", callId: "old-null", name: "custom_lookup", argumentsText: "null", result: done }] },
+       ] } } };`,
+    );
+    const raw = async (id: string) => {
+      const card = page.locator(`[data-call="${id}"]`);
+      await line(card).click();
+      await card.getByRole("tab", { name: "Raw" }).click();
+      return card.getByRole("region", { name: "What the gateway sent" });
+    };
+    const absent = await raw("old-absent");
+    await expect(absent.getByTestId("raw-missing")).toHaveText("ArgumentsArguments weren't kept.");
+    await expect(absent).not.toContainText("{}");
+    const explicit = await raw("old-null");
+    await expect(
+      explicit.getByText("Arguments, from the history the gateway returned"),
+    ).toBeVisible();
+    await expect(explicit.locator("pre").first()).toHaveText("null");
+    await expect(explicit).not.toContainText("{}");
+  });
+
   test("F-093: Raw shows only parts received, each under its heading, and says which were not: a start with no result, and a result with no start", async ({
     page,
   }) => {

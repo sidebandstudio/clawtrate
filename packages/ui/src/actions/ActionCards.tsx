@@ -221,9 +221,14 @@ function rawContentOf(call: ActionCall, env: ActionEnv): { content: RawContent; 
   const parts: Partial<Pick<Loaded, "args" | "argsLabel" | "result" | "error" | "resultLabel">> =
     {};
   if (!found) {
-    // Only the history item's row is here: its arguments and result text as the page kept them.
-    parts.args = call.args;
-    parts.argsLabel = "Arguments, from the history the gateway returned";
+    // Only the history item's row is here: its arguments and result text as the page kept them,
+    // an explicit null as null, and no arguments where the row had none.
+    const row = call.rowArgs;
+    if (row && !row.kept) missing.push({ label: "Arguments", text: "Arguments weren't kept." });
+    else {
+      parts.args = row ? row.value : call.args;
+      parts.argsLabel = "Arguments, from the history the gateway returned";
+    }
     if (call.text !== null) {
       if (call.isError) parts.error = call.text;
       else parts.result = call.text;
