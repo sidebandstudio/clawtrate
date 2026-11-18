@@ -142,6 +142,28 @@ jobs:
               }
             }
           }
+          $env:CHECK_EXE = Join-Path $dir 'Clawtrate.exe'
+          "--- the check's own function, from node:"
+          node --input-type=module -e "const m = await import('./e2e-packaged/windows.ts'); const t = Date.now(); console.log(JSON.stringify(m.taskbarOverlayDescription(process.env.CHECK_EXE)), Date.now() - t, 'ms')"
+          $variant = @'
+          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+          $ae = [Windows.Automation.AutomationElement]
+          $all = [Windows.Automation.Condition]::TrueCondition
+          $bar = $ae::RootElement.FindFirst([Windows.Automation.TreeScope]::Children, (New-Object Windows.Automation.PropertyCondition($ae::ClassNameProperty, 'Shell_TrayWnd')))
+          "PS $($PSVersionTable.PSVersion) bar: $([bool]$bar)"
+          foreach ($el in $bar.FindAll([Windows.Automation.TreeScope]::Descendants, $all)) { if ($el.Current.AutomationId -like 'Appid:*') { "  all: [$($el.Current.AutomationId)]" } }
+          $want = 'Appid: ' + $env:CHECK_EXE
+          "want: [$want]"
+          $exact = $bar.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition($ae::AutomationIdProperty, $want)))
+          "exact: $([bool]$exact)"
+          $nocase = $bar.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition($ae::AutomationIdProperty, $want, [Windows.Automation.PropertyConditionFlags]::IgnoreCase)))
+          "ignorecase: $([bool]$nocase)"
+          '@
+          $variant | Set-Content (Join-Path $env:RUNNER_TEMP 'variant.ps1')
+          "--- Windows PowerShell:"
+          powershell.exe -NoProfile -NonInteractive -File (Join-Path $env:RUNNER_TEMP 'variant.ps1')
+          "--- PowerShell 7:"
+          pwsh -NoProfile -NonInteractive -File (Join-Path $env:RUNNER_TEMP 'variant.ps1')
           taskkill /F /T /PID $app.Id
       - name: Run the launch check against the installed app
         env:
