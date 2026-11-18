@@ -149,9 +149,10 @@
         `<button type="button" class="icon-button" data-cmp="stop" aria-label="Stop watching" title="Stop watching">${icon("x")}</button></span></div>`;
     } else if (C.view === "connecting") {
       tile = `<div class="screen" data-theme="dark" data-state="connecting" aria-busy="true"><div class="screen-blank">${glyph("working")}<p>Connecting to ${name}'s browser…</p></div></div>`;
-    } else if (C.view === "ended" || C.view === "closed-tab" || C.view === "dropped") {
+    } else if (C.view === "ended" || C.view === "closed-tab" || C.view === "browser-gone" || C.view === "dropped") {
       const words =
-        C.view === "closed-tab" ? `${name} closed this tab.` : C.view === "dropped" ? "The view ended when the connection dropped." : "The view ended. The gateway stopped sending it.";
+        // The closure is reported, not attributed: a person or another program can close a tab too.
+        C.view === "closed-tab" ? "This tab was closed." : C.view === "browser-gone" ? `The view ended. ${name}'s browser stopped answering.` : C.view === "dropped" ? "The view ended when the connection dropped." : "The view ended. The gateway stopped sending it.";
       tile =
         `<div class="screen" data-theme="dark" data-state="ended"><div class="screen-blank"><p>${words}</p>` +
         `<button type="button" class="screen-watch" data-cmp="watch">${icon("eye")}Watch again</button></div></div>`;
@@ -984,14 +985,15 @@
   });
 
   // Controls in the prototype's bar.
-  W.barExtra = (W.barExtra || "") + `<button type="button" data-work="tab-closed">Juniper closes its tab</button><button type="button" data-work="lease-ends">The lease ends</button><button type="button" data-work="answered-elsewhere">Answered elsewhere</button><button type="button" data-work="run-ends">Juniper's run ends</button>`;
+  W.barExtra = (W.barExtra || "") + `<button type="button" data-work="tab-closed">The tab closes</button><button type="button" data-work="browser-gone">The browser stops answering</button><button type="button" data-work="lease-ends">The lease ends</button><button type="button" data-work="answered-elsewhere">Answered elsewhere</button><button type="button" data-work="run-ends">Juniper's run ends</button>`;
   const prevBar = W.bar;
   W.bar = (what) => {
     if (prevBar?.(what)) return true;
-    if (what === "tab-closed") {
+    if (what === "tab-closed" || what === "browser-gone") {
+      // 4004 target_closed, or 1011 browser_unavailable.
       if (C.full) closeFull(false);
       C.control = "none";
-      C.view = "closed-tab";
+      C.view = what === "tab-closed" ? "closed-tab" : "browser-gone";
       rerenderComputer();
       return true;
     }

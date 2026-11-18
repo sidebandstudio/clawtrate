@@ -745,7 +745,17 @@ check("M7 an expired event for this lease: Your control ended, with the cause it
 await p.close();
 p = await open(comp + "&computer=watching");
 await work(p, "tab-closed");
-check("when the bot closes the tab, the tile says so", await q(p, () => document.querySelector('.screen[data-state="ended"]').textContent.startsWith("Juniper closed this tab.")));
+check("when the tab is closed, the tile says so without saying who closed it", await q(p, () => {
+  const t = document.querySelector('.screen[data-state="ended"]').textContent;
+  return t.startsWith("This tab was closed.") && !t.includes("Juniper closed");
+}));
+await p.close();
+p = await open(comp + "&computer=watching");
+await work(p, "browser-gone");
+check("R2 when the browser stops answering (1011), the tile says that, not that the tab closed", await q(p, () => {
+  const t = document.querySelector('.screen[data-state="ended"]').textContent;
+  return t.startsWith("The view ended. Juniper's browser stopped answering.") && !/closed/.test(t);
+}));
 await p.close();
 
 // When watching is not available.
