@@ -325,7 +325,7 @@ export type Run = {
   attemptErrors: string[];
   /**
    * The events that started and ended the run, as received on the live stream
-   * (`agent` lifecycle `start`, `end` or `error`, and a `chat` `error`), for
+   * (`agent` lifecycle `start`, `waiting-approval`, `end` or `error`, and a `chat` `error`), for
    * the run line's and the turn error's Raw. Absent for a run known only from
    * history, which keeps no such event. Each is cut to its bound.
    */

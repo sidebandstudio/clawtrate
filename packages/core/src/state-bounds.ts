@@ -286,8 +286,8 @@ const preamble = object<Preamble>()({
   ended: FLAG,
   beforeCall: ID,
 });
-/** The events that started and ended a run: its start, its end, and a chat error. */
-export const MAX_LIFECYCLE_RECORDS = 3;
+/** The events that started, paused and ended a run: its start, its wait, its end, and a chat error. */
+export const MAX_LIFECYCLE_RECORDS = 4;
 const lifecycleRecord = object<{ via: string; record: unknown }>()({
   via: NAME,
   record: json(MAX_RECORD_CHARS),
@@ -491,6 +491,7 @@ const item = flagged<TranscriptItem>()({
   blocks: list(MAX_BLOCKS_PER_ITEM, block, { pool: "blocks" }),
   model: NAME,
   truncated: FLAG,
+  raw: json(MAX_RECORD_CHARS),
 });
 const interSession = flagged<InterSessionMessage>()({
   itemId: ID,

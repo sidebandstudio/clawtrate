@@ -4987,7 +4987,7 @@ export class ClawtrateClient {
     const phase = asRecord(payload.data)?.phase;
     if (
       payload.stream === "lifecycle" &&
-      (phase === "start" || phase === "end" || phase === "error")
+      (phase === "start" || phase === "waiting-approval" || phase === "end" || phase === "error")
     ) {
       this.noteLifecycle(key, payload.runId, `agent (lifecycle ${String(phase)})`, payload);
     }
@@ -4998,8 +4998,8 @@ export class ClawtrateClient {
 
   /**
    * Keep an event that started or ended a run with the run, as received, for
-   * the run line's and the turn error's Raw (F-094): its start, its end, and a
-   * chat error, the latest of each kind. A run the event names that this task
+   * the run line's, the turn error's and the turn notes' Raw (F-094): its
+   * start, its wait for an approval, its end, and a chat error, the latest of each kind. A run the event names that this task
    * does not hold keeps nothing.
    */
   private noteLifecycle(key: string, runId: string, via: string, record: RawRecord): void {

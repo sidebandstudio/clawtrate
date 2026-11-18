@@ -342,6 +342,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         timestamp,
         blocks: [{ kind: "text", text: SYSTEM_ROW_TEXT[kind] }],
         model: null,
+        raw: message,
       });
       currentRun = null;
       return;
@@ -359,6 +360,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
             timestamp,
             blocks: [{ kind: "text", text: gatewayTurn }],
             model: null,
+            raw: message,
           });
           return;
         }

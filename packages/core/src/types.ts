@@ -219,6 +219,11 @@ export type TranscriptItem = {
    * read whole, is a prefix of what the gateway stored.
    */
   truncated?: boolean;
+  /**
+   * For a `system` item, the history row it stands for, as the gateway sent it,
+   * for its line's Raw (F-094); null when it was too long to keep.
+   */
+  raw?: unknown;
   /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
   cut?: string[];
 };
