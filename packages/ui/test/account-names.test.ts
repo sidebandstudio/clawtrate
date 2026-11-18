@@ -35,6 +35,11 @@ describe("account names", () => {
     expect(accountParts(list[0]!, { labels: true, accounts: list }).id).toBe("acme:work");
   });
 
+  it("labels that read the same, differing only in spaces or case, each show their id", () => {
+    const list = [account("acme:home", "My  plan"), account("acme:work", " my PLAN ")];
+    expect(names(list, true)).toEqual(["Acme · My plan acme:home", "Acme · my PLAN acme:work"]);
+  });
+
   it("names a labelled account by its label alone when the label is its own", () => {
     const list = [account("acme:work", "Work"), account("acme:home", "Home")];
     expect(accountParts(list[0]!, { labels: true, accounts: list })).toEqual({

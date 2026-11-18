@@ -355,6 +355,24 @@ button.b-choice:hover {
   color: var(--text-muted);
 }
 
+/* An account's title: its name on one line, giving way; its id, when needed, on the next, whole. */
+.b-choice-title > .b-choice-name {
+  display: block;
+  overflow: hidden;
+  font-weight: var(--weight-medium);
+  color: inherit;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.b-choice-title > .b-choice-id {
+  display: block;
+  font-size: var(--text-sm);
+  line-height: 18px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .b-choice-sub {
   overflow: hidden;
   font-size: var(--text-sm);

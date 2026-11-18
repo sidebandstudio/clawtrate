@@ -875,3 +875,69 @@ test("F-474: when two new accounts appear during a sign-in, the person chooses w
     { type: "chooseSignInAccount", profileId: "xai:second" },
   ]);
 });
+
+/** Gives OpenAI's two accounts these labels. */
+const labelsOf = (page: Page, home: string, work: string) =>
+  change(
+    page,
+    `return { ...state, accounts: { ...state.accounts, accounts: state.accounts.accounts.map((a) => a.id === "openai:home" ? { ...a, label: ${JSON.stringify(home)} } : a.id === "openai:work" ? { ...a, label: ${JSON.stringify(work)} } : a) } };`,
+  );
+
+/** Each OpenAI id in the Account step: its own line, wholly inside its title. */
+const idsShown = (page: Page) =>
+  newBot(page)
+    .locator('[data-value^="openai:"] .b-choice-id')
+    .evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const id = node.getBoundingClientRect();
+        const title = node.closest(".b-choice-title")!.getBoundingClientRect();
+        return {
+          text: node.textContent,
+          inside: id.left >= title.left - 0.5 && id.right <= title.right + 0.5,
+        };
+      }),
+    );
+
+for (const size of [WIDE, PHONE]) {
+  test.describe(`names at ${size.name}`, () => {
+    test.use(contextFor(size, "light"));
+
+    test("F-476: labels that read the same, in spaces or case, show each account's id", async ({
+      page,
+    }) => {
+      await openFixture(page, ADMIN, "light");
+      await labelsOf(page, "My  plan", "my plan");
+      await page.keyboard.press("ControlOrMeta+n");
+      await page.getByRole("button", { name: "Next" }).click();
+      expect(await idsShown(page)).toEqual([
+        { text: "openai:work", inside: true },
+        { text: "openai:home", inside: true },
+      ]);
+      // Settings → Accounts reads them the same way.
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("ControlOrMeta+,");
+      const settings = page.getByRole("dialog", { name: "Settings" });
+      if (await settings.getByRole("button", { name: "Accounts", exact: true }).isVisible())
+        await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+      await expect(
+        settings.getByRole("button", { name: /^OpenAI · My plan openai:home, / }),
+      ).toBeVisible();
+      await expect(
+        settings.getByRole("button", { name: /^OpenAI · my plan openai:work, / }),
+      ).toBeVisible();
+    });
+
+    test("F-476: a long shared label gives way; each id stays whole on its own line", async ({
+      page,
+    }) => {
+      await openFixture(page, ADMIN, "light");
+      await labelsOf(page, "W".repeat(32), "W".repeat(32));
+      await page.keyboard.press("ControlOrMeta+n");
+      await page.getByRole("button", { name: "Next" }).click();
+      expect(await idsShown(page)).toEqual([
+        { text: "openai:work", inside: true },
+        { text: "openai:home", inside: true },
+      ]);
+    });
+  });
+}

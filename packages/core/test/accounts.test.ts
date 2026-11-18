@@ -696,6 +696,28 @@ describe("a bot left half-made", () => {
   });
 });
 
+describe("labels", () => {
+  it("a label that reads like another's, differing only in spaces or case, is refused", () => {
+    const others = [
+      {
+        id: "acme:home",
+        provider: "acme",
+        label: "My  plan",
+        type: "oauth",
+        status: "ok",
+        expiresAt: null,
+        kind: "subscription" as const,
+        made: "sign-in" as const,
+        keptBy: null,
+        logoutSupported: true,
+      },
+    ];
+    expect(labelProblem(others, "acme:work", "my plan")).toMatch(/Another Acme account/);
+    expect(labelProblem(others, "acme:work", " MY   PLAN ")).toMatch(/Another Acme account/);
+    expect(labelProblem(others, "acme:work", "My plans")).toBeNull();
+  });
+});
+
 describe("how an account was made", () => {
   it("a record that says only key says nothing of where it was entered: it is read as not known", async () => {
     const fake = new AccountsGateway();

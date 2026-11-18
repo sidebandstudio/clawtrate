@@ -19,16 +19,14 @@ export function AccountTitle({
   accounts: Pick<AccountsState, "labels" | "accounts">;
 }) {
   const { label, id } = accountParts(account, accounts);
+  // The id, when it is needed, is a line of its own: the label gives way, never the id.
   return (
     <>
-      {providerName(account.provider)}
-      {label && <span> · {label}</span>}
-      {id && (
-        <>
-          {" "}
-          <span className="mono">{id}</span>
-        </>
-      )}
+      <span className="b-choice-name">
+        {providerName(account.provider)}
+        {label && <span> · {label}</span>}
+      </span>
+      {id && <span className="mono b-choice-id">{id}</span>}
     </>
   );
 }

@@ -880,6 +880,14 @@ export function normalizeLabel(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
+/**
+ * A label as a person reads it, to compare two: trimmed, runs of white space
+ * as one, without case. Two labels with the same key read the same.
+ */
+export function labelKey(label: string): string {
+  return normalizeLabel(label).toLowerCase();
+}
+
 /** Why a label cannot be saved for an account, or null. Labels are compared without case. */
 export function labelProblem(
   accounts: readonly GatewayAccount[],
@@ -896,7 +904,9 @@ export function labelProblem(
       : null;
   }
   if (value.length > MAX_LABEL_CHARS) return `A label has at most ${MAX_LABEL_CHARS} characters.`;
-  const taken = others.find((each) => each.label?.toLowerCase() === value.toLowerCase());
+  const taken = others.find(
+    (each) => each.label !== null && labelKey(each.label) === labelKey(value),
+  );
   if (taken)
     return `Another ${providerName(provider)} account is called ${taken.label}. Choose a different label.`;
   return null;

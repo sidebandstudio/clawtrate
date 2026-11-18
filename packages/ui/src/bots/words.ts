@@ -3,6 +3,8 @@
 
 import {
   accountWord,
+  labelKey,
+  normalizeLabel,
   providerName,
   retainedOrder,
   type AccountsState,
@@ -36,19 +38,22 @@ export function accountName(
  * gateway whenever the label alone does not tell it apart. No two accounts of
  * a provider ever read the same: below admin there are no labels; an account
  * with none shows its id; and one whose label another account of the provider
- * shares (compared without case) shows its id too.
+ * shares, as a person reads it (`labelKey`), shows its id too. The id is the
+ * title's second line and never what gives way.
  */
 export function accountParts(
   account: GatewayAccount,
   accounts: Pick<AccountsState, "labels" | "accounts">,
 ): { label: string | null; id: string | null } {
-  const label = accounts.labels ? account.label : null;
+  const label = accounts.labels && account.label ? normalizeLabel(account.label) : null;
   if (!label) return { label: null, id: account.id };
+  // Compared as a person reads them: trimmed, white space as one, without case.
   const shared = accounts.accounts.some(
     (other) =>
       other.id !== account.id &&
       other.provider === account.provider &&
-      other.label?.toLowerCase() === label.toLowerCase(),
+      other.label !== null &&
+      labelKey(other.label) === labelKey(label),
   );
   return { label, id: shared ? account.id : null };
 }
