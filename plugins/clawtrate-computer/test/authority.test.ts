@@ -387,14 +387,12 @@ describe("an input that fails still answers to the caller's access", () => {
       await until(() => h.browser.sent("Input.insertText").length === 1);
       access.revoked = true;
       if (how === "fails")
-        h.browser.tabSockets
-          .at(-1)!
-          .emit("message", {
-            data: JSON.stringify({
-              id: h.browser.sent("").filter((e) => e.url.includes("/devtools/page/")).length,
-              error: { message: "failed" },
-            }),
-          });
+        h.browser.tabSockets.at(-1)!.emit("message", {
+          data: JSON.stringify({
+            id: h.browser.sent("").filter((e) => e.url.includes("/devtools/page/")).length,
+            error: { message: "failed" },
+          }),
+        });
       if (how === "finds the tab closed") h.browser.tabSockets.at(-1)!.close();
       const answer = await input;
       expect(ended(answer)).toEqual([false, "FORBIDDEN", "session_access_ended"]);

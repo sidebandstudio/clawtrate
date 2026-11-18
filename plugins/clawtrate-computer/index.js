@@ -379,13 +379,7 @@ export function createComputer(api, options = {}) {
       if (!current()) throw STALE;
       return cdp.send(method, {}, { signal });
     };
-    let activity = 0;
-    const off = cdp.on((message) => {
-      if (NAVIGATION_EVENTS.has(message.method)) {
-        activity += 1;
-        changed();
-      }
-    });
+    const activity = () => lease.activity;
     const deadline = Date.now() + quietTimeoutMs;
     try {
       // Stopped first: Chromium answers Page.enable on a new connection only
@@ -394,7 +388,9 @@ export function createComputer(api, options = {}) {
       await send("Page.stopLoading");
       await send("Page.enable");
       for (;;) {
-        const seen = activity;
+        // Losing the watch is a refusal, at any moment.
+        if (watch.closed) return "closed";
+        const seen = activity();
         await send("Page.stopLoading");
         // What the plugin cannot stop, a download or another tab loading, it
         // waits for, and refuses at the deadline.
@@ -405,10 +401,10 @@ export function createComputer(api, options = {}) {
         );
         if (lease.ending || signal.aborted) return false;
         if (!settled) return watch.unresolved() ?? false;
-        if (activity !== seen) continue;
+        if (activity() !== seen) continue;
         if (Date.now() + quietWindowMs > deadline) return false;
         const disturbed = await waitUntil(
-          () => activity !== seen || watch.unresolved() !== null || lease.ending,
+          () => activity() !== seen || watch.unresolved() !== null || lease.ending,
           quietWindowMs,
           signal,
         );
@@ -417,16 +413,27 @@ export function createComputer(api, options = {}) {
           // Proof that the connection a grant would hand over still works:
           // a command answered on it after the last stop.
           await send("Page.getFrameTree");
-          return cdp.closed ? "lost" : true;
+          if (lease.ending || signal.aborted) return false;
+          if (cdp.closed) return "lost";
+          // What it saw while the proof was out starts the window over (or,
+          // the watch lost, refuses at the top of the loop).
+          if (watch.closed || activity() !== seen || watch.unresolved() !== null) continue;
+          return true;
         }
       }
     } catch (error) {
       if (error === STALE) return "stale";
       return cdp.closed ? "lost" : false;
-    } finally {
-      off();
     }
   }
+
+  /**
+   * Whether the tab and the bot's browser are, at this instant, as quiet as
+   * the plugin last found them: nothing unresolved in the watch, the watch
+   * still open, and no navigation in the tab since `seen`.
+   */
+  const stillQuiet = (lease, watch, seen) =>
+    !watch.closed && watch.unresolved() === null && lease.activity === seen && !lease.cdp.closed;
 
   /** Run `fn` after everything already queued on this lease (input, release, expiry). */
   function exclusive(lease, fn) {
@@ -881,6 +888,14 @@ export function createComputer(api, options = {}) {
       }
       refuse("UNAVAILABLE", "control_request_ended", "could not connect to the tab");
     }
+    // Every navigation the tab reports, from its connection on until the grant.
+    lease.activity = 0;
+    lease.cdp.on((message) => {
+      if (lease.state === "draining" && NAVIGATION_EVENTS.has(message.method)) {
+        lease.activity += 1;
+        changed();
+      }
+    });
     lease.cdp.onClose(() => {
       if (lease.ending) return;
       void whyClosed(bot, targetId).then((why) =>
@@ -907,6 +922,7 @@ export function createComputer(api, options = {}) {
     }
     if (!watch) return busy(...UNRESOLVED.closed);
     const quiet = await quiesce(lease, current, watch);
+    const seen = lease.activity;
     if (lease.ending)
       refuse("UNAVAILABLE", "control_request_ended", "the request for control ended");
     if (quiet === "stale" || !current()) {
@@ -928,6 +944,12 @@ export function createComputer(api, options = {}) {
     if (lease.cdp.closed) {
       await endLease(lease, "revoked", "browser-unavailable");
       refuse("UNAVAILABLE", "control_request_ended", "the connection to the tab closed");
+    }
+    // The grant is the last thing that happens: anything seen up to this
+    // instant refuses it (nothing has awaited since the quiet step's last look).
+    if (!stillQuiet(lease, watch, seen)) {
+      const why = watch.closed ? "closed" : (watch.unresolved() ?? "loading");
+      return busy(...(UNRESOLVED[why] ?? UNRESOLVED.loading));
     }
     lease.state = "granted";
     armLeaseExpiry(lease);

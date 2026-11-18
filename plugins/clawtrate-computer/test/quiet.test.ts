@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GRANT_GUARANTEE } from "../index.js";
-import { ATLAS, ATLAS_TAB, load, page, until } from "./harness.ts";
+import { ATLAS, ATLAS_TAB, load, page, sleep, until } from "./harness.ts";
 
 const tab = { targetId: ATLAS_TAB };
 
@@ -326,4 +326,102 @@ it("the plugin's page states the same guarantee, and that earlier work can still
   expect(page).toContain(
     "**Work the bot had already started can still affect the page after a grant.**",
   );
+});
+
+describe("the grant is the last thing that happens", () => {
+  const SECOND = "E".repeat(32);
+  /** A take held at its proof command, with the proof's id, so a test can act first. */
+  async function atProof(h: ReturnType<typeof load>) {
+    h.browser.lists.set(ATLAS, [page(ATLAS, ATLAS_TAB), page(ATLAS, SECOND)]);
+    await h.before("atlas", "run-p", "c-p", { action: "tabs" });
+    await h.after("atlas", "run-p", "c-p");
+    h.browser.stalledMethods.add("Page.getFrameTree");
+    const take = h.call("control.take", tab);
+    await until(() => h.browser.sentToTabs("Page.getFrameTree").length === 1);
+    const lease = h.browser.tabSockets.at(-1)!;
+    const proofId = h.browser.log.filter((e) => e.kind === "send" && e.url === lease.url).length;
+    const answerProof = () => {
+      h.browser.stalledMethods.delete("Page.getFrameTree");
+      lease.emit("message", { data: JSON.stringify({ id: proofId, result: {} }) });
+    };
+    return { take, lease, answerProof };
+  }
+  const opts = {
+    quietWindowMs: 80,
+    quietTimeoutMs: 700,
+    timeouts: { discoveryMs: 500, connectMs: 500, commandMs: 2000 },
+  };
+
+  for (const [what, reason, act] of [
+    [
+      "a download beginning",
+      "download-in-progress",
+      (h: ReturnType<typeof load>) =>
+        h.browser.tabEvent(ATLAS, SECOND, "Page.downloadWillBegin", { guid: "d", url: "x" }),
+    ],
+    [
+      "another tab starting to load",
+      "browser-not-quiet",
+      (h: ReturnType<typeof load>) =>
+        h.browser.tabEvent(ATLAS, SECOND, "Page.frameStartedLoading", { frameId: "f2" }),
+    ],
+    [
+      "the watch losing the browser",
+      "browser-not-watched",
+      (h: ReturnType<typeof load>) => h.browser.watchSocket(ATLAS)!.close(),
+    ],
+  ] as const) {
+    it(`is refused when ${what} is seen while the proof is out`, async () => {
+      const h = load(opts);
+      const { take, answerProof } = await atProof(h);
+      act(h);
+      await sleep(20);
+      answerProof();
+      const answer = await take;
+      expect(answer.payload?.state).toBe("busy");
+      expect(h.events.find((e) => e.state === "busy")?.reason).toBe(reason);
+      expect(h.events.some((e) => e.state === "granted")).toBe(false);
+      await h.stop();
+    });
+  }
+
+  it("starts the window over, stopping again, when the tab navigates while the proof is out", async () => {
+    const h = load(opts);
+    const { take, lease, answerProof } = await atProof(h);
+    const stops = h.browser.sentToTabs("Page.stopLoading").length;
+    lease.event("Page.frameStartedNavigating", { frameId: "f" });
+    answerProof();
+    const answer = await take;
+    // The navigation was stopped again and the window passed in full before the grant.
+    expect(h.browser.sentToTabs("Page.stopLoading").length).toBeGreaterThan(stops);
+    expect(h.browser.sentToTabs("Page.getFrameTree").length).toBe(2);
+    expect(answer.payload?.state).toBe("granted");
+    await h.stop();
+  });
+
+  it("is refused when the tab starts loading in the watch while the proof is out and does not stop", async () => {
+    const h = load(opts);
+    const { take, lease, answerProof } = await atProof(h);
+    lease.event("Page.frameStartedNavigating", { frameId: "f" });
+    h.browser.tabEvent(ATLAS, ATLAS_TAB, "Page.frameStartedLoading", { frameId: "f" });
+    answerProof();
+    expect((await take).payload?.state).toBe("busy");
+    expect(h.events.some((e) => e.state === "granted")).toBe(false);
+    await h.stop();
+  });
+
+  it("is refused at once when the watch is lost in the quiet window", async () => {
+    const h = load({ quietWindowMs: 300, quietTimeoutMs: 5000 });
+    await h.before("atlas", "run-q", "c-q", { action: "tabs" });
+    await h.after("atlas", "run-q", "c-q");
+    const take = h.call("control.take", tab);
+    await until(() => h.browser.sentToTabs("Page.stopLoading").length === 2);
+    const started = performance.now();
+    h.browser.watchSocket(ATLAS)!.close();
+    const answer = await take;
+    expect(performance.now() - started).toBeLessThan(1500);
+    expect(answer.payload?.state).toBe("busy");
+    expect(h.events.find((e) => e.state === "busy")?.reason).toBe("browser-not-watched");
+    await h.stop();
+  });
 });
