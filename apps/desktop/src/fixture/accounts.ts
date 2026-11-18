@@ -46,6 +46,8 @@ export type AccountParams = {
   defacct: boolean;
   /** The two OpenAI accounts' labels: "none" for neither, "same" for one label shared. */
   labels: "none" | "same" | null;
+  /** xAI's key goes through a sign-in on the gateway, which refuses it. */
+  keyfails: boolean;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -63,6 +65,7 @@ export function accountParams(params: URLSearchParams): AccountParams {
     admin: params.get("admin"),
     bot: params.get("bot"),
     defacct: params.get("defacct") === "1",
+    keyfails: params.get("keyfails") === "1",
     labels:
       params.get("labels") === "none" || params.get("labels") === "same"
         ? (params.get("labels") as "none" | "same")
@@ -82,6 +85,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   bot: null,
   defacct: false,
   labels: null,
+  keyfails: false,
 };
 
 const MINUTE = 60_000;
@@ -288,11 +292,24 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         flow: "paste",
         group: "token",
       },
+      ...(params.keyfails
+        ? [
+            {
+              id: "xai/xai-api-key",
+              provider: "xai",
+              label: "xAI API key",
+              hint: null,
+              kind: "api-key",
+              flow: "key" as const,
+              group: "token" as const,
+            },
+          ]
+        : []),
     ],
     keyProviders: [
       { provider: "openai", hasKey: false, method: null },
       { provider: "anthropic", hasKey: !none, method: null },
-      { provider: "xai", hasKey: false, method: null },
+      { provider: "xai", hasKey: false, method: params.keyfails ? "xai/xai-api-key" : null },
       { provider: "openrouter", hasKey: false, method: null },
     ],
     models: [
@@ -862,6 +879,35 @@ export function accountCommand(
       later(300, () => connected());
       return Promise.resolve();
     case "saveApiKey": {
+      const keyed = accounts().keyProviders.find((k) => k.provider === command.provider);
+      if (keyed?.method) {
+        // A key's sign-in on the gateway, which refuses the key.
+        const method = accounts().methods.find((m) => m.id === keyed.method)!;
+        put((a) => ({
+          ...a,
+          signIn: {
+            id: "fixture-key",
+            method: method.id,
+            provider: method.provider,
+            label: method.label,
+            flow: "key",
+            forBot: "main",
+            keptOnly: false,
+            stage: "checking",
+            step: null,
+            error: null,
+            cancelling: false,
+            saving: false,
+            startedAt: Date.now(),
+            result: null,
+            byKey: true,
+            known: [],
+            cancelUnknown: false,
+          },
+        }));
+        later(300, () => signIn({ stage: "failed", error: "xAI refused the key." }));
+        return Promise.resolve({ profileId: null });
+      }
       const id = `${command.provider}:manual`;
       put((a) => ({
         ...a,

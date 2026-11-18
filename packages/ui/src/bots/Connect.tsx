@@ -89,6 +89,7 @@ export function useConnect({
   const [labelError, setLabelError] = useState<string | null>(null);
   const [keyProvider, setKeyProvider] = useState(accounts.keyProviders[0]?.provider ?? "");
   const [keyOpen, setKeyOpen] = useState(false);
+  const [keyAgain, setKeyAgain] = useState(0);
   const [keyError, setKeyError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const keyRef = useRef<HTMLInputElement>(null);
@@ -168,6 +169,21 @@ export function useConnect({
     await bridge.send({ type: "dismissSignIn" }).catch(() => {});
     setWhere({ view: "methods" });
   };
+  // A key's sign-in that ended without a key saved starts again where a key is typed.
+  const toKey = async (provider: string) => {
+    await bridge.send({ type: "dismissSignIn" }).catch(() => {});
+    if (accounts.keyProviders.some((each) => each.provider === provider)) setKeyProvider(provider);
+    setKeyOpen(true);
+    setKeyAgain((n) => n + 1);
+    setWhere({ view: "methods" });
+  };
+  // The key's fields, brought into view as the disclosure opens (a phone shows little at once).
+  useEffect(() => {
+    if (keyOpen) requestAnimationFrame(() => keyRef.current?.scrollIntoView({ block: "nearest" }));
+  }, [keyOpen]);
+  useEffect(() => {
+    if (keyAgain > 0) requestAnimationFrame(() => keyRef.current?.focus());
+  }, [keyAgain]);
 
   // --- Choosing how -------------------------------------------------------------
   if (where.view === "methods") {
@@ -523,7 +539,11 @@ export function useConnect({
       className="button"
       data-variant={primary ? "primary" : undefined}
       data-size="lg"
-      onClick={() => void start(where.method)}
+      onClick={() =>
+        void (current && (current.byKey || current.flow === "key")
+          ? toKey(current.provider)
+          : start(where.method))
+      }
     >
       {word}
     </button>

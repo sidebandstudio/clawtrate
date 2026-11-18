@@ -721,3 +721,34 @@ test("F-476: two accounts that share a label, whatever its case, are told apart 
   // xAI's label is its own: no id.
   await expect(group.getByRole("radio", { name: /^xAI · Personal, / })).toBeVisible();
 });
+
+test("F-474: a key the gateway refused is tried again where a key is typed, for the same provider", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&keyfails=1`, "light");
+  await connectFromNewBot(page);
+  await newBot(page).getByText("Use an API key instead").click();
+  await newBot(page).getByRole("combobox", { name: "Provider" }).selectOption("xai");
+  await page.getByTestId("api-key").fill("made-up-key-for-a-check");
+  await newBot(page).getByRole("button", { name: "Save key" }).click();
+  await expect(newBot(page).getByRole("heading", { name: "Couldn't connect" })).toBeVisible();
+  await newBot(page).getByRole("button", { name: "Try again" }).click();
+  // Back where a key is typed: the disclosure open, xAI chosen, the field empty and focused.
+  await expect(newBot(page).locator("details.b-disclosure")).toHaveAttribute("open", "");
+  await expect(newBot(page).getByRole("combobox", { name: "Provider" })).toHaveValue("xai");
+  await expect(page.getByTestId("api-key")).toBeFocused();
+  await expect(page.getByTestId("api-key")).toHaveValue("");
+  expect((await sent(page)).filter((each) => each.type === "startSignIn")).toEqual([]);
+});
+
+test.describe("phone, a key", () => {
+  test.use(contextFor(PHONE, "light"));
+  test("F-474: on a phone, opening the API key path brings its fields into view", async ({
+    page,
+  }) => {
+    await openFixture(page, ADMIN, "light");
+    await connectFromNewBot(page);
+    await newBot(page).getByText("Use an API key instead").click();
+    await expect(page.getByTestId("api-key")).toBeInViewport();
+  });
+});
