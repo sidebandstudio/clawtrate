@@ -15,6 +15,7 @@ import {
   startHost,
   stopChild,
 } from "./global-setup.ts";
+import { leaveIdle } from "./teardown.ts";
 
 /** A bot's tasks after the seed: its seeded tasks and the live examples seeded with it. */
 function seededTaskCount(botId: string): number {
@@ -168,6 +169,18 @@ async function inFlightRunId(key: string): Promise<string> {
     .not.toBe("");
   return runId;
 }
+
+/** When the running check began: a check that fails leaves nothing it started after this. */
+let checkStarted = 0;
+test.beforeEach(() => {
+  checkStarted = Date.now();
+});
+// Playwright reads its fixtures from the first argument's pattern; this hook needs none.
+// eslint-disable-next-line no-empty-pattern
+test.afterEach(async ({}, testInfo) => {
+  test.setTimeout(testInfo.timeout + 120_000);
+  if (testInfo.status !== testInfo.expectedStatus) await leaveIdle(gatewayCall, checkStarted);
+});
 
 /** The stop note of one run, by its id: never another run's note left from earlier. */
 const stopNote = (page: Page, runId: string) =>
