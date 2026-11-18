@@ -1295,16 +1295,21 @@ export class AccountsEngine {
   private async findMade(name: string): Promise<string | null> {
     const { ctx } = this;
     ctx.update((a) => (a.creation ? { ...a, creation: { ...a.creation, status: "checking" } } : a));
-    try {
-      for (let tries = 0; tries < 150 && !ctx.connected(); tries += 1) {
-        await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
+    const before = new Set(this.before);
+    // Until a read of the list succeeds, within the deadline: an answer lost to a dropped
+    // connection is often followed by a reconnect, and a read made during it is not an answer.
+    for (let tries = 0; tries < 150; tries += 1) {
+      if (ctx.connected()) {
+        try {
+          await ctx.refreshBots();
+          return ctx.bots().find((bot) => bot.name === name && !before.has(bot.id))?.id ?? null;
+        } catch {
+          // Not read: try again once the connection is back.
+        }
       }
-      await ctx.refreshBots();
-      const before = new Set(this.before);
-      return ctx.bots().find((bot) => bot.name === name && !before.has(bot.id))?.id ?? null;
-    } catch {
-      return null;
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
     }
+    return null;
   }
 
   /**

@@ -577,6 +577,30 @@ describe("a bot left half-made", () => {
     client.stop();
   });
 
+  it("an answer lost to a dropped connection is followed by a look that waits for a list read that succeeds", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const create = fake.gateway.handlers["agents.create"]!;
+    const list = fake.gateway.handlers["agents.list"]!;
+    let refused = 0;
+    fake.gateway.handlers["agents.create"] = async (params) => {
+      await create(params);
+      // The gateway made it, and its answer is lost; the first reads of the list fail too.
+      fake.gateway.handlers["agents.list"] = (listParams) => {
+        if (refused < 2) {
+          refused += 1;
+          throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
+        }
+        return list(listParams);
+      };
+      throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
+    };
+    expect((await client.createBot({ ...input })).botId).toBe("viral");
+    expect(refused).toBe(2);
+    expect(accounts().creation).toMatchObject({ status: "created", botId: "viral" });
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    client.stop();
+  });
+
   it("after an answer in doubt, a retry adopts only a bot that was not there before: never an older one of that name", async () => {
     const { client, fake, accounts } = await accountsClient();
     const create = fake.gateway.handlers["agents.create"]!;
@@ -597,8 +621,10 @@ describe("a bot left half-made", () => {
     const list = fake.gateway.handlers["agents.list"]!;
     fake.gateway.handlers["agents.create"] = async (params) => {
       await create(params);
-      fake.gateway.handlers["agents.list"] = () => {
-        throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
+      // The gateway made it, its answer is lost, and its list doesn't show it yet.
+      fake.gateway.handlers["agents.list"] = (listParams) => {
+        const answer = list(listParams) as { agents: Array<{ id: string }> };
+        return { ...answer, agents: answer.agents.filter((bot) => bot.id !== "viral") };
       };
       throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
     };
