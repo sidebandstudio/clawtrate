@@ -13,9 +13,7 @@ import {
   lineOf,
   outcomeOf,
   problemOf,
-  projectDetails,
   type ActionCall,
-  type ActionKind,
   type ActionLine,
   type ReadingContext,
 } from "./actions.ts";
@@ -207,59 +205,6 @@ function parseArgs(text: string | null | undefined): Record<string, unknown> {
   }
 }
 
-/**
- * Kinds whose result text is what the tool read, ran or wrote, never its own
- * payload: a file's content, a command's output, a document's analysis, an
- * edit's sentence. Every other tool returns its payload as JSON text
- * (`jsonResult`), alone or after a line of words.
- */
-const CONTENT_KINDS: Partial<Record<ActionKind, true>> = {
-  read: true,
-  list: true,
-  command: true,
-  terminal: true,
-  look: true,
-  edit: true,
-  memory: true,
-};
-
-/** The JSON object a result's text carries: the whole text, or a block after its words. */
-function payloadText(text: string): unknown {
-  const t = text.trim();
-  if (!t.endsWith("}")) return null;
-  // The whole text first, then each later "{" that may open the block (a few at most).
-  let at = t.startsWith("{") ? 0 : t.indexOf("{");
-  for (let tries = 0; at !== -1 && tries < 16; tries += 1) {
-    try {
-      const value: unknown = JSON.parse(t.slice(at));
-      if (value && typeof value === "object" && !Array.isArray(value)) return value;
-    } catch {
-      // Not the block: try the next brace.
-    }
-    at = t.indexOf("{", at + 1);
-  }
-  return null;
-}
-
-/**
- * The one way a call's payload is read, live and from history alike: the
- * result's own JSON, where its text carries it, under whatever `details` were
- * kept. History keeps only a few detail keys (the gateway's chat display
- * projection: exit code, duration, folder, session, `ok`, `changed`,
- * `created`, diff), so without the text's payload a reloaded call would read
- * less, or more, than the live one. Text that carries no payload adds nothing.
- */
-export function withPayload(call: ActionCall): ActionCall {
-  if (!call.text || CONTENT_KINDS[kindOf(call).kind]) return call;
-  const value = payloadText(call.text);
-  // The computer's text is its act's result, which its details carry under `result`.
-  const parsed = projectDetails(
-    value && kindOf(call).kind === "computer" ? { result: value } : value,
-  );
-  if (!parsed) return call;
-  return { ...call, details: { ...parsed, ...(call.details ?? {}) } };
-}
-
 /** Whether a run that ended left a call open because it hit its time limit. */
 function cutOff(run: Pick<Run, "state" | "error" | "ending">): boolean {
   return (
@@ -287,7 +232,7 @@ export function callFromStep(
       : step.status === "waiting"
         ? "waiting"
         : "running";
-  return withPayload({
+  return {
     id: step.toolCallId ?? step.id,
     name: step.toolName ?? "",
     args: step.args ?? parseArgs(step.argsText?.text),
@@ -303,7 +248,7 @@ export function callFromStep(
     partial: open ? (step.output?.text ?? null) : null,
     runStopped: run.state === "stopped" || run.state === "cancelled",
     ...(step.gatewayTitle ? { gatewayTitle: step.gatewayTitle } : {}),
-  });
+  };
 }
 
 /** A tool-call block of a history item, as the reading takes it; its step, when the engine has one, says more. */
@@ -324,16 +269,16 @@ export function callFromBlock(
       return { ...call, status: "unreturned", isError: false, text: null };
     // History holds a result the engine's step does not have yet: history is newer.
     if (block.result && (call.status !== "returned" || !call.text))
-      return withPayload({
+      return {
         ...call,
         status: "returned",
         isError: block.result.isError,
         text: block.result.text,
         partial: null,
-      });
+      };
     return call;
   }
-  return withPayload({
+  return {
     id: block.callId,
     name: block.name,
     args: parseArgs(block.argumentsText),
@@ -346,7 +291,7 @@ export function callFromBlock(
     startedAt: null,
     endedAt: null,
     fromHistory: true,
-  });
+  };
 }
 
 /** A reasoning step as a segment. */

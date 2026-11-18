@@ -517,6 +517,27 @@ const CASES: Case[] = [
     { status: "suppressed" },
     "suppressed",
   ),
+  // 24 a tool server: its text is the server's output, never read as the gateway's payload
+  {
+    name: "server: JSON output",
+    tool: "coder__slow_task",
+    args: { seconds: 8 },
+    text: JSON.stringify({ status: "done", seconds: 8 }),
+    details: {
+      mcpServer: "coder",
+      mcpTool: "slow_task",
+      structuredContent: { status: "done", seconds: 8 },
+    },
+    outcome: "done",
+  },
+  {
+    name: "server: empty output",
+    tool: "coder__slow_task",
+    args: { seconds: 8 },
+    text: "",
+    details: { mcpServer: "coder", mcpTool: "slow_task" },
+    outcome: "made",
+  },
   // 24 a call the gateway blocked before launch: its details are not kept, its words are
   {
     name: "server: blocked at admission",
@@ -615,11 +636,14 @@ function historyOf(c: Case) {
 describe("every kind's outcome is the same live and from history", () => {
   for (const c of CASES) {
     it(`${c.name}: ${c.outcome}`, () => {
-      const live = lineOf(callFromStep(step(c, c.details, false), RUN));
+      // What the app reads every call with: the gateway's name map for tool-server tools
+      // (`tools.effective`), which a reload needs since history keeps no `mcpServer`.
+      const ctx = { toolServers: { coder__slow_task: { server: "coder", tool: "slow_task" } } };
+      const live = lineOf(callFromStep(step(c, c.details, false), RUN), ctx);
       const history = historyOf(c);
       // History with the engine's step, and history's block alone (the step not kept).
-      const rebuilt = lineOf(callFromBlock(history.block, history.step, history.run));
-      const alone = lineOf(callFromBlock(history.block, undefined, undefined));
+      const rebuilt = lineOf(callFromBlock(history.block, history.step, history.run), ctx);
+      const alone = lineOf(callFromBlock(history.block, undefined, undefined), ctx);
       expect(live.outcome).toBe(c.outcome);
       expect(rebuilt.outcome).toBe(c.outcome);
       expect(alone.outcome).toBe(c.outcome);

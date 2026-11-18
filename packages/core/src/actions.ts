@@ -484,6 +484,76 @@ export function kindOf(call: ActionCall, ctx: ReadingContext = {}): KindInfo {
   }
 }
 
+/**
+ * Kinds whose result text is what the tool read, ran or wrote, never its own
+ * payload: a file's content, a command's output, a document's analysis, an
+ * edit's sentence, a tool server's output. Every other tool returns its payload as JSON text
+ * (`jsonResult`), alone or after a line of words.
+ */
+const CONTENT_KINDS: Partial<Record<ActionKind, true>> = {
+  read: true,
+  list: true,
+  command: true,
+  terminal: true,
+  look: true,
+  edit: true,
+  memory: true,
+  // A tool server's text is the server's own output, not the gateway's payload for the call.
+  server: true,
+  t3: true,
+};
+
+/** The JSON object a result's text carries: the whole text, or a block after its words. */
+function payloadText(text: string): unknown {
+  const t = text.trim();
+  if (!t.endsWith("}")) return null;
+  // The whole text first, then each later "{" that may open the block (a few at most).
+  let at = t.startsWith("{") ? 0 : t.indexOf("{");
+  for (let tries = 0; at !== -1 && tries < 16; tries += 1) {
+    try {
+      const value: unknown = JSON.parse(t.slice(at));
+      if (value && typeof value === "object" && !Array.isArray(value)) return value;
+    } catch {
+      // Not the block: try the next brace.
+    }
+    at = t.indexOf("{", at + 1);
+  }
+  return null;
+}
+
+/**
+ * The one way a call's payload is read, live and from history alike: the
+ * result's own JSON, where its text carries it, under whatever `details` were
+ * kept. History keeps only a few detail keys (the gateway's chat display
+ * projection: exit code, duration, folder, session, `ok`, `changed`,
+ * `created`, diff), so without the text's payload a reloaded call would read
+ * less, or more, than the live one. Text that carries no payload adds nothing.
+ */
+export function withPayload(call: ActionCall, ctx: ReadingContext = {}): ActionCall {
+  if (!call.text || CONTENT_KINDS[kindOf(call, ctx).kind]) return call;
+  const value = payloadText(call.text);
+  // The computer's text is its act's result, which its details carry under `result`.
+  const parsed = projectDetails(
+    value && kindOf(call, ctx).kind === "computer" ? { result: value } : value,
+  );
+  if (!parsed) return call;
+  return { ...call, details: { ...parsed, ...(call.details ?? {}) } };
+}
+
+/** Each call read once: `withPayload` per call object and context. */
+const readCache = new WeakMap<ActionCall, WeakMap<ReadingContext, ActionCall>>();
+const EMPTY_CTX: ReadingContext = {};
+function payloadRead(call: ActionCall, ctx: ReadingContext): ActionCall {
+  if ((call as { payloadRead?: true }).payloadRead) return call;
+  const byCtx = readCache.get(call) ?? new WeakMap<ReadingContext, ActionCall>();
+  readCache.set(call, byCtx);
+  const known = byCtx.get(ctx);
+  if (known) return known;
+  const read = { ...withPayload(call, ctx), payloadRead: true } as ActionCall;
+  byCtx.set(ctx, read);
+  return read;
+}
+
 // Outcomes ----------------------------------------------------------------------------
 
 export type Outcome =
@@ -861,7 +931,8 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
  * kind's adapter where it names something more exact than Done; then the
  * general reading; Done only when neither finds a signal (7.3).
  */
-export function outcomeOf(call: ActionCall, ctx: ReadingContext = {}): OutcomeOf {
+export function outcomeOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): OutcomeOf {
+  const call = payloadRead(given, ctx);
   const kind = kindOf(call, ctx);
   switch (call.status) {
     case "running":
@@ -1551,7 +1622,8 @@ function spokenState(call: ActionCall, mark: StateMark, o: OutcomeOf): string {
 }
 
 /** The line of one call in its state (7.2, 7.3, 8.2 to 8.4). */
-export function lineOf(call: ActionCall, ctx: ReadingContext = {}): ActionLine {
+export function lineOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): ActionLine {
+  const call = payloadRead(given, ctx);
   const info = kindOf(call, ctx);
   const w = wordsOf(call, info.kind, ctx);
   const o = outcomeOf(call, ctx);
@@ -2189,7 +2261,8 @@ export type Readable = {
 };
 
 /** What an opened card shows of one call. */
-export function readableOf(call: ActionCall, ctx: ReadingContext = {}): Readable {
+export function readableOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): Readable {
+  const call = payloadRead(given, ctx);
   const { kind } = kindOf(call, ctx);
   const o = outcomeOf(call, ctx);
   const open = isOpenOutcome(o.outcome);
