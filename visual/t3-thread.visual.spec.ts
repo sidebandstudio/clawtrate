@@ -89,7 +89,8 @@ for (const size of SIZES) {
           await expect(page.locator(".card.action, [data-testid='t3-card']").first()).toBeVisible();
           const target = await (shot.prepare ?? (async (p: Page) => thread(p)))(page);
           await page.mouse.move(0, 0);
-          await paintedFinal(page);
+          // A shot that opened something holds it in view: the transcript stays where it is.
+          await paintedFinal(page, { atEnd: shot.prepare === undefined });
           await expect(target).toHaveScreenshot(`t3-${shot.name}-${theme}-${size.name}.png`);
         });
       }

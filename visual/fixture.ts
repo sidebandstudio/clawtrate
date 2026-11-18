@@ -63,7 +63,15 @@ export async function settle(page: Page): Promise<void> {
  * the shelf keep the same geometry for three frames in a row. Text on screen alone does not
  * say so: a font, an image or the follow-to-end scroll can still move what is drawn.
  */
-export async function paintedFinal(page: Page): Promise<void> {
+export async function paintedFinal(
+  page: Page,
+  /**
+   * `atEnd: false` where the reader has opened something the view holds in place, so the
+   * transcript's final position is not its end (conversation.md 18): it is then final when
+   * it has not moved for those frames.
+   */
+  { atEnd: toEnd = true }: { atEnd?: boolean } = {},
+): Promise<void> {
   await expect
     .poll(
       () =>
@@ -102,7 +110,7 @@ export async function paintedFinal(page: Page): Promise<void> {
     .poll(
       () =>
         page.evaluate(
-          () =>
+          (toEnd) =>
             new Promise<boolean>((resolve) => {
               const geometry = () => {
                 const transcript = document.querySelector<HTMLElement>("[data-testid=transcript]");
@@ -128,12 +136,17 @@ export async function paintedFinal(page: Page): Promise<void> {
               const frame = () => {
                 seen.push(geometry());
                 if (seen.length < 4) requestAnimationFrame(frame);
-                else resolve(new Set(seen).size === 1 && atEnd());
+                else resolve(new Set(seen).size === 1 && (!toEnd || atEnd()));
               };
               requestAnimationFrame(frame);
             }),
+          toEnd,
         ),
-      { message: "the transcript at its end and the shelf, unchanged for three frames" },
+      {
+        message: toEnd
+          ? "the transcript at its end and the shelf, unchanged for three frames"
+          : "the transcript and the shelf, unchanged for three frames",
+      },
     )
     .toBe(true);
 }

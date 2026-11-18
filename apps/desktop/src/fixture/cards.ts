@@ -1373,10 +1373,11 @@ function historyOf(runs: TaskActivity["runs"], now: number): TranscriptItem[] {
         callId: step.toolCallId,
         name: step.toolName ?? "tool",
         argumentsText: step.argsText?.text ?? "{}",
+        // History holds a result only for a call that returned.
         result:
-          step.status === "running" || step.status === "waiting"
-            ? null
-            : { isError: step.status === "failed", text: step.result?.text ?? "" },
+          step.status === "done" || step.status === "failed"
+            ? { isError: step.status === "failed", text: step.result?.text ?? "" }
+            : null,
         ...(step.t3 ? { t3: step.t3 } : {}),
       });
     }
