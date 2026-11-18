@@ -1,0 +1,31 @@
+{
+  "id": "clawtrate-computer",
+  "name": "Clawtrate computer",
+  "description": "A browser of its own for each configured bot, a live view of it for the people who can use the bot, and a person's takeover and hand-back. Not made by or affiliated with OpenClaw.",
+  "categories": ["developer-tools"],
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "bots": {
+        "type": "object",
+        "propertyNames": { "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profile", "cdpUrl"],
+          "properties": {
+            "profile": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+            "cdpUrl": {
+              "type": "string",
+              "pattern": "^http://(127\\.0\\.0\\.1|\\[::1\\]):[1-9][0-9]{0,4}/?$"
+            }
+          }
+        }
+      },
+      "drainTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 60000 },
+      "renewTimeoutMs": { "type": "integer", "minimum": 5000, "maximum": 60000 }
+    }
+  }
+}

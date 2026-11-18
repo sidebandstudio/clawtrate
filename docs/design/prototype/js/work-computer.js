@@ -6,7 +6,7 @@
 // States from the address:
 //   ?bot=juniper&task=j2&panel=open&tab=computer
 //   ?computer=noplugin|unconfigured|unused|closed|watching|full|draining|control|
-//             busy|conflict|ended|offline|stuck|active
+//             busy|unsettled|conflict|ended|offline|stuck|active
 //   ?firstwatch=1        the one-time note before the first watch
 //   ?state=readonly      a read-only connection
 
@@ -32,9 +32,9 @@
     configured: mode !== "unconfigured",
     used: mode !== "unused",
     open: mode !== "closed",
-    view: ["watching", "full", "draining", "control", "busy", "conflict", "stuck", "releasefail", "releaseunknown", "complexquestion"].includes(mode) ? "live" : mode === "ended" ? "ended" : "idle",
-    full: ["full", "draining", "control", "busy", "conflict", "releasefail", "releaseunknown", "complexquestion"].includes(mode),
-    control: { draining: "draining", control: "granted", busy: "busy", conflict: "conflict", stuck: "busy", releasefail: "granted", releaseunknown: "granted", complexquestion: "granted" }[mode] || "none",
+    view: ["watching", "full", "draining", "control", "busy", "unsettled", "conflict", "stuck", "releasefail", "releaseunknown", "complexquestion"].includes(mode) ? "live" : mode === "ended" ? "ended" : "idle",
+    full: ["full", "draining", "control", "busy", "unsettled", "conflict", "releasefail", "releaseunknown", "complexquestion"].includes(mode),
+    control: { draining: "draining", control: "granted", busy: "busy", unsettled: "unsettled", conflict: "conflict", stuck: "busy", releasefail: "granted", releaseunknown: "granted", complexquestion: "granted" }[mode] || "none",
     busyCount: mode === "stuck" ? 3 : 0,
     tab: "t1",
     noteSeen: params.get("firstwatch") !== "1",
@@ -50,9 +50,19 @@
     takeSession: 0,
     disposed: [],
     lateReleased: 0,
+    // Takes withdrawn with control.release and the draining event's generation.
+    withdrawals: [],
+    takeGeneration: "",
+    // The renewal time the take answered with (renewWithinMs): the fixture's gateway uses the default.
+    renewWithinMs: 20000,
     outcome: "",
   };
   let lastTask = null;
+
+  // What a grant guarantees, and no more (the plugin's own answer says the same):
+  // never "You have control" without it.
+  const pausedLine = (name) => `${name}'s new browser actions are paused. Something it already started can still change this page.`;
+  const unsettledLine = (name) => `Something ${name} started in this browser hasn't finished yet, such as a page still loading or a download. Try again in a moment.`;
 
   const readOnly = () => W.app?.model.access === "read" || window.app?.model.access === "read";
   const app = () => window.app;
@@ -139,9 +149,10 @@
         `<button type="button" class="icon-button" data-cmp="stop" aria-label="Stop watching" title="Stop watching">${icon("x")}</button></span></div>`;
     } else if (C.view === "connecting") {
       tile = `<div class="screen" data-theme="dark" data-state="connecting" aria-busy="true"><div class="screen-blank">${glyph("working")}<p>Connecting to ${name}'s browser…</p></div></div>`;
-    } else if (C.view === "ended" || C.view === "closed-tab" || C.view === "dropped") {
+    } else if (C.view === "ended" || C.view === "closed-tab" || C.view === "browser-gone" || C.view === "dropped") {
       const words =
-        C.view === "closed-tab" ? `${name} closed this tab.` : C.view === "dropped" ? "The view ended when the connection dropped." : "The view ended. The gateway stopped sending it.";
+        // The closure is reported, not attributed: a person or another program can close a tab too.
+        C.view === "closed-tab" ? "This tab was closed." : C.view === "browser-gone" ? `The view ended. ${name}'s browser stopped answering.` : C.view === "dropped" ? "The view ended when the connection dropped." : "The view ended. The gateway stopped sending it.";
       tile =
         `<div class="screen" data-theme="dark" data-state="ended"><div class="screen-blank"><p>${words}</p>` +
         `<button type="button" class="screen-watch" data-cmp="watch">${icon("eye")}Watch again</button></div></div>`;
@@ -154,7 +165,7 @@
       note +
       tile +
       `<p class="screen-caption">${name}'s browser, used by all of its tasks<br><span>${esc(tab.title)} · ${tab.domain}</span></p>` +
-      (C.control === "granted" && !C.full ? `<p class="screen-caption"><strong>You have control.</strong> ${CT.linkButton("Give back control", { attrs: 'data-cmp="release"' })}</p>` : "") +
+      (C.control === "granted" && !C.full ? `<p class="screen-caption"><strong>You have control.</strong> <span class="control-paused">${pausedLine(name)}</span> ${CT.linkButton("Give back control", { attrs: 'data-cmp="release"' })}</p>` : "") +
       (tabs.length > 1
         ? `<ul class="screen-tabs" aria-label="${name}'s tabs">${tabs
             .map((x) => `<li><button type="button" class="screen-tab" data-cmp-tab="${x.id}" aria-current="${x.id === C.tab}"><span>${esc(x.title)}</span><span>${x.domain}</span></button></li>`)
@@ -171,11 +182,11 @@
     if (C.full) return "";
     if (C.outOfSight && ["releasing", "unconfirmed"].includes(C.control))
       return (
-        `<p class="files-alert computer-held" role="alert">This device may still have control of ${name}'s browser. Giving it back wasn't confirmed; it ends by itself within about 20 seconds.` +
+        `<p class="files-alert computer-held" role="alert">This device may still have control of ${name}'s browser. Giving it back wasn't confirmed; it ends by itself within about ${Math.round(C.renewWithinMs / 1000)} seconds.` +
         `<button type="button" class="button" data-size="sm" data-cmp="release">Give it back</button></p>`
       );
     if (C.control === "maybeheld")
-      return `<p class="files-alert computer-held" role="alert">The connection dropped. Control of ${name}'s browser may remain with this device until it expires.</p>`;
+      return `<p class="files-alert computer-held" role="alert">The connection dropped. Input has stopped. The gateway ends control when it observes this connection close; check its state after reconnecting.</p>`;
     if (C.control === "checking") return `<p class="files-alert computer-held" data-tone="quiet" role="status">${glyph("working")}Checking ${name}'s question and browser…</p>`;
     if (C.control === "ended" && !viewing())
       return `<p class="files-alert computer-held" data-tone="quiet" role="status">Your control ended.${C.endCause ? ` ${C.endCause}` : ""}</p>`;
@@ -388,6 +399,8 @@
     const btn = (label, cmp, variant = "", extra = "") => `<button type="button" class="button" data-size="sm"${variant ? ` data-variant="${variant}"` : ""} data-cmp="${cmp}" ${extra}>${label}</button>`;
     if (C.control === "draining") return bar("", `${glyph("working")}<span>Waiting for ${name} to finish what it's doing in the browser…</span><span class="spacer"></span>${btn("Cancel", "cancel-take")}`);
     if (C.control === "busy") return bar("", `<span>${name} is still acting in this browser. Try again in a moment.</span><span class="spacer"></span>${btn("Try again", "take")}`, "alert");
+    // Refused because something the bot started has not settled: a page still loading, a download.
+    if (C.control === "unsettled") return bar("", `<span>${unsettledLine(name)}</span><span class="spacer"></span>${btn("Try again", "take")}`, "alert");
     if (C.control === "conflict") return bar("", `<span>Someone on another device has control of ${name}'s browser.</span>`);
     const why = C.dropped ? `<span class="control-gone">${C.dropped}</span>` : "";
     if (C.control === "ended") return bar("", `<span>Your control ended.${C.endCause ? ` ${C.endCause}` : ""}</span>${why}<span class="spacer"></span>${btn("Take control", "take")}`, "alert");
@@ -406,9 +419,9 @@
     else if (C.question) answers = btn("Give back control and answer", "answer-in-chat", "primary");
     const gone = C.questionGone ? `<span class="control-gone">${C.questionGone}</span>` : "";
     return (
-      bar("control", `${icon("hand")}<strong>You have control</strong>${gone}<span class="spacer"></span>${answers}${btn("Give back control", "release", C.question ? "quiet" : "primary")}`) +
+      bar("control", `${icon("hand")}<strong>You have control</strong>${gone}<span class="spacer"></span>${answers}${btn("Give back control", "release", C.question ? "quiet" : "primary")}<span class="control-paused">${pausedLine(name)}</span>`) +
       (C.notice ? `<p class="control-note" role="status">${C.notice}</p>` : "") +
-      `<p class="control-note" id="control-note">Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${name}'s browser tool can't act here, in any of ${name}'s tasks. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p>`
+      `<p class="control-note" id="control-note">Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${name}'s new browser actions are paused, in every one of ${name}'s tasks; something it already started can still change this page. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p>`
     );
   }
 
@@ -476,7 +489,7 @@
     }
     const width = levels[C.zoom];
     const dock =
-      control || ["draining", "releasing", "unconfirmed", "answering", "busy", "conflict", "ended"].includes(C.control) || C.outcome
+      control || ["draining", "releasing", "unconfirmed", "answering", "busy", "unsettled", "conflict", "ended"].includes(C.control) || C.outcome
         ? controlBar(b)
         : readOnly()
           ? ""
@@ -498,7 +511,7 @@
       (control ? `<button type="button" class="icon-button keyboard-button" data-cmp="keyboard" aria-label="Type into the page" aria-expanded="${Boolean(C.typing)}">${icon("keyboard")}</button>` : "") +
       `</div>` +
       (control
-        ? `<details class="control-help"><summary>What reaches the page</summary><p>Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${b.name}'s browser tool can't act here, in any of ${b.name}'s tasks. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p></details>`
+        ? `<details class="control-help"><summary>What reaches the page</summary><p>Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${b.name}'s new browser actions are paused, in every one of ${b.name}'s tasks; something it already started can still change this page. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p></details>`
         : "") +
       `<div class="control-dock">${dock}</div>` +
       (control && C.typing
@@ -520,12 +533,15 @@
     if (C.typing) $("#type-input", view)?.focus();
   }
 
-  // Taking control. The gateway answers a take once, up to 15 s later, and has no
-  // way to withdraw it; an answer to an abandoned request is disposed of.
+  // Taking control. The gateway answers a take once, after the bot's call ends and
+  // the tab is quiet or at its deadline. The draining event gives the take's
+  // generation, with which a waiting take is withdrawn (control.release); an
+  // answer to an abandoned request is disposed of.
   function take() {
     if (readOnly()) return;
     if (!C.full) openFull();
     const id = ++C.takeSession;
+    C.takeGeneration = `g${id}`; // from the draining event, at once
     C.control = "draining";
     C.outcome = "";
     renderFull();
@@ -533,15 +549,19 @@
     setTimeout(() => arrive(id), 900);
   }
   function abandonTake() {
+    // Withdrawn with the draining generation: the take then answers control_request_ended,
+    // unless its grant won the race (?takerace=grant), which arrive() gives back at once.
+    C.withdrawals.push(C.takeGeneration);
     C.takeSession++;
     C.control = "none";
   }
   function arrive(id) {
-    const result = mode === "busy" || mode === "stuck" ? "busy" : mode === "conflict" ? "conflict" : "granted";
+    const result = mode === "busy" || mode === "stuck" ? "busy" : mode === "unsettled" ? "unsettled" : mode === "conflict" ? "conflict" : "granted";
     if (id !== C.takeSession || C.control !== "draining") {
-      // Abandoned: a late grant is given back at once, with nothing shown but the
-      // gateway's own record in the conversation.
-      if (result === "granted") {
+      // Abandoned and withdrawn: the take ends with no grant, and nothing is shown.
+      // A grant that won the race is given back at once, with nothing shown but
+      // the gateway's own record in the conversation.
+      if (result === "granted" && params.get("takerace") === "grant") {
         C.lateReleased += 1;
         eventLine(`You took control of Juniper's browser · ${NOW}`);
         eventLine(`You gave control back · ${NOW}`);
@@ -551,12 +571,13 @@
     if (result === "busy") {
       C.control = "busy";
       C.busyCount += 1;
-    } else if (result === "conflict") C.control = "conflict";
+    } else if (result === "unsettled") C.control = "unsettled";
+    else if (result === "conflict") C.control = "conflict";
     else {
       C.control = "granted";
       C.events.push(`You took control of Juniper's browser · ${NOW}`);
       eventLine(`You took control of Juniper's browser · ${NOW}`);
-      CT.announce("You have control of Juniper's browser");
+      CT.announce(`You have control of Juniper's browser. ${pausedLine("Juniper")}`);
     }
     rerenderComputer();
     ($('[data-cmp="answer"]') || $('[data-cmp="answer-in-chat"]') || $('[data-cmp="release"]') || $('[data-cmp="take"]'))?.focus();
@@ -964,14 +985,15 @@
   });
 
   // Controls in the prototype's bar.
-  W.barExtra = (W.barExtra || "") + `<button type="button" data-work="tab-closed">Juniper closes its tab</button><button type="button" data-work="lease-ends">The lease ends</button><button type="button" data-work="answered-elsewhere">Answered elsewhere</button><button type="button" data-work="run-ends">Juniper's run ends</button>`;
+  W.barExtra = (W.barExtra || "") + `<button type="button" data-work="tab-closed">The tab closes</button><button type="button" data-work="browser-gone">The browser stops answering</button><button type="button" data-work="lease-ends">The lease ends</button><button type="button" data-work="answered-elsewhere">Answered elsewhere</button><button type="button" data-work="run-ends">Juniper's run ends</button>`;
   const prevBar = W.bar;
   W.bar = (what) => {
     if (prevBar?.(what)) return true;
-    if (what === "tab-closed") {
+    if (what === "tab-closed" || what === "browser-gone") {
+      // 4004 target_closed, or 1011 browser_unavailable.
       if (C.full) closeFull(false);
       C.control = "none";
-      C.view = "closed-tab";
+      C.view = what === "tab-closed" ? "closed-tab" : "browser-gone";
       rerenderComputer();
       return true;
     }

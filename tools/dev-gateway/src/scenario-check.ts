@@ -53,6 +53,7 @@ import {
 import { FILES_BOT, PICTURE_PATH, trailMap } from "./seed-files.ts";
 import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
 import { OFFERED_TOOLS_PATH, QUIET_TURNS_PATH } from "./fake-provider.ts";
+import { COMPUTER_CHECKS } from "./computer-checks.ts";
 
 type JsonRecord = Record<string, unknown>;
 const rec = (value: unknown): JsonRecord =>
@@ -467,7 +468,16 @@ export async function drain(
   timeoutMs = 60_000,
   settleMs = DRAIN_SETTLE_MS,
 ): Promise<boolean> {
-  const op = h.op("plain");
+  return drainSessions(h.op("plain"), keys, timeoutMs, settleMs);
+}
+
+/** `drain` through one operator: the computer checks drain their tasks with it too. */
+export async function drainSessions(
+  op: OperatorSession,
+  keys: Iterable<string>,
+  timeoutMs = 60_000,
+  settleMs = DRAIN_SETTLE_MS,
+): Promise<boolean> {
   const all = [...keys];
   const deadline = Date.now() + timeoutMs;
   for (const key of all) await op.request("chat.abort", { sessionKey: key }).catch(() => {});
@@ -3889,7 +3899,10 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
 
 /** Directives of the scripted model that no scenario check claims to send. */
 export function uncoveredDirectives(): string[] {
-  const covered = new Set(SCENARIO_CHECKS.flatMap((check) => check.covers));
+  // The browser directives are sent by the computer checks, on an instance of their own.
+  const covered = new Set(
+    [...SCENARIO_CHECKS, ...COMPUTER_CHECKS].flatMap((check) => check.covers),
+  );
   return SCENARIOS.map((s) => `#${s.name}`).filter((directive) => !covered.has(directive));
 }
 

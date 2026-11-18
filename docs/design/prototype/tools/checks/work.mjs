@@ -514,9 +514,14 @@ await p.waitForTimeout(1000);
 check("F-145 granted: the question's own answers and Give back control", await q(p, () =>
   [...document.querySelectorAll(".control-bar .button")].map((x) => x.textContent).join() === "I'm done,Skip,Give back control" && document.querySelector(".screen-frame").dataset.control === "true"));
 check("the bar says which input reaches the page", await q(p, () => document.querySelector(".control-note").textContent.startsWith("Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet.")));
-check("M4 the bar promises only the browser tool's block and names the ways it leaves open", await q(p, () => {
+check("M4 the bar promises only that new browser actions are paused, says earlier work can still act, and names the ways it leaves open", await q(p, () => {
   const t = document.querySelector(".control-note").textContent;
-  return t.includes("Juniper's browser tool can't act here, in any of Juniper's tasks") && t.includes("Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands") && !t.includes("can't use its browser in any task");
+  return t.includes("Juniper's new browser actions are paused, in every one of Juniper's tasks; something it already started can still change this page") && t.includes("Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands") && !/can't act|can't use its browser/.test(t);
+}));
+check("R2 the bar never shows You have control by itself: its second line says new actions are paused and earlier work can still change the page", await q(p, () => {
+  const bar = document.querySelector(".control-bar");
+  return bar.textContent.startsWith("You have control") &&
+    bar.querySelector(".control-paused").textContent === "Juniper's new browser actions are paused. Something it already started can still change this page.";
 }));
 check("taking control is an event line in the conversation", await q(p, () => [...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You took control of Juniper's browser"))));
 await p.focus(".screen-frame");
@@ -610,7 +615,7 @@ await p.waitForTimeout(1100);
 check("M7 a drop during the release retires the sequence: no release assumed, no answer sent", await q(p, () =>
   window.CT.work.computer.control === "maybeheld" && document.querySelector("#q-library").dataset.state === "pending" &&
   ![...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You gave control back"))));
-check("M7 …and says control may remain until it expires", await q(p, () => document.querySelector(".computer-held").textContent === "The connection dropped. Control of Juniper's browser may remain with this device until it expires."));
+check("M7 …and says input has stopped and the gateway ends control when it observes the close", await q(p, () => document.querySelector(".computer-held").textContent === "The connection dropped. Input has stopped. The gateway ends control when it observes this connection close; check its state after reconnecting."));
 await q(p, () => window.app.setConnection("connected"));
 check("M7 on reconnect it reads the question and the browser again before offering anything", await q(p, () =>
   window.CT.work.computer.control === "checking" && !document.querySelector(".computer-banner") && !document.querySelector('#panel-computer [data-cmp="take"]')));
@@ -623,9 +628,9 @@ await p.close();
 p = await open(comp + "&computer=control");
 await p.waitForTimeout(50);
 await q(p, () => window.app.setConnection("reconnecting"));
-check("M7 a drop while holding: the view ends and the tab says control may remain until it expires", await q(p, () =>
+check("M7 a drop while holding: the view ends and the tab says the gateway ends control when it observes the close", await q(p, () =>
   !document.querySelector(".screen-view") && window.CT.work.computer.control === "maybeheld" && !document.querySelector('#panel-computer [data-cmp="take"]') &&
-  document.querySelector(".computer-held").textContent.startsWith("The connection dropped. Control of Juniper's browser may remain")));
+  document.querySelector(".computer-held").textContent.startsWith("The connection dropped. Input has stopped.")));
 await p.close();
 
 // The question closes during the release.
@@ -671,7 +676,16 @@ await p.click('[data-cmp="open"]');
 await p.click('.screen-view [data-cmp="take"]');
 await p.click('.screen-view [data-cmp="cancel-take"]');
 await p.waitForTimeout(1100);
-check("M6 Cancel while waiting: a grant that arrives later is given back at once and never shown", await q(p, () =>
+check("M6 Cancel while waiting withdraws the take with its generation: no grant, and nothing claims control", await q(p, () =>
+  window.CT.work.computer.control !== "granted" && window.CT.work.computer.withdrawals.join() === "g1" && window.CT.work.computer.lateReleased === 0 &&
+  !/You have control/.test(document.body.textContent) && ![...document.querySelectorAll("#transcript .event-line")].some((e) => e.textContent.startsWith("You took control"))));
+await p.close();
+p = await open(comp + "&computer=watching&takerace=grant", { width: 1100, height: 760 });
+await p.click('[data-cmp="open"]');
+await p.click('.screen-view [data-cmp="take"]');
+await p.click('.screen-view [data-cmp="cancel-take"]');
+await p.waitForTimeout(1100);
+check("M6 a grant that wins the race against the withdrawal is given back at once and never shown", await q(p, () =>
   window.CT.work.computer.control !== "granted" && window.CT.work.computer.lateReleased === 1 && !/You have control/.test(document.body.textContent)));
 await p.close();
 p = await open(comp + "&computer=watching", { width: 1100, height: 760 });
@@ -681,13 +695,15 @@ await p.click('.screen-view [data-cmp="close-full"]');
 await p.click("#tab-files");
 await p.waitForTimeout(1100);
 await p.click("#tab-computer");
-check("M6 leaving while waiting: the late grant is given back, and nothing claims control", await q(p, () =>
-  window.CT.work.computer.control !== "granted" && window.CT.work.computer.lateReleased === 1 && !document.querySelector(".screen > svg") && !/You have control/.test(document.querySelector("#panel-computer").textContent)));
+check("M6 leaving while waiting withdraws the take, and nothing claims control", await q(p, () =>
+  window.CT.work.computer.control !== "granted" && window.CT.work.computer.withdrawals.length === 1 && window.CT.work.computer.lateReleased === 0 && !document.querySelector(".screen > svg") && !/You have control/.test(document.querySelector("#panel-computer").textContent)));
 await p.close();
 p = await open(comp + "&computer=control", { width: 1100, height: 760 });
 await p.waitForTimeout(50);
 await p.click('.screen-view [data-cmp="close-full"]');
 check("M6 closing the full view keeps control, with Give back control in the tile", await q(p, () => window.CT.work.computer.control === "granted" && !!document.querySelector('#panel-computer [data-cmp="release"]')));
+check("R2 the tile in control says the same second line beside You have control", await q(p, () =>
+  document.querySelector("#panel-computer .screen-caption .control-paused")?.textContent === "Juniper's new browser actions are paused. Something it already started can still change this page."));
 await p.click("#tab-files");
 await p.waitForTimeout(500);
 check("M6 leaving the tab while in control gives control back first", await q(p, () =>
@@ -708,6 +724,7 @@ await p.close();
 
 for (const [m, words, name] of [
   ["busy", "Juniper is still acting in this browser. Try again in a moment.", "still acting"],
+  ["unsettled", "Something Juniper started in this browser hasn't finished yet, such as a page still loading or a download. Try again in a moment.", "the bot's work hasn't settled"],
   ["conflict", "Someone on another device has control of Juniper's browser.", "someone else has control"],
 ]) {
   p = await open(comp + `&computer=${m}`);
@@ -715,6 +732,10 @@ for (const [m, words, name] of [
   await p.click('.screen-view [data-cmp="take"]');
   await p.waitForTimeout(1000);
   check(`F-142 take refused: ${name}`, (await q(p, () => document.querySelector(".control-bar").textContent)).startsWith(words));
+  if (m !== "conflict") {
+    check(`R2 take refused (${name}) offers to try again, and claims no control`, await q(p, () =>
+      !!document.querySelector('.control-bar [data-cmp="take"]') && !/You have control/.test(document.querySelector(".control-bar").textContent)));
+  }
   await p.close();
 }
 p = await open(comp + "&computer=control");
@@ -724,7 +745,17 @@ check("M7 an expired event for this lease: Your control ended, with the cause it
 await p.close();
 p = await open(comp + "&computer=watching");
 await work(p, "tab-closed");
-check("when the bot closes the tab, the tile says so", await q(p, () => document.querySelector('.screen[data-state="ended"]').textContent.startsWith("Juniper closed this tab.")));
+check("when the tab is closed, the tile says so without saying who closed it", await q(p, () => {
+  const t = document.querySelector('.screen[data-state="ended"]').textContent;
+  return t.startsWith("This tab was closed.") && !t.includes("Juniper closed");
+}));
+await p.close();
+p = await open(comp + "&computer=watching");
+await work(p, "browser-gone");
+check("R2 when the browser stops answering (1011), the tile says that, not that the tab closed", await q(p, () => {
+  const t = document.querySelector('.screen[data-state="ended"]').textContent;
+  return t.startsWith("The view ended. Juniper's browser stopped answering.") && !/closed/.test(t);
+}));
 await p.close();
 
 // When watching is not available.
@@ -837,6 +868,17 @@ await p.click('[data-cmp="zoom-in"]');
 check("M10 Zoom in enlarges the picture on the device, sending nothing", await q(p, () => document.querySelector(".screen-view .screen-frame").getBoundingClientRect().width > 600 && window.CT.work.computer.typed === ""));
 check("M10 zoom, keyboard and dock controls have 44-point hit areas or more", await q(p, () =>
   [...document.querySelectorAll(".zoom-controls button, .keyboard-button, .control-dock .button")].every((x) => x.getBoundingClientRect().height >= 44 && x.getBoundingClientRect().width >= 44)));
+check("R3 phone, in control: the dock says You have control with its second line together, full width, above its buttons, all on screen", await q(p, () => {
+  const dock = document.querySelector(".control-dock");
+  const title = dock.querySelector(".control-bar > strong").getBoundingClientRect();
+  const line = dock.querySelector(".control-paused");
+  const paused = line.getBoundingClientRect();
+  const first = dock.querySelector(".button").getBoundingClientRect();
+  return dock.querySelector(".control-bar > strong").textContent === "You have control" && title.height > 0 &&
+    line.textContent === "Juniper's new browser actions are paused. Something it already started can still change this page." &&
+    paused.top >= title.bottom && paused.top - title.bottom < 16 && paused.bottom <= first.top &&
+    paused.width > 300 && paused.bottom <= innerHeight;
+}));
 check("M10 the dock: the first answer full width, then Skip and Give back control", await q(p, () => {
   const buttons = [...document.querySelectorAll(".control-dock .button")];
   return buttons.map((x) => x.textContent).join() === "I'm done,Skip,Give back control" && buttons[0].getBoundingClientRect().width > buttons[1].getBoundingClientRect().width;
