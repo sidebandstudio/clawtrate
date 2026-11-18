@@ -1,7 +1,7 @@
 // The cards in a task's transcript: approvals, questions and the Messaged
 // cards. The transcript mounts them through CardScope, CardSlot and
 // TrailingCards; the shell supplies OpenTaskContext.
-export { CardThoughtContext, OpenTaskContext, useStepHandover, type OpenTask } from "./context.tsx";
+export { CardThoughtContext, OpenTaskContext, type OpenTask } from "./context.tsx";
 export {
   CardFor,
   CardScope,
@@ -15,7 +15,6 @@ export {
 } from "./TranscriptCards.tsx";
 export {
   cardDomId,
-  codingCalls,
   oldestPending,
   placeCards,
   type CardPlacement,

@@ -20,24 +20,20 @@ import { ApprovalCardView } from "./ApprovalCard.tsx";
 import {
   CardEnvContext,
   OpenTaskContext,
-  StepHandoverContext,
   useCardEnv,
   type CardEnv,
-  type StepHandover,
-  type StepState,
 } from "./context.tsx";
 import {
   BotMessageCardView,
   IncomingLine,
   ReceivedCardView,
-  T3CodeCardView,
   goBack,
   takeArrival,
   takeReturnPoint,
 } from "./MessagedCard.tsx";
 import { botMessageKey, mayDispatch, nameOf, sentVerb } from "./model.ts";
 import { Announcer } from "./parts.tsx";
-import { cardDomId, codingCalls, placeCards, type CardRef } from "./placement.ts";
+import { cardDomId, placeCards, type CardRef } from "./placement.ts";
 import { QuestionCardView } from "./QuestionCard.tsx";
 import { useCards } from "./useCards.ts";
 import "./cards.css";
@@ -48,9 +44,6 @@ type Scope = {
 };
 
 const ScopeContext = createContext<Scope | null>(null);
-
-/** Ordinary steps whose state a task's view remembers, for the cards they may become. */
-const MAX_STEP_STATES = 64;
 
 /** The cards of one open task. Mounted once per task, around its transcript. */
 export function CardScope({
@@ -85,26 +78,6 @@ export function CardScope({
       ),
     [transcript, cards.selected],
   );
-  // Ordinary steps' states, for the card a step becomes; the newest `MAX_STEP_STATES` kept.
-  const stepStates = useRef(new Map<string, StepState>());
-  const { selected, settledRaw } = cards;
-  const handover: StepHandover = useMemo(() => {
-    const drawn = new Set(
-      codingCalls(selected)
-        .filter((card) => card.toolCallId !== null && settledRaw(card.stepId))
-        .map((card) => card.toolCallId!),
-    );
-    return {
-      isCard: (callId) => drawn.has(callId),
-      note: (callId, value) => {
-        const states = stepStates.current;
-        states.delete(callId);
-        states.set(callId, value);
-        while (states.size > MAX_STEP_STATES) states.delete(states.keys().next().value as string);
-      },
-      stateOf: (callId) => stepStates.current.get(callId),
-    };
-  }, [selected, settledRaw]);
   const runOf = useCallback(
     (runId: string | null): Run | undefined =>
       runId ? transcript.runs.find((run) => run.id === runId) : undefined,
@@ -218,9 +191,7 @@ export function CardScope({
   return (
     <ScopeContext.Provider value={{ placement, cards }}>
       <CardEnvContext.Provider value={env}>
-        <StepHandoverContext.Provider value={handover}>
-          <Announcer>{children}</Announcer>
-        </StepHandoverContext.Provider>
+        <Announcer>{children}</Announcer>
       </CardEnvContext.Provider>
     </ScopeContext.Provider>
   );
@@ -280,11 +251,6 @@ export function CardFor({ cardRef }: { cardRef: CardRef }) {
           partial={partialHistory(env.transcript)}
         />
       );
-    }
-    case "t3-code": {
-      const card = codingCalls(cards.selected).find((each) => each.id === cardRef.id);
-      if (!card || !cards.settledRaw(card.stepId)) return null;
-      return <T3CodeCardView card={card} read={cards.rawState(card.stepId)} />;
     }
   }
 }

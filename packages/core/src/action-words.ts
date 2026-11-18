@@ -506,3 +506,82 @@ export const LABELS = {
   noReason: "the gateway gave no reason",
   fromHistory: "Rebuilt from the gateway's history, which did not keep this action's details.",
 } as const;
+
+/** T3 Code's own words (conversation.md, section 11): its lines, its thread's states and its items. */
+export const T3_WORDS = {
+  /** Each operation's verb forms, before the object "T3 Code". */
+  verbs: {
+    t3_thread_launch: v("Messaging", "Messaged", "Couldn't message"),
+    t3_thread_send: v("Following up with", "Followed up with", "Couldn't follow up with"),
+    t3_thread_read: v("Reading the thread in", "Read the thread in", "Couldn't read the thread in"),
+    t3_thread_wait: v("Waiting for", "Waited for", "Couldn't wait for"),
+    t3_thread_interrupt: v("Asking", "Asked", "Couldn't ask"),
+    t3_project_list: v("Looking through", "Looked through", "Couldn't look through"),
+    t3_thread_list: v("Looking through", "Looked through", "Couldn't look through"),
+  } as Record<string, VerbForms>,
+  /** What each operation acts on, after the verb. */
+  objects: {
+    t3_thread_launch: "T3 Code",
+    t3_thread_send: "T3 Code",
+    t3_thread_read: "T3 Code",
+    t3_thread_wait: "T3 Code",
+    t3_thread_interrupt: "T3 Code to stop",
+    t3_project_list: "T3 Code projects",
+    t3_thread_list: "T3 Code threads",
+  } as Record<string, string>,
+  /** Listings fold with each other: "Looked through T3 Code 2 times". */
+  listingPlural: (n: number) => ["Looked through", `T3 Code · ${n} times`] as const,
+  listingNeutral: "T3 Code listing",
+  projects: (n: number) => (n === 1 ? "1 project" : `${n} projects`),
+  threads: (n: number) => (n === 1 ? "1 thread" : `${n} threads`),
+  /** Each call's own states (11, "Each call's state"). */
+  deliveryUnknown: "Delivery unknown",
+  notSent: "Not sent",
+  checking: "Checking",
+  /** T3 Code's reported statuses in plain words (11.2, step 2). */
+  status: {
+    preparing: "Starting",
+    queued: "Starting",
+    starting: "Starting",
+    running: "Running",
+    waiting: "Waiting in T3 Code",
+    completed: "Completed",
+    interrupted: "Interrupted",
+    failed: "Failed in T3 Code",
+    cancelled: "Cancelled",
+    rolled_back: "Rolled back",
+    idle: "Idle",
+    interrupt_requested: "Stop requested",
+    no_active_run: "Idle",
+  } as Record<string, string>,
+  /** A follow-up's delivery in words (11.3). */
+  delivery: {
+    started: "Started a new run",
+    queued: "Queued",
+    steered: "Steered the running turn",
+    restarted: "Restarted the turn",
+  } as Record<string, string>,
+  /** The head of each item of an opened thread card (11.3). */
+  itemHead: {
+    t3_thread_launch: (bot: string) => `${bot} started the thread`,
+    t3_thread_send: (bot: string) => `${bot} followed up`,
+    t3_thread_read: (bot: string) => `${bot} read the thread`,
+    t3_thread_wait: (bot: string) => `${bot} waited for a result`,
+    t3_thread_interrupt: (bot: string) => `${bot} asked T3 Code to stop`,
+  } as Record<string, (bot: string) => string>,
+  /** How much a read read (11.3): two dimensions, pages and an item's text. */
+  readToEnd: "Read to the end",
+  firstPage: "First page only: the reply may continue",
+  replyCut: "Part of the reply only: its text was cut, and the rest was not read",
+  otherCut: "Part of the run only: an item's text was cut, and the rest was not read",
+  storedCut: "The stored result was cut: how much was read is not known here.",
+  noReplyOnPage: "No reply of the latest run on this page.",
+  waitEndedFirst: "The wait ended before the run finished",
+  resultRun: (run: string) => `Its result is in run ${run}`,
+  notFinished: "This shows the call was made. It does not show that the work is finished.",
+  workMayContinue: "The call was made. Work handed to T3 Code may continue there.",
+  reportedAt: (status: string, at: string | null) =>
+    at ? `T3 Code reported ${status} at ${at}.` : `T3 Code reported ${status}.`,
+  beforeRecord: "This thread was started before this conversation's record begins.",
+  calls: (n: number) => `${n} calls`,
+} as const;

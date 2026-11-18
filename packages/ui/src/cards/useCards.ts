@@ -6,7 +6,6 @@
 import {
   BOT_MESSAGE_TOOL,
   selectMessageCards,
-  T3_CODE_TOOLS,
   type ClawtrateBridge,
   type SelectedCards,
   type Step,
@@ -57,26 +56,7 @@ type Read =
   | { status: "cut"; raw: StepRaw; reason: string }
   | { status: "failed" };
 
-/**
- * The engine's card selection for a task, and which calls are T3 Code. That
- * is decided per call, never per server, and the call's own result decides:
- * a call is T3 Code when its result names its own tool (`details.mcpTool`) as
- * one of T3 Code's published tools (`T3_CODE_TOOLS`), whatever the server is
- * called. Nothing makes a server as a whole T3 Code.
- *
- * Before its result, the gateway's map from effective names to tools
- * (`mcpTools`, from `tools.effective`) is the evidence: a call whose effective
- * name maps to one of those tools shows as the T3 Code card from its start.
- * The map is rebuilt from the gateway's current catalog, so it can name
- * another tool than the running attempt had; the result overrules it, and a
- * call whose result names another tool is an ordinary step again. A result
- * that does not name its tool (history keeps no `details` for tool-server
- * results; a denial carries none) leaves the map's word for Failed, Not sent
- * or Delivery unknown, but the map alone never makes a call Call made: such
- * a call is an ordinary step. Nothing is read out of the effective name itself (`<safe
- * server>__<safe tool>`, cut to 64 characters and given a `-2` suffix on a
- * collision, `buildSafeToolName` in OpenClaw 2026.10.6).
- */
+/** The engine's card selection for a task: its Messaged cards and incoming messages (section 10). */
 export function selectCards(
   transcript: Pick<Transcript, "runs" | "approvals" | "linkedRuns" | "interSession"> & {
     mcpTools?: Transcript["mcpTools"];
@@ -84,7 +64,7 @@ export function selectCards(
   rawOf: (step: Step) => StepRaw | null,
   previous?: SelectedCards,
 ): SelectedCards {
-  const selected = selectMessageCards(
+  return selectMessageCards(
     {
       runs: transcript.runs,
       approvals: transcript.approvals,
@@ -97,27 +77,6 @@ export function selectCards(
       ...(previous ? { previous } : {}),
     },
   );
-  const steps = new Map(transcript.runs.flatMap((run) => run.steps.map((step) => [step.id, step])));
-  const isT3 = (tool: string) => T3_CODE_TOOLS.includes(tool);
-  const mcpCalls = selected.mcpCalls.map((card) => {
-    const step = steps.get(card.stepId);
-    const raw = step ? rawOf(step) : null;
-    const named = resultTool(raw);
-    // A result that does not name its tool leaves the map's word, but never for Call made.
-    const t3 = named ? isT3(named.tool) : isT3(card.tool) && card.state !== "returned";
-    return t3 === card.codingAgent ? card : { ...card, codingAgent: t3 };
-  });
-  return { ...selected, mcpCalls };
-}
-
-/** The server and tool a call's result names (`details.mcpServer`, `details.mcpTool`), if it does. */
-function resultTool(raw: StepRaw | null): { server: string; tool: string } | null {
-  const result = raw?.result as Record<string, unknown> | null | undefined;
-  const body = (result?.result ?? result) as Record<string, unknown> | null | undefined;
-  const details = body?.details as Record<string, unknown> | null | undefined;
-  return typeof details?.mcpServer === "string" && typeof details.mcpTool === "string"
-    ? { server: details.mcpServer, tool: details.mcpTool }
-    : null;
 }
 
 /** The cards' states, to tell when the remembered selection needs replacing. */

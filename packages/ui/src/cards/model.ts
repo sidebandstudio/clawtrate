@@ -1,6 +1,6 @@
 // What each card says, decided from the engine's state alone. These functions
-// take the engine's records (`ApprovalCard`, `QuestionCard`, `BotMessageCard`,
-// `McpCallCard`) and return words and flags; the components only draw them.
+// take the engine's records (`ApprovalCard`, `QuestionCard`, `BotMessageCard`)
+// and return words and flags; the components only draw them.
 // Nothing here infers more than a record establishes (conversation.md
 // sections 10 to 13).
 
@@ -9,7 +9,6 @@ import type {
   ApprovalDecision,
   Bot,
   BotMessageCard,
-  McpCallCard,
   QuestionCard,
   QuestionItem,
   Run,
@@ -584,28 +583,6 @@ export function botMessageKey(card: BotMessageCard): MessagedKey {
   }
 }
 
-/** The design's state for a "Messaged T3 Code" card, from the engine's. */
-export function mcpKey(
-  card: McpCallCard,
-  approvals: ApprovalCard[],
-  waiting: boolean,
-): MessagedKey {
-  switch (card.state) {
-    case "started":
-      return waiting && approvalOf(card.approvalId, approvals)?.status === "pending"
-        ? "approval"
-        : "call-started";
-    case "returned":
-      return "call-made";
-    case "unknown":
-      return "delivery-unknown";
-    case "failed":
-      return "failed";
-    case "not-sent":
-      return "not-sent";
-  }
-}
-
 function senderStopped(run: Pick<Run, "state"> | undefined): boolean {
   return run?.state === "stopped" || run?.state === "stopping" || run?.state === "cancelled";
 }
@@ -660,77 +637,6 @@ export function botMessageNote(
     default:
       return "";
   }
-}
-
-/** What the open T3 Code card says came back. */
-export function mcpNote(
-  key: MessagedKey,
-  card: McpCallCard,
-  sender: string,
-  approvals: ApprovalCard[],
-  run: Pick<Run, "state"> | undefined,
-): string {
-  switch (key) {
-    case "call-started":
-      return `${sender} began this call. Nothing yet shows that it was made, and nothing more is reported until it returns.`;
-    case "approval":
-      return "This call waits for your approval. Nothing has been sent.";
-    case "delivery-unknown":
-      return senderStopped(run)
-        ? `${sender} was stopped before the call returned. The gateway cannot say whether T3 Code received it.`
-        : "The call ended without a result that says whether T3 Code received it.";
-    case "failed":
-      return "The call failed.";
-    case "not-sent":
-      return notSentLine(approvalOf(card.approvalId, approvals), sender, run);
-    default:
-      return "";
-  }
-}
-
-/** Target fields a T3 Code call's arguments carry, as chips: only those present. */
-export function targetChips(args: unknown): Row[] {
-  const a = record(args);
-  if (!a) return [];
-  const out: Row[] = [];
-  const pick = (label: string, ...keys: string[]) => {
-    for (const key of keys) {
-      const value = a[key];
-      if (typeof value === "string" && value.trim()) return out.push({ label, value });
-      if (typeof value === "number") return out.push({ label, value: String(value) });
-    }
-    return undefined;
-  };
-  pick("Project", "project", "projectId", "projectName");
-  pick("Thread", "thread", "threadId", "threadTitle");
-  if (!pick("Branch", "branch")) {
-    // T3 Code takes the branch inside `workspaceStrategy`.
-    const strategy = record(a.workspaceStrategy);
-    const branch = strategy?.branch;
-    if (typeof branch === "string" && branch.trim()) out.push({ label: "Branch", value: branch });
-  }
-  return out;
-}
-
-/**
- * The link a T3 Code call's result carries: a `resource_link` in its content,
- * or the `link` its structured result names. Never fetched; opened only when chosen.
- */
-export function resultLink(card: McpCallCard): { uri: string; title: string | null } | null {
-  if (card.links[0]) return card.links[0];
-  const link = record(card.structuredContent)?.link;
-  return typeof link === "string" && /^https?:\/\//.test(link) ? { uri: link, title: null } : null;
-}
-
-/** A T3 Code call's sent text: its `message`, or the first text argument it carries. */
-export function sentText(card: McpCallCard): string | null {
-  if (card.text) return card.text;
-  const a = record(card.args);
-  for (const key of ["text", "prompt", "instructions", "task"]) {
-    const value = a?.[key];
-    if (typeof value === "string" && value.trim()) return value;
-  }
-  return null;
 }
 
 /** Who a "Messaged <bot>" card names, from the recipient the call or its result gave. */

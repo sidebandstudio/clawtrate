@@ -50,3 +50,5 @@ export {
   type SendMode,
   type SendOptions,
 } from "./client.ts";
+export * from "./t3-facts.ts";
+export * from "./t3-code.ts";

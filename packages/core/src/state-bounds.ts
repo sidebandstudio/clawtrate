@@ -54,6 +54,7 @@ import type {
 import { MAX_STEP_PATH_CHARS, MAX_STEP_PATHS } from "./file-paths.ts";
 import type { Digest } from "./bounds.ts";
 import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
+import { MAX_T3_FACTS_CHARS } from "./t3-facts.ts";
 import type {
   Bot,
   ClawtrateState,
@@ -230,6 +231,8 @@ export const STEP: Bound = flagged<Step>()({
   rowTimes: FLAG,
   omittedBefore: NUMBER,
   resultCut: FLAG,
+  // What a T3 Code card reads of a tool-server call, projected to fit (`t3-facts.ts`).
+  t3: json(MAX_T3_FACTS_CHARS),
   gatewayTitle: text(MAX_NAME_CHARS),
   // A path is an id: never cut, since a cut path would name another file.
   files: object<StepFiles>()({
@@ -442,6 +445,7 @@ const block = union<TranscriptBlock, "kind">("kind")({
     argumentsText: text(MAX_ITEM_TOOL_CHARS),
     argumentsAbsent: FLAG,
     result: toolResult,
+    t3: json(MAX_T3_FACTS_CHARS),
   }),
 });
 const item = flagged<TranscriptItem>()({

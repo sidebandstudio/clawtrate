@@ -18,6 +18,10 @@ import {
   type RetentionAccount,
   runLineOf,
   segmentFromStep,
+  placeT3,
+  t3CallOf,
+  type T3Call,
+  type T3Sequence,
   type FeedEntry,
   type FeedGroup,
   type Preamble,
@@ -34,16 +38,16 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import {
   CardFor,
   CardThoughtContext,
   PlacedCardsContext,
-  codingCalls,
   refKey,
   useScopeCards,
-  useStepHandover,
   type CardRef,
 } from "../cards/index.ts";
 import { fullDate } from "../format.ts";
@@ -56,6 +60,7 @@ import {
   actionDomId,
   type ActionEnv,
 } from "./ActionCards.tsx";
+import { T3FeedContext, T3ThreadCard, type T3Feed, type T3ThreadInfo } from "./T3Thread.tsx";
 
 /** What a non-action entry of a record is. */
 export type FeedRef =
@@ -63,6 +68,10 @@ export type FeedRef =
   | { t: "preamble"; preamble: Preamble }
   | { t: "reply"; run: Run }
   | { t: "card"; ref: CardRef }
+  /** A T3 Code thread's card, at its first call in the record (section 11). */
+  | { t: "t3"; head: string; call: ActionCall }
+  /** A call that joined its thread's card directly: drawn there, not here (11.4). */
+  | { t: "t3-joined"; head: string; call: ActionCall }
   /** Actions the run reported that are not kept here, at their place. */
   | { t: "gap"; count: number };
 
@@ -75,6 +84,8 @@ type Feeds = {
   runs: Map<string, { groups: Groups; revision: number }>;
   /** Each run's account of what is drawn (`retentionAccount`), and its drawn calls the engine holds. */
   accounts: Map<string, { account: RetentionAccount; calls: ActionCall[] }>;
+  /** The task's T3 Code threads and where each of their calls went. */
+  t3: T3Feed;
 };
 
 const FeedsContext = createContext<Feeds | null>(null);
@@ -192,6 +203,11 @@ class Tally {
     if (run.at.has(callId)) return;
     run.ids.push(callId);
     run.at.set(callId, { entry, list });
+  }
+  /** The entry that draws a call, replaced by another: a T3 Code call drawn as its thread's card. */
+  retarget(from: FeedEntry<FeedRef>, to: FeedEntry<FeedRef>) {
+    for (const run of this.runs.values())
+      for (const at of run.at.values()) if (at.entry === from) at.entry = to;
   }
   /** The entry that draws a call of a run. */
   entryOf(runId: string, callId: string): FeedEntry<FeedRef> | undefined {
@@ -417,13 +433,13 @@ export function ActionScope({
     [given, mcpTools, builtinTools, workspaceRoot],
   );
   const scope = useScopeCards();
-  const handover = useStepHandover();
   const { selected, rawState } = scope.cards;
+  // Which T3 Code calls that were seen running keep their line when their result comes (11.4).
+  const [joins] = useState(() => new LiveJoins());
   const { placement } = scope;
 
   const feeds = useMemo(() => {
     const index = stepIndex(transcript.runs);
-    const t3 = codingCalls(selected);
     const taken = new Set<string>();
     const cards: CardsFor = {
       taken,
@@ -436,9 +452,6 @@ export function ActionScope({
       card: (callId) => {
         const message = selected.botMessages.find((card) => card.toolCallId === callId);
         if (message) return { kind: "bot-message", id: message.id };
-        // A T3 Code call is its card once the card is drawn, and nothing else.
-        const coding = t3.find((card) => card.toolCallId === callId);
-        if (coding && handover?.isCard(callId)) return { kind: "t3-code", id: coding.id };
         return null;
       },
       approvals: (callId) =>
@@ -506,6 +519,14 @@ export function ActionScope({
         revision: run.reasoningRevision,
       });
     }
+    // T3 Code's calls, across the task's whole record: each thread's card at its first call, the
+    // calls that join it directly, and lines of their own (section 11).
+    const t3 = t3Pass(
+      [...built.map((each) => each.entries), ...builtRuns.map((each) => each.entries)],
+      ctx,
+      joins,
+      tally,
+    );
     // One account per run, of what is drawn against what the gateway reported: its gap lines
     // and its run line's counts, after the live record and history are combined.
     const accounts = new Map<string, { account: RetentionAccount; calls: ActionCall[] }>();
@@ -518,6 +539,8 @@ export function ActionScope({
       const drawnCalls = ids.flatMap((id) => {
         const entry = tally.entryOf(run.id, id);
         if (entry?.type === "action") return [entry.call];
+        if (entry?.type === "card" && (entry.ref.t === "t3" || entry.ref.t === "t3-joined"))
+          return [entry.ref.call];
         const found = index.get(id);
         return found ? [callFromStep(found.step, found.run)] : [];
       });
@@ -529,8 +552,13 @@ export function ActionScope({
     const runs = new Map<string, { groups: Groups; revision: number }>();
     for (const each of builtRuns)
       runs.set(each.id, { groups: groupFeed(each.entries, ctx), revision: each.revision });
-    return { items, runs, accounts } satisfies Feeds;
-  }, [transcript, engineRuns, selected, handover, placement, ctx]);
+    // The reasoning that led to a call that joined a card is drawn in its item there (7.5).
+    for (const { groups } of [...items.values(), ...runs.values()])
+      for (const group of groups)
+        if (group.type === "card" && group.ref.t === "t3-joined" && group.thought)
+          t3.thoughts.set(group.ref.call.id, group.thought);
+    return { items, runs, accounts, t3 } satisfies Feeds;
+  }, [transcript, engineRuns, selected, placement, ctx, joins]);
 
   const placed = useMemo(() => {
     const keys = new Set<string>();
@@ -569,7 +597,11 @@ export function ActionScope({
   return (
     <ActionEnvContext.Provider value={env}>
       <PlacedCardsContext.Provider value={placed}>
-        <FeedsContext.Provider value={feeds}>{children}</FeedsContext.Provider>
+        <FeedsContext.Provider value={feeds}>
+          <T3FeedContext.Provider value={feeds.t3}>
+            <ClosedContext.Provider value={joins.closed}>{children}</ClosedContext.Provider>
+          </T3FeedContext.Provider>
+        </FeedsContext.Provider>
       </PlacedCardsContext.Provider>
     </ActionEnvContext.Provider>
   );
@@ -577,17 +609,20 @@ export function ActionScope({
 
 /**
  * When the control that held focus is replaced (a card becoming a fold, a
- * fold splitting), focus moves to the same control in what replaced it, or
- * to the replacement's line (section 2, Input). Controls are found by their
- * call and their own name, never by position.
+ * fold splitting, a call becoming its T3 Code thread's card or the other way),
+ * focus moves to the same control in what replaced it, or to the
+ * replacement's line (section 2, Input; 11.4). Controls are found by their
+ * call and their own name, never by position: a thread card's item is its
+ * call's holder, as that call's own card is.
  */
 function useKeepFocus() {
   const last = useRef<{ element: HTMLElement; call: string; control: string } | null>(null);
   useEffect(() => {
     const onFocus = (event: FocusEvent) => {
       const element = event.target as HTMLElement;
-      const holder = element.closest<HTMLElement>("[data-call]");
+      const holder = element.closest<HTMLElement>("[data-item-call], [data-call]");
       if (!holder) return;
+      const call = holder.dataset.itemCall ?? holder.dataset.call!;
       const control =
         element.dataset.viewButton !== undefined
           ? `[data-view-button="${element.dataset.viewButton}"]`
@@ -596,7 +631,7 @@ function useKeepFocus() {
             : element.getAttribute("aria-label")
               ? `[aria-label="${CSS.escape(element.getAttribute("aria-label")!)}"]`
               : ":scope > summary";
-      last.current = { element, call: holder.dataset.call!, control };
+      last.current = { element, call, control };
     };
     document.addEventListener("focusin", onFocus);
     return () => document.removeEventListener("focusin", onFocus);
@@ -606,9 +641,14 @@ function useKeepFocus() {
     if (!held || held.element.isConnected) return;
     const active = document.activeElement;
     if (active && active !== document.body) return;
+    const id = CSS.escape(held.call);
+    // The line's heading is the card's; a control inside is its item's when the call is an item.
+    const card = document.querySelector<HTMLElement>(`[data-call="${id}"]`);
+    const item = document.querySelector<HTMLElement>(`[data-item-call="${id}"]`);
     const holder =
-      document.querySelector<HTMLElement>(`[data-call="${CSS.escape(held.call)}"]`) ??
-      document.querySelector<HTMLElement>(`[data-first="${CSS.escape(held.call)}"]`);
+      (held.control === ":scope > summary" ? card : (item ?? card)) ??
+      item ??
+      document.querySelector<HTMLElement>(`[data-first="${id}"]`);
     if (!holder) return;
     const target =
       holder.querySelector<HTMLElement>(
@@ -678,6 +718,10 @@ function GroupView({
               <CardFor cardRef={ref.ref} />
             </CardThoughtContext.Provider>
           );
+        case "t3":
+          return <T3ThreadCard headId={ref.head} thought={thought} />;
+        case "t3-joined":
+          return <ClosingLine callId={ref.call.id} />;
         case "text":
           return (
             <Bubble title={ref.title}>
@@ -766,6 +810,134 @@ export function RunLine({ run }: { run: Run }) {
 /** The calls of a run, for the status line's phrase. */
 export function runCalls(run: Run) {
   return run.steps.filter((s) => s.kind === "tool").map((s) => callFromStep(s, run));
+}
+
+// T3 Code's calls across the record -----------------------------------------------------
+
+/** The most held-line decisions a task's view keeps; the oldest give way. */
+const MAX_JOIN_DECISIONS = 128;
+
+/**
+ * How the reader held each T3 Code call's line when its result came (11.4): a
+ * call seen running whose line was open, held focus, or was not at the end the
+ * reader follows keeps its line; one that was not closes up into its thread's
+ * card. A call never seen running (read from history) follows the record alone.
+ */
+class LiveJoins {
+  private readonly decided = new Map<string, "join" | "line">();
+  private readonly running = new Set<string>();
+  /** When each call closed up, and the height its line had, for the 200 ms close. */
+  readonly closed = new Map<string, { at: number; height: number }>();
+  kept = (callId: string) => this.decided.get(callId) === "line";
+  /** A call is running now: when its result comes, how its line is held decides. */
+  saw(callId: string) {
+    if (this.running.size >= MAX_JOIN_DECISIONS) this.running.delete(this.running.values().next().value!);
+    this.running.add(callId);
+  }
+  /** Decide, once, for a call about to join; true when it keeps its line. */
+  decide(callId: string): boolean {
+    if (this.decided.has(callId) || !this.running.has(callId)) return false;
+    const line = document.getElementById(actionDomId(callId));
+    const scroller = line?.closest<HTMLElement>('[data-testid="transcript"]');
+    const following =
+      !scroller || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96;
+    const held =
+      line instanceof HTMLDetailsElement &&
+      (line.open || line.contains(document.activeElement) || !following);
+    this.decided.set(callId, held ? "line" : "join");
+    while (this.decided.size > MAX_JOIN_DECISIONS)
+      this.decided.delete(this.decided.keys().next().value!);
+    if (!held && line) {
+      this.closed.set(callId, { at: Date.now(), height: line.offsetHeight });
+      while (this.closed.size > MAX_JOIN_DECISIONS)
+        this.closed.delete(this.closed.keys().next().value!);
+    }
+    return held;
+  }
+}
+
+/**
+ * Place every T3 Code call of the task's records (section 11): the record's
+ * lists in order, each one a boundary. A thread's card replaces its first
+ * call's entry, and a call that joins it directly is drawn there, not here.
+ */
+function t3Pass(
+  lists: FeedEntry<FeedRef>[][],
+  ctx: ReadingContext,
+  joins: LiveJoins,
+  tally: Tally,
+): T3Feed {
+  const sequence: T3Sequence = [];
+  const found: Array<{ list: FeedEntry<FeedRef>[]; entry: FeedEntry<FeedRef>; call: T3Call }> = [];
+  for (const list of lists) {
+    for (const entry of list) {
+      if (entry.type === "reasoning") continue;
+      if (entry.type === "action") {
+        const open = entry.call.status === "running" || entry.call.status === "waiting";
+        if (open && entry.call.name.includes("__")) joins.saw(entry.call.id);
+        const call = t3CallOf(entry.call, ctx);
+        if (call) {
+          sequence.push({ type: "t3", call });
+          found.push({ list, entry, call });
+          continue;
+        }
+      }
+      sequence.push({ type: "other" });
+    }
+    sequence.push({ type: "boundary" });
+  }
+  let placements = placeT3(sequence, joins.kept);
+  let changed = false;
+  for (const { call } of found)
+    if (placements.get(call.id)?.type === "joined" && joins.decide(call.id)) changed = true;
+  if (changed) placements = placeT3(sequence, joins.kept);
+  const threads = new Map<string, T3ThreadInfo>();
+  const byKey = new Map<string, T3ThreadInfo>();
+  for (const { call } of found) {
+    const at = placements.get(call.id)!;
+    if (at.type === "card") {
+      const info: T3ThreadInfo = { key: at.thread?.key ?? null, head: call, calls: [call] };
+      threads.set(call.id, info);
+      if (at.thread) byKey.set(at.thread.key, info);
+    } else if (at.type === "joined" || at.type === "line") byKey.get(at.thread.key)?.calls.push(call);
+  }
+  for (const { list, entry, call } of found) {
+    const at = placements.get(call.id)!;
+    if (at.type !== "card" && at.type !== "joined") continue;
+    const next: FeedEntry<FeedRef> = {
+      type: "card",
+      id: call.id,
+      ref: { t: at.type === "card" ? "t3" : "t3-joined", head: at.head, call: call.call },
+    };
+    list[list.indexOf(entry)] = next;
+    tally.retarget(entry, next);
+  }
+  return { threads, placements, thoughts: new Map() };
+}
+
+/** When each line that joined its thread's card while the reader watched closed up. */
+const ClosedContext = createContext<ReadonlyMap<string, { at: number; height: number }> | null>(
+  null,
+);
+
+/** A line that joined its thread's card while the reader watched: it closes up over 200 ms. */
+function ClosingLine({ callId }: { callId: string }) {
+  const joins = useContext(ClosedContext);
+  const closed = joins?.get(callId);
+  const [done, setDone] = useState(() => !closed || Date.now() - closed.at > 200);
+  useEffect(() => {
+    if (done) return;
+    const timer = setTimeout(() => setDone(true), 200);
+    return () => clearTimeout(timer);
+  }, [done]);
+  if (done || !closed) return null;
+  return (
+    <div
+      className="t3-closing"
+      aria-hidden="true"
+      style={{ "--closing-height": `${closed.height}px` } as CSSProperties}
+    />
+  );
 }
 
 /**

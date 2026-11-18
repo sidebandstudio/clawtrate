@@ -14,6 +14,13 @@ import {
   type SettlingRecord,
 } from "./approvals.ts";
 import { projectArgs, projectDetails } from "./actions.ts";
+import {
+  mergeT3Facts,
+  structuredFromText,
+  t3ArgFacts,
+  t3ResultFacts,
+  type T3Facts,
+} from "./t3-facts.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import { filePathsOf } from "./file-paths.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
@@ -213,6 +220,12 @@ export type Step = {
   rowTimes?: boolean;
   /** Tool steps dropped to keep the run within its bounds directly before this one. */
   omittedBefore?: number;
+  /**
+   * What a tool-server call's arguments and result say that a T3 Code card
+   * reads (`t3-facts.ts`): taken from the whole arguments and result as they
+   * arrive, at most `MAX_T3_FACTS_CHARS`. Absent for every other step.
+   */
+  t3?: T3Facts | null;
   /** The gateway cut this step's result text when it stored it (history's `__openclaw.truncated`). */
   resultCut?: boolean;
   /**
@@ -2136,6 +2149,15 @@ function toolStepId(toolCallId: string): string {
   return `tool:${toolCallId}`;
 }
 
+/**
+ * Spread into a step: the T3 Code facts of a tool-server call (its effective
+ * name holds the gateway's `__`), nothing otherwise. The reading decides
+ * whether the call is T3 Code's.
+ */
+function withT3(name: string | null, facts: T3Facts | null): { t3?: T3Facts } {
+  return name?.includes("__") && facts ? { t3: facts } : {};
+}
+
 /** Spread into a step: its file facts when it names files, nothing otherwise. */
 function withFiles(files: StepFiles | undefined): { files?: StepFiles } {
   return files ? { files } : {};
@@ -2197,6 +2219,7 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
             args: projectArgs(data.args),
             ...(data.commandBearing === true ? { commandBearing: true } : {}),
             ...withFiles(stepFiles(name ?? step.toolName, data.args)),
+            ...withT3(name ?? step.toolName, t3ArgFacts(data.args)),
           },
           ctx,
         ),
@@ -2230,6 +2253,13 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
         replaceable: data.replaceable === true,
         details: projectDetails(details),
         ...(data.commandBearing === true ? { commandBearing: true } : {}),
+        // A tool server's result names its server: what T3 Code's structured content says.
+        ...(str(details?.mcpServer)
+          ? withT3(
+              name ?? step.toolName,
+              mergeT3Facts(step.t3, t3ResultFacts(details?.structuredContent, isError)),
+            )
+          : {}),
         correction: replacing ? step.correction + 1 : step.correction,
       };
       return upsertStep(current, settleRaw(settleFiles(finished, details, isError), ctx));
@@ -2481,6 +2511,7 @@ export function runsFromHistory(
             argsText: capText(prettyArgs(block.arguments ?? block.input)),
             args: projectArgs(block.arguments ?? block.input),
             ...withFiles(stepFiles(name, block.arguments ?? block.input)),
+            ...withT3(name, t3ArgFacts(block.arguments ?? block.input)),
             truncated: meta(message).truncated === true,
           });
         }
@@ -2510,6 +2541,11 @@ export function runsFromHistory(
                 // The gateway cut this result's stored text.
                 ...(meta(message).truncated === true ? { resultCut: true } : {}),
                 details: projectDetails(message.details),
+                // History keeps no details for a tool server: its text renders the structured content.
+                ...withT3(
+                  step.toolName,
+                  mergeT3Facts(step.t3, t3ResultFacts(structuredFromText(text), isError)),
+                ),
               },
               asRecord(message.details),
               isError,

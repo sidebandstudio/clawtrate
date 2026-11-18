@@ -66,7 +66,9 @@ export const viewKeys = {
   fold: (id: string) => `fold:${id}`,
   /** The fold a call was last drawn in, by its first member's id: a split's later part opens as it was. */
   member: (id: string) => `in:${id}`,
-  /** The Readable or Raw view of a call. */
+  /** A call's item on its T3 Code thread card, by its tool call id. */
+  item: (id: string) => `t3item:${id}`,
+  /** The Readable or Raw view of a call; on a thread card, whether its item's Raw is open. */
   view: (id: string) => `view:${id}`,
   /** A "Thought" line, valid only for its run's reasoning revision. */
   thought: (id: string, revision: number) => `thought:${id}@${revision}`,

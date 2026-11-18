@@ -2,6 +2,7 @@
 // untrusted `unknown` values: a field with the wrong type is ignored rather than
 // trusted, so a newer gateway adding or changing fields cannot crash the UI.
 
+import { mergeT3Facts, structuredFromText, t3ArgFacts, t3ResultFacts } from "./t3-facts.ts";
 import type {
   Bot,
   Task,
@@ -250,10 +251,13 @@ function assistantBlocks(content: unknown): TranscriptBlock[] {
     ) {
       blocks.push({ kind: "reasoning", text: block.thinking });
     } else if (block.type === "toolCall" || block.type === "tool_use") {
+      const name = str(block.name) ?? "tool";
+      const t3 = name.includes("__") ? t3ArgFacts(block.arguments ?? block.input) : null;
       blocks.push({
         kind: "tool-call",
         callId: str(block.id) ?? "",
-        name: str(block.name) ?? "tool",
+        name,
+        ...(t3 ? { t3 } : {}),
         // Absent arguments are said to be absent; an explicit null stays null.
         ...("arguments" in block || "input" in block
           ? { argumentsText: prettyArguments("arguments" in block ? block.arguments : block.input) }
@@ -389,6 +393,14 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         // Cut by the gateway when it stored the row, or here at this app's cap.
         const cut = cutByGateway || text.length > MAX_TOOL_RESULT_CHARS;
         call.result = { ...result, ...(facts ? { facts } : {}), ...(cut ? { clipped: true } : {}) };
+        // A tool server's structured content, as the gateway renders it in the whole text.
+        if (call.name.includes("__")) {
+          const t3 = mergeT3Facts(
+            call.t3,
+            t3ResultFacts(structuredFromText(text), message.isError === true),
+          );
+          if (t3) call.t3 = t3;
+        }
         const holder = callItems.get(callId!);
         if (cutByGateway && holder) holder.truncated = true;
         return;

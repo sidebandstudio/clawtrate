@@ -2,6 +2,7 @@
 // `icons.tsx` (the design's own marks, docs/design/prototype/js/icons.js).
 
 import type { ActionIcon } from "@clawtrate/core";
+import { AgentMark } from "../cards/parts.tsx";
 
 const PATHS: Record<ActionIcon, string> = {
   read: "M4 2.75h5.25L12 5.5v7.75H4V2.75ZM9 2.75V5.5h3M6.25 8.5h3.5M6.25 10.75h3.5",
@@ -35,10 +36,14 @@ const PATHS: Record<ActionIcon, string> = {
     "M3 4.25c0-.83.67-1.5 1.5-1.5h7c.83 0 1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5H7.6l-2.85 2.5v-2.5H4.5c-.83 0-1.5-.67-1.5-1.5v-5Z",
   plug: "M6 2.75v2.5M10 2.75v2.5M4.25 5.25h7.5v2.5a3.75 3.75 0 0 1-7.5 0v-2.5ZM8 11.5v1.75",
   tool: "M8 2.5 13.5 8 8 13.5 2.5 8 8 2.5Z",
+  // T3 Code's mark is Clawtrate's own: code brackets, drawn on its tile by `KindIcon`.
+  t3: "M6 5 3.5 8 6 11M10 5l2.5 3-2.5 3",
 };
 
 /** The kind's 16 px icon; hidden from assistive technology. */
 export function KindIcon({ icon }: { icon: ActionIcon }) {
+  // T3 Code's lines carry the same mark as its card: code brackets on a rounded tile (11).
+  if (icon === "t3") return <AgentMark />;
   return (
     <svg
       viewBox="0 0 16 16"

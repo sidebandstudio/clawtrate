@@ -6,6 +6,7 @@
 import { StepFileLinks } from "../work/links.tsx";
 import {
   actionWords,
+  t3CallOf,
   foldLineOf,
   isOpenOutcome,
   lineOf,
@@ -25,7 +26,6 @@ import {
   createContext,
   useContext,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -45,11 +45,11 @@ import {
 } from "../cards/parts.tsx";
 import type { RawContent } from "../cards/raw.ts";
 import type { StepRawState } from "../cards/useCards.ts";
-import { useStepHandover } from "../cards/context.tsx";
 import { ChevronIcon, FileIcon } from "../icons.tsx";
 import { useNow } from "../StatusLine.tsx";
 import { KindIcon } from "./icons.tsx";
 import { readView, useView, viewKeys, writeView } from "./view-state.ts";
+import { ShowTheThread, T3CallBody } from "./T3Thread.tsx";
 import "./actions.css";
 
 const { tookWords, elapsedWords, thoughtFor, durationWords } = actionWords;
@@ -202,7 +202,7 @@ const rec = (value: unknown) =>
     : null;
 
 /** What the gateway sent for one call, as section 9 lays it out. */
-function rawContentOf(call: ActionCall, env: ActionEnv): { content: RawContent; load: () => void } {
+export function rawContentOf(call: ActionCall, env: ActionEnv): { content: RawContent; load: () => void } {
   const found = env.stepOf(call.id);
   const open = call.status === "running" || call.status === "waiting" || call.status === "review";
   const timing = [
@@ -482,7 +482,7 @@ function ActionDetail({ call }: { call: ActionCall }) {
       >
         {/* The files this action named, linked to the Work pane's Files tab, and back to them. */}
         <StepFileLinks callId={call.id} />
-        <Readable call={call} env={env} />
+        <T3Readable call={call} env={env} />
       </div>
       <div
         role="tabpanel"
@@ -496,6 +496,20 @@ function ActionDetail({ call }: { call: ActionCall }) {
             <RawView raw={raw.content} />
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** A T3 Code call's line opens to that call alone, and to its thread's card (11.4). */
+function T3Readable({ call, env }: { call: ActionCall; env: ActionEnv }) {
+  const t3 = t3CallOf(call, env.ctx);
+  if (!t3) return <Readable call={call} env={env} />;
+  return (
+    <div className="t3-readable">
+      <T3CallBody call={t3} />
+      <div className="card-actions">
+        <ShowTheThread callId={call.id} />
       </div>
     </div>
   );
@@ -653,58 +667,16 @@ export function ActionGroup({ members, revision }: { members: FeedMember[]; revi
   }, [env.taskKey, first, memberKey, single]);
   const open = single ? cardOpen : foldOpen;
   const setOpen = single ? setCardOpen : setFoldOpen;
-  // A call that becomes the T3 Code card once its result names it hands that
-  // card how the reader left it: open or closed, and whether focus was in it.
-  const handover = useStepHandover();
-  const note = (element: HTMLDetailsElement, focused: boolean) => {
-    if (single) handover?.note(first, { open: element.open, focused, from: "step" });
-  };
-  // Drawn again after its T3 Code card, when the result named another tool: as the card was.
-  const element = useRef<HTMLDetailsElement>(null);
-  useLayoutEffect(() => {
-    if (!single) return;
-    const state = handover?.stateOf(first);
-    const details = element.current;
-    if (state?.from !== "card" || !(state.open || state.focused) || !details) return;
-    if (state.open) {
-      writeView(env.taskKey, viewKeys.call(first), true);
-      // The card's Raw view becomes the action's Raw tab.
-      if (state.raw) writeView(env.taskKey, viewKeys.view(first), "raw");
-      details.open = true;
-    }
-    if (!state.focused) return;
-    // Focus goes to the same control as on the card, once the view it is in is drawn.
-    const control = state.control ?? null;
-    const focus = () => {
-      const named = control
-        ? [...details.querySelectorAll<HTMLElement>("button, [role=tab], a, summary")].find(
-            (each) =>
-              each.offsetParent !== null &&
-              (each.getAttribute("aria-label") ?? each.textContent?.trim()) === control,
-          )
-        : undefined;
-      (named ?? details.querySelector<HTMLElement>(":scope > summary"))?.focus({
-        preventScroll: true,
-      });
-    };
-    if (control) requestAnimationFrame(() => requestAnimationFrame(focus));
-    else focus();
-    // Once, as it is drawn.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // A call that changes in place (an ordinary card that becomes T3 Code's, or the other way)
+  // is drawn under the same tool call id, so its open state and view are the same entries.
   const fresh = useArrived(env);
   const common = {
-    ref: element,
     className: "card action",
     "data-fresh": fresh,
     open,
     onToggle: (event: { currentTarget: HTMLDetailsElement }) => {
       if (event.currentTarget.open !== open) setOpen(event.currentTarget.open);
-      note(event.currentTarget, event.currentTarget.contains(document.activeElement));
     },
-    onFocus: (event: { currentTarget: HTMLDetailsElement }) => note(event.currentTarget, true),
-    onBlur: (event: { currentTarget: HTMLDetailsElement; relatedTarget: EventTarget | null }) =>
-      note(event.currentTarget, event.currentTarget.contains(event.relatedTarget as Node | null)),
   };
   if (line) {
     const member = members[0]!;

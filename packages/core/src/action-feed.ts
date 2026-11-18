@@ -263,6 +263,7 @@ export function callFromStep(
     partial: open ? (step.output?.text ?? null) : null,
     runStopped: run.state === "stopped" || run.state === "cancelled",
     ...(step.gatewayTitle ? { gatewayTitle: step.gatewayTitle } : {}),
+    ...(step.t3 ? { t3: step.t3 } : {}),
   };
 }
 
@@ -275,9 +276,11 @@ export function callFromBlock(
   if (step && run) {
     const fromStep = callFromStep(step, run);
     // A viewer sent only item events has no arguments for the call: history's block has them.
-    const call = Object.keys(fromStep.args).length
+    const withArgs = Object.keys(fromStep.args).length
       ? fromStep
       : { ...fromStep, args: parseArgs(block.argumentsText) };
+    // History's row may hold T3 Code's facts the step has not got yet.
+    const call = !withArgs.t3?.read && block.t3?.read ? { ...withArgs, t3: block.t3 } : withArgs;
     // History holds no result, and the step's error says nothing (it came from an item's end,
     // not a result): nothing establishes how the call ended.
     if (!block.result && call.isError && !call.text)
@@ -322,6 +325,7 @@ export function callFromBlock(
     startedAt: null,
     endedAt: null,
     fromHistory: true,
+    ...(block.t3 ? { t3: block.t3 } : {}),
   };
 }
 

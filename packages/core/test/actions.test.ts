@@ -572,8 +572,9 @@ describe("F-488 every kind of 8.1 has its words, its kind and its outcome", () =
       { title: "Exclude the cache" },
       { status: "running", text: null },
     );
-    expect(kindOf(before)).toMatchObject({ kind: "tool", key: null });
+    expect(kindOf(before)).toMatchObject({ kind: "tool", key: null, leaves: true });
     expect(line(before).running).toBe("Using linear create issue");
+    expect(line(before).state).toMatchObject({ word: "Call started" });
     const after = call(
       "linear__create_issue",
       { title: "Exclude the cache" },
@@ -972,7 +973,7 @@ describe("F-294 every outcome short of Done", () => {
     expect(line(send).outcome).toBe("unknown");
     // An aborted MCP call after a stop: the server may have acted.
     const mcp = call("coder__slow_task", {}, { isError: true, text: "Aborted", details: {} });
-    expect(line(mcp).outcome).toBe("stopped");
+    expect(line(mcp).outcome).toBe("unknown");
     const server = call(
       "linear__x",
       {},
