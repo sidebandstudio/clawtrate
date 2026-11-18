@@ -1294,6 +1294,33 @@ test.describe("errors and resync", () => {
     await expect(page.getByTestId("status-line")).toBeVisible();
   });
 
+  test("F-301: Copy request ID puts exactly the request id that Raw shows on the clipboard, and says so", async ({
+    page,
+  }) => {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await open(page, "run-failed");
+    const card = page.getByTestId("turn-error");
+    const raw = card.getByRole("button", { name: "Raw" });
+    await expect(raw).toHaveAttribute("aria-expanded", "false");
+    await raw.click();
+    await expect(raw).toHaveAttribute("aria-expanded", "true");
+    const shown = (await card.getByTestId("request-id").textContent())!;
+    expect(shown).toBe("b3f0c2a1-4d5e-4f60-8a71-92c3d4e5f607");
+    // Raw is the error event as received.
+    await expect(card.getByTestId("turn-error-raw")).toContainText("The chat event");
+    await expect(card.getByTestId("turn-error-raw")).toContainText('"errorKind": "provider"');
+    await page.evaluate(() => navigator.clipboard.writeText("something else"));
+    await card.getByRole("button", { name: "Copy request ID" }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(shown);
+    await expect(page.getByTestId("card-announcer")).toHaveText("Copied request ID");
+    // A failure Clawtrate decided itself has no request of its own to copy.
+    await open(page, "run-turn-limit");
+    await expect(page.getByTestId("turn-error")).toBeVisible();
+    await expect(
+      page.getByTestId("turn-error").getByRole("button", { name: "Copy request ID" }),
+    ).toHaveCount(0);
+  });
+
   test("F-102: Try again sends the failed turn's message again with its files", async ({
     page,
   }) => {

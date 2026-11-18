@@ -13,6 +13,8 @@ import {
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "./bridge.tsx";
+import { useAnnounce } from "./cards/parts.tsx";
+import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
 import { endingOf } from "./live.ts";
 import { Markdown } from "./Markdown.tsx";
@@ -181,8 +183,11 @@ export function RunEnding({
   taskKey: string;
 }) {
   const bridge = useBridge();
+  const announce = useAnnounce();
   const [dismissed, setDismissed] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [rawOpen, setRawOpen] = useState(false);
+  const requestRef = useRef<HTMLPreElement>(null);
   // Dismiss and the line swap places; focus follows to what replaced it.
   const moved = useRef(false);
   const lineRef = useRef<HTMLButtonElement>(null);
@@ -249,6 +254,20 @@ export function RunEnding({
     );
   }
   const text = messageTextOf(run, transcript);
+  const requestId = run.requestId ?? null;
+  const raw = run.error?.raw as { source?: unknown; payload?: unknown } | undefined;
+  const copyRequest = async () => {
+    if (!requestId) return;
+    if ((await copyText(requestId)) === "copied") announce("Copied request ID");
+    else {
+      // The clipboard refused: the id is shown in Raw and selected for a manual copy.
+      setRawOpen(true);
+      requestAnimationFrame(() => {
+        if (requestRef.current) selectContents(requestRef.current);
+      });
+      announce("Couldn't copy. The text is selected.");
+    }
+  };
   return (
     <div className="card turn-error" role="alert" data-testid="turn-error" data-run={run.id}>
       <WarnIcon />
@@ -270,33 +289,84 @@ export function RunEnding({
           Couldn't send it again: {retryError}
         </p>
       )}
-      {text && (
+      {(text || requestId || raw) && (
         <div className="turn-error-actions">
-          <button
-            type="button"
-            className="button"
-            data-size="sm"
-            onClick={() => {
-              setRetryError(null);
-              // The engine still holds the message: its words and files go again together.
-              // Otherwise only history has it, and history gives the words alone.
-              const held = transcript.outbox.some((message) => message.id === run.messageId);
-              const again = held
-                ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: run.messageId! })
-                : bridge.invoke({
-                    type: "sendMessage",
-                    key: taskKey,
-                    text,
-                    mode: "auto",
-                    attachmentIds: [],
-                  });
-              void again.catch((error: unknown) =>
-                setRetryError(error instanceof Error ? error.message : String(error)),
-              );
-            }}
-          >
-            Try again
-          </button>
+          {text && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              onClick={() => {
+                setRetryError(null);
+                // The engine still holds the message: its words and files go again together.
+                // Otherwise only history has it, and history gives the words alone.
+                const held = transcript.outbox.some((message) => message.id === run.messageId);
+                const again = held
+                  ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: run.messageId! })
+                  : bridge.invoke({
+                      type: "sendMessage",
+                      key: taskKey,
+                      text,
+                      mode: "auto",
+                      attachmentIds: [],
+                    });
+                void again.catch((error: unknown) =>
+                  setRetryError(error instanceof Error ? error.message : String(error)),
+                );
+              }}
+            >
+              Try again
+            </button>
+          )}
+          {requestId && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              data-variant="quiet"
+              onClick={() => void copyRequest()}
+            >
+              Copy request ID
+            </button>
+          )}
+          {(requestId || raw) && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              data-variant="quiet"
+              aria-expanded={rawOpen}
+              onClick={() => setRawOpen((open) => !open)}
+            >
+              Raw
+            </button>
+          )}
+        </div>
+      )}
+      {rawOpen && (
+        <div className="raw-panel turn-error-raw" data-testid="turn-error-raw">
+          {requestId && (
+            <>
+              <p className="code-label">Request ID</p>
+              <pre className="code-block" ref={requestRef} data-testid="request-id" tabIndex={0}>
+                {requestId}
+              </pre>
+            </>
+          )}
+          {raw ? (
+            <>
+              <p className="code-label">
+                {typeof raw.source === "string" ? `The ${raw.source} event` : "The error event"}
+              </p>
+              <pre className="code-block" tabIndex={0}>
+                {JSON.stringify(raw.payload ?? raw, null, 2)}
+              </pre>
+            </>
+          ) : (
+            <p className="raw-state">
+              The gateway sent no event for this failure: Clawtrate ended the turn.
+            </p>
+          )}
         </div>
       )}
     </div>

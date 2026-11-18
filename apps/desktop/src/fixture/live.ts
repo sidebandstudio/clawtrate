@@ -430,10 +430,23 @@ export function liveScene(
           state: "failed",
           endedAt: now - 2 * SECOND,
           text: REPLY,
+          // The id this client gave the chat.send frame that started the run.
+          requestId: "b3f0c2a1-4d5e-4f60-8a71-92c3d4e5f607",
           error: {
             message:
               "The model provider is overloaded. Nothing ran after step 1, and steps already completed are not undone.",
             kind: "provider",
+            raw: {
+              source: "chat",
+              payload: {
+                runId: "run-live",
+                sessionKey: "agent:otto:disk-space",
+                seq: 14,
+                state: "error",
+                errorMessage: "The model provider is overloaded.",
+                errorKind: "provider",
+              },
+            },
           },
         }),
         steps: [],

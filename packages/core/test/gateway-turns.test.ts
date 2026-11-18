@@ -607,3 +607,53 @@ describe("a recipient's run settled from history while its sender's task is open
     client.stop();
   });
 });
+
+describe("a failed turn's request (F-301)", () => {
+  it("F-301: keeps the id of the chat.send frame that started the run, and the error event as the gateway sent it", async () => {
+    const { client, gateway, transcript } = await openTask();
+    const frames = () =>
+      gateway.requests.filter((each) => each.method === "chat.send").map((each) => each.id);
+    const id = client.sendMessage(KEY, "check the disk");
+    await until(() => frames().length === 1);
+    await until(() => transcript().runs[0]?.bound === true);
+    const event = {
+      runId: transcript().runs[0]!.id,
+      sessionKey: KEY,
+      seq: 3,
+      state: "error",
+      errorMessage: "The model provider is overloaded.",
+      errorKind: "provider",
+    };
+    gateway.emit("chat", event);
+    await until(() => transcript().runs[0]?.state === "failed");
+    const run = transcript().runs[0]!;
+    expect(run.requestId).toBe(frames()[0]);
+    expect(run.requestId).not.toBe(id);
+    expect(run.error).toMatchObject({
+      message: "The model provider is overloaded.",
+      kind: "provider",
+      raw: { source: "chat", payload: event },
+    });
+    client.stop();
+  });
+
+  it("F-301: a steer names no request of the run it joined, and an error event too large to keep whole is not kept", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs[0]?.state === "running");
+    client.sendMessage(KEY, "and this");
+    await until(() => gateway.calls("chat.send").length === 1);
+    await sleep(20);
+    expect(transcript().runs[0]!.requestId).toBeUndefined();
+    gateway.emit("chat", {
+      runId: "run-x",
+      sessionKey: KEY,
+      seq: 3,
+      state: "error",
+      errorMessage: "x".repeat(3_000),
+    });
+    await until(() => transcript().runs[0]?.state === "failed");
+    expect(transcript().runs[0]!.error!.raw).toBeUndefined();
+    client.stop();
+  });
+});

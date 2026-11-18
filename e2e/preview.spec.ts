@@ -1457,6 +1457,26 @@ test("F-074 F-285: a file chosen with + reaches the gateway; one over the gatewa
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
+test("F-301: a turn the gateway fails offers Copy request ID, which copies the id Raw shows beside the gateway's error event", async ({
+  page,
+}) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await openShell(page);
+  const { key } = await ownTask(page, "Copy request id");
+  await composer(page).fill("This one fails. #model-error");
+  await page.keyboard.press("Enter");
+  const card = page.getByTestId("turn-error");
+  await expect(card).toBeVisible({ timeout: 60_000 });
+  await card.getByRole("button", { name: "Raw" }).click();
+  const shown = ((await card.getByTestId("request-id").textContent()) ?? "").trim();
+  expect(shown).toMatch(/^[0-9a-f-]{36}$/);
+  await expect(card.getByTestId("turn-error-raw")).toContainText('"state": "error"');
+  await page.evaluate(() => navigator.clipboard.writeText(""));
+  await card.getByRole("button", { name: "Copy request ID" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(shown);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+});
+
 test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
   page,
 }) => {

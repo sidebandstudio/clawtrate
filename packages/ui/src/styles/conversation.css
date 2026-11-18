@@ -447,6 +447,21 @@
   margin-top: -4px;
 }
 
+.turn-error-raw {
+  grid-column: 2 / -1;
+  min-width: 0;
+}
+
+.turn-error-raw .code-block {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.turn-error-raw .code-block:last-child {
+  margin-bottom: 0;
+}
+
 .turn-error-line {
   display: block;
   margin-top: 8px;

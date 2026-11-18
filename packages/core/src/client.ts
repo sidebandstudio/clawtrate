@@ -117,6 +117,7 @@ import {
   questionMarkers,
   runsWithQuestionMarkers,
   bindRun,
+  noteRunRequest,
   cancelQueuedRun,
   dropUnboundRun,
   dropUnboundRunUnlessStopping,
@@ -2057,7 +2058,15 @@ export class ClawtrateClient {
         this.attachmentContent.get(messageId)?.files ?? [],
       );
       this.checkSize(params);
-      const sent = this.request("chat.send", params);
+      // A send that starts its own run names that run's request: what a failed turn's
+      // "Copy request ID" gives (F-301). A steer joins a run another frame started.
+      const starts = message.mode !== "steer";
+      const sent = this.request("chat.send", params, {
+        onSent: (requestId) => {
+          if (!starts) return;
+          this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
+        },
+      });
       // The frame has left: from here a Stop no longer parks it.
       this.updateActivity(key, (activity) =>
         updateMessage(activity, messageId, { leftAt: this.now() }),
@@ -5262,9 +5271,13 @@ export class ClawtrateClient {
 
   // Helpers --------------------------------------------------------------------
 
-  private request(method: string, params: unknown): Promise<unknown> {
+  private request(
+    method: string,
+    params: unknown,
+    options?: { onSent?: (requestId: string) => void },
+  ): Promise<unknown> {
     if (!this.protocol) return Promise.reject(new NotSentError());
-    return this.protocol.request(method, params);
+    return this.protocol.request(method, params, options);
   }
 
   private setConnection(patch: Partial<ConnectionState>): void {

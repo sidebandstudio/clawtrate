@@ -274,7 +274,11 @@ export const STEP: Bound = flagged<Step>()({
 });
 const pendingCard = object<PendingCard>()({ id: ID, kind: ENUM, since: NUMBER });
 const closedCard = object<ClosedCard>()({ id: ID, kind: ENUM, since: NUMBER, reason: ENUM });
-const runError = object<RunError>()({ message: text(MAX_ERROR_JSON_CHARS), kind: NAME });
+const runError = object<RunError>()({
+  message: text(MAX_ERROR_JSON_CHARS),
+  kind: NAME,
+  raw: json(MAX_ERROR_JSON_CHARS),
+});
 const runEnding = object<RunEnding>()({
   stopReason: NAME,
   timeoutPhase: NAME,
@@ -323,6 +327,7 @@ export const RUN: Bound = flagged<Run>()({
   reasoningAnchor: ID,
   nextReasoning: NUMBER,
   reasoningRevision: NUMBER,
+  requestId: ID,
 });
 const attachmentInfo = object<OutgoingAttachmentInfo>()({
   fileName: text(MAX_FILE_NAME_CHARS),

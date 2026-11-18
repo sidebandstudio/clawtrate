@@ -19,6 +19,7 @@ import { filePathsOf } from "./file-paths.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
 import {
   MAX_CLOSED_CARDS_PER_RUN,
+  MAX_ERROR_JSON_CHARS,
   MAX_ID_CHARS,
   MAX_INLINE_RAW_CHARS,
   MAX_PENDING_QUESTIONS_PER_TASK,
@@ -257,7 +258,16 @@ function settleFiles(step: Step, details: RawRecord | null, isError: boolean): S
  * How a run failed. `kind` is the gateway's own classification where it sends
  * one (`chat` `errorKind`, for example `timeout`), never parsed from the text.
  */
-export type RunError = { message: string; kind: string | null };
+export type RunError = {
+  message: string;
+  kind: string | null;
+  /**
+   * The event that said the run failed, as the gateway sent it (a `chat` error, the
+   * lifecycle error, or the send's answer), for Raw; absent for a failure of this
+   * client's own, and dropped whole when its JSON is past `MAX_ERROR_JSON_CHARS`.
+   */
+  raw?: unknown;
+};
 
 /**
  * What the run's terminal lifecycle event said, as sent: `stopReason`, and for
@@ -358,6 +368,12 @@ export type Run = {
    * order, newest last, at most `MAX_PREAMBLES_PER_RUN`. Absent until one arrives.
    */
   preambles?: Preamble[];
+  /**
+   * The id of the request frame of the `chat.send` that started this run, as this client
+   * set it: what "Copy request ID" copies and Raw shows (F-301). Absent for a run this
+   * client did not start, or whose send's frame has not left.
+   */
+  requestId?: string;
   /** Paths of fields cut to their bound; a cut `text` is not extended by later deltas. */
   cut?: string[];
 };
@@ -779,9 +795,20 @@ export function capError(text: string): string {
 }
 
 function capRunError(error: RunError | null): RunError | null {
-  return error && error.message.length > MAX_ERROR_CHARS
-    ? { ...error, message: capError(error.message) }
-    : error;
+  if (!error) return error;
+  const capped =
+    error.message.length > MAX_ERROR_CHARS ? { ...error, message: capError(error.message) } : error;
+  // Kept whole or not at all: a cut event would not be what the gateway sent.
+  if (capped.raw !== undefined && jsonLength(capped.raw) > MAX_ERROR_JSON_CHARS) {
+    const { raw: _dropped, ...rest } = capped;
+    return rest;
+  }
+  return capped;
+}
+
+/** The failing event as received, named by where it came from, for Raw (F-301). */
+function rawEvent(source: string, payload: RawRecord): { source: string; payload: RawRecord } {
+  return { source, payload };
 }
 
 export function capText(text: string): StepText {
@@ -905,6 +932,15 @@ export function activeRun(activity: TaskActivity): Run | undefined {
 
 function replaceRun(activity: TaskActivity, run: Run): TaskActivity {
   return { ...activity, runs: activity.runs.map((each) => (each.id === run.id ? run : each)) };
+}
+
+/** The request frame that started a run left with this id (F-301). */
+export function noteRunRequest(
+  activity: TaskActivity,
+  runId: string,
+  requestId: string,
+): TaskActivity {
+  return updateRun(activity, runId, (run) => ({ ...run, requestId: capId(requestId, MAX_ID_CHARS) }));
 }
 
 function updateRun(activity: TaskActivity, runId: string, fn: (run: Run) => Run): TaskActivity {
@@ -1338,7 +1374,8 @@ export function settleRunFromSendAnswer(
     if (status === "ok") return finishRun(run, "completed", ctx, null, endedAt);
     if (status === "error") {
       const message = str(answer.summary) ?? "The gateway reported an error.";
-      return finishRun(run, "failed", ctx, { message, kind: "gateway" }, endedAt);
+      const raw = rawEvent("chat.send answer", answer);
+      return finishRun(run, "failed", ctx, { message, kind: "gateway", raw }, endedAt);
     }
     return run;
   });
@@ -1803,6 +1840,7 @@ export function applyChatEvent(
         return finishRun({ ...run, ending: endingOf(payload, run.ending) }, "failed", ctx, {
           message: str(payload.errorMessage) ?? "The run failed.",
           kind: str(payload.errorKind),
+          raw: rawEvent("chat", payload),
         });
       default:
         return run;
@@ -2035,7 +2073,11 @@ function terminalFromLifecycle(
         run,
         "failed",
         ctx,
-        { message: message ?? "The run timed out.", kind: "timeout" },
+        {
+          message: message ?? "The run timed out.",
+          kind: "timeout",
+          raw: rawEvent("agent lifecycle", data),
+        },
         at,
       );
     case "blocked":
@@ -2045,7 +2087,11 @@ function terminalFromLifecycle(
         run,
         "failed",
         ctx,
-        { message: message ?? "The run failed.", kind: reason },
+        {
+          message: message ?? "The run failed.",
+          kind: reason,
+          raw: rawEvent("agent lifecycle", data),
+        },
         at,
       );
   }
