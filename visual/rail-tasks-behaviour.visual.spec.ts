@@ -54,7 +54,8 @@ test("F-012 F-054: on a writing connection a round + sits at the top right besid
 
   await plus.click();
   const menu = page.getByRole("menu", { name: "New" });
-  await expect(menu.getByRole("menuitem")).toHaveText(["New task for Otto⌥T"]);
+  // New task first; New bot follows it in the same menu.
+  await expect(menu.getByRole("menuitem")).toHaveText(["New task for Otto⌥T", "New bot⌘N"]);
   await expect(menu.getByRole("menuitem").first()).toBeFocused();
   await page.keyboard.press("Enter");
   // Selected, first under Otto, and the composer has focus.

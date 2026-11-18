@@ -43,6 +43,7 @@ const WALKED = new Set([
   "ObservableStore",
   "FileTransfers",
   "PendingSaves",
+  "AccountsEngine",
   "WaitingIndex",
   "ComputerViews",
 ]);

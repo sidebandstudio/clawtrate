@@ -489,6 +489,14 @@ test.describe("the phone", () => {
   });
 });
 
+/** The state each strip scene ends in. */
+const STRIP_STATES: Record<string, RegExp> = {
+  "discovery-error": /Couldn't load/,
+  "offline-long-address": /Can't reach/,
+  offline: /Can't reach/,
+  "sync-failed": /Couldn't sync this task/,
+};
+
 for (const width of [320, 390]) {
   test.describe(`the strip on a ${width}px phone`, () => {
     test.use(contextFor({ ...PHONE, width, height: 700 }, "light"));
@@ -496,6 +504,8 @@ for (const width of [320, 390]) {
       test(`keeps its state clear of its action: ${scene}`, async ({ page }) => {
         await openFixture(page, `scene=${scene}&${OTTO_DISK}`, "light");
         const strip = page.getByTestId("status-strip");
+        // The scene's own state, once it has reached it: sync-failed passes through Reconnecting.
+        await expect(strip.locator("strong")).toContainText(STRIP_STATES[scene]!);
         await expect(strip.getByRole("button")).toBeVisible();
         const state = (await strip.locator("strong").boundingBox())!;
         const action = (await strip.getByRole("button").boundingBox())!;

@@ -14,6 +14,13 @@ export * from "./files.ts";
 export * from "./computer.ts";
 export * from "./machine.ts";
 export * as computerWords from "./computer-words.ts";
+export * from "./accounts.ts";
+export {
+  AdminNeededError,
+  isActive as isSignInActive,
+  type CreateBotInput,
+  type CreatedBot,
+} from "./accounts-engine.ts";
 export * from "./sidebar.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";

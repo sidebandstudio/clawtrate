@@ -281,7 +281,9 @@ export function ScreenView(props: ScreenViewProps) {
         <div className="screen-blank">
           {view?.status === "ended" ? (
             <>
-              <p role="status">{words.viewEndLine(name, view.end ?? "gateway-ended", view.error)}</p>
+              <p role="status">
+                {words.viewEndLine(name, view.end ?? "gateway-ended", view.error)}
+              </p>
               <button type="button" className="screen-watch" onClick={props.onWatch}>
                 Watch again
               </button>

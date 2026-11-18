@@ -13,6 +13,8 @@
   --text-base: 15px;
   --text-lg: 17px;
   --text-title: 28px;
+  /* A Settings section's title, the size the type table gives the Work pane's name. */
+  --text-title-sm: 20px;
 
   --weight-regular: 400;
   --weight-medium: 500;
@@ -43,6 +45,8 @@
   --avatar-row: 40px;
   --avatar-pin: 56px;
   --avatar-hero: 64px;
+  /* The live picture in New bot (bots.md section 2). */
+  --avatar-create: 104px;
   --avatar-pill: 22px;
 
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);

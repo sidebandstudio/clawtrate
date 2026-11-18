@@ -5,6 +5,30 @@
 // `docs/decisions.md` states the same numbers. All lengths are JSON
 // characters (`bounds.ts`).
 
+import {
+  MAX_ACCOUNTS,
+  MAX_CATALOG_MODELS,
+  MAX_EFFORT_LEVELS,
+  MAX_FALLBACKS,
+  MAX_KEY_PROVIDERS,
+  MAX_LOCK_CHECKS,
+  MAX_ORDER_IDS,
+  MAX_SIGNIN_METHODS,
+  type AccountsState,
+  type AccountWrite,
+  type BotBinding,
+  type BotCreationState,
+  type CatalogModel,
+  type GatewayAccount,
+  type KeyProvider,
+  type LockCheck,
+  type LockEvidence,
+  type SignInMethod,
+  type SignInResult,
+  type SignInState,
+  type SignInStep,
+  type StoredOrder,
+} from "./accounts.ts";
 import type {
   ApprovalAttempts,
   ApprovalCard,
@@ -556,6 +580,7 @@ const connection = object<ConnectionState>()({
   canWrite: FLAG,
   canAnswer: FLAG,
   canApprove: FLAG,
+  canAdmin: FLAG,
   upgrade,
   deviceId: ID,
   pairing,
@@ -787,6 +812,134 @@ export const COMPUTER = object<ComputerState>()({
   control: list(MAX_CONTROL_RECORDS, controlRecord),
   panes: map(MAX_COMPUTER_PANES, MAX_ID_CHARS, computerPane),
 });
+// Provider accounts (accounts.ts). Nothing here holds a credential or anything typed.
+const account = object<GatewayAccount>()({
+  id: ID,
+  provider: ID,
+  label: NAME,
+  type: ENUM,
+  status: ENUM,
+  expiresAt: NUMBER,
+  kind: ENUM,
+  made: ENUM,
+  keptBy: ID,
+  logoutSupported: FLAG,
+});
+const signInMethod = object<SignInMethod>()({
+  id: ID,
+  provider: ID,
+  label: NAME,
+  hint: NAME,
+  kind: ENUM,
+  flow: ENUM,
+  group: ENUM,
+});
+const keyProvider = object<KeyProvider>()({ provider: ID, hasKey: FLAG, method: ID });
+const catalogModel = object<CatalogModel>()({
+  provider: ID,
+  id: ID,
+  name: NAME,
+  available: FLAG,
+  levels: list(MAX_EFFORT_LEVELS, ENUM),
+  defaultLevel: ENUM,
+});
+const storedOrder = object<StoredOrder>()({
+  ids: list(MAX_ORDER_IDS, ID),
+  stored: FLAG,
+  configured: ENUM,
+});
+const lockEvidence = object<LockEvidence>()({
+  status: ENUM,
+  checkedAt: NUMBER,
+  lastMatchAt: NUMBER,
+  lostAt: NUMBER,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+});
+const binding = object<BotBinding>()({
+  botId: ID,
+  primary: ID,
+  provider: ID,
+  model: ID,
+  account: ID,
+  mode: ENUM,
+  fallbacks: list(MAX_FALLBACKS, ID),
+  suffixLost: FLAG,
+  accountMissing: FLAG,
+  effort: ENUM,
+  order: storedOrder,
+  evidence: lockEvidence,
+  fallbacksUnwritten: FLAG,
+});
+const signInStep = object<SignInStep>()({
+  id: ID,
+  type: ENUM,
+  title: NAME,
+  message: text(MAX_MESSAGE_LINE_CHARS),
+  url: text(MAX_MESSAGE_LINE_CHARS),
+  code: NAME,
+  expiresInMinutes: NUMBER,
+  placeholder: NAME,
+  sensitive: FLAG,
+});
+const lockCheck = object<LockCheck>()({ botId: ID, account: ID, outcome: ENUM });
+const signInResult = object<SignInResult>()({
+  added: list(MAX_ACCOUNTS, ID),
+  landed: ENUM,
+  keptBy: ID,
+  readFailed: FLAG,
+  locks: list(MAX_LOCK_CHECKS, lockCheck),
+});
+const signIn = object<SignInState>()({
+  id: ID,
+  method: ID,
+  provider: ID,
+  label: NAME,
+  flow: ENUM,
+  forBot: ID,
+  keptOnly: FLAG,
+  stage: ENUM,
+  step: signInStep,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  cancelling: FLAG,
+  saving: FLAG,
+  startedAt: NUMBER,
+  result: signInResult,
+  byKey: FLAG,
+  known: list(MAX_ACCOUNTS, ID),
+  cancelUnknown: FLAG,
+});
+const botCreation = object<BotCreationState>()({
+  name: NAME,
+  status: ENUM,
+  slow: FLAG,
+  botId: ID,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  missing: list(4, ENUM),
+  uncertain: FLAG,
+});
+const accountWrite = object<AccountWrite>()({
+  what: ENUM,
+  target: ID,
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  at: NUMBER,
+});
+export const ACCOUNTS: Bound = object<AccountsState>()({
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  readAt: NUMBER,
+  labels: FLAG,
+  defaultModel: ID,
+  mainShared: FLAG,
+  accounts: list(MAX_ACCOUNTS, account),
+  methods: list(MAX_SIGNIN_METHODS, signInMethod),
+  keyProviders: list(MAX_KEY_PROVIDERS, keyProvider),
+  models: list(MAX_CATALOG_MODELS, catalogModel),
+  bindings: list(MAX_BOTS, binding),
+  signIn,
+  creation: botCreation,
+  write: accountWrite,
+});
 
 /** Every part of the state but the transcripts, and the transcripts as one map. */
 export const STATE: Bound = flagged<ClawtrateState>()({
@@ -798,6 +951,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   unroutedApprovals: list(MAX_UNROUTED, APPROVAL),
   unroutedApprovalsOmitted: NUMBER,
   creations: list(MAX_CREATIONS, CREATION),
+  accounts: ACCOUNTS,
   retention: retentionAlarm,
   sidebar,
   computer: COMPUTER,

@@ -186,6 +186,32 @@ export const MediaIcon = (props: IconProps) => (
   </Icon>
 );
 
+export const LockIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.75" />
+    <path d="M5.5 7V5.25a2.5 2.5 0 0 1 5 0V7" />
+  </Icon>
+);
+
+export const ClockIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="M8 4.75V8l2.25 1.5" />
+  </Icon>
+);
+
+export const ShieldIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="m8 2.25 4.75 1.75v3.9c0 2.7-1.9 4.9-4.75 5.85-2.85-.95-4.75-3.15-4.75-5.85V4L8 2.25ZM6 8l1.5 1.5 2.75-3" />
+  </Icon>
+);
+
+export const ExternalIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M6.75 3.25h-3.5v9.5h9.5v-3.5M9.5 3.25h3.25V6.5M12.5 3.5 7.75 8.25" />
+  </Icon>
+);
+
 export const EditIcon = (props: IconProps) => (
   <Icon {...props}>
     <path d="M9.75 3.75 12.25 6.25M3 13l.6-2.9 7.15-7.15a1.4 1.4 0 0 1 2 0l.3.3a1.4 1.4 0 0 1 0 2L5.9 12.4z" />

@@ -62,6 +62,7 @@ export function readRecord(path: string): RunRecord | null {
         (entry) =>
           (entry?.name === `e2e-${record.run}` ||
             entry?.name === `e2e-${record.run}-other` ||
+            entry?.name === `e2e-${record.run}-acct` ||
             entry?.name === `e2e-${record.run}-computer`) &&
           typeof entry.runId === "string" &&
           /^[0-9a-f]{48}$/.test(entry.runId),

@@ -52,6 +52,13 @@ const ALLOWED: Record<string, string> = {
     "static, the eight question fields the ordinary card cannot show",
   "packages/core/src/scopes.ts:READ_SCOPES": "static, one scope",
   "packages/core/src/scopes.ts:INTERACTIVE_SCOPES": "static, four scopes",
+  "packages/core/src/scopes.ts:ADMIN_SCOPES": "static, five scopes",
+  "packages/core/src/accounts-engine.ts:CERTAIN_REFUSALS": "static, seven error codes",
+  "packages/core/src/accounts.ts:KIND_RECORDS": "static, the four kinds Clawtrate records",
+  "packages/core/src/accounts-engine.ts:complete>missing":
+    "one creation's steps that did not land, at most four, gone when it returns",
+  "packages/core/src/accounts-engine.ts:complete>errors":
+    "the words for those steps, one each, gone when it returns",
   "packages/core/src/scopes.ts:IMPLIED_BY_WRITE": "static, the scopes write implies",
   "packages/core/src/state-bounds.ts:SESSION_ROW_FIELDS": "static, the twenty-one fields read",
   "packages/core/src/state-bounds.ts:SESSION_ROW_IDS": "static, five field names",
@@ -79,6 +86,16 @@ const ALLOWED: Record<string, string> = {
     "static, an empty list copied on write",
   "packages/core/src/computer.ts:readTabs>tabs":
     "one answer; the tabs it lists, cut to `MAX_COMPUTER_TABS` before they are kept in the pane",
+  "packages/core/src/accounts.ts:initialAccountsState.accounts":
+    "static, an empty list copied on write",
+  "packages/core/src/accounts.ts:initialAccountsState.methods":
+    "static, an empty list copied on write",
+  "packages/core/src/accounts.ts:initialAccountsState.keyProviders":
+    "static, an empty list copied on write",
+  "packages/core/src/accounts.ts:initialAccountsState.models":
+    "static, an empty list copied on write",
+  "packages/core/src/accounts.ts:initialAccountsState.bindings":
+    "static, an empty list copied on write",
   // Values that go into the bounded state, captured only by an update that runs at once.
   "packages/core/src/client.ts:completeCreation>message.attachments":
     "the new outgoing message's files, empty; kept only in the outbox, under its bound",

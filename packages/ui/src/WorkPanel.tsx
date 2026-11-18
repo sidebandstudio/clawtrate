@@ -1,8 +1,10 @@
 import {
   browserUse,
+  type AccountsState,
   type Bot,
   type ComputerState,
   type ConnectionState,
+  type HostInfo,
   type Task,
   type Transcript,
 } from "@clawtrate/core";
@@ -11,6 +13,7 @@ import { Avatar } from "./Avatar.tsx";
 import { useBridge } from "./bridge.tsx";
 import { stampTime } from "./format.ts";
 import { CloseIcon } from "./icons.tsx";
+import { BotSettings } from "./bots/BotSettings.tsx";
 import { ComputerTab } from "./work/ComputerTab.tsx";
 import { FilesTab } from "./work/FilesTab.tsx";
 import type { FileRequest } from "./work/links.tsx";
@@ -56,6 +59,11 @@ export function WorkPanel({
   onShowStep,
   onShowQuestion,
   onRequestAccess,
+  accounts,
+  bots,
+  tasks,
+  transcripts,
+  info,
 }: {
   bot: Bot | undefined;
   task: Task | null;
@@ -79,6 +87,12 @@ export function WorkPanel({
   onShowStep: (stepId: string) => void;
   onShowQuestion: () => void;
   onRequestAccess: (() => void) | null;
+  accounts: AccountsState;
+  bots: readonly Bot[];
+  /** The bot's tasks, for a run in progress when its account changes. */
+  tasks: readonly Task[];
+  transcripts: Record<string, Transcript>;
+  info: HostInfo;
 }) {
   const bridge = useBridge();
   // Row times are relative to when the pane opened.
@@ -221,7 +235,21 @@ export function WorkPanel({
           tabIndex={0}
           hidden={tab !== "settings"}
         >
-          <p className="work-note">{name}'s settings arrive in a later version of Clawtrate.</p>
+          {bot ? (
+            <BotSettings
+              bot={bot}
+              accounts={accounts}
+              bots={bots}
+              tasks={tasks}
+              transcripts={transcripts}
+              connection={connection}
+              info={info}
+              visible={tab === "settings"}
+              announce={announce}
+            />
+          ) : (
+            <p className="work-note">Pick a bot to see its settings.</p>
+          )}
         </div>
       </div>
       <p className="visually-hidden" role="status" aria-live="polite" data-testid="work-announcer">
