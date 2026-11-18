@@ -12,6 +12,7 @@
     "./conversation-words": "./src/conversation-words.ts",
     "./format": "./src/format.ts",
     "./gateway-state": "./src/gateway-state.ts",
+    "./live": "./src/live.ts",
     "./screen": "./src/screen.ts",
     "./strip": "./src/strip.ts",
     "./summary": "./src/summary.ts",

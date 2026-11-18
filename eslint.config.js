@@ -49,7 +49,7 @@ export default tseslint.config(
     // The interface's pure modules, which the iOS app imports as well: no React
     // and no DOM, so React Native can run them (see packages/ui/package.json).
     files: [
-      "packages/ui/src/{access,arrangement,character,connect-words,conversation-words,format,gateway-state,screen,strip,summary,unread}.ts",
+      "packages/ui/src/{access,arrangement,character,connect-words,conversation-words,format,gateway-state,live,screen,strip,summary,unread}.ts",
     ],
     languageOptions: { globals: {} },
     rules: {

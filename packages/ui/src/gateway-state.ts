@@ -46,3 +46,80 @@ export function gatewayProblem(
     message: [error.message, error.hint].filter(Boolean).join(" "),
   };
 }
+
+/** The Gateway pane's words. */
+export const SETTINGS_WORDS = {
+  title: "Settings",
+  close: "Close settings",
+  gateway: "Gateway",
+  address: "Address",
+  noAddress: "None yet",
+  state: "State",
+  device: "This device",
+  scopes: "Granted scopes",
+  noScopes: "None while not connected",
+  server: "Gateway",
+  reconnect: "Reconnect",
+  disconnect: "Disconnect",
+  useAnother: "Use another gateway",
+} as const;
+
+/** The state's dot: connected, connecting, unreachable, or off. */
+export function gatewayDot(state: string): "connected" | "connecting" | "error" | "disconnected" {
+  return state === "Connected"
+    ? "connected"
+    : state === "Connecting" || state === "Pairing pending"
+      ? "connecting"
+      : state === "Offline"
+        ? "error"
+        : "disconnected";
+}
+
+/**
+ * What the pane offers: Reconnect from Offline or Disconnected, Disconnect
+ * (which keeps the pairing) while connected or trying to be, and Use another
+ * gateway (which forgets this one) whenever there is a gateway.
+ */
+export function gatewayActions(connection: ConnectionState): {
+  reconnect: boolean;
+  disconnect: boolean;
+  forget: boolean;
+} {
+  const state = gatewayState(connection);
+  return {
+    reconnect: state === "Offline" || state === "Disconnected",
+    disconnect:
+      connection.status === "connected" ||
+      connection.status === "connecting" ||
+      connection.status === "reconnecting",
+    forget: connection.gatewayUrl !== null,
+  };
+}
+
+/** The gateway's version and protocol, once the hello said them. */
+export function serverWords(connection: ConnectionState): string | null {
+  if (!connection.serverVersion) return null;
+  return `OpenClaw ${connection.serverVersion}${connection.protocol !== null ? ` · protocol ${connection.protocol}` : ""}`;
+}
+
+/** The scopes the gateway granted, while connected. */
+export function grantedWords(connection: ConnectionState): string {
+  return connection.status === "connected" && connection.scopes.length > 0
+    ? connection.scopes.join(", ")
+    : SETTINGS_WORDS.noScopes;
+}
+
+/** The pane's last line: the pairing is kept, and what this device may do. */
+export function pairingNote(
+  gateway: string,
+  holdsAll: boolean,
+  readOnly: boolean | undefined,
+): string {
+  return `${gateway} keeps this device's pairing while it is disconnected. ${
+    holdsAll
+      ? "This device can send, stop and answer."
+      : readOnly
+        ? "This device asks for read access only."
+        : "This device reads. Re-pair to ask for sending, stopping and answering."
+  }`;
+}
