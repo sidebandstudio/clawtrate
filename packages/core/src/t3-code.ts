@@ -291,10 +291,21 @@ export function latestSent(calls: readonly T3Call[]): string {
   return (sent.split("\n").find((line) => line.trim()) ?? "").trim();
 }
 
-/** Whether the bot's stop came after a sending call on the thread was made (11, F-137). */
+/**
+ * Whether the bot was stopped after the thread's latest sending call was made
+ * (11, F-137): its run reads as stopped, or a later call on the thread was cut
+ * short by the stop, as the gateway's own "Aborted" result says. History holds
+ * no end for a run another client stopped while a call was open, only that
+ * call's "Aborted".
+ */
 export function workMayContinue(calls: readonly T3Call[]): boolean {
-  const sending = [...calls].reverse().find((c) => SENDING[c.role]);
-  return sending?.state === "made" && sending.call.runStopped === true;
+  const at = calls.findLastIndex((c) => SENDING[c.role]);
+  const sending = calls[at];
+  if (sending?.state !== "made") return false;
+  const abortedAfter = calls
+    .slice(at + 1)
+    .some((c) => c.state === "unknown" && /^aborted\.?$/i.test((c.call.text ?? "").trim()));
+  return sending.call.runStopped === true || abortedAfter;
 }
 
 // What a read read ------------------------------------------------------------------

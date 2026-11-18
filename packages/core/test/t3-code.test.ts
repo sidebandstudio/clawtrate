@@ -6,6 +6,7 @@
 // `structuredContent:` and its JSON with sorted keys. Every name is invented.
 
 import { describe, expect, it } from "vitest";
+import type { T3Call as T3CallLike } from "../src/index.ts";
 import {
   applyAgentEvent,
   callFromBlock,
@@ -563,6 +564,20 @@ describe("a thread's state (11.2)", () => {
     expect(workMayContinue([{ ...l, call: { ...l.call, runStopped: true } }])).toBe(true);
     const unreturned = { ...l, state: "unknown" as const, call: { ...l.call, runStopped: true } };
     expect(workMayContinue([unreturned])).toBe(false);
+    // Read from history, a run another client stopped has no end of its own: the later call the
+    // stop cut short says so, with the gateway's "Aborted".
+    const aborted: T3CallLike = {
+      ...l,
+      id: "call_w",
+      role: "wait",
+      tool: "t3_thread_wait",
+      state: "unknown",
+      call: { ...l.call, status: "returned", isError: true, text: "Aborted" },
+    };
+    expect(workMayContinue([l, aborted])).toBe(true);
+    expect(
+      workMayContinue([l, { ...aborted, call: { ...aborted.call, text: "Something else" } }]),
+    ).toBe(false);
   });
 });
 
