@@ -197,64 +197,94 @@ test.beforeAll(async ({ browser }) => {
   second = await pairedPage(browser, await startOwnHost());
 });
 
-test.afterAll(async () => {
-  test.setTimeout(120_000);
-  // Put the arrangement back as it was: no pins, no sections.
-  if (page) {
-    await page
-      .evaluate(
-        async (changes) => {
-          for (const change of changes) {
-            await new Promise<void>((resolve) => {
-              const socket = new WebSocket(`ws://${location.host}/bridge`);
-              socket.onmessage = (event) => {
-                const message = JSON.parse(String(event.data)) as { type: string; id?: string };
-                if (message.type === "hello")
-                  socket.send(
-                    JSON.stringify({
-                      type: "command",
-                      id: "undo",
-                      command: { type: "changeSidebar", change, base: null },
-                    }),
-                  );
-                else if (message.id === "undo") {
-                  socket.close();
-                  resolve();
-                }
-              };
-              socket.onerror = () => resolve();
-            });
-          }
-        },
-        [
-          { op: "pin", botId: "pip", pinned: false },
-          { op: "section", botId: "marlow", section: null },
-        ],
-      )
-      .catch(() => {});
-  }
-  for (const key of made) {
-    const row = await describe(key).catch(() => null);
-    if (!row?.sessionId) continue;
-    await gatewayCall("chat.abort", { sessionKey: key }).catch(() => {});
-    if (!row.archived)
-      await gatewayCall("sessions.patch", {
-        key,
-        archived: true,
-        expectedSessionId: row.sessionId,
-      }).catch(() => {});
-    await gatewayCall("sessions.delete", {
-      key,
-      archivedOnly: true,
-      deleteTranscript: true,
-      expectedSessionId: row.sessionId,
-    }).catch(() => {});
-  }
-  await watcher?.close();
-  for (const host of hosts) {
-    await stopChild(host.child);
+/** Stop every preview host this spec started, and remove its folder. */
+async function stopHosts(): Promise<void> {
+  for (const host of hosts.splice(0)) {
+    await stopChild(host.child).catch(() => host.child.kill("SIGKILL"));
     rmSync(host.data, { recursive: true, force: true });
   }
+}
+// A worker that leaves without its hooks (a timeout, an interrupt) takes its hosts with it.
+process.once("exit", () => {
+  for (const host of hosts) host.child.kill("SIGKILL");
+});
+
+/** A step of the teardown, given at most `ms`; one that takes longer is left, not waited on. */
+const within = <T>(ms: number, work: Promise<T>): Promise<T | undefined> =>
+  Promise.race([
+    work,
+    new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms)),
+  ]);
+
+test.afterAll(async () => {
+  test.setTimeout(180_000);
+  try {
+    // Put the arrangement back as it was: no pins, no sections.
+    if (page && hosts.length > 0)
+      await within(
+        15_000,
+        page
+          .evaluate(
+            async (changes) => {
+              for (const change of changes) {
+                await new Promise<void>((resolve) => {
+                  const socket = new WebSocket(`ws://${location.host}/bridge`);
+                  const done = () => {
+                    socket.close();
+                    resolve();
+                  };
+                  setTimeout(done, 5_000);
+                  socket.onmessage = (event) => {
+                    const message = JSON.parse(String(event.data)) as { type: string; id?: string };
+                    if (message.type === "hello")
+                      socket.send(
+                        JSON.stringify({
+                          type: "command",
+                          id: "undo",
+                          command: { type: "changeSidebar", change, base: null },
+                        }),
+                      );
+                    else if (message.id === "undo") done();
+                  };
+                  socket.onerror = done;
+                });
+              }
+            },
+            [
+              { op: "pin", botId: "pip", pinned: false },
+              { op: "section", botId: "marlow", section: null },
+            ],
+          )
+          .catch(() => {}),
+      );
+  } finally {
+    // The hosts go first, whatever happens to the rest.
+    await stopHosts();
+  }
+  // What the checks made on the gateway, removed in parallel within a deadline.
+  await within(
+    90_000,
+    Promise.allSettled(
+      [...made].map(async (key) => {
+        const row = await describe(key).catch(() => null);
+        if (!row?.sessionId) return;
+        await gatewayCall("chat.abort", { sessionKey: key }).catch(() => {});
+        if (!row.archived)
+          await gatewayCall("sessions.patch", {
+            key,
+            archived: true,
+            expectedSessionId: row.sessionId,
+          }).catch(() => {});
+        await gatewayCall("sessions.delete", {
+          key,
+          archivedOnly: true,
+          deleteTranscript: true,
+          expectedSessionId: row.sessionId,
+        }).catch(() => {});
+      }),
+    ),
+  );
+  await within(5_000, watcher?.close() ?? Promise.resolve());
 });
 
 test("F-054 F-012: New task from the + at the top right creates an empty task on the gateway, selects it and focuses its composer", async () => {
