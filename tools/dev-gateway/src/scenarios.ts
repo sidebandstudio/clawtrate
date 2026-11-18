@@ -672,6 +672,37 @@ export const SCENARIOS: Scenario[] = [
     steps: () => message("#reply", "Could you look over the plan?", 30),
   },
   {
+    name: "message-column",
+    phrase: "read then message your partner twice",
+    bots: "Marlow or Pip",
+    summary:
+      "A file read, two messages to the other bot, answered in their calls, and a folder listing, with no text between: one column of cards.",
+    steps: () => [
+      think("I will read my instructions, then ask my partner twice."),
+      tool("read", { path: "AGENTS.md" }),
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_send", {
+            agentId: partnerOf(ctx),
+            message: "#reply Could you look over the plan?",
+            timeoutSeconds: 30,
+          }),
+      },
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_send", {
+            agentId: partnerOf(ctx),
+            message: "#reply And the route for Saturday?",
+            timeoutSeconds: 30,
+          }),
+      },
+      tool("ls", { path: "." }),
+      say("Both answered, and my files are listed."),
+    ],
+  },
+  {
     name: "message-slow",
     phrase: "message your slow partner",
     bots: "Marlow or Pip",
@@ -760,7 +791,8 @@ export const SCENARIOS: Scenario[] = [
     name: "t3-start",
     phrase: "start a t3 code thread and move on",
     summary: "Launches a thread in the stand-in and does not wait: its run is still running.",
-    steps: () => [launch(`${T3_TASK} This one is slow.`), say("T3 Code is working on it.")],
+    // No text after it, so a call that follows sits directly under the thread's card.
+    steps: () => [launch(`${T3_TASK} This one is slow.`)],
   },
   {
     name: "t3-long",

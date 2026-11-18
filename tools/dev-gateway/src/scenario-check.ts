@@ -2508,6 +2508,63 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
+    name: "a read, two messages to the other bot and a listing, with no text between",
+    covers: ["#message-column"],
+    run: async (h) => {
+      const view = await h.run(
+        "plain",
+        await h.session("pip", "message-column"),
+        "#message-column",
+      );
+      const returned = (
+        name: string,
+        title: string,
+        check?: (d: JsonRecord) => void,
+      ): CallExpectation => ({
+        name,
+        args: view.data(view.tool("start", name)[0]!).args,
+        isError: false,
+        content: (texts, where) => expect(texts.length > 0, `${where} has text`),
+        details: (d: JsonRecord | undefined) => check?.(rec(d)),
+        title,
+      });
+      const sends = view.tool("start", "sessions_send").map((e) => rec(view.data(e).args).message);
+      same(
+        sends,
+        ["#reply Could you look over the plan?", "#reply And the route for Saturday?"],
+        "the two messages",
+      );
+      view.expectCalls([
+        returned("read", "Read from AGENTS.md"),
+        {
+          ...returned("sessions_send", "Session Send agent marlow, timeout 30", (d) =>
+            same(d.status, "ok", "the first send"),
+          ),
+        },
+        {
+          ...returned("sessions_send", "Session Send agent marlow, timeout 30", (d) =>
+            same(d.status, "ok", "the second send"),
+          ),
+          args: {
+            agentId: "marlow",
+            message: "#reply And the route for Saturday?",
+            timeoutSeconds: 30,
+          },
+        },
+        returned("ls", "Ls ."),
+      ]);
+      // Each send's recipient run: Marlow's main task, which answers with a note and calls nothing.
+      for (const end of view.tool("result", "sessions_send")) {
+        const runId = String(rec(rec(view.data(end).result).details).runId);
+        const recipient = new RunView(h.op("plain"), runId, RECIPIENT_SESSION, view.from);
+        recipient.expectCalls([]);
+        recipient.expectEnd("final", null);
+      }
+      // No text between the calls: the only assistant text is the final reply.
+      view.expectEnd("final", "Both answered, and my files are listed.");
+    },
+  },
+  {
     name: "T3 Code stand-in: a thread launched, then waited on at once",
     covers: ["#t3"],
     run: async (h) => {
