@@ -50,6 +50,8 @@ export type BridgeCommand =
     }
   /** Add, or with `remove` take back, this person's reaction on a message the task shows (F-283). */
   | { type: "setReaction"; key: string; messageId: string; emoji: string; remove: boolean }
+  /** The "Turn time limit", in minutes, for every run this client starts (F-100). */
+  | { type: "setTurnLimit"; minutes: number }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
   | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
   | { type: "retryMessage"; key: string; messageId: string }
@@ -609,6 +611,10 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           : {}),
       };
     }
+    case "setTurnLimit":
+      if (typeof command.minutes !== "number" || !Number.isInteger(command.minutes))
+        throw new Error("invalid turn limit");
+      return { type: "setTurnLimit", minutes: command.minutes };
     case "readComposerMenu":
       if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
       return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
@@ -1033,6 +1039,8 @@ class ViewerSession implements BridgeSession {
         );
       case "stopRun":
         return client.stopRun(this.mine(command.key), command.runId, { owner });
+      case "setTurnLimit":
+        return client.setTurnLimit(command.minutes);
       case "readComposerMenu":
         return client.readComposerMenu(this.mine(command.key), command.trigger);
       case "setReaction":

@@ -822,6 +822,9 @@ export function liveCommand(
       return Promise.resolve();
     case "createTask":
       return Promise.resolve({ key: "agent:otto:new-task" });
+    case "setTurnLimit":
+      set({ ...get(), turnLimitMinutes: command.minutes });
+      return Promise.resolve();
     case "readComposerMenu":
       // As the gateway lists them for Otto: its skills and commands, or the bots and a routine.
       return Promise.resolve(

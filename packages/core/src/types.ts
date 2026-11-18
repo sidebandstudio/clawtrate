@@ -351,6 +351,11 @@ export type ClawtrateState = {
    */
   retention: { estimated: number; bound: number; near: boolean };
   /**
+   * The "Turn time limit" in minutes: a run this client started fails at it, and the client
+   * aborts it (F-100). Clawtrate's own wall-clock limit, kept by the host; 50 by default.
+   */
+  turnLimitMinutes?: number;
+  /**
    * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
    * pinned bots, sections, hidden bots and the manual order. Absent where a host
    * does not read it.

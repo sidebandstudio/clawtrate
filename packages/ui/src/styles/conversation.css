@@ -1584,3 +1584,18 @@ button.reaction {
 [data-input="touch"] .composer-menu-description {
   display: none;
 }
+
+/* Settings, Conversation: the turn time limit, a number of minutes (F-100). */
+.turn-limit-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.turn-limit-field .input {
+  width: 120px;
+}
+
+.turn-limit-field > span {
+  color: var(--text-muted);
+}

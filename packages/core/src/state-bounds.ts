@@ -907,6 +907,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   accounts: ACCOUNTS,
   retention: retentionAlarm,
   sidebar,
+  turnLimitMinutes: NUMBER,
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };

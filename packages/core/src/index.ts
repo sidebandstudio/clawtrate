@@ -48,6 +48,8 @@ export {
   ClawtrateClient,
   DEFAULT_MAX_PAYLOAD_BYTES,
   DEFAULT_TURN_LIMIT_MS,
+  MAX_TURN_LIMIT_MINUTES,
+  MIN_TURN_LIMIT_MINUTES,
   defaultApprovalInstructions,
   GatewayNotAllowedError,
   MAX_FILE_READS,

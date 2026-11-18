@@ -1591,6 +1591,42 @@ test("F-071 F-070: / lists the bot's own skills and the gateway's actions, a cho
   await composer(page).fill("");
 });
 
+test("F-100: with the Turn time limit set to 1 minute, a longer turn ends as failed with its card naming the limit, and the gateway stops it", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await openShell(page);
+  const setLimit = async (minutes: string) => {
+    await page.keyboard.press("ControlOrMeta+,");
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await settings.getByRole("button", { name: "Conversation", exact: true }).click();
+    const field = settings.getByLabel("Turn time limit");
+    await field.fill(minutes);
+    await field.press("Enter");
+    await page.keyboard.press("Escape");
+    await expect(settings).toHaveCount(0);
+    await page.keyboard.press("ControlOrMeta+,");
+    await expect(settings.getByLabel("Turn time limit")).toHaveValue(minutes);
+    await page.keyboard.press("Escape");
+  };
+  // The host is shared by later checks: its limit goes back to the default whatever happens.
+  try {
+    await setLimit("1");
+    const { key } = await ownTask(page, "Turn limit");
+    await composer(page).fill("Write it out very slowly. #slow 120");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("status-line")).toBeVisible();
+    const card = page.getByTestId("turn-error");
+    await expect(card).toContainText("Otto's turn reached its 1 minute limit", {
+      timeout: 120_000,
+    });
+    await expect(page.getByTestId("status-line")).toHaveCount(0);
+    await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+  } finally {
+    await setLimit("50");
+  }
+});
+
 test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
   page,
 }) => {

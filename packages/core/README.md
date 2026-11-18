@@ -217,7 +217,7 @@ Message cards: a tool start is the model's request, not a delivery, so a card is
 - Question cards show at most 8 options per question (`optionsOmitted` counts the rest) and 3 questions.
 - At most 4 whole reads (`readStepRaw` from history, `readHistoryItem`, `readApprovalText`) run at once; a fifth is refused with an error to show.
 - A host subscribes to the client's store (`client.store.subscribe`) at most `MAX_STORE_LISTENERS` (32) times at once; one more throws.
-- A run this client started fails after 50 minutes (`DEFAULT_TURN_LIMIT_MS`). A request unanswered for 60 seconds fails locally.
+- A run this client started fails at the "Turn time limit", 50 minutes (`DEFAULT_TURN_LIMIT_MS`) until the person chooses another with `setTurnLimit` (whole minutes, 1 to 1,440, kept in the host's storage and shown as `state.turnLimitMinutes`); a run already going is timed against a new limit from when it started. A request unanswered for 60 seconds fails locally.
 - Not promised: a reasoning step's id once its run's `reasoningRevision` changed, or after its task is closed and reopened or read from a different history window; that a step's whole text can be read before history holds it; that history itself is uncut (`Step.truncated` and `TranscriptItem.truncated` mark what the gateway cut); delivery of a message whose status is `checking`, `unknown` or `unconfirmed`; any order or link between a late reply and the send it answers.
 
 ## Changes interface builders must adapt to

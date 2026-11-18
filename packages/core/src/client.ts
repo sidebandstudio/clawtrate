@@ -279,6 +279,11 @@ export const SESSION_PAGE_SIZE = 200;
 export const MAX_SESSION_PAGES = 50;
 /** Clawtrate's turn limit (F-100): a run this client started fails after it. */
 export const DEFAULT_TURN_LIMIT_MS = 50 * 60_000;
+/** The "Turn time limit" a person may choose, in minutes (F-100). */
+export const MIN_TURN_LIMIT_MINUTES = 1;
+export const MAX_TURN_LIMIT_MINUTES = 24 * 60;
+/** Where the host keeps the chosen turn limit. */
+const TURN_LIMIT_KEY = "turn-limit-minutes";
 /** Tasks the client follows at once: open in some viewer, kept for their unsent work, or being created. */
 export const MAX_TRACKED_TASKS = TRACKED_TASKS;
 /**
@@ -690,6 +695,8 @@ export class ClawtrateClient {
    * the hello does not carry one.
    */
   private gatewayBootId: string | null = null;
+  /** The turn limit in force (F-100): the host's option, else the person's choice, else 50 minutes. */
+  private turnLimitMs = DEFAULT_TURN_LIMIT_MS;
   /**
    * The person this connection acts for, as the gateway names them (`users.self` profile id):
    * which reactions are this person's own. Read once per connection; null until then, or when
@@ -858,6 +865,7 @@ export class ClawtrateClient {
   constructor(host: ClawtrateHost, options: ClientOptions = {}) {
     this.host = host;
     this.options = options;
+    this.turnLimitMs = options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS;
     this.trackedLimit = hostLimit(options.limits?.trackedTasks, MAX_TRACKED_TASKS, "trackedTasks");
   }
 
@@ -880,6 +888,12 @@ export class ClawtrateClient {
   async start(): Promise<void> {
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
+    // A turn limit the person chose earlier, unless the host was given one.
+    if (this.options.turnLimitMs === undefined) {
+      const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
+      if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
+    }
+    this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
     this.settings = await this.savedSettings();
     if (this.settings?.suspended) {
       this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
@@ -913,6 +927,7 @@ export class ClawtrateClient {
     await this.host.storage.delete(SETTINGS_KEY);
     this.store.set({
       ...initialState,
+      turnLimitMinutes: this.turnLimitMs / 60_000,
       connection: { ...initialConnectionState, deviceId: this.identity?.deviceId ?? null },
     });
   }
@@ -3941,7 +3956,7 @@ export class ClawtrateClient {
         if (timer) clearTimeout(timer);
         this.turnTimers.delete(timerKey);
       } else if (!timer && run.origin === "local" && run.bound && isActive(run.state)) {
-        const limit = this.options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS;
+        const limit = this.turnLimitMs;
         const elapsed = this.now() - (run.startedAt ?? this.now());
         this.turnTimers.set(
           timerKey,
@@ -4028,17 +4043,36 @@ export class ClawtrateClient {
     });
   }
 
+  /**
+   * Set the "Turn time limit" (F-100), in whole minutes, and keep it for the next start. Runs
+   * already going are timed against the new limit from when they started.
+   */
+  async setTurnLimit(minutes: number): Promise<void> {
+    if (!validTurnLimit(minutes))
+      throw new Error(
+        `A turn limit is a whole number of minutes from ${MIN_TURN_LIMIT_MINUTES} to ${MAX_TURN_LIMIT_MINUTES}.`,
+      );
+    this.turnLimitMs = minutes * 60_000;
+    this.store.update((state) => ({ ...state, turnLimitMinutes: minutes }));
+    await this.host.storage.set(TURN_LIMIT_KEY, String(minutes));
+    for (const [timerKey, timer] of this.turnTimers) {
+      clearTimeout(timer);
+      this.turnTimers.delete(timerKey);
+    }
+    for (const key of Object.keys(this.state.transcripts)) this.afterActivity(key);
+  }
+
   private turnLimitReached(key: string, runId: string): void {
     this.turnTimers.delete(`${key}\u0000${runId}`);
     const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
     if (!run || !isActive(run.state)) return;
-    const limit = this.options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS;
+    const limit = this.turnLimitMs;
     if (this.now() - (run.startedAt ?? this.now()) < limit) {
       // Woken early by the timer ceiling: arm again.
       this.afterActivity(key);
       return;
     }
-    const minutes = Math.round((this.options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS) / 60_000);
+    const minutes = Math.round(this.turnLimitMs / 60_000);
     this.updateActivity(key, (activity, ctx) =>
       failRun(
         activity,
@@ -4094,6 +4128,7 @@ export class ClawtrateClient {
       this.rows = new Map();
       this.store.set({
         ...initialState,
+        turnLimitMinutes: this.turnLimitMs / 60_000,
         connection: {
           ...initialConnectionState,
           status: "error",
@@ -4124,7 +4159,7 @@ export class ClawtrateClient {
     }
     this.everConnected = hasData;
     this.store.update((state) => ({
-      ...(sameGateway ? state : initialState),
+      ...(sameGateway ? state : { ...initialState, turnLimitMinutes: this.turnLimitMs / 60_000 }),
       connection: {
         ...initialConnectionState,
         status: hasData ? "reconnecting" : "connecting",
@@ -5673,4 +5708,12 @@ function reactionsOf(summary: unknown, selfId: string | null): MessageReaction[]
     out.push({ emoji, count, mine });
   }
   return out.sort((a, b) => b.count - a.count).slice(0, MAX_REACTIONS_PER_MESSAGE);
+}
+
+function validTurnLimit(minutes: number): boolean {
+  return (
+    Number.isInteger(minutes) &&
+    minutes >= MIN_TURN_LIMIT_MINUTES &&
+    minutes <= MAX_TURN_LIMIT_MINUTES
+  );
 }
