@@ -193,6 +193,10 @@ class Tally {
     run.ids.push(callId);
     run.at.set(callId, { entry, list });
   }
+  /** The entry that draws a call of a run. */
+  entryOf(runId: string, callId: string): FeedEntry<FeedRef> | undefined {
+    return this.runs.get(runId)?.at.get(callId)?.entry;
+  }
   ids(runId: string): string[] {
     return this.runs.get(runId)?.ids ?? [];
   }
@@ -509,7 +513,11 @@ export function ActionScope({
       const ids = tally.ids(run.id);
       const account = retentionAccount(run, ids);
       tally.placeGaps(run, account);
+      // Every drawn call as its card reads it: an action from history or from the engine, and a
+      // call drawn as a card from the engine's step.
       const drawnCalls = ids.flatMap((id) => {
+        const entry = tally.entryOf(run.id, id);
+        if (entry?.type === "action") return [entry.call];
         const found = index.get(id);
         return found ? [callFromStep(found.step, found.run)] : [];
       });

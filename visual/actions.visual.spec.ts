@@ -200,6 +200,26 @@ test.describe("action cards", () => {
     await expect(next).toHaveAttribute("data-fold", "11");
   });
 
+  test("F-090: the run line counts the run's actions as its cards are drawn: a failure history alone holds is counted", async ({
+    page,
+  }) => {
+    await open(page, "actions-retained-history");
+    // The first read failed; only history's row holds it, since the engine kept the newest 128.
+    await setState(
+      page,
+      `const key = "agent:otto:disk-space"; const t = state.transcripts[key];
+       const items = t.items.map((item) => ({ ...item, blocks: item.blocks.map((b, i) =>
+         b.kind === "tool-call" && b.callId === "call_1_01"
+           ? { ...b, result: { isError: true, text: "ENOENT: no such file or directory" } } : b) }));
+       return { ...state, transcripts: { ...state.transcripts, [key]: { ...t, items } } };`,
+    );
+    const fold = cards(page).first();
+    await expect(line(fold)).toHaveAccessibleName(/, 1 failed$/);
+    await expect(page.getByTestId("run-line").locator("summary")).toHaveAccessibleName(
+      "Worked · 150 actions · 1 failed",
+    );
+  });
+
   test("F-093: Raw shows only parts received, each under its heading, and says which were not: a start with no result, and a result with no start", async ({
     page,
   }) => {
