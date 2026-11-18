@@ -16,6 +16,8 @@ export type RawContent =
       argsLabel?: string;
       /** Where the result or error shown came from, when it is not the gateway's raw payload. */
       resultLabel?: string;
+      /** Parts that were not received or not kept, each under its heading with a sentence. */
+      missing?: Array<{ label: string; text: string }>;
       error?: string | null;
       /** A tool call still running. */
       running?: boolean;

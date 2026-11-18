@@ -200,6 +200,55 @@ test.describe("action cards", () => {
     await expect(next).toHaveAttribute("data-fold", "11");
   });
 
+  test("F-093: Raw shows only parts received, each under its heading, and says which were not: a start with no result, and a result with no start", async ({
+    page,
+  }) => {
+    // One call of a reloaded run: the engine's step holds the call's start as history sent it,
+    // and no result.
+    await open(page, "actions-short");
+    await setState(
+      page,
+      `const key = "agent:otto:disk-space"; const t = state.transcripts[key]; const base = t.runs[0];
+       const seed = base.steps.find((s) => s.kind === "tool");
+       const user = { id: "u-raw", role: "user", timestamp: Date.now() - 1, model: null, blocks: [{ kind: "text", text: "Read it." }] };
+       const startOnly = { ...seed, id: "tool:start-only", toolCallId: "start-only", toolName: "read", status: "running",
+         rowTimes: true, args: { path: "empty.md" }, result: null, details: null, output: null, rawSize: null,
+         raw: { source: "history", runId: base.id, call: { type: "toolCall", id: "start-only", name: "read", arguments: { path: "empty.md" } }, result: null } };
+       const resultOnly = { ...seed, id: "tool:result-only", toolCallId: "result-only", toolName: "read", status: "done",
+         args: null, argsText: null, result: { text: "Output as received", totalChars: 18 }, details: { kind: "file" }, output: null, rawSize: null,
+         raw: { source: "live", runId: base.id, call: null, result: { phase: "result", name: "read", toolCallId: "result-only",
+           result: { content: [{ type: "text", text: "Output as received" }], details: { kind: "file" } } } } };
+       return { ...state, transcripts: { ...state.transcripts, [key]: { ...t,
+         runs: [{ ...base, anchorItemId: user.id, steps: [startOnly, resultOnly], origin: "history", state: "completed" }],
+         items: [user, { id: "a-raw", role: "assistant", timestamp: Date.now(), model: null, blocks: [
+           { kind: "tool-call", callId: "start-only", name: "read", argumentsText: '{"path":"empty.md"}', result: null },
+           { kind: "text", text: "Between." },
+           { kind: "tool-call", callId: "result-only", name: "read", argumentsText: "{}", result: { text: "Output as received", isError: false } },
+         ] }] } } };`,
+    );
+    const raw = async (id: string) => {
+      const card = page.locator(`[data-call="${id}"]`);
+      await line(card).click();
+      await card.getByRole("tab", { name: "Raw" }).click();
+      return card.getByRole("region", { name: "What the gateway sent" });
+    };
+    // A start with no result: its arguments, and the result said not to be there.
+    const start = await raw("start-only");
+    await expect(start.locator(".code-label", { hasText: /^Arguments$/ })).toHaveCount(1);
+    await expect(start).toContainText("empty.md");
+    await expect(start.getByTestId("raw-missing")).toHaveText(
+      "ResultThe gateway's history holds no result for this call.",
+    );
+    await expect(start.locator(".code-label", { hasText: /^Result$/ })).toHaveCount(1);
+    // A result with no start: no "Arguments null", the arguments said not to be there.
+    const result = await raw("result-only");
+    await expect(result).not.toContainText("null");
+    await expect(result.getByTestId("raw-missing")).toHaveText(
+      "ArgumentsThis app received no start for this call, so its arguments are not here.",
+    );
+    await expect(result).toContainText("Output as received");
+  });
+
   test("F-090: history that draws every action the engine dropped says none is missing: the run line counts what is drawn, and no gap line is drawn", async ({
     page,
   }) => {
@@ -239,8 +288,9 @@ test.describe("action cards", () => {
     const none = page.locator('[data-call="call_none"]');
     await line(none).click();
     await none.getByRole("tab", { name: "Raw" }).click();
-    await expect(none.locator(".raw-state")).toHaveText(
-      "The gateway's history holds no result for this call, and this app keeps nothing more of it.",
+    // Its arguments, as history holds them, and its result said to be missing.
+    await expect(none.getByTestId("raw-missing")).toHaveText(
+      "ResultThe gateway's history holds no result for this call.",
     );
     await expect(none.getByText('"content"')).toHaveCount(0);
     const kept = page.locator('[data-call="call_text"]');
