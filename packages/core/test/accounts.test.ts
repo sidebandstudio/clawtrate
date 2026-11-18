@@ -697,9 +697,20 @@ describe("a bot left half-made", () => {
 });
 
 describe("how an account was made", () => {
-  it("tells a key typed into Clawtrate from a key a browser sign-in saved", async () => {
+  it("a record that says only key says nothing of where it was entered: it is read as not known", async () => {
     const fake = new AccountsGateway();
     fake.prefs["clawtrate.account-kind.acme:work"] = "key";
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    expect(accounts().accounts.find((a) => a.id === "acme:work")).toMatchObject({
+      kind: "key",
+      made: null,
+    });
+    client.stop();
+  });
+
+  it("tells a key typed into Clawtrate from a key a browser sign-in saved", async () => {
+    const fake = new AccountsGateway();
+    fake.prefs["clawtrate.account-kind.acme:work"] = "typed-key";
     fake.prefs["clawtrate.account-kind.acme:home"] = "sign-in-key";
     const { client, accounts } = await accountsClient({ gateway: fake });
     try {
@@ -1124,7 +1135,7 @@ describe("a typed API key leaves no trace", () => {
     expect(profileId).toBe("acme:travel");
     expect(fake.typed.filter((value) => value === KEY)).toHaveLength(1);
     expect(client.state.accounts.signIn).toMatchObject({ stage: "connected", byKey: true });
-    expect(fake.prefs["clawtrate.account-kind.acme:travel"]).toBe("key");
+    expect(fake.prefs["clawtrate.account-kind.acme:travel"]).toBe("typed-key");
     await traceless(client, storage, logs, KEY);
     client.stop();
   });

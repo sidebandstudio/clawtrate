@@ -68,7 +68,10 @@ export function howMade(account: GatewayAccount): string {
     : account.kind === "key"
       ? account.made === "typed"
         ? "An API key, entered in Clawtrate"
-        : "A sign-in that saves a key"
+        : account.made === "sign-in"
+          ? "A sign-in that saves a key"
+          : // Where the key was entered isn't known: nothing is claimed of it.
+            "An API key"
       : "Added on the gateway";
 }
 

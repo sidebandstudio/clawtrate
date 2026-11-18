@@ -55,4 +55,9 @@ describe("how an account was made", () => {
     expect(howMade({ ...key, made: "typed" })).toBe("An API key, entered in Clawtrate");
     expect(howMade({ ...key, made: "sign-in" })).toBe("A sign-in that saves a key");
   });
+
+  it("claims nothing of a key whose record doesn't say where it was entered", () => {
+    const key = { ...account("openrouter:default", null), type: "api_key", kind: "key" as const };
+    expect(howMade({ ...key, made: null })).toBe("An API key");
+  });
 });

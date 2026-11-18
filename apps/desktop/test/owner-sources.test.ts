@@ -54,7 +54,7 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/scopes.ts:INTERACTIVE_SCOPES": "static, four scopes",
   "packages/core/src/scopes.ts:ADMIN_SCOPES": "static, five scopes",
   "packages/core/src/accounts-engine.ts:CERTAIN_REFUSALS": "static, seven error codes",
-  "packages/core/src/accounts.ts:KIND_RECORDS": "static, the three kinds Clawtrate records",
+  "packages/core/src/accounts.ts:KIND_RECORDS": "static, the four kinds Clawtrate records",
   "packages/core/src/accounts-engine.ts:complete>missing":
     "one creation's steps that did not land, at most four, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>errors":

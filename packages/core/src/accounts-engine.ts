@@ -949,7 +949,7 @@ export class AccountsEngine {
             : added.length === 1
               ? added[0]!
               : null;
-      if (shown) await this.recordKind(shown, "key");
+      if (shown) await this.recordKind(shown, "typed-key");
       this.setWrite({
         what: "key",
         target: provider,
@@ -1551,7 +1551,7 @@ export function isActive(signIn: SignInState): boolean {
 function kindOf(signIn: SignInState): KindRecord {
   // A key typed here; a browser sign-in that saves a key (OpenRouter's); a subscription.
   return signIn.byKey || signIn.flow === "key"
-    ? "key"
+    ? "typed-key"
     : signIn.provider === "openrouter"
       ? "sign-in-key"
       : "subscription";

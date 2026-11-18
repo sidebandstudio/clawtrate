@@ -89,11 +89,18 @@ export type AccountKind = "subscription" | "key" | "gateway";
 
 /**
  * What Clawtrate records on the gateway for an account it made: a
- * subscription's sign-in, a key typed into Clawtrate, or a sign-in in a
- * browser that saves a key (OpenRouter's).
+ * subscription's sign-in, a key typed into Clawtrate (`typed-key`), or a
+ * sign-in in a browser that saves a key (`sign-in-key`, OpenRouter's). A
+ * record that says only `key` says nothing of where the key was entered: it
+ * is read as a key made somewhere unknown, and nothing is claimed of it.
  */
-export type KindRecord = "subscription" | "key" | "sign-in-key";
-export const KIND_RECORDS: readonly KindRecord[] = ["subscription", "key", "sign-in-key"];
+export type KindRecord = "subscription" | "key" | "typed-key" | "sign-in-key";
+export const KIND_RECORDS: readonly KindRecord[] = [
+  "subscription",
+  "key",
+  "typed-key",
+  "sign-in-key",
+];
 
 export type GatewayAccount = {
   /** The profile id on the gateway, `<provider>:<name>`. */
@@ -109,7 +116,8 @@ export type GatewayAccount = {
   kind: AccountKind;
   /**
    * How Clawtrate made it: a key typed into Clawtrate ("typed"), a sign-in it
-   * started ("sign-in"), or neither (null, an account added on the gateway).
+   * started ("sign-in"), or not known (null: an account added on the
+   * gateway, or a key whose record doesn't say where it was entered).
    */
   made: "typed" | "sign-in" | null;
   /**
@@ -544,7 +552,11 @@ export function readBotView(answer: unknown): BotView {
 const kindOf = (record: KindRecord | undefined): AccountKind =>
   record === "subscription" ? "subscription" : record ? "key" : "gateway";
 const madeOf = (record: KindRecord | undefined): GatewayAccount["made"] =>
-  record === "key" ? "typed" : record ? "sign-in" : null;
+  record === "typed-key"
+    ? "typed"
+    : record === "subscription" || record === "sign-in-key"
+      ? "sign-in"
+      : null;
 
 export function mergeAccounts(
   views: Map<string, BotView>,
