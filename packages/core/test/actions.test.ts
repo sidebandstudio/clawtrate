@@ -550,7 +550,7 @@ describe("F-488 every kind of 8.1 has its words, its kind and its outcome", () =
           { details: { status: "timeout" } },
         ),
       ),
-    ).toBe("No reply in time");
+    ).toBe("Sent · no reply in time");
     expect(
       line(call("message", { action: "send", channel: "Telegram", target: "Dana", message: "x" }))
         .outcome,

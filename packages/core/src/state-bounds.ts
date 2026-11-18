@@ -414,6 +414,7 @@ const toolResult = object<ToolResult>()({
   text: text(MAX_ITEM_TOOL_CHARS),
   // Five small facts: an exit code, three flags and two line counts.
   facts: json(MAX_TOOL_FACTS_CHARS),
+  clipped: FLAG,
 });
 const block = union<TranscriptBlock, "kind">("kind")({
   text: object<Extract<TranscriptBlock, { kind: "text" }>>()({
@@ -429,6 +430,7 @@ const block = union<TranscriptBlock, "kind">("kind")({
     callId: ID,
     name: text(MAX_NAME_CHARS),
     argumentsText: text(MAX_ITEM_TOOL_CHARS),
+    argumentsAbsent: FLAG,
     result: toolResult,
   }),
 });

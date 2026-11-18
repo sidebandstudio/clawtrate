@@ -205,6 +205,15 @@ function parseArgs(text: string | null | undefined): Record<string, unknown> {
   }
 }
 
+/** A JSON text as sent, `null` included; the text itself when it is not JSON. */
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
 /** Whether a run that ended left a call open because it hit its time limit. */
 function cutOff(run: Pick<Run, "state" | "error" | "ending">): boolean {
   return (
@@ -240,6 +249,11 @@ export function callFromStep(
     isError: step.status === "failed",
     text: open ? null : (step.result?.text ?? ""),
     details: step.details ?? null,
+    // Cut by the gateway (its flag) or by this app's cap: the text is not the whole result.
+    ...(!open &&
+    (step.truncated || (step.result && step.result.totalChars > step.result.text.length))
+      ? { cut: true }
+      : {}),
     commandBearing: step.commandBearing === true,
     // History rows' times are not the call's own: no duration is read from them.
     startedAt: step.rowTimes ? null : step.startedAt,
@@ -267,13 +281,19 @@ export function callFromBlock(
     // not a result): nothing establishes how the call ended.
     if (!block.result && call.isError && !call.text)
       return { ...call, status: "unreturned", isError: false, text: null };
-    // History holds a result the engine's step does not have yet: history is newer.
-    if (block.result && (call.status !== "returned" || !call.text))
+    // History holds a result the engine's step does not have yet (history is newer), or more of
+    // its text than the step kept: read the fuller text.
+    if (
+      block.result &&
+      (call.status !== "returned" || !call.text || block.result.text.length > call.text.length)
+    )
       return {
         ...call,
         status: "returned",
         isError: block.result.isError,
         text: block.result.text,
+        // Cut or whole as history's row is, not as the engine's shorter copy was.
+        cut: block.result.clipped === true,
         partial: null,
       };
     return call;
@@ -287,6 +307,10 @@ export function callFromBlock(
     isError: block.result?.isError === true,
     text: block.result?.text ?? null,
     details: block.result?.facts ?? null,
+    ...(block.result?.clipped ? { cut: true } : {}),
+    rowArgs: block.argumentsAbsent
+      ? { kept: false }
+      : { kept: true, value: parseJson(block.argumentsText) },
     commandBearing: false,
     startedAt: null,
     endedAt: null,

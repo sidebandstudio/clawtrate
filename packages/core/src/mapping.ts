@@ -232,7 +232,7 @@ function prettyArguments(value: unknown): string {
       return value;
     }
   }
-  return JSON.stringify(value ?? {}, null, 2);
+  return JSON.stringify(value === undefined ? null : value, null, 2);
 }
 
 function assistantBlocks(content: unknown): TranscriptBlock[] {
@@ -254,7 +254,10 @@ function assistantBlocks(content: unknown): TranscriptBlock[] {
         kind: "tool-call",
         callId: str(block.id) ?? "",
         name: str(block.name) ?? "tool",
-        argumentsText: prettyArguments(block.arguments ?? block.input),
+        // Absent arguments are said to be absent; an explicit null stays null.
+        ...("arguments" in block || "input" in block
+          ? { argumentsText: prettyArguments("arguments" in block ? block.arguments : block.input) }
+          : { argumentsText: "", argumentsAbsent: true }),
         result: null,
       });
     }
@@ -357,7 +360,9 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
               : text,
         };
         const facts = historyFacts(message.details);
-        call.result = facts ? { ...result, facts } : result;
+        // Cut by the gateway when it stored the row, or here at this app's cap.
+        const cut = cutByGateway || text.length > MAX_TOOL_RESULT_CHARS;
+        call.result = { ...result, ...(facts ? { facts } : {}), ...(cut ? { clipped: true } : {}) };
         const holder = callItems.get(callId!);
         if (cutByGateway && holder) holder.truncated = true;
         return;

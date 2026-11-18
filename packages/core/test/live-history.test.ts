@@ -12,12 +12,12 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  applyAgentEvent,
+  emptyActivity,
   callFromBlock,
   callFromStep,
   lineOf,
   mapHistory,
-  projectArgs,
-  projectDetails,
   RawTable,
   runsFromHistory,
 } from "../src/index.ts";
@@ -34,6 +34,11 @@ type Case = {
   details: Rec | null;
   isError?: boolean;
   outcome: string;
+  /**
+   * The outcome from history, where it cannot be the live one: the gateway cut
+   * the stored text, so what only the cut part said is not known (7.3).
+   */
+  history?: string;
 };
 
 const json = (payload: Rec) => JSON.stringify(payload, null, 2);
@@ -79,6 +84,21 @@ const FETCHED = {
   tookMs: 40,
   text: "Page excerpt",
 };
+/** A page as the installed `web_fetch` returns it, its fields in their order. */
+const pageOf = (truncated: boolean, text: string) => ({
+  url: "https://source.example/guide",
+  finalUrl: "https://source.example/guide",
+  status: 200,
+  contentType: "text/plain",
+  extractMode: "markdown",
+  extractor: "raw",
+  externalContent: { untrusted: true, source: "web_fetch", wrapped: true },
+  truncated,
+  length: text.length,
+  rawLength: truncated ? 95000 : text.length,
+  text,
+  tookMs: 29,
+});
 const DIFF = "--- a/notes.md\n+++ b/notes.md\n@@ -0,0 +1 @@\n+Trail";
 
 const CASES: Case[] = [
@@ -563,45 +583,406 @@ const CASES: Case[] = [
     { status: "redirect", result: { ok: false } },
     "failed",
   ),
+  // More of the installed shapes, kind by kind (OpenClaw 2026.10.6 result builders).
+  // read: its notes and notices
+  {
+    name: "read: after a resolved filename",
+    tool: "read",
+    args: { path: "Survey Report.md" },
+    text: "[Resolved filename: Survey\u00a0Report.md -> Survey Report.md.]\nA route\nA map",
+    details: { kind: "file" },
+    outcome: "done",
+  },
+  {
+    name: "read: binary after a resolved filename",
+    tool: "read",
+    args: { path: "Survey Report.pdf" },
+    text: `[Resolved filename: Survey\u00a0Report.pdf -> Survey Report.pdf.]\n${NO_CONTENTS}`,
+    details: { kind: "text" },
+    outcome: "unavailable",
+  },
+  {
+    name: "read: empty file",
+    tool: "read",
+    args: { path: "empty.md" },
+    text: "File is empty (0 bytes).",
+    details: { kind: "text" },
+    outcome: "made",
+  },
+  {
+    name: "read: blank lines",
+    tool: "read",
+    args: { path: "blank.md" },
+    text: "File contains 2 blank lines.",
+    details: { kind: "text" },
+    outcome: "done",
+  },
+  {
+    name: "read: image",
+    tool: "read",
+    args: { path: "chart.png" },
+    text: "Read image file [image/png]",
+    details: { kind: "image" },
+    outcome: "done",
+  },
+  {
+    name: "read: image omitted for the model",
+    tool: "read",
+    args: { path: "chart.png" },
+    text: "Read image file [image/png]\n[Current model does not support images. The image will be omitted from this request.]",
+    details: { kind: "text" },
+    outcome: "unavailable",
+  },
+  {
+    name: "read: the page asked for",
+    tool: "read",
+    args: { path: "notes.md", limit: 1 },
+    text: "A route\n\n[2 more lines in file. Use offset=2 to continue.]",
+    details: { kind: "truncated", content: "A route" },
+    outcome: "done",
+  },
+  {
+    name: "read: capped by lines",
+    tool: "read",
+    args: { path: "long.md" },
+    text: "Line one\nLine two\n\n[Showing lines 1-1227 of 3300 (50KB limit). Use offset=1228 to continue.]",
+    details: { kind: "truncated" },
+    outcome: "partial",
+  },
+  {
+    name: "read: capped by bytes",
+    tool: "read",
+    args: { path: "wide.md" },
+    text: "aaaa\n\n[Read output capped at 50KB for this call. Use offset=1, cursor=51200 to continue.]",
+    details: { kind: "truncated" },
+    outcome: "partial",
+  },
+  {
+    name: "read: long content, cut in history",
+    tool: "read",
+    args: { path: "long.md" },
+    text: "An ordinary line of the document.\n".repeat(400),
+    details: { kind: "file" },
+    outcome: "done",
+    history: "made",
+  },
+  {
+    name: "read: long capped content, cut in history",
+    tool: "read",
+    args: { path: "long.md" },
+    text: `${"An ordinary line of the document.\n".repeat(400)}\n[Showing lines 1-400 of 3400 (50KB limit). Use offset=401 to continue.]`,
+    details: { kind: "truncated" },
+    outcome: "partial",
+    history: "made",
+  },
+  // command: backgrounded
+  {
+    name: "exec: returned to the background",
+    tool: "exec",
+    args: { command: "printf trail" },
+    text: "Command still running (session review, pid 42). Use process (list/poll/log/write/kill/clear/remove) for follow-up.",
+    details: { status: "running", sessionId: "review", pid: 42 },
+    outcome: "made",
+  },
+  // web: the gateway's normalized answers
+  jsonCase(
+    "web_search: answer",
+    "web_search",
+    { query: "trail" },
+    { kind: "answer", provider: "p", query: "trail", content: "The trail is open.", citations: [] },
+    "done",
+  ),
+  jsonCase(
+    "web_search: truncated results",
+    "web_search",
+    { query: "trail" },
+    {
+      kind: "results",
+      provider: "p",
+      query: "trail",
+      count: 10,
+      results: Array.from({ length: 10 }, () => ({
+        title: "A trail",
+        url: "https://search.example/t",
+      })),
+      truncated: true,
+    },
+    "partial",
+  ),
+  jsonCase(
+    "web_search: truncated answer",
+    "web_search",
+    { query: "trail" },
+    {
+      kind: "answer",
+      provider: "p",
+      query: "trail",
+      content: "The trail is open.",
+      citations: [],
+      truncated: true,
+    },
+    "partial",
+  ),
+  jsonCase(
+    "web_search: provider error",
+    "web_search",
+    { query: "trail" },
+    { kind: "error", provider: "p", error: "provider_error", message: "provider unavailable" },
+    "unavailable",
+  ),
+  jsonCase(
+    "web_search: raw payload",
+    "web_search",
+    { query: "trail" },
+    { kind: "raw", provider: "p", data: { note: "no contract" } },
+    "made",
+  ),
+  // page: long, cut in history after its `truncated`
+  jsonCase(
+    "web_fetch: long cut page",
+    "web_fetch",
+    { url: FETCHED.url },
+    pageOf(true, "Ordinary text explaining the trail. ".repeat(420)),
+    "partial",
+  ),
+  jsonCase(
+    "web_fetch: long whole page",
+    "web_fetch",
+    { url: FETCHED.url },
+    pageOf(false, "Ordinary text explaining the trail. ".repeat(420)),
+    "done",
+  ),
+  jsonCase(
+    "web_fetch: no text",
+    "web_fetch",
+    { url: FETCHED.url },
+    pageOf(false, ""),
+    "unavailable",
+  ),
+  // recall: a large partial search, whose `partial` history cuts away
+  {
+    ...jsonCase(
+      "memory_search: large partial",
+      "memory_search",
+      { query: "trail" },
+      {
+        results: Array.from({ length: 15 }, (_, i) => ({
+          path: `memory/n-${i}.md`,
+          snippet: "An ordinary hit. ".repeat(40),
+        })),
+        provider: "local",
+        partial: true,
+      },
+      "partial",
+    ),
+    history: "made",
+  },
+  // routines
+  jsonCase(
+    "automations: did not run",
+    "automations",
+    { action: "run", jobId: "sample" },
+    { ok: true, ran: false, reason: "invalid-spec" },
+    "refused",
+  ),
+  jsonCase(
+    "automations: run finished with an error",
+    "automations",
+    { action: "run", jobId: "sample" },
+    {
+      ok: true,
+      enqueued: true,
+      finished: true,
+      run: { status: "error", error: "The job failed." },
+    },
+    "failed",
+  ),
+  jsonCase(
+    "automations: run finished, no record",
+    "automations",
+    { action: "run", jobId: "sample" },
+    {
+      ok: true,
+      enqueued: true,
+      finished: true,
+      runId: "r",
+      note: "Finished, but its run history is not visible to this turn",
+    },
+    "made",
+  ),
+  jsonCase(
+    "automations: run complete",
+    "automations",
+    { action: "run", jobId: "sample" },
+    { ok: true, enqueued: true, finished: true, run: { status: "ok" } },
+    "done",
+  ),
+  jsonCase(
+    "automations: next check",
+    "automations",
+    { action: "next_check" },
+    { ok: true, delayMs: 60000 },
+    "done",
+  ),
+  // channels: sent is sent, whatever happened to the reply
+  {
+    ...jsonCase(
+      "conversations_turn: sent, reply timed out",
+      "conversations_turn",
+      { conversationRef: "c1", message: "Hi" },
+      {
+        conversationRef: "c1",
+        channel: "example",
+        status: "timeout",
+        messageId: "m1",
+        correlationPersisted: true,
+      },
+      "made",
+    ),
+    isError: true,
+  },
+  {
+    ...jsonCase(
+      "conversations_turn: sent, correlation off",
+      "conversations_turn",
+      { conversationRef: "c1", message: "Hi" },
+      {
+        conversationRef: "c1",
+        channel: "example",
+        status: "sent",
+        messageId: "m1",
+        error:
+          "Channel delivery did not preserve its prepared message id; reply correlation was disabled.",
+      },
+      "done",
+    ),
+    isError: true,
+  },
+  jsonCase(
+    "conversations_turn: replied",
+    "conversations_turn",
+    { conversationRef: "c1", message: "Hi" },
+    { conversationRef: "c1", channel: "example", status: "replied", reply: "Thanks" },
+    "done",
+  ),
+  // tool servers
+  {
+    name: "server: plain text",
+    tool: "coder__slow_task",
+    args: { seconds: 3 },
+    text: "This workspace allows the quick mode only.",
+    details: { mcpServer: "coder", mcpTool: "slow_task" },
+    outcome: "done",
+  },
+  {
+    name: "server: image only",
+    tool: "coder__slow_task",
+    args: {},
+    text: "",
+    details: { mcpServer: "coder", mcpTool: "slow_task" },
+    outcome: "made",
+  },
+  {
+    name: "server: plugin veto, flagged",
+    tool: "coder__slow_task",
+    args: { seconds: 3 },
+    text: "This workspace allows the quick mode only.",
+    details: {
+      status: "blocked",
+      deniedReason: "plugin-before-tool-call",
+      reason: "This workspace allows the quick mode only.",
+    },
+    isError: true,
+    outcome: "blocked",
+    history: "failed",
+  },
+  // the rest
+  jsonCase(
+    "ask_user: dismissed",
+    "ask_user",
+    { questions: [{ question: "Which route?" }] },
+    { status: "dismissed" },
+    "made",
+  ),
+  jsonCase(
+    "create_goal: set",
+    "create_goal",
+    { objective: "Plan the trip" },
+    { ok: true, goal: { objective: "Plan the trip" } },
+    "done",
+  ),
+  jsonCase(
+    "image_generate: models listed",
+    "image_generate",
+    { action: "list" },
+    { providers: [{ id: "acme" }] },
+    "done",
+  ),
+  {
+    name: "computer: screenshot",
+    tool: "computer",
+    args: { action: "screenshot" },
+    text: "screenshot 1280x800 (screen 0, frameId f1)",
+    details: { action: "screenshot", width: 1280, height: 800 },
+    outcome: "done",
+  },
+  jsonCase("subagents: listed", "subagents", { action: "list" }, { agents: [] }, "done"),
+  {
+    name: "view_image: looked",
+    tool: "view_image",
+    args: { path: "chart.png" },
+    text: "A bar chart of monthly costs.",
+    details: null,
+    outcome: "done",
+  },
 ];
-
-const RUN = { state: "completed", error: null, ending: null, origin: "gateway" } as unknown as Run;
-
-function step(c: Case, details: Rec | null, history = false): Step {
-  return {
-    id: `tool:${c.name}`,
-    kind: "tool",
-    title: c.tool,
-    toolName: c.tool,
-    toolCallId: c.name,
-    status: c.isError ? "failed" : "done",
-    startedAt: 1_000,
-    endedAt: 1_400,
-    argsText: null,
-    output: null,
-    result: { text: c.text, totalChars: c.text.length },
-    error: c.isError ? c.text : null,
-    approvalId: null,
-    failureKind: null,
-    truncated: false,
-    replaceable: false,
-    correction: 0,
-    continuation: null,
-    raw: null,
-    rawSize: null,
-    args: projectArgs(c.args),
-    details: projectDetails(details),
-    ...(c.tool === "exec" ? { commandBearing: true } : {}),
-    ...(history ? { rowTimes: true } : {}),
-  } as Step;
-}
 
 /** The line without its duration, which history does not report. */
 const said = (spoken: string) =>
   spoken.replace(/, [0-9.]+ seconds?(?=$|,)/, "").replace(/, done$/, "");
 
-/** The case as `chat.history` returns it: the call's row and its result's row, details as kept. */
-function historyOf(c: Case) {
+/** How the gateway stores a result's text in history: up to 8,000 characters, then cut and flagged. */
+const HISTORY_TEXT_CHARS = 8000;
+
+/** The live run's step for the case, through the engine's own events. */
+function liveOf(c: Case): { step: Step; run: Run } {
+  let activity = emptyActivity;
+  let seq = 0;
+  const ctx = { sessionKey: "agent:otto:disk-space", now: 5_000, raw: new RawTable() };
+  const send = (stream: string, data: Rec) => {
+    seq += 1;
+    activity = applyAgentEvent(
+      activity,
+      { runId: "run-l", seq, stream, ts: 1_000 + seq * 300, sessionKey: ctx.sessionKey, data },
+      ctx,
+    ).activity;
+  };
+  send("lifecycle", { phase: "start", startedAt: 1_000 });
+  send("tool", { phase: "start", name: c.tool, toolCallId: c.name, args: c.args });
+  send("tool", {
+    phase: "result",
+    name: c.tool,
+    toolCallId: c.name,
+    isError: c.isError === true,
+    result: {
+      content: [{ type: "text", text: c.text }],
+      ...(c.details ? { details: c.details } : {}),
+    },
+  });
+  send("lifecycle", { phase: "end" });
+  const run = activity.runs[0]!;
+  return { step: run.steps.find((each) => each.toolCallId === c.name)!, run };
+}
+
+/**
+ * The case as `chat.history` returns it: the call's row and its result's row,
+ * details as kept. `gatewayCut` stores the text as the gateway does, cut and
+ * flagged past its bound; without it the whole text reaches this app, which
+ * cuts its block at its own bound.
+ */
+function historyOf(c: Case, gatewayCut = true) {
+  const long = c.text.length > HISTORY_TEXT_CHARS;
+  const cut = gatewayCut && long;
   const rows = [
     { role: "user", content: "Go.", timestamp: 1_000, __openclaw: { id: "u1" } },
     {
@@ -614,11 +995,16 @@ function historyOf(c: Case) {
       role: "toolResult",
       toolCallId: c.name,
       toolName: c.tool,
-      content: [{ type: "text", text: c.text }],
+      content: [
+        {
+          type: "text",
+          text: cut ? `${c.text.slice(0, HISTORY_TEXT_CHARS)}\n...(truncated)...` : c.text,
+        },
+      ],
       isError: c.isError === true,
       ...(kept(c.details) ? { details: kept(c.details) } : {}),
       timestamp: 2_400,
-      __openclaw: { id: "r1", runId: "run-h" },
+      __openclaw: { id: "r1", runId: "run-h", ...(cut ? { truncated: true } : {}) },
     },
   ];
   const ctx = { sessionKey: "agent:otto:disk-space", now: 5_000, raw: new RawTable() };
@@ -635,21 +1021,29 @@ function historyOf(c: Case) {
 
 describe("every kind's outcome is the same live and from history", () => {
   for (const c of CASES) {
-    it(`${c.name}: ${c.outcome}`, () => {
+    it(`${c.name}: ${c.outcome}${c.history ? `, from history ${c.history}` : ""}`, () => {
       // What the app reads every call with: the gateway's name map for tool-server tools
       // (`tools.effective`), which a reload needs since history keeps no `mcpServer`.
       const ctx = { toolServers: { coder__slow_task: { server: "coder", tool: "slow_task" } } };
-      const live = lineOf(callFromStep(step(c, c.details, false), RUN), ctx);
+      const live = liveOf(c);
+      const liveLine = lineOf(callFromStep(live.step, live.run), ctx);
       const history = historyOf(c);
-      // History with the engine's step, and history's block alone (the step not kept).
-      const rebuilt = lineOf(callFromBlock(history.block, history.step, history.run), ctx);
-      const alone = lineOf(callFromBlock(history.block, undefined, undefined), ctx);
-      expect(live.outcome).toBe(c.outcome);
-      expect(rebuilt.outcome).toBe(c.outcome);
-      expect(alone.outcome).toBe(c.outcome);
-      // The same words, the duration aside.
-      expect(said(rebuilt.spoken)).toBe(said(live.spoken));
-      expect(said(alone.spoken)).toBe(said(live.spoken));
+      const whole = historyOf(c, false);
+      // History with the engine's step; history's block alone (the step not kept); and the
+      // block of a whole stored text, cut at this app's own bound.
+      const readings = [
+        lineOf(callFromBlock(history.block, history.step, history.run), ctx),
+        lineOf(callFromBlock(history.block, undefined, undefined), ctx),
+        lineOf(callFromBlock(whole.block, undefined, undefined), ctx),
+      ];
+      expect(liveLine.outcome).toBe(c.outcome);
+      for (const reading of readings) {
+        expect(reading.outcome).toBe(c.history ?? c.outcome);
+        // The same words as live, the duration aside, where history can say what live said.
+        if (!c.history) expect(said(reading.spoken)).toBe(said(liveLine.spoken));
+        // Never more than live: a cut result is never Done from history when live was not.
+        if (liveLine.outcome !== "done") expect(reading.outcome).not.toBe("done");
+      }
     });
   }
 });

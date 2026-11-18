@@ -162,6 +162,8 @@ export type ToolResult = {
    * call history alone holds reads as its step does. Absent when none was kept.
    */
   facts?: Record<string, unknown>;
+  /** The text is not the whole result: the gateway cut what it stored, or this app did. */
+  clipped?: boolean;
 };
 
 export type TranscriptBlock =
@@ -173,6 +175,8 @@ export type TranscriptBlock =
       name: string;
       /** Pretty-printed JSON arguments. */
       argumentsText: string;
+      /** The row carried no arguments at all (`argumentsText` is then empty). */
+      argumentsAbsent?: boolean;
       result: ToolResult | null;
     };
 

@@ -205,6 +205,18 @@ export const NOUNS = {
 
 /** The state word at the right of a card, for each outcome that has one. */
 export const STATE_WORDS = {
+  /** A read the tool says returned nothing of an empty file. */
+  emptyFile: "Empty file",
+  /** A read whose image the tool says it left out for the model. */
+  omitted: "Omitted",
+  /** A command the gateway returned to the background. */
+  stillRunning: "Still running",
+  /** A message sent whose reply did not come in its time. */
+  sentNoReply: "Sent · no reply in time",
+  /** A routine that finished with no record of its run to read. */
+  finishedOutcomeUnknown: "Finished · outcome not known",
+  /** A result whose stored text the gateway cut: what the cut part said is not known. */
+  storedCut: "Stored result cut",
   /** A read whose result says it returned no contents of the file. */
   noContents: "No contents",
   callStarted: "Call started",
@@ -235,7 +247,6 @@ export const STATE_WORDS = {
   sent: "Sent",
   replied: "Replied",
   answered: "Answered",
-  noReplyInTime: "No reply in time",
 } as const;
 
 /** The problem words of a fold's counts and the run line, in their fixed order (7.4). */

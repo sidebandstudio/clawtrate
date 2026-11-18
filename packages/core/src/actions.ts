@@ -87,6 +87,17 @@ export type ActionCall = {
   runStopped?: boolean;
   /** The gateway's own English title for the call (`item.title`), as sent; for the general card. */
   gatewayTitle?: string | null;
+  /**
+   * The result's text here is not the whole of it: the gateway cut what it
+   * stored or sent (`__openclaw.truncated`), or this app kept a prefix. What
+   * only the cut part said is not known, so text alone never makes it Done.
+   */
+  cut?: boolean;
+  /**
+   * The arguments as history's row holds them, where no engine step does:
+   * absent when the row had none, or the value as sent (`null` included).
+   */
+  rowArgs?: { kept: false } | { kept: true; value: unknown };
 };
 
 /** What the reading needs to know beyond the call. */
@@ -164,6 +175,20 @@ export function programOf(command: unknown): string {
   const wrappers: Record<string, true> = { sudo: true, env: true, nohup: true, time: true };
   const word = words.find((w) => w && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !wrappers[w]);
   return word && /^[\w./-]+$/.test(word) ? baseName(word) : "";
+}
+
+/**
+ * What a read's line says it got: the lines of the file's text when all of it
+ * is here, the part its capped notice names, or the count the tool's own
+ * sentence gives; never a count of a sentence, of notes, or of a cut text (8.6).
+ */
+function readCount(call: Pick<ActionCall, "text" | "isError" | "cut">): string {
+  if (!call.text || call.isError) return "";
+  const r = readText(call.text);
+  if (r.counted) return r.counted;
+  if (r.shown) return r.shown;
+  if (r.said || r.capped || call.cut || !r.body.trim()) return "";
+  return PLURALS.lines(lineCount(r.body));
 }
 
 /** The general card's words, from a name (8.3): `skills_search` is "skills search". */
@@ -506,7 +531,8 @@ const CONTENT_KINDS: Partial<Record<ActionKind, true>> = {
 /** The JSON object a result's text carries: the whole text, or a block after its words. */
 function payloadText(text: string): unknown {
   const t = text.trim();
-  if (!t.endsWith("}")) return null;
+  // A JSON object cut short, as history stores a long one: its members that are all there.
+  if (!t.endsWith("}")) return t.startsWith("{") ? leadingMembers(t) : null;
   // The whole text first, then each later "{" that may open the block (a few at most).
   let at = t.startsWith("{") ? 0 : t.indexOf("{");
   for (let tries = 0; at !== -1 && tries < 16; tries += 1) {
@@ -519,6 +545,61 @@ function payloadText(text: string): unknown {
     at = t.indexOf("{", at + 1);
   }
   return null;
+}
+
+/**
+ * The members of a JSON object's text that are complete before it was cut:
+ * each key whose whole value is there, in order; nothing from a value that
+ * was cut. Null when none is complete.
+ */
+function leadingMembers(t: string): Rec | null {
+  const out: Rec = {};
+  let i = 1;
+  const space = () => {
+    while (i < t.length && /\s/.test(t[i]!)) i += 1;
+  };
+  /** The end of the JSON value starting at `i`, or -1 when it is cut. */
+  const valueEnd = (): number => {
+    let depth = 0;
+    let inString = false;
+    for (let j = i; j < t.length; j += 1) {
+      const ch = t[j]!;
+      if (inString) {
+        if (ch === "\\") j += 1;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === "{" || ch === "[") depth += 1;
+      else if (ch === "}" || ch === "]") {
+        if (depth === 0) return j;
+        depth -= 1;
+      } else if (ch === "," && depth === 0) return j;
+    }
+    return -1;
+  };
+  for (;;) {
+    space();
+    if (t[i] !== '"') break;
+    const key = /^"(?:[^"\\]|\\.)*"/.exec(t.slice(i));
+    if (!key) break;
+    i += key[0].length;
+    space();
+    if (t[i] !== ":") break;
+    i += 1;
+    space();
+    const end = valueEnd();
+    if (end === -1) break;
+    try {
+      out[JSON.parse(key[0]) as string] = JSON.parse(t.slice(i, end));
+    } catch {
+      break;
+    }
+    i = end;
+    if (t[i] === ",") i += 1;
+    else break;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /**
@@ -700,6 +781,21 @@ function errorOutcome(call: ActionCall, kind: KindInfo): OutcomeOf {
     return { outcome: "refused", word: STATE_WORDS.notRun };
   }
   if (/^exec denied: /i.test(text)) return { outcome: "blocked", word: "policy" };
+  // A send the gateway reports as sent is sent, whatever then happened to its reply.
+  if (kind.kind === "channel") {
+    const s = str(d.status);
+    if (s === "sent") return { outcome: "done", word: STATE_WORDS.sent };
+    if (s === "replied") return { outcome: "done", word: STATE_WORDS.replied };
+    if (s === "timeout") return { outcome: "made", word: STATE_WORDS.sentNoReply };
+  }
+  // A refusal or an unavailability the kind's own reading names is that, flagged or not.
+  const adapter = ADAPTERS[kind.kind];
+  if (adapter) {
+    const own = adapter(call);
+    const o = typeof own === "string" ? { outcome: own } : own;
+    if (o.outcome === "refused" || o.outcome === "unavailable" || o.outcome === "notfound")
+      return o;
+  }
   const status = str(d.status);
   if (status === "forbidden") return { outcome: "refused", word: STATE_WORDS.notRun };
   if (status === "blocked") return { outcome: "blocked", word: "policy" };
@@ -725,14 +821,78 @@ type Adapter = (call: ActionCall) => OutcomeOf | Outcome;
 /**
  * The installed tools' own sentences that say what a call established, read
  * the same live and from history, where the gateway keeps the text but not
- * the details (OpenClaw 2026.10.6: `read`'s no-contents diagnostics, exec's
+ * the details (OpenClaw 2026.10.6: exec's
  * pending approval, media generation's result and background admission).
  */
-const READ_GAVE_NO_CONTENTS =
-  /^(Read did not return file contents because|File contains no readable text \(|Offset \d+ is beyond end of file|Cursor \d+ is at or beyond the end of line)/;
 /** The gateway's own words for a call it blocked before launch (its agent loop, 2026.10.6). */
 const GATEWAY_BLOCKED =
   /^(Tool execution was blocked before launch\.|OpenClaw stopped this run because tool-loop recovery encountered another critical loop\. No blocked tool action was executed\.)$/;
+const EXEC_BACKGROUNDED = /^Command still running \(session /;
+
+/**
+ * A `read` result's text as the installed read tool writes it (OpenClaw
+ * 2026.10.6): a note that it resolved another filename first; then the
+ * file's text, or one of its own sentences for what it did not return; then
+ * a notice that its own limit cut the read short, or that the page asked for
+ * leaves more lines in the file.
+ */
+export type ReadText = {
+  /** The tool's sentence in place of content, if it wrote one. */
+  said: "no-contents" | "image-omitted" | "optional-absent" | "empty" | "blank" | "image" | null;
+  /** The file's text, without the tool's notes; empty when it wrote a sentence instead. */
+  body: string;
+  /** The read stopped at its own limit (`[Read output capped …]`, `[Showing lines a-b of N …]`). */
+  capped: boolean;
+  /** The page the call asked for, with more lines in the file (`[N more lines in file …]`). */
+  page: boolean;
+  /** What the capped notice says was shown: "lines 1-1227 of 3300". */
+  shown: string | null;
+  /** The count the tool's sentence gives: "2 blank lines". */
+  counted: string | null;
+};
+
+export function readText(text: unknown): ReadText {
+  let lines = str(text).split("\n");
+  // The note that the tool read another filename than the one asked for.
+  while (lines.length && /^\[Resolved filename: .*\]$/.test(lines[0]!.trim()))
+    lines = lines.slice(1);
+  let all = lines.join("\n");
+  let capped = false;
+  let page = false;
+  let shown: string | null = null;
+  const notice =
+    /\n*\[(Read output capped at [^\]]*|Showing (lines (\d+)-(\d+) of (\d+)|part of line \d+)[^\]]*|\d+ more lines? in file\. Use offset=\d+ to continue\.)\]\s*$/.exec(
+      all,
+    );
+  if (notice) {
+    all = all.slice(0, notice.index);
+    if (/^\d+ more lines?/.test(notice[1]!)) page = true;
+    else {
+      capped = true;
+      if (notice[3]) shown = `lines ${notice[3]}-${notice[4]} of ${notice[5]}`;
+    }
+  }
+  const t = all.trim();
+  const said: ReadText["said"] =
+    /^(Read did not return file contents because|File contains no readable text \(|Offset \d+ is beyond end of file|Cursor \d+ is at or beyond the end of line)/.test(
+      t,
+    )
+      ? "no-contents"
+      : /^Read image file \[/.test(t)
+        ? /\[Current model does not support images\. The image will be omitted/.test(t)
+          ? "image-omitted"
+          : "image"
+        : /^Optional file not found: /.test(t)
+          ? "optional-absent"
+          : /^File is empty \(0 bytes\)\.$/.test(t)
+            ? "empty"
+            : /^File contains \d+ blank lines?\.$/.test(t)
+              ? "blank"
+              : null;
+  const blank = /^File contains (\d+ blank lines?)\.$/.exec(t);
+  return { said, body: said ? "" : all, capped, page, shown, counted: blank ? blank[1]! : null };
+}
+
 const EXEC_ASKS_APPROVAL = /(^|\n)Approval required \(id /;
 const MEDIA_STARTED = /^Background task started for .+ generation \(/;
 /** How many items "Generated 2 images with …" says were made; 0 when the text says none. */
@@ -758,11 +918,27 @@ const OBSERVE: Record<string, true> = {
 /** Each kind's own reading of a result without an error flag: its "Done needs" (8.1). */
 const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
   read: (c) => {
-    // The read tool's own sentence for a file it returned no contents of (OpenClaw 2026.10.6).
-    if (READ_GAVE_NO_CONTENTS.test(str(c.text).trim()))
-      return { outcome: "unavailable", word: STATE_WORDS.noContents };
-    if (/^Optional file not found: /.test(str(c.text))) return "notfound";
-    return c.text ? "done" : "made";
+    const r = readText(c.text);
+    switch (r.said) {
+      case "no-contents":
+        return { outcome: "unavailable", word: STATE_WORDS.noContents };
+      case "image-omitted":
+        return { outcome: "unavailable", word: STATE_WORDS.omitted };
+      case "optional-absent":
+        return "notfound";
+      case "empty":
+        return { outcome: "made", word: STATE_WORDS.emptyFile };
+      default:
+        break;
+    }
+    // The page the call asked for is what it asked for, though the details call it truncated.
+    if (r.page && r.body) return "done";
+    // Cut short by the read's own limit: its notice, or its details' kind (OpenClaw 2026.10.6).
+    if (r.capped || c.details?.kind === "truncated") return "partial";
+    if (r.said) return "done";
+    if (r.body) return "done";
+    // Without the text, the details' kind says the file's content came back whole.
+    return c.details?.kind === "file" || c.details?.kind === "text" ? "done" : "made";
   },
   list: (c) => (c.text ? "done" : "made"),
   edit: (c) => {
@@ -795,25 +971,36 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
   command: (c) => {
     const d = c.details;
     if (d?.status === "approval-pending" || EXEC_ASKS_APPROVAL.test(str(c.text))) return "waiting";
+    // Returned to the background: it is still running, as its result says.
+    if (d?.status === "running" || EXEC_BACKGROUNDED.test(str(c.text)))
+      return { outcome: "made", word: STATE_WORDS.stillRunning };
     if (c.name === "code_execution") return c.text ? "done" : "made";
     // A non-zero exit is the command's answer, not a failure (8.4).
     return num(d?.exitCode) !== null ? "done" : "made";
   },
   terminal: (c) => (carries(c) ? "done" : "made"),
   web: (c) => {
+    // The gateway's normalized answer (`kind`: results, answer, error, raw; OpenClaw 2026.10.6).
     const d = c.details;
-    if (Array.isArray(d?.results)) return "done";
-    if (d?.error) return "unavailable";
-    return "made";
+    // The provider's error, as the gateway normalized it; a thrown error stays Failed.
+    if (d?.kind === "error" || (d?.error && d?.status !== "error" && !Array.isArray(d?.results)))
+      return "unavailable";
+    const answered = d?.kind === "answer" && str(d.content).trim() !== "";
+    if (!Array.isArray(d?.results) && !answered) return "made";
+    return d?.truncated === true ? "partial" : "done";
   },
   xsearch: (c) => {
     if (c.details?.error) return "unavailable";
     return c.text || c.details?.content ? "done" : "made";
   },
   page: (c) => {
-    const d = c.details;
-    if (!(d?.text || c.text)) return "unavailable";
-    return d?.truncated === true ? "partial" : "done";
+    // The payload's own `text` where it carries one (`jsonResult`), else the result's text; where
+    // history cut the text away, the `length` the gateway reported for it.
+    const d = c.details ?? {};
+    if (d.truncated === true) return "partial";
+    const body = "text" in d ? str(d.text) : str(c.text);
+    if (body.trim() || (num(d.length) ?? 0) > 0) return "done";
+    return "unavailable";
   },
   browser: (c) => (carries(c) ? "done" : "made"),
   computer: (c) => {
@@ -837,8 +1024,22 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
   routine: (c) => {
     const d = c.details ?? {};
     switch (c.args.action) {
-      case "run":
-        return rec(d.run) ? "done" : d.enqueued === true ? "queued" : "made";
+      case "run": {
+        // It did not run: the gateway says so and why (`ran: false`, its `reason`).
+        if (d.ran === false) return { outcome: "refused", word: STATE_WORDS.notRun };
+        const run = rec(d.run);
+        if (run) {
+          const status = str(run.status);
+          if (status === "error" || status === "failed" || run.error) return "failed";
+          return status === "ok" || status === "completed" || status === "success"
+            ? "done"
+            : { outcome: "made", word: wordOf(status) || STATE_WORDS.callMade };
+        }
+        // Finished, with no record of its run to read: its outcome is not known.
+        if (d.finished === true)
+          return { outcome: "made", word: STATE_WORDS.finishedOutcomeUnknown };
+        return d.enqueued === true ? "queued" : "made";
+      }
       case "remove":
         return d.removed === true ? "done" : d.removed === false ? "notfound" : "made";
       case "next_check":
@@ -913,7 +1114,7 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
     if (s === "replied") return { outcome: "done", word: STATE_WORDS.replied };
     if (s === "queued") return "queued";
     if (s === "suppressed") return "suppressed";
-    if (s === "timeout") return { outcome: "made", word: STATE_WORDS.noReplyInTime };
+    if (s === "timeout") return { outcome: "made", word: STATE_WORDS.sentNoReply };
     return "made";
   },
   server: (c) => {
@@ -923,6 +1124,134 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
   },
   // A general card has no field of its own: only a value that says the work was done (7.3).
   tool: (c) => (saysDone(c.details) ? "done" : "made"),
+};
+
+/**
+ * What establishes each kind's Done, and each outcome short of it: the
+ * evidence the adapters below read, field by field, and nothing else. The
+ * engine's guide (`packages/core/README.md`, "What establishes Done") holds
+ * the same table, and a test keeps the two the same. Text alone is never
+ * evidence of content: the tools' own sentences for nothing returned,
+ * refused, omitted or cut are read as what they say, and a result whose text
+ * is cut is never Done on that text.
+ */
+export const DONE_EVIDENCE: Readonly<Record<ActionKind, { done: string; lesser: string }>> = {
+  read: {
+    done: "`read`: the file's text (not one of the tool's own sentences), with no cap notice; or, without text, `details.kind` `file` or `text`; the page asked for (`[N more lines in file \u2026]`)",
+    lesser:
+      'Partial: `[Read output capped \u2026]`, `[Showing lines a-b of N \u2026]` or `details.kind: "truncated"`. Unavailable: `Read did not return file contents \u2026`, `File contains no readable text`, an offset or cursor past the end, an image omitted for the model. Not found: `Optional file not found:`. Call made: `File is empty (0 bytes).`',
+  },
+  list: {
+    done: "`ls`: its text",
+    lesser: "Call made: no text",
+  },
+  edit: {
+    done: "`write`, `edit`: `details.changed: true` or a diff; `apply_patch`: a result that carries text or details",
+    lesser: "No change: `details.changed: false`. Call made: neither",
+  },
+  memory: {
+    done: "A memory note's `write` or `edit`: `details.changed: true` or a diff",
+    lesser: "No change: `details.changed: false`. Call made: neither",
+  },
+  recall: {
+    done: '`memory_search`: a `results` array; `memory_get`: `status: "ok"`',
+    lesser:
+      'Partial: `partial: true`. Unavailable: `unavailable` or `disabled`. Not found: `status: "not_found"`. Failed: `status: "error"`. Not run: `status: "forbidden"`',
+  },
+  command: {
+    done: "`exec`: an `exitCode` (any value); `code_execution`: its text",
+    lesser:
+      'Waiting: `status: "approval-pending"` or `Approval required (id \u2026`. Call made, still running: `status: "running"` or `Command still running (session \u2026`. Timed out, denied, blocked: the gateway\'s own error texts',
+  },
+  terminal: {
+    done: "`terminal`: a result that carries text or details",
+    lesser: "Call made: neither",
+  },
+  web: {
+    done: '`web_search`: `kind: "results"` with a `results` array, or `kind: "answer"` with content',
+    lesser:
+      'Partial: `truncated: true`. Unavailable: `kind: "error"` or a provider `error`. Call made: `kind: "raw"` or nothing it reads',
+  },
+  xsearch: {
+    done: "`x_search`: its text, or `content`, and no `error`",
+    lesser: "Unavailable: an `error` such as `missing_xai_api_key`",
+  },
+  page: {
+    done: "`web_fetch`: its `text`, or the `length` it reports when history cut the text, with `truncated` not true",
+    lesser: "Partial: `truncated: true`. Unavailable: no text",
+  },
+  browser: {
+    done: "`browser`: a result that carries text or details",
+    lesser: "Call made: neither",
+  },
+  computer: {
+    done: "`computer`: an observation's result; an act's `details.result.effect: \"confirmed\"`",
+    lesser:
+      "Not confirmed: `effect` `unverifiable` or `suspected_noop`. Failed: `details.result.ok: false`. Call made: an act with no effect",
+  },
+  phone: {
+    done: "`mobile_ui`: an observation's `snapshotId`",
+    lesser:
+      'Not run: `code: "confirmation_required"`, or a refusal `outcome.code`. Call made: any other `outcome.code`',
+  },
+  screen: {
+    done: "`screen`: a result that carries text or details",
+    lesser: "Call made: neither",
+  },
+  routine: {
+    done: "`automations`, `cron`: add or update: the job's `id`; remove: `removed: true`; run: a `run` whose `status` is `ok`; next_check: `ok: true` with `delayMs`; look-ups: a result that carries text or details",
+    lesser:
+      "Queued: `enqueued: true` and no `run`. Not found: `removed: false`. Not run: `ran: false`. Failed: a `run` whose `status` is `error` or that carries an `error`. Call made, finished, outcome not known: `finished: true` and no `run`",
+  },
+  message: {
+    done: "`sessions_send`: the Messaged card (section 10)",
+    lesser: "The Messaged card's own states",
+  },
+  tasks: {
+    done: "`sessions_*`, `session_status`, `agents_list`: a result that carries text or details, and no signal of the general reading",
+    lesser: 'Not run: `status: "forbidden"`. Failed: `status: "error"`',
+  },
+  helper: {
+    done: '`sessions_spawn`: Started on `status: "accepted"`; `subagents` list: a result that carries text or details',
+    lesser:
+      'Not run: `status: "forbidden"`. Failed: `status: "error"`. Call made: a wait, kill or steer',
+  },
+  question: {
+    done: '`ask_user`: `status: "answered"`',
+    lesser: "Call made, with the status in words: `no_answer`, `dismissed`, `expired`, `cancelled`",
+  },
+  plan: {
+    done: "`progress_card`: a `revision`, or the gateway's answer that it cleared the card; goals: a result that carries text or details",
+    lesser: 'Failed: `update_goal` with `status: "error"`. Call made: no revision',
+  },
+  media: {
+    done: "generate: a non-empty `media` or `paths`, or `Generated N \u2026 with \u2026`; `tts`: `audioPath` or `(spoken) \u2026`; list or status: a result that carries text or details",
+    lesser:
+      'Started: `async` with `status: "started"`, or `Background task started for \u2026`. Call made: an empty list',
+  },
+  look: {
+    done: "`pdf`, `view_image`: their text, and no `details.error`",
+    lesser:
+      "Not run: `too_many_pdfs`, `too_many_images`, `unsupported_pdf_reference`, `unsupported_image_reference`, or the tool's own sentences for them (`Too many PDFs: \u2026`)",
+  },
+  channel: {
+    done: '`conversations_send`: `status: "sent"`; `conversations_turn`: `status: "replied"` (or `sent`, with or without an error flag)',
+    lesser:
+      "Queued: `queued`. Suppressed: `suppressed`. Call made, sent, no reply in time: `timeout`. Call made: `unknown`, or the `message` tool's result",
+  },
+  server: {
+    done: "A tool server's result that carries text or details beyond its identity, without an error flag",
+    lesser:
+      'Not run: `details.status: "blocked"` or the gateway\'s own block sentences. Unknown: `aborted`, `cancelled`. Call made: an empty result',
+  },
+  t3: {
+    done: "T3 Code: the T3 Code card (section 11)",
+    lesser: "The T3 Code card's own states",
+  },
+  tool: {
+    done: 'Any other tool: a value that says the work was done (`ok: true`, a `status` or `code` of `ok`, `completed`, `success`, `sent`, `accepted`, `answered`, `replied`, `removed: true`, `effect: "confirmed"`)',
+    lesser: "Every signal of the general reading (7.3); Call made: anything else",
+  },
 };
 
 /**
@@ -954,6 +1283,21 @@ export function outcomeOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): O
   // The gateway's own sentences for a call it blocked before launch, kept in history as text.
   if (GATEWAY_BLOCKED.test(str(call.text).trim())) return { outcome: "blocked", word: "policy" };
   if (call.isError) return errorOutcome(call, kind);
+  const read = settledOutcome(call, kind);
+  // A result whose text is cut is read only for what its readable part and its kept details
+  // establish: Done never rests on text that is not all there.
+  if (read.outcome === "done" && call.cut) {
+    const without = settledOutcome({ ...call, text: "" }, kind);
+    if (without.outcome !== "done") return { outcome: "made", word: STATE_WORDS.storedCut };
+  }
+  // Nothing established, from a result whose text is cut: say the stored result was cut.
+  if (read.outcome === "made" && !read.word && call.cut)
+    return { outcome: "made", word: STATE_WORDS.storedCut };
+  return read;
+}
+
+/** The outcome of a call that returned without an error flag (7.3). */
+function settledOutcome(call: ActionCall, kind: KindInfo): OutcomeOf {
   const adapter = ADAPTERS[kind.kind];
   const norm = (o: OutcomeOf | Outcome): OutcomeOf => (typeof o === "string" ? { outcome: o } : o);
   const own = adapter ? norm(adapter(call)) : { outcome: "made" as const };
@@ -1079,12 +1423,7 @@ function wordsOf(call: ActionCall, kind: ActionKind, ctx: ReadingContext): Words
   const d = call.details ?? {};
   switch (kind) {
     case "read":
-      return three(
-        VERBS.read,
-        a.path ? baseName(str(a.path)) : OBJECTS.aFile,
-        // History may not keep what the line counts: then it says nothing (8.6).
-        call.text && !call.isError ? PLURALS.lines(lineCount(call.text)) : "",
-      );
+      return three(VERBS.read, a.path ? baseName(str(a.path)) : OBJECTS.aFile, readCount(call));
     case "list":
       return three(VERBS.list, a.path ? baseName(str(a.path)) : OBJECTS.aFolder);
     case "edit": {
@@ -1486,7 +1825,7 @@ function reasonOf(call: ActionCall): string {
   const e = call.details?.error;
   const text = str(call.text).trim();
   if (e && /^[a-z0-9_]+$/.test(str(e)) && text && !text.startsWith("{")) return firstLine(text);
-  return e && typeof e !== "object" ? str(e) : "";
+  return e && typeof e !== "object" ? firstLine(str(e)) : "";
 }
 
 /**
@@ -2133,6 +2472,13 @@ const DETAIL_KEYS: Record<string, true> = {
   diff: true,
   revision: true,
   steps: true,
+  // The kind of result a tool says it returned: a file's content, a capped read, an answer.
+  kind: true,
+  continuation: true,
+  length: true,
+  ran: true,
+  reason: true,
+  finished: true,
 };
 
 /**
