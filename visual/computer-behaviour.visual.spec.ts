@@ -1,0 +1,416 @@
+// The Computer tab's behaviour on fixed state (work-pane.md, Part 3): the
+// keyboard and focus of the full view, input that reaches the page only while
+// held, the hand-back before an answer, a read-only connection, and leaving.
+// The fixture answers with the engine itself and a scripted computer plugin.
+// Test names carry the parity rows they prove.
+import { expect, test, type Page } from "@playwright/test";
+import { contextFor, openFixture, SIZES } from "./fixture.ts";
+import {
+  COMPUTER,
+  computerPanel,
+  control,
+  controlBar,
+  fullView,
+  openFull,
+  OTTO_COMPUTER,
+  take,
+  tileReady,
+  watch,
+} from "./computer-helpers.ts";
+
+const WIDE = SIZES.find((size) => size.name === "1440")!;
+const PHONE = SIZES.find((size) => size.phone)!;
+
+type Sent = { type: string; [key: string]: unknown };
+const sent = (page: Page) =>
+  page.evaluate(
+    () => (window as unknown as { clawtrateFixture: { sent: Sent[] } }).clawtrateFixture.sent,
+  );
+const sentOf = async (page: Page, type: string) =>
+  (await sent(page)).filter((each) => each.type === type);
+const pane = (page: Page) =>
+  page.evaluate(() => {
+    const state = (
+      window as unknown as {
+        clawtrateFixture: { getState(): { computer?: { panes: Record<string, unknown> } } };
+      }
+    ).clawtrateFixture.getState();
+    return state.computer?.panes["fixture-viewer"] as
+      | { view: { status: string } | null; control: { status: string; released: boolean } }
+      | undefined;
+  });
+
+test.describe("the full view on the desktop", () => {
+  test.use(contextFor(WIDE, "light"));
+
+  test("F-142: nothing is drawn until Watch; Escape in Watching closes the full view, focus returns to Open, and watching continues", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=watching`, "light");
+    await tileReady(page);
+    expect(await sentOf(page, "computerWatch")).toEqual([]);
+    await expect(computerPanel(page).locator("canvas")).toHaveCount(0);
+    await openFull(page);
+    await expect(fullView(page)).toHaveAttribute("role", "dialog");
+    await expect(fullView(page).getByText("Watching", { exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(fullView(page)).toHaveCount(0);
+    await expect(
+      computerPanel(page).getByRole("button", { name: "Open Juniper's browser full window" }),
+    ).toBeFocused();
+    expect((await pane(page))?.view?.status).toBe("live");
+  });
+
+  test("F-142: in control, Escape moves focus to Give back control and never ends control; the collapse control keeps control, shown in the tile with Give back control", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await control(page);
+    // You have control is never alone: its second line stands under it.
+    await expect(controlBar(page)).toContainText(
+      "You have control" +
+        "Juniper's new browser actions are paused. Something it already started can still change this page." +
+        "I'm done" +
+        "Skip" +
+        "Give back control",
+    );
+    await fullView(page).getByTestId("screen-frame").focus();
+    await page.keyboard.press("Escape");
+    await expect(controlBar(page).getByRole("button", { name: "Give back control" })).toBeFocused();
+    await expect(fullView(page)).toBeVisible();
+    expect((await pane(page))?.control.status).toBe("granted");
+    expect(await sentOf(page, "computerRelease")).toEqual([]);
+    await fullView(page).getByRole("button", { name: "Close the full view (Esc)" }).click();
+    await expect(fullView(page)).toHaveCount(0);
+    const tile = computerPanel(page).getByTestId("computer-tile-control");
+    await expect(tile).toContainText("You have control.");
+    await expect(tile).toContainText("Juniper's new browser actions are paused.");
+    await tile.getByRole("button", { name: "Give back control" }).click();
+    await expect.poll(async () => (await pane(page))?.control.status).toBe("none");
+  });
+
+  test("F-142: typed text, clicks and scrolling reach the page only while this viewer holds control and the picture has focus; Enter is not sent; a paste goes only on a paste", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await openFull(page);
+    const frame = fullView(page).getByTestId("screen-frame");
+    await frame.focus();
+    await page.keyboard.type("no");
+    await frame.click();
+    expect(await sentOf(page, "computerInput")).toEqual([]);
+    await take(page);
+    await expect(controlBar(page)).toContainText("You have control");
+    await frame.click({ position: { x: 100, y: 50 } });
+    await page.keyboard.type("4821");
+    await page.keyboard.press("Enter");
+    await expect(
+      fullView(page).getByRole("status").filter({ hasText: "Enter isn't sent to the page." }),
+    ).toBeVisible();
+    await page.mouse.wheel(0, 200);
+    await frame.evaluate((element) => {
+      const data = new DataTransfer();
+      data.setData("text/plain", "pasted");
+      element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
+    });
+    await expect
+      .poll(async () => (await sentOf(page, "computerInput")).length)
+      .toBeGreaterThanOrEqual(7);
+    const inputs = (await sentOf(page, "computerInput")).map(
+      (each) => each.input as { kind: string; text?: string; x?: number },
+    );
+    expect(inputs[0]).toMatchObject({ kind: "click" });
+    // Mapped from the picture to the page's own pixels (1280 wide).
+    expect(inputs[0]!.x).toBeGreaterThan(50);
+    expect(
+      inputs
+        .filter((each) => each.kind === "text")
+        .map((each) => each.text)
+        .join(""),
+    ).toBe("4821pasted");
+    expect(inputs.some((each) => each.kind === "scroll")).toBe(true);
+    // Focus leaves the picture: typing no longer reaches the page.
+    await fullView(page).getByRole("button", { name: "Give back control" }).focus();
+    const before = (await sentOf(page, "computerInput")).length;
+    await page.keyboard.type("x");
+    expect((await sentOf(page, "computerInput")).length).toBe(before);
+  });
+
+  test("F-145: choosing an answer gives control back first; the answer goes once the release is confirmed, and the bot can carry on", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await control(page);
+    await controlBar(page).getByRole("button", { name: "I'm done" }).click();
+    await expect(controlBar(page)).toContainText(
+      /Giving control back…|Sending your answer…|Answer sent/,
+    );
+    await expect(controlBar(page)).toContainText("Answer sent. Juniper can carry on.");
+    const release = (await sentOf(page, "computerRelease"))[0]!;
+    expect(release.answer).toEqual({ questionId: "ask_library_sign_in", itemId: "q1", option: 0 });
+    await expect(fullView(page).getByText("Watching", { exact: true })).toBeVisible();
+  });
+
+  test("F-145: a release that is refused leaves ownership unknown with Try again and Check; Check finds control still held", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=releasefail`, "light");
+    await control(page);
+    await controlBar(page).getByRole("button", { name: "I'm done" }).click();
+    await expect(controlBar(page)).toContainText(
+      "Giving control back wasn't confirmed. This device may still have control of Juniper's browser.",
+    );
+    await expect(controlBar(page)).toContainText(
+      "Your answer wasn't sent. Answer in the chat once control is given back.",
+    );
+    await expect(fullView(page).getByText("Watching", { exact: true })).toHaveCount(0);
+    await expect(fullView(page).getByRole("button", { name: "Take control" })).toHaveCount(0);
+    await controlBar(page).getByRole("button", { name: "Check" }).click();
+    await expect(fullView(page).getByText("You still have control.")).toBeVisible();
+  });
+
+  test("F-145: a question the bar cannot answer is answered in the chat after control is given back", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=complexquestion`, "light");
+    await control(page);
+    await controlBar(page).getByRole("button", { name: "Give back control and answer" }).click();
+    await expect(fullView(page)).toHaveCount(0);
+    await expect.poll(async () => (await pane(page))?.control.status).toBe("none");
+    await expect(page.locator(".transcript [data-testid=question-card]").last()).toBeInViewport();
+  });
+
+  test("F-144: the waiting banner's Take control opens the full view and asks for control; Show the question goes to the card", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    const banner = computerPanel(page).getByTestId("computer-banner");
+    await expect(banner).toContainText("Juniper is waiting for you");
+    await expect(banner).toContainText(
+      "Sign in to your library account, then hand the browser back.",
+    );
+    await banner.getByRole("button", { name: "Show the question" }).click();
+    await expect(page.locator(".transcript [data-testid=question-card]").last()).toBeInViewport();
+    await banner.getByRole("button", { name: "Take control" }).click();
+    await expect(fullView(page)).toBeVisible();
+    await expect(controlBar(page)).toContainText("You have control");
+  });
+
+  test("F-142: Cancel while waiting withdraws the take; nothing says You have control", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=draining`, "light");
+    await openFull(page);
+    await take(page);
+    await expect(controlBar(page)).toContainText(
+      "Waiting for Juniper to finish what it's doing in the browser…",
+    );
+    await expect(controlBar(page).getByRole("button", { name: "Cancel" })).toBeFocused();
+    await controlBar(page).getByRole("button", { name: "Cancel" }).click();
+    await expect(fullView(page).getByText("Watching", { exact: true })).toBeVisible();
+    expect(await sentOf(page, "computerCancelTake")).toHaveLength(1);
+  });
+
+  test("leaving the Computer tab while in control gives control back first, then ends the view", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await control(page);
+    await fullView(page).getByRole("button", { name: "Close the full view (Esc)" }).click();
+    await page.getByRole("tab", { name: "Files" }).click();
+    await expect.poll(async () => (await pane(page))?.control.status).toBe("none");
+    expect((await pane(page))?.view).toBeNull();
+    expect(await sentOf(page, "computerLeave")).not.toHaveLength(0);
+  });
+
+  test("Show live when I open Computer is kept for the bot, and starts watching when the tab opens", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=watching`, "light");
+    await tileReady(page);
+    await computerPanel(page).getByLabel("Show live when I open Computer").check();
+    await page.getByRole("tab", { name: "Files" }).click();
+    await page.getByRole("tab", { name: "Computer" }).click();
+    await expect(computerPanel(page).locator(".screen[data-state=live]")).toBeVisible();
+  });
+
+  test("the one-time note before the first watch goes for good", async ({ page }) => {
+    await openFixture(page, `${COMPUTER}&computer=watching&firstwatch=1`, "light");
+    await expect(computerPanel(page).getByTestId("computer-first-watch")).toContainText(
+      "This is Juniper's browser, used by all of Juniper's tasks. It may be signed in to sites, and what you see here is live: anyone who can see your screen sees it too.",
+    );
+    await watch(page);
+    await computerPanel(page).getByRole("button", { name: "Stop watching" }).click();
+    await expect(computerPanel(page).getByTestId("computer-first-watch")).toHaveCount(0);
+  });
+});
+
+test.describe("a read-only connection (section 19)", () => {
+  test.use(contextFor(WIDE, "light"));
+
+  test("F-141: never asks for a view, never opens the full view and offers Request access", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control&access=read`, "light");
+    await expect(
+      computerPanel(page).getByText(
+        "Watching needs a connection that can send. This device is read-only.",
+      ),
+    ).toBeVisible();
+    await expect(computerPanel(page).getByRole("button", { name: "Request access" })).toBeVisible();
+    await expect(computerPanel(page).getByRole("button", { name: /^Watch/ })).toHaveCount(0);
+    await expect(computerPanel(page).getByTestId("computer-banner")).toHaveCount(0);
+    await expect(fullView(page)).toHaveCount(0);
+    for (const type of ["computerWatch", "computerTake", "computerInput"])
+      expect(await sentOf(page, type)).toEqual([]);
+  });
+});
+
+test.describe("the computer button, recovery and the machine", () => {
+  test.use(contextFor(WIDE, "light"));
+
+  test("F-139: the header's computer button opens the pane on Computer with focus on its tab, and says when the browser is in use", async ({
+    page,
+  }) => {
+    await openFixture(
+      page,
+      `scene=main&bot=main&task=agent:main:ebook-apps&panel=closed&tab=files&computer=active`,
+      "light",
+    );
+    const button = page.getByTestId("computer-button");
+    await expect(button).toHaveAccessibleName("Juniper's computer, in use. Show the computer");
+    await expect(button).toHaveAttribute("data-active", "true");
+    await button.click();
+    await expect(page.getByRole("tab", { name: "Computer, in use" })).toBeFocused();
+    await expect(page.getByRole("tab", { name: "Computer, in use" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  test("F-139: a task that never used the browser has no computer button", async ({ page }) => {
+    await openFixture(page, `${COMPUTER}&computer=unused`, "light");
+    await expect(page.getByTestId("computer-button")).toHaveCount(0);
+  });
+
+  test("F-149: after three refusals for the same reason the tab offers to stop the bot in this task, after a confirmation that says what keeps going", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=stuck`, "light");
+    await openFull(page);
+    await take(page);
+    for (let i = 0; i < 2; i++) {
+      await expect(controlBar(page)).toContainText("Juniper is still acting");
+      await controlBar(page).getByRole("button", { name: "Try again" }).click();
+    }
+    await expect(controlBar(page)).toContainText("Juniper is still acting");
+    await page.keyboard.press("Escape");
+    await expect(fullView(page)).toHaveCount(0);
+    const stuck = computerPanel(page).getByTestId("computer-stuck");
+    await expect(stuck).toContainText("Juniper's browser has been busy for a while.");
+    await stuck.getByRole("button", { name: "Stop Juniper in this task" }).click();
+    const confirm = computerPanel(page).getByRole("alertdialog", {
+      name: "Stop Juniper in this task?",
+    });
+    await expect(confirm).toContainText(
+      "Steps already done stay done. Juniper's other tasks and other bots keep going.",
+    );
+    await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await confirm.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(computerPanel(page).getByTestId("computer-stopped")).toContainText(
+      "Stopped Juniper's runs in this task.",
+    );
+    expect(await sentOf(page, "computerStopTask")).toHaveLength(1);
+  });
+
+  test("F-147 F-148 F-150: the machine keeps the approval target, where commands ran and the setting apart; a node that is not connected says so with Check again", async ({
+    page,
+  }) => {
+    await openFixture(page, `${OTTO_COMPUTER}&computer=offline`, "light");
+    const machine = computerPanel(page).getByTestId("computer-machine");
+    await expect(machine).toContainText("Command approval target");
+    await expect(machine).toContainText("Commands ran on" + "media-box");
+    await expect(machine).toContainText(
+      "Set for Otto" + "Commands: media-box" + "A setting for Otto. A task can run somewhere else.",
+    );
+    await expect(machine.getByTestId("computer-node")).toContainText("Not connected");
+    await expect(machine.getByTestId("computer-node")).toContainText("while going to sleep");
+    await expect(machine.getByTestId("computer-node")).not.toContainText("Reconnecting");
+    await machine.getByRole("button", { name: "Check again" }).click();
+    await expect(machine).toContainText(/Checked \d+:\d\d (AM|PM)/);
+    // No recover, reset or update of a machine is offered.
+    await expect(
+      computerPanel(page).getByRole("button", { name: /Recover|Reset|Update/ }),
+    ).toHaveCount(0);
+  });
+
+  test("F-148: a node record that couldn't be read is Unknown, never Not connected", async ({
+    page,
+  }) => {
+    await openFixture(page, `${OTTO_COMPUTER}&computer=nodeunknown`, "light");
+    const node = computerPanel(page).getByTestId("computer-node");
+    await expect(node).toContainText("Unknown");
+    await expect(node).not.toContainText("Not connected");
+  });
+
+  test("F-153 F-154: commands with how each ended and its duration, and recent actions newest first, each one step from the chat", async ({
+    page,
+  }) => {
+    await openFixture(page, `${OTTO_COMPUTER}&computer=watching`, "light");
+    const commands = computerPanel(page).getByTestId("computer-commands");
+    await expect(commands.locator(".command-row").first()).toContainText(
+      "mv /var/lib/transcode-cache /var/lib/transcode-cache.old",
+    );
+    await expect(commands.locator(".command-row").first()).toContainText("exit 0 · 0.4s");
+    await expect(commands.locator(".command-row").nth(1)).toContainText("exit 0 · 6.2s");
+    const actions = computerPanel(page).getByTestId("computer-actions");
+    await expect(actions.getByRole("button").first()).toHaveAccessibleName(
+      /, \d+:\d\d (AM|PM)\. Show in chat$/,
+    );
+  });
+});
+
+test.describe("the full view on the phone (section 18, On the phone)", () => {
+  test.use(contextFor(PHONE, "light"));
+
+  test("F-142: in control the page opens at its own size; zoom is the device's own; the dock keeps You have control with its second line", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=control`, "light");
+    await openFull(page);
+    const fitted = await fullView(page)
+      .locator(".screen-zoom-inner")
+      .evaluate((el) => el.clientWidth);
+    await fullView(page)
+      .locator(".control-dock")
+      .getByRole("button", { name: "Take control" })
+      .click();
+    await expect(fullView(page).locator(".control-dock")).toContainText(
+      "You have control" +
+        "Juniper's new browser actions are paused. Something it already started can still change this page.",
+    );
+    await expect
+      .poll(() =>
+        fullView(page)
+          .locator(".screen-zoom-inner")
+          .evaluate((el) => el.clientWidth),
+      )
+      .toBe(1280);
+    expect(fitted).toBeLessThan(400);
+    await fullView(page).getByRole("button", { name: "Zoom out" }).click();
+    expect(await sentOf(page, "computerInput")).toEqual([]);
+    await fullView(page).getByRole("button", { name: "Type into the page" }).click();
+    await fullView(page)
+      .getByRole("textbox", { name: "Type into the page" })
+      .pressSequentially("ab");
+    await expect.poll(async () => (await sentOf(page, "computerInput")).length).toBeGreaterThan(0);
+    await fullView(page).getByRole("textbox", { name: "Type into the page" }).press("Enter");
+    await expect(
+      fullView(page).getByText("Enter isn't sent to the page. Tap the page's button instead."),
+    ).toBeVisible();
+    await fullView(page).getByRole("button", { name: "Done", exact: true }).click();
+    await expect(fullView(page).getByRole("textbox", { name: "Type into the page" })).toHaveCount(
+      0,
+    );
+  });
+});

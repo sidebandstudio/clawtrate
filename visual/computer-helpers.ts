@@ -1,0 +1,60 @@
+// Shared by the Computer tab's visual and behaviour checks.
+import { expect, type Page } from "@playwright/test";
+import { OTTO_DISK } from "./fixture.ts";
+
+/** Juniper's research task with the Work pane open on Computer. */
+export const COMPUTER = "scene=main&bot=main&task=agent:main:ebook-apps&panel=open&tab=computer";
+/** Otto's disk task on Computer: the machine with a node, and the commands. */
+export const OTTO_COMPUTER = `scene=main&${OTTO_DISK}&panel=open&tab=computer`;
+
+export const computerPanel = (page: Page) => page.locator("#work-tabpanel-computer");
+export const fullView = (page: Page) => page.getByTestId("screen-view");
+export const controlBar = (page: Page) => fullView(page).getByTestId("control-bar");
+
+/** The tile has its tabs: the Watch pill is there. */
+export const tileReady = (page: Page) =>
+  expect(
+    computerPanel(page).getByRole("button", { name: "Watch Juniper's browser" }),
+  ).toBeVisible();
+
+/** Watch, and wait for the first frame to be drawn. */
+export async function watch(page: Page) {
+  await tileReady(page);
+  await computerPanel(page).getByRole("button", { name: "Watch Juniper's browser" }).click();
+  await expect(computerPanel(page).locator(".screen[data-state=live] canvas")).toBeVisible();
+  await expect
+    .poll(() =>
+      computerPanel(page)
+        .locator(".screen canvas")
+        .evaluate((canvas: HTMLCanvasElement) => canvas.width),
+    )
+    .toBeGreaterThan(0);
+}
+
+/** Watch, then open the full view. */
+export async function openFull(page: Page) {
+  await watch(page);
+  await computerPanel(page)
+    .getByRole("button", { name: "Open Juniper's browser full window" })
+    .click();
+  await expect(fullView(page)).toBeVisible();
+  await expect
+    .poll(() =>
+      fullView(page)
+        .locator("canvas")
+        .evaluate((canvas: HTMLCanvasElement) => canvas.width),
+    )
+    .toBeGreaterThan(0);
+}
+
+/** From the full view: Take control, and wait for the answer the scene's plugin gives. */
+export async function take(page: Page) {
+  await fullView(page).getByRole("button", { name: "Take control" }).click();
+}
+
+/** Take control and wait until the gateway granted it. */
+export async function control(page: Page) {
+  await openFull(page);
+  await take(page);
+  await expect(controlBar(page)).toContainText("You have control");
+}
