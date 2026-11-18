@@ -13,6 +13,7 @@ import {
   type SentRequest,
   type SettlingRecord,
 } from "./approvals.ts";
+import { projectArgs, projectDetails } from "./actions.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import { filePathsOf } from "./file-paths.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
@@ -21,6 +22,8 @@ import {
   MAX_ID_CHARS,
   MAX_INLINE_RAW_CHARS,
   MAX_PENDING_QUESTIONS_PER_TASK,
+  MAX_PREAMBLES_PER_RUN,
+  MAX_TEXT_TAIL,
   MAX_QUESTION_OPTIONS,
   MAX_RUN_LIST,
   MAX_SETTLED_APPROVAL_COUNT,
@@ -90,7 +93,17 @@ export function isOpenStep(step: Step): boolean {
 }
 
 /** Display text, capped so long output never bloats every state snapshot. */
-export type StepText = { text: string; totalChars: number };
+export type StepText = {
+  text: string;
+  totalChars: number;
+  /**
+   * When the text is longer than this app keeps: its last characters, where a
+   * tool writes its notices ("[Read output capped …]"), and its line count,
+   * read from the whole text as it arrived.
+   */
+  tail?: string;
+  lines?: number;
+};
 
 /**
  * Exactly what the gateway sent for a step. Live tool steps keep the `tool`
@@ -125,6 +138,8 @@ export type Step = {
   kind: StepKind;
   /** Short title derived from the tool name, the same live and from history. */
   title: string;
+  /** The gateway's own English title for the call (`item` events' `title`), as sent; live only. */
+  gatewayTitle?: string;
   /** The tool name exactly as the gateway sent it, for example `sessions_send` or `coder__send_message`. */
   toolName: string | null;
   toolCallId: string | null;
@@ -176,6 +191,30 @@ export type Step = {
   raw: StepRaw | null;
   /** Length of the raw JSON, known once the step has finished. */
   rawSize: number | null;
+  /**
+   * What the reading of an action (`actions.ts`) needs of the call's
+   * arguments: `projectArgs`, at most `MAX_ACTION_FACTS_CHARS`. Absent for
+   * reasoning, or when the arguments were not an object.
+   */
+  args?: Record<string, unknown> | null;
+  /**
+   * What the reading needs of the result's `details` (`projectDetails`), at
+   * most `MAX_ACTION_FACTS_CHARS`. Absent until a result carries details;
+   * history keeps them for some tools only.
+   */
+  details?: Record<string, unknown> | null;
+  /** The gateway marked the call as a shell command (`commandBearing` on its item or result). */
+  commandBearing?: boolean;
+  /**
+   * The step's times are its history rows' timestamps (when the message and
+   * the result were written), not the call's own start and end, which only
+   * the live events report: no duration is read from them.
+   */
+  rowTimes?: boolean;
+  /** Tool steps dropped to keep the run within its bounds directly before this one. */
+  omittedBefore?: number;
+  /** The gateway cut this step's result text when it stored it (history's `__openclaw.truncated`). */
+  resultCut?: boolean;
   /**
    * For a file tool's call (`read`, `write`, `edit`, `apply_patch`): the paths
    * its arguments name, as the gateway's file list reads them, and what its
@@ -285,6 +324,15 @@ export type Run = {
    * still holds them; their raw payloads are no longer kept here.
    */
   omittedSteps: number;
+  /** Of `omittedSteps`, the tool steps: actions the run reported that are not kept. */
+  omittedTools?: number;
+  /** Tool steps dropped after the last tool step kept: the gap at the run's end. */
+  omittedToolsAtEnd?: number;
+  /**
+   * The run's end time is its last history row's timestamp, not a time the
+   * gateway's lifecycle reported: no duration is read from it.
+   */
+  endFromRows?: boolean;
   /**
    * The anchor the run's next reasoning block is numbered from: `t.<toolCallId>`
    * of the latest tool call, `c` when a history window began inside the run
@@ -300,8 +348,33 @@ export type Run = {
    * valid only while this is unchanged; when it changes, clear it.
    */
   reasoningRevision: number;
+  /**
+   * Text the model wrote beside a tool call (`item` of kind `preamble`), in
+   * order, newest last, at most `MAX_PREAMBLES_PER_RUN`. Absent until one arrives.
+   */
+  preambles?: Preamble[];
   /** Paths of fields cut to their bound; a cut `text` is not extended by later deltas. */
   cut?: string[];
+};
+
+/**
+ * Text the model wrote in the same message as a tool call (conversation.md
+ * 7.6). It is shown as the bot's bubble directly before the call it came
+ * with: the first tool step to start after it, named by its call id, so
+ * dropping older steps never moves it.
+ */
+export type Preamble = {
+  /** The gateway's item id. */
+  id: string;
+  text: string;
+  /** The item's `end` arrived: no caret. */
+  ended: boolean;
+  /**
+   * The tool call id of the first tool step to start after it; null until
+   * one starts. When that step is dropped to keep the run within its bound,
+   * the next kept tool step after it, or null when none follows.
+   */
+  beforeCall: string | null;
 };
 
 export type OutgoingStatus =
@@ -707,9 +780,12 @@ function capRunError(error: RunError | null): RunError | null {
 }
 
 export function capText(text: string): StepText {
+  if (text.length <= MAX_STEP_TEXT) return { text, totalChars: text.length };
   return {
-    text: text.length > MAX_STEP_TEXT ? text.slice(0, MAX_STEP_TEXT) : text,
+    text: text.slice(0, MAX_STEP_TEXT),
     totalChars: text.length,
+    tail: text.slice(-MAX_TEXT_TAIL),
+    lines: text.replace(/\n$/, "").split("\n").length,
   };
 }
 
@@ -928,7 +1004,19 @@ function upsertStep(run: Run, written: Step): Run {
       anchor !== null && anchor !== run.reasoningAnchor
         ? { reasoningAnchor: anchor, nextReasoning: 0 }
         : {};
-    return { ...run, ...anchored, steps: [...run.steps, step] };
+    // Text written before this call, still waiting for its call, is this call's.
+    const preambles =
+      step.kind === "tool" && step.toolCallId && run.preambles?.some((p) => p.beforeCall === null)
+        ? run.preambles.map((p) =>
+            p.beforeCall === null ? { ...p, beforeCall: step.toolCallId } : p,
+          )
+        : run.preambles;
+    return {
+      ...run,
+      ...anchored,
+      ...(preambles ? { preambles } : {}),
+      steps: [...run.steps, step],
+    };
   }
   const steps = [...run.steps];
   steps[index] = step;
@@ -2106,6 +2194,8 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
             toolName: name ?? step.toolName,
             title: toolTitle(name ?? step.toolName),
             argsText: capText(prettyArgs(data.args)),
+            args: projectArgs(data.args),
+            ...(data.commandBearing === true ? { commandBearing: true } : {}),
             ...withFiles(stepFiles(name ?? step.toolName, data.args)),
           },
           ctx,
@@ -2138,6 +2228,8 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
         failureKind: isError ? str(details?.failureKind) : null,
         truncated: details?.truncated === true,
         replaceable: data.replaceable === true,
+        details: projectDetails(details),
+        ...(data.commandBearing === true ? { commandBearing: true } : {}),
         correction: replacing ? step.correction + 1 : step.correction,
       };
       return upsertStep(current, settleRaw(settleFiles(finished, details, isError), ctx));
@@ -2164,6 +2256,7 @@ function toolResultFacts(data: RawRecord): { text: string; details: RawRecord | 
 
 /** `item` frames add the gateway's timing to the tool step they describe. */
 function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): Run {
+  if (data.kind === "preamble") return applyPreamble(run, data);
   if (data.kind !== "tool") return run;
   const toolCallId = str(data.toolCallId);
   if (!toolCallId) return run;
@@ -2172,11 +2265,31 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
   // The item start comes just before the tool start: the step shows from it.
   if (!existing && data.phase !== "start") return run;
   const step = existing ?? blankToolStep(toolCallId, str(data.name), num(data.startedAt));
+  const title = str(data.title);
   return upsertStep(run, {
     ...step,
+    ...(data.commandBearing === true ? { commandBearing: true } : {}),
+    ...(title ? { gatewayTitle: title } : {}),
     startedAt: num(data.startedAt) ?? step.startedAt,
     endedAt: isOpenStep(step) ? step.endedAt : (num(data.endedAt) ?? step.endedAt),
   });
+}
+
+/** Text beside a tool call: its updates replace its text in place; `end` ends it. */
+function applyPreamble(run: Run, data: RawRecord): Run {
+  const id = str(data.itemId);
+  const text = typeof data.progressText === "string" ? data.progressText : null;
+  if (!id || (text === null && data.phase !== "end")) return run;
+  const list = run.preambles ?? [];
+  const existing = list.find((each) => each.id === id);
+  const ended = data.phase === "end";
+  const next: Preamble = existing
+    ? { ...existing, text: text ?? existing.text, ended: existing.ended || ended }
+    : { id, text: text ?? "", ended, beforeCall: null };
+  const preambles = existing
+    ? list.map((each) => (each.id === id ? next : each))
+    : [...list, next].slice(-MAX_PREAMBLES_PER_RUN);
+  return { ...run, preambles };
 }
 
 /** Exec output, streamed into the step of the call that produced it. */
@@ -2336,6 +2449,7 @@ export function runsFromHistory(
                 status: "done",
                 startedAt: at,
                 endedAt: at,
+                rowTimes: true,
                 argsText: null,
                 output: capText(block.thinking),
                 result: null,
@@ -2362,7 +2476,10 @@ export function runsFromHistory(
           ctx.raw.set(ctx.sessionKey, id, { source: "history", runId, call: block, result: null });
           run = upsertStep(run, {
             ...blankToolStep(toolCallId, name, at),
+            // The row's time is when the message was written, not when the call started.
+            rowTimes: true,
             argsText: capText(prettyArgs(block.arguments ?? block.input)),
+            args: projectArgs(block.arguments ?? block.input),
             ...withFiles(stepFiles(name, block.arguments ?? block.input)),
             truncated: meta(message).truncated === true,
           });
@@ -2390,6 +2507,9 @@ export function runsFromHistory(
                 error: isError ? capError(text || "The tool reported an error.") : null,
                 failureKind: isError ? str(asRecord(message.details)?.failureKind) : null,
                 truncated: step.truncated || meta(message).truncated === true,
+                // The gateway cut this result's stored text.
+                ...(meta(message).truncated === true ? { resultCut: true } : {}),
+                details: projectDetails(message.details),
               },
               asRecord(message.details),
               isError,
@@ -2448,8 +2568,10 @@ export function runsFromHistory(
     runs.set(inFlightRunId, text && !run.text ? { ...run, text } : run);
   }
 
-  return [...runs.values()].map((run) => {
-    if (run.id === inFlightRunId) return run;
+  return [...runs.values()].map((built) => {
+    if (built.id === inFlightRunId) return built;
+    // Its end is its last row's time, not one its lifecycle reported.
+    const run: Run = { ...built, endFromRows: true };
     const last = lastAssistant.get(run.id);
     const stopReason = str(last?.stopReason);
     if (stopReason === "aborted" || asRecord(last?.openclawAbort)?.aborted === true) {
@@ -2493,6 +2615,17 @@ function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "h
       step: {
         ...history,
         startedAt: live.startedAt ?? history.startedAt,
+        // A finished live step keeps the end the events reported; else the end is history's row time.
+        ...(isOpenStep(live)
+          ? live.rowTimes || history.rowTimes
+            ? { rowTimes: true }
+            : {}
+          : { endedAt: live.endedAt, rowTimes: live.rowTimes === true }),
+        ...(live.omittedBefore ? { omittedBefore: live.omittedBefore } : {}),
+        // What the live stream established about the call stays: history keeps no `commandBearing`.
+        args: history.args ?? live.args ?? null,
+        ...(live.gatewayTitle ? { gatewayTitle: live.gatewayTitle } : {}),
+        ...(live.commandBearing || history.commandBearing ? { commandBearing: true } : {}),
         // The canonical copy replaced a finished, replaceable result: an explicit correction.
         correction: isOpenStep(live) || inferred ? live.correction : live.correction + 1,
       },
@@ -2523,7 +2656,7 @@ function mergeSteps(
   live: Run,
   history: Run,
   fromHistory: Set<string>,
-): { steps: Step[]; omittedSteps: number } {
+): { steps: Step[]; omittedSteps: number; omittedTools: number; omittedToolsAtEnd: number } {
   const pick = ({ step, source }: { step: Step; source: "live" | "history" }) => {
     if (source === "history") fromHistory.add(step.id);
     return step;
@@ -2543,9 +2676,14 @@ function mergeSteps(
       steps: history.steps.map((step) => {
         if (step.kind === "reasoning") return pick({ step, source: "history" });
         const current = liveById.get(step.id);
-        return pick(current ? mergeStep(current, step) : { step, source: "history" });
+        const merged = pick(current ? mergeStep(current, step) : { step, source: "history" });
+        // Retention counts again from history's whole record: its own gaps, not the live run's.
+        const { omittedBefore: _, ...rest } = merged;
+        return step.omittedBefore ? { ...rest, omittedBefore: step.omittedBefore } : rest;
       }),
       omittedSteps: history.omittedSteps,
+      omittedTools: history.omittedTools ?? 0,
+      omittedToolsAtEnd: history.omittedToolsAtEnd ?? 0,
     };
   }
   // History tool steps the live run lacks go in at their place in history's
@@ -2555,6 +2693,7 @@ function mergeSteps(
   const steps = [...live.steps];
   let cursor = 0;
   let restored = 0;
+  let atEnd = live.omittedToolsAtEnd ?? 0;
   for (const step of history.steps) {
     const index = steps.findIndex((each) => each.id === step.id);
     if (step.kind === "reasoning") {
@@ -2566,12 +2705,24 @@ function mergeSteps(
       steps.splice(cursor, 0, pick({ step, source: "history" }));
       cursor += 1;
       restored += 1;
+      // The gap it came back from is one action smaller.
+      const next = steps.findIndex((each, i) => i >= cursor && each.kind === "tool");
+      const after = next === -1 ? null : steps[next]!;
+      if (after?.omittedBefore) {
+        const { omittedBefore, ...rest } = after;
+        steps[next] = omittedBefore > 1 ? { ...rest, omittedBefore: omittedBefore - 1 } : rest;
+      } else if (next === -1 && atEnd > 0) atEnd -= 1;
     } else {
       steps[index] = pick(mergeStep(steps[index]!, step));
       cursor = index + 1;
     }
   }
-  return { steps, omittedSteps: Math.max(0, live.omittedSteps - restored) };
+  return {
+    steps,
+    omittedSteps: Math.max(0, live.omittedSteps - restored),
+    omittedTools: Math.max(0, (live.omittedTools ?? 0) - restored),
+    omittedToolsAtEnd: atEnd,
+  };
 }
 
 export type HistoryMerge = {
@@ -2641,11 +2792,19 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
       for (const step of fromRun.steps) fromHistory.add(step.id);
       return fromRun;
     }
-    const { steps, omittedSteps } = mergeSteps(current, fromRun, fromHistory);
+    const { steps, omittedSteps, omittedTools, omittedToolsAtEnd } = mergeSteps(
+      current,
+      fromRun,
+      fromHistory,
+    );
     let run: Run = {
       ...current,
       steps,
       omittedSteps,
+      ...(omittedTools || current.omittedTools !== undefined ? { omittedTools } : {}),
+      ...(omittedToolsAtEnd || current.omittedToolsAtEnd !== undefined
+        ? { omittedToolsAtEnd }
+        : {}),
       anchorItemId: fromRun.anchorItemId ?? current.anchorItemId,
       model: current.model ?? fromRun.model,
       ...mergedAnchor(current, fromRun, steps),
@@ -2661,6 +2820,8 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
           fromRun.endedAt ?? ctx.now,
         ),
         outcomeKnown: fromRun.outcomeKnown,
+        // Its end is history's row time, not one its lifecycle reported.
+        endFromRows: true,
       };
     }
     return run;
@@ -2729,14 +2890,14 @@ function capSteps(runs: Run[]): Run[] {
     if (excess <= 0) break;
     next = next.map((run) => {
       if (excess <= 0) return run;
-      let dropped = 0;
-      const steps = run.steps.filter((step) => {
-        if (excess <= 0 || (!open && isOpenStep(step))) return true;
+      const drop = new Set<Step>();
+      for (const step of run.steps) {
+        if (excess <= 0) break;
+        if (!open && isOpenStep(step)) continue;
+        drop.add(step);
         excess -= 1;
-        dropped += 1;
-        return false;
-      });
-      return dropped === 0 ? run : { ...run, steps, omittedSteps: run.omittedSteps + dropped };
+      }
+      return withoutSteps(run, drop);
     });
   }
   return next.every((run, index) => run === runs[index]) ? runs : next;
@@ -2754,10 +2915,51 @@ function dropSteps(run: Run, excess: number): Run {
     if (drop.size >= excess) break;
     drop.add(step);
   }
+  return withoutSteps(run, drop);
+}
+
+/**
+ * A run without some of its steps, every drop counted: on the run, and for
+ * tool steps on the next tool step kept (`omittedBefore`), or at the run's
+ * end, so the interface says in line where actions are not kept. Text
+ * written before a dropped call is placed before the next call kept.
+ */
+function withoutSteps(run: Run, drop: Set<Step>): Run {
+  if (drop.size === 0) return run;
+  const steps: Step[] = [];
+  const moved = new Map<string, string | null>();
+  let waiting: string[] = [];
+  let pending = 0;
+  let tools = 0;
+  for (const step of run.steps) {
+    if (drop.has(step)) {
+      if (step.kind === "tool") {
+        pending += 1 + (step.omittedBefore ?? 0);
+        tools += 1;
+        if (step.toolCallId) waiting.push(step.toolCallId);
+      }
+      continue;
+    }
+    if (step.kind === "tool") {
+      for (const id of waiting) moved.set(id, step.toolCallId);
+      waiting = [];
+      steps.push(pending ? { ...step, omittedBefore: (step.omittedBefore ?? 0) + pending } : step);
+      pending = 0;
+    } else steps.push(step);
+  }
+  for (const id of waiting) moved.set(id, null);
+  const preambles = run.preambles?.map((p) =>
+    p.beforeCall !== null && moved.has(p.beforeCall)
+      ? { ...p, beforeCall: moved.get(p.beforeCall)! }
+      : p,
+  );
   return {
     ...run,
-    steps: run.steps.filter((step) => !drop.has(step)),
+    steps,
     omittedSteps: run.omittedSteps + drop.size,
+    omittedTools: (run.omittedTools ?? 0) + tools,
+    ...(pending ? { omittedToolsAtEnd: (run.omittedToolsAtEnd ?? 0) + pending } : {}),
+    ...(preambles ? { preambles } : {}),
   };
 }
 

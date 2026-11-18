@@ -144,7 +144,7 @@ The conversation's polite live region (`conversation.md`, section 2) also speaks
 - "notes.md updated" when an open file reloads with new content;
 - "Couldn't load this task's files" and "Couldn't open notes.md";
 - the result of an action the person took: "Downloaded notes.md", "Copied notes.md", "Couldn't copy. The text is selected.";
-- "Showing the step in the chat", when "Show in chat" moves the conversation.
+- "Showing the step in the chat", when "Show in chat" moves the conversation, and "This step isn't in the chat: it is not loaded here, or not kept." when the conversation does not hold it.
 
 It does not speak list refreshes that changed nothing.
 
@@ -393,11 +393,11 @@ If the tool fails, the line becomes "Otto's write didn't finish. The file is as 
 
 **From a file: "Show in chat".** (F-447)
 
-| The file's source in this task                                        | "Show in chat" does                                                                                                                                                 |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A step last produced or changed it                                    | Scrolls the conversation to that step, opens its activity block and the step, and fills the step with `--bg-selected` for 1.6 s. Focus moves to the step's summary. |
-| It arrived as an attachment to a message and no later step changed it | Scrolls to that message and fills its bubble the same way. Focus moves to the bubble.                                                                               |
-| No source in this task (it was already in the workspace)              | Not a link: "No source in this task", in `--text-faint`                                                                                                             |
+| The file's source in this task                                        | "Show in chat" does                                                                                                                                                                                                                                      |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A step last produced or changed it                                    | Scrolls the conversation to that step's action card, opens the fold it is in and the card or row on its Readable view, and fills it with `--bg-selected` for 1.6 s. Focus moves to its summary. A call of a run still under way is reached the same way. |
+| It arrived as an attachment to a message and no later step changed it | Scrolls to that message and fills its bubble the same way. Focus moves to the bubble.                                                                                                                                                                    |
+| No source in this task (it was already in the workspace)              | Not a link: "No source in this task", in `--text-faint`                                                                                                                                                                                                  |
 
 The scroll is the smallest that brings the step's first line to the reading line under the protected band (`conversation.md` section 18). A reader who was following the end stops following.
 

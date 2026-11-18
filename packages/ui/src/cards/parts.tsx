@@ -308,6 +308,16 @@ export function RawView({ raw }: { raw: RawContent }) {
       </p>
     );
   }
+  // A part that was not received or kept, in its place, under its heading, said in words.
+  const missing = (label: string) =>
+    (raw.missing ?? [])
+      .filter((part) => part.label === label)
+      .map((part) => (
+        <div key={part.label} data-testid="raw-missing">
+          <p className="code-label">{part.label}</p>
+          <p className="raw-state">{part.text}</p>
+        </div>
+      ));
   return (
     <>
       {(raw.notes ?? []).map((note) => (
@@ -326,14 +336,19 @@ export function RawView({ raw }: { raw: RawContent }) {
           </div>
         </dl>
       )}
+      {missing("Arguments")}
       {raw.args !== undefined && (
-        <CodeBlock label="Arguments" text={formatJson(raw.args)} copy="arguments" />
+        <CodeBlock
+          label={raw.argsLabel ?? "Arguments"}
+          text={formatJson(raw.args)}
+          copy="arguments"
+        />
       )}
       {raw.error ? (
-        <CodeBlock label="Error" text={raw.error} copy="error" tone="danger" />
+        <CodeBlock label={raw.resultLabel ?? "Error"} text={raw.error} copy="error" tone="danger" />
       ) : raw.result !== undefined && raw.result !== null ? (
         <CodeBlock
-          label="Result"
+          label={raw.resultLabel ?? "Result"}
           text={formatJson(raw.result)}
           copy="result"
           {...(raw.truncated ? { truncated: "structured" as const } : {})}
@@ -341,6 +356,7 @@ export function RawView({ raw }: { raw: RawContent }) {
       ) : raw.running ? (
         <p className="exchange-note raw-running">No result yet. This call is still running.</p>
       ) : null}
+      {missing("Result")}
       {(raw.events ?? []).map(([label, value]) => (
         <CodeBlock key={label} label={label} text={formatJson(value)} copy={label.toLowerCase()} />
       ))}

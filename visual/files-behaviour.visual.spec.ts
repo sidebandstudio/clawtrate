@@ -572,14 +572,60 @@ test.describe("from a step to its file, and back", () => {
     await openRow(page, "disk-2026-11-16.md");
     await expect(page.locator(".reader-source")).toContainText("Written by Otto");
     await page.locator(".reader-source").getByRole("button", { name: "Show in chat" }).click();
-    const step = page.locator('[data-call-id="c6"]');
+    // c6 is the second member of a fold of two writes: the fold opens, then its row, on Readable.
+    const fold = page.locator('.transcript details[data-fold][data-first="c8"]');
+    await expect(fold).toHaveAttribute("open", "");
+    const step = page.locator('.transcript [data-call="c6"]');
     await expect(step).toHaveAttribute("open", "");
-    await expect(step.locator("summary")).toBeFocused();
+    await expect(step.getByRole("tab", { name: "Readable" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(step.locator(":scope > summary")).toBeFocused();
     await expect(step).toBeInViewport();
     await expect(page.getByTestId("file-reader")).toBeVisible();
     await expect(page.getByTestId("chat-link-announcer")).toHaveText(
       "Showing the step in the chat",
     );
+  });
+
+  test("F-447: Show in chat reaches a call of a run still under way and a reloaded single card", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: WIDE.width, height: WIDE.height });
+    await openFixture(page, `${FILES}&files=loaded`, "light");
+    const change = (source: string) =>
+      page.evaluate((body) => {
+        const fixture = (
+          window as unknown as {
+            clawtrateFixture: { setState(change: (state: unknown) => unknown): void };
+          }
+        ).clawtrateFixture;
+        fixture.setState(new Function("state", body) as (state: unknown) => unknown);
+      }, source);
+    // The run that wrote the note is under way: the conversation draws it from the engine.
+    await change(`const key = "agent:otto:disk-space"; const t = state.transcripts[key];
+      return { ...state, transcripts: { ...state.transcripts, [key]: { ...t,
+        runs: t.runs.map((r) => r.id === "fixture-files-2" ? { ...r, state: "running", origin: "gateway", endedAt: null } : r) } } };`);
+    await openRow(page, "disk-2026-11-16.md");
+    await page.locator(".reader-source").getByRole("button", { name: "Show in chat" }).click();
+    const live = page.locator('.transcript [data-call="c6"]');
+    await expect(live).toHaveAttribute("open", "");
+    await expect(live.locator(":scope > summary")).toBeFocused();
+    await expect(page.getByTestId("chat-link-announcer")).toHaveText(
+      "Showing the step in the chat",
+    );
+    // Reloaded, with the earlier write gone from the run: c6 is a single card, opened in place.
+    await change(`const key = "agent:otto:disk-space"; const t = state.transcripts[key];
+      return { ...state, transcripts: { ...state.transcripts, [key]: { ...t,
+        runs: t.runs.map((r) => r.id === "fixture-files-2" ? { ...r, state: "completed", origin: "history",
+          steps: r.steps.filter((s) => s.toolCallId !== "c8") } : r) } } };`);
+    await page.locator('.transcript [data-call="c6"] > summary').click();
+    await expect(page.locator('.transcript [data-call="c6"]')).not.toHaveAttribute("open", "");
+    await page.locator(".reader-source").getByRole("button", { name: "Show in chat" }).click();
+    const single = page.locator('.transcript details.card.action[data-call="c6"]');
+    await expect(single).toHaveAttribute("open", "");
+    await expect(single.locator(":scope > summary")).toBeFocused();
   });
 
   test("F-447: a file with no source in the task says so, with no link", async ({ page }) => {
@@ -601,13 +647,10 @@ test.describe("from a step to its file, and back", () => {
       `scene=main&${OTTO_DISK}&panel=closed&tab=details&files=loaded`,
       "light",
     );
-    const step = page.locator('[data-call-id="c6"]');
-    await step
-      .locator("xpath=ancestor::details[contains(@class,'steps')]")
-      .locator("summary")
-      .first()
-      .click();
-    await step.locator("summary").click();
+    // c6 is the second row of a fold of two writes.
+    await page.locator('.transcript details[data-fold][data-first="c8"] > summary').click();
+    const step = page.locator('.transcript [data-call="c6"]');
+    await step.locator(":scope > summary").click();
     await step.getByRole("button", { name: "Open disk-2026-11-16.md in the Work pane" }).click();
     await expect(page.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("heading", { name: "disk-2026-11-16.md" })).toBeFocused();
@@ -626,8 +669,8 @@ test.describe("from a step to its file, and back", () => {
     await openRow(page, "disk-2026-11-16.md");
     await page.locator(".reader-source").getByRole("button", { name: "Show in chat" }).click();
     await expect(page.locator(".shell")).toHaveAttribute("data-panel", "closed");
-    const step = page.locator('[data-call-id="c6"]');
-    await expect(step.locator("summary")).toBeFocused();
+    const step = page.locator('.transcript [data-call="c6"]');
+    await expect(step.locator(":scope > summary")).toBeFocused();
     await step.getByRole("button", { name: "Back to disk-2026-11-16.md" }).click();
     await expect(page.locator(".shell")).toHaveAttribute("data-panel", "open");
     await expect(page.getByTestId("file-reader")).toContainText("disk-2026-11-16.md");

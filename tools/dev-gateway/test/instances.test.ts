@@ -150,7 +150,7 @@ describe("instance names", () => {
         /refusing instance name/,
       );
       expect(() => profileFor(name)).toThrow(/refusing instance name/);
-      expect(() => stateDirFor(name, "/home/x")).toThrow(/refusing instance name/);
+      expect(() => stateDirFor(name, "/state/x")).toThrow(/refusing instance name/);
     }
     expect(() => validateInstanceName(undefined)).toThrow(/not a string/);
   });
@@ -159,7 +159,7 @@ describe("instance names", () => {
     for (const name of ["default", "Default", "DEFAULT", "dev", "DEV", "Dev"]) {
       expect(() => validateInstanceName(name)).toThrow(/refusing instance name/);
     }
-    const home = "/home/x";
+    const home = "/state/x";
     for (const name of ["alpha", "e2e-0", "openclaw", "clawtrate-dev", "default-1", "dev-1"]) {
       expect(profileFor(name)).toBe(`clawtrate-dev-${name}`);
       expect(profileArgs(name)).toEqual(["--profile", `clawtrate-dev-${name}`]);

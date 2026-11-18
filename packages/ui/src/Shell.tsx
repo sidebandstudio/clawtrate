@@ -315,13 +315,13 @@ export function Shell({
     (stepId: string, from: { path: string }) => {
       const callId = stepId.startsWith("tool:") ? stepId.slice(5) : stepId;
       const reveal = () => {
-        const found = revealStep(callId);
+        const found = taskKey !== null && revealStep(taskKey, callId);
         setChatNote("");
         requestAnimationFrame(() =>
           setChatNote(
             found
               ? "Showing the step in the chat"
-              : "The chat shows this step on its own once its run has finished.",
+              : "This step isn't in the chat: it is not loaded here, or not kept.",
           ),
         );
         if (found) setBackTo({ path: from.path, stepId });
@@ -333,7 +333,7 @@ export function Shell({
         requestAnimationFrame(() => requestAnimationFrame(reveal));
       } else reveal();
     },
-    [drawerOpen, setPanel],
+    [drawerOpen, setPanel, taskKey],
   );
   const goBackToFile = useCallback(() => {
     setPanel(true);

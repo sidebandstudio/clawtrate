@@ -47,6 +47,7 @@ import {
 import { FILE_COMMANDS, fileAnswers, withFileRuns, type FileParams } from "./files.ts";
 import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
+import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -92,6 +93,7 @@ export const SCENES = [
   "offline-down",
   ...LIVE_SCENES,
   ...RAIL_SCENES,
+  ...ACTION_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -388,6 +390,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
     case "task-states":
       return { initial: { ...base, tasksByBot: withTaskStates(base.tasksByBot) }, steps: [] };
     default:
+      if (isActionScene(name)) return actionScene(name, base, now);
       return liveScene(name as LiveScene, base, now);
   }
 }

@@ -157,6 +157,11 @@ export type Task = {
    * none: a read made on opening names it, so it never clears a newer "Mark as unread".
    */
   unreadMarker?: number | null;
+  /**
+   * The reasoning effort the task asks for (`thinkingLevel` on its session
+   * row), as the gateway names it. Absent when the task records none.
+   */
+  effort?: string;
   /** Paths of fields cut to their bound. */
   cut?: string[];
 };
@@ -168,7 +173,18 @@ export type TaskContext = {
   fresh: boolean;
 };
 
-export type ToolResult = { isError: boolean; text: string };
+export type ToolResult = {
+  isError: boolean;
+  text: string;
+  /**
+   * What the reading reads of the few `details` the gateway's history keeps
+   * (`exitCode`, `ok`, `changed`, `created`, and a diff's line counts), so a
+   * call history alone holds reads as its step does. Absent when none was kept.
+   */
+  facts?: Record<string, unknown>;
+  /** The text is not the whole result: the gateway cut what it stored, or this app did. */
+  clipped?: boolean;
+};
 
 export type TranscriptBlock =
   | { kind: "text"; text: string }
@@ -179,6 +195,8 @@ export type TranscriptBlock =
       name: string;
       /** Pretty-printed JSON arguments. */
       argumentsText: string;
+      /** The row carried no arguments at all (`argumentsText` is then empty). */
+      argumentsAbsent?: boolean;
       result: ToolResult | null;
     };
 
@@ -223,6 +241,18 @@ export type Transcript = TaskActivity & {
    * a result's own `details` overrule it.
    */
   mcpTools: Record<string, McpToolIdentity>;
+  /**
+   * The built-in and plugin tools `tools.effective` lists for this task, by
+   * effective name: a general card of one of these folds by its name (8.3).
+   * Absent until the inventory is read.
+   */
+  builtinTools?: string[];
+  /**
+   * The bot's workspace root, as the gateway names it (`agents.files.list`
+   * `workspace`): an absolute path is a memory note only inside it (8.2).
+   * Absent or null when the gateway has not said; nothing is inferred then.
+   */
+  workspaceRoot?: string | null;
   /** Paths of fields cut to their bound that no item beneath records itself. */
   cut?: string[];
   /** Epoch ms of the latest successful history load. */

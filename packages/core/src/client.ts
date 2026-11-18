@@ -55,6 +55,7 @@ import {
 import {
   interSessionMessages,
   linkedRunOf,
+  builtinToolNames,
   mcpToolMap,
   recipientLinks,
   recipientRunIds,
@@ -177,6 +178,7 @@ import {
   MAX_ID_CHARS,
   MAX_LINKED_RUNS,
   MAX_MCP_TOOLS,
+  MAX_BUILTIN_TOOLS,
   MAX_LISTED_TASKS,
   MAX_MESSAGE_JSON_CHARS,
   MAX_OUTBOX,
@@ -2917,9 +2919,50 @@ export class ClawtrateClient {
       return;
     }
     const map = mcpToolMap(answer, MAX_MCP_TOOLS);
+    const builtin = builtinToolNames(answer, MAX_BUILTIN_TOOLS);
     const current = this.state.transcripts[key];
-    if (!current || JSON.stringify(current.mcpTools) === JSON.stringify(map)) return;
-    this.setTranscript(key, () => ({ ...this.state.transcripts[key]!, mcpTools: map }));
+    if (
+      !current ||
+      (JSON.stringify(current.mcpTools) === JSON.stringify(map) &&
+        JSON.stringify(current.builtinTools) === JSON.stringify(builtin))
+    )
+      return;
+    this.setTranscript(key, () => ({
+      ...this.state.transcripts[key]!,
+      mcpTools: map,
+      builtinTools: builtin,
+    }));
+  }
+
+  /**
+   * Read the bot's workspace root, as the gateway names it
+   * (`agents.files.list`, `operator.read`, its `workspace`), once a task's
+   * history loads. A failed read leaves it unknown: an absolute path is then
+   * never read as a memory note (8.2).
+   */
+  private async readWorkspaceRoot(key: string, generation: number): Promise<void> {
+    const botId = botIdFromSessionKey(key);
+    if (!botId) return;
+    const incarnation = this.incarnations.get(key);
+    let answer: unknown;
+    try {
+      answer = await this.request("agents.files.list", { agentId: botId });
+    } catch (error) {
+      if (generation === this.generation)
+        this.log("warn", `agents.files.list failed: ${errorMessage(error)}`);
+      return;
+    }
+    if (
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation
+    )
+      return;
+    const root = asRecord(answer)?.workspace;
+    const workspaceRoot = typeof root === "string" && root.startsWith("/") ? root : null;
+    const current = this.state.transcripts[key];
+    if (!current || current.workspaceRoot === workspaceRoot) return;
+    this.setTranscript(key, () => ({ ...this.state.transcripts[key]!, workspaceRoot }));
   }
 
   /** Copy the state of every recipient run a task's `sessions_send` results name, where it is known. */
@@ -4550,6 +4593,7 @@ export class ClawtrateClient {
       void this.backfillQuestions(key, generation);
       void this.backfillApprovals(key, generation);
       void this.readToolMap(key, generation);
+      if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
     } catch (error) {
       if (stale()) return;
       this.setTranscript(key, (current) => ({

@@ -82,7 +82,7 @@
   const diffText = ({ added, removed }) => `+${added} −${removed}`;
 
   // A path is memory when, inside the workspace, it is MEMORY.md or under memory/ (8.2).
-  CT.workspaceRoot = "/home/bot/workspace";
+  CT.workspaceRoot = "/workspace/bot";
   const relative = (path) => {
     let p = String(path || "").replace(/^\.\//, "");
     if (p.startsWith("/")) p = p.startsWith(`${CT.workspaceRoot}/`) ? p.slice(CT.workspaceRoot.length + 1) : null;
