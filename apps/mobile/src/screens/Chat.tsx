@@ -294,6 +294,8 @@ export function Chat({
         scrollEventThrottle={64}
         onScroll={({ nativeEvent }) => {
           const { contentOffset, contentSize, layoutMeasurement } = nativeEvent;
+          // Before the view has its height, nothing says where the reader is.
+          if (layoutMeasurement.height === 0) return;
           atEnd.current =
             contentSize.height - (contentOffset.y + layoutMeasurement.height) < NEAR_END;
         }}
