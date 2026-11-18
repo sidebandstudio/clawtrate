@@ -803,7 +803,8 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "t3-wait-short",
     phrase: "wait briefly for t3 code",
-    summary: "Waits on the latest thread's run for 1.5 seconds: the wait ends before a slow run does.",
+    summary:
+      "Waits on the latest thread's run for 1.5 seconds: the wait ends before a slow run does.",
     steps: () => [onThread("t3_thread_wait", { timeoutMs: 1_500 })],
   },
   {
@@ -838,7 +839,9 @@ export const SCENARIOS: Scenario[] = [
     name: "t3-decoy",
     phrase: "read the t3 code notes",
     summary: `A call to ${DECOY_EFFECTIVE}: its name suggests T3 Code's read, its result names another tool of the same server.`,
-    steps: () => [{ kind: "tool-from", build: (ctx) => tool(DECOY_EFFECTIVE, { threadId: t3Thread(ctx) }) }],
+    steps: () => [
+      { kind: "tool-from", build: (ctx) => tool(DECOY_EFFECTIVE, { threadId: t3Thread(ctx) }) },
+    ],
   },
   {
     name: "model-error",
@@ -859,7 +862,7 @@ export type Selection = { scenario: Scenario; arg: number };
  */
 export function selectScenarios(prompt: string): Selection[] {
   const selected: Selection[] = [];
-  for (const match of prompt.matchAll(/(?:^|\s)#([a-z][a-z-]*)(?:\s+(\d+))?/g)) {
+  for (const match of prompt.matchAll(/(?:^|\s)#([a-z][a-z0-9-]*)(?:\s+(\d+))?/g)) {
     const scenario = BY_NAME.get(match[1]!);
     if (!scenario) continue;
     const raw = match[2] === undefined ? (scenario.defaultArg ?? 0) : Number(match[2]);

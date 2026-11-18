@@ -265,7 +265,11 @@ const FAILURE_CODES = new Set([
 function failure(code: string, message: string): ToolResult {
   if (!FAILURE_CODES.has(code)) throw new Error(`unknown failure code ${code}`);
   const value = { _tag: "OrchestratorMcpFailure", code, message };
-  return { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value, isError: true };
+  return {
+    content: [{ type: "text", text: JSON.stringify(value) }],
+    structuredContent: value,
+    isError: true,
+  };
 }
 
 /** A success: the structured result, and the same JSON as one text item. */
@@ -301,7 +305,13 @@ export function createT3Code(clock: () => number = Date.now) {
   const at = () => new Date(clock()).toISOString();
   const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
-  const item = (thread: Thread, run: Run, type: Item["type"], text: string, title: string | null) => {
+  const item = (
+    thread: Thread,
+    run: Run,
+    type: Item["type"],
+    text: string,
+    title: string | null,
+  ) => {
     positions += 1;
     thread.items.push({
       position: thread.items.length,
@@ -341,7 +351,8 @@ export function createT3Code(clock: () => number = Date.now) {
   const finish = (thread: Thread, run: Run) => {
     run.status = /\bFAIL\b/.test(run.message) ? "failed" : "completed";
     run.completedAt = at();
-    if (run.status === "completed") item(thread, run, "assistant_message", replyFor(run.message), null);
+    if (run.status === "completed")
+      item(thread, run, "assistant_message", replyFor(run.message), null);
     // A queued message starts the next run.
     const queued = thread.queued.shift();
     if (queued !== undefined) startRun(thread, queued);
@@ -356,7 +367,15 @@ export function createT3Code(clock: () => number = Date.now) {
   };
 
   const newThread = (projectId: string, title: string, id = `mcp:${uuid((next += 1))}`): Thread => {
-    const thread: Thread = { threadId: id, projectId, title, runs: [], items: [], queued: [], clientRequestId: null };
+    const thread: Thread = {
+      threadId: id,
+      projectId,
+      title,
+      runs: [],
+      items: [],
+      queued: [],
+      clientRequestId: null,
+    };
     threads.set(id, thread);
     return thread;
   };
@@ -441,19 +460,34 @@ export function createT3Code(clock: () => number = Date.now) {
         const limit = Math.min(100, Math.max(1, Number(args.limit ?? 100)));
         const cursor = Math.max(0, Number(args.cursor ?? 0));
         const page = PROJECTS.slice(cursor, cursor + limit);
-        return ok({ projects: page, nextCursor: cursor + limit < PROJECTS.length ? cursor + limit : null });
+        return ok({
+          projects: page,
+          nextCursor: cursor + limit < PROJECTS.length ? cursor + limit : null,
+        });
       }
       case "t3_thread_launch": {
         const projectId = typeof args.projectId === "string" ? args.projectId : null;
         if (!projectId && args.scratch !== true)
-          return failure("target_required", "Pass projectId or scratch: an outside launch needs a target.");
+          return failure(
+            "target_required",
+            "Pass projectId or scratch: an outside launch needs a target.",
+          );
         const project = PROJECTS.find((each) => each.id === projectId);
         if (projectId && !project) return failure("invalid_request", "The project was not found.");
-        const selection = (args.modelSelection ?? project?.defaultModelSelection ?? null) as Rec | null;
-        if (!selection) return failure("invalid_request", "Pass modelSelection: the project has no default model");
+        const selection = (args.modelSelection ??
+          project?.defaultModelSelection ??
+          null) as Rec | null;
+        if (!selection)
+          return failure(
+            "invalid_request",
+            "Pass modelSelection: the project has no default model",
+          );
         const request = typeof args.clientRequestId === "string" ? args.clientRequestId : null;
-        const replay = request ? [...threads.values()].find((each) => each.clientRequestId === request) : undefined;
-        const thread = replay ?? newThread(projectId ?? "scratch", String(args.title ?? "Untitled"));
+        const replay = request
+          ? [...threads.values()].find((each) => each.clientRequestId === request)
+          : undefined;
+        const thread =
+          replay ?? newThread(projectId ?? "scratch", String(args.title ?? "Untitled"));
         thread.clientRequestId = request;
         const message = typeof args.message === "string" && args.message ? args.message : null;
         const run = replay ? latest(thread) : message ? startRun(thread, message) : null;
@@ -510,7 +544,10 @@ export function createT3Code(clock: () => number = Date.now) {
       case "t3_thread_read": {
         const thread = threadOf(args);
         if (!("threadId" in thread)) return thread;
-        const max = Math.min(50_000, Math.max(1, Number(args.maxCharsPerItem ?? MAX_CHARS_PER_ITEM)));
+        const max = Math.min(
+          50_000,
+          Math.max(1, Number(args.maxCharsPerItem ?? MAX_CHARS_PER_ITEM)),
+        );
         const shape = (each: Item, offset = 0) => {
           const rest = each.text.slice(offset);
           const cut = rest.length > max;
@@ -560,9 +597,13 @@ export function createT3Code(clock: () => number = Date.now) {
         const thread = threadOf(args);
         if (!("threadId" in thread)) return thread;
         const run =
-          typeof args.runId === "string" ? thread.runs.find((each) => each.runId === args.runId) : latest(thread);
-        if (typeof args.runId === "string" && !run) return failure("run_not_found", `No run ${args.runId}.`);
-        if (!run) return ok({ threadId: thread.threadId, runId: null, status: "idle", timedOut: false });
+          typeof args.runId === "string"
+            ? thread.runs.find((each) => each.runId === args.runId)
+            : latest(thread);
+        if (typeof args.runId === "string" && !run)
+          return failure("run_not_found", `No run ${args.runId}.`);
+        if (!run)
+          return ok({ threadId: thread.threadId, runId: null, status: "idle", timedOut: false });
         const timeout = typeof args.timeoutMs === "number" ? Math.max(0, args.timeoutMs) : 30_000;
         const answer = (timedOut: boolean) =>
           ok({
@@ -575,7 +616,8 @@ export function createT3Code(clock: () => number = Date.now) {
               : {}),
           });
         if (FINAL.has(run.status)) return answer(false);
-        if (timeout < Math.max(1_000, run.workMs)) return later(Math.min(timeout, 2_000), () => answer(true));
+        if (timeout < Math.max(1_000, run.workMs))
+          return later(Math.min(timeout, 2_000), () => answer(true));
         return later(run.workMs, () => {
           tick(thread, run);
           return answer(false);
@@ -585,7 +627,9 @@ export function createT3Code(clock: () => number = Date.now) {
         const projectId = typeof args.projectId === "string" ? args.projectId : null;
         if (!projectId && args.allProjects !== true)
           return failure("target_required", "Pass projectId or allProjects: true.");
-        const listed = [...threads.values()].filter((each) => !projectId || each.projectId === projectId);
+        const listed = [...threads.values()].filter(
+          (each) => !projectId || each.projectId === projectId,
+        );
         return ok({
           projectId,
           currentThreadId: null,
@@ -618,7 +662,12 @@ export function createT3Code(clock: () => number = Date.now) {
         if (!("threadId" in thread)) return thread;
         const run = active(thread);
         if (args.stop === true) thread.queued.length = 0;
-        if (!run) return ok({ threadId: thread.threadId, runId: latest(thread)?.runId ?? null, status: "no_active_run" });
+        if (!run)
+          return ok({
+            threadId: thread.threadId,
+            runId: latest(thread)?.runId ?? null,
+            status: "no_active_run",
+          });
         run.status = "interrupted";
         run.completedAt = at();
         return ok({ threadId: thread.threadId, runId: run.runId, status: "interrupt_requested" });
@@ -632,7 +681,11 @@ export function createT3Code(clock: () => number = Date.now) {
     const { id, method, params } = message;
     if (id === undefined) return null;
     const reply = (result: unknown) => ({ jsonrpc: "2.0", id, result });
-    const fail = (code: number, text: string) => ({ jsonrpc: "2.0", id, error: { code, message: text } });
+    const fail = (code: number, text: string) => ({
+      jsonrpc: "2.0",
+      id,
+      error: { code, message: text },
+    });
     switch (method) {
       case "initialize":
         return reply({
