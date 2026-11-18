@@ -729,7 +729,9 @@ export class ComputerViews {
   /** After a reconnect, leases are read before anything is offered again. */
   private afterTabs(live: Live): void {
     const pane = this.pane(live.viewer);
-    if (!pane || pane.control.status !== "checking") return;
+    // Read while connected: what the list says of the old lease settles a drop's "maybe held".
+    if (!pane || (pane.control.status !== "checking" && pane.control.status !== "maybe-held"))
+      return;
     const tab = pane.tabs.find((each) => each.targetId === pane.control.targetId);
     // A new connection never holds the old one's lease: none listed means it ended.
     if (!tab?.lease) {
