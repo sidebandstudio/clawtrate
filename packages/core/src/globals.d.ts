@@ -4,6 +4,15 @@
 declare function setTimeout(callback: () => void, ms?: number): unknown;
 declare function clearTimeout(handle: unknown): void;
 
+/** Ends a request that waits (a sign-in's next step) when it is cancelled or its connection goes. */
+declare class AbortSignal {
+  readonly aborted: boolean;
+}
+declare class AbortController {
+  readonly signal: AbortSignal;
+  abort(reason?: unknown): void;
+}
+
 declare class URL {
   constructor(input: string, base?: string);
   readonly protocol: string;

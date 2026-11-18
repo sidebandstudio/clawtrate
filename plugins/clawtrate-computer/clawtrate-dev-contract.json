@@ -1,0 +1,6 @@
+{
+  "plugin": "clawtrate-computer",
+  "settings": {},
+  "tools": [],
+  "botBrowsers": { "bots": ["marlow", "pip"], "drainTimeoutMs": 5000, "renewTimeoutMs": 6000 }
+}

@@ -32,6 +32,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -372,7 +373,8 @@ export default async function globalSetup() {
     if (!sentinelBefore.startsWith("running true")) {
       throw new Error(`sentinel ${sentinel} is not running`);
     }
-    startInstance(name);
+    // With the scripted accounts and sign-ins, for the check that types a key into the app.
+    startInstance(name, "--with-accounts", "--with-plugin", "clawtrate-dev-signin");
     const mine = listInstances().find((row) => row.name === name);
     if (!mine?.gatewayRunning) throw new Error(`instance ${name} is not running`);
     for (const port of [mine.gatewayPort, mine.providerPort]) {
@@ -382,13 +384,16 @@ export default async function globalSetup() {
     }
 
     mkdirSync(userData);
+    // What the app writes to its output, its log, kept beside its data folder for the checks.
+    const log = join(dir, "app.log");
+    const logFd = openSync(log, "a", 0o600);
     record.hostPending = true;
     saveRecord(RECORDS, record);
     const gated = gatedSpawn(
       spawn,
       packagedExecutable(app),
       [`--user-data-dir=${userData}`, "--remote-debugging-port=0"],
-      { cwd: dir, env: appEnv(), stdio: ["ignore", "ignore", "inherit"] },
+      { cwd: dir, env: appEnv(), stdio: ["ignore", logFd, logFd] },
     );
     appProcess = gated.child;
     const found = processIdentity(appProcess.pid!);
@@ -406,6 +411,7 @@ export default async function globalSetup() {
     process.env.CLAWTRATE_PACKAGED_APP = app;
     process.env.CLAWTRATE_PACKAGED_USER_DATA = userData;
     process.env.CLAWTRATE_PACKAGED_PID = String(appProcess.pid);
+    process.env.CLAWTRATE_PACKAGED_LOG = log;
   } catch (error) {
     await teardown().catch((problem: unknown) => console.error(String(problem)));
     throw error;

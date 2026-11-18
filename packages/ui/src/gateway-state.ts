@@ -112,14 +112,15 @@ export function grantedWords(connection: ConnectionState): string {
 /** The pane's last line: the pairing is kept, and what this device may do. */
 export function pairingNote(
   gateway: string,
-  holdsAll: boolean,
-  readOnly: boolean | undefined,
+  holds: { admin?: boolean; holdsAll: boolean; readOnly: boolean | undefined },
 ): string {
   return `${gateway} keeps this device's pairing while it is disconnected. ${
-    holdsAll
-      ? "This device can send, stop and answer."
-      : readOnly
-        ? "This device asks for read access only."
-        : "This device reads. Re-pair to ask for sending, stopping and answering."
+    holds.admin
+      ? "This device holds admin access, which it asked for to change bots and accounts."
+      : holds.holdsAll
+        ? "This device can send, stop and answer."
+        : holds.readOnly
+          ? "This device asks for read access only."
+          : "This device reads. Re-pair to ask for sending, stopping and answering."
   }`;
 }

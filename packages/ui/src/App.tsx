@@ -103,7 +103,13 @@ export function App({
   return (
     <div className="app" data-connection={lost ? "lost" : undefined}>
       {settingsOpen && (
-        <Settings connection={state.connection} info={info} onClose={closeSettings} />
+        <Settings
+          connection={state.connection}
+          info={info}
+          accounts={state.accounts}
+          bots={state.bots}
+          onClose={closeSettings}
+        />
       )}
       {screen === "shell" ? (
         <Shell

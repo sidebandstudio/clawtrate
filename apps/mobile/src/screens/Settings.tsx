@@ -193,7 +193,10 @@ export function Settings({
           </View>
           {connection.gatewayUrl && (
             <Txt size={S["text-sm"]} color="text-faint">
-              {pairingNote(gatewayLabel(connection.gatewayUrl), false, true)}
+              {pairingNote(gatewayLabel(connection.gatewayUrl), {
+                holdsAll: false,
+                readOnly: true,
+              })}
             </Txt>
           )}
         </ScrollView>

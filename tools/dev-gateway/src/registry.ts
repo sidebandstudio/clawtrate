@@ -114,6 +114,8 @@ export async function choosePorts(
   name: string,
   home: string,
   free: (port: number) => Promise<boolean> = portFree,
+  /** More ports of the block that must be free, as offsets from its first port. */
+  extraOffsets: readonly number[] = [],
 ): Promise<InstancePorts> {
   const recorded = new Set<number>();
   for (const entry of listInstances(home, NOT_CHECKED)) {
@@ -124,8 +126,8 @@ export async function choosePorts(
   }
   for (const base of candidateBlocks(name)) {
     const providerPort = base + PROVIDER_PORT_OFFSET;
-    const ports = [base, base + 1, base + 2, providerPort];
-    if (!isNamedInstancePort(base) || !isNamedInstancePort(providerPort)) continue;
+    const ports = [base, base + 1, base + 2, providerPort, ...extraOffsets.map((o) => base + o)];
+    if (!ports.every(isNamedInstancePort)) continue;
     if (ports.some((port) => RESERVED_PORTS.has(port) || recorded.has(port))) continue;
     let allFree = true;
     for (const port of ports) {

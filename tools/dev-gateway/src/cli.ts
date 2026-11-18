@@ -36,6 +36,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,7 +80,14 @@ import {
   type Gated,
   type InstancePaths,
 } from "./env.ts";
-import { isNamedInstancePort, profileArgs, selectInstance } from "./instance.ts";
+import {
+  BROWSER_PORT_OFFSET,
+  PAGES_PORT_OFFSET,
+  PROVIDER_PORT_OFFSET,
+  isNamedInstancePort,
+  profileArgs,
+  selectInstance,
+} from "./instance.ts";
 import { instanceLockPath, portLockPath, withLock } from "./lock.ts";
 import {
   choosePorts,
@@ -108,6 +116,7 @@ import {
   pluginEntry,
   pluginSelectionProblem,
   trustedCodeNotice,
+  type BotBrowsers,
   type DevPlugin,
   type PluginRule,
 } from "./dev-plugins.ts";
@@ -241,7 +250,7 @@ export const CODING_AGENT_SCRIPT = fileURLToPath(new URL("./coding-agent-mcp.ts"
  * which asks a person about every command it has no approved rule for. Only
  * the messaging pair may message each other.
  */
-function botEntries(stateDir: string) {
+function botEntries(stateDir: string, browserBots: readonly string[] | null) {
   const entries: Record<string, { workspace: string; tools: Record<string, unknown> }> = {};
   for (const bot of SEED_BOTS) {
     const partner = messagingPartner(bot.id);
@@ -252,10 +261,109 @@ function botEntries(stateDir: string) {
       tools: {
         ...(bot.id === SHELL_BOT ? { exec: { mode: "ask" } } : {}),
         agentToAgent: { send: partner ? [partner] : [] },
+        // With browsers of their own, only those bots get the browser tool.
+        ...(browserBots && !browserBots.includes(bot.id) ? { deny: ["browser"] } : {}),
       },
     };
   }
   return entries;
+}
+
+/** The browser profile of a bot with a browser of its own. */
+export const botProfile = (botId: string) => `bot-${botId}`;
+
+/** The ports of an instance's own browsers and scripted pages (instance.ts). */
+export function browserPorts(ports: InstancePorts, bots: readonly string[]) {
+  return {
+    pagesPort: ports.providerPort + PAGES_PORT_OFFSET,
+    defaultCdpPort: ports.gatewayPort + BROWSER_PORT_OFFSET,
+    botCdpPorts: bots.map((_, i) => ports.gatewayPort + BROWSER_PORT_OFFSET + 1 + i),
+  };
+}
+
+/** The block offsets an instance with `count` bot browsers also needs free. */
+export const browserPortOffsets = (count: number) => [
+  PROVIDER_PORT_OFFSET + PAGES_PORT_OFFSET,
+  ...Array.from({ length: count + 1 }, (_, i) => BROWSER_PORT_OFFSET + i),
+];
+
+/**
+ * The Chromium the development browser runs: the one Playwright installed for
+ * this checkout's end-to-end tests, never a browser of the machine's owner.
+ */
+export function developmentChromium(checkout: string = CHECKOUT_DIR): string {
+  let path: string;
+  try {
+    const require = createRequire(join(checkout, "package.json"));
+    const { chromium } = require("@playwright/test") as {
+      chromium: { executablePath(): string };
+    };
+    path = chromium.executablePath();
+  } catch (error) {
+    throw new Error(`could not find Playwright's Chromium: ${String(error)}`, { cause: error });
+  }
+  if (!existsSync(path)) {
+    throw new Error(
+      `Playwright's Chromium is not installed (${path}). Run \`pnpm exec playwright install chromium\`.`,
+    );
+  }
+  return path;
+}
+
+/**
+ * The Chromium switches that confine a development browser: every
+ * connection it opens, to any host, address, port or scheme, is made to the
+ * instance's scripted pages on loopback instead (`--host-rules`), and WebRTC
+ * may not send UDP around it. The scripted pages answer only their own pages
+ * and refuse everything else. Crash reporting is off too: Chromium's crash
+ * handler is a process of its own, outside these rules. (It still starts on
+ * macOS, and exits with its browser.)
+ */
+export const confinementArgs = (pagesPort: number) => [
+  `--host-rules=MAP * 127.0.0.1:${pagesPort}`,
+  "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+  "--disable-breakpad",
+];
+
+/**
+ * The browser setup for bots with browsers of their own, all written by the
+ * tool from a plugin's `botBrowsers` declaration: one managed, headless
+ * profile per bot on ports of the instance's block, the gateway's navigation
+ * policy strict but for 127.0.0.1, no script evaluation, no import of a
+ * system browser's cookies, Playwright's Chromium, and the confinement
+ * switches above. Returns the gateway's `browser` block and the plugin's
+ * config.
+ */
+export function browserConfig(
+  ports: InstancePorts,
+  declaration: BotBrowsers,
+  executablePath: string,
+) {
+  const { pagesPort, defaultCdpPort, botCdpPorts } = browserPorts(ports, declaration.bots);
+  const profiles: Record<string, { cdpPort: number }> = { openclaw: { cdpPort: defaultCdpPort } };
+  const bots: Record<string, { profile: string; cdpUrl: string }> = {};
+  declaration.bots.forEach((botId, i) => {
+    profiles[botProfile(botId)] = { cdpPort: botCdpPorts[i]! };
+    bots[botId] = { profile: botProfile(botId), cdpUrl: `http://127.0.0.1:${botCdpPorts[i]}` };
+  });
+  return {
+    browser: {
+      enabled: true,
+      headless: true,
+      evaluateEnabled: false,
+      allowSystemProfileImport: false,
+      executablePath,
+      defaultProfile: "openclaw",
+      ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+      extraArgs: confinementArgs(pagesPort),
+      profiles,
+    },
+    plugin: {
+      bots,
+      drainTimeoutMs: declaration.drainTimeoutMs,
+      renewTimeoutMs: declaration.renewTimeoutMs,
+    },
+  };
 }
 
 /** What a start adds to the base config, beyond plugins. */
@@ -271,8 +379,19 @@ export function devConfig(
   stateDir: string = devStateDir(),
   plugins: DevPlugin[] = [],
   options: StartOptions = {},
+  chromium?: string,
 ) {
   const accounts = options.accounts ? accountsConfig(ports.providerPort, stateDir) : null;
+  const owner = plugins.find((plugin) => plugin.botBrowsers);
+  const browsers = owner?.botBrowsers
+    ? browserConfig(ports, owner.botBrowsers, chromium ?? developmentChromium())
+    : null;
+  const entryOf = (plugin: DevPlugin) => {
+    const entry = pluginEntry(plugin, stateDir, ports.providerPort);
+    return plugin === owner && browsers
+      ? { ...entry, config: { ...entry.config, ...browsers.plugin } }
+      : entry;
+  };
   return {
     gateway: {
       mode: "local",
@@ -321,7 +440,7 @@ export function devConfig(
       // The bots are declared here so their tool policy is part of the checked
       // config from the first start. Several bots need explicit ownership.
       ownership: "explicit",
-      entries: botEntries(stateDir),
+      entries: botEntries(stateDir, owner?.botBrowsers?.bots ?? null),
     },
     tools: {
       // Offer tools directly instead of behind tool_search/tool_call wrappers,
@@ -344,11 +463,16 @@ export function devConfig(
       },
       // The only tools any bot is offered: those the scenarios use. A tool
       // the gateway adds later is off until it is listed here.
-      allow: [...ALLOWED_TOOLS, ...plugins.flatMap((plugin) => plugin.tools)],
+      allow: [
+        ...ALLOWED_TOOLS,
+        ...plugins.flatMap((plugin) => plugin.tools),
+        ...(browsers ? ["browser"] : []),
+      ],
       // Denied as well, so a change to the allowlist cannot bring them back:
       // tools that reach the network, manage the gateway or its installation,
-      // drive a browser or another device, or send through a channel.
-      deny: [...DENIED_TOOLS],
+      // drive a browser or another device, or send through a channel. With
+      // bot browsers the browser tool is denied per bot instead (botEntries).
+      deny: DENIED_TOOLS.filter((tool) => !(browsers && tool === "browser")),
     },
     // The stand-in coding agent: a local command server, no network, run in
     // the instance's own folder.
@@ -378,15 +502,14 @@ export function devConfig(
         // Only the search half of the bundled Ollama plugin is used, on loopback.
         ollama: { config: { webSearch: { baseUrl: searchBaseUrl(ports) } } },
         // The project's own plugins named at start, each as its addition says.
-        ...Object.fromEntries(
-          plugins.map((plugin) => [plugin.id, pluginEntry(plugin, stateDir, ports.providerPort)]),
-        ),
+        ...Object.fromEntries(plugins.map((plugin) => [plugin.id, entryOf(plugin)])),
       },
       // Each loaded from the instance's own copy of what was checked.
       ...(plugins.length > 0
         ? { load: { paths: plugins.map((plugin) => pluginCopy(stateDir, plugin.name)) } }
         : {}),
     },
+    ...(browsers ? { browser: browsers.browser } : {}),
   };
 }
 
@@ -481,6 +604,7 @@ export const DENIED_TOOLS = [
 export const PLUGIN_RULE: PluginRule = {
   gatewayTools: [...GATEWAY_TOOLS, ...DENIED_TOOLS],
   reserved: RESERVED_PLUGIN_IDS,
+  seedBots: SEED_BOTS.map((bot) => bot.id),
   scriptedProviders: ACCOUNT_PROVIDERS,
 };
 
@@ -491,7 +615,11 @@ export function loadPlugins(
 ): DevPlugin[] {
   const problem = pluginSelectionProblem(inst.name, names);
   if (problem) throw new Error(problem);
-  return names.map((name) => loadDevPlugin(name, inst.checkout, PLUGIN_RULE));
+  const plugins = names.map((name) => loadDevPlugin(name, inst.checkout, PLUGIN_RULE));
+  if (plugins.filter((plugin) => plugin.botBrowsers).length > 1) {
+    throw new Error("only one plugin of an instance may give bots browsers of their own");
+  }
+  return plugins;
 }
 
 /**
@@ -504,9 +632,10 @@ export function devConfigContract(
   stateDir: string = devStateDir(),
   plugins: DevPlugin[] = [],
   options: StartOptions = {},
+  chromium?: string,
 ): Contract {
   const contract = structuredClone(
-    devConfig("", ports, stateDir, plugins, options),
+    devConfig("", ports, stateDir, plugins, options, chromium),
   ) as unknown as Record<string, Record<string, unknown>>;
   // With accounts, the gateway itself writes profile entries (labels, sign-ins,
   // the CLI's saves): scripted accounts only, each of a closed shape.
@@ -548,8 +677,9 @@ export function sandboxProblems(
   stateDir?: string,
   plugins: DevPlugin[] = [],
   options: StartOptions = {},
+  chromium?: string,
 ): string[] {
-  return contractProblems(config, devConfigContract(ports, stateDir, plugins, options));
+  return contractProblems(config, devConfigContract(ports, stateDir, plugins, options, chromium));
 }
 
 /** The plugins this run of the instance was started with and their digests, beside its run file. */
@@ -739,7 +869,22 @@ function assertNotInUse(inst: DevInstance): void {
 function instancePortsToCheck(inst: DevInstance): number[] {
   if (inst.name === null) return [GATEWAY_PORT, PROVIDER_PORT];
   const marker = readMarker(inst.stateDir);
-  return [marker?.gatewayPort, marker?.providerPort].filter(isNamedInstancePort);
+  const ports = [marker?.gatewayPort, marker?.providerPort].filter(isNamedInstancePort);
+  // A browser left running on the instance's ports also means it is in use.
+  let bots: string[] = [];
+  try {
+    bots = recordedPlugins(inst).find((plugin) => plugin.botBrowsers)?.botBrowsers?.bots ?? [];
+  } catch {
+    // An unreadable record adds nothing; the processes are checked anyway.
+  }
+  if (bots.length > 0 && ports.length === 2) {
+    const { pagesPort, defaultCdpPort, botCdpPorts } = browserPorts(
+      { gatewayPort: ports[0]!, providerPort: ports[1]! },
+      bots,
+    );
+    ports.push(pagesPort, defaultCdpPort, ...botCdpPorts);
+  }
+  return ports;
 }
 
 /**
@@ -823,6 +968,13 @@ export async function start(
       `plugin ${signIns[0]!.name} declares sign-ins for the scripted account providers; start with --with-accounts`,
     );
   }
+  const browserBots = plugins.find((plugin) => plugin.botBrowsers)?.botBrowsers?.bots ?? [];
+  const browserPortsOf = (ports: InstancePorts) => {
+    const { pagesPort, defaultCdpPort, botCdpPorts } = browserPorts(ports, browserBots);
+    return [pagesPort, defaultCdpPort, ...botCdpPorts];
+  };
+  // Found before anything changes, so a missing Chromium refuses the start.
+  if (browserBots.length > 0) developmentChromium(inst.checkout);
   const runner = inst.runner;
   await withInstanceLock(inst, async () => {
     if (ownership(inst.stateDir) === "foreign") throw new ForeignStateError(inst.stateDir);
@@ -837,8 +989,20 @@ export async function start(
     const ports = await withLock(
       portLockPath(inst.home),
       async () => {
-        const picked = inst.name === null ? DEFAULT_PORTS : await choosePorts(inst.name, inst.home);
-        for (const port of [picked.gatewayPort, picked.providerPort]) {
+        const picked =
+          inst.name === null
+            ? DEFAULT_PORTS
+            : await choosePorts(
+                inst.name,
+                inst.home,
+                undefined,
+                browserPortOffsets(browserBots.length),
+              );
+        for (const port of [
+          picked.gatewayPort,
+          picked.providerPort,
+          ...(browserBots.length > 0 ? browserPortsOf(picked) : []),
+        ]) {
           if (await inst.listening(port)) {
             throw new Error(`port ${port} is in use by a process this tool did not start`);
           }
@@ -887,12 +1051,22 @@ export async function start(
           {
             detached: true,
             stdio: ["ignore", providerLog, providerLog],
-            env: providerEnv(process.env, ports.providerPort),
+            env: {
+              ...providerEnv(process.env, ports.providerPort),
+              // The pages the development browser may open, when there is one.
+              ...(browserBots.length > 0
+                ? { SCRIPTED_PAGES_PORT: String(browserPorts(ports, browserBots).pagesPort) }
+                : {}),
+            },
           },
         ),
       );
       closeSync(providerLog);
       await waitFor("the scripted provider", () => inst.listening(ports.providerPort), 10_000);
+      if (browserBots.length > 0) {
+        const { pagesPort } = browserPorts(ports, browserBots);
+        await waitFor("the scripted pages", () => inst.listening(pagesPort), 10_000);
+      }
 
       const gatewayLog = openSync(join(inst.runDir, "gateway.log"), "w");
       spawnRecorded(inst, runId, "gateway", () =>
@@ -922,6 +1096,13 @@ export async function start(
       `  scripted model  http://127.0.0.1:${ports.providerPort}/v1 (pid ${marker?.providerPid})`,
     );
     console.log(`  gateway         pid ${marker?.gatewayPid}, logs in ${inst.runDir}`);
+    if (browserBots.length > 0) {
+      const { pagesPort, botCdpPorts } = browserPorts(ports, browserBots);
+      console.log(`  scripted pages  http://127.0.0.1:${pagesPort}/scripted/pages/sign-in`);
+      browserBots.forEach((bot, i) =>
+        console.log(`  browser         ${bot}: profile ${botProfile(bot)}, port ${botCdpPorts[i]}`),
+      );
+    }
     // Pip's workspace holds a picture and a git checkout for the Work pane's Files tab,
     // seeded or not: the scenario check reads the picture on an unseeded instance.
     const filesWorkspace = join(inst.stateDir, "workspaces", FILES_BOT);
@@ -954,6 +1135,103 @@ function childProcesses(pid: number, identify: Identify): { pid: number; identit
 }
 
 type StopTarget = { role: string; pid: number; identity: string };
+
+/**
+ * The development browser's processes on an instance: Chromium and its
+ * helpers, found by an argument naming the instance's own browser folder
+ * (`--user-data-dir=<state>/browser/…`, a helper's `--database=…`). A helper
+ * can outlive the browser and leave the gateway's process tree, so it is
+ * found by its arguments, not by its parent. A process that merely mentions
+ * the folder otherwise is not one of them.
+ */
+export function browserProcesses(
+  stateDir: string,
+  rows: { pid: number; command: string }[],
+): number[] {
+  const folder = `${stateDir}/browser/`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const argument = new RegExp(`(?:^|\\s)--[a-z][a-z0-9-]*=${folder}`);
+  return rows
+    .filter((row) => row.pid !== process.pid && argument.test(row.command))
+    .map((row) => row.pid);
+}
+
+/** Every process with its full command line, or null when `ps` cannot say. */
+export function listProcesses(): { pid: number; command: string }[] | null {
+  const result = spawnSync("ps", ["-axww", "-o", "pid=,command="], {
+    encoding: "utf8",
+    timeout: 5000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.error || result.status !== 0) return null;
+  return result.stdout.split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+    return match ? [{ pid: Number(match[1]), command: match[2]! }] : [];
+  });
+}
+
+/** How long the browser's processes get to exit by themselves, then after each signal. */
+export const BROWSER_EXIT_WAITS = { own: 10_000, term: 5_000, kill: 3_000 };
+
+/**
+ * Wait until none of the instance's browser processes is left: first for
+ * them to exit with their browser, then stopping those still there, each by
+ * PID and only while it is still the process that was listed. True once none
+ * is left; false when that could not be confirmed.
+ */
+export async function settleBrowserProcesses(
+  inst: { stateDir: string; name: string | null; identify: Identify },
+  waits = BROWSER_EXIT_WAITS,
+): Promise<boolean> {
+  const find = () => {
+    const rows = listProcesses();
+    if (!rows) return null;
+    return browserProcesses(inst.stateDir, rows).flatMap((pid) => {
+      const found = inst.identify(pid);
+      return found.state === "alive" ? [{ pid, identity: found.identity }] : [];
+    });
+  };
+  let left = find();
+  if (left === null) {
+    console.log(`Could not list processes to find the browser of ${label(inst)}`);
+    return false;
+  }
+  if (left.length === 0) return true;
+  const waitGone = async (ms: number) => {
+    const deadline = Date.now() + ms;
+    while (left!.length > 0 && Date.now() < deadline) {
+      await sleep(200);
+      left = find() ?? left;
+    }
+  };
+  const count = left.length;
+  await waitGone(waits.own);
+  let stopped = 0;
+  for (const [signal, ms] of [
+    ["SIGTERM", waits.term],
+    ["SIGKILL", waits.kill],
+  ] as const) {
+    if (left.length === 0) break;
+    for (const proc of left) {
+      if (processState(proc.pid, proc.identity, inst.identify) === "alive") {
+        process.kill(proc.pid, signal);
+        stopped += 1;
+      }
+    }
+    await waitGone(ms);
+  }
+  if (left.length > 0) {
+    console.log(
+      `Could not confirm that the browser processes of ${label(inst)} stopped (pids ${left.map((p) => p.pid).join(", ")})`,
+    );
+    return false;
+  }
+  console.log(
+    stopped > 0
+      ? `Stopped the browser's leftover processes of ${label(inst)} (${stopped} signals)`
+      : `Waited for the browser's ${count} processes of ${label(inst)} to exit`,
+  );
+  return true;
+}
 
 /**
  * Stop one proven process: its identity is checked again right before every
@@ -1064,6 +1342,8 @@ async function stopLocked(inst: DevInstance): Promise<void> {
   }
   let confirmed = true;
   for (const target of targets) confirmed = (await stopProcess(target, inst.identify)) && confirmed;
+  // The gateway's browser and its helpers go with it, but not always at once.
+  if (confirmed) confirmed = await settleBrowserProcesses(inst);
   if (!confirmed) {
     throw new StateInUseError(
       `${label(inst)}: could not confirm that every process stopped; its records are kept.`,
@@ -1110,6 +1390,12 @@ export async function reset(inst: DevInstance, options: { runId?: string } = {})
     assertNotInUse(inst);
     await stopLocked(inst);
     if (ownership(inst.stateDir) === "owned") {
+      // Also a browser left by a gateway that is gone: nothing of it may outlive its folder.
+      if (!(await settleBrowserProcesses(inst))) {
+        throw new StateInUseError(
+          `${label(inst)} (${inst.stateDir}): its browser's processes are still running. Nothing was deleted.`,
+        );
+      }
       const blocked = await deletionRefusal(inst);
       if (blocked) throw new StateInUseError(blocked);
       rmSync(inst.stateDir, { recursive: true });

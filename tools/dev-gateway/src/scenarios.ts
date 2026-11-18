@@ -21,6 +21,11 @@ export type PlanContext = {
   sessionKey: string | null;
   /** Tool results since the user's message, in order. */
   results: { name: string; text: string }[];
+  /**
+   * The origin of the instance's scripted pages, when its bots have browsers
+   * of their own (scripted-pages.ts); null otherwise.
+   */
+  pagesOrigin?: string | null;
 };
 
 /**
@@ -31,6 +36,12 @@ export type Step =
   | ReplyStep
   | ((ctx: PlanContext) => ReplyStep[])
   | { kind: "tool-from"; build: (ctx: PlanContext) => ReplyStep };
+
+const PAGES = "/scripted/pages/";
+/** An address outside loopback, in a documentation range nothing answers. */
+export const OUTSIDE_ADDRESS = "http://192.0.2.1/";
+/** Another loopback port than the scripted pages' (one Chromium does not refuse itself): not theirs, so refused. */
+export const OTHER_LOOPBACK = "http://127.0.0.1:2/scripted/pages/sign-in";
 
 const isToolStep = (step: Step) =>
   typeof step !== "function" && (step.kind === "tool" || step.kind === "tool-from");
@@ -60,6 +71,30 @@ const say = (text: string, delayMs?: number): ReplyStep => ({
   text,
   ...(delayMs ? { delayMs } : {}),
 });
+/**
+ * A browser call built from the scripted pages' origin, or a plain reply on
+ * an instance without browsers of their own.
+ */
+const browserCall = (args: (origin: string) => Record<string, unknown>): Step => ({
+  kind: "tool-from",
+  build: (ctx) =>
+    ctx.pagesOrigin
+      ? { kind: "tool", id: "", name: "browser", arguments: args(ctx.pagesOrigin) }
+      : { kind: "text", text: "This instance has no scripted pages." },
+});
+
+/** The reply after browser calls: what the last one says when the gateway refused it. */
+const afterBrowser =
+  (text: string): Step =>
+  (ctx) => {
+    const result = [...ctx.results].reverse().find((r) => r.name === "browser");
+    if (!result) return [];
+    if (/has control of this bot's browser/i.test(result.text)) {
+      return [say("A person has control of my browser, so I left it alone.")];
+    }
+    return [say(text)];
+  };
+
 /** Tool call ids are filled in by the planner, so they are unique in a session. */
 const tool = (name: string, args: Record<string, unknown>): ReplyStep => ({
   kind: "tool",
@@ -718,6 +753,56 @@ export const SCENARIOS: Scenario[] = [
     phrase: "fail with a model error",
     summary: "The model request fails, so the run ends in an error.",
     steps: () => [{ kind: "fail", status: 400, message: "The scripted model was asked to fail." }],
+  },
+  {
+    name: "browse",
+    phrase: "open the scripted sign in page",
+    summary: "Opens the scripted sign-in page in a new tab of the bot's own browser.",
+    bots: "a bot with a browser of its own",
+    steps: () => [
+      browserCall((origin) => ({ action: "open", url: `${origin}${PAGES}sign-in` })),
+      afterBrowser("Opened the scripted sign-in page."),
+    ],
+  },
+  {
+    name: "browse-read",
+    phrase: "read the open page",
+    summary: "Reads the text of the bot's current tab.",
+    bots: "a bot with a browser of its own",
+    steps: () => [browserCall(() => ({ action: "text" })), afterBrowser("Read the page.")],
+  },
+  {
+    name: "browse-slow",
+    phrase: "open the slow scripted page",
+    summary: "Navigates the current tab to a scripted page that takes eight seconds to load.",
+    bots: "a bot with a browser of its own",
+    steps: () => [
+      browserCall((origin) => ({ action: "navigate", url: `${origin}${PAGES}slow` })),
+      afterBrowser("The slow page loaded."),
+    ],
+  },
+  {
+    name: "browse-download",
+    phrase: "download the scripted file",
+    summary:
+      "Navigates the current tab to a scripted file that downloads slowly, over eight seconds.",
+    bots: "a bot with a browser of its own",
+    steps: () => [
+      browserCall((origin) => ({ action: "navigate", url: `${origin}${PAGES}download` })),
+      afterBrowser("Started the download."),
+    ],
+  },
+  {
+    name: "browse-outside",
+    phrase: "open an outside address",
+    summary: `Navigates to ${OUTSIDE_ADDRESS}, then to another loopback port (${OTHER_LOOPBACK}), and reads what the tab shows; both are refused.`,
+    bots: "a bot with a browser of its own",
+    steps: () => [
+      browserCall(() => ({ action: "navigate", url: OUTSIDE_ADDRESS })),
+      browserCall(() => ({ action: "navigate", url: OTHER_LOOPBACK })),
+      browserCall(() => ({ action: "text" })),
+      afterBrowser("Tried both addresses."),
+    ],
   },
 ];
 

@@ -661,9 +661,13 @@ test.describe("approval cards", () => {
 
   test("F-163: ⌘J moves focus to the oldest pending card", async ({ page }) => {
     await openFixture(page, "scene=approval-pending", "light");
-    // The card is drawn before the shortcut is pressed, so the key never lands before it.
+    // The card has arrived and is the task's pending one, and the page has focus, before the
+    // key: the app's handler, attached before the first paint, reads the transcript then.
     await expect(approvalCard(page)).toBeVisible();
+    await expect(approvalCard(page)).toHaveAttribute("data-pending", "true");
     await page.locator("body").click();
+    await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
+    await expect(approvalCard(page)).not.toBeFocused();
     await page.keyboard.press("ControlOrMeta+j");
     await expect(approvalCard(page)).toBeFocused();
   });
