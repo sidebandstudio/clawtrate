@@ -362,7 +362,7 @@ The gateway sends no event when a file changes (section 20). The pane learns of 
 
 - When Files is shown, and when the person returns to it.
 - When a file tool's result arrives in the open task: a write, an edit or a patch. One fetch for a burst of results, 600 ms after the last.
-- After the task's history is read again, while a write, edit or patch that finished is not in the list yet. The gateway lists a file from its stored transcript, which may not hold the result yet when the list is fetched, or that fetch may have failed; each history read is the gateway saying it stored more. One fetch, 600 ms after the last read. (F-448)
+- After the task's history is read again, while a write, edit or patch that finished is not in the list yet, or while the list could not be read at all. The gateway lists a file from its stored transcript, which may not hold the result yet when the list is fetched, or that fetch may have failed; each history read is the gateway saying it stored more. One fetch, 600 ms after the last read. (F-448)
 - When the person chooses Refresh.
 - When the connection returns after a drop.
 

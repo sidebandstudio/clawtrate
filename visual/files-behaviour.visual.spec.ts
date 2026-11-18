@@ -338,6 +338,34 @@ test.describe("the Files tab", () => {
     await expect(failed).toHaveCount(0);
   });
 
+  test("F-320: a failed listing is fetched again by itself after the task's history is read again", async ({
+    page,
+  }) => {
+    await openFixture(page, `${FILES}&files=error`, "light");
+    await expect(page.getByTestId("files-failed")).toContainText("Couldn't load this task's files");
+    // The task's history is read again: the gateway stored more of it.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState(change: (state: never) => unknown): void };
+        }
+      ).clawtrateFixture;
+      fixture.setState(((state: { transcripts: Record<string, { loadedAt: number | null }> }) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: { ...transcript, loadedAt: (transcript.loadedAt ?? 0) + 1 },
+          },
+        };
+      }) as never);
+    });
+    await listed(page);
+    await expect(page.getByTestId("files-failed")).toHaveCount(0);
+  });
+
   test("F-320: a failed refresh keeps the list with a line above it", async ({ page }) => {
     await openFixture(page, `${FILES}&files=stale`, "light");
     await listed(page);
