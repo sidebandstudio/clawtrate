@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { builtinToolNames, mcpToolMap } from "../src/cards.ts";
 import { MAX_BUILTIN_TOOLS, MAX_MCP_TOOLS } from "../src/state-bounds.ts";
-import { KEY, openTask } from "./client-harness.ts";
+import { grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { GatewayError, until } from "./fake-gateway.ts";
 
 const entry = (id: string, server: string, tool: string, extra: Record<string, unknown> = {}) => ({
@@ -115,6 +115,36 @@ describe("the tool map from tools.effective", () => {
         coder__slow_task: { server: "coder", tool: "slow_task" },
       });
     } finally {
+      client.stop();
+    }
+  });
+
+  it("drops a retry whose task was released and opened again while it waited: the new opening reads for itself, one read at a time", async () => {
+    // A gateway that grants access: closing the task lets it go, and opening reads it anew.
+    const gateway = grantingGateway();
+    gateway.handlers["tools.effective"] = () =>
+      answer([entry("coder__slow_task", "coder", "slow_task")]);
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => "coder__slow_task" in (transcript()?.mcpTools ?? {}));
+    let requests = 0;
+    const pending: Array<(value: unknown) => void> = [];
+    gateway.handlers["tools.effective"] = () => {
+      requests += 1;
+      if (requests === 1) throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      return new Promise((resolve) => pending.push(resolve));
+    };
+    try {
+      gateway.emit("plugins.changed", {});
+      await until(() => requests === 1);
+      // Released and opened again while the retry waits: the opening reads once, and the old
+      // retry, a second later, does not read again beside it.
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      await until(() => requests === 2);
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_300));
+      expect(requests).toBe(2);
+    } finally {
+      for (const resolve of pending) resolve(answer([]));
       client.stop();
     }
   });

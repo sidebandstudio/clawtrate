@@ -775,7 +775,10 @@ export class ClawtrateClient {
   private readonly listRequested = new Map<string, number>();
   private readonly listApplied = new Map<string, number>();
   /** Per task: its `tools.effective` read in flight, and whether another was asked for meanwhile. */
-  private readonly toolReads = new Map<string, { again: boolean }>();
+  private readonly toolReads = new Map<
+    string,
+    { again: boolean; incarnation: number | undefined }
+  >();
   /** Whole reads from history in flight (`MAX_FULL_READS`). */
   private fullReads = 0;
   /** File content on its way to viewers, in chunks (`files.ts`): nothing else of a file is kept. */
@@ -2912,8 +2915,15 @@ export class ClawtrateClient {
       running.again = true;
       return;
     }
-    const read = { again: false };
+    const read = { again: false, incarnation: this.incarnations.get(key) };
     this.toolReads.set(key, read);
+    // The reads, retries included, belong to the opening of the task that asked for them: once
+    // it is released (and perhaps opened again, which reads for itself), they stop.
+    const current = () =>
+      this.toolReads.get(key) === read &&
+      generation === this.generation &&
+      this.tracked(key) &&
+      this.incarnations.get(key) === read.incarnation;
     try {
       let failures = 0;
       do {
@@ -2926,7 +2936,7 @@ export class ClawtrateClient {
           await new Promise<void>((resolve) => setTimeout(resolve, TOOL_MAP_RETRY_MS * failures));
           read.again = true;
         }
-      } while (read.again && generation === this.generation && this.tracked(key));
+      } while (read.again && current());
     } finally {
       if (this.toolReads.get(key) === read) this.toolReads.delete(key);
     }
