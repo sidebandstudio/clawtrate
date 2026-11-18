@@ -654,3 +654,28 @@ test("F-474: where the gateway keeps sign-ins per bot, a bot connects an account
     page.getByRole("radio", { name: /^xAI · Side, Subscription, Only Otto can use it/ }),
   ).toHaveAttribute("aria-checked", "true");
 });
+
+test("F-034: a bot written whose first task did not land is said to exist, unfinished; Finish completes it by its id and opens it", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&create=partial`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("textbox", { name: "Name" }).fill("Viral");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await page.getByTestId("create").click();
+  const note = page.getByTestId("create-partial");
+  await expect(note).toContainText(
+    "Viral exists, and isn't finished. Viral was created, but its first task was not made",
+  );
+  // It is not offered as something to create again.
+  await expect(page.getByTestId("create")).toBeDisabled();
+  await note.getByRole("button", { name: "Finish Viral" }).click();
+  await expect(newBot(page)).toHaveCount(0);
+  const types = (await sent(page)).map((each) => each.type);
+  expect(types.filter((type) => type === "createBot")).toHaveLength(1);
+  expect(types).toContain("finishBot");
+  await expect(
+    page.getByTestId("bot-list").getByRole("button", { name: /^Viral\b/ }),
+  ).toBeVisible();
+});

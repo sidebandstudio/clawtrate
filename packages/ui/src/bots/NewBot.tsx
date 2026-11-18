@@ -198,7 +198,7 @@ export function NewBot({
     if (!draft.account || !listedChoice || !provider || !draft.model || busy) return;
     announce("Creating the bot");
     try {
-      const { botId } = await bridge.invoke({
+      const { botId, missing } = await bridge.invoke({
         type: "createBot",
         name: draft.name.trim(),
         avatar: await pictureOf(previewRef.current?.querySelector("svg")),
@@ -208,11 +208,29 @@ export function NewBot({
         effort: draft.effort,
       });
       remember(KEPT, null);
+      // The bot exists; what did not land is said here, and finished by its id.
+      if (missing.length > 0) {
+        announce(`Created ${name}, not finished`);
+        return;
+      }
       announce(`Created ${name}`);
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
       onCreated(botId);
     } catch {
       announce("Could not create the bot");
+    }
+  };
+  const partial = creation?.status === "partial" ? creation : null;
+  const finish = async () => {
+    if (!partial?.botId) return;
+    try {
+      const { botId, missing } = await bridge.invoke({ type: "finishBot", botId: partial.botId });
+      if (missing.length > 0) return;
+      announce(`Created ${partial.name}`);
+      void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
+      onCreated(botId);
+    } catch {
+      announce(`Could not finish ${partial.name}`);
     }
   };
 
@@ -480,8 +498,39 @@ export function NewBot({
         {creation?.status === "failed" && (
           <Note tone="danger" testId="create-failed">
             <p>
-              <b>Could not create the bot.</b> Please try again.
+              <b>Could not create the bot.</b>{" "}
+              {creation.uncertain ? creation.error : "Please try again."}
             </p>
+          </Note>
+        )}
+        {partial && (
+          <Note tone="warn" testId="create-partial">
+            <p>
+              <b>{partial.name} exists, and isn't finished.</b> {partial.error}
+            </p>
+            <div className="b-actions">
+              <button
+                type="button"
+                className="button"
+                data-variant="primary"
+                data-size="sm"
+                onClick={() => void finish()}
+              >
+                Finish {partial.name}
+              </button>
+              <button
+                type="button"
+                className="button"
+                data-variant="quiet"
+                data-size="sm"
+                onClick={() => {
+                  void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
+                  onCreated(partial.botId!);
+                }}
+              >
+                Open {partial.name} as it is
+              </button>
+            </div>
           </Note>
         )}
         <button
@@ -489,7 +538,7 @@ export function NewBot({
           className="button"
           data-variant="primary"
           data-size="lg"
-          disabled={busy || !draft.account || !listedChoice || !draft.model}
+          disabled={busy || partial !== null || !draft.account || !listedChoice || !draft.model}
           onClick={() => void create()}
           data-testid="create"
         >

@@ -47,6 +47,9 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/scopes.ts:READ_SCOPES": "static, one scope",
   "packages/core/src/scopes.ts:INTERACTIVE_SCOPES": "static, four scopes",
   "packages/core/src/scopes.ts:ADMIN_SCOPES": "static, five scopes",
+  "packages/core/src/accounts-engine.ts:CERTAIN_REFUSALS": "static, seven error codes",
+  "packages/core/src/accounts-engine.ts:createBot>missing":
+    "one creation's steps that did not land, at most two, gone when it returns",
   "packages/core/src/scopes.ts:IMPLIED_BY_WRITE": "static, the scopes write implies",
   "packages/core/src/state-bounds.ts:SESSION_ROW_FIELDS": "static, the twenty-one fields read",
   "packages/core/src/state-bounds.ts:SESSION_ROW_IDS": "static, five field names",

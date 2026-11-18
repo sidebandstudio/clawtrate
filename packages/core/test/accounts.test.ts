@@ -510,6 +510,101 @@ describe("creating a bot", () => {
   });
 });
 
+describe("a bot left half-made", () => {
+  const input = {
+    name: "Viral",
+    avatar: null,
+    account: "acme:work",
+    provider: "acme",
+    model: "dev-1",
+    effort: null,
+  } as const;
+
+  it("a bot written whose first task fails is reported with what exists and what is missing, and is finished by its id", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.gateway.handlers["sessions.create"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "Task write failed" });
+    };
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: ["task"] });
+    expect(accounts().creation).toMatchObject({
+      status: "partial",
+      botId: "viral",
+      missing: ["task"],
+      error: "Viral was created, but its first task was not made: Task write failed.",
+    });
+    // Create is not offered again for it: it exists.
+    await expect(client.createBot({ ...input })).rejects.toThrow(/exists already/);
+    fake.gateway.handlers["sessions.create"] = () => ({ ok: true });
+    expect(await client.finishBot("viral")).toEqual({ botId: "viral", missing: [] });
+    expect(accounts().creation).toMatchObject({ status: "created", missing: [] });
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    expect(fake.gateway.calls("sessions.create")).toEqual([
+      { key: "agent:viral:main", agentId: "viral", label: "Main" },
+      { key: "agent:viral:main", agentId: "viral", label: "Main" },
+    ]);
+    client.stop();
+  });
+
+  it("an answer that the bot was saved but not applied is followed by a look for it, never by Create again", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const create = fake.gateway.handlers["agents.create"]!;
+    fake.gateway.handlers["agents.create"] = async (params) => {
+      await create(params);
+      throw new GatewayError({
+        code: "UNAVAILABLE",
+        message:
+          "Agent configuration was saved but its application to the active Gateway was not confirmed",
+      });
+    };
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(accounts().creation).toMatchObject({ status: "created", botId: "viral" });
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    expect(binding(accounts(), "viral")).toMatchObject({ account: "acme:work", fallbacks: [] });
+    client.stop();
+  });
+
+  it("an answer that settles nothing, with no bot found, fails; the next Create looks for the bot before asking again", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.gateway.handlers["agents.create"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "gateway restarting" });
+    };
+    await expect(client.createBot({ ...input })).rejects.toThrow();
+    expect(accounts().creation).toMatchObject({ status: "failed", uncertain: true });
+    expect(accounts().creation?.error).toMatch(/did not say whether Viral was made/);
+    // The gateway did make it, as it turns out.
+    fake.bots.push({ id: "viral", name: "Viral" });
+    expect(await client.createBot({ ...input })).toEqual({ botId: "viral", missing: [] });
+    expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("a refusal that establishes nothing was written fails at once, and is not uncertain", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.gateway.handlers["agents.create"] = () => {
+      throw new GatewayError({ code: "INVALID_REQUEST", message: 'agent "viral" already exists' });
+    };
+    await expect(client.createBot({ ...input })).rejects.toThrow(/already exists/);
+    expect(accounts().creation).toMatchObject({ status: "failed", uncertain: false });
+    client.stop();
+  });
+
+  it("a bot Clawtrate set whose model has no fallback list is reported, also after a restart", async () => {
+    const fake = new AccountsGateway();
+    fake.prefs["clawtrate.bot-account.pip"] = { mode: "account", account: "acme:home" };
+    (
+      (fake.config.agents as Record<string, unknown>).entries as Record<
+        string,
+        Record<string, unknown>
+      >
+    ).pip!.model = "acme/dev-1@acme:home";
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    expect(binding(accounts(), "pip")).toMatchObject({ fallbacks: null, fallbacksUnwritten: true });
+    // A bot Clawtrate never set is not its to report.
+    expect(binding(accounts(), "otto").fallbacksUnwritten).toBe(false);
+    client.stop();
+  });
+});
+
 describe("sign-ins, through the gateway's own methods", () => {
   it("a link and a code: starting, waiting with the code and the link, connected, and where it landed", async () => {
     const fake = new AccountsGateway();

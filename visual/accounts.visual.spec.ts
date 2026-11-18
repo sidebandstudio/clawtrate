@@ -124,6 +124,16 @@ const SCENES: Scene[] = [
     },
   },
   {
+    name: "newbot-create-partial",
+    query: `${ADMIN}&create=partial`,
+    ready: async (page) => {
+      await accountStep(page);
+      await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+      await page.getByTestId("create").click();
+      await expect(page.getByTestId("create-partial")).toBeVisible();
+    },
+  },
+  {
     name: "newbot-create-slow",
     query: `${ADMIN}&create=slow`,
     ready: async (page) => {

@@ -13,6 +13,7 @@ export {
   AdminNeededError,
   isActive as isSignInActive,
   type CreateBotInput,
+  type CreatedBot,
 } from "./accounts-engine.ts";
 export * from "./file-paths.ts";
 export { fromBase64, sha256Hex, toBase64, utf8Bytes } from "./bytes.ts";

@@ -15,7 +15,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
-import { AccountsEngine, type CreateBotInput } from "./accounts-engine.ts";
+import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
 import {
   admitApproval,
   applyApprovalRequested,
@@ -3229,8 +3229,13 @@ export class ClawtrateClient {
     return this.accounts.disconnect(profileId);
   }
 
-  createBot(input: CreateBotInput): Promise<{ botId: string }> {
+  createBot(input: CreateBotInput): Promise<CreatedBot> {
     return this.accounts.createBot(input);
+  }
+
+  /** Finish a bot whose creation is partial, by its id: what is missing, never a second bot. */
+  finishBot(botId: string): Promise<CreatedBot> {
+    return this.accounts.finishBot(botId);
   }
 
   dismissBotCreation(): void {

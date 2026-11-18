@@ -15,7 +15,7 @@
 //                             it failed), cancel-unknown (the cancel's answer says nothing)
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
-//   create=failed|slow|checking   how New bot's Create goes
+//   create=failed|slow|checking|partial   how New bot's Create goes
 //   admin=grant               a request for admin access is approved after a moment
 //   defacct=1                 the gateway's default model names an account (openai:work)
 
@@ -886,6 +886,8 @@ export function accountCommand(
           slow: false,
           botId: null,
           error: null,
+          missing: [],
+          uncertain: false,
         },
       }));
       if (params.create === "slow") {
@@ -929,17 +931,36 @@ export function accountCommand(
             tasksByBot: { ...state.tasksByBot, [id]: [] },
             accounts: {
               ...state.accounts,
-              creation: { name, status: "created", slow: false, botId: id, error: null },
+              creation: {
+                name,
+                // create=partial: the bot exists, and its first task was not made.
+                status: params.create === "partial" ? "partial" : "created",
+                slow: false,
+                botId: id,
+                error:
+                  params.create === "partial"
+                    ? `${name} was created, but its first task was not made: the gateway did not answer.`
+                    : null,
+                missing: params.create === "partial" ? ["task"] : [],
+                uncertain: false,
+              },
               bindings: [
                 ...state.accounts.bindings,
                 bound(id, ref, command.effort ?? "medium", Date.now()),
               ],
             },
           });
-          resolve({ botId: id });
+          resolve({ botId: id, missing: params.create === "partial" ? ["task"] : [] });
         }),
       );
     }
+    case "finishBot":
+      put((a) =>
+        a.creation
+          ? { ...a, creation: { ...a.creation, status: "created", missing: [], error: null } }
+          : a,
+      );
+      return Promise.resolve({ botId: command.botId, missing: [] });
     case "dismissBotCreation":
       put((a) => ({ ...a, creation: null }));
       return Promise.resolve();

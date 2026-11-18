@@ -286,7 +286,10 @@ export class AccountsEngine {
         base.account !== null && listed.has(base.account),
         at,
       ),
-      fallbacksUnwritten: this.unwritten.has(botId),
+      // Clawtrate set this bot's account (its own record says so) and the gateway's model has no
+      // explicit fallback list: the empty list it writes did not land, then or since a restart.
+      fallbacksUnwritten:
+        this.unwritten.has(botId) || (intent !== null && ref !== null && fallbacks === null),
     };
   }
 
@@ -991,12 +994,15 @@ export class AccountsEngine {
    * `config.patch`, then the bot list read back. A create that got no answer
    * is never sent again: the bot list is read first for the one it may have made.
    */
-  async createBot(input: CreateBotInput): Promise<{ botId: string }> {
+  async createBot(input: CreateBotInput): Promise<CreatedBot> {
     this.requireAdmin("Creating a bot");
     const { ctx } = this;
     const name = input.name.trim() || "New bot";
-    if (ctx.get().creation?.status === "creating" || ctx.get().creation?.status === "checking")
+    const previous = ctx.get().creation;
+    if (previous?.status === "creating" || previous?.status === "checking")
       throw new Error("A bot is already being created.");
+    if (previous?.status === "partial" && previous.botId)
+      throw new Error(`${previous.name} exists already: finish it rather than create it again.`);
     const ref: ModelRef = { provider: input.provider, model: input.model, account: input.account };
     if (input.account && accountProvider(input.account) !== input.provider)
       throw new Error("That account belongs to another provider.");
@@ -1009,7 +1015,15 @@ export class AccountsEngine {
     const existing = new Set(ctx.bots().map((bot) => bot.id));
     ctx.update((a) => ({
       ...a,
-      creation: { name, status: "creating", slow: false, botId: null, error: null },
+      creation: {
+        name,
+        status: "creating",
+        slow: false,
+        botId: null,
+        error: null,
+        missing: [],
+        uncertain: false,
+      },
     }));
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = setTimeout(() => {
@@ -1020,63 +1034,150 @@ export class AccountsEngine {
       );
     }, SLOW_CREATE_MS);
     let botId: string | null = null;
-    try {
-      const answer = asRecord(
-        await ctx.request("agents.create", {
-          name,
-          model: formatModelRef(ref),
-          ...(avatar ? { avatar } : {}),
-        }),
-      );
-      botId = typeof answer?.agentId === "string" ? answer.agentId : null;
-    } catch (error) {
-      const refused = isRefusal(error);
-      if (refused) return this.creationFailed(error);
-      // No answer: read the list for the bot it may have made before saying anything,
-      // once there is a connection to read it on.
-      ctx.update((a) =>
-        a.creation ? { ...a, creation: { ...a.creation, status: "checking" } } : a,
-      );
+    // After an answer that settled nothing, the bot may exist: look before asking again.
+    if (previous?.status === "failed" && previous.uncertain && previous.name === name)
+      botId = await this.findMade(name, previous.botId === null ? null : existing);
+    if (!botId) {
       try {
-        for (let tries = 0; tries < 150 && !ctx.connected(); tries += 1) {
-          await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
-        }
-        await ctx.refreshBots();
-        botId = ctx.bots().find((bot) => !existing.has(bot.id) && bot.name === name)?.id ?? null;
-      } catch {
-        botId = null;
+        const answer = asRecord(
+          await ctx.request("agents.create", {
+            name,
+            model: formatModelRef(ref),
+            ...(avatar ? { avatar } : {}),
+          }),
+        );
+        botId = typeof answer?.agentId === "string" ? answer.agentId : null;
+      } catch (error) {
+        // Only a refusal that establishes nothing was written ends here. Anything else (no
+        // answer, a dropped connection, "saved but not applied") may have made the bot.
+        if (isCertainRefusal(error)) return this.creationFailed(error, false);
+        botId = await this.findMade(name, existing);
+        if (!botId) return this.creationFailed(error, true);
       }
-      if (!botId) return this.creationFailed(error);
     }
-    if (!botId) return this.creationFailed(new Error("The gateway did not say which bot it made."));
+    if (!botId)
+      return this.creationFailed(new Error("The gateway did not say which bot it made."), true);
     await this.recordIntent(
       botId,
       input.account ? { mode: "account", account: input.account } : { mode: "gateway" },
     );
+    const missing: Array<"fallbacks" | "task"> = [];
+    const errors: string[] = [];
     await this.writeModel(botId, ref, input.effort, true);
+    if (this.unwritten.has(botId)) {
+      missing.push("fallbacks");
+      errors.push("its empty fallback list was not written");
+    }
     await ctx.refreshBots().catch(() => undefined);
-    await ctx
-      .createMainTask(botId)
-      .catch((error: unknown) =>
-        ctx.log(`could not give ${botId} its first task: ${errorText(error)}`),
-      );
-    if (this.slowTimer) clearTimeout(this.slowTimer);
-    this.slowTimer = null;
-    ctx.update((a) => ({
-      ...a,
-      creation: { name, status: "created", slow: false, botId, error: null },
-    }));
-    await this.load();
-    return { botId };
+    try {
+      await ctx.createMainTask(botId);
+    } catch (error) {
+      missing.push("task");
+      errors.push(`its first task was not made: ${errorText(error)}`);
+      this.log(`could not give ${botId} its first task: ${errorText(error)}`);
+    }
+    return this.settleCreation(name, botId, missing, errors);
   }
 
-  private creationFailed(error: unknown): never {
+  /** The creation's end: created, or partial with what it lacks. */
+  private async settleCreation(
+    name: string,
+    botId: string,
+    missing: Array<"fallbacks" | "task">,
+    errors: string[],
+  ): Promise<CreatedBot> {
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
     this.ctx.update((a) => ({
       ...a,
+      creation: {
+        name,
+        status: missing.length > 0 ? "partial" : "created",
+        slow: false,
+        botId,
+        error: errors.length > 0 ? `${name} was created, but ${errors.join(", and ")}.` : null,
+        missing,
+        uncertain: false,
+      },
+    }));
+    await this.load();
+    return { botId, missing };
+  }
+
+  /**
+   * The bot a create may have made: once connected, read the list and find a
+   * bot of that name that was not there before (`existing`), or of that name
+   * at all when nothing is known of before.
+   */
+  private async findMade(name: string, existing: Set<string> | null): Promise<string | null> {
+    const { ctx } = this;
+    ctx.update((a) => (a.creation ? { ...a, creation: { ...a.creation, status: "checking" } } : a));
+    try {
+      for (let tries = 0; tries < 150 && !ctx.connected(); tries += 1) {
+        await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
+      }
+      await ctx.refreshBots();
+      return (
+        ctx.bots().find((bot) => bot.name === name && (existing === null || !existing.has(bot.id)))
+          ?.id ?? null
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Finish a bot whose creation is partial, by its id: write what is missing
+   * (the empty fallback list, the first task), never create it again.
+   */
+  async finishBot(botId: string): Promise<CreatedBot> {
+    this.requireAdmin("Creating a bot");
+    const creation = this.ctx.get().creation;
+    if (!creation || creation.status !== "partial" || creation.botId !== botId)
+      throw new Error("That bot has nothing left to finish.");
+    const missing: Array<"fallbacks" | "task"> = [];
+    const errors: string[] = [];
+    this.ctx.update((a) =>
+      a.creation ? { ...a, creation: { ...a.creation, status: "creating", error: null } } : a,
+    );
+    if (creation.missing.includes("fallbacks")) {
+      try {
+        await this.patch({ agents: { entries: { [botId]: { model: { fallbacks: [] } } } } }, [
+          `agents.entries.${botId}.model.fallbacks`,
+        ]);
+        this.unwritten.delete(botId);
+      } catch (error) {
+        missing.push("fallbacks");
+        errors.push(`its empty fallback list was not written: ${errorText(error)}`);
+      }
+    }
+    if (creation.missing.includes("task")) {
+      try {
+        await this.ctx.createMainTask(botId);
+      } catch (error) {
+        missing.push("task");
+        errors.push(`its first task was not made: ${errorText(error)}`);
+      }
+    }
+    return this.settleCreation(creation.name, botId, missing, errors);
+  }
+
+  private creationFailed(error: unknown, uncertain: boolean): never {
+    if (this.slowTimer) clearTimeout(this.slowTimer);
+    this.slowTimer = null;
+    const name = this.ctx.get().creation?.name ?? "the bot";
+    this.ctx.update((a) => ({
+      ...a,
       creation: a.creation
-        ? { ...a.creation, status: "failed", slow: false, error: errorText(error) }
+        ? {
+            ...a.creation,
+            status: "failed",
+            slow: false,
+            uncertain,
+            error: uncertain
+              ? `The gateway's answer did not say whether ${name} was made (${errorText(error)}), and Clawtrate found no new bot of that name. Create again looks for it first.`
+              : errorText(error),
+          }
         : null,
     }));
     throw error instanceof Error ? error : new Error(String(error));
@@ -1085,7 +1186,11 @@ export class AccountsEngine {
   /** Forget a creation that has settled. */
   dismissCreation(): void {
     this.ctx.update((a) =>
-      a.creation && (a.creation.status === "failed" || a.creation.status === "created")
+      a.creation &&
+      (a.creation.status === "failed" ||
+        a.creation.status === "created" ||
+        // The person chose to open the bot as it is; its Account page still says what is missing.
+        a.creation.status === "partial")
         ? { ...a, creation: null }
         : a,
     );
@@ -1285,3 +1390,21 @@ export function isActive(signIn: SignInState): boolean {
 function isRefusal(error: unknown): boolean {
   return error instanceof GatewayProtocolRequestError;
 }
+
+/** Refusals that establish the request was not applied; anything else may have been. */
+const CERTAIN_REFUSALS = new Set([
+  "INVALID_REQUEST",
+  "INVALID_PARAMS",
+  "BAD_REQUEST",
+  "FORBIDDEN",
+  "UNAUTHORIZED",
+  "NOT_FOUND",
+  "CONFLICT",
+]);
+
+function isCertainRefusal(error: unknown): boolean {
+  return error instanceof GatewayProtocolRequestError && CERTAIN_REFUSALS.has(error.code);
+}
+
+/** A bot the gateway made, and what of its creation did not land. */
+export type CreatedBot = { botId: string; missing: Array<"fallbacks" | "task"> };

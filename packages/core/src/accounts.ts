@@ -266,10 +266,21 @@ export type SignInState = {
 
 export type BotCreationState = {
   name: string;
-  status: "creating" | "checking" | "failed" | "created";
+  /**
+   * `partial`: the bot exists, and a later step did not land (`missing`); it is
+   * finished by its id (`finishBot`), never by creating again.
+   */
+  status: "creating" | "checking" | "failed" | "created" | "partial";
   slow: boolean;
   botId: string | null;
   error: string | null;
+  /** What a partial creation lacks: its empty fallback list, its first task. */
+  missing: Array<"fallbacks" | "task">;
+  /**
+   * The gateway's answer did not settle whether the bot was made, and no new
+   * bot of that name was found: the next Create looks for it again first.
+   */
+  uncertain: boolean;
 };
 
 /** The last write to a bot's settings or an account, for the line that says how it went. */

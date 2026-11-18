@@ -135,6 +135,8 @@ export type BridgeCommand =
       effort: string | null;
     }
   | { type: "dismissBotCreation" }
+  /** Finish a bot whose creation is partial, by its id. */
+  | { type: "finishBot"; botId: string }
   | {
       type: "changeBotAccount";
       botId: string;
@@ -179,8 +181,8 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                               ? { dismissed: boolean }
                               : C extends { type: "saveApiKey" }
                                 ? { profileId: string | null }
-                                : C extends { type: "createBot" }
-                                  ? { botId: string }
+                                : C extends { type: "createBot" | "finishBot" }
+                                  ? { botId: string; missing: Array<"fallbacks" | "task"> }
                                   : void;
 
 export type HostInfo = {
@@ -417,6 +419,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "dismissBotCreation":
       return { type: command.type };
     case "checkLock":
+    case "finishBot":
     case "removeBotFallbacks":
       return { type: command.type, botId: botId(command.botId) };
     case "startSignIn":
@@ -813,6 +816,8 @@ class ViewerSession implements BridgeSession {
         });
       case "dismissBotCreation":
         return client.dismissBotCreation();
+      case "finishBot":
+        return client.finishBot(command.botId);
       case "changeBotAccount":
         return client.changeBotAccount(
           command.botId,

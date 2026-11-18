@@ -204,6 +204,10 @@ export class AccountsGateway {
       }
       return { ok: true, agentId: id, name, workspace: `/w/${id}`, ...(model ? { model } : {}) };
     };
+    g.handlers["sessions.create"] = (params) => {
+      const { key } = params as { key: string };
+      return { ok: true, key, sessionId: `session-${key}` };
+    };
     g.handlers["models.authLogin"] = (params) => {
       const { sessionId, authChoice, agentId } = params as {
         sessionId: string;
