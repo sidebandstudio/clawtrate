@@ -35,7 +35,15 @@ import {
   type TaskFolder,
 } from "../src/files.ts";
 import { filePathsOf } from "../src/file-paths.ts";
-import { applyAgentEvent, emptyActivity, RawTable, type Run, type Step } from "../src/runs.ts";
+import {
+  applyAgentEvent,
+  emptyActivity,
+  mergeHistoryRuns,
+  RawTable,
+  runsFromHistory,
+  type Run,
+  type Step,
+} from "../src/runs.ts";
 
 const KEY = "agent:otto:task-1";
 const ROOT = "/state/workspaces/otto";
@@ -966,5 +974,69 @@ describe("the run markers and the step behind a file", () => {
     const written = activity.runs[0]!.steps.find((each) => each.id === "tool:c1")!;
     expect(written.files).toEqual({ paths: ["notes/a.md"], changed: true, created: true });
     expect(fileMarks(activity).get("notes/a.md")).toBe("this-run");
+  });
+
+  it("F-448: a write whose start the live stream missed takes its paths from history, so its result is counted for the refetch", () => {
+    const raw = new RawTable();
+    const ctx = { sessionKey: KEY, now: 5_000, raw };
+    // Only the result arrived live (its start was in a gap): the step names no file.
+    let activity = applyAgentEvent(
+      emptyActivity,
+      {
+        runId: "r1",
+        seq: 1,
+        stream: "lifecycle",
+        ts: 1_000,
+        sessionKey: KEY,
+        data: { phase: "start" },
+      },
+      ctx,
+    ).activity;
+    activity = applyAgentEvent(
+      activity,
+      {
+        runId: "r1",
+        seq: 3,
+        stream: "tool",
+        ts: 1_003,
+        sessionKey: KEY,
+        data: {
+          phase: "result",
+          name: "write",
+          toolCallId: "c1",
+          isError: false,
+          result: { content: [{ type: "text", text: "ok" }], details: { changed: true } },
+        },
+      },
+      ctx,
+    ).activity;
+    expect(finishedChanges(activity)).toBe(0);
+    // History holds the call with its arguments: the paths come from there.
+    const rows = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "c1",
+            name: "write",
+            arguments: { path: "notes/scratch.md", content: "hi" },
+          },
+        ],
+        __openclaw: { id: "a1", seq: 2, runId: "r1" },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "write",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        __openclaw: { id: "t1", seq: 3, runId: "r1" },
+      },
+    ];
+    const merged = mergeHistoryRuns(activity.runs, runsFromHistory(rows, "r1", ctx), ctx).runs;
+    const step = merged[0]!.steps.find((each) => each.id === "tool:c1")!;
+    expect(step.files?.paths).toEqual(["notes/scratch.md"]);
+    expect(finishedChanges({ runs: merged })).toBe(1);
   });
 });

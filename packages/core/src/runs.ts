@@ -2483,8 +2483,14 @@ function mergeStep(live: Step, history: Step): { step: Step; source: "live" | "h
       source: "history",
     };
   }
+  // A live step whose start the stream missed names no file; history's call does.
+  const truncated = history.truncated && !live.truncated;
+  const files = !live.files && history.files ? history.files : undefined;
   return {
-    step: history.truncated && !live.truncated ? { ...live, truncated: true } : live,
+    step:
+      truncated || files
+        ? { ...live, ...(truncated ? { truncated: true } : {}), ...withFiles(files) }
+        : live,
     source: "live",
   };
 }
