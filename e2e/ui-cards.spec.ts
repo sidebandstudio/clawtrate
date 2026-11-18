@@ -614,13 +614,14 @@ test.describe("Messaged cards' actions on a real gateway", () => {
     await clients.plain.terminal(String(run.runId));
     await openTask(page, "Pip", t.title);
     const messaged = card(page, "messaged-card");
-    await messaged.locator("summary").click();
+    // The card's own line: its body may hold the Thought line of the reasoning that led to it.
+    await messaged.locator(":scope > summary").click();
     await messaged.getByRole("button", { name: "Open this message in Marlow's task" }).click();
     await expect(page.locator(".title-pill")).toContainText("Notes for Pip");
     // Marlow's task, at the Message from Pip card of the run this message started, open and focused.
     const received = page.getByTestId("received-card").last();
     await expect(received).toHaveAttribute("open", "");
-    await expect(received.locator("summary")).toBeFocused();
+    await expect(received.locator(":scope > summary")).toBeFocused();
     await shot(received, "received-card");
     await received.getByRole("button", { name: "Open this message in Pip's task" }).click();
     await expect(page.getByRole("heading", { level: 1, name: t.title })).toBeVisible();
@@ -635,7 +636,7 @@ test.describe("Messaged cards' actions on a real gateway", () => {
     }
     await openTask(page, "Pip", t.title);
     const messaged = card(page, "messaged-card").last();
-    await messaged.locator("summary").click();
+    await messaged.locator(":scope > summary").click();
     await messaged
       .getByRole("button", { name: "Show every message between Pip and Marlow in this task" })
       .click();
