@@ -412,7 +412,7 @@ test.describe("action cards", () => {
       "scripted/dev-1 · effort not reported",
     );
     await expect(page.getByRole("button", { name: "Copy run id" })).toBeVisible();
-    // The effort the task asks for, when its row records one.
+    // The effort the task asks for now is not what an earlier turn asked for (conversation.md 25.5).
     await setState(
       page,
       `const tasks = Object.fromEntries(Object.entries(state.tasksByBot).map(([bot, list]) =>
@@ -420,7 +420,19 @@ test.describe("action cards", () => {
        return { ...state, tasksByBot: tasks };`,
     );
     await expect(page.getByTestId("run-line")).toContainText(
-      "scripted/dev-1 · requested effort high",
+      "scripted/dev-1 · effort not reported",
+    );
+    // The effort this app sent with the message that started the turn.
+    await setState(
+      page,
+      `const key = "agent:otto:disk-space";
+       const empty = { catalog: "idle", catalogError: null, models: [], account: null, held: null,
+         saving: false, refused: null, events: [], requested: [] };
+       return { ...state, taskModels: { ...state.taskModels,
+         [key]: { ...(state.taskModels[key] ?? empty), requested: [{ runId: "run-1", effort: "high" }] } } };`,
+    );
+    await expect(page.getByTestId("run-line")).toContainText(
+      "scripted/dev-1 · high effort requested",
     );
   });
 
