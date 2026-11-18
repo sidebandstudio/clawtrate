@@ -29,7 +29,14 @@ import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { AccountsGateway, accountsClient, CHOICES } from "./accounts-fake.ts";
 import { FAST, URL_A } from "./client-harness.ts";
-import { deferred, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import {
+  deferred,
+  GatewayError,
+  memoryStorage,
+  testHost,
+  tokenKey,
+  until,
+} from "./fake-gateway.ts";
 
 const binding = (state: ClawtrateState["accounts"], botId: string) =>
   state.bindings.find((each) => each.botId === botId)!;
@@ -766,6 +773,108 @@ describe("a typed API key leaves no trace", () => {
     await traceless(client, storage, logs, KEY);
     viewer.dispose();
     client.stop();
+  });
+
+  /** The engine's own copy of what was typed, which must be gone once the sign-in has ended. */
+  const held = (client: ClawtrateClient) =>
+    (client as unknown as { accounts: { secrets: string[] } }).accounts.secrets;
+
+  it("a later step that echoes a pasted code, in its message or title, shows it to nobody", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const code = "one-time-code-echoed-9Z";
+    const next = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) => {
+      const { answer } = params as { answer?: { value: string } };
+      return answer
+        ? {
+            done: false,
+            status: "running",
+            step: {
+              id: `retry-${answer.value}`,
+              type: "text",
+              sensitive: true,
+              title: `Code ${answer.value} was not accepted`,
+              message: `Code rejected: ${answer.value.trim()}`,
+              placeholder: answer.value,
+            },
+          }
+        : next(params);
+    };
+    await client.startSignIn(CHOICES.browser, null);
+    await client.answerSignIn(` ${code} `);
+    // Still under way, waiting for another answer: the step is shown, without the code.
+    expect(client.state.accounts.signIn).toMatchObject({ stage: "entering" });
+    expect(client.state.accounts.signIn?.step?.title).toBe("Code … was not accepted");
+    expect(JSON.stringify(client.state)).not.toContain(code);
+    // Once the sign-in ends, nothing of it is held.
+    await client.dismissSignIn();
+    expect(held(client)).toEqual([]);
+    await traceless(client, storage, logs, code);
+  });
+
+  it("a key echoed by a later step of the key sign-in is shown to nobody, and forgotten when it ends", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const next = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) => {
+      const { answer } = params as { answer?: { value: unknown } };
+      return answer && typeof answer.value === "string"
+        ? {
+            done: false,
+            status: "running",
+            step: {
+              id: "again",
+              type: "text",
+              sensitive: true,
+              title: `Key rejected: ${answer.value}`,
+            },
+          }
+        : next(params);
+    };
+    await client.saveApiKey("acme", KEY, null);
+    expect(client.state.accounts.signIn?.step?.title).toBe("Key rejected: …");
+    expect(JSON.stringify(client.state)).not.toContain(KEY);
+    await client.dismissSignIn();
+    expect(held(client)).toEqual([]);
+    await traceless(client, storage, logs, KEY);
+  });
+
+  it("a failure in the middle that echoes a pasted address's code, decoded, shows none of it", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const address = "http://127.0.0.1:1/callback?code=abc%2Fdef-4417&state=s1";
+    const decoded = "abc/def-4417";
+    const next = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) => {
+      if ((params as { answer?: unknown }).answer)
+        throw new GatewayError({
+          code: "UNAVAILABLE",
+          message: `The provider refused code ${decoded}.`,
+        });
+      return next(params);
+    };
+    await client.startSignIn(CHOICES.browser, null);
+    await client.answerSignIn(address);
+    await until(() => client.state.accounts.signIn?.result != null);
+    expect(client.state.accounts.signIn).toMatchObject({
+      stage: "failed",
+      error: "The provider refused code ….",
+    });
+    expect(held(client)).toEqual([]);
+    for (const form of [address, decoded, "abc%2Fdef-4417"])
+      await traceless(client, storage, logs, form);
+  });
+
+  it("a log line that echoes the typed key while the sign-in lasts carries none of it", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    // The record of how the account was made is written before the sign-in ends; its error echoes the key.
+    fake.gateway.handlers["users.prefs.set"] = () => {
+      throw new GatewayError({
+        code: "UNAVAILABLE",
+        message: `cannot store ${String(fake.typed.filter((value) => typeof value === "string").at(-1))}`,
+      });
+    };
+    await client.saveApiKey("acme", KEY, null);
+    expect(logs.some((line) => line.startsWith("could not record an account's kind"))).toBe(true);
+    await traceless(client, storage, logs, KEY);
   });
 
   it("withoutSecret takes a key out of anything the gateway answers", () => {

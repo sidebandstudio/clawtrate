@@ -32,6 +32,8 @@ import {
   readModelConfig,
   readStep,
   SIGNIN_WAIT_MS,
+  MAX_SIGNIN_SECRETS,
+  secretForms,
   SLOW_CREATE_MS,
   unreadEvidence,
   withoutSecret,
@@ -109,6 +111,13 @@ export class AccountsEngine {
   private loadAgain = false;
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
   private signInAbort: AbortController | null = null;
+  /**
+   * What the person typed into the sign-in under way (a key, a pasted code or
+   * address), in the forms the gateway may echo it, held only while that
+   * sign-in lasts: every string the gateway sends back is scrubbed of them
+   * before it enters the state or a log line. Forgotten when the sign-in ends.
+   */
+  private readonly secrets: string[] = [];
   private slowTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(ctx: AccountsContext) {
@@ -383,6 +392,8 @@ export class AccountsEngine {
   private async begin(signIn: SignInState, key: string | null, untilEnd: boolean): Promise<void> {
     const { ctx } = this;
     const before = this.accountsOf(signIn.provider);
+    this.forgetSecrets();
+    if (key !== null) this.holdSecret(key);
     ctx.update((a) => ({ ...a, signIn }));
     try {
       await ctx.request("models.authLogin", {
@@ -391,8 +402,9 @@ export class AccountsEngine {
         agentId: signIn.forBot,
       });
     } catch (error) {
-      const message = withoutSecret(errorText(error), key);
+      const message = this.scrub(errorText(error));
       this.setSignIn(signIn.id, { stage: isBusy(message) ? "busy" : "failed", error: message });
+      this.forgetSecrets();
       return;
     }
     await this.paused((pause) => this.follow(signIn.id, null, key, before, pause), untilEnd);
@@ -417,7 +429,52 @@ export class AccountsEngine {
   }
 
   private setSignIn(id: string, patch: Partial<SignInState>): void {
-    this.ctx.update((a) => (a.signIn?.id === id ? { ...a, signIn: { ...a.signIn, ...patch } } : a));
+    const clean = this.scrubbed(patch);
+    this.ctx.update((a) => (a.signIn?.id === id ? { ...a, signIn: { ...a.signIn, ...clean } } : a));
+  }
+
+  /** Hold what the person typed, for the life of this sign-in, to take it out of what comes back. */
+  private holdSecret(value: string): void {
+    for (const form of secretForms(value)) {
+      if (this.secrets.includes(form)) continue;
+      this.secrets.push(form);
+      if (this.secrets.length > MAX_SIGNIN_SECRETS) this.secrets.shift();
+    }
+  }
+
+  /** The sign-in is over: nothing it was given is held any more. */
+  private forgetSecrets(): void {
+    this.secrets.length = 0;
+  }
+
+  /** A text from the gateway without anything the person typed into the sign-in. */
+  private scrub(text: string): string {
+    let out = text;
+    // Longest first, so a whole address goes before the code inside it.
+    for (const secret of [...this.secrets].sort((a, b) => b.length - a.length))
+      out = withoutSecret(out, secret);
+    return out;
+  }
+
+  /** Every string a sign-in's patch carries from the gateway, scrubbed. */
+  private scrubbed(patch: Partial<SignInState>): Partial<SignInState> {
+    if (this.secrets.length === 0) return patch;
+    const out: Partial<SignInState> = { ...patch };
+    if (typeof out.error === "string") out.error = this.scrub(out.error);
+    if (out.step) {
+      const step: Record<string, unknown> = { ...out.step };
+      for (const field of ["id", "title", "message", "url", "code", "placeholder"]) {
+        const value = step[field];
+        if (typeof value === "string") step[field] = this.scrub(value);
+      }
+      out.step = step as SignInState["step"];
+    }
+    return out;
+  }
+
+  /** A log line, scrubbed of a sign-in's typed values. */
+  private log(message: string): void {
+    this.ctx.log(this.scrub(message));
   }
 
   /** The sign-in's next steps: `answer` goes with the first request only. */
@@ -432,7 +489,6 @@ export class AccountsEngine {
     let pending = answer;
     let typed = key;
     // What the person typed last, only to take it out of what the gateway answers next.
-    let sent: string | null = answer && typeof answer.value === "string" ? answer.value : null;
     const stillMine = () => {
       const now = ctx.get().signIn;
       return now !== null && now.id === id && isActive(now);
@@ -457,9 +513,10 @@ export class AccountsEngine {
         if (!ctx.connected()) {
           // A sign-in belongs to its connection and ends with it (row 6).
           this.setSignIn(id, { stage: "ended", step: null, error: null });
+          this.forgetSecrets();
           return;
         }
-        const message = withoutSecret(withoutSecret(errorText(error), sent), typed);
+        const message = this.scrub(errorText(error));
         this.setSignIn(id, { stage: endingOf("error", message), step: null, error: message });
         return await this.afterSignIn(id, before);
       } finally {
@@ -469,10 +526,7 @@ export class AccountsEngine {
       if (!stillMine()) return;
       if (next?.done === true) {
         const status = typeof next.status === "string" ? next.status : null;
-        const error =
-          typeof next.error === "string"
-            ? withoutSecret(withoutSecret(next.error, sent), typed)
-            : null;
+        const error = typeof next.error === "string" ? this.scrub(next.error) : null;
         const stage = endingOf(status, error);
         this.setSignIn(id, {
           stage: stage === "connected" ? "checking" : stage,
@@ -504,7 +558,6 @@ export class AccountsEngine {
         if (step.sensitive && typed !== null) {
           // The person's own key, sent once and dropped.
           pending = { stepId: step.id, value: typed };
-          sent = typed;
           typed = null;
           this.setSignIn(id, { stage: "checking", step: { ...step } });
           continue;
@@ -536,6 +589,7 @@ export class AccountsEngine {
     if (typeof value !== "string" || value.length === 0 || value.length > MAX_SECRET_CHARS)
       throw new Error("That can't be sent.");
     const stepId = signIn.step.id;
+    this.holdSecret(value);
     this.setSignIn(signIn.id, { stage: "checking" });
     const before = this.accountsOf(signIn.provider);
     await this.paused((pause) => this.follow(signIn.id, { stepId, value }, null, before, pause));
@@ -566,6 +620,7 @@ export class AccountsEngine {
   async dismissSignIn(): Promise<void> {
     const signIn = this.ctx.get().signIn;
     if (signIn && isActive(signIn)) await this.cancelSignIn();
+    this.forgetSecrets();
     this.ctx.update((a) => ({ ...a, signIn: null }));
   }
 
@@ -621,6 +676,7 @@ export class AccountsEngine {
     }
     if (ctx.get().signIn?.id !== id) return;
     const ended = ctx.get().signIn!;
+    this.forgetSecrets();
     this.setSignIn(id, {
       result,
       stage: ended.stage === "checking" ? "connected" : ended.stage,
@@ -657,7 +713,7 @@ export class AccountsEngine {
     await this.ctx
       .request("users.prefs.set", { entries: { [`${KIND_PREF_PREFIX}${profileId}`]: kind } })
       .catch((error: unknown) =>
-        this.ctx.log(`could not record an account's kind: ${errorText(error)}`),
+        this.log(`could not record an account's kind: ${errorText(error)}`),
       );
   }
 
@@ -667,9 +723,7 @@ export class AccountsEngine {
     this.remember(this.intents, botId, intent, MAX_ACCOUNTS);
     await this.ctx
       .request("users.prefs.set", { entries: { [`${INTENT_PREF_PREFIX}${botId}`]: intent } })
-      .catch((error: unknown) =>
-        this.ctx.log(`could not record a bot's account: ${errorText(error)}`),
-      );
+      .catch((error: unknown) => this.log(`could not record a bot's account: ${errorText(error)}`));
   }
 
   /**
@@ -1000,7 +1054,7 @@ export class AccountsEngine {
       this.unwritten.add(botId);
       if (this.unwritten.size > MAX_ACCOUNTS)
         this.unwritten.delete(this.unwritten.values().next().value!);
-      this.ctx.log(`the empty fallback list for ${botId} did not land: ${errorText(error)}`);
+      this.log(`the empty fallback list for ${botId} did not land: ${errorText(error)}`);
     }
   }
 
@@ -1148,6 +1202,8 @@ export class AccountsEngine {
     const signIn = this.ctx.get().signIn;
     if (signIn && isActive(signIn))
       this.setSignIn(signIn.id, { stage: "ended", step: null, cancelling: false, saving: false });
+    // A sign-in ends with its connection: what it was given goes with it.
+    this.forgetSecrets();
   }
 
   /** Another gateway: nothing read from this one is kept. */

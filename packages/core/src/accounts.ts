@@ -700,6 +700,43 @@ export function withoutSecret(message: string, secret: string | null): string {
   return out;
 }
 
+/** The most forms of submitted values a sign-in scrubs at once. */
+export const MAX_SIGNIN_SECRETS = 8;
+
+/**
+ * The forms in which a gateway may give back something the person typed: as
+ * typed, trimmed, decoded, and for an address pasted whole, each of its query
+ * values (the code), raw and decoded. Pieces shorter than 4 characters are not
+ * kept: they would cut into ordinary words.
+ */
+export function secretForms(value: string): string[] {
+  const trimmed = value.trim();
+  const pieces = [value, trimmed];
+  const query = trimmed.indexOf("?");
+  if (query >= 0) {
+    for (const part of trimmed.slice(query + 1).split(/[&#]/)) {
+      const equals = part.indexOf("=");
+      pieces.push(equals >= 0 ? part.slice(equals + 1) : part);
+    }
+  }
+  const forms: string[] = [];
+  for (const piece of pieces) {
+    for (const form of [piece, decoded(piece)]) {
+      if (form !== null && form.length >= 4 && !forms.includes(form)) forms.push(form);
+    }
+  }
+  return forms;
+}
+
+/** A piece of an address, decoded, or null when it does not decode. */
+function decoded(piece: string): string | null {
+  try {
+    return decodeURIComponent(piece.replace(/\+/g, " "));
+  } catch {
+    return null;
+  }
+}
+
 /** A label as kept: trimmed, at most 32 characters. */
 export function normalizeLabel(value: string): string {
   return value.trim().replace(/\s+/g, " ");
