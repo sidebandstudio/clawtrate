@@ -2014,12 +2014,21 @@ function toolAnchor(toolCallId: string): string {
  * start a history window does not show, or null for the run's start; `n`
  * counts the reasoning blocks since that anchor. The live stream and history
  * compute it alike, so nothing has to be matched. The run id and the anchor
- * are percent-encoded, so neither can hold the `:` that separates the parts
+ * have `%` and `:` escaped (`idPart`), so neither can hold the `:` that separates the parts
  * and no two places share an id, whatever characters the gateway's ids use;
  * ordinary ids (letters, digits, `-`, `_`, `.`) are unchanged by it.
  */
 export function reasoningStepId(runId: string, anchor: string | null, n: number): string {
-  return `reasoning:${encodeURIComponent(runId)}:${anchor === null ? "s" : encodeURIComponent(anchor)}:${n}`;
+  return `reasoning:${idPart(runId)}:${anchor === null ? "s" : idPart(anchor)}:${n}`;
+}
+
+/**
+ * One part of a reasoning id: `%` and `:` escaped, every other code unit kept as
+ * it is, a lone surrogate included. The parts can then hold no separator, so
+ * two places never share an id, and no string the gateway sends can make it throw.
+ */
+function idPart(value: string): string {
+  return value.replace(/%/g, "%25").replace(/:/g, "%3A");
 }
 
 function applyAssistant(run: Run, data: RawRecord, ts: number, ctx: EngineContext): Run {

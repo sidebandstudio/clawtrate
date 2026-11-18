@@ -19,6 +19,7 @@ import {
   MAX_STEPS_PER_RUN,
   mergeHistoryRuns,
   RawTable,
+  reasoningStepId,
   retainActivity,
   runsFromHistory,
   type EngineContext,
@@ -220,6 +221,19 @@ describe("reasoning ids cannot collide, whatever characters the gateway's ids ho
     expect(a).not.toBe(b);
     expect(raw.get(KEY, a)!.call).toMatchObject({ data: { text: "at the start" } });
     expect(raw.get(KEY, b)!.call).toMatchObject({ data: { text: "after the tool" } });
+  });
+
+  it("takes any string the gateway sends, a lone surrogate included, and keeps it apart from its replacement", () => {
+    const lone = JSON.parse('"\\ud800"') as string;
+    const ids = [
+      reasoningStepId(lone, null, 0),
+      reasoningStepId("\ufffd", null, 0),
+      reasoningStepId("r", `t.${lone}`, 0),
+      reasoningStepId("r", "t.\ufffd", 0),
+      reasoningStepId("r%3A", null, 0),
+      reasoningStepId("r:", null, 0),
+    ];
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("leaves ordinary ids as they were", () => {
