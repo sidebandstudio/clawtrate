@@ -3,7 +3,7 @@
 // development gateway runs, the tests that need one are skipped.
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
 import { execFileSync, spawn } from "node:child_process";
-import { readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,6 +23,20 @@ const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const APP = process.env.CLAWTRATE_PACKAGED_APP!;
 const USER_DATA = process.env.CLAWTRATE_PACKAGED_USER_DATA!;
 const APP_PID = Number(process.env.CLAWTRATE_PACKAGED_PID);
+const APP_LOG = process.env.CLAWTRATE_PACKAGED_LOG ?? "";
+/** A made-up key for the scripted API-key sign-in: its account is `acme:packaged`. */
+const TYPED_KEY = "clawtrate-dev-key.acme.packaged";
+
+/** Whether a file, or any file under a folder, holds the value, as UTF-8 or UTF-16 text. */
+function holds(path: string, value: string): string[] {
+  if (!existsSync(path)) return [];
+  if (statSync(path).isDirectory())
+    return readdirSync(path).flatMap((name) => holds(join(path, name), value));
+  const bytes = readFileSync(path);
+  return bytes.includes(Buffer.from(value, "utf8")) || bytes.includes(Buffer.from(value, "utf16le"))
+    ? [path]
+    : [];
+}
 const WINDOWS = process.platform === "win32";
 const NO_GATEWAY = "no development gateway runs on Windows";
 
@@ -245,6 +259,43 @@ test("pairs with its own development gateway instance and shows the seeded bots"
     .filter({ hasText: "Disk almost full on the media box" })
     .click();
   await expect(page.getByTestId("transcript-turn")).toHaveCount(4);
+});
+
+test("sends a key typed into it to the gateway once, and keeps it in none of its logs or data", async () => {
+  test.skip(WINDOWS, NO_GATEWAY);
+  // Admin access first: only admin connections start a sign-in.
+  await page.keyboard.press("Meta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await settings.getByRole("button", { name: "Request admin access" }).click();
+  await expect
+    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
+    .toMatch(/^Approved /m);
+  const connect = settings.getByRole("button", { name: "Connect an account" }).first();
+  await expect(connect).toBeVisible({ timeout: 30_000 });
+  await connect.click();
+  await settings.locator("details.b-disclosure summary").click();
+  await settings.getByRole("combobox", { name: "Provider" }).selectOption("acme");
+  const field = settings.getByTestId("api-key");
+  await field.fill(TYPED_KEY);
+  await settings.getByRole("button", { name: "Save key" }).click();
+  await expect(settings.getByRole("heading", { name: "Key saved" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await settings.getByRole("textbox", { name: "Label" }).fill("Packaged");
+  await settings.getByRole("button", { name: "Done" }).click();
+  // On the gateway: the account its key made, as the app reads it back.
+  await expect(settings.getByRole("button", { name: /^Acme · Packaged, API key/ })).toBeVisible({
+    timeout: 20_000,
+  });
+  await page.keyboard.press("Escape");
+  // Nowhere the app writes: its output (its log) and every file in its data folder.
+  expect(APP_LOG, "the app's log").not.toBe("");
+  expect(readFileSync(APP_LOG, "utf8").length, "the app's log has its output").toBeGreaterThan(0);
+  expect(holds(APP_LOG, TYPED_KEY)).toEqual([]);
+  expect(holds(USER_DATA, TYPED_KEY)).toEqual([]);
+  expect(holds(join(homedir(), "Library/Logs/Clawtrate"), TYPED_KEY)).toEqual([]);
+  expect(await page.content()).not.toContain(TYPED_KEY);
 });
 
 test("keeps the device key and tokens in its own data folder, readable by the user only", () => {
