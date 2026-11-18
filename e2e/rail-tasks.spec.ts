@@ -6,9 +6,13 @@
 // create is removed, and the arrangement they changed put back, afterwards.
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { CLIENT_ID, CLIENT_MODE } from "../packages/core/src/client.ts";
+import { admitsDeviceToken as admits } from "../tools/dev-gateway/src/device-token.ts";
+import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
+import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
@@ -57,6 +61,7 @@ type Row = {
   archived?: boolean;
   unread?: boolean;
   hasActiveRun?: boolean;
+  isMain?: boolean;
 };
 const describe = async (key: string) =>
   (await gatewayCall<{ session: Row | null }>("sessions.describe", { key })).session;
@@ -167,6 +172,52 @@ async function rereadBots(on: Page): Promise<void> {
         socket.onerror = () => reject(new Error("bridge socket error"));
       }),
   );
+}
+
+const ROOT = join(import.meta.dirname, "..");
+
+/** This instance's address and shared token, proven as the tool proves them. */
+function endpoint(): { url: string; token: string } {
+  const proven = provenEndpoint({
+    instance: INSTANCE,
+    home: homedir(),
+    runDir: runDirFor(INSTANCE, join(ROOT, "tools/dev-gateway/.run")),
+    checkout: realpathSync(ROOT),
+  });
+  if ("refusal" in proven) throw new Error(proven.refusal);
+  return proven;
+}
+
+/** The device token a host keeps for this gateway, from its own data folder. */
+function storedToken(host: Host): string {
+  const state = JSON.parse(readFileSync(join(host.data, "state.json"), "utf8")) as Record<
+    string,
+    string
+  >;
+  const entry = Object.entries(state).find(([key]) => key.startsWith("deviceToken:"));
+  if (!entry) throw new Error("the host keeps no device token");
+  return (JSON.parse(entry[1]) as { token: string }).token;
+}
+
+/**
+ * Whether the gateway admits a connection as a host's own device (its key, from
+ * its data folder) with this device token and no shared token: as the host would.
+ */
+async function admitsDeviceToken(host: Host, token: string): Promise<boolean> {
+  return admits({
+    url: endpoint().url,
+    privateKeyPem: readFileSync(join(host.data, "device-key.pem"), "utf8"),
+    token,
+    clientName: CLIENT_ID,
+    mode: CLIENT_MODE,
+  });
+}
+
+/** Send a message in a task as the person does: the composer of the task open on the page. */
+async function sendInTask(on: Page, title: string, text: string): Promise<void> {
+  await taskRow(on, title).click();
+  await on.getByTestId("composer-input").fill(text);
+  await on.getByTestId("composer-input").press("Enter");
 }
 
 async function shot(on: Page, name: string): Promise<void> {
@@ -407,7 +458,7 @@ test("F-277: Archive moves a task into the bot's Archived group on the gateway, 
   await expect(taskRow(page, task.title)).toHaveCount(0);
   await page
     .getByRole("list", { name: "Pip's tasks" })
-    .getByRole("button", { name: "Archived" })
+    .getByRole("button", { name: "Archived", exact: true })
     .click();
   const archived = page.getByRole("list", { name: "Pip's archived tasks" });
   await expect(archived.getByTestId("archived-task").filter({ hasText: task.title })).toBeVisible({
@@ -420,44 +471,165 @@ test("F-277: Archive moves a task into the bot's Archived group on the gateway, 
   await expect(taskRow(second, task.title)).toBeVisible({ timeout: 20_000 });
 });
 
-test("F-278: Delete, confirmed, stops the task's active run first and removes its transcript", async () => {
+test("F-278: Delete, confirmed, stops the task's active run first, then removes the task and its transcript; what the bot saved to memory stays", async () => {
   const task = await ownTask("pip", "Pip", "Delete me");
-  await taskRow(page, task.title).click();
-  await page.getByTestId("composer-input").fill("#slow 40");
-  await page.getByTestId("composer-input").press("Enter");
-  await expect
-    .poll(async () => (await describe(task.key))?.hasActiveRun, { timeout: 30_000 })
-    .toBe(true);
+  // The bot saves a memory note during the task.
+  const memory = join(
+    openInstance(INSTANCE).stateDir,
+    "workspaces",
+    "pip",
+    "memory",
+    "2026-11-17.md",
+  );
+  await sendInTask(page, task.title, "#remember");
+  await gateway.poll(() => existsSync(memory)).toBe(true);
+  const saved = readFileSync(memory, "utf8");
+  await gateway.poll(async () => (await describe(task.key))?.hasActiveRun ?? false).toBe(false);
+  // A long run is under way when Delete is chosen.
+  await sendInTask(page, task.title, "#slow 40");
+  await gateway.poll(async () => (await describe(task.key))?.hasActiveRun).toBe(true);
   await taskMenu(page, task.title);
   await page.getByRole("menuitem", { name: "Delete…" }).click();
   const dialog = page.getByRole("dialog", { name: `Delete “${task.title}”?` });
   await expect(dialog).toContainText("Its run is stopped first.");
   await dialog.getByRole("button", { name: "Delete" }).click();
   await expect(dialog).toHaveCount(0, { timeout: 30_000 });
-  // The run was stopped by an abort, not finished, before the task went.
-  await expect
-    .poll(
-      () =>
-        watcher.events.some(
-          (event) =>
-            event.event === "agent" &&
-            (event.payload as { sessionKey?: string }).sessionKey === task.key &&
-            (event.payload as { data?: { phase?: string } }).data?.phase === "end",
-        ),
-      { timeout: 20_000 },
-    )
-    .toBe(true);
-  const ended = watcher.events.filter(
+  // The run ended as stopped before the task went: its abort and end come before the removal.
+  const ofTask = (event: { payload: unknown }) =>
+    (event.payload as { sessionKey?: string; key?: string }).sessionKey === task.key ||
+    (event.payload as { key?: string }).key === task.key;
+  const removedAt = () =>
+    watcher.events.findIndex(
+      (event) =>
+        event.event === "sessions.changed" &&
+        ofTask(event) &&
+        /delete/.test(String((event.payload as { reason?: string }).reason)),
+    );
+  await gateway.poll(removedAt).toBeGreaterThan(-1);
+  const abortedAt = watcher.events.findIndex(
     (event) =>
-      event.event === "chat" && (event.payload as { sessionKey?: string }).sessionKey === task.key,
+      event.event === "chat" &&
+      ofTask(event) &&
+      (event.payload as { state?: string }).state === "aborted",
   );
-  expect(ended.some((event) => (event.payload as { state?: string }).state === "aborted")).toBe(
-    true,
+  const endedAt = watcher.events.findIndex(
+    (event) =>
+      event.event === "agent" &&
+      ofTask(event) &&
+      (event.payload as { data?: { phase?: string } }).data?.phase === "end",
   );
+  expect(abortedAt).toBeGreaterThan(-1);
+  expect(endedAt).toBeGreaterThan(-1);
+  expect(Math.max(abortedAt, endedAt)).toBeLessThan(removedAt());
+  // The task and its transcript are gone; the memory note is as it was.
   await gateway.poll(async () => await describe(task.key)).toBeNull();
   expect((await listed("pip", "all")).some((row) => row.key === task.key)).toBe(false);
+  const history = await openInstance(INSTANCE).runner.run([
+    "gateway",
+    "call",
+    "chat.history",
+    "--params",
+    JSON.stringify({ sessionKey: task.key, limit: 50 }),
+    "--json",
+  ]);
+  const messages =
+    history.status === 0
+      ? (parseJsonOutput<{ messages?: unknown[] }>(history.stdout).messages ?? [])
+      : [];
+  expect(messages).toEqual([]);
+  expect(readFileSync(memory, "utf8")).toBe(saved);
   await expect(taskRow(page, task.title)).toHaveCount(0);
   await expect(taskRow(second, task.title)).toHaveCount(0, { timeout: 20_000 });
+});
+
+test("F-277: Stop and archive stops a working task's run and archives it; restored, its history is as it was", async () => {
+  const task = await ownTask("pip", "Pip", "Stop and archive me");
+  await sendInTask(page, task.title, "Hello");
+  await gateway.poll(async () => (await describe(task.key))?.hasActiveRun ?? false).toBe(false);
+  const history = async () =>
+    JSON.stringify(
+      (
+        await gatewayCall<{ messages: Array<{ __openclaw?: { id?: string }; role?: string }> }>(
+          "chat.history",
+          { sessionKey: task.key, limit: 50 },
+        )
+      ).messages.map((message) => [message.__openclaw?.id, message.role]),
+    );
+  await sendInTask(page, task.title, "#slow 40");
+  await gateway.poll(async () => (await describe(task.key))?.hasActiveRun).toBe(true);
+  await taskMenu(page, task.title);
+  await page.getByRole("menuitem", { name: "Stop and archive…" }).click();
+  const dialog = page.getByRole("dialog", { name: /Stop and archive/ });
+  await dialog.getByRole("button", { name: "Stop and archive" }).click();
+  await expect(dialog).toHaveCount(0, { timeout: 30_000 });
+  await gateway.poll(async () => (await describe(task.key))?.archived).toBe(true);
+  expect(
+    watcher.events.some(
+      (event) =>
+        event.event === "chat" &&
+        (event.payload as { sessionKey?: string }).sessionKey === task.key &&
+        (event.payload as { state?: string }).state === "aborted",
+    ),
+  ).toBe(true);
+  const archivedHistory = await history();
+  // Restored from the Archived group: the same history.
+  const toggle = page
+    .getByRole("list", { name: "Pip's tasks" })
+    .getByRole("button", { name: "Archived", exact: true });
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  const archived = page.getByRole("list", { name: "Pip's archived tasks" });
+  await archived.getByTestId("archived-task").filter({ hasText: task.title }).click();
+  await page.getByRole("menuitem", { name: "Restore" }).click();
+  await gateway.poll(async () => (await describe(task.key))?.archived ?? false).toBe(false);
+  expect(await history()).toBe(archivedHistory);
+  expect(JSON.parse(archivedHistory).length).toBeGreaterThanOrEqual(2);
+});
+
+test("F-022: a new reply marks a task unread on both devices; a Mark as unread from another client stays while the task is open here", async () => {
+  const task = await ownTask("pip", "Pip", "New reply");
+  // A reply from a run started elsewhere, in a task neither device has open.
+  await gatewayCall("chat.send", {
+    sessionKey: task.key,
+    message: "Hello",
+    idempotencyKey: `${task.key}-hello`,
+  });
+  for (const on of [page, second])
+    await expect(taskRow(on, task.title).locator(".unread-dot")).toHaveCount(1, {
+      timeout: 30_000,
+    });
+  // Opened here, it is read; marked unread by another client while open, it stays unread.
+  await taskRow(page, task.title).click();
+  await gateway.poll(async () => (await describe(task.key))?.unread).toBe(false);
+  await expect(taskRow(second, task.title).locator(".unread-dot")).toHaveCount(0, {
+    timeout: 20_000,
+  });
+  await gatewayCall("sessions.patch", { key: task.key, unread: true });
+  await expect(taskRow(second, task.title).locator(".unread-dot")).toHaveCount(1, {
+    timeout: 20_000,
+  });
+  // Both devices have the change now; the open one does not clear it.
+  const until = Date.now() + 3_000;
+  while (Date.now() < until) expect((await describe(task.key))?.unread).toBe(true);
+});
+
+test("F-021: a question from a run puts its bot in Waiting for you: a question until it is answered", async () => {
+  const task = await ownTask("pip", "Pip", "Ask me");
+  await sendInTask(page, task.title, "#ask");
+  const pip = botRow(page, "Pip").first();
+  await expect(pip.locator(".bot-preview")).toHaveText("Waiting for you: a question", {
+    timeout: 30_000,
+  });
+  await expect(pip).toHaveAccessibleName(/^Pip, waiting for you/);
+  await expect(taskRow(page, task.title)).toHaveAccessibleName(/, needs you$/);
+  // Answered (dismissed) on the gateway by another client: nothing is pending, the state clears.
+  const pending = await gatewayCall<{ questions: Array<{ id: string; sessionKey?: string }> }>(
+    "question.list",
+    {},
+  );
+  const question = pending.questions.find((each) => each.sessionKey === task.key);
+  expect(question, "the run's question is pending on the gateway").toBeTruthy();
+  await gatewayCall("question.resolve", { id: question!.id, cancel: true });
+  await expect(pip).not.toHaveAccessibleName(/waiting for you/, { timeout: 30_000 });
 });
 
 test("F-014 F-016: a bot's pin and its section are kept on the gateway for the user: they survive a reload and the second device shows them", async () => {
@@ -525,10 +697,38 @@ test("F-021 F-057: while a bot's run waits for an approval its row says Waiting 
   );
 });
 
-test("F-424: the gateway keeps a bot's main session unarchived; a bot without one gets a new empty Main when its last task is archived", async () => {
-  // A main session can be neither archived nor deleted, so a bot that has one always keeps a task.
+/** A bot made on the gateway for one check, listed by the writing page; removed by the caller. */
+async function ownBot(name: string): Promise<string> {
+  const created = await gatewayCall<{ agentId: string }>("agents.create", {
+    name,
+    workspace: join(openInstance(INSTANCE).stateDir, "workspaces", name.toLowerCase()),
+    model: "scripted/dev-1",
+  });
+  await gateway
+    .poll(async () =>
+      (await gatewayCall<{ agents: Array<{ id: string }> }>("agents.list", {})).agents.some(
+        (agent) => agent.id === created.agentId,
+      ),
+    )
+    .toBe(true);
+  return created.agentId;
+}
+
+async function removeBot(botId: string): Promise<void> {
+  await gatewayCall("agents.delete", { agentId: botId, deleteFiles: true }).catch(() => {});
+  await gateway
+    .poll(async () =>
+      (await gatewayCall<{ agents: Array<{ id: string }> }>("agents.list", {})).agents.some(
+        (agent) => agent.id === botId,
+      ),
+    )
+    .toBe(false);
+}
+
+test("F-424: a bot's canonical main stays and offers neither Archive nor Delete; a bot without one gets exactly one empty Main, selected, when its last task is archived or deleted, however many clients act", async () => {
+  // The gateway refuses to archive a canonical main, and the rail offers neither action for it.
   const main = await describe("agent:marlow:main");
-  expect(main?.sessionId).toBeTruthy();
+  expect(main?.isMain).toBe(true);
   const refused = await openInstance(INSTANCE).runner.run([
     "gateway",
     "call",
@@ -549,61 +749,68 @@ test("F-424: the gateway keeps a bot's main session unarchived; a bot without on
   expect(items).not.toContain("Delete…");
   await page.keyboard.press("Escape");
 
-  // A bot of this check's own, made on the gateway, has no main session: one task, then none.
-  const state = openInstance(INSTANCE).stateDir;
-  const name = `Scout${STAMP}`;
-  const created = await gatewayCall<{ agentId: string }>("agents.create", {
-    name,
-    workspace: join(state, "workspaces", `scout-${STAMP}`),
-    model: "scripted/dev-1",
-  });
-  const botId = created.agentId;
+  // Two bots of this check's own, made on the gateway with no main session.
+  const archiving = await ownBot(`Scout${STAMP}`);
+  const deleting = await ownBot(`Ranger${STAMP}`);
   try {
-    // The gateway applies the new bot's config by itself, shortly after: wait until it lists it.
-    await expect
-      .poll(
-        async () =>
-          (await gatewayCall<{ agents: Array<{ id: string }> }>("agents.list", {})).agents.some(
-            (agent) => agent.id === botId,
-          ),
-        { timeout: 60_000, intervals: [1000] },
-      )
-      .toBe(true);
-    const only = await gatewayCall<{ key: string }>("sessions.create", {
-      agentId: botId,
-      label: `Only task ${STAMP}`,
-    });
-    made.add(only.key);
+    for (const botId of [archiving, deleting]) {
+      const only = await gatewayCall<{ key: string }>("sessions.create", {
+        agentId: botId,
+        label: `Only task ${STAMP}`,
+      });
+      made.add(only.key);
+    }
     await rereadBots(page);
-    await expect(page.getByTestId("bot")).toHaveCount(5, { timeout: 60_000 });
-    const scout = botRow(page, name).first();
-    await expect(scout).toHaveAccessibleName(new RegExp(`^${name}, 1 task`), { timeout: 20_000 });
+    await expect(page.getByTestId("bot")).toHaveCount(6, { timeout: 60_000 });
+    const onlyMain = async (botId: string) => {
+      await gateway
+        .poll(async () =>
+          (await listed(botId)).map((row) => [row.key, row.isMain === true, row.label ?? null]),
+        )
+        .toEqual([[`agent:${botId}:main`, true, null]]);
+      made.add(`agent:${botId}:main`);
+    };
+    // Archive: the bot's own menu, then exactly one Main, selected, with its composer.
+    const scout = botRow(page, `Scout${STAMP}`).first();
+    await expect(scout).toHaveAccessibleName(new RegExp(`^Scout${STAMP}, 1 task`), {
+      timeout: 20_000,
+    });
     await scout.click();
     await scout.focus();
     await page.keyboard.press("Shift+F10");
     await page.getByRole("menuitem", { name: "Archive task" }).click();
     await expect(page.locator(".title-pill-task")).toHaveText("Main", { timeout: 20_000 });
-    let unarchived: Row[] = [];
-    await gateway
-      .poll(async () => {
-        unarchived = await listed(botId);
-        return unarchived.map((row) => row.label);
-      })
-      .toEqual(["Main"]);
-    made.add(unarchived[0]!.key);
-    expect((await describe(only.key))?.archived).toBe(true);
+    await onlyMain(archiving);
     await expect(page.getByTestId("composer-input")).toBeVisible();
+    // The new Main is canonical: neither action is offered for it.
+    await scout.focus();
+    await page.keyboard.press("Shift+F10");
+    const mainItems = await page.getByRole("menu").getByRole("menuitem").allTextContents();
+    expect(mainItems).not.toContain("Archive task");
+    expect(mainItems).not.toContain("Delete task…");
+    await page.keyboard.press("Escape");
+
+    // Delete, while another client makes the bot's Main at the same moment: still one.
+    const ranger = botRow(page, `Ranger${STAMP}`).first();
+    await ranger.click();
+    await ranger.focus();
+    await page.keyboard.press("Shift+F10");
+    await page.getByRole("menuitem", { name: "Delete task…" }).click();
+    const other = openInstance(INSTANCE).runner.run([
+      "gateway",
+      "call",
+      "sessions.create",
+      "--params",
+      JSON.stringify({ agentId: deleting, key: `agent:${deleting}:main` }),
+      "--json",
+    ]);
+    await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+    await other;
+    await expect(page.locator(".title-pill-task")).toHaveText("Main", { timeout: 20_000 });
+    await onlyMain(deleting);
   } finally {
-    await gatewayCall("agents.delete", { agentId: botId, deleteFiles: true }).catch(() => {});
-    await expect
-      .poll(
-        async () =>
-          (await gatewayCall<{ agents: Array<{ id: string }> }>("agents.list", {})).agents.some(
-            (agent) => agent.id === botId,
-          ),
-        { timeout: 60_000, intervals: [1000] },
-      )
-      .toBe(false);
+    await removeBot(archiving);
+    await removeBot(deleting);
     await rereadBots(page);
     await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 60_000 });
   }
@@ -623,4 +830,78 @@ test("a read-only connection offers none of the task actions on a real gateway",
   await second.keyboard.press("Escape");
   await second.keyboard.press("F2");
   await expect(second.getByTestId("task-rename")).toHaveCount(0);
+});
+
+test("F-021: a device opened again while its run waits for an approval shows the bot waiting, until nothing is pending", async () => {
+  const task = await ownTask("otto", "Otto", "Wait across a restart");
+  await sendInTask(page, task.title, "#approve");
+  await expect(botRow(page, "Otto").first()).toHaveAccessibleName(/^Otto, waiting for you/, {
+    timeout: 30_000,
+  });
+  // The same device, quit and opened again: a new host on the same data folder.
+  const before = hosts[0]!;
+  await stopChild(before.child);
+  const started = startHost(INSTANCE, STATIC, before.data);
+  started.gated.release();
+  hosts[0] = { child: started.host, url: await started.url, data: before.data };
+  await page.goto(hosts[0].url);
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+  await expect(botRow(page, "Otto").first()).toHaveAccessibleName(/^Otto, waiting for you/, {
+    timeout: 30_000,
+  });
+  await expect(botRow(page, "Otto").first().locator(".bot-preview")).toHaveText(
+    "Waiting for you: approve a command",
+  );
+  await gatewayCall("chat.abort", { sessionKey: task.key });
+  await expect(botRow(page, "Otto").first()).not.toHaveAccessibleName(/waiting for you/, {
+    timeout: 30_000,
+  });
+});
+
+test("F-456: Re-pair in Settings: pending, then refused, the old authorization stays and still connects, and the error shows; approved, the new authorization replaces the old one", async () => {
+  const host = hosts[1]!;
+  const settings = second.getByRole("dialog", { name: "Settings" });
+  await second.keyboard.press("ControlOrMeta+,");
+  await expect(settings.getByTestId("granted-scopes")).toHaveText("operator.read");
+  const oldToken = storedToken(host);
+  expect(await admitsDeviceToken(host, oldToken)).toBe(true);
+
+  // Refused on the gateway's machine: the error shows and the old authorization stays.
+  await settings.getByRole("button", { name: "Re-pair" }).click();
+  await expect(settings.getByTestId("gateway-state")).toHaveText("Pairing pending", {
+    timeout: 20_000,
+  });
+  const pending =
+    parseJsonOutput<{ pending?: Array<{ requestId: string }> }>(
+      await openclaw(["devices", "list", "--json"]),
+    ).pending ?? [];
+  expect(pending.length).toBe(1);
+  await openclaw(["devices", "reject", pending[0]!.requestId]);
+  await expect(settings.getByTestId("repair-problem")).toHaveText(
+    "The gateway's owner rejected the new pairing. This device keeps its earlier access.",
+    { timeout: 20_000 },
+  );
+  await expect(settings.getByTestId("gateway-state")).toHaveText("Connected");
+  await expect(settings.getByTestId("granted-scopes")).toHaveText("operator.read");
+  expect(storedToken(host)).toBe(oldToken);
+  expect(await admitsDeviceToken(host, oldToken)).toBe(true);
+
+  // Approved: the new authorization is stored and works; the old one no longer does.
+  await settings.getByRole("button", { name: "Re-pair" }).click();
+  await expect(settings.getByTestId("gateway-state")).toHaveText("Pairing pending", {
+    timeout: 20_000,
+  });
+  await expect
+    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
+    .toMatch(/^Approved /m);
+  await expect(settings.getByTestId("granted-scopes")).toContainText("operator.write", {
+    timeout: 30_000,
+  });
+  await expect(settings.getByTestId("gateway-state")).toHaveText("Connected");
+  await expect(settings.getByRole("button", { name: "Re-pair" })).toHaveCount(0);
+  const newToken = storedToken(host);
+  expect(newToken).not.toBe(oldToken);
+  expect(await admitsDeviceToken(host, newToken)).toBe(true);
+  expect(await admitsDeviceToken(host, oldToken)).toBe(false);
+  await second.keyboard.press("Escape");
 });
