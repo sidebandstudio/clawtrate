@@ -1016,9 +1016,13 @@ test.describe("Messaged cards", () => {
   test("F-122 F-134: the outgoing row says sent only where the message is known to have gone; a finished recipient run claims no missing reply", async ({
     page,
   }) => {
+    // A card by its test id, or by a selector: a T3 Code launch that ended without naming a
+    // thread is a card of its own.
     const verb = async (scene: string, testId: string) => {
       await openFixture(page, `scene=${scene}`, "light");
-      const card = page.getByTestId(testId).last();
+      const card = (
+        testId.startsWith(".") ? page.locator(testId) : page.getByTestId(testId)
+      ).last();
       // The card's own line: a thread card's items have lines of their own.
       await card.locator(":scope > summary").click();
       return card
@@ -1041,14 +1045,11 @@ test.describe("Messaged cards", () => {
     for (const scene of ["messaged-sent", "messaged-replied", "messaged-no-reply"]) {
       expect(await verb(scene, "messaged-card"), scene).toBe("sent");
     }
-    for (const scene of [
-      "t3-started",
-      "t3-approval",
-      "t3-delivery-unknown",
-      "t3-failed",
-      "t3-not-sent",
-    ]) {
+    for (const scene of ["t3-started", "t3-approval"]) {
       expect(await verb(scene, "t3-card"), scene).toBe("asked to send");
+    }
+    for (const scene of ["t3-delivery-unknown", "t3-failed", "t3-not-sent"]) {
+      expect(await verb(scene, '.card.action[data-call="call_t3"]'), scene).toBe("asked to send");
     }
     expect(await verb("t3-thread", "t3-card")).toBe("sent");
     await openFixture(page, "scene=received-completed", "light");
