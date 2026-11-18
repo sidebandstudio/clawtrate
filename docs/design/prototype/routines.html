@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: routines and check-ins</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/conversation.css" />
+    <link rel="stylesheet" href="css/bots.css" />
+    <link rel="stylesheet" href="css/routines.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/icons.js"></script>
+    <script src="js/prototype.js"></script>
+    <script src="js/routines.js" defer></script>
+  </head>
+  <body>
+    <header class="proto-bar" id="proto-bar"></header>
+    <main class="proto-stage">
+      <div class="proto-frame">
+        <!-- The shell with what docs/design/automation.md adds: the rail's
+             Routines button and the Routines view in the main pane. The rail
+             here is a picture of the app's, with only what routines change on
+             it; js/routines.js fills the view, its dialogs and the rail. -->
+        <div class="app" id="root">
+          <div class="shell" data-panel="closed" data-view="detail">
+            <nav class="rail" aria-label="Bots">
+              <div class="rail-top">
+                <button type="button" class="icon-button rail-status" aria-label="Gateway menu">
+                  <i data-icon="settings"></i>
+                  <span class="status-dot" data-status="connected"></span>
+                </button>
+                <button type="button" class="icon-button" id="routines-button" data-r="open-view" aria-label="Routines" title="Routines">
+                  <i data-icon="clock"></i>
+                </button>
+                <button type="button" class="icon-button" aria-label="Search" title="Search (⌘K)">
+                  <i data-icon="search"></i>
+                </button>
+                <button type="button" class="icon-button" aria-label="New" title="New">
+                  <i data-icon="plus"></i>
+                </button>
+              </div>
+              <ul class="bot-list" id="bot-list" data-testid="bot-list"></ul>
+              <div class="rail-footer">
+                <button type="button" class="gateway-pill">
+                  <span class="status-dot" data-status="connected"></span>
+                  <span class="gateway-pill-text">
+                    <strong>Home gateway</strong>
+                    <span>Connected</span>
+                  </span>
+                </button>
+              </div>
+            </nav>
+            <div class="main-pane">
+              <section class="conversation r-view" id="view" aria-label="Routines"></section>
+            </div>
+          </div>
+          <ul class="menu r-menu" id="r-menu" role="menu" hidden></ul>
+          <dialog class="b-dialog r-dialog" id="edit-dialog" aria-labelledby="edit-title"></dialog>
+          <dialog class="b-dialog r-dialog" id="checkins-dialog" aria-labelledby="checkins-title"></dialog>
+          <dialog class="b-dialog" id="confirm-dialog" data-kind="confirm" role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-text"></dialog>
+          <div class="visually-hidden" id="r-announce" role="status" aria-live="polite"></div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
