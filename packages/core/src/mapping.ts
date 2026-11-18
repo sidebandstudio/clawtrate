@@ -363,6 +363,8 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           return;
         }
         if (!text.trim()) return;
+        const messageId = str(info.id);
+        const replyTo = replyReference(info);
         items.push({
           id,
           role: "user",
@@ -370,6 +372,8 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           blocks: [{ kind: "text", text }],
           model: null,
           ...(cutByGateway ? { truncated: true } : {}),
+          ...(messageId ? { messageId } : {}),
+          ...(replyTo ? { replyTo } : {}),
         });
         return;
       }
@@ -391,6 +395,10 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           items.push(item);
         }
         if (cutByGateway) item.truncated = true;
+        // A reaction or a reply names the row whose text the bubble shows: the turn's latest.
+        const rowId = str(info.id);
+        if (rowId && blocks.some((block) => block.kind === "text" && block.text.trim()))
+          item.messageId = rowId;
         for (const block of blocks) {
           if (block.kind === "tool-call" && block.callId) callItems.set(block.callId, item);
         }
@@ -422,6 +430,22 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
     }
   });
   return items;
+}
+
+/**
+ * A user row's reply reference (OpenClaw 2026.10.6: `__openclaw.replyToId` and the preview it
+ * stores beside it, `replyToPreview {text, senderLabel?}`). The preview is cut to its bound here.
+ */
+function replyReference(info: RawRecord): TranscriptItem["replyTo"] | null {
+  const id = str(info.replyToId);
+  if (!id) return null;
+  const preview = asRecord(info.replyToPreview);
+  const text = str(preview?.text);
+  return {
+    id,
+    text: text === null ? null : text.length > 480 ? `${text.slice(0, 479)}…` : text,
+    sender: str(preview?.senderLabel),
+  };
 }
 
 /** Visible text from a streaming `chat` event's message snapshot. */

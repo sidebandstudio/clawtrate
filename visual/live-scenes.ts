@@ -58,6 +58,16 @@ export const LIVE_VIEWS: Array<{
     ready: (page) => expect(page.getByTestId("status-line")).toContainText("Waiting for an answer"),
   },
   {
+    scene: "message-actions",
+    rows: "F-283 F-067",
+    ready: (page) => expect(page.getByTestId("reactions")).toBeVisible(),
+  },
+  {
+    scene: "message-actions-read",
+    rows: "F-283",
+    ready: (page) => expect(page.getByTestId("reactions")).toBeVisible(),
+  },
+  {
     scene: "composer",
     rows: "F-068",
     ready: (page) => expect(page.getByTestId("composer-input")).toBeVisible(),

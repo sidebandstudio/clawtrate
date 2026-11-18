@@ -44,7 +44,11 @@ export type BridgeCommand =
       text: string;
       mode: "auto" | "queue";
       attachmentIds: string[];
+      /** The gateway's id of the message this one replies to (F-067). */
+      replyToId?: string;
     }
+  /** Add, or with `remove` take back, this person's reaction on a message the task shows (F-283). */
+  | { type: "setReaction"; key: string; messageId: string; emoji: string; remove: boolean }
   | { type: "retryMessage"; key: string; messageId: string }
   | { type: "deleteMessage"; key: string; messageId: string }
   | { type: "cancelQueued"; key: string; messageId: string }
@@ -595,6 +599,21 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         text: messageText(command.text),
         mode: command.mode === "queue" ? "queue" : "auto",
         attachmentIds: ids as string[],
+        ...(command.replyToId !== undefined
+          ? { replyToId: id(command.replyToId, "message id") }
+          : {}),
+      };
+    }
+    case "setReaction": {
+      const emoji = command.emoji;
+      if (typeof emoji !== "string" || emoji.length === 0 || emoji.length > 64)
+        throw new Error("invalid emoji");
+      return {
+        type: "setReaction",
+        key: sessionKey(command.key),
+        messageId: id(command.messageId, "message id"),
+        emoji,
+        remove: command.remove === true,
       };
     }
     case "retryMessage":
@@ -964,6 +983,7 @@ class ViewerSession implements BridgeSession {
           const messageId = client.sendMessage(key, command.text, {
             mode: command.mode,
             attachments: taken.attachments,
+            ...(command.replyToId ? { replyToId: command.replyToId } : {}),
           });
           return { messageId };
         } catch (error) {
@@ -1005,6 +1025,14 @@ class ViewerSession implements BridgeSession {
         );
       case "stopRun":
         return client.stopRun(this.mine(command.key), command.runId, { owner });
+      case "setReaction":
+        return client.setReaction(
+          this.mine(command.key),
+          command.messageId,
+          command.emoji,
+          command.remove,
+          { owner },
+        );
       case "answerQuestion":
         return client.answerQuestion(this.mine(command.key), command.questionId, command.answers, {
           owner,

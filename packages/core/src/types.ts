@@ -235,8 +235,33 @@ export type TranscriptItem = {
    * read whole, is a prefix of what the gateway stored.
    */
   truncated?: boolean;
+  /**
+   * The gateway's id of the row whose text this item shows (`__openclaw.id`; for a bot's turn,
+   * its last row with text): what a reaction or a reply to it names. Absent when the row has none.
+   */
+  messageId?: string;
+  /** The message this one replies to (`__openclaw.replyToId`), with the gateway's preview of it. */
+  replyTo?: ReplyReference;
   /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
   cut?: string[];
+};
+
+/** A reply's reference to the message it answers, as the gateway stores it (F-067). */
+export type ReplyReference = {
+  /** The gateway's id of the message replied to. */
+  id: string;
+  /** The gateway's preview of its text (`replyToPreview.text`), or null. */
+  text: string | null;
+  /** Who wrote it, as the gateway labels them (`replyToPreview.senderLabel`), or null. */
+  sender: string | null;
+};
+
+/** One emoji's reactions on a message, as the gateway counts them (F-283). */
+export type MessageReaction = {
+  emoji: string;
+  count: number;
+  /** True when this connection's own person is among those who reacted with it. */
+  mine: boolean;
 };
 
 /** One open task: its durable transcript plus its live runs and outgoing messages. */
@@ -275,6 +300,11 @@ export type Transcript = TaskActivity & {
    * Absent or null when the gateway has not said; nothing is inferred then.
    */
   workspaceRoot?: string | null;
+  /**
+   * The reactions on the messages this transcript shows, by the gateway's message id
+   * (`session.reactions.list`, then `session.reaction` events). Absent until read.
+   */
+  reactions?: Record<string, MessageReaction[]>;
   /** Paths of fields cut to their bound that no item beneath records itself. */
   cut?: string[];
   /** Epoch ms of the latest successful history load. */

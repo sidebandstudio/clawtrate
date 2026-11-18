@@ -1,0 +1,568 @@
+// What a person can do with a message in the transcript (parity F-066, F-067,
+// F-283): hovering, focusing or touching and holding a message shows react,
+// reply and more beside it; reactions show as small emoji badges under it; a
+// reply carries a line naming what it answers, and the thread view assembles
+// a message and the replies to it, since the gateway keeps a reply only as a
+// reference (`replyToId`) with no thread of its own.
+
+import type { MessageReaction, Transcript, TranscriptItem } from "@clawtrate/core";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { useBridge } from "./bridge.tsx";
+import { copyText } from "./clipboard.ts";
+import { ArrowUpIcon, CloseIcon, MoreIcon, ReplyIcon, SmileIcon } from "./icons.tsx";
+import { Markdown } from "./Markdown.tsx";
+import { Menu, type MenuEntry } from "./Menu.tsx";
+
+/** The reactions offered by the react button: one emoji each, as the gateway takes them. */
+export const REACTIONS: Array<{ emoji: string; name: string }> = [
+  { emoji: "👍", name: "Thumbs up" },
+  { emoji: "❤️", name: "Heart" },
+  { emoji: "😂", name: "Laughing" },
+  { emoji: "🎉", name: "Party" },
+  { emoji: "👀", name: "Looking" },
+  { emoji: "🙏", name: "Thank you" },
+];
+
+/** How long a touch on a message is held before its actions show. */
+const LONG_PRESS_MS = 500;
+
+type MessageEnv = {
+  taskKey: string;
+  transcript: Transcript;
+  botName: string;
+  /** The connection may write: reacting and replying are offered. */
+  canWrite: boolean;
+  openThread: (messageId: string, from: HTMLElement | null) => void;
+  announce: (text: string) => void;
+};
+
+const MessageContext = createContext<MessageEnv | null>(null);
+
+export function MessageProvider({ env, children }: { env: MessageEnv; children: ReactNode }) {
+  return <MessageContext.Provider value={env}>{children}</MessageContext.Provider>;
+}
+
+const useMessages = () => useContext(MessageContext);
+
+/** The text a message shows, for Copy text. */
+export function itemText(item: TranscriptItem): string {
+  return item.blocks
+    .map((block) => (block.kind === "text" ? block.text : ""))
+    .filter((text) => text.trim())
+    .join("\n\n");
+}
+
+/** Who wrote a message, as its line in a thread names them. */
+function authorOf(item: TranscriptItem, botName: string): string {
+  return item.role === "user" ? "You" : botName;
+}
+
+/**
+ * React, reply and more, shown beside a message while it is hovered, while focus is in
+ * them, or after a touch and hold. One tab stop: Left and Right move between them.
+ */
+export function MessageActions({
+  item,
+  turnRef,
+}: {
+  item: TranscriptItem;
+  turnRef: RefObject<HTMLDivElement | null>;
+}) {
+  const env = useMessages();
+  const bridge = useBridge();
+  const [menu, setMenu] = useState<null | "react" | "more">(null);
+  const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
+  const [held, setHeld] = useState(false);
+  const bar = useRef<HTMLDivElement>(null);
+  const reactRef = useRef<HTMLButtonElement>(null);
+  const replyRef = useRef<HTMLButtonElement>(null);
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const [current, setCurrent] = useState(0);
+
+  // Beside the message's last bubble: to its right for the bot's, to its left for yours.
+  const measure = useCallback(() => {
+    const turn = turnRef.current;
+    const toolbar = bar.current;
+    if (!turn || !toolbar) return;
+    const bubbles = turn.querySelectorAll<HTMLElement>(".msg > .bubble");
+    const bubble = bubbles[bubbles.length - 1];
+    if (!bubble) return;
+    const turnBox = turn.getBoundingClientRect();
+    const box = bubble.getBoundingClientRect();
+    const width = toolbar.offsetWidth;
+    const left =
+      item.role === "user" ? box.left - turnBox.left - width - 6 : box.right - turnBox.left + 6;
+    // Within the column: where there is no room beside it, it sits above the bubble's outer corner.
+    const max = turnBox.width - width;
+    const room = left >= 0 && left <= max;
+    const top = box.top - turnBox.top;
+    if (room) setPlace({ top, left });
+    else
+      setPlace({
+        top: top - toolbar.offsetHeight - 4,
+        left:
+          item.role === "user"
+            ? box.left - turnBox.left
+            : Math.min(max, box.right - turnBox.left - width),
+      });
+  }, [turnRef, item.role]);
+
+  // After the commit: the turn's own ref is set only once its children's layout effects ran.
+  useEffect(() => {
+    const turn = turnRef.current;
+    if (!turn) return;
+    const onEnter = () => measure();
+    turn.addEventListener("pointerenter", onEnter);
+    // Touch and hold on the message shows its actions; a tap elsewhere hides them.
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onDown = (event: PointerEvent) => {
+      if (event.pointerType !== "touch") return;
+      if ((event.target as Element).closest(".msg-actions, button, a, summary")) return;
+      timer = setTimeout(() => {
+        measure();
+        setHeld(true);
+      }, LONG_PRESS_MS);
+    };
+    const cancel = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+    turn.addEventListener("pointerdown", onDown);
+    turn.addEventListener("pointerup", cancel);
+    turn.addEventListener("pointercancel", cancel);
+    turn.addEventListener("pointermove", cancel);
+    return () => {
+      cancel();
+      turn.removeEventListener("pointerenter", onEnter);
+      turn.removeEventListener("pointerdown", onDown);
+      turn.removeEventListener("pointerup", cancel);
+      turn.removeEventListener("pointercancel", cancel);
+      turn.removeEventListener("pointermove", cancel);
+    };
+  }, [turnRef, measure]);
+
+  useEffect(() => {
+    if (!held) return;
+    const onDown = (event: PointerEvent) => {
+      if (!turnRef.current?.contains(event.target as Node)) setHeld(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [held, turnRef]);
+
+  if (!env || !item.messageId) return null;
+  const messageId = item.messageId;
+  const buttons = [env.canWrite ? reactRef : null, env.canWrite ? replyRef : null, moreRef].filter(
+    (each): each is RefObject<HTMLButtonElement | null> => each !== null,
+  );
+  const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+    event.preventDefault();
+    const next =
+      (current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+    setCurrent(next);
+    buttons[next]!.current?.focus();
+  };
+  const tab = (ref: RefObject<HTMLButtonElement | null>) =>
+    buttons.indexOf(ref) === current ? 0 : -1;
+
+  const reactEntries: MenuEntry[] = REACTIONS.map(({ emoji, name }) => ({
+    kind: "item",
+    label: `${emoji} ${name}`,
+    onSelect: () => {
+      setMenu(null);
+      reactRef.current?.focus();
+      const mine = env.transcript.reactions?.[messageId]?.some(
+        (each) => each.emoji === emoji && each.mine,
+      );
+      void bridge
+        .invoke({ type: "setReaction", key: env.taskKey, messageId, emoji, remove: mine === true })
+        .then(
+          () => env.announce(mine ? `Removed ${emoji}` : `Reacted ${emoji}`),
+          (error: unknown) =>
+            env.announce(`Couldn't react: ${error instanceof Error ? error.message : error}`),
+        );
+    },
+  }));
+  const copy = async (text: string, what: string) => {
+    env.announce((await copyText(text)) === "copied" ? `Copied ${what}` : "Couldn't copy.");
+  };
+  const moreEntries: MenuEntry[] = [
+    {
+      kind: "item",
+      label: "Copy text",
+      onSelect: () => {
+        setMenu(null);
+        moreRef.current?.focus();
+        void copy(itemText(item), "text");
+      },
+    },
+    {
+      kind: "item",
+      label: "Copy message ID",
+      onSelect: () => {
+        setMenu(null);
+        moreRef.current?.focus();
+        void copy(messageId, "message ID");
+      },
+    },
+  ];
+
+  return (
+    <div
+      ref={bar}
+      className="msg-actions"
+      role="toolbar"
+      aria-label="Message actions"
+      data-side={item.role === "user" ? "user" : "bot"}
+      data-open={held || menu !== null ? "true" : undefined}
+      data-testid="message-actions"
+      style={place ? { top: place.top, left: place.left } : undefined}
+      onFocus={measure}
+      onKeyDown={onKey}
+    >
+      {env.canWrite && (
+        <button
+          ref={reactRef}
+          type="button"
+          className="icon-button"
+          aria-label="Add a reaction"
+          title="Add a reaction"
+          aria-haspopup="menu"
+          aria-expanded={menu === "react"}
+          tabIndex={tab(reactRef)}
+          onClick={() => setMenu(menu === "react" ? null : "react")}
+        >
+          <SmileIcon />
+        </button>
+      )}
+      {env.canWrite && (
+        <button
+          ref={replyRef}
+          type="button"
+          className="icon-button"
+          aria-label="Reply in a thread"
+          title="Reply in a thread"
+          tabIndex={tab(replyRef)}
+          onClick={() => env.openThread(messageId, replyRef.current)}
+        >
+          <ReplyIcon />
+        </button>
+      )}
+      <button
+        ref={moreRef}
+        type="button"
+        className="icon-button"
+        aria-label="More"
+        title="More"
+        aria-haspopup="menu"
+        aria-expanded={menu === "more"}
+        tabIndex={tab(moreRef)}
+        onClick={() => setMenu(menu === "more" ? null : "more")}
+      >
+        <MoreIcon />
+      </button>
+      {menu && (
+        <Menu
+          label={menu === "react" ? "Add a reaction" : "More"}
+          className="msg-actions-menu"
+          entries={menu === "react" ? reactEntries : moreEntries}
+          trigger={(menu === "react" ? reactRef : moreRef).current}
+          onClose={(refocus) => {
+            if (refocus) (menu === "react" ? reactRef : moreRef).current?.focus();
+            setMenu(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** A reaction's name: what it is, how many, and what choosing it does. */
+function reactionName(reaction: MessageReaction, canWrite: boolean): string {
+  const count = `${reaction.count} ${reaction.count === 1 ? "reaction" : "reactions"}`;
+  if (!canWrite) return `${reaction.emoji} ${count}`;
+  return reaction.mine
+    ? `${reaction.emoji} ${count}, yours among them. Remove yours`
+    : `${reaction.emoji} ${count}. Add yours`;
+}
+
+/** The reactions on a message, as small emoji badges under it. */
+export function Reactions({ item }: { item: TranscriptItem }) {
+  const env = useMessages();
+  const bridge = useBridge();
+  if (!env || !item.messageId) return null;
+  const messageId = item.messageId;
+  const list = env.transcript.reactions?.[messageId] ?? [];
+  if (list.length === 0) return null;
+  return (
+    <div
+      className="reactions"
+      data-side={item.role === "user" ? "user" : "bot"}
+      data-testid="reactions"
+      role="group"
+      aria-label="Reactions"
+    >
+      {list.map((reaction) =>
+        env.canWrite ? (
+          <button
+            key={reaction.emoji}
+            type="button"
+            className="reaction"
+            aria-pressed={reaction.mine}
+            aria-label={reactionName(reaction, true)}
+            title={reactionName(reaction, true)}
+            data-testid="reaction"
+            onClick={() =>
+              void bridge
+                .invoke({
+                  type: "setReaction",
+                  key: env.taskKey,
+                  messageId,
+                  emoji: reaction.emoji,
+                  remove: reaction.mine,
+                })
+                .then(
+                  () =>
+                    env.announce(
+                      reaction.mine ? `Removed ${reaction.emoji}` : `Reacted ${reaction.emoji}`,
+                    ),
+                  (error: unknown) =>
+                    env.announce(
+                      `Couldn't react: ${error instanceof Error ? error.message : error}`,
+                    ),
+                )
+            }
+          >
+            <span aria-hidden="true">{reaction.emoji}</span>
+            <span aria-hidden="true">{reaction.count}</span>
+          </button>
+        ) : (
+          <span
+            key={reaction.emoji}
+            className="reaction"
+            role="img"
+            aria-label={reactionName(reaction, false)}
+            data-testid="reaction"
+          >
+            <span aria-hidden="true">{reaction.emoji}</span>
+            <span aria-hidden="true">{reaction.count}</span>
+          </span>
+        ),
+      )}
+    </div>
+  );
+}
+
+/** The replies to a message, from history and on their way, in the order they were written. */
+export function repliesTo(transcript: Transcript, messageId: string) {
+  const history = transcript.items.filter((item) => item.replyTo?.id === messageId);
+  const pending = transcript.outbox.filter(
+    (message) =>
+      message.replyToId === messageId &&
+      message.status !== "cancelled" &&
+      message.status !== "handled",
+  );
+  return { history, pending, count: history.length + pending.length };
+}
+
+/** Above a reply: what it answers. It opens the thread on that message. */
+export function ReplyQuote({ item }: { item: TranscriptItem }) {
+  const env = useMessages();
+  if (!env || !item.replyTo) return null;
+  const { id, text, sender } = item.replyTo;
+  const shown = env.transcript.items.some((each) => each.messageId === id);
+  const words = `${sender ?? "A message"}: ${text ?? "a message no longer shown"}`;
+  return (
+    <button
+      type="button"
+      className="reply-quote"
+      data-testid="reply-quote"
+      disabled={!shown}
+      aria-label={`Replying to ${words}. ${shown ? "Open the thread" : "Not in the loaded history"}`}
+      onClick={(event) => env.openThread(id, event.currentTarget)}
+    >
+      <ReplyIcon />
+      <span>{words}</span>
+    </button>
+  );
+}
+
+/** Under a message that has replies: how many, opening its thread. */
+export function RepliesLink({ item }: { item: TranscriptItem }) {
+  const env = useMessages();
+  if (!env || !item.messageId) return null;
+  const { count } = repliesTo(env.transcript, item.messageId);
+  if (count === 0) return null;
+  const messageId = item.messageId;
+  return (
+    <button
+      type="button"
+      className="replies-link"
+      data-side={item.role === "user" ? "user" : "bot"}
+      data-testid="replies-link"
+      onClick={(event) => env.openThread(messageId, event.currentTarget)}
+    >
+      {count === 1 ? "1 reply" : `${count} replies`}
+    </button>
+  );
+}
+
+/**
+ * A message and its replies, with a field to reply from. The gateway keeps no thread, so it is
+ * assembled here: the message, each reply to it, and the bot's answer to that reply.
+ */
+export function ThreadView({ messageId, onClose }: { messageId: string; onClose: () => void }) {
+  const env = useMessages();
+  const bridge = useBridge();
+  const [text, setText] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const field = useRef<HTMLTextAreaElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    field.current?.focus();
+  }, [messageId]);
+  if (!env) return null;
+  const items = env.transcript.items;
+  const root = items.find((item) => item.messageId === messageId);
+  const { history, pending } = repliesTo(env.transcript, messageId);
+  // Each reply, then the bot's answer that follows it in the task, if it has one yet.
+  const answerAfter = (reply: TranscriptItem) => {
+    const at = items.indexOf(reply);
+    const next = items[at + 1];
+    return next && next.role === "assistant" ? next : null;
+  };
+  const send = async () => {
+    const body = text.trim();
+    if (!body) return;
+    setText("");
+    setError(null);
+    try {
+      await bridge.invoke({
+        type: "sendMessage",
+        key: env.taskKey,
+        text: body,
+        mode: "auto",
+        attachmentIds: [],
+        replyToId: messageId,
+      });
+      env.announce("Reply sent");
+    } catch (failure) {
+      setText(body);
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  };
+  const line = (item: TranscriptItem, key: string) => (
+    <div className="thread-msg" data-role={item.role} key={key} data-testid="thread-message">
+      <p className="thread-author">{authorOf(item, env.botName)}</p>
+      <div className="bubble">
+        <Markdown text={itemText(item)} />
+      </div>
+    </div>
+  );
+  return (
+    <div
+      ref={panel}
+      className="thread"
+      role="dialog"
+      aria-label="Thread"
+      data-testid="thread"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <div className="thread-head">
+        <h2>Thread</h2>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Close the thread"
+          title="Close the thread"
+          onClick={onClose}
+        >
+          <CloseIcon />
+        </button>
+      </div>
+      <div className="thread-body" tabIndex={0} role="region" aria-label="Messages in the thread">
+        {root ? (
+          line(root, "root")
+        ) : (
+          <p className="raw-state">This message is no longer in the loaded history.</p>
+        )}
+        <p className="thread-count">
+          {history.length + pending.length === 0
+            ? "No replies yet"
+            : history.length + pending.length === 1
+              ? "1 reply"
+              : `${history.length + pending.length} replies`}
+        </p>
+        {history.flatMap((reply) => {
+          const answer = answerAfter(reply);
+          return [line(reply, reply.id), ...(answer ? [line(answer, `${reply.id}:answer`)] : [])];
+        })}
+        {pending.map((message) => (
+          <div
+            className="thread-msg"
+            data-role="user"
+            key={message.id}
+            data-testid="thread-message"
+          >
+            <p className="thread-author">You</p>
+            <div className="bubble" data-pending="true">
+              <Markdown text={message.text} />
+            </div>
+          </div>
+        ))}
+      </div>
+      {env.canWrite && (
+        <div className="thread-reply">
+          {error && (
+            <p className="thread-error" role="alert">
+              Couldn't send this reply: {error}
+            </p>
+          )}
+          <div className="thread-field">
+            <textarea
+              ref={field}
+              rows={1}
+              value={text}
+              placeholder="Reply…"
+              aria-label="Reply in this thread"
+              data-testid="thread-input"
+              onChange={(event) => setText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing)
+                  return;
+                event.preventDefault();
+                void send();
+              }}
+            />
+            <button
+              type="button"
+              className="icon-button send-button"
+              aria-label="Send reply"
+              title="Send reply"
+              disabled={!text.trim()}
+              onClick={() => void send()}
+            >
+              <ArrowUpIcon />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

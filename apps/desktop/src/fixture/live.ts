@@ -49,6 +49,8 @@ export const LIVE_SCENES = [
   "stopped-not-sent",
   "queued-refused",
   "offline-send",
+  "message-actions",
+  "message-actions-read",
 ] as const;
 
 export type LiveScene = (typeof LIVE_SCENES)[number];
@@ -229,6 +231,46 @@ function question(now: number): QuestionCard {
 }
 
 /** The scene's state, from the loaded fixture state. */
+/**
+ * The open task as history gives it to a connection that reacts and replies: each message names
+ * the gateway's row id, the bot's report has reactions, and a later message of yours replies to
+ * an earlier answer of Otto's (F-066, F-067, F-283).
+ */
+function withMessages(state: ClawtrateState): ClawtrateState {
+  return withTranscript(state, (transcript) => {
+    const items = transcript.items.map((each, index) =>
+      each.role === "system" ? each : { ...each, messageId: `row-${index + 1}` },
+    );
+    const answers = items.filter((each) => each.role === "assistant");
+    const replied = answers[0]!;
+    const last = items.at(-1)!;
+    const reply = {
+      id: "row-reply:99",
+      role: "user" as const,
+      timestamp: (last.timestamp ?? Date.now()) + 60_000,
+      blocks: [{ kind: "text" as const, text: "Could you read the system log another way?" }],
+      model: null,
+      messageId: "row-reply",
+      replyTo: {
+        id: replied.messageId!,
+        text: "Nothing alarming that I can see from here. The system log is outside my workspace…",
+        sender: "Otto",
+      },
+    };
+    const report = answers.at(-1)!;
+    return {
+      ...transcript,
+      items: [...items, reply],
+      reactions: {
+        [report.messageId!]: [
+          { emoji: "👍", count: 2, mine: true },
+          { emoji: "🎉", count: 1, mine: false },
+        ],
+      },
+    };
+  });
+}
+
 export function liveScene(
   name: LiveScene,
   base: ClawtrateState,
@@ -299,6 +341,10 @@ export function liveScene(
       };
     case "composer":
       return { initial: interactive(base), steps: [] };
+    case "message-actions":
+      return { initial: interactive(withMessages(base)), steps: [] };
+    case "message-actions-read":
+      return { initial: withMessages(base), steps: [] };
     case "run-thinking":
       return { initial: withRun(base, now, {}), steps: [] };
     case "run-working":
@@ -610,7 +656,11 @@ export function liveCommand(
             ...transcript,
             outbox: [
               ...transcript.outbox,
-              message(id, command.text, now, { runId: id, attachments }),
+              message(id, command.text, now, {
+                runId: id,
+                attachments,
+                ...(command.replyToId ? { replyToId: command.replyToId } : {}),
+              }),
             ],
             runs: [
               ...transcript.runs,
@@ -636,6 +686,7 @@ export function liveCommand(
           outbox: [
             ...transcript.outbox,
             message(id, command.text, now, {
+              ...(command.replyToId ? { replyToId: command.replyToId } : {}),
               mode: command.mode === "queue" ? "queue" : "steer",
               status: asking ? "held" : "sent",
               runId: active.id,
@@ -771,6 +822,32 @@ export function liveCommand(
       return Promise.resolve();
     case "createTask":
       return Promise.resolve({ key: "agent:otto:new-task" });
+    case "setReaction":
+      // As the gateway answers: the message's reactions now, this person's marked.
+      update((transcript) => {
+        const list = transcript.reactions?.[command.messageId] ?? [];
+        const existing = list.find((each) => each.emoji === command.emoji);
+        const next = command.remove
+          ? list.flatMap((each) =>
+              each.emoji !== command.emoji || !each.mine
+                ? [each]
+                : each.count > 1
+                  ? [{ ...each, count: each.count - 1, mine: false }]
+                  : [],
+            )
+          : existing
+            ? list.map((each) =>
+                each.emoji === command.emoji && !each.mine
+                  ? { ...each, count: each.count + 1, mine: true }
+                  : each,
+              )
+            : [...list, { emoji: command.emoji, count: 1, mine: true }];
+        const reactions = { ...transcript.reactions };
+        if (next.length > 0) reactions[command.messageId] = next;
+        else delete reactions[command.messageId];
+        return { ...transcript, reactions };
+      });
+      return Promise.resolve();
     default:
       return undefined;
   }

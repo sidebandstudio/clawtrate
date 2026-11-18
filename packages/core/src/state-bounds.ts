@@ -93,7 +93,9 @@ import type {
   ConnectionError,
   ConnectionState,
   DiscoveryState,
+  MessageReaction,
   PairingRequest,
+  ReplyReference,
   ScopeUpgradeState,
   SendLimits,
   Task,
@@ -219,6 +221,14 @@ export const MAX_UNROUTED = 16;
 export const MAX_CREATIONS = 8;
 /** Scopes in a grant or request. */
 export const MAX_SCOPES = 16;
+/** The gateway's preview of a message replied to, as kept on the reply (F-067). */
+export const MAX_REPLY_PREVIEW_CHARS = 512;
+/** Messages whose reactions a task keeps: at most one per history row shown. */
+export const MAX_REACTED_MESSAGES = MAX_HISTORY_ITEMS;
+/** Distinct emoji kept per message, the most counted first. */
+export const MAX_REACTIONS_PER_MESSAGE = 12;
+/** One emoji: the gateway accepts one grapheme of at most 32 code points. */
+export const MAX_EMOJI_CHARS = 66;
 
 // The schema -----------------------------------------------------------------------
 
@@ -345,6 +355,7 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   createdAt: NUMBER,
   error: text(MAX_ERROR_JSON_CHARS),
   attachments: list(MAX_FILES_PER_MESSAGE, attachmentInfo),
+  replyToId: ID,
 });
 const questionOption = object<QuestionOption>()({
   index: NUMBER,
@@ -490,6 +501,17 @@ const item = flagged<TranscriptItem>()({
   blocks: list(MAX_BLOCKS_PER_ITEM, block, { pool: "blocks" }),
   model: NAME,
   truncated: FLAG,
+  messageId: ID,
+  replyTo: object<ReplyReference>()({
+    id: ID,
+    text: text(MAX_REPLY_PREVIEW_CHARS),
+    sender: NAME,
+  }),
+});
+const reaction = object<MessageReaction>()({
+  emoji: id(MAX_EMOJI_CHARS),
+  count: NUMBER,
+  mine: FLAG,
 });
 const interSession = flagged<InterSessionMessage>()({
   itemId: ID,
@@ -537,6 +559,7 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   // Names and a root are ids: a cut one would name another tool or folder.
   builtinTools: list(MAX_BUILTIN_TOOLS, id(MAX_TOOL_NAME_CHARS)),
   workspaceRoot: id(MAX_STEP_PATH_CHARS),
+  reactions: map(MAX_REACTED_MESSAGES, MAX_ID_CHARS, list(MAX_REACTIONS_PER_MESSAGE, reaction)),
   loadedAt: NUMBER,
 });
 

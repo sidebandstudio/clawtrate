@@ -32,6 +32,14 @@ import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
 import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
+import {
+  MessageActions,
+  MessageProvider,
+  Reactions,
+  RepliesLink,
+  ReplyQuote,
+  ThreadView,
+} from "./Messages.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
 
 /**
@@ -41,8 +49,16 @@ import { TEXT_BLOCKS } from "./reading-line.ts";
 function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?: boolean }) {
   const role = item.role === "user" ? "user" : "assistant";
   const time = item.timestamp === null ? undefined : fullDate(item.timestamp);
+  const ref = useRef<HTMLDivElement>(null);
   return (
-    <div className="turn" data-role={role} data-testid="transcript-turn">
+    <div
+      className="turn"
+      data-role={role}
+      data-testid="transcript-turn"
+      data-message={item.messageId}
+      ref={ref}
+    >
+      {role === "user" && <ReplyQuote item={item} />}
       {role === "assistant" ? (
         <ItemFeed itemId={item.id} />
       ) : (
@@ -57,6 +73,9 @@ function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?:
         )
       )}
       {incomplete && <IncompleteCaption />}
+      <Reactions item={item} />
+      <RepliesLink item={item} />
+      <MessageActions item={item} turnRef={ref} />
     </div>
   );
 }
@@ -194,14 +213,31 @@ function TranscriptView({
   transcript,
   note,
   liveOptions,
+  onAnnounce,
 }: {
   task: Task;
   bot: Bot;
   transcript: Transcript;
   note: ReactNode;
   liveOptions: LiveOptions;
+  onAnnounce: (text: string) => void;
 }) {
   const reading = useReading();
+  // The thread open over the transcript, and what opened it, for focus to go back to.
+  const [thread, setThread] = useState<{ messageId: string; from: HTMLElement | null } | null>(
+    null,
+  );
+  const messageEnv = useMemo(
+    () => ({
+      taskKey: task.key,
+      transcript,
+      botName: bot.name,
+      canWrite: liveOptions.interactive,
+      openThread: (messageId: string, from: HTMLElement | null) => setThread({ messageId, from }),
+      announce: onAnnounce,
+    }),
+    [task.key, transcript, bot.name, liveOptions.interactive, onAnnounce],
+  );
   const live = buildLive(bot, task, transcript, { ...liveOptions, reading });
   const scroller = useRef<HTMLDivElement>(null);
   const itemCount = transcript.items.length;
@@ -347,18 +383,32 @@ function TranscriptView({
               effort={task.effort ?? null}
               ctx={reading}
             >
-              <h1 className="task-line" tabIndex={-1}>
-                {task.title}
-              </h1>
-              <TaskContext task={task} />
-              {note}
-              {rows}
-              <TrailingCards except={live.drawsCards} />
-              {live.foot}
+              <MessageProvider env={messageEnv}>
+                <h1 className="task-line" tabIndex={-1}>
+                  {task.title}
+                </h1>
+                <TaskContext task={task} />
+                {note}
+                {rows}
+                <TrailingCards except={live.drawsCards} />
+                {live.foot}
+              </MessageProvider>
             </ActionScope>
           </CardScope>
         </div>
       </div>
+      {thread && (
+        <MessageProvider env={messageEnv}>
+          <ThreadView
+            messageId={thread.messageId}
+            onClose={() => {
+              const from = thread.from;
+              setThread(null);
+              requestAnimationFrame(() => from?.focus());
+            }}
+          />
+        </MessageProvider>
+      )}
       {live.needsYou && !atEnd ? (
         <button
           type="button"
@@ -975,6 +1025,7 @@ export function Conversation({
           onReview: review,
           leaving,
         }}
+        onAnnounce={onAnnounce}
         note={
           refreshNote && (
             <p className="load-note" role="alert">

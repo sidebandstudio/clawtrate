@@ -474,6 +474,8 @@ export type OutgoingMessage = {
   error: string | null;
   /** Files sent with it, without their content. */
   attachments: OutgoingAttachmentInfo[];
+  /** The gateway's id of the message this one replies to (`chat.send` `replyToId`, F-067). */
+  replyToId?: string;
 };
 
 export type OutgoingAttachmentInfo = { fileName: string; mimeType: string; sizeBytes: number };

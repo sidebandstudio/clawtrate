@@ -1216,3 +1216,287 @@
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+
+/* What a person can do with a message: react, reply and more (F-066, F-067, F-283). */
+.turn {
+  position: relative;
+}
+
+.msg-actions {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-raised);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-quick) linear;
+}
+
+.turn:hover > .msg-actions,
+.msg-actions:focus-within,
+.msg-actions[data-open="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.msg-actions .icon-button {
+  width: 28px;
+  height: 28px;
+  color: var(--text-muted);
+}
+
+.msg-actions .icon-button:hover,
+.msg-actions .icon-button[aria-expanded="true"] {
+  color: var(--text);
+}
+
+.msg-actions-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 4;
+}
+
+.msg-actions[data-side="user"] .msg-actions-menu {
+  right: 0;
+  left: auto;
+}
+
+.reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.reactions[data-side="user"] {
+  justify-content: flex-end;
+}
+
+.reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+button.reaction {
+  cursor: pointer;
+}
+
+.reaction[aria-pressed="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.reply-quote,
+.replies-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(78%, 560px);
+  margin: 0 0 2px auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.reply-quote > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reply-quote .icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.reply-quote:disabled {
+  cursor: default;
+}
+
+.replies-link {
+  margin: 4px 0 0;
+  color: var(--accent);
+}
+
+.replies-link[data-side="user"] {
+  margin-left: auto;
+}
+
+.reply-quote:hover:not(:disabled) > span,
+.replies-link:hover {
+  text-decoration: underline;
+}
+
+/* The thread over the transcript: the message, its replies, and a field to reply from. */
+.thread {
+  position: absolute;
+  inset: var(--header-height) 0 0 auto;
+  border-top: 1px solid var(--border);
+  border-top-left-radius: var(--radius-md);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  width: min(420px, 100%);
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: var(--shadow-pop);
+}
+
+.thread-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 8px 16px;
+}
+
+.thread-head h2 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-strong);
+}
+
+.thread-body {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 16px 16px;
+  overflow-y: auto;
+}
+
+.thread-msg {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-top: 12px;
+}
+
+.thread-msg[data-role="user"] {
+  align-items: flex-end;
+}
+
+.thread-msg .bubble {
+  max-width: 92%;
+}
+
+.thread-msg[data-role="user"] .bubble {
+  background: var(--bubble-user);
+  color: var(--bubble-user-text);
+}
+
+.thread-msg .bubble[data-pending="true"] {
+  background: var(--bg-bubble);
+  color: var(--text);
+}
+
+.thread-author,
+.thread-count {
+  margin: 0 0 4px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.thread-count {
+  margin: 14px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.thread-reply {
+  padding: 8px 12px 12px;
+}
+
+.thread-field {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 6px 6px 6px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 22px;
+  background: var(--bg-raised);
+}
+
+.thread-field:focus-within {
+  border-color: var(--accent-line);
+}
+
+.thread-field textarea {
+  flex: 1;
+  min-height: 30px;
+  max-height: 160px;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  resize: none;
+  outline: none;
+}
+
+.thread-error {
+  margin: 0 0 6px;
+  font-size: var(--text-sm);
+  color: var(--danger);
+}
+
+/* A narrow column: the thread takes all of it. */
+@media (max-width: 520px) {
+  .thread {
+    width: 100%;
+    border-left: 0;
+  }
+}
+
+[data-input="touch"] .msg-actions .icon-button,
+[data-input="touch"] .reaction {
+  position: relative;
+}
+
+[data-input="touch"] .msg-actions .icon-button::after,
+[data-input="touch"] .reaction::after,
+[data-input="touch"] .reply-quote::after,
+[data-input="touch"] .replies-link::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  transform: translate(-50%, -50%);
+}
+
+[data-input="touch"] .reply-quote,
+[data-input="touch"] .replies-link {
+  position: relative;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-actions {
+    transition: none;
+  }
+}
+
+[data-motion="reduce"] .msg-actions {
+  transition: none;
+}

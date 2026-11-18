@@ -192,6 +192,7 @@ import {
   MAX_MESSAGE_JSON_CHARS,
   MAX_OUTBOX,
   MAX_PENDING_APPROVAL_COUNT,
+  MAX_REACTIONS_PER_MESSAGE,
   MAX_RUN_TEXT_CHARS,
   MAX_TASK_LINE_CHARS,
   MAX_TRACKED_TASKS as TRACKED_TASKS,
@@ -235,6 +236,7 @@ import {
   type ClawtrateState,
   type ConnectionState,
   type DiscoveryState,
+  type MessageReaction,
   type ScopeUpgradeState,
   type SendLimits,
   type TaskCreation,
@@ -434,7 +436,12 @@ export type OutgoingAttachment = {
   content: string;
 };
 
-export type SendOptions = { mode?: SendMode; attachments?: OutgoingAttachment[] };
+export type SendOptions = {
+  mode?: SendMode;
+  attachments?: OutgoingAttachment[];
+  /** The gateway's id of the message this one replies to (F-067). */
+  replyToId?: string;
+};
 
 /**
  * A send that would break a gateway ceiling. Checked before anything reaches
@@ -682,6 +689,12 @@ export class ClawtrateClient {
    * the hello does not carry one.
    */
   private gatewayBootId: string | null = null;
+  /**
+   * The person this connection acts for, as the gateway names them (`users.self` profile id):
+   * which reactions are this person's own. Read once per connection; null until then, or when
+   * the gateway names nobody.
+   */
+  private selfId: string | null = null;
   private rows = new Map<string, RawRecord>();
   /** Which tasks wait for the person, across every bot (`waiting.ts`), for the rail. */
   private readonly waiting = new WaitingIndex();
@@ -1376,6 +1389,12 @@ export class ClawtrateClient {
     // was sent; it is released when the last pending question settles.
     const held =
       active !== undefined && active.state !== "stopping" && questionPending(transcript, active);
+    const replyToId = options.replyToId;
+    if (
+      replyToId !== undefined &&
+      (typeof replyToId !== "string" || !replyToId || replyToId.length > MAX_ID_CHARS)
+    )
+      throw new Error("That message can't be replied to.");
     const message: OutgoingMessage = {
       id: this.randomId(),
       text: body,
@@ -1391,6 +1410,7 @@ export class ClawtrateClient {
         mimeType: attachment.mimeType,
         sizeBytes: decodedBytes(attachment.content),
       })),
+      ...(replyToId ? { replyToId } : {}),
     };
     if (attachments.length > 0) {
       this.attachmentContent.set(message.id, { task: key, files: attachments, bytes });
@@ -1440,6 +1460,7 @@ export class ClawtrateClient {
     idempotencyKey: string,
     queueMode: "steer" | "followup",
     attachments: OutgoingAttachment[],
+    replyToId?: string,
   ) {
     return {
       sessionKey: key,
@@ -1448,6 +1469,7 @@ export class ClawtrateClient {
       // Always the mode meant: with none the gateway steers.
       queueMode,
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(replyToId ? { replyToId } : {}),
     };
   }
 
@@ -2056,6 +2078,7 @@ export class ClawtrateClient {
         message.id,
         message.mode === "steer" ? "steer" : "followup",
         this.attachmentContent.get(messageId)?.files ?? [],
+        message.replyToId,
       );
       this.checkSize(params);
       // A send that starts its own run names that run's request: what a failed turn's
@@ -3038,6 +3061,108 @@ export class ClawtrateClient {
       mcpTools: map,
       builtinTools: builtin,
     }));
+  }
+
+  /**
+   * Read the reactions on a task's messages (`session.reactions.list`, `operator.read`) once its
+   * history loads, keeping those of the messages it shows. Later changes come as
+   * `session.reaction` events. A failed read leaves what was shown before (F-283).
+   */
+  private async readReactions(key: string, generation: number): Promise<void> {
+    const incarnation = this.incarnations.get(key);
+    let answer: unknown;
+    try {
+      if (this.selfId === null) await this.readSelf(generation);
+      answer = await this.request("session.reactions.list", { sessionKey: key });
+    } catch (error) {
+      if (generation === this.generation)
+        this.log("warn", `session.reactions.list failed: ${errorMessage(error)}`);
+      return;
+    }
+    if (
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation
+    )
+      return;
+    const listed = asRecord(asRecord(answer)?.reactions) ?? {};
+    this.setTranscript(key, () => {
+      const current = this.state.transcripts[key]!;
+      const shown = shownMessageIds(current);
+      const reactions: Record<string, MessageReaction[]> = {};
+      for (const [messageId, summary] of Object.entries(listed)) {
+        if (!shown.has(messageId)) continue;
+        const kept = reactionsOf(summary, this.selfId);
+        if (kept.length > 0) reactions[messageId] = kept;
+      }
+      return { ...current, reactions };
+    });
+  }
+
+  /** Who this connection acts for (`users.self`), for which reactions are the person's own. */
+  private async readSelf(generation: number): Promise<void> {
+    try {
+      const answer = asRecord(await this.request("users.self", {}));
+      if (generation !== this.generation) return;
+      const id = asRecord(answer?.profile)?.id;
+      this.selfId = typeof id === "string" && id.length <= MAX_ID_CHARS ? id : null;
+    } catch {
+      this.selfId = null;
+    }
+  }
+
+  /**
+   * Add or remove this person's reaction on a message (`session.reactions.set`,
+   * `operator.write`). The gateway's answer is the message's reactions now (F-283).
+   */
+  async setReaction(
+    key: string,
+    messageId: string,
+    emoji: string,
+    remove: boolean,
+    options: { owner?: object } = {},
+  ): Promise<void> {
+    const transcript = this.state.transcripts[key];
+    if (!transcript) throw new Error("Open the task before reacting in it.");
+    if (!shownMessageIds(transcript).has(messageId))
+      throw new Error("That message is no longer shown here.");
+    if (typeof emoji !== "string" || !emoji || emoji.length > 64)
+      throw new Error("Choose one emoji.");
+    if (this.options.readOnly) throw new Error("This host only reads; it does not react.");
+    const generation = this.generation;
+    await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
+    this.checkNotWithdrawn(options.owner);
+    if (this.selfId === null) await this.readSelf(generation);
+    let answer: RawRecord | null;
+    try {
+      answer = asRecord(
+        await this.request("session.reactions.set", {
+          sessionKey: key,
+          messageId,
+          emoji,
+          ...(remove ? { remove: true } : {}),
+        }),
+      );
+    } catch (error) {
+      this.noteMissingScope(error);
+      throw error;
+    }
+    if (generation !== this.generation || !this.tracked(key)) return;
+    this.applyReactions(key, messageId, answer?.reactions);
+  }
+
+  /** A message's reactions as the gateway now counts them, kept if the task shows the message. */
+  private applyReactions(key: string, messageId: string, summary: unknown): void {
+    const current = this.state.transcripts[key];
+    if (!current || !shownMessageIds(current).has(messageId)) return;
+    const kept = reactionsOf(summary, this.selfId);
+    this.setTranscript(key, () => {
+      const latest = this.state.transcripts[key]!;
+      const reactions = { ...latest.reactions };
+      if (kept.length > 0) reactions[messageId] = kept;
+      else delete reactions[messageId];
+      return { ...latest, reactions };
+    });
   }
 
   /**
@@ -4335,6 +4460,8 @@ export class ClawtrateClient {
     const wasConnected = this.everConnected;
     this.everConnected = true;
     this.pairingSeen = null;
+    // Each connection may act for another person: read who again before marking reactions.
+    this.selfId = null;
     // The protocol gives a boot id at most 96 characters; anything else names no start.
     const bootId = asRecord(hello.server)?.bootId;
     this.gatewayBootId =
@@ -4854,6 +4981,7 @@ export class ClawtrateClient {
       void this.backfillQuestions(key, generation);
       void this.backfillApprovals(key, generation);
       void this.readToolMap(key, generation);
+      void this.readReactions(key, generation);
       if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
     } catch (error) {
       if (stale()) return;
@@ -4959,6 +5087,15 @@ export class ClawtrateClient {
         const payload = asRecord(event.payload);
         if (payload && this.waiting.onAgent(payload, this.now())) this.publishTasks();
         this.handleAgent(event);
+        return;
+      }
+      case "session.reaction": {
+        // Someone, here or elsewhere, added or removed a reaction: the message's reactions now.
+        const payload = asRecord(event.payload);
+        const key = typeof payload?.sessionKey === "string" ? payload.sessionKey : null;
+        const messageId = typeof payload?.messageId === "string" ? payload.messageId : null;
+        if (key && messageId && this.tracked(key))
+          this.applyReactions(key, messageId, payload?.reactions);
         return;
       }
       case "users.prefs.changed": {
@@ -5487,4 +5624,32 @@ export function hostLimit(value: number | undefined, max: number, name: string):
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The gateway's message ids a transcript shows: its history items' own (F-283). */
+function shownMessageIds(transcript: Transcript): Set<string> {
+  const ids = new Set<string>();
+  for (const item of transcript.items) if (item.messageId) ids.add(item.messageId);
+  return ids;
+}
+
+/**
+ * A message's reactions as the gateway summarises them (`[{emoji, count, identities}]`), the
+ * most counted first, at most `MAX_REACTIONS_PER_MESSAGE`; `mine` when `selfId` reacted.
+ */
+function reactionsOf(summary: unknown, selfId: string | null): MessageReaction[] {
+  if (!Array.isArray(summary)) return [];
+  const out: MessageReaction[] = [];
+  for (const entry of summary) {
+    const row = asRecord(entry);
+    const emoji = row?.emoji;
+    const count = row?.count;
+    if (typeof emoji !== "string" || !emoji || emoji.length > 64) continue;
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 1) continue;
+    const identities = Array.isArray(row?.identities) ? row.identities : [];
+    const mine =
+      selfId !== null && identities.some((each: unknown) => asRecord(each)?.id === selfId);
+    out.push({ emoji, count, mine });
+  }
+  return out.sort((a, b) => b.count - a.count).slice(0, MAX_REACTIONS_PER_MESSAGE);
 }
