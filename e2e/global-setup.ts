@@ -128,7 +128,12 @@ export function startHost(instance: string, staticDir: string, dataDir: string) 
       "--data-dir",
       dataDir,
     ],
-    { cwd: ROOT, stdio: ["ignore", "pipe", "inherit"] },
+    // The host checks that its flag and the environment name the same instance.
+    {
+      cwd: ROOT,
+      stdio: ["ignore", "pipe", "inherit"],
+      env: { ...process.env, CLAWTRATE_DEV_INSTANCE: instance },
+    },
   );
   const host = gated.child;
   const url = new Promise<string>((resolve, reject) => {
@@ -161,10 +166,13 @@ export default async function globalSetup() {
   if (!/^[0-9a-f]{8}$/.test(run)) throw new Error(`CLAWTRATE_E2E_RUN must be 8 hex digits`);
   const name = `e2e-${run}`;
   const sentinel = `e2e-${run}-other`;
-  const own = [name, sentinel];
+  // The Computer tab's checks need the computer plugin: an instance of its own, unseeded.
+  const computer = `e2e-${run}-computer`;
+  const own = [name, sentinel, computer];
   // The spec's own dev-gateway calls address this run's instance.
   process.env.CLAWTRATE_DEV_INSTANCE = name;
   process.env.CLAWTRATE_E2E_SENTINEL = sentinel;
+  process.env.CLAWTRATE_E2E_COMPUTER = computer;
 
   recoverDeadRuns(RECORDS, resetInstance);
 
@@ -271,11 +279,16 @@ export default async function globalSetup() {
     process.env.CLAWTRATE_E2E_OTHERS = JSON.stringify(runningOthers([name], [sentinel]));
     // Every start is a fresh, seeded gateway.
     await startInstance(name);
-    const mine = listInstances().find((row) => row.name === name);
-    if (!mine?.gatewayRunning) throw new Error(`instance ${name} is not running`);
-    for (const port of [mine.gatewayPort, mine.providerPort]) {
-      if (port === null || FORBIDDEN_PORTS.includes(port)) {
-        throw new Error(`instance ${name} is on port ${port}, which e2e never uses`);
+    // With the computer plugin, whose Marlow and Pip have browsers of their own. Seeded: the
+    // seed gives the bots their names.
+    await startInstance(computer, "--with-plugin", "clawtrate-computer");
+    for (const instance of [name, computer]) {
+      const mine = listInstances().find((row) => row.name === instance);
+      if (!mine?.gatewayRunning) throw new Error(`instance ${instance} is not running`);
+      for (const port of [mine.gatewayPort, mine.providerPort]) {
+        if (port === null || FORBIDDEN_PORTS.includes(port)) {
+          throw new Error(`instance ${instance} is on port ${port}, which e2e never uses`);
+        }
       }
     }
 
