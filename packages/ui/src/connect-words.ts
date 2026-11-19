@@ -111,7 +111,7 @@ export function scopeWords(scope: string): string {
 
 /** The pairing screen's sentence under its title. */
 export function pairingLede(gatewayUrl: string | null): string {
-  return `${gatewayLabel(gatewayUrl)} has not seen this device before. Approve it once on the gateway's machine and ${PRODUCT_NAME} connects by itself.`;
+  return `${gatewayLabel(gatewayUrl)} requires approval for this device. Approve it on the gateway's machine and ${PRODUCT_NAME} will retry the connection.`;
 }
 
 /** The seconds until the host's next retry, after the waiting words: " in 4s", or " now". */

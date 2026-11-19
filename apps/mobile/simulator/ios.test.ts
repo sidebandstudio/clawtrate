@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLEARTEXT_WORDS, CONNECT_WORDS, PRODUCT_NAME, SLOGAN } from "@clawtrate/ui/connect-words";
+import { CLEARTEXT_WORDS, CONNECT_WORDS, pairingLede, PRODUCT_NAME, SLOGAN } from "@clawtrate/ui/connect-words";
 import { ENSEMBLE } from "@clawtrate/ui/character";
 import { CONVERSATION_WORDS } from "@clawtrate/ui/conversation-words";
 import { stampTime } from "@clawtrate/ui/format";
@@ -350,7 +350,9 @@ describe("the iOS app", () => {
       }),
     ]);
     await shoot("pairing-ended");
-    await steps("after-expiry", [tap({ id: "try-again" }), waitFor({ id: "pairing" }, 90_000)]);
+    // A new request says only that approval is needed, not that the device is new.
+    const lede = see(lit(pairingLede(gateway)));
+    await steps("after-expiry", [tap({ id: "try-again" }), waitFor({ id: "pairing" }, 90_000), lede]);
     const second = await until("a new pairing request", async () =>
       (await devices()).pending.find(
         (r) => r.displayName === "Clawtrate iPhone" && r.requestId !== first.requestId,
@@ -370,6 +372,7 @@ describe("the iOS app", () => {
       }),
       tap({ id: "try-again" }),
       waitFor({ id: "pairing" }, 90_000),
+      lede,
       waitGone({ id: "connect-foot", text: `Request ${second.requestId!.slice(0, 8)} .*` }, 30_000),
     ]);
     const third = await until("a third pairing request", async () =>
