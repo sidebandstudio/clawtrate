@@ -27,6 +27,9 @@ export type HookResult = {
   };
 };
 
+/** Every host started and not yet stopped, so a test file can make sure it stopped them all. */
+export const running = new Set<object>();
+
 /** A temporary state folder, removed by `done`. */
 export function tempState() {
   const dir = mkdtempSync(join(tmpdir(), "clawtrate-tool-rules-"));
@@ -93,6 +96,7 @@ export function load(
   };
   if (options.startService !== false) {
     for (const service of services) service.start({ gatewayEvents });
+    running.add(api);
   }
 
   async function call(method: string, params: Json = {}, deviceId = "device-A"): Promise<Answer> {
@@ -152,6 +156,9 @@ export function load(
     call,
     before,
     save,
-    stop: () => services.forEach((service) => service.stop()),
+    stop: () => {
+      services.forEach((service) => service.stop());
+      running.delete(api);
+    },
   };
 }

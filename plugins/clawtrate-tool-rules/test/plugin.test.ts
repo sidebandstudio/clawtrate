@@ -14,14 +14,27 @@ import plugin, {
   TITLE_MAX,
 } from "../index.js";
 import { RulesStore } from "../lib/store.js";
-import { tempState, load } from "./harness.ts";
+import { load, running, tempState } from "./harness.ts";
 
 const cleanups: (() => void)[] = [];
-afterEach(() => cleanups.splice(0).forEach((done) => done()));
+const started: { stop(): void }[] = [];
+afterEach(() => {
+  // Every host a test started is stopped before its folder is removed.
+  started.splice(0).forEach((h) => h.stop());
+  expect(running.size).toBe(0);
+  cleanups.splice(0).forEach((done) => done());
+});
+/** A host on a folder of its own, stopped and removed after the test. */
 function host(options: Partial<Parameters<typeof load>[0]> = {}) {
   const { dir, done } = tempState();
   cleanups.push(done);
-  return { ...load({ stateDir: dir, ...options }), stateDir: dir };
+  return { ...open({ stateDir: dir, ...options }), stateDir: dir };
+}
+/** A host on a given folder, stopped after the test. */
+function open(options: Parameters<typeof load>[0]) {
+  const h = load(options);
+  started.push(h);
+  return h;
 }
 const rulesFile = (stateDir: string) => join(stateDir, "clawtrate-tool-rules", "rules.json");
 
@@ -51,8 +64,8 @@ describe("registration", () => {
     const { dir, done } = tempState();
     cleanups.push(done);
     const slots = new Map();
-    const hooksCopy = load({ stateDir: dir, slots });
-    const methodsCopy = load({ stateDir: dir, slots, on: false });
+    const hooksCopy = open({ stateDir: dir, slots });
+    const methodsCopy = open({ stateDir: dir, slots, on: false });
     await methodsCopy.save("otto", [{ action: "never", tools: ["write"] }]);
     expect(hooksCopy.before("otto", "write", { path: "a" })?.block).toBe(true);
     expect((await methodsCopy.call("status")).payload?.hook).toMatchObject({ registered: true });
@@ -149,7 +162,7 @@ describe("a lost policy is not an empty one", () => {
       mkdirSync(join(h0.stateDir, "clawtrate-tool-rules"), { recursive: true });
       spoil(rulesFile(h0.stateDir));
       try {
-        const h = load({ stateDir: h0.stateDir });
+        const h = open({ stateDir: h0.stateDir });
         for (const [tool, params] of [
           ["read", { path: "AGENTS.md" }],
           ["web_search", { query: "x" }],
@@ -628,7 +641,7 @@ describe("status says whether rules are being enforced", () => {
     const h0 = host();
     mkdirSync(join(h0.stateDir, "clawtrate-tool-rules"), { recursive: true });
     writeFileSync(rulesFile(h0.stateDir), "{ broken");
-    const h = load({ stateDir: h0.stateDir });
+    const h = open({ stateDir: h0.stateDir });
     expect((await h.call("status")).payload).toMatchObject({
       rules: { state: "lost", reason: "the rules file is not JSON", keptCopyReadAt: null },
       enforcing: "ask-every-call",
@@ -693,7 +706,7 @@ describe("who can see a card's text", () => {
       `Asked by Clawtrate's rules plugin: "Ask when nothing else decides" is on for every bot. The call: read. The details are in Clawtrate.`,
     );
     writeFileSync(rulesFile(h.stateDir), "{ broken");
-    const h2 = load({ stateDir: h.stateDir, config: FORWARDING });
+    const h2 = open({ stateDir: h.stateDir, config: FORWARDING });
     const lost = h2.before("otto", "read", { path: "notes/x.md" })!.requireApproval!;
     expect(lost.description).not.toContain("notes/x.md");
   });
@@ -737,7 +750,7 @@ describe("thirty days means thirty days", () => {
     const h = host({ now: () => now, log: { now: () => now } });
     h.before("otto", "read", { path: "a" }, { runId: "old-run" });
     now = 31 * day;
-    load({ stateDir: h.stateDir, now: () => now, log: { now: () => now } });
+    open({ stateDir: h.stateDir, now: () => now, log: { now: () => now } });
     const file = join(h.stateDir, "clawtrate-tool-rules", "decisions.jsonl");
     expect(readFileSync(file, "utf8")).not.toContain("old-run");
   });
