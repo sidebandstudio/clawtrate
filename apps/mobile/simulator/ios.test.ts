@@ -736,8 +736,7 @@ describe("the iOS app", () => {
       tap({ id: "bot-marlow" }),
       waitFor({ id: `task-${lit(key)}` }, 30_000),
       tap({ id: `task-${lit(key)}` }),
-      waitFor({ id: "jump-to-latest", text: "Disconnected\\. Last seen .*" }, 30_000),
-      tap({ id: "jump-to-latest" }),
+      // Reopened offline, nothing is loaded; the line still says what was last seen.
       waitFor({ id: "running-text", text: "Disconnected\\. Last seen .*" }, 30_000),
       see({ id: "running-dot-off" }),
       notSee({ id: "running-dot-live" }),
