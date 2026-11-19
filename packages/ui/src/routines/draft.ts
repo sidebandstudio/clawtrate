@@ -335,6 +335,10 @@ export function nextRuns(draft: Draft, now: number): number[] {
       return [];
     }
   }
+  if (schedule.kind === "at") {
+    const at = Date.parse(schedule.at ?? "");
+    return at > now ? [at] : [];
+  }
   const probe = {
     enabled: true,
     gated: false,

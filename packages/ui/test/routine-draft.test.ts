@@ -5,6 +5,7 @@ import {
   fieldsOfDraft,
   isoAt,
   newDraft,
+  nextRuns,
   problems,
   shortestGap,
   usualZone,
@@ -93,6 +94,14 @@ describe("F-189: the draft", () => {
     });
     expect(draftOf(monthly, NOW).locked).toEqual(monthly.schedule);
     expect(fieldsOfDraft(draftOf(monthly, NOW)).schedule).toEqual(monthly.schedule);
+  });
+
+  it("previews a far-off Once schedule at the stored instant", () => {
+    const at = "2035-01-01T08:00:37.000Z";
+    const saved = routine({
+      schedule: { kind: "at", at, expr: null, tz: null, everyMs: null, name: null },
+    });
+    expect(nextRuns(draftOf(saved, NOW), NOW)).toEqual([Date.parse(at)]);
   });
 
   it("writes Once as a time with its zone's offset", () => {
