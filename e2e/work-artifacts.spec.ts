@@ -173,9 +173,9 @@ test("F-115 F-118: a file Marlow hands over is a card that opens in the pane, on
   expect(readFileSync((await download.path())!, "utf8")).toBe(REPORT_TEXT);
   // Raw: the gateway's own record, without data or address.
   await reader.getByRole("button", { name: "Raw" }).click();
-  const raw = await page.getByTestId("artifact-raw").textContent();
-  expect(raw).toContain('"id": "artifact_managed_media_');
-  expect(raw).not.toContain("mediaTicket");
+  const raw = page.getByTestId("artifact-raw");
+  await expect(raw).toContainText('"id": "artifact_managed_media_', { timeout: 30_000 });
+  await expect(raw).not.toContainText("mediaTicket");
   await closePane();
   // After a reload, from history alone.
   await page.reload();

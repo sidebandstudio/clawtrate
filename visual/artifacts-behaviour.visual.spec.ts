@@ -66,10 +66,10 @@ test.describe("cards and the pane", () => {
     await expect(page.locator(".code-view .lc").first()).toHaveText("# Borrowing e-books");
     // Raw is the record artifacts.get returns: no data, no address.
     await page.getByRole("button", { name: "Raw" }).click();
-    const raw = await page.getByTestId("artifact-raw").textContent();
-    expect(raw).toContain('"title": "borrowing-report.md"');
-    expect(raw).not.toContain('"url":');
-    expect(raw).not.toContain('"data":');
+    const raw = page.getByTestId("artifact-raw");
+    await expect(raw).toContainText('"title": "borrowing-report.md"');
+    await expect(raw).not.toContainText('"url":');
+    await expect(raw).not.toContainText('"data":');
     await page.getByRole("button", { name: "Back to this task's files" }).click();
     const sentIn = page.getByTestId("sent-in-chat");
     await expect(sentIn.getByRole("heading", { name: "Sent in chat" })).toBeVisible();
