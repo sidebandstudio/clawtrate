@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import * as protocol from "@openclaw/gateway-protocol";
 import {
   applyCronEvent,
   fieldsOf,
@@ -74,6 +75,14 @@ function engine(
   const routines = new RoutinesEngine({
     request: async (method, params) => {
       requests.push({ method, params: params as Record<string, unknown> });
+      // Every request is one the pinned 2026.10.6 schema accepts.
+      const name = `validate${method.replace(/(^|\.)(\w)/gu, (_, __, c: string) => c.toUpperCase())}Params`;
+      const validate = (
+        protocol as unknown as Record<string, ((value: unknown) => boolean) & { errors?: unknown }>
+      )[name];
+      if (!validate) throw new Error(`no schema for ${method}`);
+      if (!validate(params))
+        throw new Error(`${method} params: ${JSON.stringify(validate.errors)}`);
       const handler = handlers[method];
       if (!handler) throw new Error(`unexpected ${method}`);
       return handler(params as Record<string, unknown>);
