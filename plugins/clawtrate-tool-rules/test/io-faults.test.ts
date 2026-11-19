@@ -7,7 +7,7 @@
 // recovers, the problem said until then.
 
 import type * as fs from "node:fs";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -21,11 +21,29 @@ const io = vi.hoisted(() => ({
   renameFails: false,
   /** Run once right after the next rename: another writer replacing the file. */
   afterRename: null as null | (() => void),
+  /** Closing a temporary file fails this many more times, after it is closed. */
+  tempCloseFails: 0,
+  /** The path each open descriptor was opened on. */
+  fds: new Map<number, string>(),
 }));
 vi.mock("node:fs", async (importOriginal) => {
   const real = await importOriginal<typeof fs>();
   return {
     ...real,
+    openSync: (...args: Parameters<typeof real.openSync>) => {
+      const fd = real.openSync(...args);
+      io.fds.set(fd, String(args[0]));
+      return fd;
+    },
+    closeSync: (fd: number) => {
+      const path = io.fds.get(fd) ?? "";
+      io.fds.delete(fd);
+      real.closeSync(fd);
+      if (io.tempCloseFails > 0 && path.endsWith(".tmp")) {
+        io.tempCloseFails -= 1;
+        throw Object.assign(new Error("injected"), { code: "ENOSPC" });
+      }
+    },
     readFileSync: (...args: Parameters<typeof real.readFileSync>) => {
       if (String(args[0]) === io.path) io.reads += 1;
       if (io.failures > 0 && String(args[0]) === io.path) {
@@ -67,6 +85,7 @@ afterEach(() => {
   io.appendFails = 0;
   io.renameFails = false;
   io.afterRename = null;
+  io.tempCloseFails = 0;
   cleanups.splice(0).forEach((done) => done());
 });
 const scope = (tool: string) =>
@@ -236,5 +255,30 @@ describe("a decision record that could not be read at start", () => {
     expect(reread).toHaveLength(12);
     expect(reread.slice(0, 2).map((r) => r.id)).toEqual([b, a]);
     expect(disk(file)).not.toContain('"torn');
+  });
+});
+
+describe("a rewrite whose temporary file cannot be closed", () => {
+  it("leaves no temporary file behind, however often the idle retry fails", () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    const file = join(dir, "decisions.jsonl");
+    const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+    const log = new DecisionLog(dir, { now: () => 1 });
+    const ids = Array.from({ length: 10 }, () => log.add(fields));
+    const original = readFileSync(file, "utf8");
+    io.appendFails = 1;
+    ids.push(log.add(fields));
+    io.tempCloseFails = 2;
+    log.prune();
+    log.prune();
+    expect(log.problem).toMatch(/cannot be written \(ENOSPC\)/);
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    expect(readFileSync(file, "utf8")).toBe(original);
+    log.prune();
+    expect(log.problem).toBeNull();
+    const reread = new DecisionLog(dir, { now: () => 1 }).list({ limit: 50 }).records;
+    expect(reread.map((r) => r.id).sort()).toEqual([...ids].sort());
   });
 });

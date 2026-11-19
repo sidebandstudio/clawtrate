@@ -75,19 +75,17 @@ function writeAll(fd, bytes) {
 export function writeFileAtomic(dir, name, text) {
   const target = join(dir, name);
   const temp = join(dir, `.${name}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
-  const fd = openSync(temp, "wx", 0o600);
   try {
-    writeAll(fd, Buffer.from(text, "utf8"));
-    fsyncSync(fd);
-  } catch (error) {
-    closeSync(fd);
-    rmSync(temp, { force: true });
-    throw error;
-  }
-  closeSync(fd);
-  try {
+    const fd = openSync(temp, "wx", 0o600);
+    try {
+      writeAll(fd, Buffer.from(text, "utf8"));
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     renameSync(temp, target);
   } catch (error) {
+    // Whatever failed, closing included, the temporary file does not stay behind.
     rmSync(temp, { force: true });
     throw error;
   }
