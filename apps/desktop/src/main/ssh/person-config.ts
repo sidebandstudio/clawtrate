@@ -1,6 +1,7 @@
 // The person's SSH configuration, read as text (docs/design/setup.md, section
-// 5). Only six settings are taken from the blocks that apply to the typed
-// name: HostName, User, Port, IdentityFile, IdentitiesOnly and CertificateFile.
+// 5). Only eight settings are taken from the blocks that apply to the typed
+// name: HostName, User, Port, IdentityFile, IdentitiesOnly, CertificateFile,
+// IdentityAgent and PubkeyAuthentication.
 // A setting that could run a command, open a forward, reach the computer
 // through another one or change how its key is checked is refused by name, and
 // so is any setting this file does not know. The file is never given to `ssh`,
@@ -140,7 +141,7 @@ function refusal(category: RefusalCategory, setting: string, name: string): Conf
     ],
     unsupported: [
       `${name}'s SSH settings use ${setting}.`,
-      `Clawtrate takes only HostName, User, Port, IdentityFile, IdentitiesOnly and CertificateFile. Add a plain alias for ${name} and use that.`,
+      `Clawtrate takes only HostName, User, Port, IdentityFile, IdentitiesOnly, CertificateFile, IdentityAgent and PubkeyAuthentication. Add a plain alias for ${name} and use that.`,
     ],
     "invalid-value": [
       `${name}'s SSH settings have a ${setting} Clawtrate can't use.`,
@@ -412,9 +413,11 @@ export const DEFAULT_IDENTITIES = [
 ];
 
 /**
- * When the person's configuration names no key: OpenSSH's default key names in
- * the world's home that exist, named explicitly, so that `ssh` never adds the
- * account's own defaults. None there gives `IdentityFile none`.
+ * With no IdentityFile configured, Clawtrate looks for id_rsa, id_ecdsa,
+ * id_ecdsa_sk, id_ed25519 and id_ed25519_sk under your home and adds each
+ * existing eligible file explicitly. With no eligible file, it sets
+ * IdentityFile none. Clawtrate also checks the companion paths OpenSSH can
+ * derive from each key (`resolveTarget`).
  */
 function defaultIdentities(world: SshWorld): string[] {
   const candidates = DEFAULT_IDENTITIES.map((name) => join(world.home, ".ssh", name));
@@ -423,7 +426,7 @@ function defaultIdentities(world: SshWorld): string[] {
 }
 
 /**
- * The target for a validated destination: the six settings from the blocks
+ * The target for a validated destination: the eight settings from the blocks
  * of the person's configuration that apply to its host, or a refusal that
  * names the setting.
  */
@@ -444,6 +447,14 @@ export function resolveTarget(
   if (state.refusal) return refusal(state.refusal[0], state.refusal[1], name);
   const user = destination.user ?? found.user ?? world.localUser;
   if (!isUser(user)) return refusal("invalid-value", "User", name);
+  const identityFiles = found.identityFiles.length ? found.identityFiles : defaultIdentities(world);
+  for (const file of identityFiles) {
+    const companions = [file, `${file}.pub`];
+    if (!found.certificateFiles.length) companions.push(`${file}-cert.pub`);
+    if (companions.some((path) => resolvePersonPath(path, world) === null)) {
+      return refusal("invalid-value", "IdentityFile", name);
+    }
+  }
   return {
     ok: true,
     destination,
@@ -451,7 +462,7 @@ export function resolveTarget(
     hostName: found.hostName ?? destination.host,
     user,
     port: found.port ?? 22,
-    identityFiles: found.identityFiles.length ? found.identityFiles : defaultIdentities(world),
+    identityFiles,
     identitiesOnly: found.identitiesOnly ?? null,
     certificateFiles: found.certificateFiles,
     identityAgent: found.identityAgent ?? "world",

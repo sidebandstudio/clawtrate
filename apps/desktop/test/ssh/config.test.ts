@@ -261,6 +261,53 @@ describe("the person's SSH configuration", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")(
+    "refuses a key whose .pub or -cert.pub beside it a link leads out of the home folder",
+    () => {
+      const outside = join(root, "outside-companions");
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(join(outside, "sentinel"), "not a key\n");
+      const key = join(world.home, ".ssh", "companion");
+      writeFileSync(key, "");
+      try {
+        for (const suffix of [".pub", "-cert.pub"]) {
+          symlinkSync(join(outside, "sentinel"), key + suffix);
+          try {
+            // The key itself is an ordinary file in the home; what OpenSSH reads beside it is not.
+            expect(
+              resolveWith("Host devbox\n  IdentityFile ~/.ssh/companion\n"),
+              suffix,
+            ).toMatchObject({
+              ok: false,
+              category: "invalid-value",
+              setting: "IdentityFile",
+            });
+            // The default key names are checked the same way.
+            symlinkSync(key, join(world.home, ".ssh", "id_ed25519"));
+            symlinkSync(join(outside, "sentinel"), join(world.home, ".ssh", "id_ed25519" + suffix));
+            expect(resolveWith("Host devbox\n  HostName devbox.example\n"), suffix).toMatchObject({
+              ok: false,
+              category: "invalid-value",
+              setting: "IdentityFile",
+            });
+          } finally {
+            for (const path of [key + suffix, join(world.home, ".ssh", "id_ed25519" + suffix)]) {
+              rmSync(path, { force: true });
+            }
+            rmSync(join(world.home, ".ssh", "id_ed25519"), { force: true });
+          }
+        }
+        // With nothing beside it, the same key is taken.
+        expect(resolveWith("Host devbox\n  IdentityFile ~/.ssh/companion\n")).toMatchObject({
+          ok: true,
+          identityFiles: [key],
+        });
+      } finally {
+        rmSync(key, { force: true });
+      }
+    },
+  );
+
   it("does not follow an Include out of the home folder", () => {
     expect(resolveWith("Include /etc/ssh/ssh_config\n")).toMatchObject({
       ok: false,

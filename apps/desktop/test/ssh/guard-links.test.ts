@@ -18,6 +18,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 import { parseDestination } from "../../src/main/ssh/destination.ts";
 import { resolveTarget } from "../../src/main/ssh/person-config.ts";
+import { SshTransport } from "../../src/main/ssh/transport.ts";
 import {
   guardPaths,
   guardWorld,
@@ -121,5 +122,31 @@ describe("the guard, as the file system walks a path", () => {
   it("refuses a key path that a link leads into the folder", () => {
     writeFileSync(world.personConfig, "Host devbox\n  IdentityFile ~/to-guarded/id_ed25519\n");
     expect(() => resolveTarget(world, parseDestination("devbox")!)).toThrow(SshWorldRefused);
+  });
+
+  it("refuses a plain key whose .pub or -cert.pub beside it is a link into the folder, before any ssh starts", () => {
+    const key = join(world.home, ".ssh", "plain_key");
+    writeFileSync(key, "");
+    const started: string[][] = [];
+    const transport = new SshTransport(world, {
+      spawn: (_file, args) => {
+        started.push([...args]);
+        throw new Error("no ssh in this test");
+      },
+    });
+    try {
+      for (const suffix of [".pub", "-cert.pub"]) {
+        symlinkSync(join(guarded, "id_ed25519"), key + suffix);
+        try {
+          writeFileSync(world.personConfig, "Host devbox\n  IdentityFile ~/.ssh/plain_key\n");
+          expect(() => transport.prepareRoute("1", "devbox"), suffix).toThrow(SshWorldRefused);
+        } finally {
+          rmSync(key + suffix);
+        }
+      }
+      expect(started).toEqual([]);
+    } finally {
+      rmSync(key);
+    }
   });
 });
