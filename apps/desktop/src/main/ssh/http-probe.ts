@@ -3,7 +3,7 @@
 // credential, no cookie and no token: a GET of the gateway's health path. Only
 // whether a status line came back is read; nothing of the answer is kept.
 
-import { connect } from "node:net";
+import { connect, type Socket } from "node:net";
 
 /** What the forward's own output said about its connections, as parsed facts. */
 export type ChannelFacts = {
@@ -39,36 +39,21 @@ export function probeHttp(
     }
     let settled = false;
     let received = Buffer.alloc(0);
-    const socket = connect(localPort, "127.0.0.1");
+    let socket: Socket | null = null;
+    let again: ReturnType<typeof setTimeout> | null = null;
     const onAbort = () => finish("no-answer");
     const finish = (result: ProbeResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (again) clearTimeout(again);
       // The forward's signal outlives every probe: nothing of this one stays on it.
       signal?.removeEventListener("abort", onAbort);
-      socket.destroy();
+      socket?.destroy();
       resolve(result);
     };
     const timer = setTimeout(() => finish("no-answer"), timeoutMs);
     signal?.addEventListener("abort", onAbort, { once: true });
-    socket.on("connect", () => {
-      socket.write(
-        `GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:${gatewayPort}\r\nConnection: close\r\n\r\n`,
-      );
-    });
-    socket.on("data", (chunk: Buffer) => {
-      const part = chunk.subarray(0, MAX_READ - received.length);
-      received = Buffer.concat([received, part]);
-      const end = received.indexOf(0x0a);
-      if (end !== -1) {
-        finish(
-          STATUS_LINE.test(received.subarray(0, end).toString("latin1")) ? "http" : "no-answer",
-        );
-      } else if (received.length === MAX_READ) {
-        finish("no-answer");
-      }
-    });
     const closedWithout = () => {
       if (settled) return;
       // The forward's line about the refused channel can come just after the close.
@@ -82,7 +67,43 @@ export function probeHttp(
       };
       look();
     };
-    socket.on("error", closedWithout);
-    socket.on("close", closedWithout);
+    const attempt = () => {
+      if (settled) return;
+      const current = connect(localPort, "127.0.0.1");
+      socket = current;
+      let connected = false;
+      current.on("connect", () => {
+        connected = true;
+        current.write(
+          `GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:${gatewayPort}\r\nConnection: close\r\n\r\n`,
+        );
+      });
+      current.on("data", (chunk: Buffer) => {
+        const part = chunk.subarray(0, MAX_READ - received.length);
+        received = Buffer.concat([received, part]);
+        const end = received.indexOf(0x0a);
+        if (end !== -1) {
+          finish(
+            STATUS_LINE.test(received.subarray(0, end).toString("latin1")) ? "http" : "no-answer",
+          );
+        } else if (received.length === MAX_READ) {
+          finish("no-answer");
+        }
+      });
+      current.on("error", (error: NodeJS.ErrnoException) => {
+        if (settled) return;
+        // OpenSSH logs that it listens just before it binds the port: refused here, before any
+        // connection was made, means not bound yet, so the probe tries again until its time is up.
+        if (!connected && error.code === "ECONNREFUSED") {
+          current.removeAllListeners("close");
+          current.destroy();
+          again = setTimeout(attempt, 50);
+          return;
+        }
+        closedWithout();
+      });
+      current.on("close", closedWithout);
+    };
+    attempt();
   });
 }
