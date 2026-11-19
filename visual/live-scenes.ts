@@ -125,7 +125,8 @@ export const LIVE_VIEWS: Array<{
   {
     scene: "run-stopped-elsewhere",
     rows: "F-097",
-    ready: (page) => expect(page.getByTestId("stop-note")).toContainText("another device"),
+    ready: (page) =>
+      expect(page.getByTestId("stop-note")).toContainText("with no local Stop confirmed."),
   },
   {
     scene: "run-finished-before-stop",
