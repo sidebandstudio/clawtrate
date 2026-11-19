@@ -2637,7 +2637,7 @@ export function runsFromHistory(
   messages: unknown,
   inFlight: string | RawRecord | null,
   ctx: EngineContext,
-  options: { windowCut?: boolean } = {},
+  options: { windowCut?: boolean; busy?: boolean } = {},
 ): Run[] {
   const snapshot = typeof inFlight === "string" ? { runId: inFlight } : inFlight;
   const inFlightRunId = str(snapshot?.runId);
@@ -2843,8 +2843,22 @@ export function runsFromHistory(
     runs.set(inFlightRunId, text && !run.text ? { ...run, text } : run);
   }
 
+  // The newest run of the rows; the queued turn the gateway reports in flight is not one of them.
+  const newest = [...runs.keys()].filter((id) => id !== inFlightRunId).at(-1);
   return [...runs.values()].map((built) => {
     if (built.id === inFlightRunId) return built;
+    const lastRow = lastAssistant.get(built.id);
+    const lastStop = str(lastRow?.stopReason);
+    const endShown =
+      lastStop === "stop" ||
+      lastStop === "length" ||
+      lastStop === "aborted" ||
+      lastStop === "error" ||
+      asRecord(lastRow?.openclawAbort)?.aborted === true;
+    // The newest run, its rows stopping short of an end, while the gateway has a turn of the
+    // task in flight or queued: the gateway has not said it ended (it may wait on an approval
+    // or a question, with a steer queued behind it). It stays open until its end is said.
+    if (options.busy && built.id === newest && !endShown) return built;
     // Its end is its last row's time, not one its lifecycle reported.
     const run: Run = { ...built, endFromRows: true };
     const last = lastAssistant.get(run.id);
@@ -3060,8 +3074,20 @@ function mergedAnchor(
  * terminal event lost in a gap is recovered. Pure: the caller commits the raw
  * payloads of the steps reported in `fromHistory`, so a step and its raw
  * lookup always come from the same source.
+ *
+ * A history that only infers a run's end (`outcomeKnown: false`: rows that stop at a tool call,
+ * with the run not in flight) does not end a live run while the gateway has another turn of the
+ * task in flight or queued (`busy`): then the gateway has not said this one ended. A steer into a
+ * run waiting on an approval or a question is such a case: OpenClaw 2026.10.6 keeps that run
+ * waiting and holds the steer as a queued turn of its own, which `chat.history` reports as the
+ * run in flight. The run ends when its own end arrives, or history's rows establish it.
  */
-export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext): HistoryMerge {
+export function mergeHistoryRuns(
+  live: Run[],
+  history: Run[],
+  ctx: EngineContext,
+  busy = false,
+): HistoryMerge {
   const liveById = new Map(live.map((run) => [run.id, run]));
   const historyIds = new Set(history.map((run) => run.id));
   const fromHistory = new Set<string>();
@@ -3091,7 +3117,8 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
     };
     // An end this client only inferred gives way to the end history establishes.
     if (isTerminal(fromRun.state) && fromRun.outcomeKnown) run = reopenInferred(run);
-    if (!isTerminal(run.state) && isTerminal(fromRun.state)) {
+    const inferredOnly = !fromRun.outcomeKnown && busy;
+    if (!isTerminal(run.state) && isTerminal(fromRun.state) && !inferredOnly) {
       run = {
         ...finishRun(
           run,
@@ -3117,7 +3144,8 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
  * Runs that were active before a reload and that the gateway no longer has in
  * flight, with no transcript row, have ended without saying how. They settle
  * (`stopped` if a stop was pending, otherwise `completed`) with
- * `outcomeKnown: false`, so none waits forever.
+ * `outcomeKnown: false`, so none waits forever; but not while the gateway has a turn of the
+ * task in flight or queued (`busy`), since then it has not said that nothing runs.
  */
 export function settleVanishedRuns(
   runs: Run[],
@@ -3125,9 +3153,11 @@ export function settleVanishedRuns(
   historyRunIds: ReadonlySet<string>,
   inFlightRunId: string | null,
   ctx: EngineContext,
+  busy = false,
 ): Run[] {
   return runs.map((run) => {
     if (!activeBefore.has(run.id) || isTerminal(run.state) || run.state === "queued") return run;
+    if (busy && run.id !== inFlightRunId && !historyRunIds.has(run.id)) return run;
     if (historyRunIds.has(run.id) || run.id === inFlightRunId) return run;
     const settled = finishRun(run, run.state === "stopping" ? "stopped" : "completed", ctx);
     return { ...settled, outcomeKnown: false };

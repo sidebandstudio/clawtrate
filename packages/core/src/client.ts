@@ -5126,14 +5126,19 @@ export class ClawtrateClient {
       const ctx = this.context(key);
       // History is built aside; only the steps the merge takes from it bring their raw payloads.
       const scratch = new RawTable();
+      // The gateway has a turn of this task in flight or queued: a run history only infers to
+      // have ended is not ended by this read.
+      const pendingInputs = asRecord(history?.pendingInputs)?.items;
+      const busy =
+        inFlightId !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
       const fromHistory = runsFromHistory(
         messages,
         inFlight,
         { ...ctx, raw: scratch },
-        { windowCut: history?.hasMore === true },
+        { windowCut: history?.hasMore === true, busy },
       );
       const current = this.state.transcripts[key] ?? this.emptyTranscript(key);
-      const merge = mergeHistoryRuns(current.runs, fromHistory, ctx);
+      const merge = mergeHistoryRuns(current.runs, fromHistory, ctx, busy);
       for (const stepId of merge.fromHistory) {
         const payload = scratch.get(key, stepId);
         if (payload) this.raw.set(key, stepId, payload);
@@ -5145,7 +5150,7 @@ export class ClawtrateClient {
           .map((message) => message.id),
       );
       const runs = settleUnboundStops(
-        settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx),
+        settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx, busy),
         inFlightId,
         historyIds,
         awaitingAnswer,
