@@ -13,6 +13,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
@@ -44,6 +45,25 @@ export function keygen(path: string, type: "ed25519" | "ecdsa" = "ed25519"): voi
     env: testEnv(),
     stdio: "ignore",
   });
+}
+
+/** Whether this account can make symbolic links, to a folder and to a file, and why not. */
+export function symlinkSupport(
+  make: typeof symlinkSync = symlinkSync,
+): { ok: true } | { ok: false; reason: string } {
+  const dir = tempDir("clawtrate-links-check-");
+  try {
+    mkdirSync(join(dir, "folder"));
+    writeFileSync(join(dir, "file"), "");
+    make(join(dir, "folder"), join(dir, "to-folder"), "dir");
+    make(join(dir, "file"), join(dir, "to-file"), "file");
+    return { ok: true };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code ?? "an error";
+    return { ok: false, reason: `this account can't make symbolic links (${code})` };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** Whether these tests can start an `sshd` of their own here, and why not. */

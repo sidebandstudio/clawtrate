@@ -25,41 +25,58 @@ import {
   type SshWorld,
   SshWorldRefused,
 } from "../../src/main/ssh/world.ts";
-import { tempDir, testEnv } from "./harness.ts";
+import { symlinkSupport, tempDir, testEnv } from "./harness.ts";
 
 let root: string;
 let guarded: string;
 let world: SshWorld;
 let toNested: string;
 
-beforeAll(() => {
-  root = tempDir("clawtrate-guard-links-");
-  account.home = join(root, "account");
-  guarded = join(account.home, ".ssh");
-  mkdirSync(join(guarded, "nested"), { recursive: true });
-  writeFileSync(join(guarded, "config"), "Host devbox\n  Port 2222\n");
-  writeFileSync(join(guarded, "id_ed25519"), "not a key\n");
-  const home = join(root, "home");
-  mkdirSync(join(home, ".ssh"), { recursive: true });
-  toNested = join(home, "to-nested");
-  symlinkSync(join(guarded, "nested"), toNested, "dir");
-  symlinkSync(guarded, join(home, "to-guarded"), "dir");
-  world = {
-    home,
-    personConfig: join(home, ".ssh", "config"),
-    personKnownHosts: join(home, ".ssh", "known_hosts"),
-    ssh: "/usr/bin/ssh",
-    appDir: join(root, "app"),
-    localUser: "you",
-    agent: "none",
-    platform: process.platform,
-    env: testEnv(),
+it("knows when this account can't make symbolic links, and says why", () => {
+  expect(symlinkSupport()).toEqual({ ok: true });
+  const refused = (): never => {
+    throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
   };
+  expect(symlinkSupport(refused)).toEqual({
+    ok: false,
+    reason: "this account can't make symbolic links (EPERM)",
+  });
 });
 
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+// On Windows an account may make symbolic links only with Developer Mode or the right privilege.
+const links = symlinkSupport();
+const title = links.ok
+  ? "the guard, as the file system walks a path"
+  : `the guard, as the file system walks a path (skipped: ${links.reason})`;
 
-describe("the guard, as the file system walks a path", () => {
+describe.skipIf(!links.ok)(title, () => {
+  beforeAll(() => {
+    root = tempDir("clawtrate-guard-links-");
+    account.home = join(root, "account");
+    guarded = join(account.home, ".ssh");
+    mkdirSync(join(guarded, "nested"), { recursive: true });
+    writeFileSync(join(guarded, "config"), "Host devbox\n  Port 2222\n");
+    writeFileSync(join(guarded, "id_ed25519"), "not a key\n");
+    const home = join(root, "home");
+    mkdirSync(join(home, ".ssh"), { recursive: true });
+    toNested = join(home, "to-nested");
+    symlinkSync(join(guarded, "nested"), toNested, "dir");
+    symlinkSync(guarded, join(home, "to-guarded"), "dir");
+    world = {
+      home,
+      personConfig: join(home, ".ssh", "config"),
+      personKnownHosts: join(home, ".ssh", "known_hosts"),
+      ssh: "/usr/bin/ssh",
+      appDir: join(root, "app"),
+      localUser: "you",
+      agent: "none",
+      platform: process.platform,
+      env: testEnv(),
+    };
+  });
+
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
   it("refuses a link into the folder, and a `..` taken from where a link led", () => {
     const check = (path: string) => () => guardPaths([path], guarded, process.platform);
     expect(check(join(toNested, "config"))).toThrow(SshWorldRefused);
