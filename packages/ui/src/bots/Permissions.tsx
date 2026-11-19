@@ -57,6 +57,8 @@ type Read =
   | { status: "error"; view: BotPermissions | null; error: string };
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/** An error's words inside a sentence of the page's: without their own full stop. */
+const unstopped = (text: string) => text.replace(/\.+$/, "");
 
 /** One bot's permissions, read while `shown`: on opening, on each new connection and every 60 s. */
 export function usePermissions(botId: string, shown: boolean, connection: ConnectionState) {
@@ -795,7 +797,7 @@ function LinePage({
       else if (result.outcome === "unconfirmed") {
         announce("Couldn't be confirmed");
         setNote({
-          text: `Sent, but whether it was saved couldn't be confirmed: ${result.error ?? "the gateway's answer was lost"}. ${result.view ? "This shows what the gateway has now." : "Reading what the gateway has now failed too."}`,
+          text: `Sent, but whether it was saved couldn't be confirmed: ${unstopped(result.error ?? "the gateway's answer was lost")}. ${result.view ? "This shows what the gateway has now." : "Reading what the gateway has now failed too."}`,
           tone: "warn",
         });
       } else if (result.outcome === "not-shown")
@@ -806,7 +808,7 @@ function LinePage({
       else {
         announce("Couldn't save");
         setNote({
-          text: `Couldn't save: ${result.error ?? "the gateway refused it"}. ${result.view ? "This shows what the gateway has now." : "Reading what the gateway has now failed too."}`,
+          text: `Couldn't save: ${unstopped(result.error ?? "the gateway refused it")}. ${result.view ? "This shows what the gateway has now." : "Reading what the gateway has now failed too."}`,
           tone: "danger",
         });
       }
