@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   ActiveRunError,
-  ARCHIVE_STOP_WAIT_MS,
   archiveParams,
   archiveTask,
   archivedListParams,
@@ -93,8 +92,6 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
   let written = false;
   let mainMade = false;
   let mark = "idle";
-  let latest: string | null = null;
-  let end: "archive" | "other" | null = null;
   const ctx: TaskActionContext = {
     request: async (method, raw) => {
       const params = raw as Record<string, unknown>;
@@ -150,8 +147,6 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
       clock += ms;
     },
     runMark: () => mark,
-    latestRunId: () => latest,
-    runEnd: (_, runId) => (runId === latest ? end : null),
     // By default the engine follows no run of the task.
     stopRuns: async () => 0,
     runsActive: () => false,
@@ -160,14 +155,10 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
     ctx,
     calls,
     wrote: () => written,
-    /** A run starts: the mark moves and it is the task's latest run. */
+    /** A run starts: the mark moves. */
     setMark: (next: string) => {
       mark = next;
-      latest = next;
-      end = null;
     },
-    /** The latest run's own end, as its end event names it. */
-    end: (how: "archive" | "other") => (end = how),
   };
 }
 
@@ -278,63 +269,32 @@ describe("the rail's task actions", () => {
     expect(calls.map((call) => call.method)).toEqual(["sessions.describe", "sessions.patch"]);
   });
 
-  it("a run that starts while the archive request is out, and whose own end says it was stopped, is reported", async () => {
+  it("F-277: Archive never says it stopped a run, even when a run starts during the patch and an end naming the archive arrives later", async () => {
     const gateway = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: false } });
+    const ends = new Map<string, "archive" | "other">();
     const request = gateway.ctx.request;
     gateway.ctx.request = async (method, params) => {
       const answer = await request(method, params);
-      // Another device's run starts as the patch travels; the gateway's archive drains it.
-      if (method === "sessions.patch") gateway.setMark("run-2");
+      // Another device's run starts as the patch travels; an earlier one ends for another reason.
+      if (method === "sessions.patch") {
+        gateway.setMark("run-2");
+        ends.set("run-1", "other");
+      }
       return answer;
     };
-    const sleep = gateway.ctx.sleep;
-    let polls = 0;
-    gateway.ctx.sleep = async (ms) => {
-      await sleep(ms);
-      // The run's end event, naming the archive as its stop, arrives just after the answer.
-      if ((polls += 1) === 2) gateway.end("archive");
-    };
-    expect(await archiveTask(gateway.ctx, KEY, { stop: false })).toEqual({ stoppedRun: true });
-  });
-
-  it("F-277: a run that starts meanwhile and is stopped for another reason is not said to have been stopped by the archive", async () => {
-    const gateway = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: false } });
-    const request = gateway.ctx.request;
-    gateway.ctx.request = async (method, params) => {
-      const answer = await request(method, params);
-      if (method === "sessions.patch") gateway.setMark("run-2");
-      return answer;
-    };
-    const sleep = gateway.ctx.sleep;
-    let polls = 0;
-    gateway.ctx.sleep = async (ms) => {
-      await sleep(ms);
-      // Another device's Stop ends it: a stop, but not the archive's (`stopReason: "rpc"`).
-      if ((polls += 1) === 2) gateway.end("other");
+    let slept = 0;
+    gateway.ctx.sleep = async () => {
+      slept += 1;
     };
     expect(await archiveTask(gateway.ctx, KEY, { stop: false })).toEqual({ stoppedRun: false });
-  });
-
-  it("F-277: an earlier run's stop, seen with no run started meanwhile, is not reported", async () => {
-    const gateway = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: false } });
-    gateway.setMark("run-1");
-    gateway.end("archive");
-    const started = gateway.ctx.now();
-    expect(await archiveTask(gateway.ctx, KEY, { stop: false })).toEqual({ stoppedRun: false });
-    expect(gateway.ctx.now()).toBe(started);
-  });
-
-  it("a run that starts while the archive request is out but is not seen to stop is not reported, after a bounded wait", async () => {
-    const gateway = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: false } });
-    const request = gateway.ctx.request;
-    gateway.ctx.request = async (method, params) => {
-      const answer = await request(method, params);
-      if (method === "sessions.patch") gateway.setMark("run-2");
-      return answer;
-    };
-    const started = gateway.ctx.now();
-    expect(await archiveTask(gateway.ctx, KEY, { stop: false })).toEqual({ stoppedRun: false });
-    expect(gateway.ctx.now() - started).toBeGreaterThanOrEqual(ARCHIVE_STOP_WAIT_MS);
+    // The second run's end names the archive, after the answer: the archive reply carried no
+    // receipt for this click, so nothing is attributed to it, and nothing waited for it.
+    ends.set("run-2", "archive");
+    expect(slept).toBe(0);
+    expect(gateway.calls.map((call) => call.method)).toEqual([
+      "sessions.describe",
+      "sessions.patch",
+    ]);
   });
 
   it("F-277: a task whose run is active is not archived without Stop, and nothing is asked of it", async () => {
@@ -538,8 +498,6 @@ describe("the rail's task actions", () => {
       now: () => 0,
       sleep: async () => {},
       runMark: () => "",
-      latestRunId: () => null,
-      runEnd: () => null,
       stopRuns: async () => 0,
       runsActive: () => false,
     };

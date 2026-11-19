@@ -106,17 +106,7 @@ export class WaitingIndex {
   /** Session key to its markers by id, in the order tasks began waiting. */
   private readonly sessions = new Map<string, Map<string, Marker>>();
   /** Each task's latest run as the events report it: its id, when, and whether it was stopped. */
-  private readonly runs = new Map<
-    string,
-    {
-      runId: string;
-      at: number;
-      stopped: boolean;
-      /** Whether its end was seen, and whether that end named the gateway's archive as the stop. */
-      ended: boolean;
-      byArchive: boolean;
-    }
-  >();
+  private readonly runs = new Map<string, { runId: string; at: number; stopped: boolean }>();
   /** Tasks whose runs the engine holds, as those runs describe them; they win over the events. */
   private readonly held = new Map<string, HeldTask>();
 
@@ -163,13 +153,7 @@ export class WaitingIndex {
         const latest = this.runs.get(key);
         if (latest?.runId === runId) return false;
         this.runs.delete(key);
-        this.runs.set(key, {
-          runId,
-          at: ts,
-          stopped: false,
-          ended: false,
-          byArchive: false,
-        });
+        this.runs.set(key, { runId, at: ts, stopped: false });
         cap(this.runs, MAX_WAITING_SESSIONS);
         return latest?.stopped === true;
       }
@@ -200,14 +184,7 @@ export class WaitingIndex {
         const reason = classifyLifecycleTerminal(data.phase, data);
         const stopped = reason === "aborted" || reason === "cancelled";
         this.runs.delete(key);
-        this.runs.set(key, {
-          runId,
-          at: ts,
-          stopped,
-          ended: true,
-          // The gateway's archive drains the task's runs as an abort named for it.
-          byArchive: data.stopReason === "archive" && (stopped || data.aborted === true),
-        });
+        this.runs.set(key, { runId, at: ts, stopped });
         cap(this.runs, MAX_WAITING_SESSIONS);
         return changed || stopped || latest?.stopped === true;
       }
@@ -325,18 +302,6 @@ export class WaitingIndex {
       if (!first || marker.since < first.since) first = marker;
     }
     return first && { kind: first.kind, since: first.since };
-  }
-
-  /**
-   * How a run of the task ended, on the evidence of that run's own end event:
-   * "archive" when the gateway stopped it for an archive (`stopReason: "archive"`),
-   * "other" for any other end, null while it runs or when it is not the task's
-   * latest run.
-   */
-  runEnd(key: string, runId: string): "archive" | "other" | null {
-    const latest = this.runs.get(key);
-    if (latest?.runId !== runId || !latest.ended) return null;
-    return latest.byArchive ? "archive" : "other";
   }
 
   /** The latest run the events reported for a task, by id; null when none was seen. */

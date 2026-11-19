@@ -614,25 +614,19 @@ export function Rail({
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
     const act = async (stop: boolean) => {
-      const { stoppedRun } = await bridge.invoke({ type: "archiveTask", key: task.key, stop });
+      await bridge.invoke({ type: "archiveTask", key: task.key, stop });
       setAnnouncement(`Archived ${task.title}.`);
-      // The gateway's archive ends anything running in the task: a run that had just started,
-      // seen to end as stopped on its own end event, is said here, with the way back.
-      if (stoppedRun)
-        runner.tell({
-          tone: "info",
-          text: "Archived. A run that had just started was stopped.",
-          action: {
-            label: "Restore",
-            onSelect: () => restore({ key: task.key, title: task.title, botId: bot.id }),
-          },
-        });
       await afterRemoval(bot, task, remaining, next);
     };
     const askStop = () =>
       setDialog({
         title: `Stop and archive “${task.title}”?`,
-        body: <p>{bot.name} is still working on this task. Archiving it stops its run first.</p>,
+        body: (
+          <p>
+            {bot.name} is still working on this task. Clawtrate will ask the gateway to stop the run
+            before archiving.
+          </p>
+        ),
         confirm: { label: "Stop and archive" },
         onConfirm: () => act(true),
         returnTo: trigger,

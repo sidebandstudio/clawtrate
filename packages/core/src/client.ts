@@ -5209,8 +5209,6 @@ export class ClawtrateClient {
       },
       now: () => this.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      latestRunId: (key) => this.waiting.latestRunId(key),
-      runEnd: (key, runId) => this.waiting.runEnd(key, runId),
       stopRuns: async (key) => {
         const runs = this.state.transcripts[key]?.runs ?? [];
         await Promise.all(

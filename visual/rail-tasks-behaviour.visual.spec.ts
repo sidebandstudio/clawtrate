@@ -269,7 +269,7 @@ test("Archive: a task that starts working as Archive goes out gets the Stop and 
   await expect(taskRow(page, "Certificate renewal")).toHaveCount(0);
 });
 
-test("Archive: when the archive stopped a run that had just started, the notice says so, with Restore", async ({
+test("Archive: when a run had just started as the archive went out, it says Archived and offers Restore in the Archived group, and claims no stop", async ({
   page,
 }) => {
   await openFixture(page, `scene=rail-write&${OTTO}`, "light");
@@ -278,10 +278,14 @@ test("Archive: when the archive stopped a run that had just started, the notice 
   );
   await taskMenu(page, "Certificate renewal");
   await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
-  const notice = page.getByTestId("rail-notice");
-  await expect(notice).toContainText("Archived. A run that had just started was stopped.");
-  await expect(notice).toHaveAttribute("role", "status");
-  await notice.getByRole("button", { name: "Restore" }).click();
+  await expect(
+    page.getByRole("status").filter({ hasText: /^Archived Certificate renewal/ }),
+  ).toHaveCount(1);
+  await expect(page.getByTestId("rail-notice")).toHaveCount(0);
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
+  const archived = page.getByRole("list", { name: "Otto's archived tasks" });
+  await archived.getByTestId("archived-task").filter({ hasText: "Certificate renewal" }).click();
+  await page.getByRole("menuitem", { name: "Restore" }).click();
   await expect(taskRow(page, "Certificate renewal")).toBeVisible();
   // An archive that met no run says nothing more.
   await taskMenu(page, "Router firmware");
@@ -498,7 +502,9 @@ test("F-277: a task whose run is active asks Stop and archive or Cancel; Cancel 
   await taskMenu(page, "Rotate the logs");
   await page.getByRole("menuitem", { name: "Stop and archive…" }).click();
   const dialog = page.getByRole("dialog", { name: /Stop and archive/ });
-  await expect(dialog).toContainText("Archiving it stops its run first.");
+  await expect(dialog).toContainText(
+    "Clawtrate will ask the gateway to stop the run before archiving.",
+  );
   await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
