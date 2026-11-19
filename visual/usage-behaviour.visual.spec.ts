@@ -366,8 +366,10 @@ test("F-237: a period whose figures couldn't be read says so, and never shows an
   await expect(page.getByTestId("usage-total")).toHaveText("1,640,000 tokens");
   await usage(page).getByRole("radio", { name: "Today" }).click();
   await expect(page.getByTestId("usage-error")).toContainText("Couldn't load Otto's usage");
+  // None of the week's figures stand in for today's (the weekly budget's meter keeps its own).
   await expect(page.getByTestId("usage-total")).toHaveCount(0);
-  await expect(usage(page)).not.toContainText("1,640,000");
+  await expect(page.getByTestId("usage-tokens")).toHaveCount(0);
+  await expect(page.getByTestId("usage-source")).toHaveCount(0);
   // Back to This week: its own figures again.
   await usage(page).getByRole("radio", { name: "This week" }).click();
   await expect(page.getByTestId("usage-total")).toHaveText("1,640,000 tokens");
