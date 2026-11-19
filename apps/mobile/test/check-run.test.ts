@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   deviceName,
   instanceName,
+  maestroEnv,
   newRun,
   ownsDevice,
   readRecord,
@@ -65,5 +66,15 @@ describe("what the Simulator check touches", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps the driver's update check and error reports on a closed loopback port", () => {
+    expect(maestroEnv(1)).toEqual({
+      MAESTRO_CLI_NO_ANALYTICS: "1",
+      MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: "true",
+      MAESTRO_DISABLE_UPDATE_CHECK: "true",
+      MAESTRO_API_URL: "http://127.0.0.1:1",
+      MAESTRO_DRIVER_STARTUP_TIMEOUT: "600000",
+    });
   });
 });

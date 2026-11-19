@@ -92,3 +92,19 @@ export function runnerAlive(
 ): boolean {
   return startOf(record.pid) === record.started;
 }
+
+/**
+ * Maestro 2.12.1 asks its servers for a newer version and can send them an
+ * error report, whatever its analytics setting says. For the checks it is
+ * pointed at a loopback port nothing listens on, so neither leaves this machine.
+ */
+export function maestroEnv(closedPort: number): Record<string, string> {
+  return {
+    MAESTRO_CLI_NO_ANALYTICS: "1",
+    MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: "true",
+    MAESTRO_DISABLE_UPDATE_CHECK: "true",
+    MAESTRO_API_URL: `http://127.0.0.1:${closedPort}`,
+    // On a loaded machine its runner can take many minutes to start on the device.
+    MAESTRO_DRIVER_STARTUP_TIMEOUT: "600000",
+  };
+}

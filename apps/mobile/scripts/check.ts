@@ -14,6 +14,7 @@
 
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readdirSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readDevConnection } from "../../desktop/src/host/runtime.ts";
@@ -21,6 +22,7 @@ import { APP_PATH, BUILD_DIR, BUNDLE_ID } from "./build.ts";
 import {
   deviceName,
   instanceName,
+  maestroEnv,
   newRun,
   ownsDevice,
   readRecord,
@@ -104,6 +106,15 @@ function devGateway(...args: string[]): number {
       stdio: "inherit",
     }).status ?? 1
   );
+}
+
+/** A loopback port nothing listens on, for what must not reach the network. */
+async function closedPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
 }
 
 /**
@@ -228,9 +239,8 @@ async function main(): Promise<number> {
         detached: true,
         env: {
           ...env,
+          ...maestroEnv(await closedPort()),
           JAVA_HOME: javaHome,
-          MAESTRO_CLI_NO_ANALYTICS: "1",
-          MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: "true",
           CLAWTRATE_IOS_MAESTRO: maestro,
           CLAWTRATE_IOS_DEVICE: record.device,
           CLAWTRATE_IOS_BUNDLE: BUNDLE_ID,
