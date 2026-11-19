@@ -364,6 +364,7 @@ export function createToolRules(api, options = {}) {
     try {
       store.write(after);
     } catch (error) {
+      if (error instanceof RuleError) throw error;
       throw new RequestError(
         "UNAVAILABLE",
         "store_not_written",

@@ -31,8 +31,8 @@ export const STORE_DIR = "clawtrate-tool-rules";
 export const RULES_FILE = "rules.json";
 export const DECISIONS_FILE = "decisions.jsonl";
 const FORMAT = "clawtrate-tool-rules";
-/** The largest rules file read; a full store of every scope is well under it. */
-const MAX_RULES_BYTES = 8 * 1024 * 1024;
+/** The largest rules file read, and so the largest written. */
+export const MAX_RULES_BYTES = 8 * 1024 * 1024;
 
 /** Kept this long, and at most this many, newest first. */
 export const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -174,11 +174,29 @@ export class RulesStore {
     return this.state.problem;
   }
 
-  /** Write `scopes` as the whole store, and take it as read. */
+  /**
+   * Write `scopes` as the whole store, and take it as read. A store the
+   * reader would refuse is not written: a RuleError, and nothing changes on
+   * disk or in memory.
+   */
   write(scopes) {
+    const text = `${JSON.stringify(serializeRules(scopes), null, 2)}\n`;
+    const size = Buffer.byteLength(text, "utf8");
+    if (size > MAX_RULES_BYTES) {
+      throw new RuleError(
+        "store_too_large",
+        `the rules would take ${size} bytes, more than the ${MAX_RULES_BYTES} the plugin reads; nothing was saved`,
+        { limit: MAX_RULES_BYTES, size },
+      );
+    }
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-    writeFileAtomic(this.dir, RULES_FILE, `${JSON.stringify(serializeRules(scopes), null, 2)}\n`);
-    this.seen = statKey(statOrNull(this.path));
+    writeFileAtomic(this.dir, RULES_FILE, text);
+    // Written; if the file cannot be looked at now, the next read looks again.
+    try {
+      this.seen = statKey(statOrNull(this.path));
+    } catch {
+      this.seen = undefined;
+    }
     this.state = { scopes, problem: null };
   }
 }

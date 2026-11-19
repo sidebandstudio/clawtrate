@@ -13,6 +13,7 @@ import plugin, {
   PLUGIN_VERSION,
   TITLE_MAX,
 } from "../index.js";
+import { RulesStore } from "../lib/store.js";
 import { tempState, load } from "./harness.ts";
 
 const cleanups: (() => void)[] = [];
@@ -406,4 +407,42 @@ describe("what a bot must be denied", () => {
       "clawtrate-tool-rules: Bot otto may run commands on the gateway's machine outside a sandbox, as the gateway's user, which can edit the gateway's config and the rules plugin's store, so Clawtrate's rules are advice for it. Deny it exec and process, or run its commands on another machine or in a sandbox.",
     ]);
   });
+});
+
+describe("a save the reader cannot reopen", () => {
+  it("is refused whole, and every accepted save reads back the same in a fresh process", async () => {
+    const h = host();
+    const note = "n".repeat(1000);
+    const tools = Array.from(
+      { length: 16 },
+      (_, i) => `tool_${String(i).padStart(2, "0")}_${"t".repeat(120)}`,
+    );
+    const full = (action: string, n: number) =>
+      Array.from({ length: n }, () => ({ action, tools, note }));
+    const rules = [...full("allow", 20), ...full("ask", 20), ...full("never", 50)];
+    let refused: Awaited<ReturnType<typeof h.call>> | null = null;
+    for (let i = 0; i < 64 && !refused; i += 1) {
+      const before = i === 0 ? "" : readFileSync(rulesFile(h.stateDir), "utf8");
+      const answer = await h.save(`bot${i}`, rules);
+      if (!answer.ok) {
+        refused = answer;
+        expect(i).toBeGreaterThan(0);
+        expect(readFileSync(rulesFile(h.stateDir), "utf8")).toBe(before);
+        break;
+      }
+      // A fresh process reads exactly what the plugin answers with.
+      const fresh = new RulesStore(join(h.stateDir, "clawtrate-tool-rules"));
+      expect(Object.fromEntries(fresh.scopes() ?? [])).toEqual(
+        (await h.call("get")).payload!.scopes,
+      );
+    }
+    expect(refused?.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { reason: "store_too_large", limit: 8 * 1024 * 1024 },
+    });
+    expect(refused?.error?.details?.size).toBeGreaterThan(8 * 1024 * 1024);
+    // The rules in memory are the ones last saved, and still read back.
+    const fresh = new RulesStore(join(h.stateDir, "clawtrate-tool-rules"));
+    expect(Object.fromEntries(fresh.scopes() ?? [])).toEqual((await h.call("get")).payload!.scopes);
+  }, 60_000);
 });
