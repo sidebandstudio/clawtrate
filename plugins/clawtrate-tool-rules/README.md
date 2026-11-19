@@ -42,7 +42,7 @@ With the plugin:
 A rule of this plugin holds only against a bot that cannot change the gateway or the plugin's store. Deny each bot:
 
 1. **The `gateway` and `plugins` tools.** The `gateway` tool reads the gateway's settings and can update and restart the gateway, and the `plugins` tool manages plugins, so a bot with either may be able to turn this plugin off, replace it or remove it.
-2. **Commands on the gateway's machine outside a sandbox** (`exec` and `process`). A command runs as the gateway's user and can edit the gateway's settings and this plugin's files. Deny both tools to the bot, set its command policy to `deny`, or run its commands on another machine (`tools.exec.host: "node"`) or in a sandbox.
+2. **Commands on the gateway's machine outside a sandbox** (`exec` and `process`). A command runs as the gateway's user and can edit the gateway's settings and this plugin's files. Deny both tools to the bot, set its command policy to `deny`, or run its commands on another machine (`tools.exec.host: "node"`) or in a sandbox, with `tools.exec.host` not set to `"gateway"` and elevated exec closed for the bot (below): a sandboxed bot whose host is the gateway's machine runs its commands there.
 3. **Writing files outside its workspace.** The store is in the gateway's state folder. Keep `tools.fs.workspaceOnly: true`, or deny `write`, `edit` and `apply_patch`.
 
 **What the plugin checks.** When it starts, it reads the gateway's settings and writes one warning to the gateway's log for each bot and each of the three it cannot rule out, for example `clawtrate-tool-rules: Bot otto may run commands on the gateway's machine outside a sandbox, …, so Clawtrate's rules are advice for it.` The check is conservative and reads the settings as the gateway does:
