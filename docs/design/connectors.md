@@ -348,15 +348,27 @@ Under the steps: "Or sign in from Settings on the gateway's own web page." The p
 
 There is no Client ID and no Client Secret: the gateway has no field for either and refuses them (R§5). OpenClaw registers itself with the server when it signs in.
 
-**"Add to gateway"** writes `config.patch` on `mcp.servers.<name>` with `{url, transport: "streamable-http", headers?, auth?, oauth?}`, then reads `config.get` back.
+**The write.** Every write to a server entry follows one contract (R§5):
 
-| The write           | The section shows                                                                                                                                                                                        |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Accepted, read back | "**Added notes-work.** The gateway lists it. Its tools reach bots from their next run, unless a bot's settings deny them." and "Open notes-work". With "Sign in with OAuth": "Sign in" as the next step. |
-| Refused             | "**Couldn't add notes-work:**" and each of the gateway's issues as given ("mcp.servers.notes-work.url: Expected http:// or https:// URL"), the field it names marked. Nothing saved.                     |
-| No answer           | "Checking what the gateway has…", then the read-back                                                                                                                                                     |
+1. **The revision reviewed.** When the form opens (and when "Add another account" fills it in), Clawtrate reads `config.get` and keeps its `hash`. That read is also where a name already on the gateway is found: "There's already a server named notes-work."
+2. **The patch.** `config.patch` (admin) with `raw: JSON.stringify({mcp: {servers: {[name]: entry}}})` and `baseHash` set to that `hash`, never a hash read later. The entry is exactly:
 
-Whether the server answers is not known at this point; the result says only what the read-back shows.
+   | Kind                               | `entry`                                                                            |
+   | ---------------------------------- | ---------------------------------------------------------------------------------- |
+   | Remote HTTPS, Sign-in "None"       | `{url, transport: "streamable-http", headers?}`                                    |
+   | Remote HTTPS, "Sign in with OAuth" | `{url, transport: "streamable-http", headers?, auth: "oauth"}`                     |
+   | Command (section 13)               | `{command, args, cwd?}`, with `args` always an array, `[]` when there are none     |
+   | Removal (section 14)               | `null`, with `replacePaths: ["mcp.servers.<name>.args"]` when the entry has `args` |
+
+3. **A changed revision.** When the gateway answers that its settings changed since that read ("config changed since last load"), nothing is sent again with a newer hash: "The gateway's settings changed. Review the current entry before trying again." The form reads `config.get` again and shows what is there now. An entry of the same name made elsewhere in the meantime is a conflict, never overwritten: "There's already a server named notes-work on the gateway."
+4. **The read-back.** After an accepted write, after a refusal and after no answer, Clawtrate reads `config.get` and compares the fields the person reviewed: the address, the transport, `auth` and the header names (remote), or the command, every argument and the working folder (command). Header values cannot be compared: the gateway hides them (`__OPENCLAW_REDACTED__`), so their names are the most that can be verified.
+
+| The read-back                                                      | The section shows                                                                                                                                                                    |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The entry, with every reviewed field as reviewed                   | "**Added notes-work.**" (section 12's result; words of section 7's rule on what a listing proves) and "Open notes-work". With "Sign in with OAuth": "Sign in" as the next step.      |
+| No such entry, after a refusal                                     | "**Couldn't add notes-work:**" and each of the gateway's issues as given ("mcp.servers.notes-work.url: Expected http:// or https:// URL"), the field it names marked. Nothing saved. |
+| No such entry, after no answer                                     | "**notes-work wasn't added.**" with "Try again", which starts again from a new read                                                                                                  |
+| An entry that differs from what was reviewed, or a read that fails | "**Couldn't confirm the change.**" and what the read showed, with "Check again"                                                                                                      |
 
 ## 13. Adding a server started by a command
 
@@ -383,7 +395,7 @@ Under the fields: "The gateway runs this program on its own machine, as the user
 
 The command and every argument are shown exactly as they will be saved, one per line, in mono, never shortened. The machine is the gateway's address as this device knows it, or "the gateway's machine" when that is all it knows.
 
-"Run it on the gateway" writes and reads back as section 12. The read-back shows the command and arguments as `config.get` returns them, and the result says: "**Added search-index.** The gateway will run it at a bot's next run." A failure to start (a missing program) shows on the server's page after that run, as the gateway reported it ("spawn … ENOENT").
+"Run it on the gateway" writes and reads back by section 12's contract. The read-back shows the command and arguments as `config.get` returns them, and the result says: "**Added search-index.** The gateway will run it at a bot's next run." A failure to start (a missing program) shows on the server's page after that run, as the gateway reported it ("spawn … ENOENT").
 
 ## 14. Removing
 
@@ -398,14 +410,14 @@ Every removal is a confirmation that says exactly what goes and what stays, then
 
 The bots named are those whose last tool list had its tools; when none has run since it was added, the line reads "its tools, from every bot that doesn't deny them". After the removal, `plugins.list` is read: "Removed Quillnote. The gateway no longer lists it." A connector that comes with OpenClaw has no Remove (section 8).
 
-**A tool server** (`config.patch` with `null`, and `replacePaths` for a command's arguments, R§5):
+**A tool server** (section 12's contract: `null`, with `replacePaths` for a command's arguments, and the `hash` read when the confirmation opened, R§5):
 
 > **Remove notes-work from the gateway?**
 > Goes: the server's entry in the gateway's settings, with its headers; its tools, from every bot that has them.
 > Stays: its sign-in, kept by the gateway in its state, not encrypted there. Removing the server does not delete it, and the gateway finds it again if a server with the same name and URL is added. To sign out first, run `openclaw mcp logout notes-work` on the gateway's machine before removing the server.
 > [Cancel] [Remove]
 
-The `logout` line appears only for a server with "Sign in with OAuth". Then `config.get` is read: "Removed notes-work. The gateway's settings no longer list it." When the read-back still lists it: "notes-work is still listed: <the gateway's reason>." with "Try again".
+The `logout` line appears only for a server with "Sign in with OAuth". Then `config.get` is read, and "Removed notes-work. The gateway's settings no longer have it." is said only when that read has no such entry. When the read still has it: "notes-work is still there: <the gateway's reason>." with "Try again". When the settings changed since the confirmation opened: "The gateway's settings changed. Review the current entry before trying again." When the read fails: "Couldn't confirm the change."
 
 ## 15. What do you use every day? (F-004)
 
@@ -504,6 +516,7 @@ Beside the states F-218 names, a connector's page also shows two more the gatewa
 
 - A catalog store that keeps the last overview, its time, and whether it came with `remoteError`.
 - One write at a time per window: a second change waits for the read-back of the first.
+- A server write carries the `config.get` `hash` read when the person reviewed it, and the exact entry of section 12; its result comes only from the read-back's comparison.
 - The command and the profile option for `openclaw mcp login` and `logout` come from the host, as the approve command does (`bots.md` §2).
 
 ### Order

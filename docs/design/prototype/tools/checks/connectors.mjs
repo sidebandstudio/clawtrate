@@ -103,8 +103,13 @@ const STATES = [
   ["screen=server&id=notes-work&device=iphone", ["Change it from Clawtrate on your computer."]],
   ["screen=server-remove-confirm&id=notes-work", ["Remove notes-work from the gateway?", "the server's entry in the gateway's settings, with its headers", "its tools, from every bot that has them", "its sign-in, kept by the gateway in its state, not encrypted there. Removing the server does not delete it, and the gateway finds it again if a server with the same name and URL is added.", "To sign out first, run this on the gateway's machine before removing the server:", "openclaw mcp logout notes-work"]],
   ["screen=server-remove-confirm&id=search-index", ["Remove search-index from the gateway?", "nothing else: it has no sign-in the gateway keeps"]],
-  ["screen=server-removed&id=notes-work", ["Removed notes-work.", "The gateway's settings no longer list it."]],
-  ["screen=server-remove-failed&id=notes-work", ["notes-work is still listed:", "Try again"]],
+  ["screen=server-removed&id=notes-work", ["Removed notes-work.", "The gateway's settings no longer have it."]],
+  ["screen=server-remove-failed&id=notes-work", ["notes-work is still there:", "Try again"]],
+  ["screen=server-changed&id=notes-work", ["The gateway's settings changed.", "Review the current entry before trying again."]],
+  ["screen=server-unconfirmed&id=notes-work", ["Couldn't confirm the change."]],
+  ["screen=add-server-notadded&name=notes-home", ["notes-home wasn't added.", "Try again"]],
+  ["screen=add-server-unconfirmed&name=notes-home", ["Couldn't confirm the change.", "Check again"]],
+  ["screen=add-server-changed&name=notes-home", ["The gateway's settings changed.", "Review the current entry before trying again."]],
   ["screen=add-server", ["Add a custom connector", "Type", "Remote HTTPS", "Command", "Name", "Server URL", "Headers", "Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved.", "Sign-in", "None", "Sign in with OAuth", "OpenClaw registers itself with the server when it signs in.", "Add to gateway"]],
   ["screen=add-server&type=command", ["Command", "Arguments", "One per line. Each is passed as one argument, never through a shell.", "Working folder", "The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can.", "Continue"]],
   ["screen=add-server&access=read", ["Read-only.", "Adding a custom connector needs admin access."]],
@@ -252,7 +257,12 @@ await walk("turn off while the gateway is busy, then try again", "screen=turnoff
 }
 await walk("remove a connector", "screen=installed", [[row("Tasktide"), "connector"], [link("Remove…"), "remove-confirm"], [link("Remove"), "removed"], [link("Back to the list"), "installed"]]);
 await walk("remove a tool server", "screen=installed", [[row("notes-work"), "server"], [link("Remove…"), "server-remove-confirm"], [link("Remove"), "server-removed"]], ["Removed notes-work."]);
-await walk("a tool server still listed after removal", "screen=server-remove-confirm&id=notes-work", [[link("Still lists it"), "server-remove-failed"], [link("Try again"), "server-remove-confirm"]]);
+await walk("a tool server still there after removal", "screen=server-remove-confirm&id=notes-work", [[link("Still has it"), "server-remove-failed"], [link("Try again"), "server-remove-confirm"]]);
+await walk("removal: the settings changed since the confirmation opened", "screen=server-remove-confirm&id=notes-work", [[link("Settings changed"), "server-changed"], [link("Review notes-work"), "server"]]);
+await walk("removal: the read fails", "screen=server-remove-confirm&id=notes-work", [[link("The read fails"), "server-unconfirmed"], [link("Check again"), "server"]]);
+await walk("add: no answer, then the read-back has no such entry", "screen=add-server-saved&name=notes-home", [[link("No answer"), "add-server-checking"], [link("Has no such entry"), "add-server-notadded"], [link("Try again"), "add-server"]]);
+await walk("add: no answer, then the read-back differs", "screen=add-server-saved&name=notes-home", [[link("No answer"), "add-server-checking"], [link("Differs, or the read fails"), "add-server-unconfirmed"], [link("Check again"), "add-server-checking"], [link("Matches what you reviewed"), "add-server-saved"]]);
+await walk("add: the settings changed since the form opened", "screen=add-server-saved&name=notes-home", [[link("Settings changed"), "add-server-changed"], [link("Back to the form"), "add-server"]]);
 await walk("add another account to a tool server", "screen=server&id=notes-work", [[link("Add another account"), "add-server"]]);
 {
   const p = await open("screen=server&id=notes-work");

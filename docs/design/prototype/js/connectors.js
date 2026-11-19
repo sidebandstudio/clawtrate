@@ -582,17 +582,25 @@
           goes([`the server's entry in the gateway's settings${s.kind === "remote" ? ", with its headers" : ""}`, "its tools, from every bot that has them"], [s.signin === "oauth" ? "its sign-in, kept by the gateway in its state, not encrypted there. Removing the server does not delete it, and the gateway finds it again if a server with the same name and URL is added." : "nothing else: it has no sign-in the gateway keeps"]) +
             (s.signin === "oauth" ? `<p>To sign out first, run this on the gateway's machine before removing the server:</p>${command(`openclaw mcp logout ${name}`, "sign-out command")}` : ""),
           [link("Cancel", "server", { id: name }, { variant: "quiet" }), link("Remove", "server-removed", { id: name }, { variant: "primary" })],
-          proto("the read-back", [link("Still lists it", "server-remove-failed", { id: name }, { variant: "quiet" })]),
+          proto("the gateway", [link("Still has it", "server-remove-failed", { id: name }, { variant: "quiet" }), link("Settings changed", "server-changed", { id: name }, { variant: "quiet" }), link("The read fails", "server-unconfirmed", { id: name }, { variant: "quiet" })]),
         )
       );
     },
     "server-removed": () => {
       const name = params.get("id") || "notes-work";
-      return windowHtml({ title: name, back: go("installed"), body: result("", "check", `Removed ${name}.`, "The gateway's settings no longer list it.") + `<div class="c-actions">${link("Back to the list", "installed")}</div>` });
+      return windowHtml({ title: name, back: go("installed"), body: result("", "check", `Removed ${name}.`, "The gateway's settings no longer have it.") + `<div class="c-actions">${link("Back to the list", "installed")}</div>` });
     },
     "server-remove-failed": () => {
       const name = params.get("id") || "notes-work";
-      return windowHtml({ title: name, back: go("server", { id: name }), body: note("danger", `${name} is still listed:`, "Another plugin or config operation is already running; retry when it completes.", `<div class="c-actions">${link("Try again", "server-remove-confirm", { id: name })}</div>`) });
+      return windowHtml({ title: name, back: go("server", { id: name }), body: note("danger", `${name} is still there:`, "Another plugin or config operation is already running; retry when it completes.", `<div class="c-actions">${link("Try again", "server-remove-confirm", { id: name })}</div>`) });
+    },
+    "server-changed": () => {
+      const name = params.get("id") || "notes-work";
+      return windowHtml({ title: name, back: go("server", { id: name }), body: note("warn", "The gateway's settings changed.", "Review the current entry before trying again.", `<div class="c-actions">${link(`Review ${name}`, "server", { id: name })}</div>`) });
+    },
+    "server-unconfirmed": () => {
+      const name = params.get("id") || "notes-work";
+      return windowHtml({ title: name, back: go("server", { id: name }), body: note("warn", "Couldn't confirm the change.", "The gateway's settings couldn't be read back.", `<div class="c-actions">${link("Check again", "server", { id: name })}</div>`) });
     },
     "add-server": () => windowHtml(addServerForm()),
     "command-confirm": () =>
@@ -611,11 +619,22 @@
         title: "Add a custom connector",
         body:
           result("ok", "check", `Added ${esc(name)}.`, cmd ? "The gateway will run it at a bot's next run." : "The gateway lists it. Its tools reach bots from their next run, unless a bot's settings deny them.", link(`Open ${esc(name)}`, "server", { id: cmd ? "search-index" : "notes-work", last: "notyet" }, { variant: "primary" }) + (params.get("signin") === "oauth" ? link("Sign in", "signin-cli", { id: "notes-work", server: "1" }) : "")) +
-          proto("the write", [link("Refused", "add-server-refused", { name }, { variant: "quiet" }), link("No answer", "add-server-checking", { name }, { variant: "quiet" })]),
+          proto("the write", [link("Refused", "add-server-refused", { name }, { variant: "quiet" }), link("No answer", "add-server-checking", { name }, { variant: "quiet" }), link("Settings changed", "add-server-changed", { name }, { variant: "quiet" })]),
       });
     },
     "add-server-refused": () => windowHtml({ title: "Add a custom connector", body: result("danger", "x", `Couldn't add ${esc(params.get("name") || "notes-work")}:`, `mcp.servers.${esc(params.get("name") || "notes-work")}.url: Expected http:// or https:// URL. Nothing saved.`, link("Back to the form", "add-server")) }),
-    "add-server-checking": () => windowHtml({ title: "Add a custom connector", body: `<p class="c-state" aria-busy="true">Checking what the gateway has…</p>` + proto("the read-back", [link("Lists it", "add-server-saved", { name: params.get("name") || "notes-work" }, { variant: "quiet" }), link("Doesn't list it", "add-server-refused", { name: params.get("name") || "notes-work" }, { variant: "quiet" })]) }),
+    "add-server-checking": () => {
+      const name = params.get("name") || "notes-work";
+      return windowHtml({
+        title: "Add a custom connector",
+        body:
+          `<p class="c-state" aria-busy="true">Checking what the gateway has…</p>` +
+          proto("the read-back", [link("Matches what you reviewed", "add-server-saved", { name }, { variant: "quiet" }), link("Has no such entry", "add-server-notadded", { name }, { variant: "quiet" }), link("Differs, or the read fails", "add-server-unconfirmed", { name }, { variant: "quiet" })]),
+      });
+    },
+    "add-server-notadded": () => windowHtml({ title: "Add a custom connector", body: result("danger", "x", `${esc(params.get("name") || "notes-work")} wasn't added.`, "The gateway's settings have no such entry.", link("Try again", "add-server")) }),
+    "add-server-unconfirmed": () => windowHtml({ title: "Add a custom connector", body: note("warn", "Couldn't confirm the change.", `The gateway's settings have an entry named ${esc(params.get("name") || "notes-work")}, and its address differs from the one you reviewed.`, `<div class="c-actions">${link("Check again", "add-server-checking", { name: params.get("name") || "notes-work" })}</div>`) }),
+    "add-server-changed": () => windowHtml({ title: "Add a custom connector", body: note("warn", "The gateway's settings changed.", "Review the current entry before trying again.", `<div class="c-actions">${link("Back to the form", "add-server")}</div>`) }),
     "signin-cli": () => windowHtml(signin()),
     chat: () => "",
     picker: () => picker(),
