@@ -99,7 +99,8 @@ async function main(): Promise<void> {
             platform: process.platform,
           });
     } catch (error) {
-      world = error instanceof SetupRefusedError ? error : new SetupRefusedError(String(error));
+      world =
+        error instanceof SetupRefusedError ? error : new SetupRefusedError("file", String(error));
     }
     runtime.policy.setup = new SetupController({
       client: runtime.client,

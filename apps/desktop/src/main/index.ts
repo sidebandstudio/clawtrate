@@ -36,7 +36,7 @@ import {
 import { SetupController } from "../setup/controller.ts";
 import { ProgramRunner } from "../setup/programs.ts";
 import {
-  automatedRun,
+  mustSandbox,
   productionWorld,
   readSandbox,
   realHome,
@@ -111,7 +111,9 @@ function setupWorld(): LookWorld | SetupRefusedError {
   try {
     if (path) return sandboxWorld(readSandbox(path), process.platform);
   } catch (error) {
-    return error instanceof SetupRefusedError ? error : new SetupRefusedError(String(error));
+    return error instanceof SetupRefusedError
+      ? error
+      : new SetupRefusedError("file", String(error));
   }
   return productionWorld({
     home: realHome(),
@@ -306,7 +308,7 @@ async function main(): Promise<void> {
   const setup = new SetupController({
     client,
     world: setupWorld(),
-    sandboxed: !app.isPackaged || automatedRun(process.env, hasSwitch),
+    sandboxed: mustSandbox({ packaged: app.isPackaged, env: process.env, switches: hasSwitch }),
     realHome: realHome(),
     run: programs.run,
     stopPrograms: () => programs.stopAll(),
