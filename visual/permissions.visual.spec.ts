@@ -73,7 +73,9 @@ const SCENES: Scene[] = [
     name: "F-178-saved-empty",
     query: `${ADMIN}&saved=empty`,
     ready: permissions("Saved approvals", (page) =>
-      expect(page.getByTestId("saved-empty")).toBeVisible(),
+      expect(page.getByTestId("saved-empty")).toContainText(
+        "Nothing in the two lists readThe gateway lists no routine's grant, and its machine's approvals file has no allowlist entry.",
+      ),
     ),
   },
   {
@@ -292,8 +294,18 @@ test.describe("behaviour", () => {
     await expect(
       page.getByTestId("allowlist-entry").filter({ hasText: "coder__send_message" }),
     ).toContainText("Added ");
-    await expect(page.getByTestId("saved-not-listed")).toContainText(
-      "Not here, because the gateway has no list for them: placement grants",
+    // The page names the lists it read, those it did not, and which entries it can remove.
+    await expect(page.getByTestId("saved-read")).toHaveText(
+      "Read here: the routines' grants the gateway lists, and the allowlist in the approvals file of the gateway's own machine. Clawtrate's rules plugin makes no standing approval.",
+    );
+    await expect(page.getByTestId("saved-not-listed")).toHaveText(
+      "Not read here: placement grants, which the gateway keeps for some plugin commands on paired machines for up to 30 days and has no list for; the allowlists of paired machines; and any trust a plugin keeps for itself. Remove… is offered only for an allowlist entry with an id.",
+    );
+    const tool = page.getByTestId("allowlist-entry").filter({ hasText: "coder__send_message" });
+    await expect(tool).toContainText("No last use recorded");
+    await expect(tool).not.toContainText("Not used yet");
+    await expect(tool.getByTestId("entry-not-removable")).toHaveText(
+      "Clawtrate can't remove this entry: the file gives it no id.",
     );
     await expect(entry).toContainText("which can be wider than the command that saved it");
     await entry.getByRole("button", { name: "Remove…" }).click();

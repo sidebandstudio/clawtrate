@@ -178,7 +178,7 @@ export type RoutineGrant = {
 /** One entry of a machine's allowlist, in the approvals file's own terms. */
 export type AllowlistEntry = {
   agentId: string;
-  /** The entry's id in the file; null when it has none (then it cannot be removed here). */
+  /** The entry's id in the file; null when it has none (a tool entry): then it cannot be removed here. */
   entryId: string | null;
   kind: "command" | "tool";
   /** A command entry's pattern, or a tool entry's `<server>__<tool>`. */
@@ -186,6 +186,7 @@ export type AllowlistEntry = {
   argPattern: string | null;
   commandText: string | null;
   fromAlwaysAllow: boolean;
+  /** When the file says it was last used; null when the file records none (not "never used"). */
   lastUsedAt: number | null;
   /** When it was added, where the file records it (tool entries do; command entries don't). */
   addedAt: number | null;
@@ -296,7 +297,7 @@ export function allowlistOf(file: unknown): { items: AllowlistEntry[]; omitted: 
         argPattern: null,
         commandText: null,
         fromAlwaysAllow: entry.source === "allow-always",
-        lastUsedAt: null,
+        lastUsedAt: time(entry.lastUsedAt),
         addedAt: time(entry.addedAt),
       });
     }

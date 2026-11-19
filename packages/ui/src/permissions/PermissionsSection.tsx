@@ -585,9 +585,9 @@ function SavedPart({
 
   return (
     <div data-testid="saved-approvals">
-      <p className="b-hint c-lead">
-        What the gateway lists: the routines' grants, and the allowlist of the gateway's own
-        machine. Clawtrate's rules plugin makes none.
+      <p className="b-hint c-lead" data-testid="saved-read">
+        Read here: the routines' grants the gateway lists, and the allowlist in the approvals file
+        of the gateway's own machine. Clawtrate's rules plugin makes no standing approval.
       </p>
       {goneNotes.map(([id, text]) => (
         <p key={id} className="b-hint" role="status">
@@ -596,10 +596,11 @@ function SavedPart({
       ))}
       {empty ? (
         <div className="work-empty" data-testid="saved-empty">
-          <h3>No saved approvals</h3>
+          <h3>Nothing in the two lists read</h3>
           <p>
-            When a routine's command is allowed for some days, or a command's card adds it to a
-            machine's allowlist, it is listed here.
+            The gateway lists no routine's grant, and its machine's approvals file has no allowlist
+            entry. A routine's command allowed for some days, or a command allowed always on the
+            gateway's machine, would be listed here.
           </p>
         </div>
       ) : (
@@ -705,14 +706,21 @@ function SavedPart({
                       )}
                       <small>
                         {entry.lastUsedAt === null
-                          ? "Not used yet"
+                          ? "No last use recorded"
                           : `Last used ${fullDate(entry.lastUsedAt)}`}
                         {entry.addedAt === null ? "" : ` · Added ${fullDate(entry.addedAt)}`}
                       </small>
-                      <small>
-                        Covers what the gateway matches it to, which can be wider than the command
-                        that saved it.
-                      </small>
+                      {entry.kind === "command" && (
+                        <small>
+                          Covers what the gateway matches it to, which can be wider than the command
+                          that saved it.
+                        </small>
+                      )}
+                      {!entry.entryId && (
+                        <small data-testid="entry-not-removable">
+                          Clawtrate can't remove this entry: the file gives it no id.
+                        </small>
+                      )}
                       <GatewayMark />
                       {note && (
                         <small role="status" data-tone="danger">
@@ -755,9 +763,9 @@ function SavedPart({
         </>
       )}
       <p className="b-hint" data-testid="saved-not-listed">
-        Not here, because the gateway has no list for them: placement grants, which it keeps for
-        some plugin commands on paired machines for up to 30 days or until the machine's pairing
-        changes. Not read here: the allowlists of paired machines.
+        Not read here: placement grants, which the gateway keeps for some plugin commands on paired
+        machines for up to 30 days and has no list for; the allowlists of paired machines; and any
+        trust a plugin keeps for itself. Remove… is offered only for an allowlist entry with an id.
       </p>
       {confirm && (
         <Confirm

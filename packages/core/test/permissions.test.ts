@@ -236,6 +236,42 @@ describe("F-178: saved approvals, as the gateway lists them", () => {
     });
   });
 
+  it("a tool entry's last use is read from the file, and is null only when the file records none", async () => {
+    const read = await readSavedApprovals(
+      fake({
+        "exec.approval.grants.list": () => ({ grants: [] }),
+        "exec.approvals.get": () => ({
+          ...approvalsFile([]),
+          file: {
+            version: 1,
+            agents: {
+              otto: {
+                mcpTools: [
+                  {
+                    server: "coder",
+                    tool: "send",
+                    source: "allow-always",
+                    addedAt: 5,
+                    lastUsedAt: 9,
+                  },
+                  { server: "coder", tool: "read", source: "allow-always", addedAt: 5 },
+                ],
+              },
+            },
+          },
+        }),
+      }).ctx,
+      { canApprove: true, canAdmin: true },
+    );
+    if (read.allowlist.status !== "ready") throw new Error("not ready");
+    expect(
+      read.allowlist.items.map((each) => [each.pattern, each.lastUsedAt, each.entryId]),
+    ).toEqual([
+      ["coder__send", 9, null],
+      ["coder__read", null, null],
+    ]);
+  });
+
   it("is bounded where it enters: grants, entries and their text", async () => {
     const long = "x".repeat(5000);
     const gateway = fake({
