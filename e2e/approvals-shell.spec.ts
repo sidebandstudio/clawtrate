@@ -182,6 +182,24 @@ async function historyOf(key: string): Promise<HistoryRow[]> {
   return history.messages;
 }
 
+/**
+ * Wait for the gateway to hold the task's pending exec request (as the admin client lists it),
+ * then for its card: the card's wait starts from the gateway's own state, not from the send.
+ */
+async function pendingRequest(key: string): Promise<void> {
+  const op = await adminClient();
+  await expect
+    .poll(
+      async () =>
+        (
+          await op.request<Array<{ request: { sessionKey?: string } }>>("exec.approval.list", {})
+        ).some((each) => each.request.sessionKey === key),
+      { timeout: 120_000, intervals: [1000] },
+    )
+    .toBe(true);
+  await expect(approvalCard(page)).toHaveCount(1, { timeout: 30_000 });
+}
+
 async function shot(target: Page | ReturnType<Page["locator"]>, name: string): Promise<void> {
   if (!SHOTS) return;
   await target.screenshot({ path: join(SHOTS, `real-${name}.png`) });
@@ -234,11 +252,11 @@ const approvalCard = (on: Page) => on.getByTestId("approval-card");
 const transcript = (on: Page) => on.getByTestId("transcript");
 
 test("F-171 F-164 F-432: a command the gateway warns about: the warning on the card, the full request with the exact command to copy and why the gateway asked, then its output while it streams", async () => {
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   const { title, key } = await hostTask("otto", "Count", "#count");
   await openTask(page, "Otto", title);
   const card = approvalCard(page);
-  await expect(card).toHaveCount(1, { timeout: 30_000 });
+  await pendingRequest(key);
   // The gateway's own warning, from its analysis of the command, on a line of its own.
   const command = SHELL_COMMANDS.count;
   const warnings = card.locator(".request-warnings li");
@@ -302,11 +320,11 @@ test("F-171 F-164 F-432: a command the gateway warns about: the warning on the c
 });
 
 test("F-325: Allow once runs the command exactly once and saves no rule; the same command asks again", async () => {
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   const first = await hostTask("otto", "Once", "#sleep 7");
   await openTask(page, "Otto", first.title);
   const card = approvalCard(page);
-  await expect(card).toHaveCount(1, { timeout: 30_000 });
+  await pendingRequest(first.key);
   await card.getByRole("button", { name: "Allow once" }).click();
   await expect(card.locator(".tag")).toHaveText("Allowed once", { timeout: 30_000 });
   await card.locator("summary").first().click();
@@ -342,18 +360,18 @@ test("F-325: Allow once runs the command exactly once and saves no rule; the sam
   // The same command again asks again.
   const again = await hostTask("otto", "Once again", "#sleep 7");
   await openTask(page, "Otto", again.title);
-  await expect(approvalCard(page)).toHaveCount(1, { timeout: 30_000 });
+  await pendingRequest(again.key);
   await expect(approvalCard(page)).toHaveAttribute("data-state", "pending");
   await approvalCard(page).getByRole("button", { name: "Deny" }).click();
   await expect(approvalCard(page).locator(".tag")).toHaveText("Denied", { timeout: 30_000 });
 });
 
 test("F-091: an approval is its action's waiting state and a card of its own after it, counted once, with its request and resolution in Raw, and so again once the task is read anew", async () => {
-  test.setTimeout(180_000);
-  const { title } = await hostTask("otto", "Linked", "#sleep 8");
+  test.setTimeout(300_000);
+  const { title, key } = await hostTask("otto", "Linked", "#sleep 8");
   await openTask(page, "Otto", title);
   const card = approvalCard(page);
-  await expect(card).toHaveCount(1, { timeout: 30_000 });
+  await pendingRequest(key);
   // While it waits, the action card is in its waiting state, and the approval card follows it.
   const action = page.locator(".transcript details.card.action[data-kind='command']").last();
   await expect(action).toHaveAttribute("data-status", "waiting");
@@ -406,7 +424,7 @@ test("F-091: an approval is its action's waiting state and a card of its own aft
 });
 
 test("F-057 F-295: a task whose run completed with a failed action shows the failed mark and says done with failures until it is opened", async () => {
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   const { title } = await hostTask("pip", "Fails", "#tool-fail");
   // Another task on screen, so the failing one is not opened when its run ends.
   const other = await hostTask("pip", "Elsewhere", "reply with a note");
@@ -441,7 +459,7 @@ async function questionsClient(): Promise<OperatorSession> {
 }
 
 test("F-112: a question record outside the ordinary subset is shown readable, with its raw record, and cannot be answered here", async () => {
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   const { title, key } = await hostTask("pip", "Form", "reply with a note");
   await openTask(page, "Pip", title);
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
@@ -487,11 +505,11 @@ test("F-112: a question record outside the ordinary subset is shown readable, wi
 });
 
 test("F-169: a message sent while an approval is pending joins the run and leaves the card pending; Stop cancels the run, and the card closes as Cancelled once the gateway says so", async () => {
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   const { title, key } = await hostTask("otto", "Steer and stop", "#sleep 9");
   await openTask(page, "Otto", title);
   const card = approvalCard(page);
-  await expect(card).toHaveCount(1, { timeout: 30_000 });
+  await pendingRequest(key);
   const composer = page.getByTestId("composer-input");
   await composer.fill("Keep going once you can.");
   await page.keyboard.press("Enter");
@@ -527,7 +545,7 @@ test("F-169: a message sent while an approval is pending joins the run and leave
 });
 
 test("F-094: a failed turn's card, its run line and a line the gateway wrote itself each have Raw with the event or row behind them", async () => {
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   const { title, key } = await hostTask("pip", "Raw lines", "#read #model-error");
   await openTask(page, "Pip", title);
   const raw = (target: ReturnType<Page["locator"]>) =>
