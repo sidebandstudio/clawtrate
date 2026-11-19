@@ -23,6 +23,7 @@ import {
   rmSync,
   statSync,
   truncateSync,
+  utimesSync,
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -361,6 +362,8 @@ export class DecisionLog {
   constructor(dir, { now = Date.now, retentionMs = RETENTION_MS, max = MAX_DECISIONS } = {}) {
     this.dir = dir;
     this.path = join(dir, DECISIONS_FILE);
+    /** Where a record too large to read at start is set aside, for thirty days. */
+    this.oversizePath = `${this.path}.oversize`;
     this.now = now;
     this.retentionMs = retentionMs;
     this.max = max;
@@ -382,7 +385,10 @@ export class DecisionLog {
     try {
       // A file past the cap is not read into memory: it is set aside, and a new one started.
       if (statSync(this.path).size > MAX_DECISIONS_BYTES) {
-        renameSync(this.path, `${this.path}.oversize`);
+        renameSync(this.path, this.oversizePath);
+        // Stamped with when it was set aside, which its removal counts from.
+        const asideAt = this.now() / 1000;
+        utimesSync(this.oversizePath, asideAt, asideAt);
         this.problem = `the decision record was larger than ${MAX_DECISIONS_BYTES} bytes; it was set aside as ${DECISIONS_FILE}.oversize and a new one started`;
         return;
       }
@@ -498,8 +504,18 @@ export class DecisionLog {
    */
   prune() {
     const cutoff = this.now() - this.retentionMs;
+    this.#pruneOversize(cutoff);
     if (this.expiryPending || (this.records.length > 0 && this.records[0].at < cutoff)) {
       this.#maintain(true);
+    }
+  }
+
+  /** Remove a record set aside as oversized once it was set aside before `cutoff`. */
+  #pruneOversize(cutoff) {
+    try {
+      if (statSync(this.oversizePath).mtimeMs < cutoff) rmSync(this.oversizePath, { force: true });
+    } catch {
+      // None set aside, or it cannot be looked at: the next prune looks again.
     }
   }
 

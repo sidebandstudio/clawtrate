@@ -315,3 +315,23 @@ describe("a decision record whose last line is torn", () => {
     expect(readFileSync(join(dir, "decisions.jsonl"), "utf8")).not.toContain('"torn');
   });
 });
+
+describe("a decision record set aside as oversized", () => {
+  it("is removed thirty days after it was set aside, and not before", () => {
+    const dir = folder();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "decisions.jsonl"), Buffer.alloc(64 * 1024 * 1024 + 1, 10));
+    const day = 86_400_000;
+    let now = 1_000 * day;
+    const log = new DecisionLog(dir, { now: () => now });
+    const aside = join(dir, "decisions.jsonl.oversize");
+    expect(readdirSync(dir)).toContain("decisions.jsonl.oversize");
+    now += 29 * day;
+    log.prune();
+    expect(readdirSync(dir)).toContain("decisions.jsonl.oversize");
+    now += 2 * day;
+    log.prune();
+    expect(readdirSync(dir)).not.toContain("decisions.jsonl.oversize");
+    expect(() => statSync(aside)).toThrow();
+  });
+});
