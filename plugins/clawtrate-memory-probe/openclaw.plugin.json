@@ -1,7 +1,7 @@
 {
   "id": "clawtrate-memory-probe",
   "name": "Clawtrate memory probe",
-  "description": "Development only: resolve a bot workspace and write a Markdown note for memory research.",
+  "description": "Development only: resolve a bot workspace for memory research.",
   "activation": {
     "onStartup": true
   },

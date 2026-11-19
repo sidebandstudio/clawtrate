@@ -115,7 +115,10 @@ with `user-velvet-402`. Each reply had `ok: true`, the updated file content, and
 a new SHA-256 `hash`. **[live]**
 
 The probe wrote the other two files with plain `node:fs` in the resolved
-workspace. A read immediately after each write established storage independently
+workspace. That write method was removed from the probe after these runs: it
+checked its path before writing and could not hold the workspace boundary during
+the write, so the probe that ships only resolves workspaces. The results below
+were recorded with it. A read immediately after each write established storage independently
 of indexing: **[live]**
 
 ```json
