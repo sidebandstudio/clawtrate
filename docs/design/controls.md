@@ -433,7 +433,7 @@ Saved approvals lists the standing approvals the gateway keeps and Clawtrate can
 
 ## 9. Activity
 
-Activity lists the tool actions the gateway's audit log holds, newest first, and what caused each where a record says so (F-324). As built, a row's tag is the audit record's own outcome in the gateway's words (Ran, Failed, Blocked, Cancelled, Timed out, Started), not Allowed, Asked or Denied, because no record that shares the call's run and call id says which of those it was.
+Activity lists the tool actions the gateway's audit log holds, newest first, and what caused each where a record says so (F-324). As built, a row's tag is the audit record's own outcome in the gateway's words (Ran, Failed, Blocked, Cancelled, Timed out, Started), not Allowed, Asked or Denied, because the records the gateway keeps for a call do not say which of those it was; the events that do, for some calls, reach only a connection open when they are sent.
 
 **A row**: the time; the bot; the task; the action as the audit log names it (the tool, and a command or target only when an independently readable tool result in the task's own transcript has it); a tag, **Allowed**, **Asked**, **Denied** or **Blocked**; and on the second line its cause, labelled:
 
