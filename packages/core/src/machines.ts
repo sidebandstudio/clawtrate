@@ -360,12 +360,12 @@ export function readToolServers(
 ): ToolServer[] {
   const names = Object.keys(rec(rec(config.mcp).servers)).slice(0, MAX_INVENTORY);
   // A server is offered when the listing has a tool of it, by the gateway's own server name
-  // (tool ids carry a shortened one).
+  // (tool ids carry a shortened one), that the session doesn't deny.
   const offered = new Set<string>();
   for (const group of list(rec(listing).groups))
     for (const tool of list(rec(group).tools)) {
       const server = rec(tool).mcpServer;
-      if (typeof server === "string") offered.add(server);
+      if (typeof server === "string" && rec(tool).deniedBySession !== true) offered.add(server);
     }
   const botTools = rec(entryOf(config, botId).tools);
   return names.map((name) => {

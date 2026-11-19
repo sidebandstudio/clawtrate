@@ -477,17 +477,18 @@ describe("where a bot runs: the engine", () => {
     expect(admin.inventory.secrets).toEqual(["router-admin", "nas-backup"]);
   });
 
-  it("F-047: a tool server is offered by a listed tool of its own, named by the gateway's server field", () => {
+  it("F-047: a tool server is offered only by a listed tool of its own that the session doesn't deny", () => {
     const long = "a-tool-server-named-past-thirty-characters";
     const config = { mcp: { servers: { coder: {}, [long]: {}, t3code: {} } } };
     // Rows as OpenClaw 2026.10.6's tools.effective lists them: the id carries a shortened
-    // server name, `mcpServer` the configured one.
+    // server name, `mcpServer` the configured one; session-denied rows are listed too.
     const listing = {
       groups: [
         {
           tools: [
-            { id: "coder__lookup", mcpServer: "coder" },
+            { id: "coder__lookup", mcpServer: "coder", deniedBySession: true },
             { id: "a-tool-server-named-past-th__run", mcpServer: long },
+            { id: "t3code__start", mcpServer: "t3code", deniedBySession: true },
             { id: "t3code__read", mcpServer: "t3code" },
           ],
         },
@@ -496,7 +497,7 @@ describe("where a bot runs: the engine", () => {
     expect(
       readToolServers(config, "otto", listing).map((server) => [server.name, server.offered]),
     ).toEqual([
-      ["coder", true],
+      ["coder", false],
       [long, true],
       ["t3code", true],
     ]);
