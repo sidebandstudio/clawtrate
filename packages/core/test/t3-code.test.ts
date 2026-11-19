@@ -645,11 +645,12 @@ describe("what a read read: its two dimensions (11.1, 11.3)", () => {
     expect(t3(h.withStep)).toBeNull();
   });
 
-  it("F-133: a rendering history cut is not read: it says the stored result was cut only on the gateway's mark", () => {
+  it("F-133: a rendering history cut is not read, and says only that it could not be read", () => {
+    // The gateway's mark and the app's own cap set the same flag: neither is claimed as a cut.
     const whole = rendered(readResult([item("assistant_message", "x".repeat(9000))]));
     expect(structuredFromText(whole.slice(0, 8000))).toBeNull();
     expect(readLines(readDimensions(null, true))).toEqual([
-      "The stored result was cut: how much was read is not known here.",
+      "This result could not be read here: what it reported is not known.",
     ]);
   });
 });
@@ -1071,4 +1072,13 @@ it("F-313: an unreturned call can link to the named thread card later in the col
     { type: "t3", call: later },
   ]);
   expect(placement.get(ended.id)).toMatchObject({ type: "own", head: later.id });
+});
+
+it("F-314: text cut only in the app does not say the gateway stored a cut result", () => {
+  const call = fromHistory("t3_thread_read", { threadId: THREAD }, null, false, {
+    text: "x".repeat(25_000),
+  }).alone;
+  expect(readLines(readDimensions(null, call.cut === true))[0]).not.toContain(
+    "stored result was cut",
+  );
 });

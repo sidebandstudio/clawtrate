@@ -444,7 +444,7 @@ export function readDimensions(facts: T3Facts | null, storedCut = false): ReadDi
 
 /** The lines a read's item shows on how much it read, together (11.3). */
 export function readLines(d: ReadDimensions): string[] {
-  if (d.unknown) return [d.storedCut ? T3_WORDS.storedCut : T3_WORDS.unreadable];
+  if (d.unknown) return [T3_WORDS.unreadable];
   if (d.toEnd) return [T3_WORDS.readToEnd];
   return [
     ...(d.morePages ? [d.continuation ? T3_WORDS.laterPage : T3_WORDS.firstPage] : []),

@@ -591,7 +591,6 @@ export const T3_WORDS = {
   firstPage: "First page only: the reply may continue",
   replyCut: "Part of the reply only: its text was cut, and the rest was not read",
   otherCut: "Part of the run only: an item's text was cut, and the rest was not read",
-  storedCut: "The stored result was cut: how much was read is not known here.",
   unreadable: "This result could not be read here: what it reported is not known.",
   laterPage: "More pages after this one: the reply may continue",
   shortened: "Shortened here; Raw has all of it.",
