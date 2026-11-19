@@ -9,7 +9,8 @@ const node: NodeFacts = {
   id: "node-media-box",
   name: "media-box",
   connected: false,
-  lastSeenAt: new Date("2026-11-16T17:12:00-05:00").getTime(),
+  // Local times, so the words are the same in any time zone.
+  lastSeenAt: new Date(2026, 10, 16, 17, 12).getTime(),
   lastSeenReason: "connect",
   approved: true,
   approvalsCommands: true,
@@ -53,7 +54,7 @@ describe("the machines' words", () => {
   });
 
   it("F-157: a machine not connected says when it was last seen, with the gateway's reason", () => {
-    expect(nodeState(node, new Date("2026-11-16T17:40:00-05:00").getTime())).toMatch(
+    expect(nodeState(node, new Date(2026, 10, 16, 17, 40).getTime())).toMatch(
       /^Not connected · Last seen Today 5:12\sPM \(connect\)$/,
     );
     expect(nodeState({ ...node, connected: true }, 0)).toBe("Connected");
