@@ -92,7 +92,7 @@ await stateWords("Gateway pane: Other gateways and Remove this gateway…, not U
 // Part 2: Your gateways and a gateway's page --------------------------------------------------------------
 
 await stateWords("Your gateways: its words and rows", "open=settings&section=gateways", settings, [
-  "Clawtrate uses one gateway at a time. Each keeps its own pairing on this device, and nothing from one is sent to another.",
+  "Clawtrate saves a separate connection for each gateway and uses one at a time.",
   "Home gateway",
   "gateway.local · In use",
   "Studio gateway",

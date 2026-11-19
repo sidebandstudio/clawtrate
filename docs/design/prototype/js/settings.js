@@ -548,7 +548,7 @@
       const body =
         removalResult() +
         added +
-        `<p class="s-lead">Clawtrate uses one gateway at a time. Each keeps its own pairing on this device, and nothing from one is sent to another.</p>` +
+        `<p class="s-lead">Clawtrate saves a separate connection for each gateway and uses one at a time.</p>` +
         (S.conn === "none" ? note("<p>Not connected. Choose a gateway to use.</p>", "warn") : "") +
         `<ul class="b-choices s-gateways" data-testid="gateway-list">${S.order.map(row).join("")}</ul>` +
         (S.order.length === 1 ? `<p class="b-hint">Add another gateway to switch between them here or from the gateway menu.</p>` : "") +
