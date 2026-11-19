@@ -208,7 +208,8 @@ test("F-042 F-043: a bot's model and effort chosen in its settings are saved on 
   expect(entry.thinkingDefault).toBe("high");
   const listed = await reader.request<{ agents: Json[] }>("agents.list", {});
   const quill = listed.agents.find((each) => each.id === BOT)!;
-  expect((quill.model as Json).primary).toBe("acme/dev-2@acme:work");
+  // `agents.list` names a bot's model without its account (observed on 2026.10.6).
+  expect((quill.model as Json).primary).toBe("acme/dev-2");
   expect(quill.thinkingDefault).toBe("high");
 
   // Put back as the task checks below expect it: dev-1 and Low, the gateway's default effort.
