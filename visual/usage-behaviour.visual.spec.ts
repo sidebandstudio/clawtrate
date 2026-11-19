@@ -714,5 +714,14 @@ test("the Usage row's value wraps rather than shortening at phone width", async 
   );
   const cut = await value.evaluate((element) => element.scrollWidth > element.clientWidth);
   expect(cut).toBe(false);
+  // It wraps onto lines of its own, every one of them shown: no clamp hides the end.
+  const shape = await value.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const lines = new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+    return { lines, hidden: element.scrollHeight - element.clientHeight };
+  });
+  expect(shape.lines).toBeGreaterThan(1);
+  expect(shape.hidden).toBeLessThanOrEqual(0);
   await context.close();
 });
