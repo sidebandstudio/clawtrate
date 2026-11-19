@@ -6,6 +6,8 @@ import {
   occurrences,
   runOutcome,
   scheduleWords,
+  triggerWords,
+  wallMinutes,
   when,
   zonedTime,
   zoneWords,
@@ -120,11 +122,84 @@ describe("F-197: occurrences", () => {
     expect(frequent(routine())).toBe(false);
     expect(occurrences(routine({ enabled: false }), ...week)).toEqual([]);
   });
+  // The expected instants are what OpenClaw 2026.10.6's own scheduler
+  // (`computeNextRunAtMs`, croner) returned for these schedules, one after another.
+  const iso = (times: number[]) => times.map((ms) => new Date(ms).toISOString());
+  it("skip a time the clock skips (spring forward), as the gateway does", () => {
+    const daily = routine({
+      schedule: schedule({ expr: "30 2 * * *", tz: NY }),
+      nextRunAt: Date.parse("2026-03-07T07:30:00Z"),
+    });
+    expect(
+      iso(
+        occurrences(daily, Date.parse("2026-03-07T00:00:00Z"), Date.parse("2026-03-11T00:00:00Z")),
+      ),
+    ).toEqual(["2026-03-07T07:30:00.000Z", "2026-03-09T06:30:00.000Z", "2026-03-10T06:30:00.000Z"]);
+  });
+  it("run a time the clock passes twice (fall back) once, the first time, as the gateway does", () => {
+    const daily = routine({
+      schedule: schedule({ expr: "30 1 * * *", tz: NY }),
+      nextRunAt: Date.parse("2026-10-31T05:30:00Z"),
+    });
+    expect(
+      iso(
+        occurrences(daily, Date.parse("2026-10-31T00:00:00Z"), Date.parse("2026-11-03T00:00:00Z")),
+      ),
+    ).toEqual(["2026-10-31T05:30:00.000Z", "2026-11-01T05:30:00.000Z", "2026-11-02T06:30:00.000Z"]);
+    const halfHours = routine({
+      schedule: schedule({ expr: "*/30 1-2 * * *", tz: NY }),
+      nextRunAt: Date.parse("2026-11-01T05:00:00Z"),
+    });
+    expect(
+      iso(
+        occurrences(
+          halfHours,
+          Date.parse("2026-11-01T04:10:00Z"),
+          Date.parse("2026-11-01T12:00:00Z"),
+        ),
+      ),
+    ).toEqual([
+      "2026-11-01T05:00:00.000Z",
+      "2026-11-01T05:30:00.000Z",
+      "2026-11-01T07:00:00.000Z",
+      "2026-11-01T07:30:00.000Z",
+    ]);
+  });
+  it("start at the gateway's next run, even when it is a few minutes after the written time", () => {
+    const staggered = routine({ nextRunAt: zonedTime(2026, 11, 19, 8, 3, NY) });
+    expect(
+      occurrences(staggered, ...week)
+        .map((ms) => when(ms, NOW, NY))
+        .slice(0, 2),
+    ).toEqual(["tomorrow 8:03 AM", "Fri 8:00 AM"]);
+    expect(occurrences(routine({ nextRunAt: null }), ...week)).toEqual([]);
+  });
+  it("sit on the day's hour scale by the wall clock, also on a day of 23 hours", () => {
+    // Sun Mar 8 2026 in New York: 8:00 AM is seven hours after midnight, drawn at eight.
+    const eight = zonedTime(2026, 3, 8, 8, 0, NY);
+    expect(wallMinutes(eight, NY)).toBe(8 * 60);
+  });
   it("draw a schedule it cannot compute only at its next run", () => {
     const zoneless = routine({ schedule: schedule({ expr: "0 8 * * *" }) });
     expect(occurrences(zoneless, ...week)).toEqual([zoneless.nextRunAt]);
     const gated = routine({ gated: true });
     expect(occurrences(gated, ...week)).toEqual([gated.nextRunAt]);
+  });
+});
+
+describe("F-188: what starts a routine", () => {
+  it("is its schedule, its schedule then a check, or another kind of trigger, by what the gateway says", () => {
+    expect(triggerWords(routine())).toBe("Its schedule only.");
+    expect(triggerWords(routine({ schedule: schedule({ kind: "every", everyMs: 60_000 }) }))).toBe(
+      "Its schedule only.",
+    );
+    expect(triggerWords(routine({ gated: true }))).toBe(
+      "Its schedule, then a check or spacing set on it.",
+    );
+    for (const name of ["on-exit", "stream"])
+      expect(triggerWords(routine({ schedule: schedule({ kind: "other", name }) }))).toBe(
+        `The gateway's "${name}" trigger, not a clock schedule.`,
+      );
   });
 });
 

@@ -1,9 +1,12 @@
 // A routine's schedule in words, its times in zones, and the calendar's
 // occurrences (automation.md sections 4 and 5). The gateway gives only a
 // routine's next run, so later occurrences are computed here from the
-// schedule; what cannot be computed is drawn only at its next run.
+// schedule, the way the gateway's scheduler (OpenClaw 2026.10.6) does around
+// daylight saving: a time the clock skips that day does not run, and a time
+// the clock passes twice runs once, the first time. What cannot be computed
+// is drawn only at its next run.
 
-import type { Routine, RoutineRun, RoutineSchedule } from "@clawtrate/core";
+import type { Bot, Routine, RoutineRun, RoutineSchedule } from "@clawtrate/core";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -14,6 +17,12 @@ const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", 
 export function zoneCity(tz: string): string {
   if (tz === "UTC" || tz === "Etc/UTC") return "UTC";
   return (tz.split("/").at(-1) ?? tz).replaceAll("_", " ");
+}
+
+/** Minutes since midnight on the wall clock in `tz`: where a time sits on a day's hour scale. */
+export function wallMinutes(ms: number, tz: string): number {
+  const parts = partsIn(ms, tz);
+  return parts.hour * 60 + parts.minute;
 }
 
 /** The viewer's own zone. */
@@ -253,6 +262,17 @@ export function computable(routine: Routine): boolean {
   return schedule.kind === "cron" && schedule.tz !== null && parseCron(schedule.expr!) !== null;
 }
 
+/**
+ * What starts a routine, as far as the gateway says (automation.md section 6):
+ * its schedule, a check or spacing set on it, or a trigger of another kind.
+ */
+export function triggerWords(routine: Routine): string {
+  if (routine.schedule.kind === "other")
+    return `The gateway's "${routine.schedule.name}" trigger, not a clock schedule.`;
+  if (routine.gated) return "Its schedule, then a check or spacing set on it.";
+  return "Its schedule only.";
+}
+
 /** Runs more than four times a day: drawn as one band per day, not as chips. */
 export function frequent(routine: Routine): boolean {
   const { schedule } = routine;
@@ -262,21 +282,25 @@ export function frequent(routine: Routine): boolean {
   return cron !== null && cron.minute.values.size * cron.hour.values.size > 4;
 }
 
-/** The scheduled times of a routine from `from` to `to`; empty for a paused one. */
+/**
+ * The scheduled times of a routine from `from` to `to`; empty for a paused one.
+ * The gateway's next run is authoritative: nothing is drawn before it (a
+ * top-of-the-hour run may be moved a few minutes later), and the times
+ * computed after it follow the schedule.
+ */
 export function occurrences(routine: Routine, from: number, to: number): number[] {
-  if (!routine.enabled) return [];
   const next = routine.nextRunAt;
-  if (!computable(routine)) return next !== null && next >= from && next < to ? [next] : [];
-  const { schedule } = routine;
+  if (!routine.enabled || next === null) return [];
+  const own = next >= from && next < to ? [next] : [];
+  if (!computable(routine) || routine.schedule.kind === "at") return own;
+  return [...own, ...scheduled(routine.schedule, next, Math.max(from, next + 1), to)];
+}
+
+function scheduled(schedule: RoutineSchedule, next: number, from: number, to: number): number[] {
   const out: number[] = [];
-  if (schedule.kind === "at") {
-    const ms = Date.parse(schedule.at!);
-    return ms >= from && ms < to ? [ms] : [];
-  }
   if (schedule.kind === "every") {
-    if (next === null) return [];
     const step = schedule.everyMs!;
-    let at = next >= from ? next : next + Math.ceil((from - next) / step) * step;
+    let at = next + Math.ceil((from - next) / step) * step;
     while (at < to && out.length < 2_000) {
       out.push(at);
       at += step;
@@ -301,7 +325,15 @@ export function occurrences(routine: Routine, from: number, to: number): number[
     if (cron.dom.any || cron.dow.any ? !(domOk && dowOk) : !(domOk || dowOk)) continue;
     for (const hour of [...cron.hour.values].sort((a, b) => a - b))
       for (const minute of [...cron.minute.values].sort((a, b) => a - b)) {
-        const at = zonedTime(year, month, day, hour, minute, tz);
+        let at = zonedTime(year, month, day, hour, minute, tz);
+        const wall = partsIn(at, tz);
+        // Skipped by the clock that day (spring forward): the gateway does not run it.
+        if (wall.hour !== hour || wall.minute !== minute) continue;
+        // Passed twice (fall back): the gateway runs it once, the first time.
+        // shortcut: assumes an hour's shift, as in every zone with daylight saving but Lord Howe's.
+        const earlier = partsIn(at - HOUR, tz);
+        if (earlier.hour === hour && earlier.minute === minute && earlier.day === wall.day)
+          at -= HOUR;
         if (at >= from && at < to && out.length < 2_000) out.push(at);
       }
   }
@@ -328,4 +360,22 @@ export function runOutcome(run: RoutineRun): { text: string; mark: "failed" | "s
   if (run.durationMs !== null) parts.push(`${(run.durationMs / 1000).toFixed(1)} s`);
   if (run.totalTokens !== null) parts.push(`${run.totalTokens.toLocaleString("en-US")} tokens`);
   return { text: parts.join(" · "), mark: null };
+}
+
+/**
+ * The routine's bot, or one named by its id when Clawtrate does not hold that
+ * bot (it keeps at most `MAX_BOTS`): its routine is still listed and opened.
+ */
+export function ownerOf(bots: Bot[], botId: string): Bot {
+  return (
+    bots.find((each) => each.id === botId) ?? {
+      id: botId,
+      name: botId,
+      emoji: null,
+      avatarUrl: null,
+      theme: null,
+      model: null,
+      isDefault: false,
+    }
+  );
 }
