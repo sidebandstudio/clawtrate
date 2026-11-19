@@ -280,6 +280,8 @@ describe("the gateway's figures", () => {
     });
     // The development gateway's answer: a time and no providers.
     expect(parseLimits({ updatedAt: 5, providers: [] }).providers).toEqual([]);
+    // An answer without the list says nothing about providers: it is a failed read.
+    expect(() => parseLimits({ updatedAt: 77 })).toThrow("had no list of providers");
   });
 });
 
@@ -1584,6 +1586,18 @@ describe("the usage engine", () => {
     await Promise.all([first, joined]);
     engine.onClose();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("F-235: a limits answer without its provider list is a failed read, not 'No limits reported'", async () => {
+    const gateway = fakeGateway();
+    const { engine, usage } = engineOn({
+      ...gateway,
+      request: async (method, raw) =>
+        method === "usage.status" ? { updatedAt: 77 } : gateway.request(method, raw),
+    });
+    await engine.refreshLimits();
+    expect(usage().limits.status).toBe("error");
+    engine.onClose();
   });
 
   it("F-235: reads the providers' limits at a hello", async () => {

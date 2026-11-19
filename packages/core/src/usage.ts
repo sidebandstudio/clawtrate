@@ -517,8 +517,11 @@ function resetTime(value: unknown): number | null {
 /** A `usage.status` answer, bounded. A window is kept only with a percentage the provider gave. */
 export function parseLimits(result: unknown): ProviderLimits {
   const record = asRecord(result) ?? {};
+  // No list is no answer: "No limits reported" is said only of an empty one.
+  if (!Array.isArray(record.providers))
+    throw new Error("The gateway's answer had no list of providers.");
   const providers: ProviderLimit[] = [];
-  for (const each of Array.isArray(record.providers) ? record.providers : []) {
+  for (const each of record.providers) {
     const entry = asRecord(each);
     const provider = short(entry?.provider, MAX_BUDGET_ID_CHARS);
     if (!entry || !provider) continue;
