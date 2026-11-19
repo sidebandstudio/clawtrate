@@ -642,14 +642,18 @@ describe("where a bot runs: the engine", () => {
 
   it("F-274: a path in another system's form reaches the gateway as typed; the app doesn't judge it", async () => {
     const gw = gateway();
-    for (const path of ["C:\\Workspaces\\Otto", "workspaces/otto", "~/otto", "/srv/../otto"])
-      await engine(gw, { admin: true }).setWorkspace("otto", path);
-    expect(gw.calls.filter(([m]) => m === "agents.update").map(([, p]) => p.workspace)).toEqual([
+    const paths = [
       "C:\\Workspaces\\Otto",
       "workspaces/otto",
       "~/otto",
       "/srv/../otto",
-    ]);
+      "/srv/folder\twith tab",
+      "\\\\server\\share\\otto",
+    ];
+    for (const path of paths) await engine(gw, { admin: true }).setWorkspace("otto", path);
+    expect(gw.calls.filter(([m]) => m === "agents.update").map(([, p]) => p.workspace)).toEqual(
+      paths,
+    );
   });
 
   it("F-274: a refused workspace change is an unclear outcome with a fresh read, never a rollback", async () => {

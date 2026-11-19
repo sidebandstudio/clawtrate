@@ -835,7 +835,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: "setBotWorkspace",
         botId: botId(command.botId),
-        path: filePath(shortText(command.path, MAX_PATH_CHARS, "path")),
+        path: shortText(command.path, MAX_PATH_CHARS, "path"),
       };
     case "setMachineDefaults": {
       if (!DEFAULTS_CHOICES.includes(command.choice as DefaultsChoice))

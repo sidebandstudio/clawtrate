@@ -136,8 +136,9 @@ describe("device access", () => {
     expect(() =>
       parseBridgeCommand({ type: "setMachineDefaults", machineId: "gateway", choice: "maybe" }),
     ).toThrow("invalid choice");
-    expect(() =>
-      parseBridgeCommand({ type: "setBotWorkspace", botId: "otto", path: "a\nb" }),
-    ).toThrow();
+    // Path text the gateway may accept is forwarded as it is.
+    expect(
+      parseBridgeCommand({ type: "setBotWorkspace", botId: "otto", path: "folder\twith tab" }),
+    ).toEqual({ type: "setBotWorkspace", botId: "otto", path: "folder\twith tab" });
   });
 });

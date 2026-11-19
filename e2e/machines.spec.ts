@@ -11,7 +11,7 @@
 // screenshots of what it checked there, at 1440 light and dark and 390 light.
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACCOUNT_CLIENTS } from "../tools/dev-gateway/src/account-checks.ts";
@@ -311,7 +311,7 @@ test("F-047: with coder denied to Otto, a read-only connection sees coder denied
   await shots(page, "runs-on-inventory");
 });
 
-test("F-274: admin chooses a new workspace folder for Otto; the gateway creates it and reads it back; on media-box a folder is not supported", async () => {
+test("F-274: admin chooses a new workspace folder for Otto; the gateway creates it and reads it back", async () => {
   const page = writer.page;
   await runsOn(page);
   await expect(
@@ -334,6 +334,16 @@ test("F-274: admin chooses a new workspace folder for Otto; the gateway creates 
   const agents = await admin.request<{ agents: Json[] }>("agents.list", {});
   expect(agents.agents.find((agent) => agent.id === "otto")?.workspace).toBe(moved);
   expect(existsSync(moved)).toBe(true);
+  await expect(page.getByTestId("runs-on-workspace")).toContainText(moved);
+  // A path the gateway can't use is refused in its own words, and the workspace stays.
+  const file = join(moved, "not-a-folder");
+  writeFileSync(file, "");
+  await page.getByRole("button", { name: "Change…" }).click();
+  await field.fill(join(file, "child"));
+  await page.getByRole("button", { name: "Save folder" }).click();
+  await expect(page.locator("#m-workspace-error")).toContainText("ENOTDIR", { timeout: 30_000 });
+  const after = await admin.request<{ agents: Json[] }>("agents.list", {});
+  expect(after.agents.find((agent) => agent.id === "otto")?.workspace).toBe(moved);
   await expect(page.getByTestId("runs-on-workspace")).toContainText(moved);
 });
 
