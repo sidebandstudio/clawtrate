@@ -644,7 +644,8 @@ function WorkspaceForm({
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.stopPropagation();
-          onDone(null);
+          // While a save is pending the form stays: its answer belongs to it.
+          if (!busy) onDone(null);
         }
       }}
     >
@@ -688,6 +689,7 @@ function WorkspaceForm({
           className="button"
           data-variant="quiet"
           data-size="sm"
+          disabled={busy}
           onClick={() => onDone(null)}
         >
           Cancel

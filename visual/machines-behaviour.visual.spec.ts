@@ -158,6 +158,22 @@ const reconnect = (page: Page, admin: boolean) =>
     }));
   }, admin);
 
+test("F-274: a workspace form stays while its save is pending", async ({ page }) => {
+  await openFixture(page, `${PANE}&access=admin&machine=gatewayhost`, "light");
+  await openRunsOn(page);
+  await page.getByRole("button", { name: "Change…" }).click();
+  const field = page.getByRole("textbox", { name: /path on the gateway's machine/ });
+  await field.fill("/srv/clawtrate/workspaces/otto-3");
+  await page.getByRole("button", { name: "Save folder" }).click();
+  // The fixture answers after 300 ms: neither Escape nor Cancel ends the form before.
+  await expect(page.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  await field.press("Escape");
+  await expect(field).toBeVisible();
+  await expect(announcer(page)).toHaveText(
+    "Saved. Otto's workspace: /srv/clawtrate/workspaces/otto-3",
+  );
+});
+
 test("F-157: a removal that completes after the connection's access changed leaves nothing behind", async ({
   page,
 }) => {
