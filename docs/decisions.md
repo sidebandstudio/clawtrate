@@ -576,6 +576,8 @@ The host side of "Another computer" (`docs/design/setup.md` sections 5, 8 and 19
   - A stand-in client test of a refusal that arrives before the process closes, then a stop or exit 255, and a strict recheck before "pinned" after a transient key change.
   - The HTTP probe cancelling its grace poll when it settles another way, with at most one grace poll per socket (its abort listener is removed when it settles).
   - Real sign-in with the Linux and Windows client versions the design supports: an explicit agent, host-bound public-key authentication and certificate authentication.
+  - A LOOK where one profile's status can't be read and the other reports a healthy service is "can't tell", as the closing review asked; whether to offer the readable one while saying the other couldn't be read is for the setup screens, which show the person the choice.
+  - Preparing a route again for another endpoint retires the old preparation before both new files are written, so a failed write leaves the route unprepared; it says so, and nothing connects on a half-written configuration. Staging both files first can follow.
 
 ## Not done yet
 
