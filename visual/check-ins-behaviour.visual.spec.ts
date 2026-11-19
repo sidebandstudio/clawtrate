@@ -1,8 +1,9 @@
 // How a bot's check-ins behave in the fixture (docs/design/automation.md
 // section 13): the dialog's choices and the one command each save sends, the
 // default bot's note, what Off does not stop, the admin guard on every way
-// in, a draft kept across admin and a conflict, and a save's outcome kept
-// with its own draft. The fixture plans each save with the core's own
+// in, a draft kept across admin and a conflict and bound to its gateway's
+// identity, a save's outcome kept with its own draft, and a check after an
+// outcome that is not known. The fixture plans each save with the core's own
 // planner; that one patch is written and confirmed is checked against the
 // engine in packages/core/test/check-ins.test.ts, and against a gateway in
 // e2e/check-ins.spec.ts.
@@ -26,6 +27,8 @@ const saves = async (page: Page) =>
     .filter((each) => each.type === "saveCheckIn")
     .map(({ botId, every, prompt, was, kept }) => ({ botId, every, prompt, was, kept }));
 const NOTHING = { every: null, prompt: null };
+/** The prompt another client writes in the fixture's conflict. */
+const THEIRS = "Theirs. If nothing needs attention, reply NO_REPLY.";
 const block = (page: Page, bot: string) =>
   page.locator(`[data-testid="check-in"][data-bot="${bot}"]`);
 const dialog = (page: Page, name: string) =>
@@ -161,7 +164,7 @@ test("F-201: below admin nothing can change check-ins, on any way in, and admin 
   await expect(page.getByTestId("check-ins-dialog")).toHaveCount(0);
 });
 
-test("F-201: the dialog closes when admin access goes, and its controls never act without it", async ({
+test("F-201: the dialog closes when admin access goes, and no control to change check-ins is left", async ({
   page,
 }) => {
   await openFixture(page, ADMIN, "light");
@@ -184,11 +187,27 @@ test("F-201: a save that could not be confirmed says so in its own dialog only, 
   await marlow.getByRole("radio", { name: /^Daily/ }).click();
   await marlow.getByRole("button", { name: "Save", exact: true }).click();
   // While it saves, Escape waits for the answer.
+  const saving = marlow.getByRole("button", { name: "Saving…" });
+  await expect(saving).toBeVisible();
   await page.keyboard.press("Escape");
+  await expect(saving).toBeVisible();
   await expect(marlow).toBeVisible();
   await expect(marlow.getByTestId("save-unknown")).toContainText("Not confirmed.");
+  await expect(marlow.getByTestId("save-unknown")).toContainText("Check reads what it has now");
   await expect(page.getByTestId("b-announcer")).not.toHaveText("Check-ins saved");
   await expect(block(page, "marlow")).toContainText("No check-ins");
+  // Check only reads; saving again stays the person's own act.
+  const refreshes = async () =>
+    (await sent(page)).filter((each) => each.type === "refreshCheckIns").length;
+  const before = await refreshes();
+  await marlow.getByRole("button", { name: "Check", exact: true }).click();
+  await expect(marlow.getByTestId("save-checked")).toContainText("Checked.");
+  expect(await refreshes()).toBe(before + 1);
+  expect(await saves(page)).toHaveLength(1);
+  await expect(marlow.getByRole("radio", { name: /^Daily/ })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
   await marlow.getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();
   await expect(dialog(page, "Marlow").getByTestId("save-unknown")).toHaveCount(0);
@@ -261,8 +280,70 @@ test("F-201: a cadence changed elsewhere while the dialog is open is a conflict 
   await expect(juniper).toHaveCount(0);
   const [first, second] = await saves(page);
   expect(first!.was).toEqual({ every: "30m", prompt: null });
-  expect(second).toMatchObject({ every: "0m", was: { every: "24h", prompt: null } });
+  expect(second).toMatchObject({
+    every: "0m",
+    prompt: "Mine. NO_REPLY",
+    was: { every: "24h", prompt: THEIRS },
+  });
   await expect(block(page, "main")).toContainText("No check-ins");
+});
+
+test("F-201: after a conflict on the cadence alone, saving again never sends the prompt the person left, and the dialog shows the gateway's", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&checkins=daily&cisave=conflict`, "light");
+  await checkIns(page);
+  await page.getByRole("button", { name: "Change Juniper's check-ins" }).click();
+  const juniper = dialog(page, "Juniper");
+  await juniper.getByRole("radio", { name: /^Off/ }).click();
+  await juniper.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(juniper.getByTestId("save-conflict")).toContainText("Its cadence was changed.");
+  await expect(juniper.getByRole("textbox", { name: "Prompt" })).toHaveValue(THEIRS);
+  await juniper.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(juniper).toHaveCount(0);
+  const [, second] = await saves(page);
+  expect(second).toEqual({
+    botId: "main",
+    every: "0m",
+    prompt: null,
+    was: { every: "24h", prompt: THEIRS },
+    kept: [],
+  });
+});
+
+test("F-201: the bots a dialog named are what its save sends, though the list behind it changed", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await checkIns(page);
+  await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();
+  const marlow = dialog(page, "Marlow");
+  await expect(marlow.getByTestId("catch-note")).toContainText("Juniper checks in now");
+  await change(
+    page,
+    "return { ...state, checkIns: { ...state.checkIns, defaults: { ...state.checkIns.defaults, inherited: ['main', 'otto'] } } };",
+  );
+  await expect(marlow.getByTestId("catch-note")).toContainText("Juniper checks in now");
+  await marlow.getByRole("radio", { name: /^Daily/ }).click();
+  await marlow.getByRole("button", { name: "Save", exact: true }).click();
+  expect((await saves(page))[0]!.kept).toEqual([{ botId: "main", every: "30m" }]);
+});
+
+test("F-201: when the bots to keep are more than one change can write, the dialog says so before Save, and Save is off", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await checkIns(page);
+  await change(
+    page,
+    "return { ...state, checkIns: { ...state.checkIns, defaults: { ...state.checkIns.defaults, inherited: Array.from({ length: 33 }, (_, i) => 'b' + i), inheritedCut: true } } };",
+  );
+  await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();
+  const marlow = dialog(page, "Marlow");
+  await expect(marlow.getByTestId("catch-blocked")).toContainText("at most 32");
+  await expect(marlow.getByTestId("save-conflict")).toHaveCount(0);
+  await expect(marlow.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+  expect(await saves(page)).toEqual([]);
 });
 
 test("F-201: a draft survives admin going and coming back, and is not shown for another gateway", async ({
@@ -283,11 +364,18 @@ test("F-201: a draft survives admin going and coming back, and is not shown for 
     "true",
   );
   await expect(marlow.getByRole("textbox", { name: "Prompt" })).toHaveValue("Kept. NO_REPLY");
+  // Another gateway now answers at the same address: its identity is not the draft's.
   await change(
     page,
-    "return { ...state, connection: { ...state.connection, gatewayUrl: 'ws://another.invalid' } };",
+    "return { ...state, connection: { ...state.connection, gatewayId: 'another' }, checkIns: { ...state.checkIns, gatewayId: 'another' } };",
   );
   await expect(page.getByTestId("check-ins-dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();
+  // A new draft, from what this gateway has.
+  await expect(dialog(page, "Marlow").getByRole("radio", { name: /^Off/ })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
   expect(await saves(page)).toEqual([]);
 });
 
@@ -316,6 +404,27 @@ test("F-201: check-ins read while disconnected are read again when the connectio
   expect(await refreshes()).toBe(before + 1);
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect.poll(refreshes).toBe(before + 2);
+  // The bots arrive after the connection does: their arrival reads again.
+  await change(page, "return { ...state, bots: state.bots.slice(1) };");
+  await expect.poll(refreshes).toBe(before + 3);
+  // A read that failed keeps the way to read again.
+  await change(
+    page,
+    "return { ...state, checkIns: { ...state.checkIns, status: 'error', error: 'timeout' } };",
+  );
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect.poll(refreshes).toBe(before + 4);
+});
+
+test("F-201: a cadence that is not whole minutes is shown exactly", async ({ page }) => {
+  await openFixture(page, ADMIN, "light");
+  await checkIns(page);
+  await change(
+    page,
+    "return { ...state, checkIns: { ...state.checkIns, jobs: state.checkIns.jobs.map((job) => ({ ...job, everyMs: 90000 })) } };",
+  );
+  await expect(block(page, "main")).toContainText("Checks in every 90 seconds");
+  await expect(block(page, "main")).toContainText("Every 90 seconds, Juniper looks");
 });
 
 test("F-201: an inherited custom prompt is what an empty prompt means, and no words say the bot stays quiet", async ({
@@ -333,4 +442,18 @@ test("F-201: an inherited custom prompt is what an empty prompt means, and no wo
   );
   await expect(juniper).toContainText("Empty uses the prompt set as the gateway's default");
   await expect(juniper.getByTestId("prompt-note")).toContainText("may answer every check-in");
+});
+
+test("F-201: As needed says the prompt asks for quiet only for the gateway's own prompt, not for a custom one that names NO_REPLY", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await checkIns(page);
+  await page.getByRole("button", { name: "Change Pip's check-ins" }).click();
+  const pip = dialog(page, "Pip");
+  const asNeeded = pip.getByRole("radio", { name: /^As needed/ });
+  await expect(asNeeded).toContainText("stay quiet");
+  await pip.getByText("What to check").click();
+  await pip.getByRole("textbox", { name: "Prompt" }).fill("Always answer; never reply NO_REPLY.");
+  await expect(asNeeded).not.toContainText("quiet");
 });

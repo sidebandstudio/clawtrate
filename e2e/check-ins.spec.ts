@@ -185,7 +185,7 @@ test("F-201: Daily for Marlow is one config.patch that also keeps Juniper's chec
   await expect(block("main")).toContainText("Checks in every 30 minutes");
 });
 
-test("F-201: As needed for Marlow is one config.patch of every 30m, and once it says saved its job runs every 30 minutes", async () => {
+test("F-201: As needed for Marlow is one config.patch of every 30m, and once it says saved its job is set to every 30 minutes", async () => {
   test.setTimeout(120_000);
   await onePatch(() => save("marlow", /^As needed/));
   expect(await settings()).toEqual({ main: { every: "30m" }, marlow: { every: "30m" } });
