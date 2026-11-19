@@ -274,6 +274,9 @@ check("host dialog: everything behind it is inert", await p.evaluate(() => [...d
 check("host dialog: its title has focus", await p.evaluate(() => document.activeElement?.id === "s-host-title"));
 for (let i = 0; i < 6; i++) await p.keyboard.press("Tab");
 check("host dialog: Tab stays inside it", await p.evaluate(() => Boolean(document.activeElement?.closest("[data-host-dialog]"))));
+await p.evaluate(() => document.getElementById("s-host-title").focus());
+await p.keyboard.press("Shift+Tab");
+check("host dialog: Shift+Tab from its title stays inside it", await p.evaluate(() => Boolean(document.activeElement?.closest("[data-host-dialog]"))));
 await p.keyboard.press("Escape");
 check("host dialog: Escape closes it and returns focus to the button that opened it", await p.evaluate(() => !document.querySelector("[data-host-scrim]") && document.activeElement?.dataset.host === "replaceKey"));
 await p.close();

@@ -701,10 +701,12 @@
       }
       if (event.key === "Tab") {
         // Focus stays inside the dialog.
+        // The title, focused on open, counts as the start.
         const items = [...scrim.querySelectorAll("button, a[href], input")];
         const first = items[0];
         const last = items[items.length - 1];
-        if (event.shiftKey && document.activeElement === first) (event.preventDefault(), last.focus());
+        const atStart = document.activeElement === first || document.activeElement?.id === "s-host-title";
+        if (event.shiftKey && atStart) (event.preventDefault(), last.focus());
         else if (!event.shiftKey && document.activeElement === last) (event.preventDefault(), first.focus());
       }
     });
