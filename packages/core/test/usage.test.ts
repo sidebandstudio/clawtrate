@@ -514,7 +514,15 @@ function fakeGateway(options: { identity?: boolean; meddle?: number; counting?: 
       fromBot("m2", T + 2, "agent:pip:ask-marlow"),
       assistant("m2", T + 3),
     ],
-    "agent:marlow:other": [person("m3", T), assistant("m3", T + 1, 500)],
+    // A message from Pip whose send returned before Marlow answered (`accepted`): no result names
+    // its run, so it is not counted as another bot's.
+    "agent:marlow:other": [
+      person("m3", T),
+      assistant("m3", T + 1, 500),
+      fromBot("m4", T + 2, "agent:pip:slow"),
+      assistant("m4", T + 3, 300),
+    ],
+    "agent:pip:slow": [person("p2", T), sendResult("agent:marlow:other", null, "accepted")],
     "agent:pip:ask-marlow": [
       person("p1", T),
       assistant("p1", T + 1),
@@ -571,7 +579,7 @@ function fakeGateway(options: { identity?: boolean; meddle?: number; counting?: 
                 ]
               : [
                   { key: "agent:marlow:main", usage: totals(400, 0) },
-                  { key: "agent:marlow:other", usage: totals(500, 0) },
+                  { key: "agent:marlow:other", usage: totals(800, 0) },
                 ],
           cacheStatus: fresh,
         };
@@ -887,10 +895,11 @@ describe("the usage engine", () => {
     });
     expect(report.figure.tokens.total).toBe(1700);
     expect(report.tasks?.map((t) => [t.key, t.total])).toEqual([
-      ["agent:marlow:other", 500],
+      ["agent:marlow:other", 800],
       ["agent:marlow:main", 400],
     ]);
-    // m1 (a person's, 200) and m3 (500) are people's; m2 (200) is the run Pip's send names.
+    // m1 (a person's, 200) and m3 (500) are people's; m2 (200) is the run Pip's send names; m4
+    // (300), another message from Pip that no result names, is not attributed.
     expect(report.sources).toEqual({
       people: 700,
       routines: 0,

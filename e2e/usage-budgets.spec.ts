@@ -17,7 +17,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   BUDGETS_PREF_KEY,
-  inRange,
   rangeFor,
   rangeParams,
   type UsagePeriod,
@@ -60,6 +59,21 @@ async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
 }
 
 /**
+ * The days a Daily or a Weekly budget covers today in `zone`, worked out here, apart from the
+ * app's own date code: today, or Monday to today.
+ */
+function ownDays(period: "daily" | "weekly", zone: string) {
+  const at = new Date();
+  const today = at.toLocaleDateString("en-CA", { timeZone: zone });
+  if (period === "daily") return { startDate: today, endDate: today, timeZone: zone };
+  const sinceMonday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(
+    at.toLocaleDateString("en-US", { weekday: "short", timeZone: zone }),
+  );
+  const monday = new Date(Date.parse(`${today}T12:00:00Z`) - sinceMonday * 86_400_000);
+  return { startDate: monday.toISOString().slice(0, 10), endDate: today, timeZone: zone };
+}
+
+/**
  * What the gateway answers for a bot's (or every bot's) total over a period, in the page's time
  * zone, once it has finished counting: a cold gateway first answers with what it has read so
  * far and `cacheStatus.status: "refreshing"`, which the page shows as still being counted.
@@ -86,6 +100,7 @@ async function gatewayTotal(botId: string | null, period: UsagePeriod | "daily" 
         total: Number(result.totals.totalTokens),
         unpriced: Number(result.totals.missingCostEntries),
         cost: Number(result.totals.totalCost),
+        asOf: Number(result.updatedAt),
         counting,
       };
     await new Promise((resolve) => setTimeout(resolve, 2_000));
@@ -357,15 +372,123 @@ test("F-232 F-237: a bot's Usage page shows the gateway's own totals for each pe
   await page.keyboard.press("Escape");
 });
 
+/** A task's history rows, as the gateway gives them. */
+async function historyOf(sessionKey: string): Promise<Json[]> {
+  return (await gateway.request<{ messages: Json[] }>("chat.history", { sessionKey, limit: 1000 }))
+    .messages;
+}
+
+/** The tokens of one run's model answers in a history, and when its last one came. */
+function runIn(messages: Json[], runId: string, within: (at: number) => boolean = () => true) {
+  const rows = messages.filter(
+    (each) =>
+      each.role === "assistant" &&
+      (each.__openclaw as Json | undefined)?.runId === runId &&
+      within(Number(each.timestamp)),
+  );
+  return {
+    tokens: rows.reduce(
+      (sum, each) => sum + Number((each.usage as Json | undefined)?.totalTokens ?? 0),
+      0,
+    ),
+    at: Math.max(0, ...rows.map((each) => Number(each.timestamp))),
+  };
+}
+
+/**
+ * Another bot's runs in a bot's tasks this week, worked out here from the gateway's own records
+ * and apart from the app's code: a turn another bot's message started (`inter_session`), counted
+ * as `expected` when the sending task's `sessions_send` result names its run, and as
+ * `unconfirmed` when none does.
+ */
+async function otherBots(botId: string) {
+  const days = ownDays("weekly", timeZone);
+  const within = (at: number) => {
+    const date = new Date(at).toLocaleDateString("en-CA", { timeZone });
+    return date >= days.startDate && date <= days.endDate;
+  };
+  // The task list once the gateway has finished counting it: a task still being counted has
+  // no usage yet (`computing`), and would be left out.
+  let tasks: {
+    sessions: Array<{ key: string; usage?: Json; computing?: boolean }>;
+    cacheStatus?: Json;
+  };
+  const deadline = Date.now() + 90_000;
+  for (;;) {
+    tasks = await gateway.request("sessions.usage", {
+      agentId: botId,
+      ...rangeParams(days),
+      limit: 200,
+    });
+    const status = tasks.cacheStatus ?? {};
+    const counting =
+      (typeof status.status === "string" && status.status !== "fresh") ||
+      tasks.sessions.some((each) => each.computing === true);
+    if (!counting) break;
+    expect(Date.now(), `${botId}'s tasks are still being counted`).toBeLessThan(deadline);
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  const named = new Map<string, Set<string>>();
+  const sendersRead = new Set<string>();
+  let expected = 0;
+  let unconfirmed = 0;
+  for (const task of tasks.sessions.filter((each) => Number(each.usage?.totalTokens ?? 0) > 0)) {
+    const history = await historyOf(task.key);
+    for (const row of history) {
+      const provenance = row.provenance as Json | undefined;
+      const key = row.idempotencyKey;
+      if (provenance?.kind !== "inter_session" || typeof key !== "string" || !key.endsWith(":user"))
+        continue;
+      const source = String(provenance.sourceSessionKey);
+      if (!sendersRead.has(source)) {
+        sendersRead.add(source);
+        for (const each of await historyOf(source)) {
+          if (each.role !== "toolResult" || each.toolName !== "sessions_send") continue;
+          const text = (each.content as Array<{ text?: string }>).map((b) => b.text ?? "").join("");
+          const result = JSON.parse(text) as {
+            runId?: string;
+            sessionKey?: string;
+            status?: string;
+          };
+          if (!result.runId || !result.sessionKey || result.status === "forbidden") continue;
+          named.set(
+            result.sessionKey,
+            (named.get(result.sessionKey) ?? new Set()).add(result.runId),
+          );
+        }
+      }
+      const runId = key.slice(0, -":user".length);
+      const { tokens } = runIn(history, runId, within);
+      if (named.get(task.key)?.has(runId)) expected += tokens;
+      else unconfirmed += tokens;
+    }
+  }
+  return { expected, unconfirmed };
+}
+
+/** A bot's Usage page for this week, once the gateway's total includes what happened by `since`. */
+async function settledWeek(bot: string, botId: string, since: number) {
+  await expect
+    .poll(async () => (await gatewayTotal(botId, "week")).asOf > since, {
+      timeout: 90_000,
+      intervals: [2_000],
+    })
+    .toBe(true);
+  await usagePage(page, bot);
+  await page.getByTestId("usage-page").getByRole("radio", { name: "This week" }).click();
+  await expect(page.getByTestId("usage-source")).not.toContainText("still being counted", {
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId("usage-sources")).toBeVisible({ timeout: 30_000 });
+  // Every task read in full: the line is the whole figure, never a part of it.
+  await expect(page.getByTestId("usage-page")).not.toContainText("Partial:");
+}
+
 test("F-131: the Messages from other bots line counts only the run a send's result names", async () => {
+  test.setTimeout(300_000);
   // Marlow's main task holds a run a person started and a run Pip's send started (the seed's
   // "Ask Marlow about the plan"); Pip's task holds the send's result, which names that run.
-  const range = rangeFor("week", Date.now(), timeZone);
-  const sender = await gateway.request<{ messages: Json[] }>("chat.history", {
-    sessionKey: "agent:pip:ask-marlow",
-    limit: 200,
-  });
-  const named = sender.messages
+  const named = (await historyOf("agent:pip:ask-marlow"))
     .filter((each) => each.role === "toolResult" && each.toolName === "sessions_send")
     .map((each) => {
       const text = (each.content as Array<{ text?: string }>)
@@ -375,20 +498,10 @@ test("F-131: the Messages from other bots line counts only the run a send's resu
     })
     .filter((each) => each.sessionKey === "agent:marlow:main" && each.runId);
   expect(named).toHaveLength(1);
-  const recipient = await gateway.request<{ messages: Json[] }>("chat.history", {
-    sessionKey: "agent:marlow:main",
-    limit: 200,
-  });
-  const runTokens = (runId: string) =>
-    recipient.messages
-      .filter(
-        (each) =>
-          each.role === "assistant" && (each.__openclaw as Json | undefined)?.runId === runId,
-      )
-      .reduce((sum, each) => sum + Number((each.usage as Json | undefined)?.totalTokens ?? 0), 0);
+  const recipient = await historyOf("agent:marlow:main");
   const runs = [
     ...new Set(
-      recipient.messages.flatMap((each) => {
+      recipient.flatMap((each) => {
         const runId = (each.__openclaw as Json | undefined)?.runId;
         return each.role === "assistant" && typeof runId === "string" ? [runId] : [];
       }),
@@ -396,88 +509,65 @@ test("F-131: the Messages from other bots line counts only the run a send's resu
   ];
   // The recipient task has runs the send does not name: the person's.
   expect(runs.length).toBeGreaterThan(1);
-  const sent = runTokens(named[0]!.runId!);
+  const sent = runIn(recipient, named[0]!.runId!).tokens;
   expect(sent).toBeGreaterThan(0);
-  const taskTotal = runs.reduce((sum, runId) => sum + runTokens(runId), 0);
+  const taskTotal = runs.reduce((sum, runId) => sum + runIn(recipient, runId).tokens, 0);
   expect(taskTotal).toBeGreaterThan(sent);
-  // Every bot-to-bot run of Marlow's this week, worked out from the gateway's own records: a
-  // turn another bot's send delivered, in any of Marlow's tasks, whose run the sending task's
-  // `sessions_send` result names. Other checks of this run may have added more than the seed's.
-  const within = inRange(range);
-  const marlowTasks = await gateway.request<{ sessions: Array<{ key: string; usage?: Json }> }>(
-    "sessions.usage",
-    { agentId: "marlow", ...rangeParams(range), limit: 200 },
-  );
-  const results = new Map<string, Set<string>>();
-  const sendersRead = new Set<string>();
-  let expected = 0;
-  for (const task of marlowTasks.sessions.filter(
-    (each) => Number(each.usage?.totalTokens ?? 0) > 0,
-  )) {
-    const history = await gateway.request<{ messages: Json[] }>("chat.history", {
-      sessionKey: task.key,
-      limit: 1000,
-    });
-    for (const row of history.messages) {
-      const provenance = row.provenance as Json | undefined;
-      const key = row.idempotencyKey;
-      if (provenance?.kind !== "inter_session" || typeof key !== "string" || !key.endsWith(":user"))
-        continue;
-      const source = String(provenance.sourceSessionKey);
-      if (!sendersRead.has(source)) {
-        sendersRead.add(source);
-        const sent = await gateway.request<{ messages: Json[] }>("chat.history", {
-          sessionKey: source,
-          limit: 1000,
-        });
-        for (const each of sent.messages) {
-          if (each.role !== "toolResult" || each.toolName !== "sessions_send") continue;
-          const text = (each.content as Array<{ text?: string }>).map((b) => b.text ?? "").join("");
-          const result = JSON.parse(text) as {
-            runId?: string;
-            sessionKey?: string;
-            status?: string;
-          };
-          if (!result.runId || !result.sessionKey || result.status === "forbidden") continue;
-          results.set(
-            result.sessionKey,
-            (results.get(result.sessionKey) ?? new Set()).add(result.runId),
-          );
-        }
-      }
-      const runId = key.slice(0, -":user".length);
-      if (!results.get(task.key)?.has(runId)) continue;
-      expected += history.messages
-        .filter(
-          (each) =>
-            each.role === "assistant" &&
-            (each.__openclaw as Json | undefined)?.runId === runId &&
-            within(Number(each.timestamp)),
-        )
-        .reduce((sum, each) => sum + Number((each.usage as Json | undefined)?.totalTokens ?? 0), 0);
-    }
-  }
-  expect(expected).toBeGreaterThanOrEqual(sent);
-  await usagePage(page, "Marlow");
-  await page.getByTestId("usage-page").getByRole("radio", { name: "This week" }).click();
-  await expect(page.getByTestId("usage-sources")).toBeVisible();
-  await expect(page.getByTestId("usage-source")).not.toContainText("still being counted", {
-    timeout: 60_000,
+  // A send whose call returns before Marlow answers (`accepted`, naming Marlow's run): when
+  // Marlow answers, the gateway delivers the reply into Pip's task as another bot's message
+  // (`inter_session` from `sessions_send`, its source Marlow's task), and the run it starts
+  // there is one that no send's result names. The line must leave it out.
+  const slow = await gatewayCall<{ key: string }>("sessions.create", {
+    agentId: "pip",
+    label: `Slow send ${STAMP}`,
   });
-  const shown = await bar(page, "usage-sources", "Messages from other bots");
-  // Never the recipient task's whole total charged to the send, never the person's run.
-  expect(shown).toBeGreaterThanOrEqual(sent);
-  if ((await page.getByTestId("usage-page").textContent())?.includes("Partial: some tasks"))
-    // More tasks than the page reads: what it shows is part of the gateway's figure, never more.
-    expect(shown).toBeLessThanOrEqual(expected);
-  else expect(shown).toBe(expected);
-  const total = (await gatewayTotal("marlow", "week")).total;
-  const parts = await Promise.all(
-    ["Messages from people", "Routines", "Messages from other bots", "Not attributed"].map((name) =>
-      bar(page, "usage-sources", name),
-    ),
-  );
-  expect(parts.reduce((sum, each) => sum + each, 0)).toBe(total);
+  await gatewayCall("chat.send", {
+    sessionKey: slow.key,
+    message: "Message your slow partner about the plan.",
+    idempotencyKey: `${slow.key}-slow`,
+  });
+  const lateReply = async () => {
+    const history = await historyOf(slow.key);
+    const started = history.find(
+      (each) =>
+        (each.provenance as Json | undefined)?.kind === "inter_session" &&
+        (each.provenance as Json | undefined)?.sourceSessionKey === "agent:marlow:main",
+    );
+    const key = started?.idempotencyKey;
+    if (typeof key !== "string" || !key.endsWith(":user")) return { tokens: 0, at: 0 };
+    return runIn(history, key.slice(0, -":user".length));
+  };
+  // Marlow takes 15 seconds to answer; then Pip answers the reply.
+  await expect
+    .poll(async () => (await lateReply()).tokens, { timeout: 150_000, intervals: [2_000] })
+    .toBeGreaterThan(0);
+  const reply = await lateReply();
+  // Marlow: the seed's send and the slow one each name their run.
+  const marlow = await otherBots("marlow");
+  expect(marlow.expected).toBeGreaterThanOrEqual(sent);
+  await settledWeek("Marlow", "marlow", reply.at);
+  // Never the recipient task's whole total charged to the send, never the person's run:
+  // exactly the runs the results name.
+  await expect
+    .poll(() => bar(page, "usage-sources", "Messages from other bots"), { timeout: 30_000 })
+    .toBe(marlow.expected);
+  const sum = async () =>
+    (
+      await Promise.all(
+        ["Messages from people", "Routines", "Messages from other bots", "Not attributed"].map(
+          (name) => bar(page, "usage-sources", name),
+        ),
+      )
+    ).reduce((total, each) => total + each, 0);
+  expect(await sum()).toBe((await gatewayTotal("marlow", "week")).total);
+  // Pip: the late reply's run is another bot's message no result names, and is left out.
+  const pip = await otherBots("pip");
+  expect(pip.unconfirmed).toBeGreaterThanOrEqual(reply.tokens);
+  await settledWeek("Pip", "pip", reply.at);
+  await expect
+    .poll(() => bar(page, "usage-sources", "Messages from other bots"), { timeout: 30_000 })
+    .toBe(pip.expected);
+  expect(await sum()).toBe((await gatewayTotal("pip", "week")).total);
 });
 
 test("F-234: a weekly budget set on one device is shown with the same value after a reload and on the second device", async () => {
