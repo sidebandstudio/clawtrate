@@ -59,7 +59,7 @@ Run `pnpm scenarios` too when you change the development gateway or its scenario
 
 One issue, one pull request. Start the body with `Closes #123`, or `Part of #123` when the issue needs more than one pull request. Smaller pull requests merge sooner. Every pull request gets a `size:` label, from XS to XXL, so you can see how big yours is.
 
-`main` gets one squashed commit per pull request. Its title becomes the commit's subject and its body the commit's message, so write both for someone reading the history a year from now.
+`main` gets one squashed commit per pull request, and its whole message is the pull request's title with its number. Write the title for someone reading the history a year from now, who sees nothing else.
 
 The title says what changes for the person using Clawtrate, in plain words and under 72 characters, after a type: `feat`, `fix`, `docs`, `test`, `ci`, `refactor` or `chore`.
 
@@ -70,6 +70,8 @@ The title says what changes for the person using Clawtrate, in plain words and u
 | `docs: explain how to add a scenario`                     | `Update files`                                                                                      |
 
 The body says what changes in one to three sentences, why, and how it was checked. Use short, plain sentences, and delete the template's comments. Interface changes need before and after screenshots at desktop and phone width.
+
+CodeRabbit reviews every pull request that is not a draft. Its comments are advice: check each one against the code, fix the real ones, and reply with the reason when one is wrong. Nothing waits on it.
 
 Coding agents are welcome here, since most of Clawtrate is written with them. You are still responsible for every line you submit. Read the diff before you open the pull request, and leave co-author trailers, "generated with" lines and any other tool or agent attribution out of commits and pull requests.
 
