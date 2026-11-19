@@ -5,8 +5,8 @@
 // design says; it is not drawn here. A run that is going on shows its streaming
 // text and says what it does in the status line's words, in the past tense
 // while the connection is lost or closed, and the history that lands when it
-// ends replaces both.
-// Pure, so the unit tests cover it.
+// ends replaces both. A message the engine cut or the gateway truncated, and
+// earlier messages not loaded, are said. Pure, so the unit tests cover it.
 
 import {
   activeRun,
@@ -23,7 +23,7 @@ import {
   type TranscriptItem,
 } from "@clawtrate/core";
 import { actionWords } from "@clawtrate/core";
-import { stampBefore } from "@clawtrate/ui/conversation-words";
+import { CONVERSATION_WORDS, stampBefore } from "@clawtrate/ui/conversation-words";
 import { stampTime } from "@clawtrate/ui/format";
 import { statusLineFor } from "@clawtrate/ui/live";
 import { STATE_WORDS } from "@clawtrate/ui/summary";
@@ -42,6 +42,8 @@ export type ChatRow =
       tone: "danger" | null;
     }
   | { kind: "event"; id: string; text: string }
+  /** A message the engine cut or the gateway truncated, or earlier messages not loaded. */
+  | { kind: "note"; id: string; text: string }
   /**
    * A run going on now: what it is doing, in the status line's words. `tone` is
    * the connection's: live while connected, lost while it reconnects, off when
@@ -117,6 +119,19 @@ export function runningWords(
   return { text: phrase(STATE_WORDS.working), tone };
 }
 
+/** What to say under an item the gateway truncated when it stored it, or the engine cut a block of to its bound. */
+export function shortenedWords(item: TranscriptItem): string | null {
+  if (item.truncated === true) return CONVERSATION_WORDS.truncated;
+  return (item.cut ?? []).some((path) => path.startsWith("blocks"))
+    ? CONVERSATION_WORDS.shortened
+    : null;
+}
+
+function noteRow(item: TranscriptItem): ChatRow[] {
+  const text = shortenedWords(item);
+  return text ? [{ kind: "note", id: `shortened:${item.id}`, text }] : [];
+}
+
 export function chatRows(
   task: Task,
   transcript: Transcript,
@@ -125,6 +140,8 @@ export function chatRows(
   link: Link,
 ): ChatRow[] {
   const rows: ChatRow[] = [];
+  if (transcript.hasMore)
+    rows.push({ kind: "note", id: "earlier", text: CONVERSATION_WORDS.earlier });
   const ctx = readingContextOf(transcript);
   const index = stepIndex(transcript.runs);
   let previous: number | null = null;
@@ -139,6 +156,7 @@ export function chatRows(
         .join(" ")
         .trim();
       if (text) rows.push({ kind: "event", id: item.id, text });
+      rows.push(...noteRow(item));
       continue;
     }
     if (item.role === "user") {
@@ -147,6 +165,7 @@ export function chatRows(
         .join("\n\n")
         .trim();
       if (text) rows.push({ kind: "user", id: item.id, text });
+      rows.push(...noteRow(item));
       continue;
     }
     for (const group of groupFeed(entriesOf(item, index), ctx)) {
@@ -174,6 +193,7 @@ export function chatRows(
         });
       }
     }
+    rows.push(...noteRow(item));
   }
   const active = activeRun(transcript);
   // What the run has written so far, before it lands in history.

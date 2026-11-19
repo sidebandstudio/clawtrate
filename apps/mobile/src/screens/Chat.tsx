@@ -95,6 +95,17 @@ function RowView({ row }: { row: ChatRow }) {
           {row.text}
         </Txt>
       );
+    case "note":
+      return (
+        <Txt
+          testID={row.id === "earlier" ? "earlier-note" : "shortened-note"}
+          size={S["text-sm"]}
+          color="text-faint"
+          style={{ paddingHorizontal: 14, textAlign: row.id === "earlier" ? "center" : "left" }}
+        >
+          {row.text}
+        </Txt>
+      );
     case "event":
       return (
         <Txt

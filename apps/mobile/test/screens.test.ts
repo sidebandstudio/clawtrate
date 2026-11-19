@@ -1,6 +1,7 @@
 import {
   callFromBlock,
   emptyActivity,
+  enforceState,
   newRun,
   foldLineOf,
   initialState,
@@ -18,6 +19,7 @@ import { back, connectView, current, HOME, inShell, keptMismatch } from "../src/
 import { chatRows, runningWords } from "../src/transcript.ts";
 
 const LIVE = { connected: true, closed: false };
+const KEY = "agent:otto:disk";
 
 const NOW = new Date(2026, 10, 18, 9, 30).getTime();
 
@@ -357,5 +359,44 @@ describe("the iPhone chat's rows", () => {
       { kind: "bot", id: "live:run-1", text: "Half a reply" },
       { kind: "running", id: "running", text: "Writing", tone: "live" },
     ]);
+  });
+
+  it("says a message is shortened when the engine cut it or the gateway truncated it, and that earlier messages are not loaded", () => {
+    const long: TranscriptItem = {
+      id: "a2",
+      role: "assistant",
+      timestamp: at,
+      model: null,
+      blocks: [{ kind: "text", text: `${"word ".repeat(500)}Last sentence.` }],
+    };
+    const bounded = enforceState({
+      ...initialState,
+      transcripts: { [KEY]: { ...transcript([long]), hasMore: true } },
+    }).transcripts[KEY]!;
+    const rows = chatRows(task(KEY, at), bounded, "Otto", NOW, LIVE);
+    expect(rows[0]).toEqual({
+      kind: "note",
+      id: "earlier",
+      text: "Only part of this task's history is loaded here, so earlier messages may be missing.",
+    });
+    expect(rows.find((row) => row.kind === "note" && row.id === "shortened:a2")?.text).toBe(
+      "Shortened here. Only the first part of this message is kept on this device.",
+    );
+    const truncated = chatRows(
+      task(KEY, at),
+      transcript([{ ...items[0]!, truncated: true }]),
+      "Otto",
+      NOW,
+      LIVE,
+    );
+    expect(truncated.map((row) => row.kind)).toEqual(["stamp", "user", "note"]);
+    expect(truncated[2]).toMatchObject({
+      text: "Truncated by the gateway. The rest was not sent.",
+    });
+    expect(
+      chatRows(task(KEY, at), transcript(items), "Otto", NOW, LIVE).some(
+        (row) => row.kind === "note",
+      ),
+    ).toBe(false);
   });
 });
