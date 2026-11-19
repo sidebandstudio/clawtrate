@@ -83,6 +83,9 @@
     [`${tab}&bview=rule&line=files&form=open&limit=allow`, "20 allow rules already"],
     [`${tab}&bview=rule&line=files&form=open&limit=ask`, "20 ask rules already"],
     [`${tab}&bview=rule&line=files&form=open&limit=never`, "Near 50 never rules"],
+    [`${tab}&bview=rule&line=files&form=fromcard`, "The rule form filled in from an expired request"],
+    [`${tab}&bview=rule&line=files&form=fromcard&access=write`, "An expired request's rule, below admin"],
+    [`bot=pip&panel=open&tab=settings&bview=rule&line=message`, "A line for a bot with no routines"],
     [`${tab}&bview=rule&line=files&rules=stopped`, "One line while the rules plugin is stopped"],
     [`${tab}&bview=messaging`, "Messaging other bots"],
     [`${tab}&bview=messaging&msg=some`, "Only these bots"],
@@ -1286,15 +1289,18 @@
             `<p class="request-foot">Waits 10 minutes; if no one answers, Otto doesn't do it.</p></section>`,
         },
         {
-          name: "An ask when the saved approvals are full",
-          note: "Refuse, and say so: nothing is evicted, and Always allow is shown but can't be chosen.",
+          name: "An ask when the scope's allow entries are full",
+          note: `Nothing is removed by itself. Before anyone answers, the card says Always allow will save nothing; answered, the call runs once and the next identical call asks again. The link opens <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files">the rules list</a>.`,
           still: true,
           html:
             `<section class="card request" data-kind="approval" data-state="pending" role="region" aria-label="Otto wants to change a file. Needs approval.">` +
             `<header class="request-head"><h3 class="request-title">Otto wants to change a file</h3><span class="tag" data-tone="warn">Needs approval</span></header>` +
             `<p class="request-summary">Write notes/disk-2026-11-18.md in Otto's workspace.</p>` +
-            `<div class="request-actions"><button type="button" class="button" data-variant="primary">Allow once</button><button type="button" class="button" aria-disabled="true">Always allow…</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet">Deny</button></div>` +
-            `<p class="c-sentence">Otto has 20 saved approvals. Remove one in Settings, Permissions, to save another.</p></section>`,
+            `<div class="request-actions"><button type="button" class="button" data-variant="primary">Allow once</button><button type="button" class="button">Always allow…</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet">Deny</button></div>` +
+            `<p class="c-sentence">Always allow will run this once and save nothing: Otto has 20 allow rules and saved answers, the most a scope can hold. <a class="link-button" href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files">Open the rules list</a></p></section>` +
+            `<section class="card request" data-kind="approval" data-state="resolved" role="region" aria-label="Otto wanted to change a file. Answered."><header class="request-head"><h3 class="request-title">Otto wanted to change a file</h3><span class="tag">Allowed this once</span></header>` +
+            `<p class="c-outcome">Your answer: Always allow, 5:41 PM.</p><p class="c-outcome">Then: Ran, once.</p>` +
+            `<p class="c-outcome">Nothing was saved: Otto has 20 allow rules and saved answers, the most a scope can hold. The next identical call asks again. <a class="link-button" href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files">Open the rules list</a></p></section>`,
         },
         {
           name: "An answer, and what then happened",
@@ -1308,6 +1314,7 @@
         },
         {
           name: "An expired ask",
+          note: `Make a rule… (admin; below admin it is absent) opens <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files&amp;form=fromcard">the rule form filled in from the request</a>. It saves only when the person adds the rule, and the expired call never runs.`,
           still: true,
           html: `<section class="card request" data-kind="approval" data-state="resolved" role="region" aria-label="Otto wanted to change a file. Expired."><header class="request-head"><h3 class="request-title">Otto wanted to change a file</h3><span class="tag">Expired</span></header><p class="c-outcome">Expired. Nothing ran.</p><div class="request-actions"><button type="button" class="button">Make a rule…</button></div></section>`,
         },

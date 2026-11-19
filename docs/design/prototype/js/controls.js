@@ -35,7 +35,7 @@
     override: p("override") === "1",
     held: p("held") === "1",
     autohold: true,
-    form: p("form") === "open" ? { pattern: p("pattern") === "long" ? "a".repeat(1001) : "", action: p("limit") === "never" ? "never" : p("limit") === "ask" ? "ask" : p("limit") === "allow" ? "allow" : "never", saving: "save" } : null,
+    form: p("form") === "fromcard" ? { pattern: "notes/disk-2026-11-18.md", action: "allow", saving: "save", note: "", from: "5:41 PM" } : p("form") === "open" ? { pattern: p("pattern") === "long" ? "a".repeat(1001) : "", action: p("limit") === "never" ? "never" : p("limit") === "ask" ? "ask" : p("limit") === "allow" ? "allow" : "never", saving: "save" } : null,
     saveNote: null,
     revoked: new Set(p("saved") === "revoked" ? ["g1"] : []),
     auditBot: "all",
@@ -132,7 +132,7 @@
   let seq = 10;
   const RULESET = {
     otto: [
-      { id: "r1", line: "files", action: "never", pattern: "secrets/**", version: 2, set: "Nov 12, 4:05 PM", last: { time: "5:43 PM", log: "e3" } },
+      { id: "r1", line: "files", action: "never", pattern: "secrets/**", version: 2, set: "Nov 12, 4:05 PM", note: "Keep keys away", last: { time: "5:43 PM", log: "e3" } },
       { id: "r2", line: "exec", action: "ask", pattern: "rm *", version: 1, set: "Nov 13, 8:40 PM", saving: "every", last: null },
     ],
     "*": [
@@ -141,6 +141,16 @@
     ],
   };
   const LIMIT = { allow: 20, ask: 20, never: 50 };
+  // A bot's routines (section 3): there an ask is refused with no card.
+  const ROUTINES = { otto: ["Weekly cleanup"] };
+  const askLimits = (bot) => {
+    const name = esc(botName(bot));
+    const rs = ROUTINES[bot] || [];
+    const there = rs.length
+      ? `${name} has ${rs.length} routine${rs.length === 1 ? "" : "s"}, ${rs.map(esc).join(", ")}. There, Ask first means refused: a routine's run has no one to ask, and the call is refused with no card. The routine's own summary may still say the work was done. `
+      : "";
+    return `<p class="b-hint" data-testid="ask-limits">${there}When another bot's message starts ${name}'s run, ${name} may not be able to ask; the call is then refused.</p>`;
+  };
   const fill = (action, n, prefix) => {
     for (let i = 0; i < n; i += 1) RULESET.otto.push({ id: `${prefix}${i}`, line: "files", action, pattern: `${prefix}/${i}/**`, version: 1, set: "Nov 9", last: null });
   };
@@ -402,7 +412,7 @@
       `<p class="c-sentence" role="status">${sentence}</p>` +
       (!running() && !l.fixed && !locked ? `<p class="b-hint">Asking needs Clawtrate's rules plugin running.</p>` : "") +
       (chosen === "ask" && !l.fixed
-        ? `<p class="b-hint">In routines, Ask works as Never: a routine's run has no one to ask. When another bot's message starts ${name}'s run, ${name} may not be able to ask; the call is then refused.</p>`
+        ? askLimits(bot)
         : "")
     );
   }
@@ -479,14 +489,14 @@
       ...shown.map(
         (r) =>
           `<div class="b-row"><span class="b-row-main"><span>${ACTION_SHORT[r.action]} · ${r.action === "never" ? "under" : "matching"} <code>${esc(r.pattern)}</code></span>` +
-          `<small>${name}'s rule, version ${r.version} · set ${esc(r.set)}${r.action === "ask" ? ` · ${r.saving === "every" ? "Asks every time" : "Answers can be saved"}` : ""} · ${markWords("plugin")}</small><small>${lastOf(r)}</small></span>` +
+          `<small>${name}'s rule, version ${r.version} · set ${esc(r.set)}${r.action === "ask" ? ` · ${r.saving === "every" ? "Asks every time" : "Answers can be saved"}` : ""} · ${markWords("plugin")}</small>${r.note ? `<small class="c-rule-note">Note, not evaluated: "${esc(r.note)}"</small>` : ""}<small>${lastOf(r)}</small></span>` +
           `${isAdmin() ? `${button("Edit", `data-c="rule-edit" data-value="${r.id}" data-size="sm"`, "quiet")}${button("Remove", `data-c="rule-remove" data-value="${r.id}" data-size="sm"`, "quiet")}` : ""}</div>`,
       ),
       ...allRulesFor(l.id).map((r) => `<div class="b-row"><span class="b-row-main"><span>${ACTION_SHORT[r.action]} · under <code>${esc(r.pattern)}</code></span><small>A rule for every bot, version ${r.version} · edited in Settings, Permissions</small><small>${lastOf(r)}</small></span></div>`),
     ];
     html += rows.length ? `<dl class="facts">${rows.join("")}</dl>` : `<p class="b-hint">No rules. ${name} may ${l.words.toLowerCase()} as chosen above.</p>`;
     if (own.length > shown.length) html += `<p class="b-hint">And ${own.length - shown.length} more rules.</p>`;
-    if (C.form) html += ruleForm(bot, l);
+    if (C.form && isAdmin()) html += ruleForm(bot, l);
     else if (isAdmin()) html += `<div class="b-actions" style="margin-top:8px">${button("Add a rule", 'data-c="form-open" data-size="sm"')}</div>`;
     return html;
   }
@@ -503,6 +513,8 @@
     const ready = len > 0 && !error;
     return (
       `<div class="c-form" role="group" aria-label="Add a rule">` +
+      `<p class="b-hint" style="margin:0">A rule is built from choices: nothing on the gateway can evaluate a sentence. Add a note in your own words if it helps.</p>` +
+      (f.from ? `<p class="b-hint" style="margin:0" data-testid="form-from">Filled in from ${name}'s expired request at ${f.from}. Nothing runs: adding this rule changes ${name}'s future calls only.</p>` : "") +
       `<p style="margin:0">When ${name} wants to: <b>${l.words.toLowerCase()}</b></p>` +
       `<label>acting on:<input class="input" data-c-pattern value="${esc(f.pattern)}" placeholder="${KIND_EXAMPLE[l.kind]}" aria-describedby="c-pattern-help${error ? " c-pattern-error" : ""}"${error ? ' aria-invalid="true"' : ""} spellcheck="false" autocomplete="off" /></label>` +
       `<p class="b-hint" id="c-pattern-help" style="margin:0">${KIND_HELP[l.kind].replace("Otto", name)}</p>` +
@@ -513,6 +525,9 @@
       (f.action === "ask"
         ? `<label>When someone answers:<select class="input" data-c-saving><option value="save"${f.saving === "save" ? " selected" : ""}>Answers can be saved</option><option value="every"${f.saving === "every" ? " selected" : ""}>Ask every time</option></select></label>`
         : "") +
+      (f.action === "ask" ? askLimits(bot) : "") +
+      `<label>Note (optional):<input class="input" data-c-note value="${esc(f.note || "")}" placeholder="In your own words" autocomplete="off" /></label>` +
+      `<p class="b-hint" style="margin:0">Shown beside the rule. Nothing evaluates it.</p>` +
       `<div class="b-actions">${button("Add rule", `data-c="form-add" data-size="sm"${ready ? "" : " disabled"}`, "primary")}${button("Cancel", 'data-c="form-cancel" data-size="sm"', "quiet")}</div>` +
       `</div>`
     );
@@ -877,7 +892,7 @@
         C.part = "saved";
         return D.openSettings(t, "permissions");
       case "form-open":
-        C.form = { pattern: "", action: "never", saving: "save" };
+        C.form = { pattern: "", action: "never", saving: "save", note: "" };
         rerenderTab();
         return setTimeout(() => $("[data-c-pattern]", panel)?.focus(), 30);
       case "form-cancel":
@@ -888,7 +903,7 @@
         const l = lineOf(C.line);
         C.form.tried = true;
         if ((RULESET[bot] || []).some((r) => r.line === l.id && r.action === C.form.action && r.pattern === C.form.pattern)) return rerenderTab();
-        (RULESET[bot] = RULESET[bot] || []).unshift({ id: `n${(seq += 1)}`, line: l.id, action: C.form.action, pattern: C.form.pattern, version: 1, set: "Just now", saving: C.form.saving === "every" ? "every" : "save", last: null });
+        (RULESET[bot] = RULESET[bot] || []).unshift({ id: `n${(seq += 1)}`, line: l.id, action: C.form.action, pattern: C.form.pattern, version: 1, set: "Just now", saving: C.form.saving === "every" ? "every" : "save", note: (C.form.note || "").trim(), last: null });
         const added = ACTION_SHORT[C.form.action];
         C.form = null;
         rerenderTab();
@@ -986,6 +1001,7 @@
       $("[data-c-action]", panel)?.focus();
     }
     if (t.matches("[data-c-saving]") && C.form) C.form.saving = t.value;
+    if (t.matches("[data-c-note]") && C.form) C.form.note = t.value;
     if (t.matches("[data-c-peer]")) {
       const list = M[current()][`${t.dataset.cPeer}Only`];
       if (t.checked && !list.includes(t.value)) list.push(t.value);
