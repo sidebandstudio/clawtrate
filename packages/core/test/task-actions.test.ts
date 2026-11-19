@@ -93,7 +93,8 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
   let written = false;
   let mainMade = false;
   let mark = "idle";
-  let stops = 0;
+  let latest: string | null = null;
+  let end: "archive" | "other" | null = null;
   const ctx: TaskActionContext = {
     request: async (method, raw) => {
       const params = raw as Record<string, unknown>;
@@ -149,7 +150,8 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
       clock += ms;
     },
     runMark: () => mark,
-    stopMark: () => stops,
+    latestRunId: () => latest,
+    runEnd: (_, runId) => (runId === latest ? end : null),
     // By default the engine follows no run of the task.
     stopRuns: async () => 0,
     runsActive: () => false,
@@ -158,8 +160,14 @@ function fakeGateway(rows: Record<string, Record<string, unknown>>) {
     ctx,
     calls,
     wrote: () => written,
-    setMark: (next: string) => (mark = next),
-    stop: () => (stops += 1),
+    /** A run starts: the mark moves and it is the task's latest run. */
+    setMark: (next: string) => {
+      mark = next;
+      latest = next;
+      end = null;
+    },
+    /** The latest run's own end, as its end event names it. */
+    end: (how: "archive" | "other") => (end = how),
   };
 }
 
@@ -283,10 +291,37 @@ describe("the rail's task actions", () => {
     let polls = 0;
     gateway.ctx.sleep = async (ms) => {
       await sleep(ms);
-      // The run's end event, read as stopped, arrives just after the answer.
-      if ((polls += 1) === 2) gateway.stop();
+      // The run's end event, naming the archive as its stop, arrives just after the answer.
+      if ((polls += 1) === 2) gateway.end("archive");
     };
     expect(await archiveTask(gateway.ctx, KEY, { stop: false })).toEqual({ stoppedRun: true });
+  });
+
+  it("F-277: a run that starts meanwhile and is stopped for another reason is not said to have been stopped by the archive", async () => {
+    const gateway = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: false } });
+    const request = gateway.ctx.request;
+    gateway.ctx.request = async (method, params) => {
+      const answer = await request(method, params);
+      if (method === "sessions.patch") gateway.setMark("run-2");
+      return answer;
+    };
+    const sleep = gateway.ctx.sleep;
+    let polls = 0;
+    gateway.ctx.sleep = async (ms) => {
+      await sleep(ms);
+      // Another device's Stop ends it: a stop, but not the archive's (`stopReason: "rpc"`).
+      if ((polls += 1) === 2) gateway.end("other");
+    };
+    expect(await archiveTask(gateway.ctx, KEY, { stop: false })).toEqual({ stoppedRun: false });
+  });
+
+  it("F-277: an earlier run's stop, seen with no run started meanwhile, is not reported", async () => {
+    const gateway = fakeGateway({ [KEY]: { sessionId: "s-1", hasActiveRun: false } });
+    gateway.setMark("run-1");
+    gateway.end("archive");
+    const started = gateway.ctx.now();
+    expect(await archiveTask(gateway.ctx, KEY, { stop: false })).toEqual({ stoppedRun: false });
+    expect(gateway.ctx.now()).toBe(started);
   });
 
   it("a run that starts while the archive request is out but is not seen to stop is not reported, after a bounded wait", async () => {
@@ -503,7 +538,8 @@ describe("the rail's task actions", () => {
       now: () => 0,
       sleep: async () => {},
       runMark: () => "",
-      stopMark: () => 0,
+      latestRunId: () => null,
+      runEnd: () => null,
       stopRuns: async () => 0,
       runsActive: () => false,
     };

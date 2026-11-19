@@ -145,14 +145,14 @@ export class WaitingIndex {
       runId: string;
       at: number;
       stopped: boolean;
-      stopSeq: number;
+      /** Whether its end was seen, and whether that end named the gateway's archive as the stop. */
+      ended: boolean;
+      byArchive: boolean;
       /** Each counted call's latest result: whether the gateway flagged it as an error. */
       calls: Map<string, boolean>;
       end: "completed" | "blocked" | null;
     }
   >();
-  /** Counts the run ends seen as stopped, in the order they arrived: each task keeps its latest. */
-  private stops = 0;
   /** Tasks whose runs the engine holds, as those runs describe them; they win over the events. */
   private readonly held = new Map<string, HeldTask>();
 
@@ -213,7 +213,8 @@ export class WaitingIndex {
           runId,
           at: ts,
           stopped: false,
-          stopSeq: latest?.stopSeq ?? 0,
+          ended: false,
+          byArchive: false,
           calls: new Map(),
           end: null,
         });
@@ -247,7 +248,9 @@ export class WaitingIndex {
           runId,
           at: ts,
           stopped,
-          stopSeq: stopped ? (this.stops += 1) : (latest?.stopSeq ?? 0),
+          ended: true,
+          // The gateway's archive drains the task's runs as an abort named for it.
+          byArchive: data.stopReason === "archive" && (stopped || data.aborted === true),
           // Calls are counted for the run they came with; a run seen only from its end has none.
           calls: latest?.runId === runId ? latest.calls : new Map(),
           end,
@@ -369,12 +372,15 @@ export class WaitingIndex {
   }
 
   /**
-   * A mark that moves each time a run of the task is seen to end as stopped, on the
-   * evidence of that run's own end event: read before and after an action to learn
-   * whether a run was stopped meanwhile.
+   * How a run of the task ended, on the evidence of that run's own end event:
+   * "archive" when the gateway stopped it for an archive (`stopReason: "archive"`),
+   * "other" for any other end, null while it runs or when it is not the task's
+   * latest run.
    */
-  stopMark(key: string): number {
-    return this.runs.get(key)?.stopSeq ?? 0;
+  runEnd(key: string, runId: string): "archive" | "other" | null {
+    const latest = this.runs.get(key);
+    if (latest?.runId !== runId || !latest.ended) return null;
+    return latest.byArchive ? "archive" : "other";
   }
 
   /** The latest run the events reported for a task, by id; null when none was seen. */

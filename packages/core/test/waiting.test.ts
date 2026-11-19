@@ -64,23 +64,27 @@ describe("which tasks wait for the person", () => {
     expect(index.stoppedAt(KEY)).toBeNull();
   });
 
-  it("moves a task's stop mark on each run seen to end as stopped, and keeps it across a newer run", () => {
+  it("F-277: says how a task's latest run ended from its own end, naming the archive only when the end does", () => {
     const index = new WaitingIndex();
-    expect(index.stopMark(KEY)).toBe(0);
     index.onAgent(lifecycle("start", {}, "r1"), 10);
-    index.onAgent(lifecycle("end", {}, "r1"), 20);
-    expect(index.stopMark(KEY)).toBe(0);
+    expect(index.runEnd(KEY, "r1")).toBeNull();
+    index.onAgent(lifecycle("end", { aborted: true, stopReason: "rpc" }, "r1"), 20);
+    expect(index.runEnd(KEY, "r1")).toBe("other");
     index.onAgent(lifecycle("start", {}, "r2"), 30);
-    index.onAgent(lifecycle("end", { aborted: true }, "r2"), 40);
-    const first = index.stopMark(KEY);
-    expect(first).toBeGreaterThan(0);
-    index.onAgent(lifecycle("start", {}, "r3"), 50);
-    expect(index.stopMark(KEY)).toBe(first);
-    // An older run's end after a newer start does not move it.
-    index.onAgent(lifecycle("end", { aborted: true }, "r2"), 60);
-    expect(index.stopMark(KEY)).toBe(first);
-    index.onAgent(lifecycle("end", { status: "cancelled" }, "r3"), 70);
-    expect(index.stopMark(KEY)).toBeGreaterThan(first);
+    expect(index.runEnd(KEY, "r1")).toBeNull();
+    expect(index.runEnd(KEY, "r2")).toBeNull();
+    // An older run's end after a newer start says nothing of the newer run.
+    index.onAgent(lifecycle("end", { aborted: true, stopReason: "archive" }, "r1"), 40);
+    expect(index.runEnd(KEY, "r2")).toBeNull();
+    index.onAgent(
+      lifecycle("end", { aborted: true, status: "cancelled", stopReason: "archive" }, "r2"),
+      50,
+    );
+    expect(index.runEnd(KEY, "r2")).toBe("archive");
+    // An end that names the archive but was not stopped is not a stop by it.
+    index.onAgent(lifecycle("start", {}, "r3"), 60);
+    index.onAgent(lifecycle("end", { stopReason: "archive" }, "r3"), 70);
+    expect(index.runEnd(KEY, "r3")).toBe("other");
   });
 
   it("F-021 F-057: a task the engine follows is described by its runs, not by the events", () => {
