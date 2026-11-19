@@ -79,7 +79,6 @@ export function QuestionCardView({ card, domId }: { card: Question; domId: strin
   };
 
   if (card.status !== "pending") {
-    const run = env.runOf(card.runId);
     return (
       <section
         ref={settled}
@@ -112,7 +111,7 @@ export function QuestionCardView({ card, domId }: { card: Question; domId: strin
             ) : (
               <div className="answer">
                 <span />
-                <span>{questionNote(card, run)}</span>
+                <span>{questionNote(card)}</span>
               </div>
             )}
           </div>

@@ -24,7 +24,6 @@ import { CopyValue } from "./AccessBar.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
 import { BackIcon, ChevronIcon, CloseIcon } from "./icons.tsx";
-import type { SettingsSection } from "./settings-link.ts";
 
 /** The connection's state, as the Gateway pane names it. */
 export function gatewayState(connection: ConnectionState): string {
@@ -66,11 +65,10 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = SettingsSection;
+type Section = "gateway" | "accounts";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
-  ["permissions", "Permissions"],
 ];
 /** ⌘, opens on the section last shown, Gateway the first time. */
 const SHOWN_LAST = "settings-section";
@@ -80,24 +78,21 @@ export function Settings({
   info,
   accounts,
   bots,
-  section: asked = null,
   onClose,
 }: {
   connection: ConnectionState;
   info: HostInfo;
   accounts: AccountsState;
   bots: readonly Bot[];
-  /** The section to open on, when a control asked for one; else the last one shown. */
-  section?: Section | null;
   onClose: () => void;
 }) {
   const send = useCommand();
   const dialogRef = useRef<HTMLDivElement>(null);
   const [section, setSectionState] = useState<Section>(
-    () => asked ?? recall<Section>(SHOWN_LAST) ?? "gateway",
+    () => recall<Section>(SHOWN_LAST) ?? "gateway",
   );
-  // On a phone the list comes first; a section replaces it, at once when a control asked for it.
-  const [pane, setPane] = useState<"nav" | "section">(asked ? "section" : "nav");
+  // On a phone the list comes first; a section replaces it.
+  const [pane, setPane] = useState<"nav" | "section">("nav");
   const [announcer, announce] = useAnnouncer();
   const setSection = (next: Section) => {
     remember(SHOWN_LAST, next);
@@ -320,35 +315,13 @@ export function Settings({
     </>
   );
 
-  // What decides approvals, and what changing it takes. The page that lists and edits
-  // saved rules is not built yet (conversation.md, section 24).
-  const permissionsPane = (
-    <div className="settings-permissions" data-testid="permissions">
-      <p className="settings-note">
-        The gateway decides which commands need your approval, from each bot's policy on the machine
-        it runs commands on: by that policy a command runs, asks first, or is refused. Clawtrate
-        shows each request the gateway makes and never allows one by itself; it denies a request
-        only when the run that asked has ended without an answer.
-      </p>
-      <p className="settings-note">
-        "Always allow" adds a command to that machine's allowlist. Changing a bot's policy, or
-        reading the allowlist, needs admin access on the gateway.{" "}
-        {connection.canAdmin
-          ? "This device holds admin access."
-          : "This device doesn't hold admin access."}
-      </p>
-    </div>
-  );
-
   let content: ReactNode;
   if (section === "accounts" && accountsSection.connect) content = accountsSection.connect;
   else {
     const view =
       section === "accounts" && accountsSection.view
         ? accountsSection.view
-        : section === "permissions"
-          ? { title: "Permissions", back: toNav, body: permissionsPane, foot: null }
-          : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+        : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">

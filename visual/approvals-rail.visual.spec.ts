@@ -7,6 +7,72 @@ import { contextFor, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
 
 const approvalCard = (page: Page) => page.getByTestId("approval-card");
 
+const CARD_TASK = "agent:otto:transcode-cache";
+
+type FixtureWindow = {
+  clawtrateFixture: {
+    getState(): { transcripts: Record<string, { approvals: Array<Record<string, unknown>> }> };
+    setState(change: (state: Record<string, unknown>) => Record<string, unknown>): void;
+    invoke(command: Record<string, unknown>): Promise<unknown>;
+    send(command: Record<string, unknown>): Promise<unknown>;
+  };
+  sentCommands?: Array<Record<string, unknown>>;
+};
+
+/** Record every command the interface sends through the bridge. */
+async function recordCommands(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as FixtureWindow;
+    w.sentCommands = [];
+    const fixture = w.clawtrateFixture;
+    const invoke = fixture.invoke.bind(fixture);
+    const send = fixture.send.bind(fixture);
+    fixture.invoke = (command) => (w.sentCommands!.push(command), invoke(command));
+    fixture.send = (command) => (w.sentCommands!.push(command), send(command));
+  });
+}
+
+const commandsSent = (page: Page) =>
+  page.evaluate(() =>
+    ((window as unknown as FixtureWindow).sentCommands ?? []).filter((each) =>
+      ["resolveApproval", "checkApproval"].includes(String(each.type)),
+    ),
+  );
+
+/** Change the first approval of the card task as an event from the gateway would. */
+async function changeApproval(page: Page, change: Record<string, unknown>, exec = false) {
+  await page.evaluate(
+    ({ key, change, exec }) => {
+      const fixture = (window as unknown as FixtureWindow).clawtrateFixture;
+      fixture.setState((state) => {
+        const transcripts = state.transcripts as Record<string, Record<string, unknown>>;
+        const t = transcripts[key]!;
+        const approvals = (t.approvals as Array<Record<string, unknown>>).map((card, index) =>
+          index !== 0
+            ? card
+            : exec
+              ? { ...card, exec: { ...(card.exec as Record<string, unknown>), ...change } }
+              : { ...card, ...change },
+        );
+        return { ...state, transcripts: { ...transcripts, [key]: { ...t, approvals } } };
+      });
+    },
+    { key: CARD_TASK, change, exec },
+  );
+}
+
+const settleFromGateway = (page: Page, outcome: Record<string, unknown>) =>
+  changeApproval(page, { ...outcome, resolvedAt: Date.now(), runEnded: false, inferred: false });
+const changeExec = (page: Page, change: Record<string, unknown>) =>
+  changeApproval(page, change, true);
+const execFields = (page: Page) =>
+  page.evaluate(
+    (key) =>
+      (window as unknown as FixtureWindow).clawtrateFixture.getState().transcripts[key]!
+        .approvals[0]!.exec as Record<string, unknown>,
+    CARD_TASK,
+  );
+
 /** Nothing inside reaches past its own right edge: no horizontal scroll at this width. */
 async function fitsWidth(page: Page, target: Locator): Promise<void> {
   const box = await target.boundingBox();
@@ -23,27 +89,37 @@ for (const size of SIZES) {
     test.describe(`${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
 
-      test("F-418: a run that completed while its request was pending closes the card as the run ended: nothing to answer, its command not run", async ({
+      test("F-418: a request that outlived its run says the run ended and stays answerable; it closes only with the gateway's outcome, naming who decided, and the app sends nothing", async ({
         page,
       }) => {
-        await openFixture(page, "scene=approval-withdrawn", theme);
+        await openFixture(page, "scene=approval-run-ended", theme);
+        await recordCommands(page);
         const card = approvalCard(page);
-        await expect(card).toHaveAttribute("data-state", "denied");
-        await expect(card.locator(".tag")).toHaveText("Closed: the run ended");
+        await expect(card).toHaveAttribute("data-state", "pending");
+        await expect(card.locator(".request-ended")).toHaveText(
+          "Otto's run has ended. This request is still open, and you can still answer it.",
+        );
         for (const name of ["Allow once", "Always allow…", "Deny"]) {
-          await expect(card.getByRole("button", { name, exact: true })).toHaveCount(0);
+          await expect(card.getByRole("button", { name, exact: true })).toBeVisible();
         }
+        await fitsWidth(page, card);
+        // The gateway's own outcome arrives, decided on another device.
+        await settleFromGateway(page, {
+          status: "denied",
+          decision: "deny",
+          resolvedBy: "Pip's laptop",
+          reason: "user",
+        });
+        await expect(card.locator(".tag")).toHaveText("Denied");
         await card.locator("summary").first().click();
         await expect(card.locator(".request-resolved-body > p").first()).toHaveText(
-          "The run ended before this was answered. The command was not run.",
+          /^Denied by Pip's laptop at \d+:\d\d [AP]M\.$/,
         );
-        // The run is over: no status line waits on it, and its run line follows it.
-        await expect(page.getByTestId("status-line")).toHaveCount(0);
-        await expect(page.getByTestId("run-line").last()).toBeVisible();
-        await fitsWidth(page, card);
+        await expect(card).not.toContainText(/run ended|not run|can run now/);
+        expect(await commandsSent(page)).toEqual([]);
       });
 
-      test("F-164 F-170: the full request says why the gateway asked, with Manage settings opening Permissions; closing it returns focus to the link", async ({
+      test("F-164: the full request gives the exact command to copy and states the host's policy from the request's own fields, as policy", async ({
         page,
       }) => {
         await openFixture(page, "scene=approval-pending", theme);
@@ -55,20 +131,24 @@ for (const size of SIZES) {
           "mv /srv/media/transcode-cache /srv/scratch/transcode-cache",
         );
         await expect(full.getByRole("button", { name: "Copy command" })).toBeVisible();
+        // The line follows the request's own fields, and says nothing of why this request asked.
+        expect(await execFields(page)).toMatchObject({ security: "allowlist", ask: "on-miss" });
         await expect(full.locator(".request-why")).toHaveText(
-          "The gateway asked because this command is not on media-box's allowlist. Manage settings",
+          "Media-box asks before commands that are not on its allowlist.",
         );
+        await expect(full.getByRole("button", { name: "Manage settings" })).toHaveCount(0);
         await fitsWidth(page, card);
-        const manage = full.getByRole("button", { name: "Manage settings" });
-        await manage.click();
-        const settings = page.getByRole("dialog", { name: "Settings" });
-        await expect(settings.getByRole("heading", { name: "Permissions" })).toBeVisible();
-        await expect(settings.getByTestId("permissions")).toContainText(
-          "Changing a bot's policy, or reading the allowlist, needs admin access on the gateway.",
+        // A two-phase request that carries the fields and no evaluation: the same policy line.
+        await changeExec(page, { commandAnalysis: null });
+        await expect(full.locator(".request-why")).toHaveText(
+          "Media-box asks before commands that are not on its allowlist.",
         );
-        await page.keyboard.press("Escape");
-        await expect(settings).toHaveCount(0);
-        await expect(manage).toBeFocused();
+        await changeExec(page, { ask: "always" });
+        await expect(full.locator(".request-why")).toHaveText(
+          "Media-box asks before every command.",
+        );
+        await changeExec(page, { security: null, ask: null });
+        await expect(full.locator(".request-why")).toHaveCount(0);
         await full.locator("summary").click();
         await expect(full.locator("summary")).toHaveText(/Show full request/);
       });

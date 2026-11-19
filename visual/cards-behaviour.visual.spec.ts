@@ -195,9 +195,9 @@ test.describe("approval cards", () => {
     await expect(card).toHaveAttribute("data-state", "allowed");
     await expect(page.locator(":focus")).toHaveText(/Allowed once/);
     await card.locator("summary").first().click();
-    await expect(
-      card.getByText("Allowed once. The command can run now. Otto will ask again next time."),
-    ).toBeVisible();
+    await expect(card.locator(".request-resolved-body > p").first()).toHaveText(
+      /^Allowed once( by .+)? at \d+:\d\d [AP]M\.$/,
+    );
     expect(await sent(page)).toContainEqual({
       type: "resolveApproval",
       key: "agent:otto:transcode-cache",
@@ -222,7 +222,7 @@ test.describe("approval cards", () => {
     expect((await sent(page)).map((command) => command.decision)).toEqual(["deny"]);
   });
 
-  test("F-165: Deny sends deny, the buttons go, and the card says the command was not run", async ({
+  test("F-165: Deny sends deny, the buttons go, and the card says it was denied and when", async ({
     page,
   }) => {
     await openFixture(page, "scene=approval-pending", "light");
@@ -232,7 +232,9 @@ test.describe("approval cards", () => {
     await expect(card.locator(".tag")).toHaveText("Denied");
     await expect(card.getByRole("button", { name: /Allow|Deny/ })).toHaveCount(0);
     await card.locator("summary").first().click();
-    await expect(card.getByText("Denied. The command was not run.")).toBeVisible();
+    await expect(card.locator(".request-resolved-body > p").first()).toHaveText(
+      /^Denied( by .+)? at \d+:\d\d [AP]M\.$/,
+    );
     expect((await sent(page)).at(-1)).toMatchObject({ decision: "deny" });
   });
 
@@ -270,7 +272,7 @@ test.describe("approval cards", () => {
     await card.locator("summary").first().click();
     await expect(
       card.getByText(
-        "Added to media-box's allowlist. The gateway decides what it covers. Seeing that list needs admin access.",
+        "This asked the gateway to keep a rule for requests like this one. Whether it kept one is not confirmed here.",
       ),
     ).toBeVisible();
     expect((await sent(page)).at(-1)).toMatchObject({
@@ -483,35 +485,37 @@ test.describe("approval cards", () => {
     ]);
   });
 
-  test("F-168: a pending card says when it expires; an expired one says the command was not run", async ({
+  test("F-168: a pending card says the deadline the gateway recorded; an expired one says the gateway recorded it expired", async ({
     page,
   }) => {
     await openFixture(page, "scene=approval-pending", "light");
     await expect(approvalCard(page).locator(".request-foot")).toHaveText(
-      "Expires in 28 minutes; the command is not run if it does.",
+      /^Expires at \d+:\d\d [AP]M, in 28 minutes\.$/,
     );
     await openFixture(page, "scene=approval-expired", "light");
     const card = approvalCard(page);
     await expect(card.locator(".tag")).toHaveText("Expired");
     await card.locator("summary").first().click();
     await expect(card.locator(".request-resolved-body > p").first()).toHaveText(
-      /^Expired at \d+:\d\d [AP]M without an answer\. The command was not run\.$/,
+      /^The gateway recorded it as expired at \d+:\d\d [AP]M, with no answer\.$/,
     );
   });
 
-  test("F-169 F-418: Stop's cancellation, a closed request, and one still open after its run ended say exactly that", async ({
+  test("F-169 F-418: the gateway's cancellation, a closed request, and one still open after its run ended say exactly that", async ({
     page,
   }) => {
     await openFixture(page, "scene=approval-cancelled", "light");
     await expect(approvalCard(page).locator(".tag")).toHaveText("Cancelled");
     await approvalCard(page).locator("summary").first().click();
-    await expect(
-      approvalCard(page).getByText(
-        "You stopped the run before answering. The command was not run.",
-      ),
-    ).toBeVisible();
+    await expect(approvalCard(page).locator(".request-resolved-body > p").first()).toHaveText(
+      /^The gateway cancelled it at \d+:\d\d [AP]M, when its run was stopped\.$/,
+    );
     await openFixture(page, "scene=approval-closed-ended", "light");
-    await expect(approvalCard(page).locator(".tag")).toHaveText("Closed: the run ended");
+    await expect(approvalCard(page).locator(".tag")).toHaveText("Closed");
+    await approvalCard(page).locator("summary").first().click();
+    await expect(approvalCard(page).locator(".request-resolved-body > p").first()).toHaveText(
+      "The gateway closed it without saying how.",
+    );
     await openFixture(page, "scene=approval-run-ended", "light");
     await expect(
       approvalCard(page).getByText(

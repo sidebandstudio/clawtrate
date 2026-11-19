@@ -5,7 +5,6 @@ import { ConnectScreen } from "./ConnectScreen.tsx";
 import { readPreference, useBubbles, useTheme } from "./preferences.ts";
 import { screenFor } from "./screen.ts";
 import { Settings } from "./Settings.tsx";
-import { OPEN_SETTINGS_EVENT, type SettingsSection } from "./settings-link.ts";
 import { Shell } from "./Shell.tsx";
 
 /**
@@ -52,25 +51,14 @@ export function App({
   const [bubbles, setBubbles] = useBubbles();
   // Settings opens over either screen, with Cmd/Ctrl+, or from the gateway menu.
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // The section a control asked for ("Manage settings" on an approval), else the last one shown.
-  const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const settingsOpener = useRef<HTMLElement | null>(null);
   const openSettings = useCallback(() => {
     const active = document.activeElement as HTMLElement | null;
     settingsOpener.current = active && active !== document.body ? active : null;
     setSettingsOpen(true);
   }, []);
-  useEffect(() => {
-    const onOpen = (event: Event) => {
-      setSettingsSection((event as CustomEvent<{ section: SettingsSection }>).detail.section);
-      openSettings();
-    };
-    window.addEventListener(OPEN_SETTINGS_EVENT, onOpen);
-    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpen);
-  }, [openSettings]);
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
-    setSettingsSection(null);
     const opener = settingsOpener.current;
     requestAnimationFrame(() => {
       if (opener?.isConnected && !opener.closest("[inert]")) opener.focus();
@@ -120,7 +108,6 @@ export function App({
           info={info}
           accounts={state.accounts}
           bots={state.bots}
-          section={settingsSection}
           onClose={closeSettings}
         />
       )}

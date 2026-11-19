@@ -37,7 +37,9 @@ import {
   type MessagedKey,
   mcpNote,
   questionNote,
+  policyLine,
   resolvedView,
+  thenLine,
   sendableDecisions,
   SUMMARY_COMMAND_CHARS,
   targetChips,
@@ -125,7 +127,8 @@ describe("approval cards from the engine's state", () => {
       machine: "media-box",
     });
     expect(view.warnings).toEqual(["This can't be undone"]);
-    expect(expiryLine(card, NOW)).toBe("Expires in 28 minutes; the command is not run if it does.");
+    // The deadline the gateway recorded, and nothing forecast about what happens at it.
+    expect(expiryLine(card, NOW)).toMatch(/^Expires at \d+:\d\d [AP]M, in 28 minutes\.$/);
     expect([view.once, view.always, allowLabel(view)]).toEqual([true, true, "Allow once"]);
     expect([...sendableDecisions(card, false)].sort()).toEqual([
       "allow-always",
@@ -232,49 +235,99 @@ describe("approval cards from the engine's state", () => {
     ]);
   });
 
-  it("F-325 F-165 F-168 F-169 F-032: each settled outcome says what the gateway reported and no more", () => {
-    const words = (name: CardSceneName) => {
-      const { card, run } = approval(name);
-      return resolvedView(card, bots, otto, run);
-    };
-    expect(words("approval-allowed-once")).toMatchObject({
-      tag: "Allowed once",
-      sentence: "Allowed once. The command can run now. Otto will ask again next time.",
-    });
+  it("F-325 F-165 F-168 F-169 F-032: each settled outcome says what the gateway recorded and who decided, and nothing forecast", () => {
+    const words = (name: CardSceneName) => resolvedView(approval(name).card);
+    const clockAt = /\d+:\d\d [AP]M/;
+    expect(words("approval-allowed-once")).toMatchObject({ tag: "Allowed once" });
+    expect(words("approval-allowed-once").sentence).toMatch(/^Allowed once at \d+:\d\d [AP]M\.$/);
+    // "Saved" only after a read that shows the entry; this app reads none at its tier.
     expect(words("approval-always-allowlist")).toMatchObject({
       tag: "Always allowed",
-      sentence: "Allowed, and saved. The command can run now.",
       saved:
-        "Added to media-box's allowlist. The gateway decides what it covers. Seeing that list needs admin access.",
+        "This asked the gateway to keep a rule for requests like this one. Whether it kept one is not confirmed here.",
     });
     expect(words("approval-always-routine").saved).toBe(
-      "The routine Weekly cleanup may run this command without asking.",
+      "This asked the gateway for a standing grant for the routine Weekly cleanup. Whether it was kept is not confirmed here.",
     );
-    expect(words("approval-denied")).toMatchObject({
-      tag: "Denied",
-      sentence: "Denied. The command was not run.",
-    });
-    expect(words("approval-expired").tag).toBe("Expired");
+    expect(words("approval-denied").sentence).toMatch(/^Denied at \d+:\d\d [AP]M\.$/);
+    expect(words("approval-expired")).toMatchObject({ tag: "Expired" });
     expect(words("approval-expired").sentence).toMatch(
-      /^Expired at \d+:\d\d [AP]M without an answer\. The command was not run\.$/,
+      /^The gateway recorded it as expired at \d+:\d\d [AP]M, with no answer\.$/,
     );
-    expect(words("approval-cancelled")).toMatchObject({
-      tag: "Cancelled",
-      sentence: "You stopped the run before answering. The command was not run.",
-    });
+    expect(words("approval-cancelled").sentence).toMatch(
+      /^The gateway cancelled it at \d+:\d\d [AP]M, when its run was stopped\.$/,
+    );
+    // A gateway that settled it without saying how, and a list that no longer holds it.
     expect(words("approval-closed-ended")).toMatchObject({
-      tag: "Closed: the run ended",
-      sentence: "The run ended before this was answered. The command was not run.",
+      tag: "Closed",
+      sentence: "The gateway closed it without saying how.",
     });
-    expect(words("approval-closed-failed")).toMatchObject({
-      tag: "Closed: the run failed",
-      sentence: "The run failed before this was answered. The command was not run.",
+    expect(words("approval-closed-unknown")).toMatchObject({
+      tag: "Closed",
+      sentence: "It is no longer pending on the gateway. Its outcome was not read here.",
     });
-    // Not listed after a reload says nothing about how it ended: no claim that it was not run.
-    expect(words("approval-closed-unknown").sentence).not.toMatch(/not run/);
-    expect(words("approval-winner").winner).toMatch(
-      /^Decided by Pip's laptop at .*\. Your decision was not applied\.$/,
+    // Who decided, as the gateway names them.
+    expect(words("approval-winner").sentence).toMatch(/^Denied by Pip's laptop at /);
+    expect(words("approval-winner").winner).toBe("Your decision was not applied.");
+    for (const name of [
+      "approval-allowed-once",
+      "approval-always-allowlist",
+      "approval-denied",
+      "approval-expired",
+      "approval-cancelled",
+      "approval-closed-ended",
+      "approval-closed-unknown",
+    ] as CardSceneName[]) {
+      const view = words(name);
+      const all = [view.sentence, view.then, view.saved].join(" ");
+      expect(all, name).not.toMatch(
+        /can run now|will ask again|next time|not run|run ended|run failed/,
+      );
+      if (view.tag !== "Closed") expect(view.sentence, name).toMatch(clockAt);
+    }
+  });
+
+  it("F-325 F-168: what became of the call is said only from the call's own result", () => {
+    const { card } = approval("approval-allowed-once");
+    expect(thenLine(card, undefined)).toBe("This command's result has not been reported here.");
+    expect(thenLine(card, { status: "running" })).toBe("The command is running.");
+    expect(thenLine(card, { status: "done", result: { text: "(no output)" } })).toBe(
+      "The command ran. Its result is on its card above.",
     );
+    expect(
+      thenLine(card, {
+        status: "failed",
+        result: { text: "Exec denied (gateway id=x, user-denied): ls" },
+      }),
+    ).toBe("The gateway reported that it did not run the command.");
+    // A call stopped or cut off has no result: nothing says it ran or can run.
+    expect(thenLine(card, { status: "stopped" })).toBe(
+      "This command's result has not been reported.",
+    );
+    expect(thenLine(card, { status: "unknown" })).toBe(
+      "This command's result has not been reported.",
+    );
+  });
+
+  it("F-164: the policy line says the host's policy from the request's own fields, never a cause", () => {
+    const { card } = approval("approval-pending");
+    expect([card.exec!.security, card.exec!.ask]).toEqual(["allowlist", "on-miss"]);
+    expect(policyLine(card)).toBe("Media-box asks before commands that are not on its allowlist.");
+    const ask = (exec: Partial<NonNullable<typeof card.exec>>) =>
+      policyLine({ ...card, exec: { ...card.exec!, ...exec } });
+    expect(ask({ ask: "always" })).toBe("Media-box asks before every command.");
+    expect(ask({ host: "gateway", nodeId: null })).toBe(
+      "The gateway's machine asks before commands that are not on its allowlist.",
+    );
+    // A two-phase request that carries the fields and no evaluation: still policy, not a cause.
+    expect(ask({ commandAnalysis: null })).toBe(
+      "Media-box asks before commands that are not on its allowlist.",
+    );
+    expect(ask({ security: "full", ask: "off" })).toBeNull();
+    expect(ask({ security: null, ask: null })).toBeNull();
+    for (const line of [ask({}), ask({ ask: "always" })]) {
+      expect(line).not.toMatch(/because|asked because|why/i);
+    }
   });
 });
 
@@ -312,14 +365,16 @@ describe("question cards from the engine's state", () => {
 
   it("F-302: dismissed, expired, cancelled and closed questions say so", () => {
     const note = (name: CardSceneName) => {
-      const { card, run } = question(name);
-      return questionNote(card, run);
+      const { card } = question(name);
+      return questionNote(card);
     };
     expect(note("question-dismissed")).toBe("Dismissed");
     expect(note("question-expired")).toBe("Expired without an answer");
     expect(note("question-cancelled")).toBe("Cancelled: you stopped the run");
-    expect(note("question-closed-ended")).toBe("Closed: the run ended");
-    expect(note("question-closed-failed")).toBe("Closed: the run failed");
+    // Closed says what the gateway established and no reason of this app's, however the run ended.
+    for (const name of ["question-closed-ended", "question-closed-failed"] as CardSceneName[]) {
+      expect(note(name)).toBe("No longer pending on the gateway. Its outcome was not read here.");
+    }
   });
 });
 

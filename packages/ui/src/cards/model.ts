@@ -13,7 +13,6 @@ import type {
   QuestionCard,
   QuestionItem,
   Run,
-  RunState,
 } from "@clawtrate/core";
 
 // Names ---------------------------------------------------------------------------
@@ -247,31 +246,22 @@ function possessive(name: string): string {
 }
 
 /**
- * Why the gateway asked, from the request's own fields, and whether the host's
- * policy asked (then "Manage settings" goes with it). Null when the request
- * does not say. A command asks when the host's policy for it is "ask every
- * time" (`ask: "always"`), or when it is not on the host's allowlist and the
- * policy asks on a miss (`security: "allowlist"`, `ask: "on-miss"`).
+ * The host's policy for commands, from the request's own `security` and `ask`,
+ * said as policy. OpenClaw 2026.10.6 records no cause for a request (its
+ * snapshot's `reason` is how it ended), so the line never says this is why
+ * this request was asked: the gateway also asks for inline code, heredocs and
+ * plans it cannot enforce, and for a per-call ask, whatever the policy says.
+ * Null when the request carries neither field as one of these policies.
  */
-export function askReason(card: ApprovalCard): { text: string; policy: boolean } | null {
-  if (card.exec) {
-    const machine = machineOf(card);
-    if (card.exec.ask === "always") {
-      return {
-        text: `The gateway asked because commands ${machine ? `on ${machine}` : "here"} are set to ask every time.`,
-        policy: true,
-      };
-    }
-    if (card.exec.security === "allowlist" && card.exec.ask === "on-miss") {
-      return {
-        text: `The gateway asked because this command is not on ${machine ? `${possessive(machine)} allowlist` : "the host's allowlist"}.`,
-        policy: true,
-      };
-    }
-    return null;
-  }
-  if (card.plugin?.pluginId) {
-    return { text: `The plugin ${card.plugin.pluginId} asked for this approval.`, policy: false };
+export function policyLine(card: ApprovalCard): string | null {
+  if (!card.exec) return null;
+  const machine = machineOf(card);
+  const subject = machine
+    ? `${machine.charAt(0).toUpperCase()}${machine.slice(1)}`
+    : "This machine";
+  if (card.exec.ask === "always") return `${subject} asks before every command.`;
+  if (card.exec.security === "allowlist" && card.exec.ask === "on-miss") {
+    return `${subject} asks before commands that are not on its allowlist.`;
   }
   return null;
 }
@@ -292,151 +282,151 @@ export function allowLabel(view: Pick<ApprovalView, "always">): string {
   return view.always ? "Allow once" : "Allow";
 }
 
-/** "Expires in 28 minutes; the command is not run if it does." */
+/**
+ * "Expires at 6:08 PM, in 28 minutes.": the deadline the gateway recorded for
+ * the request. What happens at it is the gateway's configured fallback, so the
+ * line forecasts nothing about the command.
+ */
 export function expiryLine(card: ApprovalCard, now: number): string | null {
   if (card.expiresAt === null || card.status !== "pending") return null;
   const minutes = Math.max(1, Math.round((card.expiresAt - now) / 60_000));
-  const noun = card.kind === "exec" ? "the command is" : "the action is";
   const span =
     minutes >= 120
       ? `${Math.round(minutes / 60)} hours`
       : minutes === 1
         ? "1 minute"
         : `${minutes} minutes`;
-  return `Expires in ${span}; ${noun} not run if it does.`;
+  return `Expires at ${clock(card.expiresAt)}, in ${span}.`;
 }
 
 export type ResolvedView = {
   tag: string;
   tone: "accent" | null;
+  /** What the gateway recorded: the decision or outcome, who made it where it says, and when. */
   sentence: string;
-  /** What was saved, in the form's words. */
+  /** What happened to the call afterwards, from the call's own result only. */
+  then: string | null;
+  /** What was asked of the gateway to keep, and that keeping it was not confirmed here. */
   saved: string | null;
   /** The line when another decision won. */
   winner: string | null;
 };
 
+/** Who settled it, as the gateway names them: the legacy event's label, else the snapshot's resolver. */
+function deciderOf(card: ApprovalCard): string | null {
+  return card.resolvedBy ?? card.resolver?.id ?? null;
+}
+
 /**
- * A settled approval: what the gateway reported and no more. Allowing is not
- * proof that a command ran; an outcome this client only inferred, or one the
- * gateway gave without saying how, is not stated as more.
+ * The call's outcome after the answer, said only from the call's own result:
+ * the step the approval waits on, as the engine holds it.
+ */
+export function thenLine(
+  card: ApprovalCard,
+  step: { status: string; result?: { text: string } | null } | undefined,
+): string | null {
+  if (!card.stepId || card.status === "pending") return null;
+  const noun = card.kind === "exec" ? "command" : "action";
+  if (!step) return `This ${noun}'s result has not been reported here.`;
+  if (step.status === "running" || step.status === "waiting") return `The ${noun} is running.`;
+  if (step.status === "done") return `The ${noun} ran. Its result is on its card above.`;
+  if (step.status === "failed") {
+    return /denied/i.test(step.result?.text ?? "")
+      ? `The gateway reported that it did not run the ${noun}.`
+      : `The ${noun} failed. Its result is on its card above.`;
+  }
+  return `This ${noun}'s result has not been reported.`;
+}
+
+/**
+ * A settled approval: the gateway's own record of it and no more. Its decision
+ * or outcome, who made it where the gateway says, and when; what became of the
+ * call only from the call's own result; nothing forecast, and no reason of this
+ * app's. An outcome this client only inferred is said to be unread.
  */
 export function resolvedView(
   card: ApprovalCard,
-  bots: Bot[],
-  taskBot: Bot | undefined,
-  run: Pick<Run, "state" | "stopRequestedAt"> | undefined,
+  step?: { status: string; result?: { text: string } | null },
 ): ResolvedView {
-  const name = nameOf(bots, card.agentId, taskBot?.name ?? "The bot");
-  const noun = card.kind === "exec" ? "command" : "action";
-  const can = card.kind === "exec" ? "The command can run now." : "It can go ahead now.";
-  const notRun = card.kind === "exec" ? "The command was not run." : "Nothing was done.";
+  const at = card.resolvedAt;
+  const when = at ? ` at ${clock(at)}` : "";
+  const by = deciderOf(card) ? ` by ${deciderOf(card)}` : "";
+  const then = thenLine(card, step);
   const winner =
-    card.error && /already been settled/.test(card.error)
-      ? `${card.resolvedBy ? `Decided by ${card.resolvedBy}${card.resolvedAt ? ` at ${clock(card.resolvedAt)}` : ""}. ` : ""}Your decision was not applied.`
-      : null;
+    card.error && /already been settled/.test(card.error) ? "Your decision was not applied." : null;
   const grant = standingGrant(card);
-  const machine = machineOf(card);
   switch (card.status) {
     case "allowed":
       if (card.decision === "allow-always") {
         return {
           tag: "Always allowed",
           tone: "accent",
-          sentence: `Allowed, and saved. ${can}`,
+          sentence: `Always allowed${by}${when}.`,
+          then,
           saved: grant
-            ? `${grant.routine ? `The routine ${grant.routine}` : "The routine"} may run this command without asking.`
-            : card.kind === "exec"
-              ? `Added to ${machine ? possessive(machine) : "the host's"} allowlist. The gateway decides what it covers. Seeing that list needs admin access.`
-              : "The gateway will remember this decision for requests it treats as the same.",
-          winner,
-        };
-      }
-      if (card.decision === "allow-once") {
-        return {
-          tag: "Allowed once",
-          tone: "accent",
-          sentence: `Allowed once. ${can} ${name} will ask again next time.`,
-          saved: null,
-          winner,
-        };
-      }
-      return { tag: "Allowed", tone: "accent", sentence: `Allowed. ${can}`, saved: null, winner };
-    case "denied":
-      // This client denied it because its run ended first (F-418): it closed with the run.
-      if (card.reason === "run-ended" || card.reason === "run-failed") {
-        const failed = card.reason === "run-failed";
-        return {
-          tag: failed ? "Closed: the run failed" : "Closed: the run ended",
-          tone: null,
-          sentence: `The run ${failed ? "failed" : "ended"} before this was answered. ${notRun}`,
-          saved: null,
+            ? `This asked the gateway for a standing grant for ${grant.routine ? `the routine ${grant.routine}` : "the routine that asked"}. Whether it was kept is not confirmed here.`
+            : "This asked the gateway to keep a rule for requests like this one. Whether it kept one is not confirmed here.",
           winner,
         };
       }
       return {
-        tag: "Denied",
-        tone: null,
-        sentence: `Denied. ${notRun}`,
+        tag: card.decision === "allow-once" ? "Allowed once" : "Allowed",
+        tone: "accent",
+        sentence: `${card.decision === "allow-once" ? "Allowed once" : "Allowed"}${by}${when}.`,
+        then,
         saved: null,
         winner,
       };
-    case "expired": {
-      const at = card.resolvedAt ?? card.expiresAt;
+    case "denied":
+      return { tag: "Denied", tone: null, sentence: `Denied${by}${when}.`, then, saved: null, winner };
+    case "expired":
+      if (card.inferred) {
+        const deadline = card.expiresAt ?? at;
+        return {
+          tag: "Expired",
+          tone: null,
+          sentence: `Its deadline${deadline ? `, ${clock(deadline)},` : ""} passed without an answer. The gateway's own outcome was not read here.`,
+          then,
+          saved: null,
+          winner: null,
+        };
+      }
       return {
         tag: "Expired",
         tone: null,
-        sentence: `Expired${at ? ` at ${clock(at)}` : ""} without an answer. ${notRun}`,
+        sentence: `The gateway recorded it as expired${when}, with no answer.`,
+        then,
         saved: null,
         winner: null,
       };
-    }
     case "cancelled":
       return {
         tag: "Cancelled",
         tone: null,
         sentence:
-          run?.stopRequestedAt !== null && run?.stopRequestedAt !== undefined
-            ? `You stopped the run before answering. ${notRun}`
-            : `The gateway cancelled this request before it was answered. ${notRun}`,
+          card.reason === "run-aborted"
+            ? `The gateway cancelled it${when}, when its run was stopped.`
+            : `The gateway cancelled it${when}.`,
+        then,
         saved: null,
         winner: null,
       };
     case "closed":
-    case "pending": {
-      // Closed: the gateway settled it without saying how (`outcomeUnknown`, a
-      // settlement that allows nothing), or a reload no longer listed it
-      // (`inferred`, which says nothing about how it ended).
-      const ended = run && isEnded(run.state);
-      const failed = run?.state === "failed";
-      if (card.outcomeUnknown && !card.inferred) {
-        return {
-          tag: ended ? (failed ? "Closed: the run failed" : "Closed: the run ended") : "Closed",
-          tone: null,
-          sentence: ended
-            ? `The run ${failed ? "failed" : "ended"} before this was answered. The ${noun} was not ${card.kind === "exec" ? "run" : "done"}.`
-            : `The gateway closed this request without allowing it. ${notRun}`,
-          saved: null,
-          winner,
-        };
-      }
+    case "pending":
+      // Closed: the gateway settled it without saying how (`outcomeUnknown`), or a reload no
+      // longer listed it (`inferred`), which says nothing about how it ended.
       return {
-        tag: ended ? (failed ? "Closed: the run failed" : "Closed: the run ended") : "Closed",
+        tag: "Closed",
         tone: null,
-        sentence: ended
-          ? `${name}'s run has ended and this request is closed. The gateway did not say how it was settled.`
-          : "This request was settled while this app was not watching. The gateway did not say how.",
+        sentence:
+          card.outcomeUnknown && !card.inferred
+            ? "The gateway closed it without saying how."
+            : "It is no longer pending on the gateway. Its outcome was not read here.",
+        then,
         saved: null,
         winner,
       };
-    }
   }
-}
-
-function isEnded(state: RunState): boolean {
-  return (
-    state === "completed" || state === "failed" || state === "stopped" || state === "cancelled"
-  );
 }
 
 /** The one-line summary on a folded resolved card. */
@@ -496,7 +486,7 @@ export function answeredRows(item: QuestionItem, answers: string[] | undefined):
 }
 
 /** What a settled question says under each title. */
-export function questionNote(card: QuestionCard, run: Pick<Run, "state"> | undefined): string {
+export function questionNote(card: QuestionCard): string {
   switch (card.status) {
     case "dismissed":
       return "Dismissed";
@@ -505,7 +495,8 @@ export function questionNote(card: QuestionCard, run: Pick<Run, "state"> | undef
     case "cancelled":
       return "Cancelled: you stopped the run";
     case "closed":
-      return run?.state === "failed" ? "Closed: the run failed" : "Closed: the run ended";
+      // The gateway no longer holds it and said nothing of how: no reason of this app's.
+      return "No longer pending on the gateway. Its outcome was not read here.";
     default:
       return "";
   }
