@@ -372,6 +372,8 @@ export class DecisionLog {
     this.byId = new Map();
     /** Lines in the file beyond one per record kept: answers, and records since dropped. */
     this.extraLines = 0;
+    /** When the oldest line evicted from memory but still on disk was written, or null. */
+    this.evictedOldestAt = null;
     this.expiryPending = false;
     /** A torn last line still to repair: "end", the byte length to keep, or null. */
     this.tornTail = null;
@@ -439,7 +441,13 @@ export class DecisionLog {
     this.expiryPending ||= drop > 0;
     drop = Math.max(drop, this.records.length - this.max);
     if (drop > 0) {
-      for (const record of this.records.slice(0, drop)) this.byId.delete(record.id);
+      for (const record of this.records.slice(0, drop)) {
+        this.byId.delete(record.id);
+        // An evicted line stays on disk until a rewrite: remember when the oldest expires.
+        if (this.evictedOldestAt === null || record.at < this.evictedOldestAt) {
+          this.evictedOldestAt = record.at;
+        }
+      }
       this.records = this.records.slice(drop);
       this.extraLines += drop;
     }
@@ -452,6 +460,7 @@ export class DecisionLog {
       const lines = this.records.map((record) => JSON.stringify(record));
       writeFileAtomic(this.dir, DECISIONS_FILE, lines.length > 0 ? `${lines.join("\n")}\n` : "");
       this.extraLines = 0;
+      this.evictedOldestAt = null;
       this.tornTail = null;
       this.unsaved = 0;
       this.expiryPending = false;
@@ -506,9 +515,9 @@ export class DecisionLog {
   prune() {
     const cutoff = this.now() - this.retentionMs;
     this.#pruneOversize(cutoff);
-    if (this.expiryPending || (this.records.length > 0 && this.records[0].at < cutoff)) {
-      this.#maintain(true);
-    }
+    const evictedExpired = this.evictedOldestAt !== null && this.evictedOldestAt < cutoff;
+    const heldExpired = this.records.length > 0 && this.records[0].at < cutoff;
+    if (this.expiryPending || evictedExpired || heldExpired) this.#maintain(true);
   }
 
   /** Remove a record set aside as oversized once it was set aside before `cutoff`. */
