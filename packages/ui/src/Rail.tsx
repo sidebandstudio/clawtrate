@@ -147,69 +147,53 @@ function withRoutine(summary: BotSummary, running: Routine | null): BotSummary {
 /** A routine run's row stays under its bot this long after it finished (Clawtrate's choice, the gateway's default retention). */
 const ROUTINE_ROW_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Each of a bot's isolated agent routines that is running or whose latest
- * run finished in the last 24 hours, once, as a row under the bot: the clock,
- * the routine's name, its latest run's time and the failed mark when that run
- * failed (F-193). A finished row opens that run; a running one opens the
- * routine, where the run in progress is. They are kept apart from the bot's
- * tasks: not counted, never unread, and not part of the tasks' order.
- */
-function RoutineRows({
-  bot,
-  routines,
+function recentRoutineRuns(bot: Bot, routines: Routine[], now: number): Routine[] {
+  return routines.filter(
+    (each) =>
+      each.botId === bot.id &&
+      each.target === "isolated" &&
+      each.payload === "agentTurn" &&
+      (each.runningAt !== null ||
+        (each.lastRunAt !== null && now - (each.lastEndedAt ?? each.lastRunAt) < ROUTINE_ROW_MS)),
+  );
+}
+
+function RoutineRow({
+  routine,
   now,
   onOpen,
 }: {
-  bot: Bot;
-  routines: Routine[];
+  routine: Routine;
   now: number;
   onOpen: (id: string, runAt: number | null) => void;
 }) {
-  const rows = routines
-    .filter(
-      (each) =>
-        each.botId === bot.id &&
-        each.target === "isolated" &&
-        each.payload === "agentTurn" &&
-        (each.runningAt !== null ||
-          (each.lastRunAt !== null && now - (each.lastEndedAt ?? each.lastRunAt) < ROUTINE_ROW_MS)),
-    )
-    .sort((a, b) => (b.runningAt ?? b.lastRunAt ?? 0) - (a.runningAt ?? a.lastRunAt ?? 0));
-  if (rows.length === 0) return null;
+  const failed = routine.runningAt === null && routine.lastStatus === "error";
+  const at = routine.runningAt ?? routine.lastRunAt!;
   return (
-    <ul className="task-list" aria-label={`${bot.name}'s routine runs`} data-testid="routine-runs">
-      {rows.map((routine) => {
-        const failed = routine.runningAt === null && routine.lastStatus === "error";
-        const at = routine.runningAt ?? routine.lastRunAt!;
-        return (
-          <li key={routine.id}>
-            <button
-              type="button"
-              className="task routine-task"
-              data-testid="routine-task"
-              data-routine={routine.id}
-              data-state={routine.runningAt !== null ? "working" : failed ? "failed" : undefined}
-              aria-label={`${routine.name}, routine run${routine.runningAt !== null ? ", running" : failed ? ", failed" : ""}`}
-              onClick={() => onOpen(routine.id, routine.runningAt === null ? at : null)}
-            >
-              <ClockIcon className="task-pin" />
-              <span className="task-title">{routine.name}</span>
-              <time className="task-time" aria-hidden="true">
-                {routine.runningAt !== null ? "now" : rowTime(at, now)}
-              </time>
-              <span className="task-mark" aria-hidden="true">
-                {routine.runningAt !== null ? (
-                  <StateMark state="working" />
-                ) : failed ? (
-                  <StateMark state="failed" />
-                ) : null}
-              </span>
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+    <li>
+      <button
+        type="button"
+        className="task routine-task"
+        data-testid="routine-task"
+        data-routine={routine.id}
+        data-state={routine.runningAt !== null ? "working" : failed ? "failed" : undefined}
+        aria-label={`${routine.name}, routine run${routine.runningAt !== null ? ", running" : failed ? ", failed" : ""}`}
+        onClick={() => onOpen(routine.id, routine.runningAt === null ? at : null)}
+      >
+        <ClockIcon className="task-pin" />
+        <span className="task-title">{routine.name}</span>
+        <time className="task-time" aria-hidden="true">
+          {routine.runningAt !== null ? "now" : rowTime(at, now)}
+        </time>
+        <span className="task-mark" aria-hidden="true">
+          {routine.runningAt !== null ? (
+            <StateMark state="working" />
+          ) : failed ? (
+            <StateMark state="failed" />
+          ) : null}
+        </span>
+      </button>
+    </li>
   );
 }
 
@@ -257,6 +241,8 @@ type TaskActions = {
 function TaskRows({
   bot,
   tasks,
+  routineRuns,
+  onOpenRoutineRun,
   selection,
   onOpenTask,
   onTip,
@@ -268,6 +254,8 @@ function TaskRows({
 }: {
   bot: Bot;
   tasks: Task[];
+  routineRuns: Routine[];
+  onOpenRoutineRun?: ((id: string, runAt: number | null) => void) | undefined;
   selection: SelectionModel;
   onOpenTask: (botId: string, key: string) => void;
   onTip: (tip: Tip | null) => void;
@@ -285,6 +273,17 @@ function TaskRows({
 }) {
   const currentKey = selection.bot?.id === bot.id ? (selection.task?.key ?? null) : null;
   const all = selection.showAll.has(bot.id);
+  const rows = [
+    ...tasks.map((task) => ({ key: task.key, at: task.updatedAt, pinned: task.pinned, task })),
+    ...routineRuns.map((routine) => ({
+      key: `routine:${routine.id}`,
+      at: routine.runningAt ?? routine.lastRunAt,
+      pinned: false,
+      routine,
+    })),
+  ].sort(
+    (a, b) => Number(b.pinned === true) - Number(a.pinned === true) || (b.at ?? 0) - (a.at ?? 0),
+  );
   const showTip = (element: HTMLElement, text: string) => {
     const title = element.querySelector(".task-title");
     if (!title || title.scrollWidth <= title.clientWidth) return onTip(null);
@@ -298,7 +297,17 @@ function TaskRows({
   };
   return (
     <ul className="task-list" aria-label={`${bot.name}'s tasks`} data-testid="task-list">
-      {visibleTasks(tasks, currentKey, all, cap).map((task) => {
+      {visibleTasks(rows, currentKey, all, cap).map((row) => {
+        if ("routine" in row)
+          return (
+            <RoutineRow
+              key={row.key}
+              routine={row.routine}
+              now={now}
+              onOpen={(id, at) => onOpenRoutineRun?.(id, at)}
+            />
+          );
+        const { task } = row;
         const current = task.key === currentKey;
         const unread =
           (!current || selection.keptUnread.has(task.key)) && isUnread(task, selection.unreadSeen);
@@ -375,14 +384,14 @@ function TaskRows({
           </li>
         );
       })}
-      {tasks.length > cap && (
+      {rows.length > cap && (
         <li>
           <button
             type="button"
             className="task task-more"
             onClick={() => selection.toggleShowAll(bot.id)}
           >
-            <span className="task-title">{all ? "Show fewer" : `Show all ${tasks.length}`}</span>
+            <span className="task-title">{all ? "Show fewer" : `Show all ${rows.length}`}</span>
           </button>
         </li>
       )}
@@ -1673,6 +1682,9 @@ export function Rail({
     const waiting = waitingWords(tasks);
     const open = place !== "search" && selection.isOpen(bot.id);
     const several = tasks.length > 1;
+    const routineRuns =
+      place !== "search" && (open || !several) ? recentRoutineRuns(bot, routines, now) : [];
+    const showTasks = open || (place !== "search" && interactive && archivedOpen.has(bot.id));
     const selected = bot.id === selection.bot?.id;
     const latest = summary.latest;
     return (
@@ -1754,26 +1766,20 @@ export function Rail({
             openBotMenu(bot.id, trigger, rect.right - 232, rect.bottom, true);
           }}
         />
-        {(open || (place !== "search" && interactive && archivedOpen.has(bot.id))) && (
+        {(showTasks || routineRuns.length > 0) && (
           <TaskRows
             bot={bot}
-            tasks={tasks}
+            tasks={showTasks ? tasks : []}
+            routineRuns={routineRuns}
+            onOpenRoutineRun={onOpenRoutineRun}
             selection={selection}
             onOpenTask={openTask}
             onTip={setTip}
             onTaskMenu={openTaskMenu}
-            actions={taskActions}
+            actions={showTasks ? taskActions : null}
             archived={archivedProps(bot)}
             cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
             now={now}
-          />
-        )}
-        {place !== "search" && (open || !several) && (
-          <RoutineRows
-            bot={bot}
-            routines={routines}
-            now={now}
-            onOpen={(id, runAt) => onOpenRoutineRun?.(id, runAt)}
           />
         )}
       </li>
@@ -1970,6 +1976,8 @@ export function Rail({
                 <TaskRows
                   bot={owner}
                   tasks={tasksByBot[owner.id] ?? []}
+                  routineRuns={recentRoutineRuns(owner, routines, now)}
+                  onOpenRoutineRun={onOpenRoutineRun}
                   selection={selection}
                   onOpenTask={openTask}
                   onTip={setTip}

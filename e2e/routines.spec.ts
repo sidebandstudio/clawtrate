@@ -247,6 +247,29 @@ test("F-024: started marks the routine and its bot as working, and finished clea
   await expect(view().getByTestId("run-row").first()).toContainText("started by hand");
 });
 
+test("F-193: the latest routine run and tasks share the sidebar cap in recency order", async () => {
+  const job = await add(scriptedRoutine(`Recent routine ${STAMP}`, "otto", "Note the time."));
+  const tasks = page
+    .locator(".bot-group")
+    .filter({ has: page.locator('[data-bot="otto"]') })
+    .locator('[data-testid="task"], [data-testid="routine-task"]');
+  for (let index = 0; index < 6; index += 1)
+    await call("sessions.create", {
+      key: `agent:otto:recency-${STAMP}-${index}`,
+      agentId: "otto",
+      label: `Recency task ${index}`,
+    });
+  const otto = botRow("Otto").first();
+  if ((await otto.getAttribute("aria-expanded")) === "false") {
+    await otto.focus();
+    await page.keyboard.press("ArrowRight");
+  }
+  await expect(tasks).toHaveCount(6);
+  expect((await runNow(job.id)).run?.status).toBe("ok");
+  await expect(tasks.first()).toContainText(job.name);
+  await expect(tasks).toHaveCount(6);
+});
+
 test("F-190 F-193: a run opens its conversation as the run recorded it, from the routine's page and from the rail", async () => {
   const name = `Conversation ${STAMP}`;
   const job = await add(scriptedRoutine(name, "marlow", "Summarise my notes. #steps"));

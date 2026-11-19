@@ -10,7 +10,10 @@ const ROUTINES = "scene=main&routines=on";
 const size = (name: string) => SIZES.find((each) => each.name === name)!;
 const view = (page: Page) => page.getByTestId("routines-view");
 const rail = (page: Page, bot: string) =>
-  page.getByRole("list", { name: `${bot}'s routine runs` }).getByTestId("routine-task");
+  page
+    .locator(".bot-group")
+    .filter({ has: page.getByTestId("bot").getByText(bot, { exact: true }) })
+    .getByTestId("routine-task");
 
 async function open(page: Page, query = ROUTINES) {
   await openFixture(page, query, "light");
@@ -94,6 +97,27 @@ test.describe("1440", () => {
     await view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
     await expect(view(page).getByTestId("routine-row")).toHaveCount(3);
     expect(await sent(page)).toContain("readBotRoutines");
+  });
+
+  test("F-191: the bot filter confirms completeness only after a successful complete read", async ({
+    page,
+  }) => {
+    const omitted = view(page).getByTestId("routines-omitted");
+    const chooseOtto = () =>
+      view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
+    await open(page, "scene=main&routines=truncated&routinehold=otto");
+    await chooseOtto();
+    await expect(view(page).getByLabel("Loading routines")).toBeVisible();
+    await expect(omitted).not.toContainText("All of this bot's are shown.");
+    await page.evaluate(() =>
+      (window as unknown as { releaseRoutineReads(): void }).releaseRoutineReads(),
+    );
+    await expect(omitted).toContainText("All of this bot's are shown.");
+
+    await open(page, "scene=main&routines=truncated&routinefail=otto");
+    await chooseOtto();
+    await expect(view(page)).toContainText("Couldn't load this bot's routines.");
+    await expect(omitted).not.toContainText("All of this bot's are shown.");
   });
 
   test("F-188 F-353: a routine's page says its instruction, schedule, zone, next run, where it runs and its triggers", async ({
@@ -229,7 +253,7 @@ test.describe("1440", () => {
       "data-state",
       "failed",
     );
-    await expect(page.getByRole("list", { name: "Juniper's routine runs" })).toHaveCount(0);
+    await expect(rail(page, "Juniper")).toHaveCount(0);
     await rail(page, "Marlow").click();
     await expect(view(page).getByRole("heading", { name: "Morning digest" })).toBeVisible();
     await expect(view(page).getByTestId("scheduled-message")).toBeVisible();
