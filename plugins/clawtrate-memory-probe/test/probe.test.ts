@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -80,5 +80,28 @@ describe("the memory probe", () => {
     expect(notePath(workspace, "memory/nested/note.md")).toBe(
       join(workspace, "memory/nested/note.md"),
     );
+  });
+
+  it("refuses a write through a linked note or a linked folder", () => {
+    const { workspace, methods } = load();
+    const outside = join(workspace, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "target.md"), "kept\n");
+    const write = (agentId: string) =>
+      methods.get("clawtrate-memory-probe.write")!.handler({
+        params: { agentId, path: "memory/nested/note.md", content: "overwritten\n" },
+        respond: () => {},
+      });
+
+    mkdirSync(join(workspace, "linked-note/memory/nested"), { recursive: true });
+    symlinkSync(join(outside, "target.md"), join(workspace, "linked-note/memory/nested/note.md"));
+    expect(() => write("linked-note")).toThrow(/symbolic link/);
+
+    mkdirSync(join(workspace, "linked-folder"));
+    symlinkSync(outside, join(workspace, "linked-folder/memory"));
+    expect(() => write("linked-folder")).toThrow(/symbolic link/);
+
+    expect(readFileSync(join(outside, "target.md"), "utf8")).toBe("kept\n");
+    expect(() => readFileSync(join(outside, "nested/note.md"))).toThrow();
   });
 });
