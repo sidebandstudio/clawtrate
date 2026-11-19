@@ -1228,6 +1228,36 @@
   position: relative;
 }
 
+/* A bubble with its actions stands in its .msg's place: the unit takes the bubble's spacing,
+   so a turn is laid out as it is without them. */
+.msg-unit {
+  margin-top: 4px;
+}
+
+.msg-unit > .msg:first-child {
+  margin-top: 0;
+}
+
+.card + .msg-unit,
+.msg-unit + .card,
+.msg-unit + :is(.action, .messaged),
+:is(.action, .messaged) + .msg-unit {
+  margin-top: 8px;
+}
+
+.thought[data-place="reply"] + .msg-unit {
+  margin-top: 4px;
+}
+
+:is(.msg[data-role="user"], .msg-unit:has(> .msg[data-role="user"]))
+  + :is(.msg[data-role="assistant"], .msg-unit:has(> .msg[data-role="assistant"])),
+:is(.msg[data-role="assistant"], .msg-unit:has(> .msg[data-role="assistant"]))
+  + :is(.msg[data-role="user"], .msg-unit:has(> .msg[data-role="user"])),
+.event-line + .msg-unit:has(> .msg[data-role="user"]),
+:is(.action, .thought, .run-line) + .msg-unit:has(> .msg[data-role="user"]) {
+  margin-top: var(--space-4);
+}
+
 .msg-actions {
   position: absolute;
   top: 0;

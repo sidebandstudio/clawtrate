@@ -1124,7 +1124,9 @@ test("F-088: a gateway run that narrates between its tool calls shows each narra
   const turn = page.getByTestId("transcript-turn").last();
   await expect(turn).toContainText("I wrote notes/scratch.md.");
   const parts = await turn
-    .locator(':scope > .msg[data-role="assistant"], :scope > .action')
+    .locator(
+      ':scope > .msg[data-role="assistant"], :scope > .msg-unit > .msg[data-role="assistant"], :scope > .action',
+    )
     .evaluateAll((nodes) =>
       nodes.map((node) =>
         node.classList.contains("action")
