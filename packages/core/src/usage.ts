@@ -621,8 +621,10 @@ export function budgetId(target: { routineId: string | null; botId: string }): s
 /** A whole number of tokens a budget may be, or the reason it may not, in the form's words. */
 export function budgetTokens(value: string | number): number | string {
   const n = typeof value === "number" ? value : Number(String(value).replace(/[,\s]/g, ""));
-  if (!Number.isSafeInteger(n) || n < MIN_BUDGET_TOKENS || n > MAX_BUDGET_TOKENS)
+  if (!Number.isSafeInteger(n) || n < MIN_BUDGET_TOKENS)
     return "Enter a whole number of 1,000 or more.";
+  if (n > MAX_BUDGET_TOKENS)
+    return `Enter a whole number of ${MAX_BUDGET_TOKENS.toLocaleString("en-US")} or less.`;
   return n;
 }
 

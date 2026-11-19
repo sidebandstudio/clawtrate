@@ -418,6 +418,11 @@ describe("budgets kept with the gateway", () => {
     expect(budgetTokens("900")).toBe("Enter a whole number of 1,000 or more.");
     expect(budgetTokens("1.5")).toBe("Enter a whole number of 1,000 or more.");
     expect(budgetTokens("")).toBe("Enter a whole number of 1,000 or more.");
+    // Past the largest budget, the form says the largest, not a bound the number already meets.
+    expect(budgetTokens("1,000,000,000,001")).toBe(
+      "Enter a whole number of 1,000,000,000,000 or less.",
+    );
+    expect(budgetTokens("1,000,000,000,000")).toBe(1_000_000_000_000);
     expect(() =>
       applyBudgetChange({ budgets: [] }, { op: "set", budget: { ...otto, tokens: 999 } }, NOW),
     ).toThrow(BudgetError);
