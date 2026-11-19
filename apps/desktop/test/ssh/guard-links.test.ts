@@ -33,7 +33,12 @@ let world: SshWorld;
 let toNested: string;
 
 it("knows when this account can't make symbolic links, and says why", () => {
-  expect(symlinkSupport()).toEqual({ ok: true });
+  // Either answer is right for this account: an account without links skips the suite below.
+  const here = symlinkSupport();
+  expect(
+    here.ok ? true : /^this account can't make symbolic links \(\w+\)$/.test(here.reason),
+    JSON.stringify(here),
+  ).toBe(true);
   const refused = (): never => {
     throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
   };
