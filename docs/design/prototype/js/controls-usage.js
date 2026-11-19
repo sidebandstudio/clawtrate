@@ -77,7 +77,7 @@
   const prevExtra = CT.botsExtraGroups;
   CT.botsExtraGroups = (id) => {
     const g = G[id];
-    let value = USAGE === "error" ? "Couldn't load" : `This week: ${short(weekTotal(id))} tokens · about $${fig(id, "week").cost.toFixed(2)}`;
+    let value = USAGE === "error" ? "Couldn't load" : `This week: ${short(weekTotal(id))} tokens · ${USAGE === "nocost" ? "cost unavailable" : `about $${fig(id, "week").cost.toFixed(2)}${USAGE === "partial" ? ", partial" : ""}`}`;
     if (g) value = `Budget ${short(usedOf(id))} of ${short(g.limit)} ${periodWords(g)} · ${value}`;
     return (prevExtra ? prevExtra(id) : "") + `<h3 class="b-tabgroup">Usage</h3><dl class="facts">${openRow("Usage", value, `data-bs="usage" aria-label="Usage: ${value}. Open."`)}</dl>`;
   };
@@ -261,7 +261,7 @@
     if (lim === "near" && bot === "otto") add(`<p>OpenAI reports 92% of a weekly limit used, as of 5:40 PM. It doesn't say which of your OpenAI accounts.</p><button type="button" class="icon-button" data-variant="quiet" data-c="banner-close" aria-label="Close">${icon("x")}</button>`, "neutral");
     if (lim === "reached" && bot === "otto") add(`<p>OpenAI reports a weekly limit reached, as of 5:40 PM. It resets Nov 20.</p><button type="button" class="icon-button" data-variant="quiet" data-c="banner-close" aria-label="Close">${icon("x")}</button>`);
     const g = G[bot];
-    if (bot === "otto" && g && pctOf(bot) >= 100) add(`<p>Otto has reached its ${kindWord(g)} warning budget. This is shown only: other apps, channels and Otto's routines aren't stopped.</p>${button("Raise budget", 'data-c="raise-from-composer" data-size="sm"')}`);
+    if (bot === "otto" && g && pctOf(bot) >= 100) add(`<p>Otto has reached its ${kindWord(g)} warning budget. This is shown only: other apps, channels and Otto's routines aren't stopped.</p>${B.access !== "read" ? button("Raise budget", 'data-c="raise-from-composer" data-size="sm"') : ""}`);
   }
   const otto = app.bots.find((b) => b.id === "otto");
   if (BUDGET === "warn") {
@@ -289,6 +289,7 @@
         return BS.render();
       case "budget-new":
       case "budget-edit":
+        if (B.access === "read") return;
         U.form = { value: G[bot] ? String(G[bot].limit) : "", kind: G[bot]?.kind || "weekly" };
         BS.render();
         return setTimeout(() => $("[data-c-budget]", panel)?.focus(), 30);
@@ -299,6 +300,7 @@
         U.form = null;
         return BS.render();
       case "budget-save": {
+        if (B.access === "read") return;
         const n = Number(U.form.value.replace(/[, ]/g, ""));
         G[bot] = { kind: U.form.kind, limit: n };
         U.form = null;
@@ -310,7 +312,8 @@
         app.setPanel(true);
         BS.S.view = "usage";
         $("#tab-settings").click();
-        U.form = { value: "3000000", kind: "weekly" };
+        if (B.access === "read") return;
+        U.form = { value: "3000000", kind: G[bot]?.kind || "weekly" };
         return BS.render(true);
       case "pause-routine":
         return announce("Weekly cleanup is paused. Resume it from the routine's page.");
