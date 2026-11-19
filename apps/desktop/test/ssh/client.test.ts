@@ -528,6 +528,60 @@ describe.skipIf(process.platform === "win32")("the ssh client", () => {
     });
   });
 
+  it("reports the pin a match was made against, when a replacement lands while the probe runs", async () => {
+    const version = "OpenSSH_9.9p2, LibreSSL 3.3.6\n";
+    const keyOf = (fill: number) =>
+      Buffer.concat([
+        Buffer.from([0, 0, 0, 11]),
+        Buffer.from("ssh-ed25519"),
+        Buffer.from([0, 0, 0, 32]),
+        Buffer.alloc(32, fill),
+      ]).toString("base64");
+    const world = worldWith(version.trim(), "darwin", "pin-replaced-during-probe");
+    const fake = heldSpawn();
+    const transport = new SshTransport(world, { spawn: fake.spawn });
+    writeFileSync(world.personConfig, "Host devbox\n  HostName devbox.example\n");
+    const route = transport.prepareRoute("1", "devbox");
+    if (!route.ok) throw new Error(JSON.stringify(route));
+    const pins = new AppKnownHosts(join(world.appDir, "known_hosts"));
+    const a = keyOf(8);
+    const b = keyOf(9);
+    pins.pin(
+      route.alias,
+      { type: "ssh-ed25519", key: a, fingerprint: fingerprintOf(a) },
+      route.endpoint,
+      new Date(0),
+      false,
+    );
+    const matched = (key: string) =>
+      [
+        `debug1: Server host key: ssh-ed25519 ${fingerprintOf(key)}`,
+        `debug1: Host '${route.alias}' is known and matches the ED25519 host key.`,
+        `debug1: Found key in ${join(world.appDir, "known_hosts")}:1`,
+        "",
+      ].join("\n");
+    const checking = transport.checkHostKey(route);
+    (await fake.next()).answer(version);
+    const probe = await fake.next();
+    // An approved replacement installs B before ssh reads the file; ssh then matches B.
+    pins.pin(
+      route.alias,
+      { type: "ssh-ed25519", key: b, fingerprint: fingerprintOf(b) },
+      route.endpoint,
+      new Date(1),
+      true,
+    );
+    // Checked again against the pin there now: that check, when it comes, matches B too.
+    void fake.next().then((recheck) => recheck.answer(matched(b), "", 255));
+    probe.answer(matched(b), "", 255);
+    expect(await checking).toEqual({
+      ok: true,
+      state: "pinned",
+      label: "ED25519",
+      fingerprint: fingerprintOf(b),
+    });
+  });
+
   it("turns a spawn that fails into a typed result, never an exception", async () => {
     const world = worldWith("OpenSSH_9.9p2, LibreSSL 3.3.6", "darwin", "spawn");
     const transport = new SshTransport(world, {

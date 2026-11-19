@@ -488,6 +488,10 @@ export class SshTransport {
   private async checkPinned(route: Route, pin: Pin): Promise<HostKeyCheck | Failed | StaleRoute> {
     const { run, lines } = await this.probe(this.configPath(route), route.alias);
     if (!this.current(route)) return STALE;
+    // An approved replacement may have installed another key while ssh read the file: what it
+    // matched or refused is then about that key, so the check is made again against it.
+    const now = this.known.get(route.alias, route.endpoint);
+    if (now && (now.type !== pin.type || now.key !== pin.key)) return this.checkPinned(route, now);
     if (lines.matches)
       return {
         ok: true,
