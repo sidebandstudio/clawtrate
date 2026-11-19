@@ -406,6 +406,17 @@ describe("where a bot runs: the engine", () => {
     expect(save.place).toMatchObject({ host: "node", nodeSelector: NODE, node: null });
   });
 
+  it("F-046: a confirmed save stands when the machine list can't be read; the stored id is shown", async () => {
+    const gw = gateway();
+    gw.refuse.set("node.list", "node list unavailable");
+    const save = await engine(gw, { admin: true }).setCommandMachine(
+      "otto",
+      { host: "node", nodeId: NODE },
+      "c1",
+    );
+    expect(save).toMatchObject({ active: "applied", place: { nodeSelector: NODE, node: null } });
+  });
+
   it("F-046: a save the read-back does not show is refused, not announced", async () => {
     const gw = gateway();
     gw.ignore.add("config.patch");

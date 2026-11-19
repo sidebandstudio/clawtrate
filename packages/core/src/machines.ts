@@ -829,7 +829,8 @@ export class MachinesEngine {
     }
     const [{ config, hash, raw }, { nodes }] = await Promise.all([
       this.config(),
-      this.ctx.request("node.list", {}).then(readNodes),
+      // The list only names the machine; without it the stored id is shown, and the save stands.
+      this.ctx.request("node.list", {}).then(readNodes, () => ({ nodes: [], omitted: 0 })),
     ]);
     const place = readCommandPlace(config, botId, nodes);
     const agrees =
