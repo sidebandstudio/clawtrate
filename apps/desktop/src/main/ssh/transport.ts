@@ -25,6 +25,7 @@ import { ForwardSupervisor, type ForwardProcess, type VerifyResult } from "./for
 import {
   AppKnownHosts,
   type HostKey,
+  type Pin,
   keyLabel,
   literalKeyAt,
   parseKnownHostsLine,
@@ -439,45 +440,22 @@ export class SshTransport {
     if (!client.ok) return client;
     if (!this.current(route)) return STALE;
     const pin = this.known.get(route.alias, route.endpoint);
-    if (pin) {
-      const { run, lines } = await this.probe(this.configPath(route), route.alias);
-      if (!this.current(route)) return STALE;
-      if (lines.matches)
-        return {
-          ok: true,
-          state: "pinned",
-          label: keyLabel(pin.type),
-          fingerprint: pin.fingerprint,
-        };
-      const failure = runFailure(run);
-      if (failure.kind !== "host-key-changed" && failure.kind !== "host-key-unknown") {
-        return this.failed(route, failure);
-      }
-      const captured = await this.capture(route, true);
-      if (!this.current(route)) return STALE;
-      if (!captured.ok) return captured;
-      if (captured.capture.key.fingerprint === pin.fingerprint) {
-        this.captures.delete(captured.capture.id);
-        return {
-          ok: true,
-          state: "pinned",
-          label: keyLabel(pin.type),
-          fingerprint: pin.fingerprint,
-        };
-      }
-      return {
-        ok: true,
-        state: "changed",
-        trusted: {
-          label: keyLabel(pin.type),
-          fingerprint: pin.fingerprint,
-          pinnedAt: pin.pinnedAt,
-        },
-        presented: this.shown(captured.capture),
-      };
-    }
+    if (pin) return this.checkPinned(route, pin);
     const prior = await this.priorTrust(route);
     if (!this.current(route)) return STALE;
+    // Another check of this route may have pinned a key while this one looked: never overwritten.
+    const pinnedMeanwhile = this.known.get(route.alias, route.endpoint);
+    if (pinnedMeanwhile) {
+      if (prior && prior.type === pinnedMeanwhile.type && prior.key === pinnedMeanwhile.key) {
+        return {
+          ok: true,
+          state: "pinned",
+          label: keyLabel(pinnedMeanwhile.type),
+          fingerprint: pinnedMeanwhile.fingerprint,
+        };
+      }
+      return this.checkPinned(route, pinnedMeanwhile);
+    }
     if (prior) {
       const pinned = this.known.pin(
         route.alias,
@@ -497,6 +475,45 @@ export class SshTransport {
     if (!this.current(route)) return STALE;
     if (!captured.ok) return captured;
     return { ok: true, state: "first-contact", presented: this.shown(captured.capture) };
+  }
+
+  /** Where a pinned route's key stands: still the pinned one, or changed (with the key presented now). */
+  private async checkPinned(route: Route, pin: Pin): Promise<HostKeyCheck | Failed | StaleRoute> {
+    const { run, lines } = await this.probe(this.configPath(route), route.alias);
+    if (!this.current(route)) return STALE;
+    if (lines.matches)
+      return {
+        ok: true,
+        state: "pinned",
+        label: keyLabel(pin.type),
+        fingerprint: pin.fingerprint,
+      };
+    const failure = runFailure(run);
+    if (failure.kind !== "host-key-changed" && failure.kind !== "host-key-unknown") {
+      return this.failed(route, failure);
+    }
+    const captured = await this.capture(route, true);
+    if (!this.current(route)) return STALE;
+    if (!captured.ok) return captured;
+    if (captured.capture.key.fingerprint === pin.fingerprint) {
+      this.captures.delete(captured.capture.id);
+      return {
+        ok: true,
+        state: "pinned",
+        label: keyLabel(pin.type),
+        fingerprint: pin.fingerprint,
+      };
+    }
+    return {
+      ok: true,
+      state: "changed",
+      trusted: {
+        label: keyLabel(pin.type),
+        fingerprint: pin.fingerprint,
+        pinnedAt: pin.pinnedAt,
+      },
+      presented: this.shown(captured.capture),
+    };
   }
 
   /** A literal key for the resolved host and port in the person's known-hosts file, verified, or null. */

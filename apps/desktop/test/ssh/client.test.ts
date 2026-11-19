@@ -332,6 +332,64 @@ describe.skipIf(process.platform === "win32")("the ssh client", () => {
     expect(await c.fake.settle(look)).toEqual({ ok: false, kind: "stale-route" });
   });
 
+  it("two checks of one route that both find an earlier key: one pins it, the other is pinned, nothing throws", async () => {
+    const version = "OpenSSH_9.9p2, LibreSSL 3.3.6\n";
+    const keyOf = (fill: number) =>
+      Buffer.concat([
+        Buffer.from([0, 0, 0, 11]),
+        Buffer.from("ssh-ed25519"),
+        Buffer.from([0, 0, 0, 32]),
+        Buffer.alloc(32, fill),
+      ]).toString("base64");
+    const lookupAnswer = (world: SshWorld, key: string) =>
+      [
+        `debug1: Server host key: ssh-ed25519 ${fingerprintOf(key)}`,
+        `debug1: Host 'devbox.example' is known and matches the ED25519 host key.`,
+        `debug1: Found key in ${world.personKnownHosts}:1`,
+        "",
+      ].join("\n");
+    for (const later of ["same", "another"] as const) {
+      const world = worldWith(version.trim(), "darwin", `prior-twice-${later}`);
+      const fake = heldSpawn();
+      const transport = new SshTransport(world, { spawn: fake.spawn });
+      writeFileSync(world.personConfig, "Host devbox\n  HostName devbox.example\n");
+      const route = transport.prepareRoute("1", "devbox");
+      if (!route.ok) throw new Error(JSON.stringify(route));
+      const first = keyOf(4);
+      writeFileSync(world.personKnownHosts, `devbox.example ssh-ed25519 ${first}\n`);
+      const one = transport.checkHostKey(route);
+      const two = transport.checkHostKey(route);
+      (await fake.next()).answer(version);
+      const lookupOne = await fake.next();
+      const lookupTwo = await fake.next();
+      lookupOne.answer(lookupAnswer(world, first), "", 255);
+      expect(await one).toMatchObject({ ok: true, state: "pinned-from-known-hosts" });
+      // The second lookup answers after the pin was written: with the same key, or with another.
+      const second = later === "same" ? first : keyOf(5);
+      writeFileSync(world.personKnownHosts, `devbox.example ssh-ed25519 ${second}\n`);
+      lookupTwo.answer(lookupAnswer(world, second), "", 255);
+      if (later === "another") {
+        // Checked against the pin there now, which the server presents.
+        const pinned = await fake.next();
+        expect(pinned.args[1]).toBe(transport.configPath(route));
+        pinned.answer(
+          `debug1: Host 'clawtrate' is known and matches the ED25519 host key.\n`,
+          "",
+          255,
+        );
+      }
+      expect(await fake.settle(two), later).toEqual({
+        ok: true,
+        state: "pinned",
+        label: "ED25519",
+        fingerprint: fingerprintOf(first),
+      });
+      const pins = readFileSync(join(world.appDir, "known_hosts"), "utf8");
+      expect(pins, later).toContain(first);
+      expect(pins, later).not.toContain(keyOf(5));
+    }
+  });
+
   it("turns a spawn that fails into a typed result, never an exception", async () => {
     const world = worldWith("OpenSSH_9.9p2, LibreSSL 3.3.6", "darwin", "spawn");
     const transport = new SshTransport(world, {
