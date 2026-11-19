@@ -10,10 +10,12 @@ How to read the citations, as in `gateway-capabilities.md` and `setup-flow.md`:
 
 Where things were run: a named development instance, `pnpm dev-gateway start --instance d9grp`, with its four seeded bots and the scripted model, and the probe in `group-chats/group-probe.ts`, which pairs its own devices through the tool's `openOperator` (its pairing approved by id through the tool's guarded runner) and removes them when it ends. Each experiment is `node docs/research/group-chats/group-probe.ts <experiment> --instance d9grp`. On this gateway Juniper's agent id is `main`; the others are `otto`, `marlow` and `pip`. Ids, keys and run ids below are from those runs; the owner's display name and the state folder's path are left out.
 
-## Two facts other designs rely on
+## Facts other designs rely on
 
-- **An approval request reaches, and can be resolved by, only the device that sent the message that started the run:** a second device of the same person, holding `operator.approvals` and subscribed to the task with approvals, received no request, listed none in `exec.approval.list` and was refused "unknown or expired approval id" when it answered by id, while a read-only device saw only the run's `waiting-approval` phase; an admin connection may see and resolve it, which was read in the source (`canAccessOperatorApproval`) and not run (section 9).
-- **A `chat.send` to a task that was deleted starts a new, empty task under the same key without saying so:** `sessions.describe` answered `{session: null}`, the send answered `{status: "started"}` with no error, and the key then described a new task, so a client must check that a task exists before it sends to one (section 3).
+- **An approval request reaches, and can be resolved by, only the device bound to it, which is the device that sent the message that started the run:** a second device of the same person, holding `operator.approvals` and subscribed to the task with approvals, received no request, listed none in `exec.approval.list` and was refused "unknown or expired approval id" when it answered by id, while a read-only device saw only the run's `waiting-approval` phase; an admin connection may see and resolve it, which was read in the source (`canAccessOperatorApproval`) and not run (section 9).
+- **An ordinary question is not bound that way:** every connection holding `operator.questions` received `question.requested`, listed it in `question.list` and could answer or dismiss it, wherever its run began; a read-only connection received nothing and was refused the list (section 9).
+- **A `chat.send` to a task that was deleted starts a new, empty task under the same key without saying so:** `sessions.describe` answered `{session: null}`, the send answered `{status: "started"}` with no error, and the key then described a new task. A check before the send catches only a task already gone; a send that also carries the task's confirmed `sessionId` and `expectedLeafEntryId: null`, without `queueMode: "steer"`, is refused instead ("active branch changed; review and retry") and makes no task, while the same send with `queueMode: "steer"`, or with `sessionId` alone, still makes one (section 3).
+- **Stop reaches only the runs this device may stop:** `chat.abort` on a task whose run another device started answered "unauthorized", and a task-wide abort ended this device's run while another device's input, accepted into the same task behind it, ran on to `final` (section 6).
 
 ## Summary
 
@@ -21,15 +23,16 @@ Where things were run: a named development instance, `pnpm dev-gateway start --i
 |---|---|---|---|
 | 1 | Is there a session with several bots? | No. A task belongs to one bot: its key is `agent:<id>:…` and a send naming another bot is refused. `session.members` adds people, not bots; `sessions.groups` are sidebar folders; `session.discussion` is one task's thread on a provider, absent here. **Live.** The gateway's own multi-bot feature, channel "broadcast groups", runs several bots on one inbound channel message, needs admin configuration and a channel, and its docs say the Control UI has no team thread either. **Source.** | 1 |
 | 2 | What is a group, then? | One task per bot, made with `sessions.create`, and one message to all is one `chat.send` per task. Each send answers on its own (`{runId, status:"started"}`), and each run ends on its own; the three ends of one message came in a different order from the sends. **Live.** | 2 |
-| 3 | What orders the merged view? | The gateway's own clock: every history row has a `timestamp`, set by the one gateway all the tasks are on. An assistant row's time is when its reply was written, a few hundred ms before its run's `final`. **Live.** | 2 |
+| 3 | What orders the merged view? | The gateway's own clock: every history row has a `timestamp`, set by the one gateway all the tasks are on. A reply's saved time is not when its run ended: a six-second streamed reply was stamped before a short one that ended eight seconds earlier, so the saved order can differ from the order replies finished. Assistant rows carry no `agentId`; the task they come from names the bot. **Live.** | 2 |
 | 4 | Can the copies of one message be told apart from other messages after a reload or on another device? | Yes. A run's id is the `idempotencyKey` the client sends, and the user row in history keeps `idempotencyKey: "<that key>:user"`. A client that puts one group-send id into each copy's key can join them. **Live.** | 2 |
-| 5 | One of three refused, busy or failed | Refused: an archived member task answers "Session … is archived. Restore it before starting new work." while the others start. Busy: a send to a task whose run is active is accepted into that run (the row carries `steerTargetRunId`; the session's `effectiveQueueMode` is `steer`). A deleted bot: "Unknown agent id". **Live.** A send to a task that no longer exists is not refused: it makes a new task under that key. **Live.** | 3 |
+| 5 | One of three refused, busy or failed | Refused: an archived member task answers "Session … is archived. Restore it before starting new work." while the others start. Busy: a send to a task whose run is active is accepted; it joined the run when the row carried `steerTargetRunId`, and when another device's run was active it waited in the task's `pendingInputs` and ran after. `started` acknowledges admission, not delivery. A deleted bot: "Unknown agent id". **Live.** A send to a task that no longer exists is not refused: it makes a new task under that key. **Live.** | 3 |
 | 6 | Does a bot see what the others said? | No. Each task is its own conversation, and the scripted model received only its own task's turns. `replyToId` gives a bot the message replied to only when that message is in its own task; a message id from another task resolves to nothing. **Live.** A bot's own messaging tool, `sessions_send`, goes where the bot points it: in the run here, Marlow's message went to Pip's main task, not to Pip's task in the group. **Live.** | 4 |
 | 7 | `@<bot>` and `@everyone` | `chat.send`'s `mentions` name human profiles, and are refused for this client: "Human mentions require a signed-in Control UI chat." The same text without `mentions` is stored exactly as typed. So a mention is the app's own routing, and the text each bot receives is what the person typed. **Live.** | 5 |
-| 8 | Stop with several runs | One `chat.abort` per task, each confirmed with the runs it ended; each run ended `aborted` on its own. **Live.** | 6 |
+| 8 | Stop with several runs | One `chat.abort` per task, each confirmed with the runs it ended. An abort on a run another device started answered "unauthorized"; an input accepted behind the stopped run ran on. **Live.** | 6 |
 | 9 | Where a group's name, members and order can be kept | `users.prefs`: read with `operator.read`, written with `operator.write`, one JSON value of at most 4,096 bytes per key, at most 128 keys per person, compare-and-set, `null` deletes. A second device of the same person read the record and received `users.prefs.changed`; a read-only device read it and was refused a write. **Live.** | 7 |
 | 10 | What a deleted bot or a removed task leaves | A deleted bot's tasks go with it: history empty, `sessions.describe` null, a send refused. An archived task keeps its history and refuses sends until restored. Deleting a task needs it archived first, at write; it is then gone. **Live.** | 8 |
-| 11 | Approvals in a group | An approval names the asking bot (`agentId`) and its task (`sessionKey`). It reached the device whose message started the run; a second device with the same scopes, subscribed to the same task with approvals, received nothing, listed nothing and was refused when it answered by id. A read-only device saw the run's `waiting-approval` phase. Always allow on Otto's command saved an entry under Otto alone. **Live.** | 9 |
+| 11 | Approvals in a group | An approval names the asking bot (`agentId`) and its task (`sessionKey`). It reached the device whose message started the run; a second device with the same scopes, subscribed to the same task with approvals, received nothing, listed nothing and was refused when it answered by id. A read-only device saw the run's `waiting-approval` phase. Always allow on Otto's command saved an entry under Otto alone. An ordinary question, by contrast, reached and could be answered by every connection with `operator.questions`. **Live.** | 9 |
+| 12 | Can a send be kept from making a new task? | Yes, when it carries the confirmed `sessionId` and `expectedLeafEntryId: null` and no `queueMode: "steer"`: refused with "active branch changed; review and retry", no task made. Accepted as usual on a task with history and on a running task. **Live.** | 3 |
 
 ## 1. There is no session with several bots
 
@@ -72,7 +75,15 @@ history agent:marlow:…: [{"role":"user","timestamp":…578844,…},{"role":"as
 ```
 
 - **Sent means each send answered.** Each `chat.send` returned its own run id. A message "to everyone" is as many sends as there are targets, and each can be accepted or refused on its own (section 3).
-- **One clock.** All the tasks are on one gateway, and every row's `timestamp` is that gateway's. The three copies of the message were recorded 5 ms apart; the replies at their own times. An assistant row is stamped when its message was written, a little before its run's `final`, so a reply's place is known once it is complete. While it streams, its place is not yet in history.
+- **One clock, not the order of finishing.** All the tasks are on one gateway, and every row's `timestamp` is that gateway's. The three copies of the message were recorded 5 ms apart. A reply's saved time is not the time its run ended (`order`: Otto streamed for six seconds, Juniper answered at once):
+
+  ```
+  ends, in the order they arrived: [{"at":…909255,"key":"main"},{"at":…917402,"key":"otto"}]
+  Juniper assistant rows: [{"timestamp":…909142,"agentId":null}]
+  Otto assistant rows: [{"timestamp":…908758,"agentId":null}]
+  ```
+
+  Juniper finished eight seconds before Otto, yet Otto's saved reply sorts first. So the order saved messages take on a reload can differ from the order a person saw them finish. Assistant rows carry no `agentId`: the task a row comes from names its bot.
 - **The replies end in any order.** Marlow's run ended first here although its send went last.
 - **The copies can be joined.** The run id is the `idempotencyKey` sent (`grp-f9762d4a-…` above), and the user row keeps it: in the `reply` run, `"idempotencyKey":"4c25e9d6-38e2-4803-aa66-d61d6e67b580:user"` for run `4c25e9d6-38e2-4803-aa66-d61d6e67b580`. The schema allows any non-empty string (`ChatSendParams.idempotencyKey`, `minLength: 1`). A client that builds each copy's key from one group-send id and the bot can show one message once, after a reload and on another device of the person, from history alone.
 
@@ -98,7 +109,19 @@ three chat.send answers while Otto runs: Juniper {"status":"started","messageSeq
 history Otto: user "#slow 8" · assistant (slow reply) · user "#text" with __openclaw.steerTargetRunId · assistant (plain reply)
 ```
 
-Otto's session reports `effectiveQueueMode: "steer"`. The send answered "started" like the others; what tells the cases apart is the row's `steerTargetRunId` and the run's own events, which is what `conversation.md` section 6 already uses for the "Steer" caption. A member with a pending question, or a run being stopped, was not tried in a group: those copies follow `conversation.md` section 15 in that member's task, where the client holds or queues the message itself and nothing reaches the gateway until it is released.
+Otto's session reports `effectiveQueueMode: "steer"`. The send answered "started" like the others; what tells the cases apart is the row's `steerTargetRunId` and the run's own events, which is what `conversation.md` section 6 already uses for the "Steer" caption.
+
+**An input behind another device's run waits in the task** (`queuedstop`): device A started `#slow 6`, then device B sent `#text` to the same task.
+
+```
+A's run, then B's input into the same task: {"first":{"status":"started","messageSeq":1},"later":{"runId":"b5b571e0-…","status":"started"}}
+pendingInputs while A's run is active: {"total":1,"items":[["acceptedAt","id","message","runId","state"]]}
+A stops the task: {"ok":true,"aborted":true,"runIds":["f787d227-…"]}   (A's run only)
+ends: A's run aborted, B's run final
+steerTargetRunId on user rows: [null]
+```
+
+So `started` is an admission, not a delivery: the input may join the running turn (`steerTargetRunId` on its row), wait in `chat.history`'s `pendingInputs` (which names its `runId`), or start a run of its own; the row, `pendingInputs` and the run's own events say which. A member with a pending question, or a run being stopped, was not tried in a group: those copies follow `conversation.md` section 15 in that member's task, where the client holds or queues the message itself and nothing reaches the gateway until it is released.
 
 **A task that no longer exists is made again by a send** (`refused`):
 
@@ -108,7 +131,21 @@ a send to that key: {"ok":true,"result":{"runId":"c541cb97-…","status":"starte
 describe it after the send: {"key":"agent:otto:dashboard:7eb06132-…","createdVia":"operator"}
 ```
 
-So a client must check that a member's task still exists before it sends to it; sending blindly to a deleted member task starts a new, empty one.
+So a client must check that a member's task still exists before it sends to it; sending blindly to a deleted member task starts a new, empty one. The check catches only a task already gone when it runs: a task deleted between the check and the send is made again by the send.
+
+**The gateway's own guard** (`guard`): `chat.send` takes `sessionId` and `expectedLeafEntryId`. When `queueMode` is not `"steer"` and `expectedLeafEntryId` is given, the handler refuses the send unless `sessionId` matches the task now at that key (`assertExpectedLeafActive`, `<openclaw>/dist/chat-send-handler-D_7lP5Io.mjs` lines 3488-3501, applied at lines 3933, 4044 and 4997; with `sessionId` given, line 3499 lets an ancestor of the active entry pass, and live a task with history accepted `null`). `sessionId` alone only fails a send whose task still exists under another identity (line 4998); it does not stop a send to a deleted task.
+
+```
+guarded send to a task with history (sessionId, expectedLeafEntryId null): {"ok":true,"result":{"status":"started"}}
+deleted between check and send, then an unguarded send: started; the key now holds a new session id
+sessionId alone, after deletion: started; the key now holds a new session id
+sessionId and expectedLeafEntryId null, after deletion: {"ok":false,"error":"active branch changed; review and retry","details":{"reason":"active-leaf-changed"}}
+session at the key after the refused send: null
+the same with queueMode steer, after deletion: started; the key now holds a new session id
+guarded send while the task runs: started; both runs ended final
+```
+
+So a send guarded with the task's confirmed `sessionId` and `expectedLeafEntryId: null`, with no `queueMode` (the task's own default then applies), is refused when the task has gone, on an empty task, a task with history or a running one. A send with `queueMode: "steer"` cannot be guarded this way and remakes a deleted task.
 
 **A deleted bot refuses** (`delbot`): `chat.send` answered "Unknown agent id \"probe-wren\"" (section 8).
 
@@ -169,7 +206,19 @@ ends: Juniper aborted, Otto aborted, Marlow aborted
 chat.abort on a task with no run: {"ok":true,"aborted":true,"runIds":[]}
 ```
 
-Each abort answers for its own task and names the runs it ended; an abort on a task with nothing running answers with an empty list. A stop that fails was not produced here; `conversation.md` section 16 already handles one for a single run.
+Each abort answers for its own task and names the runs it ended; an abort on a task with nothing running answers with an empty list.
+
+**Whose runs a device may stop** (`stopdevices`, `queuedstop`): device A started Juniper's run and device B started Otto's.
+
+```
+A stops Otto's task (B's run): {"ok":false,"error":"unauthorized","code":"INVALID_REQUEST"}
+B stops Juniper's task (A's run): {"ok":false,"error":"unauthorized","code":"INVALID_REQUEST"}
+A stops Juniper's task (its own run): {"ok":true,"aborted":true,"runIds":["796afb9f-…"]}
+ends: Juniper aborted, Otto final
+same device, a later input, then A stops only the first run by id: runIds [the first run]; the later input's run ended final
+```
+
+A run records the device and connection that started it, and a non-admin requester may abort it only when one of them matches, or when the run records neither (`canRequesterAbortChatRun`, `<openclaw>/dist/chat-abort-runtime-DN2xZ73h.mjs` lines 61-70); a task-wide abort that finds only runs it may not stop answers "unauthorized" (lines 677-689; `chat-abort-handler-ta8mBb_q.mjs` lines 182-205). An admin requester passes (line 67, source). A stop that times out was not produced here.
 
 ## 7. Where the group's record can live
 
@@ -237,12 +286,29 @@ exec.approvals.get (admin): agents with an allowlist: {"otto":["/bin/ls", …]}
 - **What Always allow saves.** The entry went into Otto's own allowlist in the approvals file, under `agents.otto`; Juniper's and the others' were untouched. What it covers is the gateway's to decide, as `conversation.md` section 12 says.
 - Juniper's `#approve` was refused by policy (the development gateway denies every bot's shell but Otto's), so one message to two bots gave one card.
 
+**Questions are seen differently** (`cards`): device A sent `#approve` to Otto's task and `#ask` to Juniper's; B held the same scopes; `r` held read only.
+
+```
+question: {"id":"ask_3f4b…","runId":"f9adc2f3-…","sessionKey":"agent:main:dashboard:4d2c…"}
+approval: {"id":"356b89db-…","runId":"a36bfcc7-…","sessionKey":"agent:otto:dashboard:9ebe…"}
+events seen: {"a":{"question":1,"approval":1},"b":{"question":1,"approval":0},"r":{"question":0,"approval":0}}
+b: question.list: [{"id":"ask_3f4b…","agentId":"main","sessionKey":…,"runId":…,"status":"pending",…}]
+b: exec.approval.list: []
+r: question.list: {"error":"missing scope: operator.questions"}
+b dismisses A's question: {"status":"cancelled"}
+b answers A's approval: "unknown or expired approval id"
+a denies its approval: {"ok":true}
+```
+
+A connection holding `operator.questions` has broad access to questions; own-run access applies only without that scope (`usesOwnRunQuestionAccess`, `<openclaw>/dist/question-access-BY5GPhIx.mjs` lines 4-9). An approval's access is the reviewer binding above. Both requests carry the run's `runId`, `sessionKey` and `agentId`, so a card can be keyed by member task, run and request.
+
 ## 10. What could not be proven here
 
 - **Broadcast groups in a client.** Read from the docs only; a development instance has no channel. Nothing here depends on them.
 - **An approval when the device that started the run is gone.** Whether the request then routes to another device, waits, or is refused as having no route was not tried.
 - **A pending question or a stopping run in one member while a group message goes out.** Not run in a group; those copies follow `conversation.md` section 15 inside that member's task, as a message typed there would.
-- **A stop request that fails** was not produced.
+- **A stop request that times out** was not produced; a refused one was (section 6).
+- **An admin connection stopping another device's run, or answering its approval.** Read in the source only.
 - **Two people on one gateway.** Every device here was the owner's profile. A second person's preferences are their own (the store is per profile), so they would not see the owner's groups; not run.
 
 ## Files
