@@ -229,16 +229,20 @@ export function composerFor(
 ): ComposerView {
   const run = currentRun(transcript);
   const offline = !options.connected;
+  // A pending question holds every message, also when no run is shown as active.
+  const held = !!transcript && questionPending(transcript, run);
   if (!run || !transcript) {
     return {
       placeholder: offline
         ? "Offline. Messages send when you reconnect."
-        : `Message ${options.bot}`,
-      mode: "send",
+        : held
+          ? `Answer above, or message ${options.bot}`
+          : `Message ${options.bot}`,
+      mode: held ? "hold" : "send",
       stoppable: null,
       stopping: false,
-      modeWord: null,
-      menu: "idle",
+      modeWord: !offline && held ? "Hold" : null,
+      menu: held ? "hold" : "idle",
       offline,
     };
   }
@@ -255,7 +259,6 @@ export function composerFor(
       offline,
     };
   }
-  const held = questionPending(transcript, run);
   const waiting = run.state === "waiting" || held || run.pendingCards.length > 0;
   const mode: SendMode = held ? "hold" : options.chosen === "queue" ? "queue" : "steer";
   return {

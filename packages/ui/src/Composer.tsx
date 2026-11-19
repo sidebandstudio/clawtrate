@@ -631,7 +631,7 @@ export function Composer({
   // Rows on the shelf, oldest first, newest at the bottom.
   const rows: ReactNode[] = [];
   const run = transcript?.runs.find((each) => each.id === runId) ?? null;
-  const asking = run && transcript ? questionPending(transcript, run) : false;
+  const asking = transcript ? questionPending(transcript, run ?? undefined) : false;
   for (const message of shelfMessages(transcript)) {
     rows.push(
       <ShelfRow

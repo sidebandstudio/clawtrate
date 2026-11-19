@@ -140,4 +140,53 @@ describe("a steered run that waits on you (F-468, F-096)", () => {
     expect(opened.endFromRows ?? false).toBe(false);
     task.client.stop();
   });
+
+  it("F-468: a question still listed after a history gap continues to hold the draft", async () => {
+    const gateway = grantingGateway();
+    let gap = false;
+    // After the gap, history holds none of the run and nothing in flight: its end only inferred.
+    gateway.handlers["chat.history"] = () =>
+      gap
+        ? { messages: [], hasMore: false }
+        : { messages: [], hasMore: false, inFlightRun: { runId: RUN } };
+    gateway.handlers["question.list"] = () => ({ questions: [questionRecord("ask_1", RUN)] });
+    const approval = {
+      id: "approval-1",
+      request: { command: "ls", sessionKey: KEY, runId: RUN },
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 600_000,
+    };
+    gateway.handlers["exec.approval.list"] = () => [approval];
+    gateway.handlers["plugin.approval.list"] = () => [];
+    gateway.handlers["openclaw.approval.list"] = () => [];
+    const task = await openTask({ gateway });
+    gateway.emit("agent", agentEvent(RUN, 1, "lifecycle", { phase: "start" }));
+    gateway.emit("question.requested", questionRecord("ask_1", RUN));
+    gateway.emit("exec.approval.requested", approval);
+    await until(() => task.transcript().questions[0]?.status === "pending");
+    gap = true;
+    gateway.dropAll();
+    await until(
+      () =>
+        task.transcript().runs.find((each) => each.id === RUN)?.state !== "waiting" &&
+        task.transcript().runs.find((each) => each.id === RUN)?.state !== "running",
+      10_000,
+    ).catch(() => {});
+    await sleep(200);
+    // The gateway still lists the question as pending: it stays pending, and a message is held.
+    expect(task.transcript().questions[0]!.status).toBe("pending");
+    expect(task.transcript().approvals[0]!.runEnded).toBe(false);
+    task.client.sendMessage(KEY, "About that");
+    await sleep(100);
+    expect(task.transcript().outbox[0]!.status).toBe("held");
+    expect(gateway.calls("chat.send")).toEqual([]);
+    gateway.emit("question.resolved", {
+      id: "ask_1",
+      status: "answered",
+      sessionKey: KEY,
+      ts: Date.now(),
+    });
+    await until(() => gateway.calls("chat.send").length === 1);
+    task.client.stop();
+  });
 });

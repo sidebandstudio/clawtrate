@@ -515,7 +515,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
   const { history, pending, count } = repliesTo(transcript, messageId);
   const run = currentRun(transcript);
   const stopping = run?.state === "stopping";
-  const asking = run ? questionPending(transcript, run) : false;
+  const asking = questionPending(transcript, run);
   const send = async () => {
     const body = text.trim();
     if (!body) return;

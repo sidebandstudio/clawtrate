@@ -1415,8 +1415,7 @@ export class ClawtrateClient {
         : "steer";
     // A pending question holds every outgoing message in the task, however it
     // was sent; it is released when the last pending question settles.
-    const held =
-      active !== undefined && active.state !== "stopping" && questionPending(transcript, active);
+    const held = active?.state !== "stopping" && questionPending(transcript, active);
     const replyToId = options.replyToId;
     if (
       replyToId !== undefined &&
@@ -1570,8 +1569,7 @@ export class ClawtrateClient {
         : active.state === "stopping"
           ? "queue"
           : "steer";
-    const held =
-      active !== undefined && active.state !== "stopping" && questionPending(transcript, active);
+    const held = active?.state !== "stopping" && questionPending(transcript, active);
     const status = held ? "held" : mode === "queue" && active ? "queued" : "sending";
     this.updateActivity(key, (activity) => {
       // A run the gateway refused never started; the retry is a new attempt.
@@ -1686,7 +1684,10 @@ export class ClawtrateClient {
   sendQueuedNow(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);
     if (!message || message.status !== "queued") return;
-    const active = activeRun(this.state.transcripts[key]!);
+    const transcript = this.state.transcripts[key]!;
+    const active = activeRun(transcript);
+    if (questionPending(transcript, active))
+      throw new Error("Send now is unavailable while a question is pending.");
     if (active?.state === "stopping")
       throw new Error("Send now is unavailable while the run stops.");
     this.updateActivity(key, (activity) => {
@@ -2066,6 +2067,19 @@ export class ClawtrateClient {
     let message = this.outgoing(key, messageId);
     if (!message || (message.status !== "sending" && message.status !== "awaiting-access")) return;
 
+    // A pending question holds every send, whatever run it was meant for and whether or not
+    // a run is still shown as active: the question's own state is the guard.
+    {
+      const current = this.state.transcripts[key];
+      const currentRun = current ? activeRun(current) : undefined;
+      if (current && questionPending(current, currentRun)) {
+        this.updateActivity(key, (activity) =>
+          updateMessage(activity, messageId, { status: "held", runId: currentRun?.id ?? null }),
+        );
+        return;
+      }
+    }
+
     // The active run may have changed while access was pending.
     if (message.mode === "steer") {
       const active = activeRun(this.state.transcripts[key]!);
@@ -2091,12 +2105,6 @@ export class ClawtrateClient {
             this.now(),
           );
         });
-        return;
-      } else if (questionPending(this.state.transcripts[key]!, active)) {
-        // A plain message would answer the question and break the run; hold it.
-        this.updateActivity(key, (activity) =>
-          updateMessage(activity, messageId, { status: "held", runId: active.id }),
-        );
         return;
       } else if (active.id !== message.runId) {
         this.updateActivity(key, (activity) =>
@@ -4150,7 +4158,7 @@ export class ClawtrateClient {
     const held = transcript.outbox
       .filter((message) => message.status === "held")
       .map((message) => message.id);
-    if (held.length > 0 && !(active && questionPending(transcript, active))) {
+    if (held.length > 0 && !questionPending(transcript, active)) {
       // The question is settled: release every held message at once, in the
       // order sent, each as a message sent now would go. Into a running run
       // as a steer, unless it was queued; queued while the run stops; and
@@ -4180,9 +4188,10 @@ export class ClawtrateClient {
     }
     const current = this.state.transcripts[key];
     if (!current) return;
-    const next = activeRun(current)
-      ? undefined
-      : current.runs.find((run) => run.state === "queued");
+    const next =
+      activeRun(current) || questionPending(current)
+        ? undefined
+        : current.runs.find((run) => run.state === "queued");
     if (next) {
       this.updateActivity(key, (activity) =>
         // It keeps `mode: "queue"`: if the gateway refuses to start it, the

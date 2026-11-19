@@ -1097,11 +1097,11 @@ export function findRun(activity: TaskActivity, runId: string): Run | undefined 
  * take it as the answer. A pending question holds every outgoing message, and
  * this is the one definition of it: the engine and the interface both use it.
  */
-export function questionPending(activity: TaskActivity, run: Run): boolean {
+export function questionPending(activity: TaskActivity, run?: Run): boolean {
   return (
-    activity.questions.some(
-      (question) => question.status === "pending" && question.runId === run.id,
-    ) || [...run.pendingCards, ...run.suspendedCards].some((card) => card.kind === "question")
+    activity.questions.some((question) => question.status === "pending") ||
+    (run !== undefined &&
+      [...run.pendingCards, ...run.suspendedCards].some((card) => card.kind === "question"))
   );
 }
 
@@ -1922,7 +1922,8 @@ export function settleQuestionsOfEndedRuns(activity: TaskActivity): TaskActivity
   const questions = activity.questions.map((question) => {
     if (question.status !== "pending" || !question.runId) return question;
     const run = findRun(activity, question.runId);
-    if (!run || !isTerminal(run.state)) return question;
+    // Only an end the gateway established closes it; an inferred one leaves it to the gateway.
+    if (!run || !isTerminal(run.state) || !run.outcomeKnown) return question;
     changed = true;
     return { ...question, status: "closed" as const, submitting: false };
   });
