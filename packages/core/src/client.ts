@@ -291,6 +291,8 @@ export const DEFAULT_TURN_LIMIT_MS = 50 * 60_000;
 export const MIN_TURN_LIMIT_MINUTES = 1;
 export const MAX_TURN_LIMIT_MINUTES = 24 * 60;
 /** Where the host keeps the chosen turn limit. */
+/** Reads of a task's reactions, the first and again each time a newer change overtook one. */
+const REACTION_LIST_ATTEMPTS = 3;
 const TURN_LIMIT_KEY = "turn-limit-minutes";
 /** Tasks the client follows at once: open in some viewer, kept for their unsent work, or being created. */
 export const MAX_TRACKED_TASKS = TRACKED_TASKS;
@@ -3198,11 +3200,15 @@ export class ClawtrateClient {
    * history loads, keeping those of the messages it shows. Later changes come as
    * `session.reaction` events. A failed read leaves what was shown before (F-283).
    */
-  private async readReactions(key: string, generation: number): Promise<void> {
+  private async readReactions(key: string, generation: number, attempt = 0): Promise<void> {
     const incarnation = this.incarnations.get(key);
     let answer: unknown;
+    let before: Transcript["reactions"];
     try {
       if (this.selfId === null) await this.readSelf(generation);
+      // What the list will replace: an event, a change of this person's or a new history page
+      // after it was asked for is newer than the list, and the list then gives way to it.
+      before = this.state.transcripts[key]?.reactions;
       answer = await this.request("session.reactions.list", { sessionKey: key });
     } catch (error) {
       if (generation === this.generation)
@@ -3215,6 +3221,12 @@ export class ClawtrateClient {
       this.incarnations.get(key) !== incarnation
     )
       return;
+    if (this.state.transcripts[key]!.reactions !== before) {
+      // Changed while the list was on its way: ask again, a few times, rather than go back.
+      if (attempt < REACTION_LIST_ATTEMPTS - 1)
+        void this.readReactions(key, generation, attempt + 1);
+      return;
+    }
     const listed = asRecord(asRecord(answer)?.reactions) ?? {};
     this.setTranscript(key, () => {
       const current = this.state.transcripts[key]!;
@@ -3257,7 +3269,8 @@ export class ClawtrateClient {
       const id = asRecord(answer?.profile)?.id;
       this.selfId = typeof id === "string" && id.length <= MAX_ID_CHARS ? id : null;
     } catch {
-      this.selfId = null;
+      // A refusal on an earlier connection says nothing of a later one's identity.
+      if (generation === this.generation) this.selfId = null;
     }
   }
 
@@ -3283,6 +3296,8 @@ export class ClawtrateClient {
     await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
     this.checkNotWithdrawn(options.owner);
     if (this.selfId === null) await this.readSelf(generation);
+    // An event about this message after the request is newer than its answer.
+    const before = this.state.transcripts[key]?.reactions?.[messageId];
     let answer: RawRecord | null;
     try {
       answer = asRecord(
@@ -3298,6 +3313,7 @@ export class ClawtrateClient {
       throw error;
     }
     if (generation !== this.generation || !this.tracked(key)) return;
+    if (this.state.transcripts[key]?.reactions?.[messageId] !== before) return;
     this.applyReactions(key, messageId, answer?.reactions);
   }
 
@@ -5175,6 +5191,7 @@ export class ClawtrateClient {
           this.dropAttachments(message.id);
       }
       const activity = markUnconfirmed(reconciled);
+      const items = mapHistory(messages);
       const rebuilt: Transcript = {
         ...current,
         ...retainActivity(
@@ -5182,8 +5199,10 @@ export class ClawtrateClient {
         ),
         sessionKey: key,
         status: "ready",
-        items: mapHistory(messages),
+        items,
         interSession: interSessionMessages(messages),
+        // Reactions leave with the history they belonged to (F-283).
+        ...(current.reactions ? { reactions: reactionsShown(current.reactions, items) } : {}),
         error: null,
         hasMore: history?.hasMore === true,
         caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
@@ -5842,6 +5861,16 @@ export function hostLimit(value: number | undefined, max: number, name: string):
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The reactions kept for the messages these history items show, and no others (F-283). */
+function reactionsShown(
+  reactions: Record<string, MessageReaction[]>,
+  items: TranscriptItem[],
+): Record<string, MessageReaction[]> {
+  const shown = shownMessageIds({ items } as Transcript);
+  const kept = Object.fromEntries(Object.entries(reactions).filter(([id]) => shown.has(id)));
+  return Object.keys(kept).length === Object.keys(reactions).length ? reactions : kept;
 }
 
 /** The gateway's message ids a transcript shows: its history items' and their bubbles' (F-283). */
