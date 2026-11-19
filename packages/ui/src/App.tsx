@@ -51,6 +51,13 @@ export function App({
   const [bubbles, setBubbles] = useBubbles();
   // Settings opens over either screen, with Cmd/Ctrl+, or from the gateway menu.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Activity's "Show in chat" (controls.md section 9): the task and call to bring into view.
+  const [reveal, setReveal] = useState<{
+    botId: string;
+    key: string;
+    callId: string;
+    nonce: number;
+  } | null>(null);
   const settingsOpener = useRef<HTMLElement | null>(null);
   const openSettings = useCallback(() => {
     const active = document.activeElement as HTMLElement | null;
@@ -108,6 +115,10 @@ export function App({
           info={info}
           accounts={state.accounts}
           bots={state.bots}
+          tasksByBot={state.tasksByBot}
+          onShowInChat={(target) =>
+            setReveal((previous) => ({ ...target, nonce: (previous?.nonce ?? 0) + 1 }))
+          }
           onClose={closeSettings}
         />
       )}
@@ -123,6 +134,7 @@ export function App({
           onOpenSettings={openSettings}
           inert={settingsOpen}
           onCaughtUp={setCaughtUp}
+          reveal={reveal}
         />
       ) : (
         <ConnectScreen

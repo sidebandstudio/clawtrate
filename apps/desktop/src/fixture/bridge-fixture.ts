@@ -55,6 +55,7 @@ import {
 import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { NO_PERMISSION_PARAMS, permissionCommand, type PermissionParams } from "./permissions.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -457,7 +458,7 @@ function answerStrings(
 
 export function createFixtureBridge(
   name: SceneName,
-  options: { files?: FileParams; accounts?: AccountParams } = {},
+  options: { files?: FileParams; accounts?: AccountParams; permissions?: PermissionParams } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   /** Every command the interface sent, for tests that check what was asked of the host. */
@@ -525,7 +526,22 @@ export function createFixtureBridge(
   const railRefused = new Set<string>();
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
+  // Settings → Permissions: what was revoked and removed, as the gateway's read back lists it.
+  const revokedGrants = new Map<string, number>();
+  const removedEntries = new Set<string>();
   async function apply(command: BridgeCommand): Promise<unknown> {
+    const permission = permissionCommand(
+      command,
+      () => state,
+      now,
+      options.permissions ?? NO_PERMISSION_PARAMS,
+      revokedGrants,
+      removedEntries,
+    );
+    if (permission) {
+      sent.push(command);
+      return permission;
+    }
     const account = accountCommand(command, () => state, set, accountParams);
     if (account) {
       sent.push(command);

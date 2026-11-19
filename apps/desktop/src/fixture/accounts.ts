@@ -24,6 +24,7 @@
 
 import {
   ADMIN_SCOPES,
+  APPROVALS_TIER_SCOPES,
   INTERACTIVE_SCOPES,
   initialAccountsState,
   type AccountsState,
@@ -644,7 +645,7 @@ export function accountCommand(
   });
   switch (command.type) {
     case "requestAccess": {
-      if (command.tier !== "admin") return undefined;
+      if (command.tier !== "admin" && command.tier !== "approvals") return undefined;
       const upgrade = (patch: Partial<ClawtrateState["connection"]["upgrade"]>) =>
         set({
           ...get(),
@@ -652,7 +653,7 @@ export function accountCommand(
         });
       upgrade({
         status: "requesting",
-        scopes: [...ADMIN_SCOPES],
+        scopes: command.tier === "admin" ? [...ADMIN_SCOPES] : [...APPROVALS_TIER_SCOPES],
         requestId: null,
         approveCommand: null,
         error: null,
@@ -664,7 +665,7 @@ export function accountCommand(
           approveCommand: `openclaw devices approve ${REQUEST}`,
         }),
       );
-      if (params.admin === "grant")
+      if (params.admin === "grant" && command.tier === "admin")
         later(1000, () => {
           upgrade({ status: "approved" });
           set(

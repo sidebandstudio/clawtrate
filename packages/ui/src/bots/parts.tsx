@@ -257,6 +257,16 @@ export function useAnnouncer(): [ReactNode, (text: string) => void] {
   return [node, announce];
 }
 
+/** Whether the request under way asks for approvals alone. */
+export function askingApprovals(connection: ConnectionState): boolean {
+  const scopes = connection.upgrade.scopes;
+  return (
+    scopes.includes("operator.approvals") &&
+    !scopes.includes("operator.write") &&
+    !scopes.includes("operator.admin")
+  );
+}
+
 /** Whether the request under way asks for admin. */
 export function askingAdmin(connection: ConnectionState): boolean {
   return connection.upgrade.scopes.includes("operator.admin");
@@ -272,15 +282,18 @@ export function AdminBar({
   connection,
   info,
   need,
+  tier = "admin",
 }: {
   connection: ConnectionState;
   info: HostInfo;
   need: string;
+  /** What the bar asks for: admin, or approvals alone (controls.md section 2). */
+  tier?: "admin" | "approvals";
 }) {
   const send = useCommand();
-  const ask = () => void send({ type: "requestAccess", tier: "admin" }).catch(() => {});
+  const ask = () => void send({ type: "requestAccess", tier }).catch(() => {});
   const upgrade = connection.upgrade;
-  const mine = askingAdmin(connection);
+  const mine = tier === "admin" ? askingAdmin(connection) : askingApprovals(connection);
   const status = mine ? upgrade.status : "idle";
   const readOnly = info.readOnly || !connection.canWrite;
   let body: ReactNode;
@@ -345,12 +358,19 @@ export function AdminBar({
   } else {
     body = (
       <>
-        <b>{readOnly ? "Read-only." : "Admin access needed."}</b> {need}
+        <b>
+          {readOnly
+            ? "Read-only."
+            : tier === "admin"
+              ? "Admin access needed."
+              : "Approvals access needed."}
+        </b>{" "}
+        {need}
       </>
     );
     action = (
       <button type="button" className="button" data-variant="primary" data-size="sm" onClick={ask}>
-        Request admin access
+        {tier === "admin" ? "Request admin access" : "Request access"}
       </button>
     );
   }

@@ -12,6 +12,7 @@ import {
   type Bot,
   type ConnectionState,
   type HostInfo,
+  type Task,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useCommand } from "./bridge.tsx";
@@ -24,6 +25,7 @@ import { CopyValue } from "./AccessBar.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
 import { BackIcon, ChevronIcon, CloseIcon } from "./icons.tsx";
+import { PermissionsSection, type ShowInChat } from "./permissions/PermissionsSection.tsx";
 
 /** The connection's state, as the Gateway pane names it. */
 export function gatewayState(connection: ConnectionState): string {
@@ -65,10 +67,11 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = "gateway" | "accounts";
+type Section = "gateway" | "accounts" | "permissions";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
+  ["permissions", "Permissions"],
 ];
 /** ⌘, opens on the section last shown, Gateway the first time. */
 const SHOWN_LAST = "settings-section";
@@ -78,12 +81,18 @@ export function Settings({
   info,
   accounts,
   bots,
+  tasksByBot = {},
+  onShowInChat,
   onClose,
 }: {
   connection: ConnectionState;
   info: HostInfo;
   accounts: AccountsState;
   bots: readonly Bot[];
+  /** The rail's tasks, for Activity's task names. */
+  tasksByBot?: Record<string, Task[]>;
+  /** Activity's "Show in chat": close Settings and bring that step into view. */
+  onShowInChat?: ShowInChat;
   onClose: () => void;
 }) {
   const send = useCommand();
@@ -317,6 +326,21 @@ export function Settings({
 
   let content: ReactNode;
   if (section === "accounts" && accountsSection.connect) content = accountsSection.connect;
+  else if (section === "permissions")
+    content = (
+      <PermissionsSection
+        connection={connection}
+        info={info}
+        bots={bots}
+        tasksByBot={tasksByBot}
+        announce={announce}
+        toNav={toNav}
+        onShowInChat={(target) => {
+          onClose();
+          onShowInChat?.(target);
+        }}
+      />
+    );
   else {
     const view =
       section === "accounts" && accountsSection.view
