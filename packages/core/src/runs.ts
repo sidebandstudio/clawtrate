@@ -1103,6 +1103,22 @@ export function questionPending(activity: TaskActivity, run: Run): boolean {
   );
 }
 
+/**
+ * The run Stop aborts, or null when no one current run is established. A steer's or a queued
+ * turn's own run id stands for the run it belongs to; every active run is counted the same way,
+ * so a steer the gateway acknowledged under an id of its own is not a second candidate. With two
+ * runs active and nothing tying them (an older run whose end a reconnect missed, beside the one
+ * the gateway runs now), Stop is withheld until the gateway establishes which one is current.
+ */
+export function runningRunId(activity: TaskActivity, asked: string): string | null {
+  const canonical = (id: string) => activity.steerAliases[id] ?? activity.queueAliases[id] ?? id;
+  const direct = canonical(asked);
+  const active = new Set(
+    activity.runs.filter((run) => isActive(run.state)).map((run) => canonical(run.id)),
+  );
+  return active.size === 1 && active.has(direct) ? direct : null;
+}
+
 /** The task's run that is running, waiting or stopping, if any. */
 export function activeRun(activity: TaskActivity): Run | undefined {
   return activity.runs.find((run) => isActive(run.state));

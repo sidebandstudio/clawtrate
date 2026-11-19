@@ -13,6 +13,7 @@ import {
   type ReadingContext,
   activeRun,
   isActive,
+  runningRunId,
   questionPending,
   type OutgoingMessage,
   type Run,
@@ -265,7 +266,9 @@ export function composerFor(
         : `Message ${options.bot}`,
     mode,
     // Offline the composer is its offline form: Send alone.
-    stoppable: isActive(run.state) && !offline ? run : null,
+    // Only one current run, as the engine establishes it (`runningRunId`), is offered Stop.
+    stoppable:
+      isActive(run.state) && !offline && runningRunId(transcript, run.id) === run.id ? run : null,
     stopping: false,
     modeWord: offline ? null : mode === "hold" ? "Hold" : mode === "queue" ? "Queue" : "Steer",
     menu: held ? "hold" : "run",

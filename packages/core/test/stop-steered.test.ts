@@ -147,3 +147,49 @@ describe("Stop after a steer (F-097, F-169)", () => {
     task.client.stop();
   });
 });
+
+describe("Stop with no one current run (F-097)", () => {
+  it("F-097: an older missed end cannot redirect Stop away from the current run after reconnect", async () => {
+    const gateway = grantingGateway();
+    // After a reconnect that missed the original run's end: its rows stop at a tool call, and
+    // the gateway has the current run in flight.
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        {
+          role: "user",
+          content: "First",
+          __openclaw: { id: "u1", idempotencyKey: "original:user" },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: { command: "ls" } }],
+          stopReason: "toolUse",
+          __openclaw: { id: "a1", runId: "original" },
+        },
+      ],
+      hasMore: false,
+      inFlightRun: { runId: "current" },
+    });
+    gateway.handlers["chat.abort"] = (params) => ({
+      ok: true,
+      aborted: true,
+      runIds: [(params as { runId: string }).runId],
+    });
+    const task = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("original", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("agent", agentEvent("current", 1, "lifecycle", { phase: "start" }));
+    await until(
+      () => task.transcript().runs.filter((each) => each.state === "running").length === 2,
+    );
+    // Both are plausible: Stop is withheld, whichever is asked.
+    await task.client.stopRun(KEY, "original");
+    await task.client.stopRun(KEY, "current");
+    expect(task.gateway.calls("chat.abort")).toEqual([]);
+    // The older run's end arrives: one current run, and Stop names it.
+    gateway.emit("agent", agentEvent("original", 9, "lifecycle", { phase: "end" }));
+    await until(() => run(task, "original")?.state === "completed");
+    await task.client.stopRun(KEY, "current");
+    expect(task.gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "current" }]);
+    task.client.stop();
+  });
+});

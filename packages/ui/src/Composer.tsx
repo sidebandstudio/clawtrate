@@ -327,7 +327,15 @@ export function Composer({
         return;
       }
       // "Stop now" typed during a run is Stop, as the button is: it is not sent as words.
-      if (how !== "new-task" && view.stoppable && files.length === 0 && isStopNow(text)) {
+      if (how !== "new-task" && runId !== null && files.length === 0 && isStopNow(text)) {
+        if (!view.stoppable) {
+          // No one current turn is established here: the words stay, and nothing is sent.
+          onNotice({
+            title: "Couldn't ask for Stop.",
+            reason: "The current turn isn't available to stop here.",
+          });
+          return;
+        }
         setText("");
         stop(view.stoppable);
         return;
@@ -396,6 +404,7 @@ export function Composer({
       onNotice,
       view,
       stop,
+      runId,
     ],
   );
 

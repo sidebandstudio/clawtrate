@@ -922,6 +922,43 @@ test.describe("steering, queueing and holding", () => {
     await expect(page.getByTestId("stopped-with")).toHaveCount(0);
   });
 
+  test("F-097: with two runs active and nothing tying them, Stop is not offered, and a typed Stop now keeps the words", async ({
+    page,
+  }) => {
+    await open(page, "run-working");
+    await expect(page.getByRole("button", { name: "Stop Otto" })).toBeVisible();
+    // A second run beside it, as after a reconnect that missed the first one's end.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        const first = transcript.runs.find((run: Run) => run.id === "run-live")!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              runs: [...transcript.runs, { ...first, id: "run-current", steps: [] }],
+            },
+          },
+        };
+      });
+    });
+    await expect(page.getByRole("button", { name: "Stop Otto" })).toHaveCount(0);
+    await field(page).fill("Stop now");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".composer-shelf [role=alert]")).toContainText(
+      "Couldn't ask for Stop.",
+    );
+    await expect(field(page)).toHaveValue("Stop now");
+  });
+
   test("F-097: a typed Stop now during a run stops it as Stop does, and is not sent as words", async ({
     page,
   }) => {
