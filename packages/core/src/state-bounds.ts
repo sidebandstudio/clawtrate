@@ -495,6 +495,7 @@ const block = union<TranscriptBlock, "kind">("kind")({
   text: object<Extract<TranscriptBlock, { kind: "text" }>>()({
     kind: ENUM,
     text: text(MAX_BLOCK_CHARS),
+    messageId: ID,
   }),
   reasoning: object<Extract<TranscriptBlock, { kind: "reasoning" }>>()({
     kind: ENUM,

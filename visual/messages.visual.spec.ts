@@ -98,6 +98,69 @@ test.describe("message actions", () => {
     await expect(actions.getByRole("button", { name: "More" })).toBeFocused();
   });
 
+  test("F-066: in a turn of a progress bubble and a final one, each bubble's actions act on its own message", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await record(page);
+    const turn = page
+      .getByTestId("transcript-turn")
+      .filter({ hasText: "I'll write that down so I don't forget." });
+    const progress = turn.getByTestId("message").filter({ hasText: "I'll write that down" });
+    const final = turn.getByTestId("message").filter({ hasText: "Will do." });
+    await expect(progress).toHaveAttribute("data-message", "row-4-1");
+    await expect(final).toHaveAttribute("data-message", "row-4");
+    await progress.scrollIntoViewIfNeeded();
+    // The progress bubble's own actions, beside it, and only its own.
+    const bubble = progress.locator(".msg > .bubble");
+    await bubble.hover();
+    const actions = progress.getByTestId("message-actions");
+    await expect.poll(() => shown(actions)).toBe(true);
+    expect(await shown(final.getByTestId("message-actions"))).toBe(false);
+    const bar = (await actions.boundingBox())!;
+    const box = (await bubble.boundingBox())!;
+    expect(bar.x).toBeGreaterThanOrEqual(box.x + box.width);
+    expect(Math.abs(bar.y - box.y)).toBeLessThan(4);
+    await actions.getByRole("button", { name: "Add a reaction" }).click();
+    await page
+      .getByRole("menu", { name: "Add a reaction" })
+      .getByRole("menuitem", { name: /Party/ })
+      .click();
+    expect((await sent(page)).at(-1)).toMatchObject({ type: "setReaction", messageId: "row-4-1" });
+    await expect(progress.getByTestId("reaction")).toHaveText("🎉1");
+    await expect(final.getByTestId("reactions")).toHaveCount(0);
+    await actions.getByRole("button", { name: "More" }).click();
+    await page.getByRole("menuitem", { name: "Copy message ID" }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("row-4-1");
+    // The final bubble's actions name the final row.
+    await final.locator(".msg > .bubble").hover();
+    const finalActions = final.getByTestId("message-actions");
+    await expect.poll(() => shown(finalActions)).toBe(true);
+    await finalActions.getByRole("button", { name: "More" }).click();
+    await page.getByRole("menuitem", { name: "Copy text" }).click();
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe("Will do. I added a note so I check the disk each morning and tell you above 90%.");
+    await finalActions.getByRole("button", { name: "More" }).click();
+    await page.getByRole("menuitem", { name: "Copy message ID" }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("row-4");
+    // Reply on the progress bubble opens its thread and names its row.
+    await bubble.hover();
+    await actions.getByRole("button", { name: "Reply in a thread" }).click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    await expect(thread.getByTestId("thread-message").first()).toContainText(
+      "I'll write that down so I don't forget.",
+    );
+    await thread.getByTestId("thread-input").fill("Thanks.");
+    await page.keyboard.press("Enter");
+    expect((await sent(page)).at(-1)).toMatchObject({
+      type: "sendMessage",
+      text: "Thanks.",
+      replyToId: "row-4-1",
+    });
+  });
+
   test("F-283: a reaction chosen from the react button shows as a badge under the message, and choosing the badge takes it away", async ({
     page,
   }) => {

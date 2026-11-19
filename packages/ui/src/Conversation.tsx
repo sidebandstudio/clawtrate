@@ -32,14 +32,7 @@ import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
 import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
-import {
-  MessageActions,
-  MessageProvider,
-  Reactions,
-  RepliesLink,
-  ReplyQuote,
-  ThreadView,
-} from "./Messages.tsx";
+import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
 
 /**
@@ -49,33 +42,31 @@ import { TEXT_BLOCKS } from "./reading-line.ts";
 function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?: boolean }) {
   const role = item.role === "user" ? "user" : "assistant";
   const time = item.timestamp === null ? undefined : fullDate(item.timestamp);
-  const ref = useRef<HTMLDivElement>(null);
   return (
-    <div
-      className="turn"
-      data-role={role}
-      data-testid="transcript-turn"
-      data-message={item.messageId}
-      ref={ref}
-    >
+    <div className="turn" data-role={role} data-testid="transcript-turn">
       {role === "user" && <ReplyQuote item={item} />}
       {role === "assistant" ? (
         <ItemFeed itemId={item.id} />
       ) : (
-        item.blocks.map((block, i) =>
-          block.kind === "text" && block.text.trim() ? (
-            <div className="msg" data-role={role} key={i}>
-              <div className="bubble" title={time}>
-                <Markdown text={block.text} />
+        <MessageUnit
+          message={
+            item.messageId
+              ? { messageId: item.messageId, role: "user", text: itemText(item) }
+              : null
+          }
+        >
+          {item.blocks.map((block, i) =>
+            block.kind === "text" && block.text.trim() ? (
+              <div className="msg" data-role={role} key={i}>
+                <div className="bubble" title={time}>
+                  <Markdown text={block.text} />
+                </div>
               </div>
-            </div>
-          ) : null,
-        )
+            ) : null,
+          )}
+        </MessageUnit>
       )}
       {incomplete && <IncompleteCaption />}
-      <Reactions item={item} />
-      <RepliesLink item={item} />
-      <MessageActions item={item} turnRef={ref} />
     </div>
   );
 }

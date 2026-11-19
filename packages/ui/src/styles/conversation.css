@@ -1223,7 +1223,8 @@
 }
 
 /* What a person can do with a message: react, reply and more (F-066, F-067, F-283). */
-.turn {
+.turn,
+.msg-unit {
   position: relative;
 }
 
@@ -1243,7 +1244,7 @@
   transition: opacity var(--dur-quick) linear;
 }
 
-.turn:hover > .msg-actions,
+.msg-unit:hover > .msg-actions,
 .msg-actions:focus-within,
 .msg-actions[data-open="true"] {
   opacity: 1;

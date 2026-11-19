@@ -54,6 +54,35 @@ export function MessageProvider({ env, children }: { env: MessageEnv; children: 
 
 const useMessages = () => useContext(MessageContext);
 
+/**
+ * One message the person can act on: a bubble and the gateway's id of the row it shows. A bot's
+ * turn of several rows is several of them, so each action names the bubble it was chosen on.
+ */
+export type MessageRef = { messageId: string; role: "user" | "assistant"; text: string };
+
+/**
+ * A bubble with what can be done with it: its reactions under it, its replies link, and react,
+ * reply and more beside it. Without the gateway's id of its row it is the bubble alone.
+ */
+export function MessageUnit({
+  message,
+  children,
+}: {
+  message: MessageRef | null;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  if (!message) return <>{children}</>;
+  return (
+    <div className="msg-unit" data-message={message.messageId} data-testid="message" ref={ref}>
+      {children}
+      <Reactions message={message} />
+      <RepliesLink message={message} />
+      <MessageActions message={message} unitRef={ref} />
+    </div>
+  );
+}
+
 /** The text a message shows, for Copy text. */
 export function itemText(item: TranscriptItem): string {
   return item.blocks
@@ -62,9 +91,20 @@ export function itemText(item: TranscriptItem): string {
     .join("\n\n");
 }
 
-/** Who wrote a message, as its line in a thread names them. */
-function authorOf(item: TranscriptItem, botName: string): string {
-  return item.role === "user" ? "You" : botName;
+/**
+ * The message a transcript shows under an id: the user's item, or the bot's bubble whose row it
+ * is. Null when the loaded history does not show it.
+ */
+export function messageOf(transcript: Transcript, messageId: string): MessageRef | null {
+  for (const item of transcript.items) {
+    if (item.role === "user" && item.messageId === messageId)
+      return { messageId, role: "user", text: itemText(item) };
+    if (item.role !== "assistant") continue;
+    for (const block of item.blocks)
+      if (block.kind === "text" && block.messageId === messageId)
+        return { messageId, role: "assistant", text: block.text };
+  }
+  return null;
 }
 
 /**
@@ -72,12 +112,14 @@ function authorOf(item: TranscriptItem, botName: string): string {
  * them, or after a touch and hold. One tab stop: Left and Right move between them.
  */
 export function MessageActions({
-  item,
-  turnRef,
+  message,
+  unitRef,
 }: {
-  item: TranscriptItem;
-  turnRef: RefObject<HTMLDivElement | null>;
+  message: MessageRef;
+  unitRef: RefObject<HTMLDivElement | null>;
 }) {
+  const turnRef = unitRef;
+  const role = message.role;
   const env = useMessages();
   const bridge = useBridge();
   const [menu, setMenu] = useState<null | "react" | "more">(null);
@@ -90,7 +132,7 @@ export function MessageActions({
   /** The button whose menu is open, for focus to go back to. */
   const [trigger, setTrigger] = useState<HTMLElement | null>(null);
 
-  // Beside the message's last bubble: to its right for the bot's, to its left for yours.
+  // Beside the message's bubble: to its right for the bot's, to its left for yours.
   const measure = useCallback(() => {
     const turn = turnRef.current;
     const toolbar = bar.current;
@@ -102,7 +144,7 @@ export function MessageActions({
     const box = bubble.getBoundingClientRect();
     const width = toolbar.offsetWidth;
     const left =
-      item.role === "user" ? box.left - turnBox.left - width - 6 : box.right - turnBox.left + 6;
+      role === "user" ? box.left - turnBox.left - width - 6 : box.right - turnBox.left + 6;
     // Within the column: where there is no room beside it, it sits above the bubble's outer corner.
     const max = turnBox.width - width;
     const room = left >= 0 && left <= max;
@@ -112,11 +154,11 @@ export function MessageActions({
       setPlace({
         top: top - toolbar.offsetHeight - 4,
         left:
-          item.role === "user"
+          role === "user"
             ? box.left - turnBox.left
             : Math.min(max, box.right - turnBox.left - width),
       });
-  }, [turnRef, item.role]);
+  }, [turnRef, role]);
 
   // After the commit: the turn's own ref is set only once its children's layout effects ran.
   useEffect(() => {
@@ -161,8 +203,8 @@ export function MessageActions({
     return () => document.removeEventListener("pointerdown", onDown);
   }, [held, turnRef]);
 
-  if (!env || !item.messageId) return null;
-  const messageId = item.messageId;
+  if (!env) return null;
+  const messageId = message.messageId;
   const order = env.canWrite ? ["react", "reply", "more"] : ["more"];
   const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
@@ -201,7 +243,7 @@ export function MessageActions({
       onSelect: () => {
         setMenu(null);
         moreRef.current?.focus();
-        void copy(itemText(item), "text");
+        void copy(message.text, "text");
       },
     },
     {
@@ -221,7 +263,7 @@ export function MessageActions({
       className="msg-actions"
       role="toolbar"
       aria-label="Message actions"
-      data-side={item.role === "user" ? "user" : "bot"}
+      data-side={role === "user" ? "user" : "bot"}
       data-open={held || menu !== null ? "true" : undefined}
       data-testid="message-actions"
       style={place ? { top: place.top, left: place.left } : undefined}
@@ -300,17 +342,17 @@ function reactionName(reaction: MessageReaction, canWrite: boolean): string {
 }
 
 /** The reactions on a message, as small emoji badges under it. */
-export function Reactions({ item }: { item: TranscriptItem }) {
+function Reactions({ message }: { message: MessageRef }) {
   const env = useMessages();
   const bridge = useBridge();
-  if (!env || !item.messageId) return null;
-  const messageId = item.messageId;
+  if (!env) return null;
+  const messageId = message.messageId;
   const list = env.transcript.reactions?.[messageId] ?? [];
   if (list.length === 0) return null;
   return (
     <div
       className="reactions"
-      data-side={item.role === "user" ? "user" : "bot"}
+      data-side={message.role === "user" ? "user" : "bot"}
       data-testid="reactions"
       role="group"
       aria-label="Reactions"
@@ -383,7 +425,7 @@ export function ReplyQuote({ item }: { item: TranscriptItem }) {
   const env = useMessages();
   if (!env || !item.replyTo) return null;
   const { id, text, sender } = item.replyTo;
-  const shown = env.transcript.items.some((each) => each.messageId === id);
+  const shown = messageOf(env.transcript, id) !== null;
   const words = `${sender ?? "A message"}: ${text ?? "a message no longer shown"}`;
   return (
     <button
@@ -401,17 +443,17 @@ export function ReplyQuote({ item }: { item: TranscriptItem }) {
 }
 
 /** Under a message that has replies: how many, opening its thread. */
-export function RepliesLink({ item }: { item: TranscriptItem }) {
+function RepliesLink({ message }: { message: MessageRef }) {
   const env = useMessages();
-  if (!env || !item.messageId) return null;
-  const { count } = repliesTo(env.transcript, item.messageId);
+  if (!env) return null;
+  const { count } = repliesTo(env.transcript, message.messageId);
   if (count === 0) return null;
-  const messageId = item.messageId;
+  const messageId = message.messageId;
   return (
     <button
       type="button"
       className="replies-link"
-      data-side={item.role === "user" ? "user" : "bot"}
+      data-side={message.role === "user" ? "user" : "bot"}
       data-testid="replies-link"
       onClick={(event) => env.openThread(messageId, event.currentTarget)}
     >
@@ -436,7 +478,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
   }, [messageId]);
   if (!env) return null;
   const items = env.transcript.items;
-  const root = items.find((item) => item.messageId === messageId);
+  const root = messageOf(env.transcript, messageId);
   const { history, pending } = repliesTo(env.transcript, messageId);
   // Each reply, then the bot's answer that follows it in the task, if it has one yet.
   const answerAfter = (reply: TranscriptItem) => {
@@ -464,14 +506,16 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
       setError(failure instanceof Error ? failure.message : String(failure));
     }
   };
-  const line = (item: TranscriptItem, key: string) => (
+  const line = (item: { role: string; text: string }, key: string) => (
     <div className="thread-msg" data-role={item.role} key={key} data-testid="thread-message">
-      <p className="thread-author">{authorOf(item, env.botName)}</p>
+      <p className="thread-author">{item.role === "user" ? "You" : env.botName}</p>
       <div className="bubble">
-        <Markdown text={itemText(item)} />
+        <Markdown text={item.text} />
       </div>
     </div>
   );
+  const lineOf = (item: TranscriptItem, key: string) =>
+    line({ role: item.role, text: itemText(item) }, key);
   return (
     <div
       ref={panel}
@@ -513,7 +557,10 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
         </p>
         {history.flatMap((reply) => {
           const answer = answerAfter(reply);
-          return [line(reply, reply.id), ...(answer ? [line(answer, `${reply.id}:answer`)] : [])];
+          return [
+            lineOf(reply, reply.id),
+            ...(answer ? [lineOf(answer, `${reply.id}:answer`)] : []),
+          ];
         })}
         {pending.map((message) => (
           <div

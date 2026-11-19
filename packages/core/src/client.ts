@@ -5839,10 +5839,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The gateway's message ids a transcript shows: its history items' own (F-283). */
+/** The gateway's message ids a transcript shows: its history items' and their bubbles' (F-283). */
 function shownMessageIds(transcript: Transcript): Set<string> {
   const ids = new Set<string>();
-  for (const item of transcript.items) if (item.messageId) ids.add(item.messageId);
+  for (const item of transcript.items) {
+    if (item.messageId) ids.add(item.messageId);
+    for (const block of item.blocks)
+      if (block.kind === "text" && block.messageId) ids.add(block.messageId);
+  }
   return ids;
 }
 

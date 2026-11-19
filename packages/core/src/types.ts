@@ -209,7 +209,16 @@ export type ToolResult = {
 };
 
 export type TranscriptBlock =
-  | { kind: "text"; text: string }
+  | {
+      kind: "text";
+      text: string;
+      /**
+       * The gateway's id of the row this bubble's text came from (`__openclaw.id`), on a bot's
+       * turn: what a reaction, a reply or Copy message ID on this bubble names. A turn of several
+       * rows shows several bubbles, each with its own.
+       */
+      messageId?: string;
+    }
   | { kind: "reasoning"; text: string }
   | {
       kind: "tool-call";

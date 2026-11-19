@@ -1491,61 +1491,91 @@ test("F-301: a turn the gateway fails offers Copy request ID, which copies the i
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
-test("F-066 F-283 F-067: on a real reply, the actions show beside it, a reaction is set and taken back on the gateway, and a reply sent from its thread names it", async ({
+test("F-066 F-283 F-067: on a real turn of a progress bubble and a final one, each bubble's actions name its own row: a reaction is set and taken back on the gateway, and a reply sent from its thread names it", async ({
   page,
 }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await openShell(page);
   const { key } = await ownTask(page, "React and reply");
-  await composer(page).fill("Say something short. #text");
+  // Text beside a call, then the answer: one turn, two rows of the gateway's, two bubbles.
+  await composer(page).fill("Say something short. #text #read");
   await page.keyboard.press("Enter");
   await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
-  type Row = { role: string; __openclaw?: { id?: string; replyToId?: string } };
+  type Row = {
+    role: string;
+    content?: unknown;
+    __openclaw?: { id?: string; replyToId?: string };
+  };
   const rows = async () =>
     (await gatewayCall<{ messages: Row[] }>("chat.history", { sessionKey: key, limit: 20 }))
       .messages;
-  const replyRow = (await rows()).filter((row) => row.role === "assistant").at(-1)!;
-  const messageId = replyRow.__openclaw!.id!;
-  const turn = page.locator(`[data-testid="transcript-turn"][data-message="${messageId}"]`);
-  await expect(turn).toBeVisible({ timeout: 30_000 });
-  await turn.locator(".msg > .bubble").last().hover();
-  const actions = turn.getByTestId("message-actions");
-  await expect.poll(() => actions.evaluate((el) => Number(getComputedStyle(el).opacity))).toBe(1);
+  const hasText = (row: Row) =>
+    typeof row.content === "string"
+      ? row.content.trim() !== ""
+      : Array.isArray(row.content) &&
+        row.content.some(
+          (part: { type?: string; text?: string }) => part.type === "text" && part.text?.trim(),
+        );
+  const answers = (await rows()).filter((row) => row.role === "assistant" && hasText(row));
+  expect(answers).toHaveLength(2);
+  const progressId = answers[0]!.__openclaw!.id!;
+  const finalId = answers[1]!.__openclaw!.id!;
+  expect(progressId).not.toBe(finalId);
+  const progress = page.locator(`[data-testid="message"][data-message="${progressId}"]`);
+  const final = page.locator(`[data-testid="message"][data-message="${finalId}"]`);
+  await expect(progress).toBeVisible({ timeout: 30_000 });
+  await expect(final).toBeVisible();
+  await expect(progress).toContainText("Here is a plain reply");
+  await expect(final).toContainText("I read my instructions file.");
+  const opacity = (actions: ReturnType<typeof progress.getByTestId>) =>
+    actions.evaluate((el) => Number(getComputedStyle(el).opacity));
+  const actions = progress.getByTestId("message-actions");
+  await progress.locator(".msg > .bubble").hover();
+  await expect.poll(() => opacity(actions)).toBe(1);
 
-  // F-283: a reaction, as the gateway records it, and taken back.
-  const listed = async () => {
+  // F-283: a reaction on the progress bubble, as the gateway records it under its row, and taken back.
+  const listed = async (id: string) => {
     const answer = await gatewayCall<{ reactions: Record<string, Array<{ emoji: string }>> }>(
       "session.reactions.list",
       { sessionKey: key },
     );
-    return (answer.reactions[messageId] ?? []).map((each) => each.emoji);
+    return (answer.reactions[id] ?? []).map((each) => each.emoji);
   };
   await actions.getByRole("button", { name: "Add a reaction" }).click();
   await page
     .getByRole("menu", { name: "Add a reaction" })
     .getByRole("menuitem", { name: /Thumbs up/ })
     .click();
-  const badge = turn.getByTestId("reaction");
+  const badge = progress.getByTestId("reaction");
   await expect(badge).toHaveText("👍1", { timeout: 30_000 });
   await expect(badge).toHaveAttribute("aria-pressed", "true");
-  await expect.poll(listed, { timeout: 30_000 }).toEqual(["👍"]);
+  await expect.poll(() => listed(progressId), { timeout: 30_000 }).toEqual(["👍"]);
+  expect(await listed(finalId)).toEqual([]);
+  await expect(final.getByTestId("reactions")).toHaveCount(0);
   await badge.click();
-  await expect(turn.getByTestId("reactions")).toHaveCount(0, { timeout: 30_000 });
-  await expect.poll(listed, { timeout: 30_000 }).toEqual([]);
+  await expect(progress.getByTestId("reactions")).toHaveCount(0, { timeout: 30_000 });
+  await expect.poll(() => listed(progressId), { timeout: 30_000 }).toEqual([]);
 
-  // F-067: Reply opens the thread on the message, and the reply names it on the gateway.
-  await turn.locator(".msg > .bubble").last().hover();
+  // F-066: the final bubble's More copies the final row's id.
+  await final.locator(".msg > .bubble").hover();
+  const finalActions = final.getByTestId("message-actions");
+  await expect.poll(() => opacity(finalActions)).toBe(1);
+  await finalActions.getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: "Copy message ID" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(finalId);
+
+  // F-067: Reply on the progress bubble opens its thread, and the reply names its row.
+  await progress.locator(".msg > .bubble").hover();
   await actions.getByRole("button", { name: "Reply in a thread" }).click();
   const thread = page.getByRole("dialog", { name: "Thread" });
-  await expect(thread.getByTestId("thread-message").first()).toContainText(
-    await turn.locator(".msg > .bubble").last().innerText(),
-  );
+  await expect(thread.getByTestId("thread-message").first()).toContainText("Here is a plain reply");
   await thread.getByTestId("thread-input").fill("A reply to that. #text");
   await page.keyboard.press("Enter");
   await expect
     .poll(
       async () =>
         (await rows()).some(
-          (row) => row.role === "user" && row.__openclaw?.replyToId === messageId,
+          (row) => row.role === "user" && row.__openclaw?.replyToId === progressId,
         ),
       { timeout: 30_000 },
     )

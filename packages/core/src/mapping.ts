@@ -395,10 +395,15 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           items.push(item);
         }
         if (cutByGateway) item.truncated = true;
-        // A reaction or a reply names the row whose text the bubble shows: the turn's latest.
+        // A reaction or a reply names the row whose text a bubble shows: each bubble its own row.
         const rowId = str(info.id);
-        if (rowId && blocks.some((block) => block.kind === "text" && block.text.trim()))
-          item.messageId = rowId;
+        if (rowId) {
+          for (const block of blocks)
+            if (block.kind === "text" && block.text.trim()) {
+              block.messageId = rowId;
+              item.messageId = rowId;
+            }
+        }
         for (const block of blocks) {
           if (block.kind === "tool-call" && block.callId) callItems.set(block.callId, item);
         }

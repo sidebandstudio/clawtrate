@@ -18,6 +18,7 @@ import {
   type Run,
   type Step,
   type Transcript,
+  type TranscriptBlock,
 } from "@clawtrate/core";
 import { OPEN_TASK } from "./data.ts";
 
@@ -241,9 +242,28 @@ function question(now: number): QuestionCard {
  */
 function withMessages(state: ClawtrateState): ClawtrateState {
   return withTranscript(state, (transcript) => {
-    const items = transcript.items.map((each, index) =>
-      each.role === "system" ? each : { ...each, messageId: `row-${index + 1}` },
-    );
+    const items = transcript.items.map((each, index) => {
+      if (each.role === "system") return each;
+      const messageId = `row-${index + 1}`;
+      if (each.role === "user") return { ...each, messageId };
+      // The bot's turn: each bubble is a row of its own. The second answer had a progress
+      // bubble before its call, a row of its own too, so the turn shows two.
+      const blocks: TranscriptBlock[] =
+        index === 3
+          ? [{ kind: "text", text: "I'll write that down so I don't forget." }, ...each.blocks]
+          : each.blocks;
+      const texts = blocks.filter((block) => block.kind === "text").length;
+      let n = 0;
+      return {
+        ...each,
+        messageId,
+        blocks: blocks.map((block) =>
+          block.kind === "text"
+            ? { ...block, messageId: ++n === texts ? messageId : `${messageId}-${n}` }
+            : block,
+        ),
+      };
+    });
     const answers = items.filter((each) => each.role === "assistant");
     const replied = answers[0]!;
     const last = items.at(-1)!;
