@@ -264,9 +264,20 @@ agents.delete main {deleteFiles:false}: refused: Agent "main" owns the legacy sh
 
 A delete with files moved the probe's folders into the Trash of the user the gateway runs as (`~/.Trash` on macOS, `movePathToTrash` in `@openclaw/fs-safe`), which is where they stay. A person should know this: **a deleted bot's folders, its workspace and memory among them, can be restored from the Trash on the gateway's machine until that Trash is emptied**, and until then they still take their space there. The probe's folders were left in that Trash; nothing in it was touched.
 
+### What a review found that this section had not
+
+An independent run of the same calls showed more than the paragraphs above (round 1 review):
+
+- The gateway compares a workspace with every other bot's in both directions (`workspacePathsOverlap`, `<openclaw>/dist/agent-delete-safety-*.mjs`, region `src/agents/agent-delete-safety.ts`) and against other bots' registered folders and database files (`isPathOwnedBySurvivingAgent`, `agent-delete-databases-*.mjs`). A parent workspace was kept when a nested one survived, with different `agents.list` paths. **Source**, and **live** in that run.
+- A retry uses the choice the journal first recorded (`lockedJournal?.deleteFiles ?? requestedDeleteFiles`, `agents-DAPW-UCQ.mjs` line 827): a retry sent with `deleteFiles:false` after a ticked delete still moved the workspace. **Live** in that run.
+- When the session-store purge fails, no folder is moved (line 935, `if (deleteFiles && !purgeFailed)`). **Source.**
+- With the box unticked, the bot's task rows were gone and one deletion archive of its transcript was kept. **Live** in that run.
+- After the delete, `agents.workspace.list` and `agents.files.get` answer "agent … not found", so a client cannot read a folder's state afterwards: it has only the answer's `removed` and `failed`, which do not list every path kept.
+- `agents.workspace.list` returns one folder's entries a page at a time (`totalEntries` for that folder), so it does not count a workspace's files.
+
 ### For the design
 
-The confirmation says the folders can be restored from that Trash until it is emptied, and names, from reads made when it opens, what goes at once (settings and routes, the tasks from every list, each routine, saved approvals) and what goes only with the folder option (the workspace with its memory, the bot's own folder, the transcripts), and says which folder stays because another bot uses it. Clawtrate always sends `deleteFiles` explicitly. Afterwards it reads `agents.list`, `sessions.list` and `cron.list` again and shows those with the answer's `removed` and `failed`; a folder in `failed` is named with its reason, and "Try again" repeats the delete, which the gateway resumes from its journal. A refusal is quoted and nothing is said to have changed. Not observed: `purgeFailed`, and an answer lost mid-delete; for the second, the design reads `agents.list` and offers the same retry.
+The confirmation says the folders can be restored from that Trash until it is emptied. It names, from reads made when it opens and made again just before it sends, what goes at once (settings and routes, the tasks from every list, each routine, saved approvals) and what goes only with the folder option (the workspace with its memory, the bot's own folder, the transcripts), with numbers only for lists read to their end. It says a folder stays because another bot uses it only for an exact match of `agents.list` paths, and otherwise that the gateway checks that while it deletes. Clawtrate always sends `deleteFiles` explicitly. Afterwards it reads `agents.list`, `config.get`, `cron.list` and `sessions.list` again and reports each folder path from the answer alone: moved, already gone, couldn't be moved, or, for a path the answer doesn't name, not confirmed. A refusal is quoted and followed by the same reads. A lost answer offers "Check again" and "Retry the same delete", and promises neither outcome.
 
 ## 10. A Clawtrate bot file, written and read back
 

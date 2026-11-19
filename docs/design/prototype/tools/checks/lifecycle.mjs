@@ -530,65 +530,93 @@ await p.close();
 
 p = await open("lc=delete&delbot=pip");
 t = await dlg(p);
-check("F-050 the dialog lists what goes now", has(t, "Delete Pip?", "Pip's settings", "Its 4 tasks, from every task list", "Its 2 routines: Weekly plan, Sunday reminder", "Approvals saved for its commands"));
-check("F-276 the folder option is unticked, and names each folder and the memory in it", has(t, "Also move Pip's folders to the Trash on the gateway's machine", "Its workspace folder, workspace-pip: 23 files, its memory among them (MEMORY.md and 3 notes)", "Its own folder, with the sign-ins only Pip uses (Pip's key)", "Its tasks' transcripts") && (await p.evaluate(() => !document.querySelector("[data-lc-files]").checked)));
+check("S10 the confirmation is an alertdialog, named by its title, with focus on Cancel", (await p.evaluate(() => { const d = document.querySelector("#lc-dialog"); return d.getAttribute("role") === "alertdialog" && document.getElementById(d.getAttribute("aria-labelledby"))?.textContent === "Delete Pip?" && document.activeElement?.textContent === "Cancel"; })));
+check("F-050 the dialog lists what goes now, counts only from complete lists", has(t, "Delete Pip?", "Pip's settings", "Its 4 tasks, from every task list", "Its 2 routines: Weekly plan, Sunday reminder", "Approvals saved for its commands") && !t.includes("23 files"));
+check("F-276 the folder option is unticked, and says what the gateway will try", has(t, "Also move Pip's folders to the Trash on the gateway's machine", "The gateway will try to move this workspace, workspace-pip, including its files and memory. It keeps folders still used by another bot.", "Its own folder. May include local sign-ins and other bot data.", "Its tasks' transcripts") && (await p.evaluate(() => !document.querySelector("[data-lc-files]").checked)));
 check("F-050 the folder option says the Trash can give them back", t.includes("They can be restored from that Trash, on the gateway's machine, until it's emptied."));
-check("F-050 the dialog lists what stays", has(t, "All three folders above, where they are now", "Accounts other bots use, and shared memory", "What Pip said in other bots' tasks", "This can't be undone from Clawtrate."));
-check("S10 focus starts on Cancel", await p.evaluate(() => document.activeElement?.textContent === "Cancel"));
+check("S10 it says the gateway checks ownership while deleting, and promises nothing about shared memory", t.includes("The gateway checks, while it deletes, which folders another bot still uses.") && !t.includes("shared memory") && !t.includes("All three folders"));
+check("S10 what stays, unticked", has(t, "Its folders: with the box unticked, none is asked for the Trash. The gateway may archive its tasks' transcripts.", "What Pip said in other bots' tasks", "Before deleting, Clawtrate reads all of this again."));
 await clickText(p, "#lc-dialog", "Delete Pip");
 check("S10 Deleting", (await dlg(p)).includes("Deleting Pip…"));
 await p.waitForTimeout(700);
 t = await dlg(p);
-check("F-050 F-276 afterwards it says what the gateway has, read back; unticked, the folders stay", has(t, "Pip was deleted", "Read back from the gateway just now:", "No longer in the gateway's list of bots", "No tasks of Pip's listed", "No routines of Pip's", "Its folders stay on the gateway's machine, as asked") && !(await text(p, "#bot-list")).includes("Pip"));
+check("F-050 afterwards each line is a read", has(t, "Pip was deleted", "Read back from the gateway just now:", "Not in the gateway's list of bots", "No settings or channel routes for Pip", "No routines of Pip's", "No tasks of Pip's listed") && !(await text(p, "#bot-list")).includes("Pip"));
+check("F-276 unticked, the box-off words", (await text(p, "[data-lc-nofolders]")) === "No folders requested for Trash. The gateway removed the bot's active task records and may archive the transcript files.");
+await p.close();
+
+p = await open("lc=delete&delbot=otto");
+check("S10 a channel route is named as removed", (await dlg(p)).includes("Removes this channel route: Telegram, account home"));
 await p.close();
 
 p = await open("lc=delete&delbot=pip");
 await click(p, "[data-lc-files]");
-check("F-276 ticked, the folders leave the Stays list", !(await dlg(p)).includes("All three folders above"));
+check("F-276 ticked, the folders leave the Stays list", !(await dlg(p)).includes("none is asked for the Trash"));
 await clickText(p, "#lc-dialog", "Delete Pip");
 await p.waitForTimeout(700);
-check("F-276 ticked, the folders are moved to the Trash", (await dlg(p)).includes("Its workspace folder, its own folder and its tasks' transcripts moved to the Trash"));
-check("F-276 ... and the after state says they can be restored from there", (await dlg(p)).includes("What was moved to the Trash on the gateway's machine can be restored from there until it's emptied."));
+t = await dlg(p);
+check("F-276 ticked, each path as the gateway's answer reported it", has(t, "Folders, as the gateway's answer reported them", "workspace-pip: Gateway reported moving this to Trash", "agents/pip/agent: Gateway reported moving this to Trash", "agents/pip/sessions: Gateway reported moving this to Trash", "agents/pip/agent/openclaw-agent.sqlite-journal: Gateway reported this path was already gone"));
+check("F-276 ... and the after state says they can be restored from there", t.includes("What was moved to the Trash on the gateway's machine can be restored from there until it's emptied."));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&shared=1&files=1");
 t = await dlg(p);
-check("F-464 a workspace another bot uses stays, said before", t.includes("Its workspace folder, workspace-juniper, stays: also used by Juniper."));
+check("F-464 a confirmed shared workspace: the exact also-used-by line", t.includes("Its workspace folder, workspace-juniper, stays: also used by Juniper.") && (await p.evaluate(() => !document.querySelector("[data-lc-files]").disabled)));
 await clickText(p, "#lc-dialog", "Delete Pip");
 await p.waitForTimeout(700);
-check("F-464 ... and after", (await dlg(p)).includes("Its own folder and its tasks' transcripts moved to the Trash; workspace-juniper stays for Juniper"));
+check("F-464 ... and after, no claim the reply doesn't make", (await text(p, '[data-lc-path="workspace-juniper"]')).includes("workspace-juniper: The gateway didn't confirm what happened to this path. Juniper still lists it as its workspace."));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&files=1&delresult=partial");
 await clickText(p, "#lc-dialog", "Delete Pip");
 await p.waitForTimeout(700);
 t = await dlg(p);
-check("S10 a folder the gateway couldn't move is named with its reason", has(t, "Pip was deleted, but one folder is still there", "workspace-pip wasn't moved: permission denied. It's still on the gateway's machine.", "Trying again moves what's left.", "Try again", "Leave it"));
-await clickText(p, "#lc-dialog", "Try again");
+check("S10 a path the gateway couldn't move is named with its reason, and Retry cleanup is offered", has(t, "Pip was deleted, but the gateway couldn't move one folder", "workspace-pip: Gateway couldn't move this: permission denied", "Retry cleanup", "Leave it") && !t.includes("still on the gateway"));
+await clickText(p, "#lc-dialog", "Retry cleanup");
 await p.waitForTimeout(700);
-check("S10 Try again finishes the delete", (await dlg(p)).includes("Pip was deleted") && (await dlg(p)).includes("moved to the Trash"));
+check("S10 Retry cleanup reports again from the answer", (await text(p, '[data-lc-path="workspace-pip"]')).includes("Gateway reported moving this to Trash"));
 await p.close();
 
-p = await open("lc=delete&delbot=pip&delresult=uncertain");
+p = await open("lc=delete&delbot=pip&files=1&delresult=purge");
 await clickText(p, "#lc-dialog", "Delete Pip");
 await p.waitForTimeout(700);
 t = await dlg(p);
-check("S10 a lost answer: what was read, and what isn't known", has(t, "Pip is no longer listed", "What happened to its folders: the gateway's answer was lost", "Trying again finishes the same delete"));
-await clickText(p, "#lc-dialog", "Try again");
+check("S10 a session-store failure in its own words, and no folder claims", has(t, "Pip was deleted, but its task records weren't", "The gateway couldn't remove Pip's task records, so it moved no folders.", "Retry the same delete") && !t.includes("Gateway reported moving"));
+await p.close();
+
+p = await open("lc=delete&delbot=pip&files=1&delresult=uncertain");
+await clickText(p, "#lc-dialog", "Delete Pip");
 await p.waitForTimeout(700);
-check("S10 ... and Try again ends it", (await dlg(p)).includes("Pip was deleted"));
+t = await dlg(p);
+check("S10 a lost answer keeps the choice and promises nothing", has(t, "Clawtrate didn't get the gateway's answer", "You asked to move its folders to the Trash; a retry asks the same.", "workspace-pip: The gateway didn't confirm what happened to this path", "Check again", "Retry the same delete"));
+await clickText(p, "#lc-dialog", "Check again");
+await p.waitForTimeout(500);
+check("S10 Check again reads again", (await dlg(p)).includes("Read again just now.") && (await dlg(p)).includes("Not in the gateway's list of bots"));
+await clickText(p, "#lc-dialog", "Retry the same delete");
+await p.waitForTimeout(700);
+check("S10 Retry the same delete reports what the answer says", (await dlg(p)).includes("Pip was deleted"));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&delresult=refused");
 await clickText(p, "#lc-dialog", "Delete Pip");
 await p.waitForTimeout(700);
 t = await dlg(p);
-check("S10 a refusal is quoted, and nothing is said to have changed", has(t, "The gateway didn't delete Pip", "cannot be deleted.", "Nothing was removed.") && (await text(p, "#bot-list")).includes("Pip"));
+check("S10 a refusal is quoted, and what is there is read, not promised", has(t, "The gateway didn't delete Pip", "cannot be deleted.", "Still in the gateway's list of bots", "Its settings are still there") && !t.includes("Nothing was removed") && (await text(p, "#bot-list")).includes("Pip"));
+await p.close();
+
+p = await open("lc=delete&delbot=pip&delchanged=1");
+await clickText(p, "#lc-dialog", "Delete Pip");
+await p.waitForTimeout(600);
+t = await dlg(p);
+check("S10 the preview is read again at Delete, and a change asks again", t.includes("What Pip has changed since this opened: it now has 5 tasks. Check what goes, then delete again.") && t.includes("Its 5 tasks, from every task list") && (await p.evaluate(() => app.bots.some((b) => b.id === "pip"))));
+await clickText(p, "#lc-dialog", "Delete Pip");
+await p.waitForTimeout(700);
+check("S10 ... and deleting again goes through", (await dlg(p)).includes("Pip was deleted"));
 await p.close();
 
 p = await open(`bot=otto&${settings}&onlybot=1`);
 check("S10 the only bot can't be deleted, with the reason", (await panel(p)).includes("Otto is the gateway's only bot, and the gateway doesn't delete its only bot.") && (await p.evaluate(() => document.querySelector('#panel-settings [data-lc="open-delete"]').disabled)));
 await p.close();
+
 p = await open(`bot=otto&${settings}&access=read`);
 t = await panel(p);
 check("S2 below admin Manage offers Export only", t.includes("Export…") && !t.includes("Duplicate…") && !t.includes("Delete Otto"));

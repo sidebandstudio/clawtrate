@@ -113,8 +113,11 @@
     ["lc=delete&delbot=pip&files=1", "Delete Pip, with its folders"],
     ["lc=delete&delbot=pip&shared=1&files=1", "Delete Pip, its workspace shared with Juniper"],
     ["lc=delete&delbot=pip&files=1&delresult=partial", "Delete: one folder left (Delete Pip)"],
-    ["lc=delete&delbot=pip&delresult=uncertain", "Delete: the answer lost (Delete Pip)"],
+    ["lc=delete&delbot=pip&files=1&delresult=uncertain", "Delete: the answer lost (Delete Pip)"],
     ["lc=delete&delbot=pip&delresult=refused", "Delete: refused (Delete Pip)"],
+    ["lc=delete&delbot=pip&files=1&delresult=purge", "Delete: the task records weren't removed (Delete Pip)"],
+    ["lc=delete&delbot=pip&delchanged=1", "Delete: what the bot has changed meanwhile (Delete Pip)"],
+    ["lc=delete&delbot=otto", "Delete Otto, with a channel route"],
     ["bot=otto&" + st + "&onlybot=1", "The gateway's only bot"],
   ];
 

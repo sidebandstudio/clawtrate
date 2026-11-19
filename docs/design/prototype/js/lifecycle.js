@@ -126,6 +126,9 @@
     const d = L.dialog;
     if (!d) return;
     dialog.dataset.kind = d.kind === "delete" ? "lc-delete" : "lc";
+    // A confirmation that removes something is an alertdialog, named by its title and described by its first list.
+    if (d.kind === "delete") dialog.setAttribute("role", "alertdialog");
+    else dialog.removeAttribute("role");
     const view = VIEWS[d.kind](d);
     dialog.innerHTML = view;
     CT.hydrate(dialog);
@@ -973,6 +976,7 @@
     const name = esc((d.botName ??= nameOf(id)));
     const f = FACTS[id];
     const share = sharers(id);
+    const tasks = d.tasks ?? f.tasks;
     if (d.read === "loading")
       return sheet(`Delete ${name}?`, `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Reading what ${name} has on the gateway…</p>`, button("Cancel", 'data-lc="close" data-size="lg"', "quiet"));
     if (d.read === "failed")
@@ -981,59 +985,104 @@
         note(`<p><b>Couldn't read what ${name} has.</b> The gateway didn't answer. Clawtrate doesn't delete a bot without saying what goes.</p>`, "danger"),
         button("Try again", 'data-lc="del-reread" data-size="lg" data-lc-focus', "primary") + button("Cancel", 'data-lc="close" data-size="lg"', "quiet"),
       );
-    if (d.status === "deleting") return sheet(`Deleting ${name}`, `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Deleting ${name}…</p>`, "");
-    if (d.status === "refused")
-      return sheet(
-        `The gateway didn't delete ${name}`,
-        note(`<p>The gateway answered: “Agent "${id}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted.” Nothing was removed.</p>`, "danger") +
-          `<p class="b-hint">Other bots use sign-ins kept in ${name}'s folder. The gateway's owner moves them first, on the gateway's machine.</p>`,
-        button("Close", 'data-lc="close" data-size="lg" data-lc-focus'),
-      );
-    if (d.status === "done" || d.status === "partial" || d.status === "uncertain") {
-      const ok = (t) => `<li data-state="done">${glyph("done")}<span>${t}</span></li>`;
-      const bad = (t) => `<li data-state="failed">${glyph("failed")}<span>${t}</span></li>`;
-      const unknown = (t) => `<li data-state="unknown">${glyph("queued")}<span>${t}</span></li>`;
-      let rows = ok(`No longer in the gateway's list of bots`) + ok(`No tasks of ${name}'s listed`) + (f.routines.length ? ok(`No routines of ${name}'s`) : "");
-      if (d.status === "uncertain") rows += unknown(`What happened to its folders: the gateway's answer was lost`);
-      else if (!d.files) rows += ok(`Its folders stay on the gateway's machine, as asked`);
-      else if (d.status === "partial") rows += ok(`Its own folder and its tasks' transcripts moved to the Trash`) + bad(`${esc(f.folder)} wasn't moved: permission denied. It's still on the gateway's machine.`);
-      else rows += ok(share.length ? `Its own folder and its tasks' transcripts moved to the Trash; ${esc(f.folder)} stays for ${esc(share.join(", "))}` : `Its workspace folder, its own folder and its tasks' transcripts moved to the Trash`);
-      const trashLine = d.files && d.status !== "uncertain" ? `<p class="b-hint">What was moved to the Trash on the gateway's machine can be restored from there until it's emptied.</p>` : "";
-      const title = d.status === "done" ? `${name} was deleted` : d.status === "partial" ? `${name} was deleted, but one folder is still there` : `${name} is no longer listed`;
-      return sheet(
-        title,
-        `<p class="b-hint lc-first">Read back from the gateway just now:</p><ul class="lc-result" aria-label="What the gateway has now">${rows}</ul>` +
-          trashLine +
-          (d.status === "uncertain" ? `<p class="b-hint">Trying again finishes the same delete: the gateway keeps a record of it until it's complete.</p>` : "") +
-          (d.status === "partial" ? `<p class="b-hint">Trying again moves what's left. The gateway keeps a record of the delete until it's complete.</p>` : ""),
-        d.status === "done"
-          ? button("Close", 'data-lc="close" data-size="lg" data-lc-focus')
-          : button("Try again", 'data-lc="del-retry" data-size="lg" data-lc-focus', "primary") + button(d.status === "partial" ? "Leave it" : "Close", 'data-lc="close" data-size="lg"', "quiet"),
-      );
-    }
+    if (d.status === "deleting" || d.status === "checking")
+      return sheet(d.status === "checking" ? `Delete ${name}?` : `Deleting ${name}`, `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>${d.status === "checking" ? `Reading what ${name} has again…` : `Deleting ${name}…`}</p>`, "");
+    if (d.status) return resultView(d, name, f, share);
     const workspaceLine = share.length
       ? `<li data-state="stays"><span>Its workspace folder, ${esc(f.folder)}, stays: also used by ${esc(share.join(" and "))}.</span></li>`
-      : `<li><span>Its workspace folder, ${esc(f.folder)}: ${f.files} files, its memory among them (${esc(f.memory)})</span></li>`;
+      : `<li><span>The gateway will try to move this workspace, ${esc(f.folder)}, including its files and memory. It keeps folders still used by another bot.</span></li>`;
     return sheet(
       `Delete ${name}?`,
-      `<h4 class="b-group">Removed from the gateway</h4><ul class="lc-list">` +
-        `<li>${name}'s settings${f.routes ? `, and its channel route: messages on it go to the gateway's default bot` : ""}</li>` +
-        `<li>Its ${f.tasks} tasks, from every task list</li>` +
+      (d.changed ? note(`<p><b>What ${name} has changed since this opened:</b> it now has ${tasks} tasks. Check what goes, then delete again.</p>`, "warn") : "") +
+        `<h4 class="b-group">Removed from the gateway</h4><ul class="lc-list">` +
+        `<li>${name}'s settings</li>` +
+        (f.routes ? `<li>Removes this channel route: Telegram, account home</li>` : "") +
+        `<li>Its ${tasks} tasks, from every task list</li>` +
         (f.routines.length ? `<li>Its ${f.routines.length === 1 ? "routine" : `${f.routines.length} routines`}: ${esc(f.routines.join(", "))}</li>` : "") +
         `<li>Approvals saved for its commands</li></ul>` +
         `<label class="b-check lc-files"><input type="checkbox" data-lc-files${d.files ? " checked" : ""} /><span>Also move ${name}'s folders to the Trash on the gateway's machine</span></label>` +
         `<p class="b-hint lc-files-hint">They can be restored from that Trash, on the gateway's machine, until it's emptied.</p>` +
-        `<ul class="lc-list lc-folders" data-on="${Boolean(d.files)}">${workspaceLine}<li><span>Its own folder${f.own.length ? `, with the sign-ins only ${name} uses (${esc(f.own.join(", "))})` : ""}</span></li><li><span>Its tasks' transcripts</span></li></ul>` +
+        `<ul class="lc-list lc-folders" data-on="${Boolean(d.files)}">${workspaceLine}<li><span>Its own folder. May include local sign-ins and other bot data.</span></li><li><span>Its tasks' transcripts</span></li></ul>` +
+        `<p class="b-hint">The gateway checks, while it deletes, which folders another bot still uses.</p>` +
         `<h4 class="b-group">Stays</h4><ul class="lc-list">` +
-        (d.files ? "" : `<li>All three folders above, where they are now</li>`) +
-        `<li>Accounts other bots use, and shared memory</li><li>What ${name} said in other bots' tasks</li><li>Anything in the Trash, until it's emptied there</li></ul>` +
-        `<p class="b-hint">This can't be undone from Clawtrate.</p>`,
+        (d.files ? "" : `<li>Its folders: with the box unticked, none is asked for the Trash. The gateway may archive its tasks' transcripts.</li>`) +
+        `<li>What ${name} said in other bots' tasks</li></ul>` +
+        `<p class="b-hint">This can't be undone from Clawtrate. Before deleting, Clawtrate reads all of this again.</p>`,
       button("Cancel", 'data-lc="close" data-size="lg" data-lc-focus', "quiet") + button(`Delete ${name}`, 'data-lc="del-go" data-size="lg" data-tone="danger"'),
     );
   };
 
+  // After a delete: each line is a read, or what the gateway's answer reported for a path.
+  function resultView(d, name, f, share) {
+    const line = (state, t) => `<li data-state="${state}">${glyph(state === "done" ? "done" : state === "failed" ? "failed" : "queued")}<span>${t}</span></li>`;
+    const listed = d.status === "refused";
+    const lost = d.status === "lost" && !d.checked;
+    const reads =
+      (listed ? line("failed", `Still in the gateway's list of bots`) : line("done", `Not in the gateway's list of bots`)) +
+      (listed ? line("failed", `Its settings are still there`) : line("done", `No settings or channel routes for ${name}`)) +
+      (f.routines.length ? (listed ? line("failed", `Its routines are still there`) : line("done", `No routines of ${name}'s`)) : "") +
+      (d.status === "purge"
+        ? line("failed", `The gateway couldn't remove ${name}'s task records, so it moved no folders.`)
+        : listed
+          ? line("failed", `Its tasks are still listed`)
+          : line("done", `No tasks of ${name}'s listed`));
+    const path = (p, word, state) => `<li data-state="${state}" data-lc-path="${p}">${glyph(state === "done" ? "done" : state === "failed" ? "failed" : "queued")}<span><span class="mono">${p}</span>: ${word}</span></li>`;
+    let paths = "";
+    if (listed) paths = "";
+    else if (!d.files) paths = `<p class="b-hint" data-lc-nofolders>No folders requested for Trash. The gateway removed the bot's active task records and may archive the transcript files.</p>`;
+    else if (lost) paths = `<ul class="lc-result" aria-label="Folders">${path(f.folder, "The gateway didn't confirm what happened to this path", "unknown")}</ul>`;
+    else if (d.status === "purge") paths = "";
+    else
+      paths =
+        `<h4 class="b-group">Folders, as the gateway's answer reported them</h4><ul class="lc-result" aria-label="Folders">` +
+        (share.length
+          ? path(f.folder, `The gateway didn't confirm what happened to this path. ${esc(share.join(" and "))} still lists it as its workspace.`, "unknown")
+          : d.status === "partial"
+            ? path(f.folder, "Gateway couldn't move this: permission denied", "failed")
+            : path(f.folder, "Gateway reported moving this to Trash", "done")) +
+        path(`agents/${d.bot}/agent`, "Gateway reported moving this to Trash", "done") +
+        path(`agents/${d.bot}/sessions`, "Gateway reported moving this to Trash", "done") +
+        path(`agents/${d.bot}/agent/openclaw-agent.sqlite-journal`, "Gateway reported this path was already gone", "done") +
+        `</ul><p class="b-hint">What was moved to the Trash on the gateway's machine can be restored from there until it's emptied.</p>`;
+    const titles = {
+      done: `${name} was deleted`,
+      partial: `${name} was deleted, but the gateway couldn't move one folder`,
+      purge: `${name} was deleted, but its task records weren't`,
+      lost: `Clawtrate didn't get the gateway's answer`,
+      refused: `The gateway didn't delete ${name}`,
+    };
+    const head =
+      d.status === "refused"
+        ? note(`<p>The gateway answered: “Agent "${d.bot}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted.”</p>`, "danger") +
+          `<p class="b-hint">Other bots use sign-ins kept in ${name}'s folder. The gateway's owner moves them first, on the gateway's machine.</p>`
+        : d.status === "lost"
+          ? `<p class="b-hint lc-first">${d.checked ? "Read again just now." : "The delete was sent; its answer was lost."} You asked ${d.files ? "to move its folders to the Trash" : "to keep its folders"}; a retry asks the same.</p>`
+          : "";
+    const actions =
+      d.status === "partial"
+        ? button("Retry cleanup", 'data-lc="del-retry" data-size="lg" data-lc-focus', "primary") + button("Leave it", 'data-lc="close" data-size="lg"', "quiet")
+        : d.status === "lost"
+          ? button("Check again", 'data-lc="del-check" data-size="lg" data-lc-focus', "primary") + button("Retry the same delete", 'data-lc="del-retry" data-size="lg"') + button("Close", 'data-lc="close" data-size="lg"', "quiet")
+          : d.status === "purge"
+            ? button("Retry the same delete", 'data-lc="del-retry" data-size="lg" data-lc-focus', "primary") + button("Close", 'data-lc="close" data-size="lg"', "quiet")
+            : button("Close", 'data-lc="close" data-size="lg" data-lc-focus');
+    return sheet(titles[d.status], head + `<p class="b-hint lc-first">Read back from the gateway just now:</p><ul class="lc-result" aria-label="What the gateway has now">${reads}</ul>` + paths, actions);
+  }
+
   function runDelete(retry) {
     const d = L.dialog;
+    // The preview is read again before anything is sent; a change asks again.
+    if (!retry && p("delchanged") && !d.changed) {
+      d.status = "checking";
+      paint();
+      return setTimeout(() => {
+        d.status = null;
+        d.changed = true;
+        d.tasks = FACTS[d.bot].tasks + 1;
+        paint(true);
+        announce(`What ${d.botName} has changed. Check it, then delete again.`);
+      }, 400);
+    }
     d.status = "deleting";
     d.busy = true;
     paint(true);
@@ -1041,7 +1090,8 @@
       d.busy = false;
       const want = p("delresult");
       if (!retry && want === "refused") d.status = "refused";
-      else if (!retry && want === "uncertain") d.status = "uncertain";
+      else if (!retry && want === "uncertain") d.status = "lost";
+      else if (!retry && want === "purge") d.status = "purge";
       else if (!retry && want === "partial" && d.files) d.status = "partial";
       else d.status = "done";
       if (d.status !== "refused" && botOf(d.bot)) {
@@ -1052,7 +1102,7 @@
         else refreshRail();
       }
       paint(true);
-      announce(d.status === "done" ? `${d.botName} was deleted` : d.status === "refused" ? "The gateway didn't delete it" : d.status === "partial" ? "Deleted, with one folder left" : "No longer listed");
+      announce({ done: `${d.botName} was deleted`, refused: "The gateway didn't delete it", partial: "Deleted; one folder wasn't moved", purge: "Deleted; its task records weren't", lost: "The gateway's answer was lost" }[d.status]);
     }, 600);
   }
 
@@ -1223,6 +1273,15 @@
         return paint(true);
       case "del-go":
         return runDelete(false);
+      case "del-check":
+        L.dialog.status = "checking";
+        paint();
+        return setTimeout(() => {
+          L.dialog.status = "lost";
+          L.dialog.checked = true;
+          paint(true);
+          announce("Read again");
+        }, 400);
       case "del-retry":
         return runDelete(true);
     }
