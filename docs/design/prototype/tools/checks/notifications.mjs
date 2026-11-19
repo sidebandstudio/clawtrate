@@ -110,6 +110,22 @@ await p.waitForTimeout(60);
 check("quiet hours end: a reply from during them is not shown later", (await pics(p)).length === 0);
 await p.close();
 
+// A budget warning in quiet hours: held, shown at the end if it still holds; nothing if it lapsed.
+await notShown("a budget warning during quiet hours is held", "event=budget&quiet=1", ["Held until 07:00: Otto's budget warning, shown then if the budget is still at or over 80% for this period."]);
+p = await open("event=budget&quiet=1");
+await p.evaluate(() => window.notif.quietEnds());
+await p.waitForTimeout(60);
+check("quiet hours end: a held budget warning still at 80% is shown, once", (await pics(p)).length === 1 && (await pics(p))[0].includes("Used 82% of its weekly budget."), JSON.stringify(await pics(p)));
+await p.evaluate(() => window.notif.quietEnds());
+await p.waitForTimeout(60);
+check("quiet hours end: it is not shown a second time", (await pics(p)).length === 1);
+await p.close();
+p = await open("event=budget&quiet=1&chrome=1");
+await click(p, '[data-bar="lapsed"]');
+await click(p, '[data-bar="quietend"]');
+check("quiet hours end: a budget raised or a period rolled over meanwhile shows nothing", (await pics(p)).length === 0 && (await why(p)).includes("Nothing still waiting"), await why(p));
+await p.close();
+
 // One per task: a newer event for the task replaces the picture shown.
 p = await open("event=approval");
 await p.evaluate(() => window.notif.fire("budget"));

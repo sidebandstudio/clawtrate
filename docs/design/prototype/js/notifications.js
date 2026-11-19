@@ -132,6 +132,7 @@
       if (S.focus === ev.bot) return { none: `${b.name} is on screen in the focused window.` };
     }
     if (S.quietNow) {
+      if (ev.kind === "budget") return { hold: `Held until ${S.quiet.to}: ${b.name}'s budget warning, shown then if the budget is still at or over 80% for this period.` };
       const wait = ev.kind === "approval" || ev.kind === "question";
       return wait ? { hold: `Held until ${S.quiet.to}: ${b.name} is waiting for you.` } : { none: "Quiet hours: this is never shown later. The rail and the task hold it." };
     }
@@ -200,8 +201,16 @@
     if ($("#settings-dialog").open) renderSettings();
   }
 
+  // The budget was raised, or its period rolled over, while quiet hours were on.
+  function budgetLapsed() {
+    for (const ev of S.held) if (ev.kind === "budget") S.resolved.add(`${ev.task}:${ev.kind}`);
+    S.why = "Otto's budget is no longer at 80% for this period.";
+    renderLayer();
+  }
+
   function answeredElsewhere() {
     for (const ev of S.held) {
+      if (ev.kind === "budget") continue;
       S.resolved.add(`${ev.task}:${ev.kind}`);
       findTask(ev.task).t.wait = null;
     }
@@ -630,6 +639,8 @@
     ["system", "System", "settings.md, in review"],
     ["updates", "Updates", "settings.md, in review"],
   ];
+  // Held waits, for the "Quiet until" line; a held budget warning is not a bot waiting.
+  const waits = () => S.held.filter((ev) => ev.kind !== "budget").length;
   const SYSTEM_NOTE = {
     mac: "Clawtrate shows notifications while it's open, also with its window closed. It can't see whether macOS allows them or whether a Focus is on.",
     windows: "Clawtrate shows notifications while it's open. Closing its window quits it. It can't see whether Windows allows them or whether Do Not Disturb is on.",
@@ -726,7 +737,7 @@
               : `${S.quiet.from} to ${S.quiet.to}, Lisbon time. Set on this computer.`
           }</p>` +
           (S.quietNow
-            ? `<p class="n-now" data-testid="quiet-now">Quiet until ${S.quiet.to}.${S.held.length ? ` ${S.held.length} bot${S.held.length === 1 ? " is" : "s are"} waiting for you. ${S.held.length === 1 ? "It" : "They"} will be shown then.` : ""}</p>`
+            ? `<p class="n-now" data-testid="quiet-now">Quiet until ${S.quiet.to}.${waits() ? ` ${waits()} bot${waits() === 1 ? " is" : "s are"} waiting for you. ${waits() === 1 ? "It" : "They"} will be shown then.` : ""}</p>`
             : "");
       }
       body += kept("quiet", keptShared());
@@ -799,6 +810,7 @@
       `<label>Focus <select data-bar="focus">${opt("", "none", S.focus || "")}${opt("otto", "Otto on screen", S.focus || "")}${opt("pip", "Pip on screen", S.focus || "")}</select></label>` +
       `<button type="button" data-bar="quiet" aria-pressed="${S.quietNow}">Quiet hours now</button>` +
       `<button type="button" data-bar="answered">Answered elsewhere</button>` +
+      `<button type="button" data-bar="lapsed">Budget raised</button>` +
       `<button type="button" data-bar="quietend">Quiet hours end</button>` +
       `<label>At the click <select data-bar="click">${opt("", "all well", S.click)}${opt("gone", "task deleted", S.click)}${opt("offline", "connection down", S.click)}${opt("othergw", "another gateway", S.click)}${opt("stale", "no record", S.click)}</select></label>` +
       `<button type="button" data-bar="settings">Settings</button>` +
@@ -820,6 +832,7 @@
       }
       if (el.dataset.bar === "quietend") quietEnds();
       if (el.dataset.bar === "answered") answeredElsewhere();
+      if (el.dataset.bar === "lapsed") budgetLapsed();
       if (el.dataset.bar === "settings") openSettings(el);
     });
   }
@@ -963,5 +976,5 @@
     S.tab = "details";
     render();
   }
-  window.notif = { S, fire, decide, open, quietEnds };
+  window.notif = { S, fire, decide, open, quietEnds, budgetLapsed };
 })();
