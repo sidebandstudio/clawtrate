@@ -531,9 +531,6 @@ function routineSchedule(value: unknown): RoutineSchedule {
   };
 }
 
-const TARGETS = ["isolated", "main", "other"] as const;
-const DELIVERIES = ["none", "announce", "webhook", "other"] as const;
-
 function oneOf<T extends string>(value: unknown, options: readonly T[], what: string): T {
   if (!options.includes(value as T)) throw new Error(`invalid ${what}`);
   return value as T;
@@ -544,8 +541,8 @@ function routineFields(value: Record<string, unknown>): RoutineFields {
     name: shortText(value.name, 256, "name"),
     text: shortText(value.text, MAX_ROUTINE_TEXT_CHARS, "instruction"),
     schedule: routineSchedule(value.schedule),
-    target: oneOf(value.target, TARGETS, "target"),
-    delivery: oneOf(value.delivery, DELIVERIES, "delivery"),
+    target: oneOf(value.target, ["isolated", "main", "other"] as const, "target"),
+    delivery: oneOf(value.delivery, ["none", "announce", "webhook", "other"] as const, "delivery"),
   };
 }
 
