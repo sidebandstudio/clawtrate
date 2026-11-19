@@ -2,11 +2,19 @@
 // they change on disk; the decision record, metadata only, for 30 days.
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { nextScope } from "../lib/rules.js";
-import { DecisionLog, RulesStore, hashCallId, serializeRules } from "../lib/store.js";
+import { DecisionLog, RETENTION_MS, RulesStore, hashCallId, serializeRules } from "../lib/store.js";
 import { tempState } from "./harness.ts";
 
 const cleanups: (() => void)[] = [];
@@ -240,5 +248,50 @@ describe("a known lost policy", () => {
     expect(lost(store.view())).toEqual(["lost", null, null]);
     writeFileSync(file, JSON.stringify(serializeRules(new Map())));
     expect(store.view()).toMatchObject({ kind: "read", enforced: new Map(), kept: null });
+  });
+});
+
+describe("expired records on disk", () => {
+  const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+  const onDisk = (dir: string, id: string) =>
+    readFileSync(join(dir, "decisions.jsonl"), "utf8").includes(id);
+  const listed = (log: DecisionLog, id: string) =>
+    log.list({ limit: 100 }).records.some((record) => record.id === id);
+
+  it("leave the file at the next prune, also when an ordinary append already dropped them", () => {
+    const dir = folder();
+    let now = 10_000;
+    const log = new DecisionLog(dir, { now: () => now });
+    const expired = log.add(fields);
+    now += 86_400_000;
+    for (let i = 0; i < 10; i += 1) log.add(fields);
+    now = 10_000 + RETENTION_MS + 1;
+    log.add(fields);
+    log.prune();
+    expect(listed(log, expired)).toBe(false);
+    expect(onDisk(dir, expired)).toBe(false);
+  });
+
+  it("leave the file once it can be written again after a failed rewrite", () => {
+    const base = folder();
+    mkdirSync(base, { recursive: true });
+    const dir = join(base, "record");
+    const aside = join(base, "record-aside");
+    mkdirSync(dir);
+    let now = 10_000;
+    const log = new DecisionLog(dir, { now: () => now });
+    const id = log.add(fields);
+    now += RETENTION_MS + 1;
+    // The folder is briefly something that cannot be written.
+    renameSync(dir, aside);
+    writeFileSync(dir, "not a folder");
+    log.prune();
+    expect(log.problem).toMatch(/cannot be written/);
+    rmSync(dir);
+    renameSync(aside, dir);
+    log.prune();
+    expect(listed(log, id)).toBe(false);
+    expect(onDisk(dir, id)).toBe(false);
+    expect(log.problem).toBeNull();
   });
 });

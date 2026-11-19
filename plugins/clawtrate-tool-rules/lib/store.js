@@ -351,6 +351,7 @@ export class DecisionLog {
     this.byId = new Map();
     /** Lines in the file beyond one per record kept: answers, and records since dropped. */
     this.extraLines = 0;
+    this.expiryPending = false;
     this.problem = null;
     this.#load();
   }
@@ -399,6 +400,7 @@ export class DecisionLog {
     const cutoff = this.now() - this.retentionMs;
     let drop = 0;
     while (drop < this.records.length && this.records[drop].at < cutoff) drop += 1;
+    this.expiryPending ||= drop > 0;
     drop = Math.max(drop, this.records.length - this.max);
     if (drop > 0) {
       for (const record of this.records.slice(0, drop)) this.byId.delete(record.id);
@@ -408,12 +410,14 @@ export class DecisionLog {
     // Rewritten only when asked (expiry) or when the file holds a fifth more
     // lines than records kept, never once per append.
     const bloated = this.extraLines > 0 && this.extraLines >= this.records.length / 5;
-    if (!bloated && !force) return;
+    if (!bloated && !force && !this.expiryPending) return;
     try {
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
       const lines = this.records.map((record) => JSON.stringify(record));
       writeFileAtomic(this.dir, DECISIONS_FILE, lines.length > 0 ? `${lines.join("\n")}\n` : "");
       this.extraLines = 0;
+      this.expiryPending = false;
+      this.problem = null;
     } catch (error) {
       this.problem = `the decision record cannot be written (${error.code ?? "error"})`;
     }
@@ -423,7 +427,7 @@ export class DecisionLog {
     try {
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
       appendFileSync(this.path, `${JSON.stringify(value)}\n`, { mode: 0o600 });
-      this.problem = null;
+      if (!this.expiryPending) this.problem = null;
     } catch (error) {
       this.problem = `the decision record cannot be written (${error.code ?? "error"})`;
     }
@@ -435,7 +439,9 @@ export class DecisionLog {
    */
   prune() {
     const cutoff = this.now() - this.retentionMs;
-    if (this.records.length > 0 && this.records[0].at < cutoff) this.#maintain(true);
+    if (this.expiryPending || (this.records.length > 0 && this.records[0].at < cutoff)) {
+      this.#maintain(true);
+    }
   }
 
   /** Add a record; returns its id. */
