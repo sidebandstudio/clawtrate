@@ -16,6 +16,7 @@ import {
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
+import { RoutinesEngine, type RoutineRun, type RunConversation } from "./routines.ts";
 import {
   admitApproval,
   applyApprovalRequested,
@@ -816,6 +817,16 @@ export class ClawtrateClient {
     now: () => this.now(),
     randomId: () => this.randomId(),
     log: (message) => this.log("warn", message),
+  });
+  /** The gateway's scheduled jobs (`routines.ts`); its state is `routines`. */
+  private readonly routines = new RoutinesEngine({
+    request: (method, params) => {
+      if (!this.protocol) return Promise.reject(new NotSentError());
+      return this.protocol.request(method, params);
+    },
+    get: () => this.state.routines,
+    update: (change) =>
+      this.store.update((state) => ({ ...state, routines: change(state.routines) })),
   });
   /**
    * Task lists being read, each its rows so far, already bounded: at most two,
@@ -3418,6 +3429,33 @@ export class ClawtrateClient {
     }
   }
 
+  // Routines (`routines.ts`; automation.md sections 3 to 8), all at the read tier ----------
+
+  /** Read the routine list and the scheduler's state again. */
+  refreshRoutines(): Promise<void> {
+    if (this.state.connection.status !== "connected") return Promise.resolve();
+    return this.routines.load();
+  }
+
+  /** A routine's runs, newest first, at most `MAX_ROUTINE_RUNS`; returned, not kept. */
+  readRoutineRuns(id: string): Promise<RoutineRun[]> {
+    return this.routines.runs(id);
+  }
+
+  /** The latest runs across routines, for the calendar; returned, not kept. */
+  readCalendarRuns(): Promise<RoutineRun[]> {
+    return this.routines.calendarRuns();
+  }
+
+  /** One run's conversation, when the gateway keeps it; returned, not kept. */
+  readRunConversation(
+    id: string,
+    runId: string,
+    sessionKey: string | null,
+  ): Promise<RunConversation> {
+    return this.routines.conversation(id, runId, sessionKey);
+  }
+
   // Provider accounts (`accounts.ts`, `accounts-engine.ts`; bots.md sections 3 to 11) ----------
 
   /** Read the accounts, sign-ins, bindings and catalogue the account screens show. */
@@ -4102,6 +4140,7 @@ export class ClawtrateClient {
         if (generation !== this.generation) return;
         this.streams.clear();
         this.accounts.onClose();
+        this.routines.onClose();
         const status = this.state.connection.status;
         if (status !== "pairing" && status !== "error") {
           // Once this gateway has answered, every later drop is a reconnect, not a first connect.
@@ -4166,6 +4205,7 @@ export class ClawtrateClient {
   /** What one gateway reported that must never be read against another. */
   private forgetGatewayState(): void {
     this.accounts.reset();
+    this.routines.reset();
     // A creation belongs to the gateway it was asked of; it is never asked of another.
     for (const timer of this.creationTimers.values()) clearTimeout(timer);
     this.creationTimers.clear();
@@ -4192,6 +4232,7 @@ export class ClawtrateClient {
   private close(): void {
     this.generation += 1;
     this.accounts.onClose();
+    this.routines.onClose();
     this.protocol?.stop();
     this.protocol = null;
     this.streams.clear();
@@ -4348,7 +4389,10 @@ export class ClawtrateClient {
     this.pendingResync = null;
     this.quietReconnect = false;
     void this.bootstrap(generation, reason).then(() => {
-      if (generation === this.generation) this.accounts.onHello();
+      if (generation !== this.generation) return;
+      this.accounts.onHello();
+      // Every connect reads the list again: runs that started or ended while away are in it.
+      void this.routines.load();
     });
   }
 
@@ -4930,6 +4974,9 @@ export class ClawtrateClient {
         this.handleAgent(event);
         return;
       }
+      case "cron":
+        this.routines.onEvent(event.payload);
+        return;
       case "users.prefs.changed": {
         const keys = asRecord(event.payload)?.keys;
         if (Array.isArray(keys) && keys.includes(SIDEBAR_PREF_KEY))
