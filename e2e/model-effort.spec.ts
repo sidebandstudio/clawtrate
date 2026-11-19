@@ -145,6 +145,17 @@ test.beforeAll(async ({ browser }) => {
     replacePaths: [`agents.entries.${BOT}.model.fallbacks`],
   });
   await admin.request("sessions.create", { key: TASK, agentId: BOT, label: "Main" });
+  // The gateway applies the new entry, reloading if it must, before the interface pairs.
+  await expect
+    .poll(
+      () =>
+        admin.request<Json>("config.get", {}).then(
+          (now) => now.appliedConfigHash === now.configRevisionHash,
+          () => false,
+        ),
+      { timeout: 120_000, intervals: [1000] },
+    )
+    .toBe(true);
 
   const data = mkdtempSync(join(tmpdir(), "clawtrate-models-"));
   const started = startHost(INSTANCE, STATIC, data);
