@@ -332,6 +332,9 @@ test.afterAll(async () => {
 });
 
 test("F-237: usage by bot and source agrees with the gateway for the selected period", async () => {
+  // Three periods, each waiting up to 90 s for the gateway's answers to agree, 60 s for its
+  // counting and 30 s for the figures, then Settings: more than the default deadline.
+  test.setTimeout(600_000);
   await usagePage(page, "Otto");
   for (const [choice, period] of [
     ["This week", "week"],
