@@ -12,6 +12,7 @@ import { homedir, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import { physicalPath, within } from "./paths.ts";
+import { CONFIG_PATH } from "./route-config.ts";
 
 export type SshWorld = {
   /** The person's home folder: where `~` in their SSH configuration points. */
@@ -41,9 +42,7 @@ export type SshAgent = "none" | { socket: string } | "windows-pipe";
 
 /** An agent socket path the configuration can name: absolute and plain. */
 export const isAgentSocket = (path: string) =>
-  isAbsolute(path) &&
-  /^[\p{L}\p{N} ._+@/(),'&!~#=[\]-]{1,1024}$/u.test(path) &&
-  !path.includes("  ");
+  isAbsolute(path) && path.length <= 1024 && CONFIG_PATH.test(path) && !path.endsWith(" ");
 
 /** The agent the app chooses for the person: the socket `SSH_AUTH_SOCK` names, or none. */
 export function chooseAgent(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): SshAgent {

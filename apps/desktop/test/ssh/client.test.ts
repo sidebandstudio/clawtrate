@@ -140,8 +140,8 @@ describe.skipIf(process.platform === "win32")("the ssh client", () => {
       world,
       "C:\\ProgramData\\Clawtrate\\ssh\\known_hosts",
     );
-    expect(text).toContain("  IdentityFile C:/ProgramData/you/.ssh/id_ed25519\n");
-    expect(text).toContain("  UserKnownHostsFile C:/ProgramData/Clawtrate/ssh/known_hosts\n");
+    expect(text).toContain('  IdentityFile "C:/ProgramData/you/.ssh/id_ed25519"\n');
+    expect(text).toContain('  UserKnownHostsFile "C:/ProgramData/Clawtrate/ssh/known_hosts"\n');
     const production = productionWorld(join(root, "prod"), { SSH_AUTH_SOCK: "/srv/agent.sock" });
     expect(production.agent).toEqual(
       process.platform === "win32" ? "windows-pipe" : { socket: "/srv/agent.sock" },

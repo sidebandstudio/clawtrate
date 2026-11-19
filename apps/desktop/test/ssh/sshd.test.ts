@@ -4,10 +4,10 @@
 // the LOOK under a hostile login environment, and the forward's life.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { userInfo } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -107,6 +107,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
   });
 
   it("first contact: the key is captured without signing in, shown, and exactly those bytes are pinned", async () => {
+    const startedBefore = started.length;
     const check = await transport.checkHostKey(route);
     expect(check.ok && check.state).toBe("first-contact");
     if (!check.ok || check.state !== "first-contact") return;
@@ -114,10 +115,13 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     expect(check.presented.fingerprint).toBe(fingerprintOfFile(`${sshd.hostKey}.pub`));
     // Nothing is pinned before the caller confirms.
     expect(() => readFileSync(join(t.world.appDir, "known_hosts"), "utf8")).toThrow();
-    // The probe offered no key: the server saw no authentication attempt with one.
-    const probe = started.at(-1)!;
-    expect(probe.args).toContain("PreferredAuthentications=none");
-    expect(probe.args).toContain("StrictHostKeyChecking=accept-new");
+    // The probe offered no key, and the key was read from exactly one connection: one capture, no second read.
+    const captures = started
+      .slice(startedBefore)
+      .filter((s) => s.config?.includes("  StrictHostKeyChecking accept-new\n"));
+    expect(captures).toHaveLength(1);
+    expect(captures[0]!.args).toContain("PreferredAuthentications=none");
+    expect(captures[0]!.args).toContain("NumberOfPasswordPrompts=0");
 
     const pinned = transport.trustCapturedKey(route, check.presented.captureId);
     expect(pinned).toEqual({
@@ -198,6 +202,41 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       ]) {
         rmSync(join(t.home, file), { force: true });
       }
+    }
+  });
+
+  it("works from folders whose names have spaces and the other characters a profile name can have", async () => {
+    const odd = join(root, "Jane O'Neil (Work) & Co, #1 é");
+    const key = join(t.home, ".ssh", "Jane O'Neil key");
+    copyFileSync(t.userKey, key);
+    chmodSync(key, 0o600);
+    copyFileSync(`${t.userKey}.pub`, `${key}.pub`);
+    const before = readFileSync(t.world.personConfig, "utf8");
+    t.writeConfig(
+      `Host oddbox\n  HostName 127.0.0.1\n  Port ${sshd.port}\n  IdentityFile "~/.ssh/Jane O'Neil key"\n  IdentitiesOnly yes\n`,
+    );
+    const oddTransport = new SshTransport(
+      { ...t.world, appDir: join(odd, "app") },
+      { spawn: recordingSpawn },
+    );
+    try {
+      const oddRoute = oddTransport.prepareRoute("odd", "oddbox");
+      if (!oddRoute.ok) throw new Error(JSON.stringify(oddRoute));
+      const check = await oddTransport.checkHostKey(oddRoute);
+      expect(check).toMatchObject({ ok: true, state: "first-contact" });
+      if (!check.ok || check.state !== "first-contact") return;
+      expect(check.presented.fingerprint).toBe(fingerprintOfFile(`${sshd.hostKey}.pub`));
+      // The key landed in the file the app read, inside the folder: nothing was written beside it.
+      expect(readdirSync(odd)).toEqual(["app"]);
+      expect(oddTransport.trustCapturedKey(oddRoute, check.presented.captureId).ok).toBe(true);
+      expect(await oddTransport.checkHostKey(oddRoute)).toMatchObject({
+        ok: true,
+        state: "pinned",
+      });
+      expect((await oddTransport.look(oddRoute)).ok).toBe(true);
+    } finally {
+      await oddTransport.closeAll();
+      t.writeConfig(before);
     }
   });
 
@@ -473,7 +512,9 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       expect(s.env.SSH_AUTH_SOCK).toBeUndefined();
       if (s.args[0] === "-V") continue;
       expect(s.args[0]).toBe("-F");
-      expect(s.args[1]!.startsWith(join(t.world.appDir, "route-"))).toBe(true);
+      // A file the transport wrote in an app folder of this test's: a route's, or a capture's.
+      expect(s.args[1]!.startsWith(`${root}/`), s.args[1]).toBe(true);
+      expect(basename(s.args[1]!)).toMatch(/^(route|capture)-[^/]+\.conf$/);
       expect(s.config).toContain("  IdentityAgent none\n");
     }
   });

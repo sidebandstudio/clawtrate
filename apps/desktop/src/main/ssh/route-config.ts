@@ -6,27 +6,34 @@ import { isHost, isRouteId, isUser, routeAlias } from "./destination.ts";
 import type { Target } from "./person-config.ts";
 import type { SshWorld } from "./world.ts";
 
-/** "normal": every look and the forward. "lookup": prior trust, by host and port, in the person's file. */
-export type ConfigPurpose = "normal" | "lookup";
+/**
+ * "normal": every look and the forward. "lookup": prior trust, by host and
+ * port, in the person's file. "capture": first contact, writing the presented
+ * key into the empty file given as `knownHosts`.
+ */
+export type ConfigPurpose = "normal" | "lookup" | "capture";
 
 export class UnsafeConfigValue extends Error {
   override name = "UnsafeConfigValue";
 }
 
 /**
- * A path as a configuration value: forward slashes, double quotes around a
- * space, and nothing `ssh` would expand or split (`%`, `$`, `~`, quotes,
- * backslashes, `#`, `=` or control characters).
+ * Characters a path in the host's configuration may hold: letters, digits,
+ * space and the punctuation profile and folder names use. Not `"` or `\`
+ * (quoting), `%` or `$` (expansion), nor control characters.
+ */
+export const CONFIG_PATH = /^(?:[A-Za-z]:)?\/[\p{L}\p{N}\p{M} ._+@/(),'&!~#=[\]{};^-]*$/u;
+
+/**
+ * A path as a configuration value: forward slashes, always in double quotes,
+ * so that a space or a `#` in a profile or folder name is part of it.
  */
 export function pathValue(path: string, platform: NodeJS.Platform): string {
   const value = platform === "win32" ? path.replaceAll("\\", "/") : path;
-  if (!/^(?:[A-Za-z]:)?\/[\p{L}\p{N} ._+@/-]*$/u.test(value)) {
+  if (!CONFIG_PATH.test(value) || value.endsWith(" ")) {
     throw new UnsafeConfigValue("A path holds characters the host's configuration does not allow.");
   }
-  if (value.endsWith(" ") || value.includes("  ")) {
-    throw new UnsafeConfigValue("A path holds spaces the host's configuration does not allow.");
-  }
-  return value.includes(" ") ? `"${value}"` : value;
+  return `"${value}"`;
 }
 
 /**
@@ -75,7 +82,7 @@ export function routeConfigText(
         [`  UserKnownHostsFile ${p(world.personKnownHosts)}`]
       : [`  HostKeyAlias ${routeAlias(routeId)}`, `  UserKnownHostsFile ${p(knownHosts)}`]),
     "  GlobalKnownHostsFile none",
-    "  StrictHostKeyChecking yes",
+    purpose === "capture" ? "  StrictHostKeyChecking accept-new" : "  StrictHostKeyChecking yes",
     "  UpdateHostKeys no",
     "  BatchMode yes",
     "  ConnectTimeout 10",

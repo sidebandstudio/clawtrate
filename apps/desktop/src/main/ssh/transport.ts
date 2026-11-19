@@ -412,15 +412,17 @@ export class SshTransport {
     route: Route,
     replaces: boolean,
   ): Promise<{ ok: true; capture: Capture } | Failed> {
-    const file = join(this.world.appDir, `capture-${randomUUID()}`);
+    const id = randomUUID();
+    const file = join(this.world.appDir, `capture-${id}`);
+    // The capture has a configuration of its own, so that its file's path is a quoted value, never split.
+    const config = join(this.world.appDir, `capture-${id}.conf`);
     writeFileSync(file, "", { mode: 0o600, flag: "wx" });
     try {
-      const { run } = await this.probe(this.configPath(route), route.alias, [
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        `UserKnownHostsFile=${file}`,
-      ]);
+      writeFileSync(config, routeConfigText(route.id, route.target, this.world, file, "capture"), {
+        mode: 0o600,
+        flag: "wx",
+      });
+      const { run } = await this.probe(config, route.alias);
       const lines = readFileSync(file, "utf8")
         .split("\n")
         .filter((line) => line.trim() !== "");
@@ -443,6 +445,7 @@ export class SshTransport {
       return { ok: true, capture };
     } finally {
       rmSync(file, { force: true });
+      rmSync(config, { force: true });
     }
   }
 

@@ -436,11 +436,11 @@ describe("the configuration the host writes", () => {
         "  HostName devbox.example",
         "  User you",
         "  Port 22",
-        "  IdentityFile /srv/you/.ssh/id_ed25519",
+        '  IdentityFile "/srv/you/.ssh/id_ed25519"',
         "  IdentitiesOnly yes",
-        "  CertificateFile /srv/you/.ssh/id_ed25519-cert.pub",
+        '  CertificateFile "/srv/you/.ssh/id_ed25519-cert.pub"',
         "  HostKeyAlias clawtrate-route-1",
-        "  UserKnownHostsFile /srv/app/known_hosts",
+        '  UserKnownHostsFile "/srv/app/known_hosts"',
         "  GlobalKnownHostsFile none",
         "  StrictHostKeyChecking yes",
         "  UpdateHostKeys no",
@@ -456,7 +456,7 @@ describe("the configuration the host writes", () => {
         "  ControlMaster no",
         "  ControlPath none",
         "  RequestTTY no",
-        "  IdentityAgent /srv/agent.sock",
+        '  IdentityAgent "/srv/agent.sock"',
         "",
       ].join("\n"),
     );
@@ -468,7 +468,7 @@ describe("the configuration the host writes", () => {
   it("writes the agent the app chose, or the person's, and PubkeyAuthentication as set", () => {
     const sock = { ...world, agent: { socket: "/srv/agent.sock" } } as const;
     expect(routeConfigText("1", target(), sock, "/srv/kh")).toContain(
-      "\n  IdentityAgent /srv/agent.sock\n",
+      '\n  IdentityAgent "/srv/agent.sock"\n',
     );
     expect(routeConfigText("1", target({ identityAgent: "none" }), sock, "/srv/kh")).toContain(
       "\n  IdentityAgent none\n",
@@ -480,7 +480,7 @@ describe("the configuration the host writes", () => {
         world,
         "/srv/kh",
       ),
-    ).toContain("\n  IdentityAgent /srv/you/1p.sock\n");
+    ).toContain('\n  IdentityAgent "/srv/you/1p.sock"\n');
     expect(
       routeConfigText("1", target({ pubkeyAuthentication: "no" }), world, "/srv/kh"),
     ).toContain("\n  PubkeyAuthentication no\n");
@@ -499,29 +499,28 @@ describe("the configuration the host writes", () => {
   it("looks up prior trust with the person's known-hosts file and without the route's alias", () => {
     const text = routeConfigText("1", target(), world, "/srv/app/known_hosts", "lookup");
     expect(text).not.toContain("HostKeyAlias");
-    expect(text).toContain(`  UserKnownHostsFile ${world.personKnownHosts}\n`);
+    expect(text).toContain(`  UserKnownHostsFile "${world.personKnownHosts}"\n`);
     expect(text).toContain("  StrictHostKeyChecking yes\n");
   });
 
-  it("quotes a path with a space, writes Windows paths with forward slashes, and refuses anything ssh would expand", () => {
+  it("quotes every path, writes Windows paths with forward slashes, and refuses anything ssh would expand", () => {
     expect(pathValue("/srv/Application Support/known_hosts", "darwin")).toBe(
       '"/srv/Application Support/known_hosts"',
     );
+    expect(pathValue("/srv/Jane O'Neil (Work) & Co, #1/kh", "darwin")).toBe(
+      `"/srv/Jane O'Neil (Work) & Co, #1/kh"`,
+    );
     expect(pathValue("C:\\ProgramData\\Clawtrate\\known_hosts", "win32")).toBe(
-      "C:/ProgramData/Clawtrate/known_hosts",
+      '"C:/ProgramData/Clawtrate/known_hosts"',
     );
     for (const bad of [
       "/srv/%d/known_hosts",
       "/srv/${HOME}/kh",
       "~/kh",
       '/srv/a"b',
-      "/srv/a'b",
-      "/srv/a#b",
-      "/srv/a=b",
       "/srv/a\nHost x",
       "/srv/a\\b",
       "relative/kh",
-      "/srv/two  spaces",
       "/srv/trailing ",
     ]) {
       expect(() => pathValue(bad, "linux"), bad).toThrow();
@@ -597,6 +596,48 @@ describe("the configuration the host writes", () => {
     }
     expect(resolveWith("Host devbox\n  HostName devbox.example\n")).toMatchObject({
       identityFiles: [],
+    });
+  });
+
+  it.skipIf(!existsSync(SSH))(
+    "reads back in ssh whole a path with spaces and a profile name's other characters, the capture's included",
+    () => {
+      const dir = join(root, "Jane O'Neil (Work) & Co, #1 [é]=b+c!~");
+      mkdirSync(dir, { recursive: true });
+      for (const purpose of ["normal", "capture"] as const) {
+        const file = join(dir, `${purpose}.conf`);
+        writeFileSync(
+          file,
+          routeConfigText(
+            "1",
+            target({ identityFiles: [join(dir, "my key")] }),
+            world,
+            join(dir, "known hosts"),
+            purpose,
+          ),
+        );
+        const run = spawnSync(SSH, ["-G", "-F", file, "--", "clawtrate-route-1"], {
+          env: testEnv(),
+          encoding: "utf8",
+        });
+        expect(run.status).toBe(0);
+        expect(run.stdout).toContain(`\nidentityfile ${join(dir, "my key")}\n`);
+        expect(run.stdout).toContain(`\nuserknownhostsfile ${join(dir, "known hosts")}\n`);
+        expect(run.stdout).toContain(
+          purpose === "capture"
+            ? "\nstricthostkeychecking accept-new\n"
+            : "\nstricthostkeychecking true\n",
+        );
+      }
+    },
+  );
+
+  it("takes a key path with a profile name's characters from the person's configuration", () => {
+    expect(
+      resolveWith(`Host devbox\n  IdentityFile "~/.ssh/Jane O'Neil (Work) & Co, #1"\n`),
+    ).toMatchObject({
+      ok: true,
+      identityFiles: [`${world.home}/.ssh/Jane O'Neil (Work) & Co, #1`],
     });
   });
 

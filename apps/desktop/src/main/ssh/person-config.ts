@@ -11,6 +11,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import { type Destination, isHost, isUser, parsePort } from "./destination.ts";
 import { physicalPath, within } from "./paths.ts";
+import { CONFIG_PATH } from "./route-config.ts";
 import { guardWorld, isAgentSocket, type SshWorld, SshWorldRefused } from "./world.ts";
 
 export type RefusalCategory =
@@ -203,7 +204,7 @@ function singleValue(value: string): string | null {
 }
 
 /** Characters a path may hold: letters, digits, space and `._+@-/`, and a Windows drive. */
-const PATH_CHARS = /^(?:[A-Za-z]:)?[\p{L}\p{N} ._+@/-]+$/u;
+const PATH_CHARS = CONFIG_PATH;
 
 /**
  * Whether `path` is inside `home`, both by its spelling and as the file system
@@ -218,7 +219,7 @@ function insideHome(path: string, home: string, platform: NodeJS.Platform): bool
 export function resolvePersonPath(raw: string, world: SshWorld): string | null {
   let value = raw;
   if (world.platform === "win32") value = value.replaceAll("\\", "/");
-  if (/[%$`'"\\]/.test(value) || /\p{Cc}/u.test(value)) return null;
+  if (/[%$`"\\]/.test(value) || /\p{Cc}/u.test(value)) return null;
   let path: string;
   // Kept as spelled, so that what is checked is what `ssh` opens: a `..` after a link is not undone here.
   if (value === "~" || value.startsWith("~/")) path = `${world.home}/${value.slice(2)}`;
