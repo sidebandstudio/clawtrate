@@ -24,6 +24,8 @@ const io = vi.hoisted(() => ({
   afterRename: null as null | (() => void),
   /** Closing a temporary file fails this many more times, after it is closed. */
   tempCloseFails: 0,
+  /** Run once just before `io.path` is next opened to be appended to or cut. */
+  beforeWriteOpen: null as null | (() => void),
   /** The path each open descriptor was opened on. */
   fds: new Map<number, string>(),
 }));
@@ -32,6 +34,11 @@ vi.mock("node:fs", async (importOriginal) => {
   return {
     ...real,
     openSync: (...args: Parameters<typeof real.openSync>) => {
+      if (String(args[0]) === io.path && typeof args[1] === "number") {
+        const before = io.beforeWriteOpen;
+        io.beforeWriteOpen = null;
+        before?.();
+      }
       const fd = real.openSync(...args);
       io.fds.set(fd, String(args[0]));
       return fd;
@@ -46,8 +53,10 @@ vi.mock("node:fs", async (importOriginal) => {
       }
     },
     readFileSync: (...args: Parameters<typeof real.readFileSync>) => {
-      if (String(args[0]) === io.path) io.reads += 1;
-      if (io.failures > 0 && String(args[0]) === io.path) {
+      // By path, or by a descriptor opened on it.
+      const path = typeof args[0] === "number" ? io.fds.get(args[0]) : String(args[0]);
+      if (path === io.path) io.reads += 1;
+      if (io.failures > 0 && path === io.path) {
         io.failures -= 1;
         throw Object.assign(new Error("injected"), { code: io.code });
       }
@@ -71,9 +80,9 @@ vi.mock("node:fs", async (importOriginal) => {
       if (io.utimesFails) throw Object.assign(new Error("injected"), { code: "ENOSPC" });
       return real.utimesSync(...args);
     },
-    truncateSync: (...args: Parameters<typeof real.truncateSync>) => {
+    ftruncateSync: (...args: Parameters<typeof real.ftruncateSync>) => {
       if (io.truncateFails) throw Object.assign(new Error("injected"), { code: "EIO" });
-      return real.truncateSync(...args);
+      return real.ftruncateSync(...args);
     },
   };
 });
@@ -91,6 +100,7 @@ afterEach(() => {
   io.renameFails = false;
   io.utimesFails = false;
   io.afterRename = null;
+  io.beforeWriteOpen = null;
   io.tempCloseFails = 0;
   cleanups.splice(0).forEach((done) => done());
 });
@@ -502,5 +512,73 @@ describe("recovery of a decision record", () => {
       /set aside as decisions\.jsonl\.oversize, but when could not be recorded/,
     );
     expect(log.problem).not.toMatch(/cannot be read/);
+  });
+});
+
+describe("a decision record changed from outside", () => {
+  const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+  const seed = () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    const file = join(dir, "decisions.jsonl");
+    const log = new DecisionLog(dir, { now: () => 100 });
+    const seeded = Array.from({ length: 10 }, () => log.add(fields));
+    io.path = file;
+    return { dir, file, log, seeded };
+  };
+  const ids = (file: string) =>
+    actual
+      .readFileSync(file, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => (JSON.parse(line) as { id: string }).id);
+  const outsider = `${JSON.stringify({ ...fields, id: "outside0000000000", at: 105 })}\n`;
+
+  it("keeps a line added from outside before an idle retry, and says the retry waits", () => {
+    const { dir, file, log, seeded } = seed();
+    io.appendFails = 1;
+    const pending = log.add(fields);
+    actual.appendFileSync(file, outsider);
+    const before = actual.readFileSync(file, "utf8");
+    log.prune();
+    expect(log.problem).toBe("the decision record changed on disk; waiting to read it again");
+    expect(actual.readFileSync(file, "utf8")).toBe(before);
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    log.prune();
+    expect(log.problem).toBeNull();
+    expect(ids(file).sort()).toEqual([...seeded, pending, "outside0000000000"].sort());
+  });
+
+  for (const change of ["removed", "emptied", "replaced"] as const) {
+    it(`writes every record it holds after the file was ${change}`, () => {
+      const { file, log, seeded } = seed();
+      if (change === "removed") actual.rmSync(file);
+      if (change === "emptied") actual.truncateSync(file, 0);
+      if (change === "replaced") {
+        actual.writeFileSync(`${file}.new`, outsider);
+        actual.renameSync(`${file}.new`, file);
+      }
+      const next = log.add(fields);
+      expect(log.problem).toBeNull();
+      const expected = [...seeded, next, ...(change === "replaced" ? ["outside0000000000"] : [])];
+      expect(ids(file).sort()).toEqual(expected.sort());
+    });
+  }
+
+  it("never cuts a file put in place of one with a torn last line", () => {
+    const { dir, file, seeded } = seed();
+    actual.appendFileSync(file, '{"id":"torn');
+    io.beforeWriteOpen = () => {
+      actual.writeFileSync(`${file}.new`, outsider);
+      actual.renameSync(`${file}.new`, file);
+    };
+    const log = new DecisionLog(dir, { now: () => 110 });
+    expect(actual.readFileSync(file, "utf8")).toBe(outsider);
+    expect(log.problem).toBe("the decision record changed on disk; waiting to read it again");
+    const next = log.add(fields);
+    expect(log.problem).toBeNull();
+    expect(actual.readFileSync(file, "utf8")).not.toContain('"torn');
+    expect(ids(file).sort()).toEqual([...seeded, next, "outside0000000000"].sort());
   });
 });
