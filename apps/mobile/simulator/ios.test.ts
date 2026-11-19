@@ -965,7 +965,11 @@ function anotherGateway(): Step[] {
   ];
 }
 
-/** Type a gateway's address and token, and connect with the keyboard's Go key. */
+/**
+ * Type a gateway's address and token, and connect with the keyboard's Go key.
+ * iOS offers to save what a secure field held; the app gives it nothing to
+ * offer, so no sheet comes, and the check would fail rather than dismiss one.
+ */
 function typeAddress(url: string, token: string): Step[] {
   return [
     waitFor({ id: "address-field" }, 30_000),
@@ -976,9 +980,8 @@ function typeAddress(url: string, token: string): Step[] {
     { eraseText: 80 },
     { inputText: token },
     { pressKey: "Enter" },
-    // iOS offers to save what a secure field held once it leaves the screen. The token is
-    // used once, so the person says Not Now; the sheet is the system's, not the app's.
-    { extendedWaitUntil: { visible: "Save Password\\?", timeout: 8_000, optional: true } },
-    { runFlow: { when: { visible: "Save Password\\?" }, commands: [tap("Not Now")] } },
+    { extendedWaitUntil: { visible: "Save Password\\?", timeout: 5_000, optional: true } },
+    notSee("Save Password\\?"),
+    notSee("(Not Now|Save Password)"),
   ];
 }

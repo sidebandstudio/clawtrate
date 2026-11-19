@@ -299,8 +299,8 @@ function Field({
       autoCorrect={false}
       spellCheck={false}
       keyboardType={secret ? "default" : "url"}
-      // The token is used once and is not a password to save; the address is not a user name.
-      textContentType={secret ? "oneTimeCode" : "none"}
+      // Neither is a password or a user name to save.
+      textContentType="none"
       autoComplete="off"
       returnKeyType="go"
       onSubmitEditing={onSubmit}
@@ -335,7 +335,11 @@ export function Address({
       return;
     }
     setSubmitError(null);
-    send({ type: "connect", url: url.trim(), token: token || null }).catch((error: unknown) =>
+    // The field is emptied before the screen changes: iOS offers to save what a
+    // secure field holds when it goes, and this token is not one to keep there.
+    const typed = token;
+    setToken("");
+    send({ type: "connect", url: url.trim(), token: typed || null }).catch((error: unknown) =>
       setSubmitError({
         title: failureTitle(null),
         message: redact(error instanceof Error ? error.message : String(error)),
