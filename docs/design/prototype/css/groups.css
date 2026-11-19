@@ -180,6 +180,12 @@
   opacity: 1;
 }
 
+.g-said + .turn,
+.g-status + .turn,
+.g-line + .turn {
+  margin-top: var(--space-4);
+}
+
 /* new: where your message went, one line under it that opens to each target. */
 .g-went {
   display: flex;

@@ -183,7 +183,8 @@
           st === "failed"
             ? ` The gateway answered: Session … is archived. Restore it before starting new work.${m.member[bot] || m.tier === "read" ? "" : ` ${CT.linkButton(`Resend to ${name}`, { attrs: `data-resend="${item.id}:${bot}"` })}`}`
             : "";
-        return `<li><b>${name}</b>: ${STATE_WORDS[st](name).replace(new RegExp(` ?(to|for) ${name}$|${name}$`), "").trim() || st}${why}</li>`;
+        const word = { sending: "Sending…", sent: "Sent", steer: "Steer: joined its running turn", held: "Held until you answer it", queued: "Queued", failed: "Couldn't send.", notsent: "Not sent" }[st];
+        return `<li><b>${name}</b>: ${word}${why}</li>`;
       })
       .join("");
     return (

@@ -89,7 +89,7 @@ One polite live region: "Making the group", "Made the group", "Couldn't make Mar
 
 ### Input
 
-Dialogs follow `bots.md` §2: modal, Escape closes, focus returns to what opened them. ⌘⇧N opens New group where "+" offers it. In a group's composer `@` opens the mention list; Up and Down move, Enter or Tab inserts, Escape closes it and leaves the `@` typed.
+Dialogs follow `bots.md` §2: modal, Escape closes, focus returns to what opened them. ⌘⇧N opens New group where "+" offers it. In a group's composer `@` opens the mention list; Up and Down move, Enter inserts, Escape closes it and leaves the `@` typed.
 
 ## 3. What a group is, said on the screen
 
