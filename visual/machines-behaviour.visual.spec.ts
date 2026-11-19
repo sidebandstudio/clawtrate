@@ -40,7 +40,7 @@ test("F-046: choosing where Otto's commands run is announced only once the answe
   page,
 }) => {
   await openFixture(page, `${PANE}&access=admin`, "light");
-  await expect(page.getByTestId("runs-on-value")).toHaveText("Commands: media-box");
+  await expect(page.getByTestId("runs-on-value")).toHaveText("Command setting: media-box");
   await openRunsOn(page);
   const select = page.getByTestId("runs-on-machine");
   await expect(select).toHaveAccessibleName("Otto's command machine: media-box · Connected");
@@ -50,7 +50,7 @@ test("F-046: choosing where Otto's commands run is announced only once the answe
   // The fixture answers after 300 ms; nothing is announced before.
   await expect(announcer(page)).not.toHaveText(/Saved/);
   await expect(announcer(page)).toHaveText(
-    "Saved and applied. Otto's commands: the gateway's machine",
+    "Saved and applied. Otto's command machine setting: the gateway's machine",
   );
   await expect(select).toHaveAccessibleName("Otto's command machine: The gateway's machine");
   // The save sends the revision the page showed.
@@ -61,7 +61,9 @@ test("F-046: choosing where Otto's commands run is announced only once the answe
   // Back returns to the row that opened the page, which reads the new value.
   await page.getByRole("button", { name: "Back to settings" }).click();
   await expect(page.getByRole("button", { name: /^Where Otto runs: / })).toBeFocused();
-  await expect(page.getByTestId("runs-on-value")).toHaveText("Commands: the gateway's machine");
+  await expect(page.getByTestId("runs-on-value")).toHaveText(
+    "Command setting: the gateway's machine",
+  );
 });
 
 test("F-046: a save the gateway hasn't applied is said as saved, not applied, and one it couldn't apply in its words", async ({
@@ -72,7 +74,7 @@ test("F-046: a save the gateway hasn't applied is said as saved, not applied, an
   await page.getByTestId("runs-on-machine").click();
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
   await expect(announcer(page)).toHaveText(
-    "Saved. The gateway doesn't report it applied yet. Otto's commands: the gateway's machine",
+    "Saved. The gateway doesn't report it applied yet. Otto's command machine setting: the gateway's machine",
   );
   await expect(page.getByTestId("runs-on-not-applied")).toBeVisible();
   await openFixture(page, `${PANE}&access=admin&mwrite=notapplied`, "light");
@@ -90,7 +92,7 @@ test("F-046: a stored host the app doesn't know is shown as stored and marked, n
 }) => {
   await openFixture(page, `${PANE}&access=admin&machine=unsupported`, "light");
   await expect(page.getByTestId("runs-on-value")).toHaveText(
-    "Commands: “cluster” (not supported here)",
+    "Command setting: “cluster” (not supported here)",
   );
   await openRunsOn(page);
   await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
@@ -103,7 +105,7 @@ test("F-046: switching bots never draws the previous bot's place while the new o
   page,
 }) => {
   await openFixture(page, `${PANE}&access=admin&mslow=pip`, "light");
-  await expect(page.getByTestId("runs-on-value")).toHaveText("Commands: media-box");
+  await expect(page.getByTestId("runs-on-value")).toHaveText("Command setting: media-box");
   await page
     .getByTestId("bot-list")
     .getByRole("button", { name: /^Pip\b/ })
@@ -118,7 +120,7 @@ test("F-046: the Runs on row is drawn from its own read while the account read h
 }) => {
   await openFixture(page, `${PANE}&access=admin&accounts=error`, "light");
   await expect(page.getByText("Couldn't load Otto's settings")).toBeVisible();
-  await expect(page.getByTestId("runs-on-value")).toHaveText("Commands: media-box");
+  await expect(page.getByTestId("runs-on-value")).toHaveText("Command setting: media-box");
   await openRunsOn(page);
   await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
     "Otto's command machine: media-box · Connected",
@@ -175,6 +177,11 @@ test("F-274: a path is sent as typed for the gateway to judge, beside the bot's 
 }) => {
   await openFixture(page, `${PANE}&access=admin&machine=gatewayhost`, "light");
   await openRunsOn(page);
+  // Nothing stored: the Commands group says "Not set" and draws no set mark.
+  await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
+    "Otto's command machine: Not set",
+  );
+  await expect(page.getByTestId("runs-on-page")).not.toContainText("Set on the gateway");
   await page.getByRole("button", { name: "Change…" }).click();
   const field = page.getByRole("textbox", { name: /path on the gateway's machine/ });
   await expect(field).toBeFocused();

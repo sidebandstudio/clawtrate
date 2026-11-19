@@ -51,9 +51,9 @@ export function hostWords(commands: CommandPlace): string {
   return host;
 }
 
-/** The value of the "Where Otto runs" row: "Commands: media-box · Same setting as Pip". */
+/** The value of the "Where Otto runs" row: "Command setting: media-box · Same setting as Pip". */
 export function runsOnValue(placement: BotPlacement, nameOf: (id: string) => string): string {
-  const where = `Commands: ${hostWords(placement.commands)}`;
+  const where = `Command setting: ${hostWords(placement.commands)}`;
   const same = [
     ...new Set([...placement.sameSetting.machine, ...placement.sameSetting.workspace]),
   ].map(nameOf);

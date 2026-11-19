@@ -595,9 +595,13 @@ export function useMachinesSection({
               {machine.node ? nodeState(machine.node, now) : "Connected"}
               {machine.node && !machine.node.listsRun ? " · Lists no system.run command" : ""}
               {" · "}
-              {machine.named.length > 0
-                ? `Named for commands in the settings of ${names(machine.named.map(nameOf))}`
-                : "Named for commands in no bot's settings"}
+              {machine.kind === "gateway"
+                ? machine.named.length > 0
+                  ? `Stored command setting for ${names(machine.named.map(nameOf))}`
+                  : "No matching stored host setting"
+                : machine.named.length > 0
+                  ? `Node ID stored in the settings of ${names(machine.named.map(nameOf))}`
+                  : "No matching stored node ID"}
               {nodeActions(machine)}
             </dd>
           </div>
@@ -644,7 +648,7 @@ export function useMachinesSection({
           title={`Remove ${removing.name}?`}
           text={`Asks the gateway to remove ${removing.name}'s pairing.${
             removing.bots.length > 0
-              ? ` It is named for commands in the settings of ${names(removing.bots.map(nameOf))}.`
+              ? ` Its node ID is stored in the settings of ${names(removing.bots.map(nameOf))}.`
               : ""
           }`}
           action="Remove"

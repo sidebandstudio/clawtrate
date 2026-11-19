@@ -38,13 +38,13 @@ describe("the machines' words", () => {
       sameSetting: { machine: ["pip"], workspace: ["pip", "marlow"] },
     } as unknown as BotPlacement;
     expect(runsOnValue(placement, (id) => id[0]!.toUpperCase() + id.slice(1))).toBe(
-      "Commands: media-box · Same setting as Pip and Marlow",
+      "Command setting: media-box · Same setting as Pip and Marlow",
     );
     const unset = {
       commands: place({}),
       sameSetting: { machine: [], workspace: [] },
     } as unknown as BotPlacement;
-    expect(runsOnValue(unset, (id) => id)).toBe("Commands: not set");
+    expect(runsOnValue(unset, (id) => id)).toBe("Command setting: not set");
   });
 
   it("F-046: a stored value is shown as stored: an unknown host marked, a node the list lacks by its id, auto as auto", () => {

@@ -221,7 +221,7 @@ test("F-046: admin asked for explicitly sets Otto's commands to media-box; it is
   const announcer = page.getByTestId("work-announcer");
   await expect(announcer).toHaveText(
     new RegExp(
-      `^Saved(?: and applied|\\. The gateway doesn't report it applied yet)\\. ${OTTO}'s commands: media-box$`,
+      `^Saved(?: and applied|\\. The gateway doesn't report it applied yet)\\. ${OTTO}'s command machine setting: media-box$`,
     ),
     { timeout: 30_000 },
   );
@@ -251,7 +251,7 @@ test("F-046: admin asked for explicitly sets Otto's commands to media-box; it is
   await expect(reader.page.getByTestId("runs-on-machine")).toBeDisabled();
   await expect(reader.page.getByTestId("admin-bar")).toContainText("This connection only reads.");
   await reader.page.getByRole("button", { name: "Back to settings" }).click();
-  await expect(reader.page.getByTestId("runs-on-value")).toHaveText("Commands: media-box");
+  await expect(reader.page.getByTestId("runs-on-value")).toHaveText("Command setting: media-box");
   await shots(reader.page, "runs-on-read-only");
 });
 
@@ -345,7 +345,7 @@ test("F-156: admin sets media-box's defaults to Ask every time; the file reads b
   const page = writer.page;
   const settings = await machines(page);
   await expect(page.locator('[data-machine="media-box"]').first()).toContainText(
-    `Connected · Lists no system.run command · Named for commands in the settings of ${OTTO}`,
+    `Connected · Lists no system.run command · Node ID stored in the settings of ${OTTO}`,
   );
   const file = settings.locator('[data-testid="approvals-file"][data-machine="media-box"]');
   await file.getByRole("radio", { name: "Ask every time" }).click();

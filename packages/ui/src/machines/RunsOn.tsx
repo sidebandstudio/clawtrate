@@ -265,7 +265,7 @@ export function RunsOnPage({
         nodeId: value === "gateway" ? null : value,
         baseHash: placement.configHash,
       });
-      const where = `${botName}'s commands: ${hostWords(saved.place)}`;
+      const where = `${botName}'s command machine setting: ${hostWords(saved.place)}`;
       if (saved.active === "applied") announce(`Saved and applied. ${where}`);
       else if (saved.active === "pending")
         announce(`Saved. The gateway doesn't report it applied yet. ${where}`);
@@ -354,9 +354,14 @@ export function RunsOnPage({
       <p className="m-sentence">
         {origin}
         {onNode && commands.nodeInherited
-          ? " The machine is from the gateway's setting for every bot."
-          : ""}{" "}
-        <Mark kind="set" />
+          ? " The node selector is from the gateway's setting for every bot."
+          : ""}
+        {commands.host !== null && (
+          <>
+            {" "}
+            <Mark kind="set" />
+          </>
+        )}
       </p>
       {placement.configActive === false && (
         <p className="b-hint" data-testid="runs-on-not-applied">

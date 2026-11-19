@@ -34,7 +34,7 @@ const MAIN: Scene[] = [
     query: `${PANE}&access=admin&machine=shared`,
     ready: (page) =>
       expect(page.getByTestId("runs-on-value")).toHaveText(
-        "Commands: media-box · Same setting as Pip",
+        "Command setting: media-box · Same setting as Pip",
       ),
   },
   {
