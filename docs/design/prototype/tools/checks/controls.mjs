@@ -1,8 +1,9 @@
-// Behaviour checks for controls.html (docs/design/controls.md): what a bot may
-// do and one line's rule, rules about what a tool acts on and their limits,
-// rules for every bot, saved approvals, activity, messaging between bots,
-// memory and shared memory, where a bot runs, machines, usage, budgets, the
-// conversation's lines, the gallery's Controls section, and the phone width.
+// Behaviour checks for controls.html (docs/design/controls.md): what holds each
+// rule and the rules plugin's states, the glance, a line's four facts, the one
+// contract for asks and saved answers, rules for every bot, saved approvals,
+// activity and its causes, messaging, memory's three facts, where a bot runs,
+// machines, usage and budgets, the conversation's pieces, and the phone width.
+// Every check reads visible words, so a changed label fails.
 // Run from the repository root:  node docs/design/prototype/tools/checks/controls.mjs
 import { chromium, pageUrl } from "./browser.mjs";
 
@@ -25,10 +26,19 @@ const open = async (query = "", viewport = { width: 1440, height: 900 }) => {
 const text = (p, sel) => p.evaluate((s) => document.querySelector(s)?.textContent.replace(/\s+/g, " ") || "", sel);
 const panelText = (p) => text(p, "#panel-settings");
 const dialogText = (p) => text(p, "#settings-dialog");
+const has = (t, ...words) => words.every((w) => t.includes(w));
 const announced = async (p) => {
   await p.waitForTimeout(80);
   return p.evaluate(() => document.querySelector("#b-announce").textContent);
 };
+const glance = (p, title) =>
+  p.evaluate((t) => [...document.querySelectorAll(".c-glance-block")].find((b) => b.querySelector("h4").textContent.startsWith(t))?.textContent.replace(/\s+/g, " ") || "", title);
+const lineIn = (p, group, words) =>
+  p.evaluate(([g, w]) => {
+    const h = [...document.querySelectorAll("#panel-settings .b-group")].find((x) => x.textContent === g);
+    return Boolean(h && [...h.nextElementSibling.querySelectorAll(".c-line")].some((l) => l.textContent.includes(w)));
+  }, [group, words]);
+const lineText = (p, words) => p.evaluate((w) => [...document.querySelectorAll(".c-line")].find((l) => l.querySelector(".c-line-words > span").textContent === w)?.textContent.replace(/\s+/g, " ") || "", words);
 
 process.on("uncaughtException", (e) => {
   console.log(out.join("\n"));
@@ -36,63 +46,67 @@ process.on("uncaughtException", (e) => {
   process.exit(1);
 });
 
-// A bot's settings: where the pages sit (section 1) ------------------------------------------
+// A bot's settings (section 1) --------------------------------------------------------------------
 let p = await open(tab);
 let t = await panelText(p);
-check("S1 the Tools group opens with what Otto may do, in counts", t.includes("What Otto may do") && t.includes("6 without asking, 3 ask first, 3 never"));
-check("S1 then Messaging other bots", t.includes("Messaging other bots") && t.includes("Any bot, asks first"));
-check("S1 Memory and Usage groups sit between Tools and Runs on", await p.evaluate(() => {
-  const g = [...document.querySelectorAll("#panel-settings .b-tabgroup")].map((h) => h.textContent);
-  return g.indexOf("Tools") < g.indexOf("Memory") && g.indexOf("Memory") < g.indexOf("Usage") && g.indexOf("Usage") < g.indexOf("Runs on");
-}));
-check("S1 Runs on opens where Otto runs", t.includes("Where Otto runs") && t.includes("Commands on media-box"));
-await p.click('[data-bs="rules"]');
-await p.waitForTimeout(120);
-check("S4 the row opens the page, with focus on its title", (await text(p, "#panel-settings .b-subhead h3")) === "What Otto may do" && (await p.evaluate(() => document.activeElement.matches("[data-bs-focus]"))));
+check("S1 the Tools group opens with what Otto may do, its counts whole", has(t, "What Otto may do", "4 never · 2 ask first · 6 without asking"));
+check("S1 messaging's row says what Otto may do now", t.includes("May message any bot, asks first"));
+check("S1 Memory and Usage sit between Tools and Runs on", await p.evaluate(() => { const g = [...document.querySelectorAll("#panel-settings .b-tabgroup")].map((h) => h.textContent); return g.indexOf("Tools") < g.indexOf("Memory") && g.indexOf("Memory") < g.indexOf("Usage") && g.indexOf("Usage") < g.indexOf("Runs on"); }));
+check("S16 the Usage row leads with the budget, the same figure as the totals", t.includes("Budget 1.64M of 2.5M · This week: 1.64M tokens"));
+check("S14 Runs on names the command machine", t.includes("Where Otto runs") && t.includes("Commands on media-box"));
+await p.close();
+p = await open(tab + "&width=phone", { width: 390, height: 844 });
+check("S1 phone: counts are never cut", await p.evaluate(() => [...document.querySelectorAll(".c-wrapvalue")].every((v) => v.scrollWidth <= v.clientWidth + 1)) && (await panelText(p)).includes("4 never · 2 ask first · 6 without asking"));
 await p.close();
 
-// What a bot may do (section 4) ----------------------------------------------------------------
+// What a bot may do (sections 2 and 4) -----------------------------------------------------------
 p = await open(tab + "&bview=rules");
 t = await panelText(p);
-check("S4 the count strip", t.includes("6 without asking · 3 ask first · 3 never"));
-check("S4 the lead says where the lines come from and when", t.includes("From Otto's settings and the gateway's, read at 5:41 PM. Open a line for its exact rule."));
-const groups = await p.evaluate(() => [...document.querySelectorAll("#panel-settings .b-group")].map((g) => g.textContent));
-check("S4 groups in order: without asking, asks first, never", groups.indexOf("Without asking") === 0 && groups.indexOf("Asks first") === 1 && groups.indexOf("Never") === 2, groups.join(" / "));
-const lineIn = (group, words) =>
-  p.evaluate(([g, w]) => {
-    const h = [...document.querySelectorAll("#panel-settings .b-group")].find((x) => x.textContent === g);
-    return Boolean(h && [...h.nextElementSibling.querySelectorAll(".c-line")].some((l) => l.textContent.includes(w)));
-  }, [group, words]);
-check("S4 Run commands asks first (Review first)", await lineIn("Asks first", "Run commands"));
-check("S4 Use the browser is never, set on the gateway", await lineIn("Never", "Use the browser") && (await p.evaluate(() => [...document.querySelectorAll(".c-line")].find((l) => l.textContent.includes("Use the browser")).getAttribute("aria-label").includes("set on the gateway"))));
-check("S4 Ask you questions is always without asking", await lineIn("Without asking", "Ask you questions"));
-check("S4 a line names its rule and its mark", await p.evaluate(() => { const l = [...document.querySelectorAll(".c-line")].find((x) => x.textContent.includes("Change files")); return l.textContent.includes("1 rule: never under secrets/**") && l.getAttribute("aria-label").startsWith("Change files, allowed, 1 rule"); }));
-check("S4 the marks are words with an icon", await p.evaluate(() => [...document.querySelectorAll(".c-line .c-mark")].every((m) => m.querySelector(".icon") && m.textContent.trim().length > 10)));
+check("S2 the rules plugin's state, in words", t.includes("Clawtrate's rules plugin is running (version 1.2). It last checked a call at 5:46 PM."));
+check("S4 the glance: Never first, then Asks first, then Without asking", await p.evaluate(() => [...document.querySelectorAll(".c-glance-block h4")].map((h) => h.firstChild.textContent.trim()).join(",") === "Never,Asks first,Without asking"));
+check("S4 the glance names Never's actions and the scoped exception", has(await glance(p, "Never"), "Manage routines", "Use the browser", "Change the gateway's settings", "T3 Code", "changing files under secrets/**"));
+check("S4 the glance names what asks first, with the command's exception", has(await glance(p, "Asks first"), "Run commands (Review first; always before rm *)", "Message other bots"));
+check("S4 the glance names what runs without asking, with its exception", has(await glance(p, "Without asking"), "Change files (not under secrets/**)", "Read files", "Ask you questions"));
+check("S7 Never is visible without scrolling at 1440", await p.evaluate(() => document.querySelector(".c-glance-block").getBoundingClientRect().bottom <= innerHeight));
+check("S4 a scoped deny makes the line Limited, never Allowed", (await lineText(p, "Change files")).includes("Limited") && (await lineText(p, "Change files")).includes("Never under secrets/**"));
+check("S2 a plugin rule is marked as holding only while the plugin runs", (await lineText(p, "Message other bots")).includes("Only while Clawtrate's rules plugin runs"));
+check("S2 a gateway rule carries the unqualified mark", (await lineText(p, "Manage routines")).includes("The gateway enforces this"));
+check("S2 a gateway setting for every bot carries the lock", (await lineText(p, "Use the browser")).includes("Set on the gateway"));
+check("S4 groups in order: Never, Asks first, Without asking", await p.evaluate(() => [...document.querySelectorAll("#panel-settings .b-group")].map((g) => g.textContent).slice(0, 3).join(",") === "Never,Asks first,Without asking"));
+check("S2 for these rules to hold: management denied, commands elsewhere, file rules are tool rules", has(t, "Otto can't change the gateway or its plugins: Never.", "Otto's commands run on media-box, not on the gateway's machine.", "A rule about a file tool covers that tool, not the file."));
+check("S2 the hold switch says what it is and what it can't do", has(t, "If the rules plugin stops, deny the tools its rules cover", "The gateway doesn't do it by itself, so between the plugin stopping and Clawtrate noticing, these rules aren't enforced."));
+check("F-162 F-173 the review switch is on for Otto, and says what off means", (await p.evaluate(() => document.querySelector('[data-c="review"]').getAttribute("aria-checked") === "true")) && t.includes("Off: every such command asks you."));
 check("S4 tools not offered are listed, folded", await p.evaluate(() => { const d = [...document.querySelectorAll("#panel-settings details")].find((x) => x.textContent.includes("Not offered to Otto")); return d && !d.open && d.textContent.includes("x_search"); }));
-check("F-162 F-173 the review switch is on for Otto, and says what off means", await p.evaluate(() => document.querySelector('[data-c="review"]').getAttribute("aria-checked") === "true") && t.includes("Off: every such command asks you."));
-check("S4 asking when nothing else decides is a switch, with the gateway having no reviewer for other tools", t.includes("Ask when nothing else decides") && t.includes("any other tool that no rule covers asks you first"));
-await p.click('[data-c="fallback"]');
-await p.waitForTimeout(400);
-check("S4 turning it on warns once", (await panelText(p)).includes("Otto will ask for every file it reads and every search it makes."));
-check("S4 rules for every bot are linked", t.includes("Rules for every bot also apply: 2 rules."));
-await p.focus('[data-c-line="exec"]');
-await p.keyboard.press("Enter");
+await p.click('.c-glance [data-c-line="exec"]');
 await p.waitForTimeout(150);
-check("S5 Enter opens the line's page", (await text(p, "#panel-settings .b-subhead h3")) === "Run commands");
-await p.click('#panel-settings [data-bs="rules"]');
+check("S4 a name in the glance opens its line", (await text(p, "#panel-settings .b-subhead h3")) === "Run commands");
+await p.click('#panel-settings .b-subhead [data-bs="rules"]');
 await p.waitForTimeout(200);
-check("S19 Back returns focus to the line that opened the page", await p.evaluate(() => document.activeElement?.dataset.cLine === "exec"));
+check("S19 Back returns focus to that line", await p.evaluate(() => document.activeElement?.matches('.c-line[data-c-line="exec"]')));
 await p.close();
 
-p = await open(tab + "&bview=rules&rules=noplugin");
-t = await panelText(p);
-check("S4 without the rules plugin: the note says what holds", t.includes("Asking first, and rules about what a tool acts on, need Clawtrate's rules plugin on the gateway.") && t.includes("Otto's settings can allow or deny each tool, and commands can ask."));
-check("S10 without the plugin, changing the gateway's settings starts as never", await lineIn("Never", "Change the gateway's settings"));
-check("S4 without the plugin, the fallback switch is disabled with its reason", await p.evaluate(() => document.querySelector('[data-c="fallback"]').disabled) && t.includes("Without it, tools that no rule covers run."));
-await p.close();
 p = await open(tab + "&bview=rules&rules=stopped");
 t = await panelText(p);
-check("S4 the plugin not answering: values read Unknown, never Allowed", t.includes("Couldn't read Clawtrate's rules from the gateway.") && (await lineIn("Unknown", "Read files")));
+check("S2 stopped: the plugin's state, never 'the rules plugin enforces this'", t.includes("Clawtrate's rules plugin isn't answering.") && !t.includes("Clawtrate's rules plugin enforces this") && !t.includes("Only while Clawtrate's rules plugin runs"));
+check("S2 stopped: not being enforced right now, with what Otto can do", has(t, "Not being enforced right now.", "3 of Otto's rules need Clawtrate's rules plugin", "Change files under secrets/**", "Message other bots"));
+check("S2 stopped: plugin lines read Unknown, Not enforced now", (await lineText(p, "Change files")).includes("Unknown") && (await lineText(p, "Message other bots")).includes("Not enforced now"));
+check("S2 holding a scoped rule denies the whole tool, said", t.includes('To hold "never under secrets/**", Clawtrate denies Change files entirely until the plugin runs.'));
+await p.click('[data-c="hold"]');
+await p.waitForTimeout(100);
+t = await panelText(p);
+check("S2 deny until it runs: the lines become the gateway's Never", (await lineText(p, "Change files")).includes("Until the rules plugin runs") && (await lineText(p, "Change files")).includes("The gateway enforces this") && t.includes("Denied until the rules plugin runs."));
+await p.close();
+for (const [state, words] of [
+  ["noplugin", "Clawtrate's rules plugin isn't installed on this gateway."],
+  ["old", "Clawtrate's rules plugin is version 0.9; Otto's rules need 1.0 or newer."],
+  ["unchecked", "Checking Clawtrate's rules plugin…"],
+]) {
+  p = await open(tab + `&bview=rules&rules=${state}`);
+  check(`S2 the plugin ${state}: said in words`, (await panelText(p)).includes(words));
+  await p.close();
+}
+p = await open(tab + "&bview=rules&machine=gatewayhost");
+check("S2 commands on the gateway's machine: plugin rules are advice", (await panelText(p)).includes("Otto runs commands on the gateway's machine as its user. A command can change the gateway's settings and the rules plugin's store, so Otto's plugin rules are advice until Run commands is Never there or runs elsewhere."));
 await p.close();
 p = await open(tab + "&bview=rules&rules=loading");
 check("S4 loading is busy grey blocks", await p.evaluate(() => document.querySelector('#panel-settings [aria-busy="true"] .skeleton') !== null));
@@ -101,403 +115,445 @@ p = await open(tab + "&bview=rules&rules=error");
 check("S4 couldn't load, with Try again", (await panelText(p)).includes("Couldn't load what Otto may do") && (await p.$('[data-c="reload"]')) !== null);
 await p.close();
 p = await open(tab + "&bview=rules&rules=fresh");
-check("S4 before the first task: lines from settings", (await panelText(p)).includes("Otto hasn't run yet, so the gateway hasn't listed its tools."));
+check("S4 before the first task", (await panelText(p)).includes("Otto hasn't run yet, so the gateway hasn't listed its tools."));
 await p.close();
 p = await open(tab + "&bview=rules&rules=stale");
-check("S4 an old listing says so", (await panelText(p)).includes("It can be out of date until Otto runs again."));
+check("S4 the listing is old, labelled Offered", (await panelText(p)).includes("Offered: the gateway's listing for Otto's latest task, Nov 17."));
 await p.close();
 p = await open(tab + "&bview=rules&override=1");
-check("S3 the gateway's deny for every bot overrides the bot's allow", await lineIn("Never", "Search the web"));
-await p.close();
-p = await open(tab + "&bview=rule&line=web&override=1");
-t = await panelText(p);
-check("F-333 the overridden line says the bot's own choice has no effect, and cannot be changed", t.includes("Otto's own choice, Allow, has no effect while the gateway's settings deny this tool for every bot.") && (await p.evaluate(() => [...document.querySelectorAll('[data-c="choose"]')].every((x) => x.getAttribute("aria-disabled") === "true"))));
+check("S3 the gateway's deny for every bot overrides the bot's allow", await lineIn(p, "Never", "Search the web"));
 await p.close();
 p = await open(tab + "&bview=rules&access=read");
 t = await panelText(p);
-check("S2 read-only: every value, no change, and the page's own request", t.includes("6 without asking") && t.includes("Changing Otto's permissions needs admin access.") && (await p.evaluate(() => document.querySelectorAll("#panel-settings .access-bar").length === 1 && document.querySelector('[data-c="review"]').disabled)));
+check("S2 read-only: every value, no change, one request", (await glance(p, "Never")).includes("4") && t.includes("Changing Otto's permissions needs admin access.") && (await p.evaluate(() => document.querySelectorAll("#panel-settings .access-bar").length === 1 && document.querySelector('[data-c="review"]').disabled)));
+await p.close();
+p = await open("bot=pip&panel=open&tab=settings&bview=rules&newbot=step2");
+check("S10 a new bot whose restrictive write failed: said, and nothing is sent", (await panelText(p)).includes("Pip's restrictive settings weren't written. It has the gateway's defaults for every bot, which let it run commands without asking. Clawtrate won't send to Pip until they are."));
+await p.close();
+p = await open("bot=pip&panel=open&tab=settings&newbot=step3");
+check("S10 a new bot whose defaults write failed: restrictive, said", (await panelText(p)).includes("Pip is set restrictively: it can't run commands or manage anything."));
 await p.close();
 
-// One line, opened (section 5) -----------------------------------------------------------------
+// One line, opened (section 5) -------------------------------------------------------------------
+p = await open(tab + "&bview=rule&line=exec");
+t = await panelText(p);
+check("S5 Run commands: four choices, Review first checked", await p.evaluate(() => [...document.querySelectorAll('[data-c="exec"]')].map((r) => r.textContent).join(",") === "Allow all,Review first,Ask,Never" && document.querySelector('[data-c="exec"][aria-checked="true"]').textContent === "Review first"));
+check("S2 the four facts: offered, default, own setting, effective", has(t, "Offered", "Default for every bot", "Commands: Never", "Otto's own setting", "Review first. It replaces the default for Otto.", "Effective", "media-box's approvals file"));
+check("S3 two checks for commands, neither passing the other", t.includes("Two checks: Clawtrate's rules plugin first, then the gateway's own"));
+check("S6 a rule's own version, setting and use", has(t, "Otto's rule, version 1", "Asks every time", "No recorded use"));
+check("S5 the line as a whole has no Last used", !t.includes("Last used"));
+await p.click('[data-c="exec"][data-value="full"]');
+await p.waitForTimeout(80);
+check("S5 Allow all asks first, with focus on Cancel", await p.evaluate(() => { const d = document.querySelector("#confirm-dialog"); return d.open && d.textContent.includes("Let Otto run any command without asking?") && document.activeElement.textContent.trim() === "Cancel"; }));
+await p.keyboard.press("Escape");
+await p.close();
 p = await open(tab + "&bview=rule&line=files");
 t = await panelText(p);
-check("S5 the choice is one radio group: Allow, Ask, Never", await p.evaluate(() => { const g = document.querySelector('#panel-settings .c-choice[role="radiogroup"]'); return g && [...g.querySelectorAll('[role="radio"]')].map((r) => r.textContent).join(",") === "Allow,Ask,Never" && g.querySelector('[aria-checked="true"]').textContent === "Allow"; }));
-check("S5 the facts: tools, decided by, enforced by, set, last used", ["write", "apply_patch", "Decided by", "Enforced by", "Set", "Last used", "5:46 PM, in 'Disk almost full on the media box'"].every((w) => t.includes(w)));
-check("S6 rules about what it acts on: the bot's and every bot's", t.includes("Never · under secrets/**") && t.includes("A rule for every bot") && t.includes("**/.ssh/**"));
-check("S8 the line's saved approval", t.includes("Allow under notes/**, for 1 hour"));
+check("S5 Change files: effective says the exception and who holds it", t.includes("Allowed, except never under secrets/** (the rules plugin)"));
+check("S5 a rule's last decided call links to that exact record", (await p.evaluate(() => document.querySelector('[data-c="to-record"]')?.textContent)) === "Last decided a call: 5:43 PM");
+await p.click('[data-c="to-record"]');
+await p.waitForTimeout(200);
+check("S9 that link opens Activity with that record open", await p.evaluate(() => document.querySelector("#settings-dialog").open && document.querySelector('[data-c="log"][data-value="e3"]')?.getAttribute("aria-expanded") === "true"));
+await p.close();
+p = await open(tab + "&bview=rule&line=files");
 await p.focus('[data-c="choose"][data-value="allow"]');
 await p.keyboard.press("ArrowRight");
 await p.waitForTimeout(60);
 check("S5 an arrow moves and chooses, and the save shows Saving…", (await panelText(p)).includes("Saving…"));
 await p.waitForTimeout(450);
-check("F-176 choosing Ask saves it, said and announced", (await panelText(p)).includes("Otto asks you before it changes files.") && (await announced(p)).includes("Saved. Change files: asks first"));
+check("F-176 Ask saved: says it holds only while the plugin runs", (await panelText(p)).includes("Otto asks you before it changes files. Only while Clawtrate's rules plugin runs.") && (await announced(p)).includes("Saved. Change files: asks first"));
 await p.click('[data-c="choose"][data-value="never"]');
 await p.waitForTimeout(450);
-check("F-176 choosing Never: the gateway removes the tools", (await panelText(p)).includes("Otto can't change files. The gateway removes the tools from Otto's tools.") && (await panelText(p)).includes("The gateway enforces this"));
+check("F-176 Never saved: the gateway removes the tools", (await panelText(p)).includes("Otto can't change files. The gateway removes the tools from Otto's tools."));
 await p.close();
-
 p = await open(tab + "&bview=rule&line=files&waiting=1");
-await p.click('[data-c="choose"][data-value="ask"]');
+await p.click('[data-c="choose"][data-value="never"]');
 await p.waitForTimeout(450);
-check("S3 a rule saved while a request waits: the request keeps its card", (await panelText(p)).includes("Otto still has a request waiting in 'Disk almost full on the media box'; your answer there decides it.") && (await p.$('[data-c="show-request"]')) !== null);
+check("S3 saving while a request waits warns that the request will end", (await panelText(p)).includes("changing settings ends a waiting request, so it will not run even if it is answered."));
 await p.close();
 p = await open(tab + "&bview=rule&line=files&write=refused");
 await p.click('[data-c="choose"][data-value="never"]');
 await p.waitForTimeout(200);
-check("S5 a refused save: the saved value stays, and why", (await panelText(p)).includes("Couldn't save: the gateway refused the change. Nothing changed.") && (await p.evaluate(() => document.querySelector('[data-c="choose"][aria-checked="true"]').dataset.value === "allow")));
+check("S5 a refused save keeps the saved value, and says why", (await panelText(p)).includes("Couldn't save: the gateway refused the change. Nothing changed."));
 await p.close();
 p = await open(tab + "&bview=rule&line=files&write=conflict");
 await p.click('[data-c="choose"][data-value="never"]');
 await p.waitForTimeout(200);
-check("S5 a save crossed by another person: shows what the gateway has", (await panelText(p)).includes("Someone else changed Otto's settings. This shows what the gateway has now."));
+check("S5 a save crossed by another change shows the gateway's", (await panelText(p)).includes("Someone else changed Otto's settings. This shows what the gateway has now."));
 await p.close();
-
-p = await open(tab + "&bview=rule&line=exec");
+p = await open(tab + "&bview=rule&line=files&write=timeout");
+await p.click('[data-c="choose"][data-value="never"]');
+await p.waitForTimeout(1200);
+check("S5 a save with no answer is checked by reading back", (await panelText(p)).includes("Checked whether this was saved: it was."));
+await p.close();
+p = await open(tab + "&bview=rule&line=web&override=1");
+check("F-333 an overridden allow has no effect and cannot be changed", (await panelText(p)).includes("Otto's own choice, Allow, has no effect while the gateway's settings deny this tool for every bot.") && (await p.evaluate(() => [...document.querySelectorAll('[data-c="choose"]')].every((x) => x.getAttribute("aria-disabled") === "true"))));
+await p.close();
+p = await open(tab + "&bview=rule&line=files&rules=stopped");
 t = await panelText(p);
-check("S5 Run commands has four choices, Review first checked", await p.evaluate(() => [...document.querySelectorAll('[data-c="exec"]')].map((r) => r.textContent).join(",") === "Allow all,Review first,Ask,Never" && document.querySelector('[data-c="exec"][aria-checked="true"]').textContent === "Review first"));
-check("S3 two layers: a saved approval doesn't stop the command policy asking", t.includes("A saved approval here doesn't stop that.") && t.includes("media-box's own approvals also apply"));
-check("S6 a rule about what a command matches", t.includes("Ask first · matching rm *"));
-await p.click('[data-c="exec"][data-value="full"]');
-await p.waitForTimeout(80);
-check("S5 Allow all asks first, with focus on Cancel", await p.evaluate(() => { const d = document.querySelector("#confirm-dialog"); return d.open && d.textContent.includes("Let Otto run any command without asking?") && d.textContent.includes("It can then change or delete anything the machine's user can.") && document.activeElement.textContent.trim() === "Cancel"; }));
-await p.keyboard.press("Escape");
-await p.close();
-p = await open(tab + "&bview=rule&line=browser");
-check("S5 a line set on the gateway: locked choice, the lock's words", (await panelText(p)).includes("The gateway's settings for every bot") && (await p.evaluate(() => document.querySelector(".c-choice").hasAttribute("data-locked"))));
+check("S5 with the plugin stopped: Ask can't be chosen, rules say not enforced now", (await p.evaluate(() => document.querySelector('[data-c="choose"][data-value="ask"]').getAttribute("aria-disabled") === "true")) && t.includes("Not enforced now: the rules plugin isn't running"));
 await p.close();
 p = await open(tab + "&bview=rule&line=message");
-check("S11 a line for messaging bots opens its own rule page too", (await text(p, "#panel-settings .b-subhead h3")) === "Message other bots");
-await p.close();
-p = await open(tab + "&bview=rule&line=files&rules=noplugin");
-t = await panelText(p);
-check("S5 without the plugin: Ask can't be chosen, and why", (await p.evaluate(() => document.querySelector('[data-c="choose"][data-value="ask"]').getAttribute("aria-disabled") === "true")) && t.includes("Asking needs Clawtrate's rules plugin."));
-check("S6 without the plugin: no rules about what a tool acts on", t.includes("Rules about what it acts on need Clawtrate's rules plugin."));
+check("S3 an ask's line says routines can't ask, and other bots' messages may not", (await panelText(p)).includes("In routines, Ask works as Never: a routine's run has no one to ask. When another bot's message starts Otto's run, Otto may not be able to ask; the call is then refused."));
 await p.close();
 
-// Rules about what a tool acts on, and their limits (section 6) ---------------------------------
+p = await open(tab + "&bview=rule&line=exec&cmdpolicy=allowlist");
+check("S5 a policy set outside Clawtrate is its own checked value", (await p.evaluate(() => document.querySelector('[data-c="exec"][aria-checked="true"]').textContent)) === "Only listed commands" && (await panelText(p)).includes("set outside Clawtrate. It can be left by choosing another value, not chosen again here."));
+await p.close();
+p = await open(tab + "&bview=rule&line=exec&cmdpolicy=legacy");
+check("S5 a legacy policy is named as given", (await panelText(p)).includes("Legacy setting: security allowlist, ask on miss"));
+await p.close();
+p = await open("bot=otto&task=o1&rules=stopped&held=1");
+check("S2 Clawtrate's own hold is a line in the bot's open task", (await text(p, "#transcript")).includes("Clawtrate denied Message other bots, Change files and Run commands for Otto: the rules plugin isn't answering."));
+await p.close();
+
+// The one contract: rules and their limits (section 6) --------------------------------------------
 p = await open(tab + "&bview=rule&line=files");
 await p.click('[data-c="form-open"]');
 await p.waitForTimeout(80);
-check("F-174 the form: action, pattern, what it matches, It should, Add rule disabled", await p.evaluate(() => { const f = document.querySelector(".c-form"); return f && f.textContent.includes("When Otto wants to: change files") && f.textContent.includes("** across folders") && document.activeElement.matches("[data-c-pattern]") && document.querySelector('[data-c="form-add"]').disabled; }));
+check("F-174 the form: action, pattern, what it matches, Add disabled", await p.evaluate(() => { const f = document.querySelector(".c-form"); return f && f.textContent.includes("When Otto wants to: change files") && f.textContent.includes("** across folders") && document.querySelector('[data-c="form-add"]').disabled; }));
 await p.keyboard.type("drafts/**");
 await p.selectOption("[data-c-action]", "ask");
+await p.waitForTimeout(60);
+check("S6 an ask rule chooses whether answers can be saved", await p.evaluate(() => [...document.querySelectorAll("[data-c-saving] option")].map((o) => o.textContent).join(",") === "Answers can be saved,Ask every time"));
 await p.click('[data-c="form-add"]');
 await p.waitForTimeout(80);
-check("F-174 adding a rule lists it, in precedence order, and announces it", (await panelText(p)).includes("Ask first · matching drafts/**") && (await announced(p)).includes("Rule added"));
+check("F-174 adding a rule lists it with its version", (await panelText(p)).includes("Ask first · matching drafts/**") && (await panelText(p)).includes("Otto's rule, version 1") && (await announced(p)).includes("Rule added"));
 await p.close();
 p = await open(tab + "&bview=rule&line=files&form=open&pattern=long");
-check("F-332 a 1,001-character pattern is refused, and saves nothing", (await panelText(p)).includes("A rule can be at most 1,000 characters. This one is 1,001.") && (await p.evaluate(() => document.querySelector('[data-c="form-add"]').disabled && document.querySelector("[data-c-pattern]").getAttribute("aria-invalid") === "true")));
-await p.evaluate(() => { const f = document.querySelector("[data-c-pattern]"); f.value = "a".repeat(1000); f.dispatchEvent(new Event("input", { bubbles: true })); });
-await p.waitForTimeout(60);
-check("F-332 a 1,000-character pattern can be added", await p.evaluate(() => !document.querySelector('[data-c="form-add"]').disabled));
+check("F-332 a 1,001-character pattern is refused, nothing saved", (await panelText(p)).includes("A rule can be at most 1,000 characters. This one is 1,001.") && (await p.evaluate(() => document.querySelector('[data-c="form-add"]').disabled)));
 await p.close();
 p = await open(tab + "&bview=rule&line=files&form=open&limit=allow");
 await p.fill("[data-c-pattern]", "letters/**");
 await p.selectOption("[data-c-action]", "allow");
 await p.waitForTimeout(60);
-check("F-332 a 21st allow rule is refused", (await panelText(p)).includes("Otto has 20 allow rules, the most a scope can hold. Remove one to add another.") && (await p.evaluate(() => document.querySelector('[data-c="form-add"]').disabled)));
+check("F-332 S6 a 21st allow rule is refused, never evicting", (await panelText(p)).includes("Otto has 20 allow rules, the most a scope can hold. Remove one to add another.") && (await p.evaluate(() => document.querySelector('[data-c="form-add"]').disabled)));
 await p.close();
 p = await open(tab + "&bview=rule&line=files&form=open&limit=ask");
 await p.fill("[data-c-pattern]", "letters/**");
 await p.selectOption("[data-c-action]", "ask");
 await p.waitForTimeout(60);
-const askFull = (await panelText(p)).includes("Otto has 20 ask rules");
+const askFull = (await panelText(p)).includes("Otto has 20 ask rules, the most a scope can hold.");
 await p.selectOption("[data-c-action]", "allow");
 await p.waitForTimeout(60);
 check("F-332 a 21st ask rule is refused, and an allow rule still saves", askFull && (await p.evaluate(() => !document.querySelector('[data-c="form-add"]').disabled)));
 await p.close();
+p = await open(tab + "&bview=rule&line=files&form=open&limit=never");
+await p.fill("[data-c-pattern]", "letters/**");
+await p.waitForTimeout(60);
+const under = await p.evaluate(() => !document.querySelector('[data-c="form-add"]').disabled);
+await p.click('[data-c="form-add"]');
+await p.waitForTimeout(80);
+await p.click('[data-c="form-open"]');
+await p.fill("[data-c-pattern]", "letters2/**");
+await p.waitForTimeout(60);
+check("S6 never rules are bounded at 50", under && (await panelText(p)).includes("Otto has 50 never rules, the most a scope can hold."));
+await p.close();
 
-// Messaging other bots (section 11) -----------------------------------------------------------
+// Messaging (section 11) -------------------------------------------------------------------------
 p = await open(tab + "&bview=messaging");
 t = await panelText(p);
-check("F-130 outgoing and incoming halves, each a radio group", await p.evaluate(() => document.querySelectorAll('#panel-settings [role="radiogroup"]').length === 2) && t.includes("Otto may message:") && t.includes("Other bots may message Otto:"));
-check("F-130 the outgoing list is the gateway's, the ask the plugin's", t.includes("Otto's own list, agentToAgent.send.") && (await p.evaluate(() => document.querySelector('[data-c="msg-out-ask"]').getAttribute("aria-checked") === "true")));
-check("S11 the gateway's own setting is shown, locked", t.includes("The gateway lets bots message each other."));
-check("F-131 attributed usage from other bots", t.includes("Messages from other bots used about 41,200 of Otto's tokens this week"));
+check("F-130 the effective line comes first", t.includes("Effective: Otto may message any bot."));
+check("S11 an omitted list reads 'Use the gateway's list'", await p.evaluate(() => document.querySelector('[data-c="msg-out"][aria-checked="true"]').textContent.trim() === "Use the gateway's list"));
+check("F-130 outgoing is the gateway's, incoming the plugin's", t.includes("Otto's own list, agentToAgent.send.") && (await p.evaluate(() => [...document.querySelectorAll("#panel-settings .c-sentence")].some((s) => s.textContent.includes("Only while Clawtrate's rules plugin runs")))));
+check("F-131 attributed usage only", t.includes("counting only runs a send's result names"));
 await p.click('[data-c="msg-out"][data-value="none"]');
-check("F-311 choosing No bot saves and announces it", (await announced(p)).includes("Otto may message: no bot"));
-await p.close();
-p = await open(tab + "&bview=messaging&msg=some");
-check("F-310 only these: a checkbox per bot", await p.evaluate(() => document.querySelector('[data-c-peer="out"][value="pip"]').checked));
-await p.click('[data-c-peer="out"][value="pip"]');
-await p.waitForTimeout(60);
-check("F-310 no bot chosen is refused and nothing is saved", (await panelText(p)).includes("Choose at least one bot, or choose No bot. Nothing is saved until then."));
-await p.close();
-p = await open(tab + "&bview=messaging&rules=noplugin");
-check("F-130 without the plugin, the incoming half can't be set, and why", (await panelText(p)).includes("Who may message Otto needs Clawtrate's rules plugin. The gateway only lets each bot limit whom it messages.") && (await p.evaluate(() => document.querySelector('[data-c="msg-in"]').disabled)));
+await p.waitForTimeout(100);
+check("F-311 No bot: saved, and the effective line changes", (await announced(p)).includes("Otto may message no bot") && (await panelText(p)).includes("Effective: Otto may message no bot."));
 await p.close();
 p = await open(tab + "&bview=messaging&msg=gateway");
-check("S11 the gateway's pair setting, set on the gateway", (await panelText(p)).includes("The gateway lets only these pairs message each other: Marlow and Pip."));
+t = await panelText(p);
+check("S11 the gateway's pairs decide: Otto may message no bot", t.includes("Only these pairs may message each other: Marlow and Pip.") && t.includes("Effective: Otto may message no bot."));
+await p.close();
+p = await open(tab + "&bview=messaging&msg=some");
+await p.click('[data-c-peer="out"][value="pip"]');
+await p.waitForTimeout(60);
+check("F-310 choosing no bot in Only these is refused", (await panelText(p)).includes("Choose at least one bot, or choose No bot. Nothing is saved until then."));
+await p.close();
+p = await open(tab + "&bview=messaging&rules=noplugin");
+check("F-130 without the plugin, incoming can't be set, and why", (await panelText(p)).includes("Who may message Otto needs Clawtrate's rules plugin running. The gateway only lets each bot limit whom it messages.") && (await p.evaluate(() => document.querySelector('[data-c="msg-in"]').disabled)));
 await p.close();
 
-// Settings, Permissions (sections 7, 8, 9) ----------------------------------------------------
+// Settings, Permissions (sections 7, 8, 9) --------------------------------------------------------
 p = await open("open=settings&section=permissions");
 const nav = await p.evaluate(() => [...document.querySelectorAll(".b-nav-item")].map((x) => x.textContent));
 check("S1 Settings gains Permissions, Memory, Usage and Machines after Integrations", nav.join(",") === "Gateway,Accounts,Integrations,Permissions,Memory,Usage,Machines", nav.join(","));
 t = await dialogText(p);
-check("F-333 set on the gateway for every bot, with the lock and its words", t.includes("Set on the gateway for every bot") && t.includes("Set on the gateway. Clawtrate can't change it. Every bot's own settings can narrow these, never widen them."));
-check("F-177 rules for every bot, from the plugin", t.includes("Rules for every bot") && t.includes("Never · Change files under **/.ssh/**") && t.includes("Ask first · Send messages on channels"));
-check("S7 each bot's counts open its page", await p.evaluate(() => document.querySelectorAll('[data-c="open-bot-rules"]').length === 4));
-check("S10 what a new bot starts with", t.includes("What a new bot starts with") && t.includes("Review first") && t.includes("Kept as your preference with the gateway"));
-await p.click('[data-c="open-bot-rules"][data-value="pip"]');
-await p.waitForTimeout(200);
-check("S7 a bot's row opens its permissions page in its Settings tab", (await text(p, "#panel-settings .b-subhead h3")) === "What Pip may do");
+check("S3 ceilings and defaults are told apart", has(t, "Ceilings", "No bot's own settings can grant these back.", "Defaults", "A bot's own setting replaces a default for that bot, wider or narrower."));
+check("F-333 set on the gateway, Clawtrate can't change it", t.includes("Set on the gateway. Clawtrate can't change it."));
+check("F-177 rules for every bot, with versions", t.includes("Never · Change files under **/.ssh/**") && t.includes("version 1"));
+check("S10 a new bot starts restrictive, then these", has(t, "What a new bot starts with", "Review first", "Change the gateway's settings", "Clawtrate writes a new bot restrictively first", "It sends nothing to the bot until the first write is read back."));
 await p.close();
 p = await open("open=settings&section=permissions&access=write");
 check("S7 below admin: the rules' request", (await dialogText(p)).includes("Changing rules for every bot needs admin access."));
 await p.close();
-p = await open("open=settings&section=permissions&rules=noplugin");
-check("S10 without the plugin a new bot starts with the gateway's settings denied, and says why", (await dialogText(p)).includes("Without the rules plugin a bot can't be made to ask, so new bots start with this denied."));
+p = await open("open=settings&section=permissions&rules=stopped");
+check("S7 the plugin stopped: rules for every bot aren't enforced now", (await dialogText(p)).includes("2 rules for every bot aren't enforced now."));
 await p.close();
 
 p = await open("open=settings&section=permissions&part=saved");
 t = await dialogText(p);
-check("F-178 saved approvals by kind, each with scope, times and use", ["Clawtrate's grants", "Routines' grants", "Machines' allowlists", "Until 6:41 PM", "Used 4 times", "When it was added isn't recorded."].every((w) => t.includes(w)));
-check("S8 what the gateway doesn't list is said", t.includes("It doesn't list them, so they aren't here; each ends within 30 days"));
+check("F-178 S6 a grant names what it's bound to", has(t, "Change files under notes/** · Otto", "answers Otto's rule 'ask before changing files' (version 2)", "from the request at 5:41 PM", "until 6:41 PM", "used 3 times"));
+check("S6 a grant for every bot was made with admin", t.includes("Message other bots: Pip · every bot") && t.includes("made with admin access"));
+check("S8 an allowlist entry says it can cover more than the command", t.includes("which can be wider than this exact command"));
+check("S8 routine grants and allowlists, each with its holder", has(t, "Routines' grants", "Machines' allowlists", "When it was added isn't recorded.", "The gateway enforces this", "Only while Clawtrate's rules plugin runs"));
 await p.click('[data-c="revoke"][data-value="g1"]');
 await p.waitForTimeout(60);
-check("F-327 Revoke: struck through, and what happens next", (await dialogText(p)).includes("Revoked. The next matching action asks again, unless another saved approval or a rule decides.") && (await p.$("#settings-dialog .c-struck")) !== null);
+check("F-327 Revoke: struck, with when and what follows", (await dialogText(p)).includes("Revoked 5:50 PM. The next matching action asks again") && (await p.$("#settings-dialog .c-struck")) !== null);
+await p.close();
+p = await open("open=settings&section=permissions&part=saved&access=write");
+check("S6 below admin, a grant for every bot can't be revoked", (await dialogText(p)).includes("Revoking a grant for every bot needs admin access."));
+await p.close();
+p = await open("open=settings&section=permissions&part=saved&saved=ended");
+check("S6 a grant ended by its rule's edit stays readable", (await dialogText(p)).includes("Ended: its rule was edited."));
 await p.close();
 p = await open("open=settings&section=permissions&part=saved&access=read");
-check("S8 read-only: the approvals request, not admin", (await dialogText(p)).includes("Seeing saved approvals needs a connection that can answer approvals.") && !(await dialogText(p)).includes("Until 6:41 PM"));
-await p.click('[data-b="request-write"]');
-await p.waitForTimeout(100);
-check("S8 with the approvals scope, the grants show and allowlists need admin", (await dialogText(p)).includes("Until 6:41 PM") && (await dialogText(p)).includes("Seeing machines' allowlists needs admin access."));
+check("S8 read-only: the approvals request, not admin", (await dialogText(p)).includes("Seeing saved approvals needs approvals access.") && !(await dialogText(p)).includes("until 6:41 PM"));
 await p.close();
 p = await open("open=settings&section=permissions&part=saved&saved=empty");
 check("S8 empty", (await dialogText(p)).includes("When you choose Always allow on a card, it is listed here."));
 await p.close();
-p = await open("open=settings&section=permissions&part=saved&saved=error");
-check("S8 couldn't load", (await dialogText(p)).includes("Couldn't load saved approvals"));
-await p.close();
 
 p = await open("open=settings&section=permissions&part=activity");
 t = await dialogText(p);
-check("F-324 activity rows: time, bot, summary, verdict, source", await p.evaluate(() => { const r = document.querySelectorAll("#settings-dialog .c-log"); return r.length === 8 && [...r].every((x) => x.querySelector(".c-log-time") && x.querySelector(".c-tag") && x.querySelector(".c-log-source")); }));
-check("F-324 sources are named, or Not reported", t.includes("Otto's rule: never under secrets/") && t.includes("Your answer: allow once") && t.includes("Not reported"));
-check("S9 the foot says what the gateway keeps", t.includes("The gateway keeps 30 days of activity, up to 100,000 records, without arguments or results. A call to a tool the gateway removed leaves no record here"));
-await p.click('[data-c="audit-filter"][data-value="grant"]');
+check("F-324 each row: time, bot, action, verdict and a labelled cause", await p.evaluate(() => [...document.querySelectorAll("#settings-dialog .c-log")].every((x) => x.querySelector(".c-log-time") && x.querySelector(".c-tag") && /^(Recorded|Inferred|Cause not recorded|Needs approvals access)/.test(x.querySelector(".c-log-source").textContent))));
+check("S9 recorded, inferred and not recorded are said apart", has(t, "Recorded: a saved approval, change files under notes/** (since revoked)", "Inferred: Marlow's messaging list didn't name Pip", "Cause not recorded"));
+check("S9 a recorded rule keeps its version after an edit", t.includes("version 2 (edited since)"));
+check("S9 the foot says what the gateway keeps, and there is no Clear", t.includes("The gateway keeps 30 days of activity, up to 100,000 records, without arguments or results.") && !(await p.evaluate(() => [...document.querySelectorAll("#settings-dialog button")].some((x) => /clear/i.test(x.textContent)))));
+check("S9 the saved-approval filter is a visible, labelled checkbox", (await p.evaluate(() => document.querySelector("[data-c-grantonly]").closest("label").textContent.trim())) === "Only those allowed by a saved approval");
+await p.check("[data-c-grantonly]");
 await p.waitForTimeout(60);
-check("S9 allowed by a saved approval: each row names its grant", await p.evaluate(() => { const r = [...document.querySelectorAll("#settings-dialog .c-log-source")].map((x) => x.textContent); return r.length === 3 && r.every((x) => x.startsWith("A saved approval") || x.includes("allowlist")); }));
-await p.click('[data-c="audit-filter"][data-value="all"]');
-await p.click('[data-c="log"][data-value="e3"]');
+check("S9 only those allowed by a saved approval: each names its grant", await p.evaluate(() => { const r = [...document.querySelectorAll("#settings-dialog .c-log-source")].map((x) => x.textContent); return r.length === 2 && r.every((x) => x.startsWith("Recorded: a saved approval")); }));
+await p.uncheck("[data-c-grantonly]");
+await p.selectOption("[data-c-verdict]", "blocked");
 await p.waitForTimeout(60);
-check("S9 a row opens to its facts and Show in chat", await p.evaluate(() => document.querySelector('[data-c="log"][data-value="e3"]').getAttribute("aria-expanded") === "true" && document.querySelector('#settings-dialog [data-c="show-in-chat"]') !== null));
-await p.selectOption("[data-c-auditbot]", "marlow");
+check("S9 the verdict filter", await p.evaluate(() => [...document.querySelectorAll("#settings-dialog .c-tag")].every((x) => x.textContent === "Blocked") && document.querySelectorAll("#settings-dialog .c-log").length === 2));
+await p.selectOption("[data-c-verdict]", "all");
+await p.click('[data-c="older"]');
 await p.waitForTimeout(60);
-check("S9 filtered to one bot", await p.evaluate(() => document.querySelectorAll("#settings-dialog .c-log").length === 1));
+check("S9 Show older adds older records", (await dialogText(p)).includes("Router firmware"));
 await p.close();
 p = await open("open=settings&section=permissions&part=activity&access=read");
-check("S9 read-only: asked and answered sources need approvals access", (await dialogText(p)).includes("Needs approvals access"));
+check("S9 read-only: no cause from approvals is shown", (await dialogText(p)).includes("Needs approvals access") && !(await dialogText(p)).includes("Recorded: your answer"));
 await p.close();
-p = await open("open=settings&section=permissions&part=activity&audit=off");
-check("S9 the gateway records nothing: said, with no action", (await dialogText(p)).includes("The gateway isn't recording activity: its audit log is switched off in its settings."));
-await p.close();
-p = await open("open=settings&section=permissions&part=activity&audit=empty");
-check("S9 empty", (await dialogText(p)).includes("No tool activity in the last 30 days."));
+for (const [state, words] of [
+  ["off", "The gateway isn't recording activity: its audit log is switched off in its settings."],
+  ["empty", "No tool activity in the last 30 days."],
+  ["partial", "Records before Oct 19 have expired."],
+  ["error", "Couldn't load activity"],
+]) {
+  p = await open(`open=settings&section=permissions&part=activity&audit=${state}`);
+  check(`S9 activity ${state}`, (await dialogText(p)).includes(words));
+  await p.close();
+}
+p = await open("open=settings&section=permissions&part=activity&audit=loading");
+check("S9 activity loading", await p.evaluate(() => document.querySelector('#settings-dialog [aria-busy="true"]') !== null));
 await p.close();
 
-// Memory (sections 12 and 13) ------------------------------------------------------------------
+// Memory (sections 12 and 13) --------------------------------------------------------------------
 p = await open(tab + "&bview=memory");
 t = await panelText(p);
-check("F-211 memory is files: always loaded, about you, notes", ["Always loaded", "About you", "Notes"].every((g) => t.includes(g)) && t.includes("Otto's memory is files in its workspace."));
-check("F-376 the always-loaded budget is a meter, with its numbers in text", await p.evaluate(() => { const m = document.querySelector('#panel-settings [role="meter"]'); return m && m.getAttribute("aria-valuemax") === "20000"; }) && t.includes("1,240 of 20,000 characters. Past that, the gateway cuts what it loads."));
-check("F-212 where always loaded holds", t.includes("Not loaded in Otto's routines, helpers, or group and channel tasks."));
-check("F-211 a note names its file and date", t.includes("memory/2026-11-17.md") && t.includes("Search: ready."));
+check("F-211 three groups: root memory, about you, notes", has(t, "Root memory", "About you", "Notes"));
+check("S12 each item says stored, and whether it loads", t.includes("Stored, revision 7c1e · Loads into new private tasks; fits its budget") && t.includes("Not loaded; found by search"));
+check("S12 both budgets, as meters with numbers", has(t, "MEMORY.md: 1,240 of 20,000 characters.", "All loaded files: 10,800 of 60,000 characters.") && (await p.evaluate(() => document.querySelectorAll('#panel-settings [role="meter"]').length >= 3)));
+check("F-212 the loading conditions, in full", has(t, "Not in its routines, helpers, or group and channel tasks, and not text the gateway doesn't trust.", "If you keep your own USER.md on this gateway", "A task already open may keep the earlier copy until it starts again."));
+check("S12 searchable only once a search returns the revision", t.includes("A revision counts as searchable only once a search returns it."));
 await p.click('[data-c="mem-export"]');
-check("F-214 Export is announced", (await announced(p)).includes("Exported 6 files"));
+check("F-214 Export is announced", (await announced(p)).includes("Exported 7 files"));
 await p.click('[data-c="mem-clear"]');
 await p.waitForTimeout(60);
-check("F-215 Clear memory asks first and says what stays", await p.evaluate(() => { const d = document.querySelector("#confirm-dialog"); return d.open && d.textContent.includes("Otto's files, tasks, routines, settings and shared memory stay.") && d.textContent.includes("export first to keep a copy"); }));
+check("F-215 Clear names what it removes and what it doesn't", await p.evaluate(() => { const d = document.querySelector("#confirm-dialog"); return d.open && d.textContent.includes("This deletes MEMORY.md and memory/2026-11-17.md, memory/2026-11-16.md and memory/2026-11-12-backup.md.") && d.textContent.includes("It doesn't remove: Otto's chat history; what tasks already running were given; search results until the index refreshes; copies of shared items in other bots"); }));
 await p.keyboard.press("Escape");
 await p.click('[data-c-item="n1"]');
 await p.waitForTimeout(120);
 t = await panelText(p);
-check("F-211 an item: file, scope, date, who saved it, when it takes effect", t.includes("memory/2026-11-17.md") && t.includes("Otto only") && t.includes("Saved by Otto in 'Disk almost full on the media box', Nov 17, 5:41 PM") && t.includes("When the gateway's memory index has the change."));
-check("F-376 a note can be always loaded", (await p.$('[data-c="mem-pin"]')) !== null);
+check("F-211 an item: stored, loads, searchable, saved by this revision", has(t, "Revision 19bd", "Not loaded; found by search", "This revision found by search at 5:42 PM", "Otto, in 'Disk almost full on the media box', this revision"));
 await p.click('[data-c="mem-pin"]');
 await p.waitForTimeout(80);
-check("F-376 pinning moves it into always-loaded memory", (await panelText(p)).includes("MEMORY.md") && (await announced(p)).includes("Pinned"));
-await p.click('#panel-settings [data-bs="memory"]');
+check("F-376 moving a note into root memory", (await panelText(p)).includes("MEMORY.md") && (await announced(p)).includes("Moved to root memory"));
+await p.click('#panel-settings .b-subhead [data-bs="memory"]');
 await p.waitForTimeout(150);
 check("S19 Back returns to the item", await p.evaluate(() => document.activeElement?.dataset.cItem === "n1"));
 await p.close();
-p = await open(tab + "&bview=memitem&item=n1&mem=full");
+p = await open(tab + "&bview=memitem&item=n2");
+check("S12 an unattributed revision says so", (await panelText(p)).includes("Who saved this revision isn't recorded."));
+await p.close();
+p = await open(tab + "&bview=memory&mem=over");
+check("S12 past its budget: the meter turns danger and says what's cut", (await panelText(p)).includes("1,140 characters at the end aren't loaded.") && (await p.evaluate(() => document.querySelector('#panel-settings .c-meter[data-tone="danger"]') !== null)) && (await panelText(p)).includes("Past the budget: not loaded"));
+await p.close();
+p = await open(tab + "&bview=memitem&item=n1&mem=over");
 await p.click('[data-c="mem-pin"]');
 await p.waitForTimeout(80);
-check("F-376 pinning past the budget is refused: Pinned memory is full", (await panelText(p)).includes("Pinned memory is full: Otto's always-loaded memory would be"));
+check("F-376 moving past the budget is refused, both files unchanged", (await panelText(p)).includes("so the end wouldn't load. Move something out first. Both files are unchanged."));
 await p.close();
-p = await open(tab + "&bview=memitem&item=m1");
-await p.click('[data-c="mem-edit"]');
-await p.waitForTimeout(80);
+p = await open(tab + "&bview=memory&mem=moving");
+check("S12 a move that didn't finish shows the item in both places", (await panelText(p)).includes("In root memory and in memory/2026-11-16.md: moving it didn't finish."));
+await p.close();
+p = await open(tab + "&bview=memitem&item=n2&mem=moving");
+check("S12 finish moving or keep both", (await p.$('[data-c="mem-finish"]')) !== null && (await p.$('[data-c="mem-keepboth"]')) !== null);
+await p.close();
+p = await open(tab + "&bview=memitem&item=m1&mem=edit");
 await p.fill("[data-c-memedit]", "The media box is media-box; its disk is /srv, 4 TB.");
 await p.click('[data-c="mem-save"]');
 await p.waitForTimeout(80);
-check("F-212 editing an always-loaded item saves it, from the next private task", (await panelText(p)).includes("4 TB") && (await panelText(p)).includes("From Otto's next private task, and in a task already open from its next message.") && (await announced(p)).includes("Memory saved"));
+check("F-212 editing a root item saves a new revision", (await panelText(p)).includes("4 TB") && (await panelText(p)).includes("Revision e4a9") && (await announced(p)).includes("Memory saved"));
 await p.close();
 p = await open(tab + "&bview=memitem&item=m1&mem=conflict");
-await p.click('[data-c="mem-edit"]');
-await p.waitForTimeout(80);
-check("S12 an edit crossed by another change keeps the text, with the file's now", (await panelText(p)).includes("Otto's memory changed while you were editing. Your text is kept here; the file now has:") && (await p.$('[data-c="mem-save-force"]')) !== null);
+check("S12 an edit crossed by another change keeps the text", (await panelText(p)).includes("Otto's memory changed while you were editing. Your text is kept here; the file now has:"));
 await p.close();
 p = await open(tab + "&bview=memory&mem=noplugin");
-t = await panelText(p);
-check("S12 without the memory plugin: notes read-only, always loaded still editable", t.includes("Changing notes needs Clawtrate's memory plugin.") && !(await p.$('[data-c="mem-import"]')));
-await p.click('[data-c="mem-clear"]');
-check("F-215 without the plugin, clearing says notes stay", await p.evaluate(() => document.querySelector("#confirm-dialog").textContent.includes("Notes under memory/ stay")));
-await p.keyboard.press("Escape");
+check("S12 without the memory plugin: notes read-only", (await panelText(p)).includes("Changing notes needs Clawtrate's memory plugin running.") && !(await p.$('[data-c="mem-import"]')));
 await p.close();
-p = await open(tab + "&bview=memitem&item=n1&mem=noplugin");
-check("S12 a note without the plugin offers no Edit", !(await p.$('[data-c="mem-edit"]')) && (await panelText(p)).includes("Changing notes needs Clawtrate's memory plugin."));
-await p.close();
-p = await open(tab + "&bview=memory&mem=import");
-check("F-008 an import is reviewed as items before anything is saved", (await panelText(p)).includes("6 items from house-notes.md") && (await panelText(p)).includes("Nothing is saved until you choose Add."));
-await p.close();
-p = await open(tab + "&bview=memory&mem=add");
-await p.fill("[data-c-memtext]", "The router's admin page is on the second network.");
-await p.click('[data-c="mem-add-save"]');
-await p.waitForTimeout(80);
-check("F-377 adding an item lists it", (await panelText(p)).includes("The router's admin page is on the second network.") && (await announced(p)).includes("Memory saved"));
-await p.close();
-p = await open(tab + "&bview=memory&mem=nosearch");
-check("S12 no memory search on the gateway: files still listed", (await panelText(p)).includes("Otto's memory search isn't set up on this gateway: Memory provider unavailable. Files are still listed."));
-await p.close();
-p = await open(tab + "&bview=memory&mem=unsearchable");
-check("S12 a changed note not yet searchable", (await panelText(p)).includes("Not yet searchable"));
-await p.close();
-p = await open(tab + "&bview=memory&mem=empty");
-check("S12 empty", (await panelText(p)).includes("Otto hasn't saved anything yet."));
-await p.close();
+for (const [state, words] of [
+  ["searchoff", "Search is off for Otto in the gateway's settings."],
+  ["nosearch", "Otto's memory search isn't set up on this gateway: Memory provider unavailable. Files are still listed."],
+  ["unsearchable", "Not yet confirmed searchable"],
+  ["empty", "Otto hasn't saved anything yet."],
+  ["import", "6 items from house-notes.md"],
+]) {
+  p = await open(tab + `&bview=memory&mem=${state}`);
+  check(`S12 memory ${state}`, (await panelText(p)).includes(words));
+  await p.close();
+}
 p = await open(tab + "&bview=memory&access=read");
 check("S12 read-only: the memory request, once", (await panelText(p)).includes("Changing Otto's memory needs admin access. The gateway lets only admin connections write a bot's files.") && (await p.evaluate(() => document.querySelectorAll("#panel-settings .access-bar").length === 1)));
 await p.close();
 p = await open("open=settings&section=memory");
 t = await dialogText(p);
-check("F-213 shared memory: folders every bot searches, not loaded", t.includes("Every bot searches these folders when it looks in its memory. They aren't loaded into a bot's prompt by themselves.") && t.includes("/srv/bots/shared"));
+check("F-213 shared memory names which bots search it, and which don't", t.includes("Searched by Juniper, Marlow, Otto. Not by Pip: its memory search is off."));
 await p.click('[data-c="shared-pin"]');
 await p.waitForTimeout(60);
+check("F-455 copying into every bot's root memory says what it means", await p.evaluate(() => document.querySelector("#confirm-dialog").textContent.includes("Each copy is that bot's own; editing the shared file later doesn't change them. All or nothing.")));
 await p.click('#confirm-dialog [data-b="confirm-ok"]');
 await p.waitForTimeout(80);
-check("F-455 always load for every bot is refused when one bot's memory is full", (await dialogText(p)).includes("Pinned memory is full for Pip."));
-await p.close();
-p = await open("open=settings&section=memory&shared=none");
-check("S13 no shared folder, and it must already exist", (await dialogText(p)).includes("No shared memory") && (await dialogText(p)).includes("The folder must already exist on the gateway's machine; Clawtrate can't create it."));
+check("F-455 all or nothing: refused whole when one bot is full", (await dialogText(p)).includes("Nothing was copied: Pip's root memory would pass its budget."));
 await p.close();
 
-// Where a bot runs, and machines (sections 14 and 15) -----------------------------------------
+// Where a bot runs, and machines (sections 14 and 15) ------------------------------------------
 p = await open(tab + "&bview=machine");
 t = await panelText(p);
-check("F-046 commands' machine is a setting, and says so", t.includes("Run Otto's commands on:") && t.includes("A setting for Otto. A task can be sent to another machine."));
-check("F-273 a node's bot has no browser of its own here, and why", t.includes("Not supported on this machine: Clawtrate's computer plugin runs browsers on the gateway's machine only."));
-check("F-047 what Otto can reach, each from its own source", ["Accounts", "Tool servers", "Secrets", "Plugin sign-ins", "Folders", "The gateway's secret store, shared by every bot"].every((w) => t.includes(w)) && t.includes("not a wall"));
-check("F-272 another bot on the same machine is named", t.includes("Pip is also set to run commands here."));
+check("F-046 three places: commands, workspace, browser", has(t, "Run Otto's commands on:", "workspaces/otto, on the gateway's machine", "The gateway's shared browser, on the gateway's machine."));
+check("S14 commands elsewhere don't move the workspace or the browser", t.includes("On media-box, commands run in media-box's own folder unless a task names one.") && t.includes("Commands running on media-box don't change where the browser is."));
+check("F-047 what the settings name is inventory", t.includes("Inventory. Whether Otto can use each isn't reported."));
+check("S14 the gateway creates a workspace on its own machine", t.includes("the gateway creates it if it doesn't exist."));
 await p.close();
 p = await open(tab + "&bview=machine&machine=shared");
-check("F-272 a shared workspace leads the page", (await panelText(p)).includes("Otto shares its workspace folder with Pip.") && (await panelText(p)).includes("Files one bot writes, the other can change."));
+check("F-272 a shared workspace leads the page", (await panelText(p)).includes("Otto shares its workspace folder with Pip. Files one bot writes, the other can change."));
 await p.close();
 p = await open(tab + "&bview=machine&access=read");
-check("F-047 below admin, secrets and plugin sign-ins need admin", (await panelText(p)).includes("Needs admin access") && (await panelText(p)).includes("Changing where Otto runs needs admin access."));
-await p.close();
-p = await open("bot=pip&panel=open&tab=settings&bview=machine");
-check("F-273 F-274 a bot on the gateway's machine: shared browser, and its folder shared", (await panelText(p)).includes("The gateway's shared browser.") && (await panelText(p)).includes("Pip shares its workspace folder with Marlow."));
+check("F-047 below admin, secrets and sign-ins need admin", (await panelText(p)).includes("Needs admin access") && (await panelText(p)).includes("Changing where Otto runs needs admin access."));
 await p.close();
 p = await open("open=settings&section=machines");
 t = await dialogText(p);
-check("F-157 machines with state and last seen, and paired devices", t.includes("media-box") && t.includes("Last seen") && t.includes("This device") && t.includes("Clawtrate on iPhone"));
-check("F-156 a machine's command approvals: three choices, set on the machine", await p.evaluate(() => document.querySelectorAll('[data-c="node-approvals"]').length === 3) && t.includes("a bot's own policy can't loosen it"));
+check("F-156 a machine's approvals file: defaults, entries, effective", has(t, "Defaults, for bots with no entry of their own", "Its own entry: Ask on every command", "Review first (Otto's policy), then Ask every time (its entry here)"));
+check("S15 Allow every command still meets each bot's policy", t.includes('"Allow every command" still meets each bot\'s own policy.'));
+check("F-157 machines and paired devices", has(t, "media-box", "Last seen", "This device", "Clawtrate on iPhone"));
+await p.close();
+p = await open("open=settings&section=machines&access=write");
+check("S15 below admin the approvals file isn't shown", (await dialogText(p)).includes("Seeing a machine's approvals needs admin access.") && !(await dialogText(p)).includes("Its own entry"));
 await p.close();
 p = await open("open=settings&section=machines&devices=noscope");
-check("S15 paired devices below device access: the device request, not admin", (await dialogText(p)).includes("Managing paired devices needs device access.") && (await dialogText(p)).includes("Seeing paired devices needs device access."));
+check("S15 paired devices below device access: the device request", (await dialogText(p)).includes("Managing paired devices needs device access."));
 await p.close();
 
-// Usage and budgets (sections 16 and 17) ------------------------------------------------------
+// Usage and budgets (sections 16 and 17) --------------------------------------------------------
 p = await open(tab + "&bview=usage");
 t = await panelText(p);
-check("F-232 tokens as the gateway reports them, with source and age", ["Input", "Output", "Cache read", "Cache write", "Total"].every((w) => t.includes(w)) && t.includes("From the gateway's usage records, as of 5:41 PM."));
-check("F-232 cost is the gateway's estimate, in US dollars, never Clawtrate's", t.includes("About $3.18") && t.includes("Estimated by the gateway from its configured prices, in US dollars."));
-check("F-131 F-237 by source, with Not attributed", t.includes("Messages from other bots") && t.includes("Not attributed") && t.includes("never charged to one message"));
-check("F-233 what fills the context isn't reported", t.includes("What fills it isn't reported: the gateway counts input, output and cache, not history, memory or tools apart."));
-await p.click('[data-c="period"][data-value="today"]');
-await p.waitForTimeout(60);
-check("S16 the period changes the figures", !(await panelText(p)).includes("312,400 tokens"));
+check("S16 the budget comes before the figures", await p.evaluate(() => { const g = [...document.querySelectorAll("#panel-settings .b-group")].map((x) => x.textContent); return g.indexOf("Budget") < g.indexOf("Usage"); }));
+check("S17 by default a budget is a warning, and says so", t.includes("Shown only") && t.includes("Stopping Otto at the limit needs Clawtrate's budget plugin"));
+check("S16 the budget and the totals are the same figure", t.includes("1.64M of 2.5M tokens this week") && t.includes("1,640,000 tokens"));
+check("F-232 the cost is the gateway's estimate, with source and age", t.includes("About $3.29") && t.includes("The gateway's estimate from its configured prices, in US dollars, as of 5:41 PM."));
+check("F-131 F-237 by source, with Not attributed", has(t, "Messages from other bots", "Not attributed", "never charged to one message"));
+check("F-233 what fills the context isn't reported", t.includes("What fills it isn't reported"));
 await p.close();
-p = await open(tab + "&bview=usage&usage=nocost");
-check("F-232 no price: unavailable, never zero", (await panelText(p)).includes("Cost unavailable for scripted/dev-1: the gateway has no price for it.") && !(await panelText(p)).includes("$0.00"));
-await p.close();
-p = await open(tab + "&bview=usage&usage=computing");
-check("F-232 still being counted", (await panelText(p)).includes("Still being counted"));
-await p.close();
+for (const [state, words] of [
+  ["partial", "Partial: 2 runs have no price configured."],
+  ["nocost", "Cost unavailable for scripted/dev-1: the gateway has no price for it."],
+  ["computing", "Still being counted"],
+]) {
+  p = await open(tab + `&bview=usage&usage=${state}`);
+  check(`F-232 usage ${state}`, (await panelText(p)).includes(words));
+  await p.close();
+}
 p = await open(tab + "&bview=usage&budget=warn");
-t = await panelText(p);
-check("F-396 at 82 percent: the meter warns, with numbers in text", (await p.evaluate(() => document.querySelector('#panel-settings .c-meter[data-tone="warn"] [role="meter"]') !== null)) && t.includes("82%"));
-check("F-234 a budget without its plugin is marked Shown only, and says what enforcing needs", t.includes("Shown only") && t.includes("Enforcing budgets needs Clawtrate's budget plugin, with the gateway's owner's permission to read conversations."));
+check("F-396 at 82 percent: the meter warns, with numbers", (await panelText(p)).includes("1.64M of 2M tokens this week") && (await p.evaluate(() => document.querySelector('#panel-settings .c-meter[data-tone="warn"] [role="meter"]') !== null)));
 await p.close();
 p = await open(tab + "&bview=usage&budget=reached");
-check("F-397 shown only, used up: Clawtrate holds back its own sends and names what it doesn't stop", (await panelText(p)).includes("so Clawtrate won't send from here.") && (await text(p, ".c-composer-note")).includes("other apps, channels and Otto's routines aren't stopped."));
+check("F-397 a warning budget used up holds back Clawtrate's own sends, and says what it doesn't stop", (await text(p, ".c-composer-note")).includes("other apps, channels and Otto's routines aren't stopped."));
 await p.close();
 p = await open(tab + "&bview=usage&budget=enforced");
-check("F-234 an enforced budget carries the budget plugin's mark", (await panelText(p)).includes("Clawtrate's budget plugin enforces this"));
+t = await panelText(p);
+check("S17 a held budget names the routes it covers and those it doesn't", t.includes("Only while Clawtrate's budget plugin runs") && t.includes("Not for runs on the Codex harness: those are warned only."));
 await p.close();
-p = await open("bot=otto&task=o3&budget=enforcedreached");
-check("F-397 with the plugin, the gateway refused the run, said in the task", (await text(p, "#transcript")).includes("Otto didn't start: its weekly budget is used up") && (await text(p, "#transcript")).includes("It resets Monday at 00:00."));
-await p.close();
-p = await open("bot=otto&task=o3&budget=warn");
-check("F-396 the 80 percent line in the task", (await text(p, "#transcript")).includes("Otto has used 82% of its weekly budget: 1.64M of 2M tokens."));
+for (const [state, words] of [
+  ["unconsented", "the gateway's owner hasn't let it read conversations. This budget is a warning until they do."],
+  ["pluginstopped", "The budget plugin isn't running (or is older than this budget needs), so nothing stops Otto at the limit."],
+  ["behind", "The plugin's count is from 5:12 PM; runs since then may not be counted, so Otto can pass the limit."],
+  ["unenforced", "Otto's budget isn't being enforced now."],
+  ["invalid", "Enter a whole number of 1,000 or more."],
+]) {
+  p = await open(tab + `&bview=usage&budget=${state}`);
+  check(`S17 budget ${state}`, (await panelText(p)).includes(words));
+  await p.close();
+}
+p = await open(tab + "&budget=unenforced");
+check("S17 a chosen stop that isn't held leads the Usage row", (await panelText(p)).includes("Budget not being enforced now"));
 await p.close();
 p = await open(tab + "&bview=usage&budget=invalid");
-check("S17 an invalid number is refused, and Save waits", (await panelText(p)).includes("Enter a whole number of 1,000 or more.") && (await p.evaluate(() => document.querySelector('[data-c="budget-save"]').disabled)));
-await p.fill("[data-c-budget]", "2500000");
+await p.fill("[data-c-budget]", "3000000");
 await p.waitForTimeout(60);
 await p.click('[data-c="budget-save"]');
-await p.waitForTimeout(60);
-check("F-459 raising the budget saves it", (await announced(p)).includes("Budget saved") && (await panelText(p)).includes("2.5M"));
+check("F-459 raising the budget saves it", (await announced(p)).includes("Budget saved") && (await panelText(p)).includes("1.64M of 3M"));
 await p.close();
-p = await open(tab + "&bview=usage&budget=none");
-check("S17 no budget: set one", (await p.$('[data-c="budget-new"]')) !== null);
+p = await open("bot=otto&task=o3&budget=enforcedreached");
+check("F-397 the plugin refused the run, said with its routes", (await text(p, "#transcript")).includes("Otto didn't start: its weekly budget is used up") && (await text(p, "#transcript")).includes("for runs from apps, channels and the command line"));
+await p.close();
+p = await open("bot=otto&task=o3&budget=warn");
+check("F-396 the 80 percent line agrees with the budget", (await text(p, "#transcript")).includes("Otto has used 82% of its weekly budget: 1.64M of 2M tokens."));
 await p.close();
 p = await open("open=settings&section=usage");
 t = await dialogText(p);
-check("F-235 provider limits as the gateway reports them", t.includes("OpenAI · Weekly · 62% used · resets Nov 20") && t.includes("xAI · No limits reported."));
-check("F-237 usage by bot, and budgets with their marks", t.includes("By bot") && t.includes("Routine Weekly cleanup (Otto) · daily") && t.includes("Shown only"));
+check("F-235 provider limits carry their time and no account", t.includes("OpenAI · Weekly · 62% used · resets Nov 20 · as of 5:40 PM") && t.includes("Neither says which of your accounts it is about."));
 await p.close();
 p = await open("bot=otto&plimit=near");
-check("F-236 near a provider's limit: a banner above the composer, with a close button", (await text(p, ".c-composer-note")).includes("OpenAI reports 92% of the weekly limit used on OpenAI · Work. It resets in 2 days.") && (await p.$('.c-composer-note [data-c="banner-close"]')) !== null);
-await p.close();
-p = await open("bot=otto&plimit=reached");
-check("F-236 at the limit", (await text(p, ".c-composer-note")).includes("OpenAI's weekly limit is reached on OpenAI · Work."));
+check("F-236 near a provider's limit: no account is named", (await text(p, ".c-composer-note")).includes("OpenAI reports 92% of a weekly limit used, as of 5:40 PM. It doesn't say which of your OpenAI accounts."));
 await p.close();
 p = await open("bot=otto&task=o1&saveline=1");
-check("F-110 Saved to memory is a line in the task", (await text(p, "#transcript")).includes("Saved to memory: memory/2026-11-17.md"));
 await p.click('[data-c="saved-to-memory"]');
 await p.waitForTimeout(200);
-check("F-110 it opens the saved item in the memory viewer", (await panelText(p)).includes("Disk at 91% after the camera import."));
+check("F-110 Saved to memory opens that item", (await panelText(p)).includes("Disk at 91% after the camera import."));
 await p.close();
 
-// The gallery's Controls section --------------------------------------------------------------
+// The gallery's Controls section ----------------------------------------------------------------
 p = await b.newPage({ viewport: { width: 1440, height: 900 } });
 p.on("pageerror", (e) => out.push("PAGEERROR " + e));
 await p.goto(pageUrl("gallery.html") + "?chrome=0&theme=light&section=controls");
 await p.waitForTimeout(200);
 t = await text(p, "#controls");
-check("S3 F-334 a refused call names what decided, for each source", ["The gateway's settings deny exec for every bot. Set on the gateway.", "Otto's settings: Never run commands.", "Otto's rule: Never run commands matching rm -rf *.", "You denied it at 5:43 PM.", "No one answered within 10 minutes.", "No one could be asked"].every((w) => t.includes(w)));
-check("S18 a person's denial and an expiry are not Blocked by policy", await p.evaluate(() => { const s = [...document.querySelectorAll("#controls .spec")]; const of = (n) => s.find((x) => x.querySelector("h3").textContent.includes(n)).querySelector(".spec-box").textContent; return !of("A person").includes("Blocked by policy") && of("A person").includes("Denied") && of("No answer").includes("Expired"); }));
-check("F-167 the ask's grant form: for whom and how long, and its wait", t.includes("Asked because of Otto's rule 'Message other bots: ask first'.") && ["Otto only", "Every bot", "1 hour", "1 day", "Until revoked"].every((w) => t.includes(w)) && t.includes("Waits 10 minutes"));
-check("F-416 a full scope names the replaced rule", t.includes("Replaced the oldest rule: 'Allow under drafts/**'."));
-check("F-311 F-436 the Messaged card's policy states", t.includes("Otto may not message Marlow (Otto's messaging settings; the gateway enforces this). Nothing was sent.") && t.includes("You denied the approval. Nothing was sent."));
+check("S3 F-334 a refused call says what decided, recorded or inferred", has(t, "Recorded: removed from Otto's tools by Otto's settings (read 5:41 PM).", "Inferred: Otto's settings deny this tool now; Clawtrate didn't read them before this call.", "The gateway's settings changed while it waited."));
+check("S18 an answer and its outcome are two lines", has(t, "Your answer: Allowed once, 5:44 PM.", "Then: Didn't run: the gateway's settings changed while it waited.", "Saving it wasn't confirmed."));
+check("S6 an expired ask offers a rule, not a grant", t.includes("Expired. Nothing ran.") && t.includes("Make a rule…") && !t.includes("Always allow next time"));
+check("F-167 the save form: scope, lifetime, what it covers, Every bot for admin", has(t, "Otto only", "Every bot", "1 hour", "Until revoked", "Saving for every bot needs admin access.", "It answers this rule only, at this version"));
+check("S6 an ask that can't be saved offers Allow once and Deny only", has(t, "Each message is asked about."));
+check("S6 at the saved-approval limit Always allow is refused, never evicting", t.includes("Otto has 20 saved approvals. Remove one in Settings, Permissions, to save another."));
+check("F-311 F-436 the Messaged card's policy states", has(t, "Otto may not message Marlow: Otto's messaging settings. The gateway enforces this.", "Set on the gateway. Nothing was sent.", "held by Clawtrate's rules plugin", "You denied the approval. Nothing was sent."));
 const links = await p.evaluate(() => [...document.querySelectorAll("#controls .c-state-links a")].map((a) => a.getAttribute("href")));
-check("S23 every state of controls.html is linked from the gallery", links.length >= 80 && links.every((h) => h.startsWith("controls.html?")), String(links.length));
+check("S23 every state of controls.html is linked from the gallery", links.length >= 113 && links.every((h) => h.startsWith("controls.html?")), String(links.length));
 await p.close();
 
-// Phone, themes, motion (section 19) -----------------------------------------------------------
+// Phone, themes, motion (section 19) -------------------------------------------------------------
 p = await open(tab + "&bview=rules&width=phone", { width: 390, height: 844 });
+check("S7 phone: Never is visible without scrolling", await p.evaluate(() => { const n = [...document.querySelectorAll(".c-glance-block")].find((b) => b.querySelector("h4").textContent.startsWith("Never")); return n && n.getBoundingClientRect().bottom <= innerHeight; }));
+check("S19 phone: the glance stacks", await p.evaluate(() => { const r = [...document.querySelectorAll(".c-glance-block")].map((b) => b.getBoundingClientRect().left); return new Set(r.map(Math.round)).size === 1; }));
 check("S19 phone: a line's words never shorten", await p.evaluate(() => [...document.querySelectorAll(".c-line-words > span")].every((s) => s.scrollWidth <= s.clientWidth + 1)));
-check("S19 phone: lines are 56 px or taller", await p.evaluate(() => [...document.querySelectorAll(".c-line")].every((l) => l.getBoundingClientRect().height >= 55.5)));
 await p.close();
 p = await open(tab + "&bview=rule&line=exec&width=phone", { width: 390, height: 844 });
-check("S19 phone: choices are 44 px or taller, four in two rows", await p.evaluate(() => { const r = [...document.querySelectorAll('[data-c="exec"]')].map((x) => x.getBoundingClientRect()); return r.every((x) => x.height >= 44) && new Set(r.map((x) => Math.round(x.top))).size === 2; }));
+check("S19 phone: choices 44 px or taller, four in two rows", await p.evaluate(() => { const r = [...document.querySelectorAll('[data-c="exec"]')].map((x) => x.getBoundingClientRect()); return r.every((x) => x.height >= 44) && new Set(r.map((x) => Math.round(x.top))).size === 2; }));
 await p.close();
 p = await open("open=settings&section=permissions&part=activity&width=phone", { width: 390, height: 844 });
-check("S19 phone: activity rows fit the width", await p.evaluate(() => [...document.querySelectorAll(".c-log")].every((r) => r.scrollWidth <= r.clientWidth + 1)));
+check("S7 phone: the filters never cover the first row", await p.evaluate(() => document.querySelector(".c-filters[role=group]").getBoundingClientRect().bottom <= document.querySelector(".c-log").getBoundingClientRect().top));
+check("S7 phone: every filter is fully visible", await p.evaluate(() => { const band = document.querySelector(".c-filters[role=group]").getBoundingClientRect(); return [...document.querySelectorAll(".c-filters[role=group] > *")].every((x) => { const r = x.getBoundingClientRect(); return r.left >= band.left - 1 && r.right <= band.right + 1; }); }));
+check("S7 phone: every tag stays inside its row, uncut", await p.evaluate(() => [...document.querySelectorAll(".c-log")].every((row) => { const tag = row.querySelector(".c-tag"); const a = row.getBoundingClientRect(); const r = tag.getBoundingClientRect(); return r.right <= a.right + 1 && tag.scrollWidth <= tag.clientWidth + 1; })));
 await p.close();
 p = await b.newPage({ viewport: { width: 1440, height: 900 } });
 p.on("pageerror", (e) => out.push("PAGEERROR " + e));
