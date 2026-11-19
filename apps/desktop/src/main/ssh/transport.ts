@@ -141,14 +141,23 @@ export function failureNote(
 
 /** The fixed copy for a forward's cause that has no SSH failure of its own. */
 export function forwardNote(
-  cause: { kind: "forwarding-refused" } | { kind: "gateway-not-running" },
+  cause:
+    | { kind: "forwarding-refused" }
+    | { kind: "gateway-not-running" }
+    | { kind: "gateway-not-answering" },
   route: Route,
 ): { title: string; sentence: string } {
   const name = route.target.destination.host;
   if (cause.kind === "forwarding-refused") {
     return {
       title: `${name} doesn't allow forwarding`,
-      sentence: `The SSH server on ${name} refused to open a connection to the gateway. Its sshd needs AllowTcpForwarding set to yes or local.`,
+      sentence: `The SSH server on ${name} refused this forwarded connection. Check whether its SSH configuration and your key allow forwarding to the gateway port.`,
+    };
+  }
+  if (cause.kind === "gateway-not-answering") {
+    return {
+      title: `Nothing answered on the gateway port on ${name}`,
+      sentence: "The SSH server could not connect to the gateway's port.",
     };
   }
   return {

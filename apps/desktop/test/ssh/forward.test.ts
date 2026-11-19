@@ -155,9 +155,10 @@ describe("the forward's states", () => {
     });
     await h.advance(2000);
     await h.up();
+    // A forwarded connection that failed says the port didn't answer, not that OpenClaw stopped.
     expect(h.forward.state).toMatchObject({
       phase: "waiting",
-      cause: { kind: "gateway-not-running" },
+      cause: { kind: "gateway-not-answering" },
     });
     expect(h.verifyCalls()).toBe(0);
     expect(h.states.some((s) => s.phase === "up")).toBe(false);

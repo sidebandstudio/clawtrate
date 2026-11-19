@@ -301,9 +301,10 @@ describe("the gateway service on a port", () => {
       });
     }
     expect(serviceOnPort(facts(), 18790)).toEqual({ ok: false, reason: "none" });
+    // A running service whose gateway didn't answer its RPC is not proven stopped.
     expect(serviceOnPort(facts({ rpc: { ok: false } }), 18789)).toEqual({
       ok: false,
-      reason: "not-running",
+      reason: "cant-tell",
     });
   });
 

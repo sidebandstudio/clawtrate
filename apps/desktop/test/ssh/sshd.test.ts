@@ -673,6 +673,34 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     }
   });
 
+  it("a forwarded connection that fails is the gateway port not answering, not OpenClaw stopped", async () => {
+    const closedPort = await freePort();
+    stub.setStatus("default", statusJson({ port: closedPort, home: t.home }));
+    try {
+      const look = await transport.look(route);
+      if (!look.ok) throw new Error("look failed");
+      // The LOOK reports the service running there, but nothing listens on that port.
+      const found = serviceOnPort(look.facts, closedPort);
+      if (!found.ok) throw new Error("no service");
+      const forward = await openForward(route, found);
+      try {
+        await waitFor(() => forward.state.phase === "waiting", 20000, "the forward to wait");
+        expect(forward.state).toMatchObject({
+          phase: "waiting",
+          cause: { kind: "gateway-not-answering" },
+        });
+      } finally {
+        await forward.close();
+      }
+      expect(forwardNote({ kind: "gateway-not-answering" }, route)).toEqual({
+        title: "Nothing answered on the gateway port on devbox",
+        sentence: "The SSH server could not connect to the gateway's port.",
+      });
+    } finally {
+      stub.setStatus("default", statusJson({ port: gateway.port, home: t.home }));
+    }
+  });
+
   it("a server that refuses forwarding is its own state, and the forward is never up", async () => {
     const strict = await startSshd(join(root, "noforward"), t.home, t.userKey, {
       forwarding: "no",
@@ -703,7 +731,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       expect(forwardNote({ kind: "forwarding-refused" }, strictRoute)).toEqual({
         title: "strict doesn't allow forwarding",
         sentence:
-          "The SSH server on strict refused to open a connection to the gateway. Its sshd needs AllowTcpForwarding set to yes or local.",
+          "The SSH server on strict refused this forwarded connection. Check whether its SSH configuration and your key allow forwarding to the gateway port.",
       });
       await forward.close();
       transport.forget(strictRoute);

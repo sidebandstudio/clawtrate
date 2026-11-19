@@ -371,8 +371,7 @@ export function serviceOnPort(
     if (gateway.exit !== 0 || !service || !gateway.configPath || service.label === "other") {
       return { ok: false, reason: "cant-tell" };
     }
-    if (service.running === false || gateway.rpcOk === false)
-      return { ok: false, reason: "not-running" };
+    if (service.running === false) return { ok: false, reason: "not-running" };
     if (service.running !== true || service.loaded !== true || gateway.rpcOk !== true) {
       return { ok: false, reason: "cant-tell" };
     }

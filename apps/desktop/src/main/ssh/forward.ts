@@ -31,6 +31,8 @@ export type ForwardCause =
   | { kind: "local-port-taken" }
   /** The LOOK found the gateway's service on that port, but stopped or not answering. */
   | { kind: "gateway-not-running" }
+  /** The other computer's SSH server could not connect to the gateway's port. */
+  | { kind: "gateway-not-answering" }
   /** The LOOK found no gateway service on that port, or answered in a way that couldn't be read. */
   | { kind: "cant-tell" }
   /** The other computer's SSH server refused to forward a connection to the gateway's port. */
@@ -234,7 +236,7 @@ export class ForwardSupervisor {
         .then((answer) => {
           if (generation !== this.generation || this.closed()) return;
           if (answer === "forwarding-refused") return this.restart({ kind: "forwarding-refused" });
-          if (answer === "gateway-closed") return this.restart({ kind: "gateway-not-running" });
+          if (answer === "gateway-closed") return this.restart({ kind: "gateway-not-answering" });
           if (answer !== "http") return this.restart({ kind: "cant-tell" });
           return this.deps.verify(this.stop.signal).then(
             (result) => this.verified(generation, port, result),
