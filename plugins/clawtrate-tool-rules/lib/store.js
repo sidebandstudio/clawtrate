@@ -379,6 +379,8 @@ export class DecisionLog {
     this.unsaved = 0;
     /** Whether the record on disk was read (or is missing); until then nothing is written. */
     this.loaded = false;
+    /** When the record set aside as oversized was set aside, until that is recorded on it. */
+    this.asideUnstampedAt = null;
     this.problem = null;
     this.#load();
   }
@@ -405,31 +407,30 @@ export class DecisionLog {
       // In time order, the order within a millisecond kept.
       this.records = [...this.byId.values()].sort((a, b) => a.at - b.at);
     };
-    let text;
+    let text = "";
+    let aside = null;
     try {
-      // A file past the cap is not read into memory: it is set aside, and a new one started.
+      // A file past the cap is not read into memory: it is set aside.
       if (statSync(this.path).size > MAX_DECISIONS_BYTES) {
-        renameSync(this.path, this.oversizePath);
-        // Stamped with when it was set aside, which its removal counts from.
-        const asideAt = this.now() / 1000;
-        utimesSync(this.oversizePath, asideAt, asideAt);
-        this.problem = `the decision record was larger than ${MAX_DECISIONS_BYTES} bytes; it was set aside as ${DECISIONS_FILE}.oversize and a new one started`;
-        this.loaded = true;
-        keep();
-        this.unsaved += held.length;
-        return;
+        aside = this.#setAside();
+        if (aside === null) {
+          keep();
+          return;
+        }
+      } else {
+        text = readFileSync(this.path, "utf8");
       }
-      text = readFileSync(this.path, "utf8");
     } catch (error) {
-      keep();
       if (error?.code !== "ENOENT") {
+        keep();
+        this.loaded = false;
         this.problem = `the decision record cannot be read (${error.code ?? "error"})`;
         return;
       }
-      this.loaded = true;
-      this.unsaved += held.length;
-      return;
     }
+    // One way on for a record read, a missing one and one just set aside; a
+    // stale read error goes with the read that succeeded.
+    this.problem = aside;
     this.loaded = true;
     // A last line with no newline was torn by a write that did not finish: cut
     // it (or end it, if it is whole) before anything is appended after it.
@@ -455,11 +456,46 @@ export class DecisionLog {
         this.byId.set(record.id, record);
       }
     }
-    // What this process held before the file could be read is not on disk yet.
     keep();
-    this.unsaved += held.length;
+    // What this process held before the file could be read is not on disk yet:
+    // it is written now, not at a later retry.
+    if (held.length > 0) {
+      this.unsaved += held.length;
+      this.#maintain(true);
+      return;
+    }
     this.prune();
     this.#maintain();
+  }
+
+  /**
+   * Set the record past the byte cap aside, unread: the problem to say, or
+   * null when it could not be moved (then nothing is written).
+   */
+  #setAside() {
+    try {
+      renameSync(this.path, this.oversizePath);
+    } catch (error) {
+      this.loaded = false;
+      this.problem = `the decision record is larger than ${MAX_DECISIONS_BYTES} bytes and could not be set aside (${error.code ?? "error"}); nothing is written until it is`;
+      return null;
+    }
+    // Set aside: stamped with when, which its removal counts from.
+    this.asideUnstampedAt = this.now();
+    const said = `the decision record was larger than ${MAX_DECISIONS_BYTES} bytes; it was set aside as ${DECISIONS_FILE}.oversize`;
+    try {
+      this.#stampAside();
+      return said;
+    } catch (error) {
+      return `${said}, but when could not be recorded on it (${error.code ?? "error"}); its removal waits until it is`;
+    }
+  }
+
+  #stampAside() {
+    if (this.asideUnstampedAt === null) return;
+    const at = this.asideUnstampedAt / 1000;
+    utimesSync(this.oversizePath, at, at);
+    this.asideUnstampedAt = null;
   }
 
   /**
@@ -571,7 +607,13 @@ export class DecisionLog {
     this.expiryPending ||= this.evictedOldestAt !== null && this.evictedOldestAt < cutoff;
     const heldExpired = this.records.length > 0 && this.records[0].at < cutoff;
     // A record a failed write left off the disk is retried here too, on an idle gateway.
-    if (this.expiryPending || heldExpired || this.unsaved > 0) {
+    if (
+      !this.loaded ||
+      this.tornTail !== null ||
+      this.expiryPending ||
+      heldExpired ||
+      this.unsaved > 0
+    ) {
       this.#maintain(true);
     }
   }
@@ -579,6 +621,8 @@ export class DecisionLog {
   /** Remove a record set aside as oversized once it was set aside before `cutoff`. */
   #pruneOversize(cutoff) {
     try {
+      // A stamp that failed is tried again first: the file's own time is not when it was set aside.
+      this.#stampAside();
       if (statSync(this.oversizePath).mtimeMs < cutoff) rmSync(this.oversizePath, { force: true });
     } catch {
       // None set aside, or it cannot be looked at: the next prune looks again.

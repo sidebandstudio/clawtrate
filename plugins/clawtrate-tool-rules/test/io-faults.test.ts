@@ -18,6 +18,7 @@ const io = vi.hoisted(() => ({
   reads: 0,
   truncateFails: false,
   appendFails: 0,
+  utimesFails: false,
   renameFails: false,
   /** Run once right after the next rename: another writer replacing the file. */
   afterRename: null as null | (() => void),
@@ -66,6 +67,10 @@ vi.mock("node:fs", async (importOriginal) => {
       io.afterRename = null;
       after?.();
     },
+    utimesSync: (...args: Parameters<typeof real.utimesSync>) => {
+      if (io.utimesFails) throw Object.assign(new Error("injected"), { code: "ENOSPC" });
+      return real.utimesSync(...args);
+    },
     truncateSync: (...args: Parameters<typeof real.truncateSync>) => {
       if (io.truncateFails) throw Object.assign(new Error("injected"), { code: "EIO" });
       return real.truncateSync(...args);
@@ -84,6 +89,7 @@ afterEach(() => {
   io.truncateFails = false;
   io.appendFails = 0;
   io.renameFails = false;
+  io.utimesFails = false;
   io.afterRename = null;
   io.tempCloseFails = 0;
   cleanups.splice(0).forEach((done) => done());
@@ -148,7 +154,9 @@ describe("a torn last line that cannot be cut", () => {
     io.truncateFails = true;
     io.renameFails = true;
     const again = new DecisionLog(dir, { now: () => 2 });
-    expect(again.problem).toMatch(/last line is torn and could not be repaired/);
+    // The cut failed, and so did the whole rewrite tried after it.
+    expect(again.problem).toMatch(/cannot be written \(ENOSPC\)/);
+    expect(readFileSync(file, "utf8")).toBe(torn);
     const id = again.add({ ...fields, tool: "write" });
     expect(readFileSync(file, "utf8")).toBe(torn);
     expect(again.problem).not.toBeNull();
@@ -378,5 +386,121 @@ describe("decisions held while the record could not be read, and another writer'
     log.prune();
     expect(log.problem).toBeNull();
     expect(lines(file).map((r) => r.id)).toEqual([...seeded, held]);
+  });
+});
+
+describe("recovery of a decision record", () => {
+  const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+  const seed = () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    const file = join(dir, "decisions.jsonl");
+    const first = new DecisionLog(dir, { now: () => 100 });
+    const seeded = Array.from({ length: 10 }, () => first.add(fields));
+    io.path = file;
+    return { dir, file, seeded };
+  };
+  const ids = (file: string) =>
+    actual
+      .readFileSync(file, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => (JSON.parse(line) as { id: string }).id);
+  /** Unreadable at start and at the first decision, which is held in memory. */
+  const holding = (dir: string) => {
+    io.failures = 2;
+    const log = new DecisionLog(dir, { now: () => 110 });
+    const held = log.add(fields);
+    expect(log.problem).toMatch(/cannot be read \(EIO\)/);
+    return { log, held };
+  };
+
+  it("clears a read error at the first idle maintenance that reads it, with nothing held", () => {
+    const { dir, file, seeded } = seed();
+    const before = actual.readFileSync(file, "utf8");
+    io.failures = 1;
+    const log = new DecisionLog(dir, { now: () => 110 });
+    expect(log.problem).toMatch(/cannot be read \(EIO\)/);
+    log.prune();
+    expect(log.problem).toBeNull();
+    expect(log.list({ limit: 50 }).records.map((r) => r.id)).toEqual([...seeded].reverse());
+    expect(actual.readFileSync(file, "utf8")).toBe(before);
+  });
+
+  for (const ending of ["whole", "torn"] as const) {
+    it(`repairs a ${ending} last line that could not be repaired at start, at the first idle maintenance`, () => {
+      const { dir, file, seeded } = seed();
+      const text = actual.readFileSync(file, "utf8");
+      writeFileSync(file, ending === "whole" ? text.trimEnd() : `${text}{"id":"torn`);
+      if (ending === "whole") io.appendFails = 1;
+      else io.truncateFails = true;
+      io.renameFails = true;
+      const log = new DecisionLog(dir, { now: () => 110 });
+      expect(log.problem).not.toBeNull();
+      io.truncateFails = false;
+      io.renameFails = false;
+      log.prune();
+      expect(log.problem).toBeNull();
+      expect(actual.readFileSync(file, "utf8").endsWith("}\n")).toBe(true);
+      expect(ids(file)).toEqual(seeded);
+    });
+  }
+
+  it("writes what it held at the first maintenance after the record was removed", () => {
+    const { dir, file } = seed();
+    const { log, held } = holding(dir);
+    actual.rmSync(file);
+    log.prune();
+    expect(log.problem).toBeNull();
+    expect(ids(file)).toEqual([held]);
+  });
+
+  it("writes what it held at the first maintenance that sets an oversized record aside", () => {
+    const { dir, file } = seed();
+    const { log, held } = holding(dir);
+    actual.truncateSync(file, 64 * 1024 * 1024 + 1);
+    log.prune();
+    expect(log.problem).toBeNull();
+    expect(ids(file)).toEqual([held]);
+    expect(actual.statSync(`${file}.oversize`).size).toBe(64 * 1024 * 1024 + 1);
+  });
+
+  it("says when the oversized record cannot be set aside, and sets it aside at the next maintenance", () => {
+    const { dir, file } = seed();
+    const { log, held } = holding(dir);
+    actual.truncateSync(file, 64 * 1024 * 1024 + 1);
+    io.renameFails = true;
+    log.prune();
+    expect(log.problem).toMatch(/could not be set aside \(ENOSPC\)/);
+    expect(actual.statSync(file).size).toBe(64 * 1024 * 1024 + 1);
+    io.renameFails = false;
+    log.prune();
+    expect(log.problem).toBeNull();
+    expect(ids(file)).toEqual([held]);
+  });
+
+  it("writes what it held though the set-aside record's time cannot be recorded, and records it later", () => {
+    const { dir, file } = seed();
+    const { log, held } = holding(dir);
+    actual.truncateSync(file, 64 * 1024 * 1024 + 1);
+    io.utimesFails = true;
+    log.prune();
+    expect(log.problem).toBeNull();
+    expect(ids(file)).toEqual([held]);
+    io.utimesFails = false;
+    log.prune();
+    expect(actual.statSync(`${file}.oversize`).mtimeMs).toBe(110);
+  });
+
+  it("says a failed time on the set-aside record apart from a read error", () => {
+    const { dir, file } = seed();
+    actual.truncateSync(file, 64 * 1024 * 1024 + 1);
+    io.utimesFails = true;
+    const log = new DecisionLog(dir, { now: () => 110 });
+    expect(log.problem).toMatch(
+      /set aside as decisions\.jsonl\.oversize, but when could not be recorded/,
+    );
+    expect(log.problem).not.toMatch(/cannot be read/);
   });
 });
