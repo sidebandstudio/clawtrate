@@ -123,6 +123,22 @@ describe("signing", () => {
     expect(signingProblems({ APPLE_ID: "someone" }, "win")).toEqual([]);
   });
 
+  it("refuses a blank notarizing value, so the build and electron-builder pick the same method", () => {
+    const cert = { CSC_LINK: "x", CSC_KEY_PASSWORD: "y" };
+    const key = { APPLE_API_KEY: "k.p8", APPLE_API_KEY_ID: "d", APPLE_API_ISSUER: "e" };
+    // electron-builder would take this APPLE_ID and stop for its missing password after signing.
+    expect(signingProblems({ ...cert, ...key, APPLE_ID: " " }, "mac")).toEqual([
+      "APPLE_ID is set but blank",
+    ]);
+    expect(signingProblems({ ...cert, APPLE_KEYCHAIN_PROFILE: "\t" }, "mac")).toEqual([
+      "APPLE_KEYCHAIN_PROFILE is set but blank",
+    ]);
+    expect(signingProblems({ ...cert, CSC_NAME: " " }, "mac")).toEqual([
+      "CSC_NAME is set but blank",
+    ]);
+    expect(signingProblems({ ...cert, ...key }, "mac")).toEqual([]);
+  });
+
   it("reads what codesign says of a bundle's signature", () => {
     expect(
       macSignatureKind(

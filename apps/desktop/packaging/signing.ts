@@ -21,6 +21,13 @@ const NOTARIZE_SETS: ReadonlyArray<[NotarizeWith, readonly string[]]> = [
   ["keychain-profile", ["APPLE_KEYCHAIN_PROFILE"]],
 ];
 
+/** The macOS variables electron-builder reads as set whenever they are not empty. */
+const MAC_VARIABLES_TAKEN_AS_GIVEN = [
+  "CSC_NAME",
+  ...NOTARIZE_SETS.flatMap(([, names]) => names),
+  "APPLE_KEYCHAIN",
+];
+
 /**
  * The certificate variables a build reads, in electron-builder 26.18.1's own
  * order: the first one set at all, even to an empty string, is the one used
@@ -107,6 +114,12 @@ export function notarizeWith(env: Env): NotarizeWith | null {
 export function signingProblems(env: Env, target: "mac" | "win"): string[] {
   const problems = certificateProblems(env, target);
   if (target === "win") return problems;
+  // electron-builder takes any non-empty value, spaces included (macCodeSign.js
+  // for CSC_NAME, MacTargetHelper.getNotarizeOptions for the APPLE_* variables),
+  // where this file would not: a blank one is refused here, so both choose alike.
+  for (const name of MAC_VARIABLES_TAKEN_AS_GIVEN) {
+    if (env[name] !== undefined && !set(env, name)) problems.push(`${name} is set but blank`);
+  }
   for (const [, names] of NOTARIZE_SETS) {
     const given = names.filter((name) => set(env, name));
     if (given.length > 0 && given.length < names.length) {

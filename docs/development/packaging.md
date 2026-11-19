@@ -39,7 +39,7 @@ macOS, notarizing, which runs only when signing is on, one of:
 - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`;
 - `APPLE_KEYCHAIN_PROFILE` (a `notarytool store-credentials` profile), optionally with `APPLE_KEYCHAIN`.
 
-Signing turns on the hardened runtime with electron-builder's default entitlements. Notarizing runs only with one complete set; a partial set (an `APPLE_ID` without its password, say), or notarizing credentials without a signing identity, stops `pnpm package:mac` before it builds, naming the variables and never their values.
+Signing turns on the hardened runtime with electron-builder's default entitlements. Notarizing runs only with one complete set; a partial set (an `APPLE_ID` without its password, say), or notarizing credentials without a signing identity, stops `pnpm package:mac` before it builds, naming the variables and never their values. So does a notarizing variable or `CSC_NAME` that is set but blank: electron-builder counts a value of spaces as given and would pick a different method than the build announced.
 
 Windows: `WIN_CSC_LINK` (a `.pfx` file's path, or its base64) and `WIN_CSC_KEY_PASSWORD`. `CSC_LINK` and `CSC_KEY_PASSWORD` also work when the build runs on Windows: electron-builder takes `WIN_CSC_LINK` if it is set at all, even empty, and `CSC_LINK` otherwise, and the password the same way, each on its own.
 
