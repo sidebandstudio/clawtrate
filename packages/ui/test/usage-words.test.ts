@@ -7,10 +7,14 @@ import { describe, expect, it } from "vitest";
 import {
   barText,
   botBars,
+  budgetInput,
   budgetLine,
+  budgetWindow,
   costHint,
   costValue,
+  deviceTimeZone,
   figureLine,
+  reportWindow,
   warnedLine,
 } from "../src/usage/words.ts";
 
@@ -90,5 +94,36 @@ describe("every bot's bars", () => {
       "Marlow: 1,800 tokens so far",
       "Otto: Unavailable",
     ]);
+  });
+});
+
+describe("a budget's window and a report's", () => {
+  // Thursday 19 November 2026 at 15:00 in Tokyo, 01:00 in New York.
+  const NOW = Date.UTC(2026, 10, 19, 6);
+  const weekly: Budget = { ...routine, id: "bot:otto", routineId: null, period: "weekly" };
+
+  it("F-234: each names its own days and time zone; neither says it is the other's figure", () => {
+    const words = budgetWindow(weekly, null, NOW);
+    expect(words).toBe(
+      `Counts the total the gateway reports this week (Nov 16 to Nov 19, ${NY === deviceTimeZone() ? "your time" : NY}): input, output and cache.`,
+    );
+    expect(words).not.toMatch(/same figure/);
+    expect(
+      reportWindow("today", {
+        startDate: "2026-11-20",
+        endDate: "2026-11-20",
+        timeZone: "Asia/Tokyo",
+      }),
+    ).toBe(`today (Nov 20, ${deviceTimeZone() === "Asia/Tokyo" ? "your time" : "Asia/Tokyo"})`);
+    expect(
+      reportWindow("month", { startDate: "2026-10-21", endDate: "2026-11-19", timeZone: NY }),
+    ).toMatch(/^the last 30 days \(Oct 21 to Nov 19, /);
+  });
+
+  it("F-234: changing a budget keeps the time zone it was set in; a new one counts in this device's", () => {
+    const tokyo: Budget = { ...weekly, timeZone: "Asia/Tokyo" };
+    const target = { botId: "otto", routineId: null, routineName: null };
+    expect(budgetInput(target, tokyo, "weekly", 5_000).timeZone).toBe("Asia/Tokyo");
+    expect(budgetInput(target, null, "weekly", 5_000).timeZone).toBe(deviceTimeZone());
   });
 });

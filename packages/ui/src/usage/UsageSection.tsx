@@ -24,7 +24,15 @@ import {
   useNow,
   useUsageReport,
 } from "./parts.tsx";
-import { asOf, botBars, budgetLine, figureLine, kindWord, PARTIAL_COUNT } from "./words.ts";
+import {
+  asOf,
+  botBars,
+  budgetLine,
+  figureLine,
+  kindWord,
+  PARTIAL_COUNT,
+  reportWindow,
+} from "./words.ts";
 import "./usage.css";
 
 const SOURCES: Array<[keyof Omit<UsageSources, "partial">, string]> = [
@@ -274,7 +282,8 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
       {r && (
         <div aria-busy={report.status === "loading"} data-testid="usage-all">
           <p className="b-hint" style={{ marginTop: 0 }}>
-            From the gateway's usage records, {asOf(r.figure.asOf)}.
+            From the gateway's usage records {reportWindow(r.period, r.range)},{" "}
+            {asOf(r.figure.asOf)}.
             {stillCounted(r) ? " Some of the gateway's records are still being counted." : ""}
           </p>
           <Bars

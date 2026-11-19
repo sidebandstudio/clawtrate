@@ -446,8 +446,7 @@ export function routinesOf(result: unknown): Routine[] {
   for (const each of Array.isArray(jobs) ? jobs : []) {
     const job = asRecord(each);
     if (!job || typeof job.id !== "string" || !PLAIN_ID.test(job.id)) continue;
-    if (typeof job.sessionTarget !== "string" || !OWN_TASK_TARGETS.has(job.sessionTarget))
-      continue;
+    if (typeof job.sessionTarget !== "string" || !OWN_TASK_TARGETS.has(job.sessionTarget)) continue;
     if (asRecord(job.payload)?.kind === "heartbeat") continue;
     const botId = [job.agentId, job.effectiveAgentId].find(
       (value): value is string => typeof value === "string" && PLAIN_ID.test(value),

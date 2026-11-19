@@ -75,12 +75,23 @@ test("F-233: the context of the open task is the gateway's figure, and what fill
   );
 });
 
-test("S16 the budget comes first, and its count is the same figure as the week's total", async ({
+test("S16 the budget comes first, and it and the figures each name their own period and time zone", async ({
   page,
 }) => {
   await openFixture(page, PAGE, "light");
   const groups = await usage(page).locator(".b-group").allTextContents();
   expect(groups.indexOf("Budget")).toBeLessThan(groups.indexOf("Usage"));
+  await expect(page.getByTestId("budget-window")).toContainText(
+    /^Counts the total the gateway reports this week \([A-Z][a-z]{2} \d{1,2}( to [A-Z][a-z]{2} \d{1,2})?, your time\)/,
+  );
+  await expect(usage(page)).not.toContainText("same figure");
+  // Today's figures beside a weekly budget: each says which days it is.
+  await usage(page).getByRole("radio", { name: "Today" }).click();
+  await expect(page.getByTestId("usage-source")).toContainText(
+    /^From the gateway's usage records for Otto today \([A-Z][a-z]{2} \d{1,2}, your time\), as of /,
+  );
+  await expect(page.getByTestId("budget-window")).toContainText("this week");
+  await usage(page).getByRole("radio", { name: "This week" }).click();
   await expect(page.getByTestId("budget-meter")).toContainText("1.64M of 2.5M tokens this week");
   await expect(page.getByTestId("usage-total")).toHaveText("1,640,000 tokens");
   await expect(page.getByTestId("budget-meter").getByRole("meter")).toHaveAccessibleName(

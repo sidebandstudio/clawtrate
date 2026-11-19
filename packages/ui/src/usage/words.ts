@@ -4,9 +4,12 @@
 import {
   budgetPercent,
   currentCount,
+  rangeFor,
   type Budget,
   type BudgetCount,
+  type BudgetInput,
   type BudgetPeriod,
+  type DateRange,
   type UsageCost,
   type UsageFigure,
   type UsagePeriod,
@@ -52,12 +55,62 @@ export function asOf(at: number | null): string {
   return at === null ? "at a time the gateway didn't give" : `as of ${clock(at)}`;
 }
 
+/** A time zone in words: "your time" when it is the device's, its name otherwise. */
+export const zoneWords = (timeZone: string): string =>
+  timeZone === deviceTimeZone() ? "your time" : timeZone;
+
 /** When a budget's period starts again, in its own time zone. */
 export function resetWords(budget: Budget): string {
-  const where = budget.timeZone === deviceTimeZone() ? "your time" : budget.timeZone;
+  const where = zoneWords(budget.timeZone);
   return budget.period === "daily"
     ? `Resets at 00:00, ${where}.`
     : `Resets Monday at 00:00, ${where}.`;
+}
+
+const dayWords = (date: string) =>
+  new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+
+/** The days a figure covers and the time zone they are counted in: "Nov 16 to Nov 19, your time". */
+export function rangeWords(range: DateRange): string {
+  const days =
+    range.startDate === range.endDate
+      ? dayWords(range.startDate)
+      : `${dayWords(range.startDate)} to ${dayWords(range.endDate)}`;
+  return `${days}, ${zoneWords(range.timeZone)}`;
+}
+
+/** A report's period in words: "this week (Nov 16 to Nov 19, your time)". */
+export function reportWindow(period: UsagePeriod, range: DateRange): string {
+  const name = period === "today" ? "today" : period === "week" ? "this week" : "the last 30 days";
+  return `${name} (${rangeWords(range)})`;
+}
+
+/**
+ * What a budget counts, over its own days and in its own time zone, which may
+ * be another period or zone than the figures shown with it.
+ */
+export function budgetWindow(budget: Budget, count: BudgetCount | null, now: number): string {
+  const range = count?.range ?? rangeFor(budget.period, now, budget.timeZone);
+  const at = count && count.used !== null ? `, ${asOf(count.asOf)}` : "";
+  return `Counts the total the gateway reports ${periodWord(budget.period)} (${rangeWords(range)}): input, output and cache${at}.`;
+}
+
+/**
+ * The budget a form saves. A budget keeps the time zone it was set in, so
+ * changing it from a device elsewhere never moves its days; a new one counts
+ * in this device's.
+ */
+export function budgetInput(
+  target: { botId: string; routineId: string | null; routineName: string | null },
+  existing: Budget | null,
+  period: BudgetPeriod,
+  tokens: number,
+): BudgetInput {
+  return { ...target, period, tokens, timeZone: existing?.timeZone ?? deviceTimeZone() };
 }
 
 /** " so far" after a figure the gateway is still counting. */

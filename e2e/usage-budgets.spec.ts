@@ -300,7 +300,7 @@ test("F-232 F-237: a bot's Usage page shows the gateway's own totals for each pe
     expect(expected.total).toBeGreaterThan(0);
   }
   await expect(page.getByTestId("usage-source")).toHaveText(
-    /^From the gateway's usage records for Otto, as of \d{1,2}:\d{2} [AP]M\./,
+    /^From the gateway's usage records for Otto the last 30 days \([A-Z][a-z]{2} \d{1,2} to [A-Z][a-z]{2} \d{1,2}, your time\), as of \d{1,2}:\d{2} [AP]M\./,
   );
   // The development gateway configures a price of zero: an estimate of zero, named as the gateway's.
   await expect(page.getByTestId("usage-cost")).toHaveText("About $0.00");

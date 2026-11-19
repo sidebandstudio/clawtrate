@@ -11,7 +11,16 @@ import { BackIcon, ChevronIcon, WarnIcon } from "../icons.tsx";
 import { BudgetPart } from "./Budget.tsx";
 import { settleUsageRequest, useUsageRequest } from "./navigation.ts";
 import { Bars, PeriodChoice, useNow, useUsageReport } from "./parts.tsx";
-import { asOf, budgetLine, budgetOf, costHint, costValue, figureLine, full } from "./words.ts";
+import {
+  asOf,
+  budgetLine,
+  budgetOf,
+  costHint,
+  costValue,
+  figureLine,
+  full,
+  reportWindow,
+} from "./words.ts";
 import "./usage.css";
 
 /** The Usage group's row: its budget first, then this week's figure (section 16). */
@@ -167,7 +176,8 @@ export function BotUsagePage({
       <h4 className="b-group">Usage</h4>
       <PeriodChoice value={period} onChange={setPeriod} />
       <p className="b-hint" data-testid="usage-source">
-        From the gateway's usage records for {name}, {asOf(figure.asOf)}.
+        From the gateway's usage records for {name} {reportWindow(r.period, r.range)},{" "}
+        {asOf(figure.asOf)}.
         {counting ? " Some of the gateway's records are still being counted." : ""}
       </p>
       <dl className="facts" data-testid="usage-tokens">

@@ -13,16 +13,18 @@ import {
 import { useEffect, useId, useRef, useState } from "react";
 import { useBridge } from "../bridge.tsx";
 import { Note } from "../bots/parts.tsx";
-import { Choice, Meter, ShownOnly } from "./parts.tsx";
+import { Choice, Meter, ShownOnly, useNow } from "./parts.tsx";
 import {
-  asOf,
+  budgetInput,
   budgetLine,
+  budgetWindow,
   deviceTimeZone,
   full,
   kindWord,
   periodWord,
   reachedLine,
   resetWords,
+  zoneWords,
 } from "./words.ts";
 
 export type BudgetTarget = { botId: string; routineId: string | null; routineName: string | null };
@@ -58,6 +60,7 @@ export function BudgetForm({
     field.current?.focus();
   }, []);
   const tokens = budgetTokens(value);
+  const zone = existing?.timeZone ?? deviceTimeZone();
   const invalid = typeof tokens === "string";
   const shownError = invalid && value.trim() !== "" ? tokens : null;
   const save = async () => {
@@ -67,7 +70,7 @@ export function BudgetForm({
     try {
       await bridge.invoke({
         type: "changeBudget",
-        change: { op: "set", budget: { ...target, period, tokens, timeZone: deviceTimeZone() } },
+        change: { op: "set", budget: budgetInput(target, existing, period, tokens) },
       });
       announce("Budget saved");
       onDone(true);
@@ -132,8 +135,8 @@ export function BudgetForm({
       </label>
       <p className="b-hint" id={`${ids}-help`} style={{ margin: 0 }}>
         A whole number of 1,000 or more. Counts the total the gateway reports for {name}{" "}
-        {period === "daily" ? "each day" : "each week"}: input, output and cache. A warning: nothing
-        on the gateway stops a bot at its budget.
+        {period === "daily" ? "each day" : "each week"}, {zoneWords(zone)}: input, output and cache.
+        A warning: nothing on the gateway stops a bot at its budget.
       </p>
       {shownError && (
         <p className="b-field-error" id={`${ids}-error`} style={{ margin: 0 }}>
@@ -210,6 +213,7 @@ export function BudgetPart({
   form: boolean;
   onForm: (open: boolean) => void;
 }) {
+  const now = useNow();
   if (usage?.budgetsStatus === "unavailable")
     return (
       <p className="b-hint" data-testid="budget-unavailable">
@@ -286,9 +290,8 @@ export function BudgetPart({
           </p>
         </Note>
       ) : null}
-      <p className="b-hint">
-        Counts the total the gateway reports {periodWord(budget.period)}: input, output and cache,
-        the same figure as Usage below{used !== null && count ? `, ${asOf(count.asOf)}` : ""}.
+      <p className="b-hint" data-testid="budget-window">
+        {budgetWindow(budget, count, now)}
         {count?.counting ? " Some of the gateway's records are still being counted." : ""}{" "}
         {resetWords(budget)}
       </p>
