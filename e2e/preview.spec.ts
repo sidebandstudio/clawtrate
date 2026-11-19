@@ -1069,35 +1069,34 @@ test("F-027: a hidden bot keeps working: a run on the gateway shows in the Hidde
   await botRow(page, "Marlow").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Hide from sidebar" }).click();
   await page.getByRole("button", { name: /^Hidden bots/ }).click();
-  const hidden = page.getByRole("list", { name: "Hidden bots" }).locator('.bot[data-bot="marlow"]');
-  await expect(hidden).toBeVisible();
-  // Every state the hidden row's avatar takes while the run lasts.
-  await page.evaluate(() => {
-    const seen: string[] = [];
-    (window as unknown as { hiddenStates: string[] }).hiddenStates = seen;
-    const read = () => {
-      const state = document
-        .querySelector('.hidden-list .bot[data-bot="marlow"] .presence')
-        ?.getAttribute("data-state");
-      if (state) seen.push(state);
-    };
-    new MutationObserver(read).observe(document.body, {
-      subtree: true,
+  const hidden = page.getByRole("list", { name: "Hidden bots" });
+  await openBot(page, "Marlow");
+  const { key } = await gatewayTask("marlow", "While hidden");
+  const task = hidden.locator(`[data-key="${key}"]`);
+  await expect(task).toHaveAttribute("data-status", "idle");
+  // The avatar summarizes every task, including runs started outside this check.
+  await task.evaluate((row) => {
+    const seen: Array<string | null> = [];
+    (window as unknown as { hiddenStates: typeof seen }).hiddenStates = seen;
+    new MutationObserver((changes) => {
+      seen.push(...changes.map((change) => change.oldValue), row.getAttribute("data-status"));
+    }).observe(row, {
       attributes: true,
-      childList: true,
+      attributeFilter: ["data-status"],
+      attributeOldValue: true,
     });
   });
   const prompt = "From the end-to-end run, while hidden: anything new?";
-  const { key } = await gatewayTask("marlow", "While hidden");
   await runOnGateway("marlow", key, prompt);
-  await expect(hidden.locator(".bot-preview")).toContainText(
-    "This is the scripted development model",
+  await expect(task).toHaveAttribute("data-status", "done");
+  const wasRunning = await page.evaluate(() =>
+    (window as unknown as { hiddenStates: Array<string | null> }).hiddenStates.includes("running"),
   );
-  const states = await page.evaluate(
-    () => (window as unknown as { hiddenStates: string[] }).hiddenStates,
+  expect(wasRunning).toBe(true);
+  await task.click();
+  await expect(page.getByTestId("transcript-turn").last()).toContainText(
+    `This is the scripted development model. It has no reply written for: ${prompt}`,
   );
-  expect(states).toContain("working");
-  await expect(hidden.locator(".presence")).not.toHaveAttribute("data-state", "working");
   // It stayed hidden throughout.
   await expect(page.locator('.bot-list > .bot-group > .bot[data-bot="marlow"]')).toHaveCount(0);
 });

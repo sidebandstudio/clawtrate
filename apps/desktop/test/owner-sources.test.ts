@@ -139,6 +139,24 @@ const ALLOWED: Record<string, string> = {
     "one bridge session per open window, removed when it closes",
   "apps/desktop/src/web-host/server.ts:<anonymous>>chunks":
     "one upload's body while it arrives, within its declared length, dropped at the deadline",
+  // The SSH transport of "Another computer".
+  "apps/desktop/src/main/ssh/forward.ts:BACKOFF_MS": "static, five delays",
+  "apps/desktop/src/main/ssh/known-hosts.ts:KEY_TYPES": "static, seven key types",
+  "apps/desktop/src/main/ssh/look.ts:PROGRAM_PLACES": "static, five fixed places",
+  "apps/desktop/src/main/ssh/person-config.ts:TAKEN": "static, the eight settings taken",
+  "apps/desktop/src/main/ssh/person-config.ts:REFUSED": "static, the settings refused by name",
+  "apps/desktop/src/main/ssh/person-config.ts:IGNORED": "static, the settings left out",
+  "apps/desktop/src/main/ssh/person-config.ts:DEFAULT_IDENTITIES": "static, five key names",
+  "apps/desktop/src/main/ssh/world.ts:WINDOWS_ENV": "static, fifteen variable names",
+  "apps/desktop/src/main/ssh/run.ts:<anonymous>>out":
+    "one ssh run's standard output, at most its `maxStdout` bytes, gone when the run ends",
+  "apps/desktop/src/main/ssh/run.ts:<anonymous>>err":
+    "one ssh run's error output, at most its `maxStderr` bytes, gone when the run ends",
+  "apps/desktop/src/main/ssh/run.ts:closed": "weak, dies with the child processes it names",
+  "apps/desktop/src/main/ssh/transport.ts:startForward>listening":
+    "one forward process's listener from its supervisor, gone with the process",
+  "apps/desktop/src/main/ssh/transport.ts:startForward>exits":
+    "one forward process's listener from its supervisor, gone with the process",
 };
 
 describe("the source keeps no collection outside the registry", () => {

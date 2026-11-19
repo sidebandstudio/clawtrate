@@ -1,0 +1,14 @@
+{
+  "id": "clawtrate-tool-rules",
+  "name": "Clawtrate tool rules",
+  "description": "What each bot may do with its tools: run without asking, ask a person first, or never. Holds only while it runs. Not made by or affiliated with OpenClaw.",
+  "categories": ["developer-tools"],
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "cardDetails": { "type": "string", "enum": ["auto", "full", "redacted"] }
+    }
+  }
+}
