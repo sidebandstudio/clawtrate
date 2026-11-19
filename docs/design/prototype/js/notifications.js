@@ -68,6 +68,7 @@
 
   const S = {
     os: ["mac", "windows", "linux"].includes(p("os")) ? p("os") : "mac",
+    none: p("platform") === "none", // this build cannot show notifications (section 10)
     device: ["sender", "other", "read"].includes(p("device")) ? p("device") : "sender",
     master: p("master") !== "0",
     previews: p("previews") === "1",
@@ -116,6 +117,7 @@
   /** Returns { show: picture } or { hold: why } or { none: why }, by the design's order. */
   function decide(ev) {
     const b = bot(ev.bot);
+    if (S.none) return { none: "This copy of Clawtrate can't show notifications here. The rail and the badge show it." };
     if (!S.master) return { none: "Show notifications is off on this computer." };
     if (!sharedReadable()) return { none: "Your settings haven't been read from the gateway, so no notification about a bot is shown." };
     if (ev.kind === "stopped") return { none: "A stopped run isn't notified: someone chose to stop it." };
@@ -441,7 +443,15 @@
     if (own === "off") return "Off";
     return `Same as ${bot(botId).name} (${S.bots[botId] ? "on" : "off"})`;
   };
-  const botValue = (id) => (!S.master ? "Off on this computer" : S.bots[id] ? "On" : "Off");
+  const botValue = (id) => (S.none ? "Not shown on this computer" : !S.master ? "Off on this computer" : S.bots[id] ? "On" : "Off");
+  // Where a saved setting is kept, in the words bots-lifecycle.md uses (section 2).
+  const KEPT_DEVICE = "Kept on this computer.";
+  const keptShared = () =>
+    S.prefs === "device"
+      ? "Kept on this computer: this connection has no profile on the gateway to keep it in, so your other devices won't show it."
+      : "Kept for you on this gateway, so your other devices show the same.";
+  const kept = (id, words) => `<p class="b-hint n-kept" data-testid="kept-${id}">${words}</p>`;
+  const NONE_HERE = (what) => `This copy of Clawtrate can't show notifications. ${what} applies on your other devices.`;
   const savingLine = (key, idle) => (S.saving === key ? "Saving…" : S.error[key] || idle);
 
   function renderPanel() {
@@ -461,7 +471,8 @@
         (S.taskLimit
           ? `<p class="b-field-error" data-testid="task-limit">Up to 40 tasks can have their own setting. Set one back to "Same as" its bot first. <button type="button" class="link-button" data-n="bot-page">${b.name}'s notifications</button></p>`
           : "") +
-        `<p class="b-hint">On or Off wins over ${b.name}'s switch. This computer's switch, focus and quiet hours still apply.</p>` +
+        kept("task", keptShared()) +
+        `<p class="b-hint">${S.none ? NONE_HERE("This setting") : `On or Off wins over ${b.name}'s switch. This computer's switch, focus and quiet hours still apply.`}</p>` +
         (S.access === "read" ? `<div class="b-panel-foot">${accessBar(NEED)}</div>` : "")
       : `<p class="work-note">No task is open. Pick one of ${b.name}'s tasks to see its details.</p>`;
     $("#panel-settings").innerHTML = S.bview === "notifications" ? botPage(b) : botFrame(b);
@@ -498,7 +509,8 @@
     const own = b.tasks.filter((t) => S.tasks[t.id]);
     let html =
       `<div class="b-subhead"><button type="button" class="icon-button" data-variant="quiet" data-n="bot-back" aria-label="Back to settings">${icon("back")}</button><h3 tabindex="-1" data-n-focus>Notifications</h3></div>`;
-    if (!S.master) html += note(`<p>Notifications are off on this computer.</p><div class="b-actions"><button type="button" class="link-button" data-n="settings">Settings</button></div>`);
+    if (S.none) html += note(`<p>${NONE_HERE("This switch")}</p>`);
+    else if (!S.master) html += note(`<p>Notifications are off on this computer.</p><div class="b-actions"><button type="button" class="link-button" data-n="settings">Settings</button></div>`);
     if (S.quietNow) html += note(`<p>Quiet until ${S.quiet.to}.</p>`);
     if (S.prefs === "reading") return html + `<div aria-busy="true" class="n-reading"><div class="skeleton" style="height:58px;width:100%"></div></div><p class="b-hint">Reading your settings from the gateway…</p>`;
     if (S.prefs === "readfail") return html + note(`<p>Couldn't read your notification settings from the gateway. Until Clawtrate can, it shows no notifications about your bots.</p><div class="b-actions"><button type="button" class="button" data-size="sm" data-n="retry-read">Try again</button></div>`, "danger");
@@ -507,6 +519,7 @@
       `<dl class="facts">` +
       switchRow(`bot-${b.id}`, `Notify me about ${b.name}`, savingLine(`bot-${b.id}`, `When ${b.name} finishes or waits for you.`), S.bots[b.id], `data-n-bot="${b.id}"${shared && S.saving !== `bot-${b.id}` ? "" : " disabled"}`, `${b.name}'s notifications`) +
       `</dl>` +
+      kept("bot", keptShared()) +
       `<h4 class="b-group">Tasks with their own setting</h4>` +
       (own.length
         ? `<dl class="facts">${own.map((t) => `<div><dt>${esc(t.title)}</dt><dd>${S.tasks[t.id] === "on" ? "On" : "Off"}</dd></div>`).join("")}</dl>`
@@ -674,13 +687,22 @@
     const dis = (key) => (shared && S.saving !== key ? "" : " disabled");
     let body = "";
     if (S.failedAt) body += note(`<p>Your system didn't show Clawtrate's notification at ${S.failedAt}. Check Clawtrate in your system's notification settings.</p>`, "warn");
-    body +=
-      `<h4 class="b-group">This computer</h4><dl class="facts">` +
+    if (S.none)
+      body +=
+        `<h4 class="b-group">This computer</h4>` +
+        note(
+          `<p data-testid="none-note">This copy of Clawtrate can't show notifications on ${S.os === "windows" ? "Windows" : "macOS"}. What your bots finish or wait on shows in the rail and on ${S.os === "windows" ? "the taskbar button" : "the dock's badge"}.</p><p>Quiet hours and your bots' switches below apply on your other devices.</p>`,
+        );
+    else {
+      body +=
+        `<h4 class="b-group">This computer</h4><dl class="facts">` +
       switchRow("master", "Show notifications", savingLine("master", S.master ? "When a bot finishes or waits for you." : "No notifications on this computer. Your other devices keep theirs."), S.master, `data-n-set="master"${S.saving === "master" ? " disabled" : ""}`, "Show notifications") +
       switchRow("previews", "Show previews", savingLine("previews", "Adds a task's title and the first words of a reply, a command or a question. Anyone who can see your screen can read them, also when it's locked, unless your system hides previews."), S.previews, `data-n-set="previews"${S.saving === "previews" ? " disabled" : ""}`, "Show previews") +
       switchRow("budgetsw", "Budget warnings", savingLine("budgetsw", "When a bot has used 80% of a budget."), S.budgetsw, `data-n-set="budgetsw"${S.saving === "budgetsw" ? " disabled" : ""}`, "Budget warnings") +
       `</dl>` +
+      kept("device", KEPT_DEVICE) +
       `<p class="b-hint" data-testid="system-note">${SYSTEM_NOTE[S.os]}</p>`;
+    }
     if (S.conflictNote) body += note(`<p>Changed on another of your devices a moment ago. This is what's set now.</p>`, "warn");
     body += `<h4 class="b-group">Quiet hours</h4>`;
     if (S.prefs === "reading") body += `<div aria-busy="true" class="n-reading"><div class="skeleton" style="height:58px;width:100%"></div><div class="skeleton" style="height:120px;width:100%"></div></div><p class="b-hint" data-testid="reading">Reading your settings from the gateway…</p>`;
@@ -707,6 +729,7 @@
             ? `<p class="n-now" data-testid="quiet-now">Quiet until ${S.quiet.to}.${S.held.length ? ` ${S.held.length} bot${S.held.length === 1 ? " is" : "s are"} waiting for you. ${S.held.length === 1 ? "It" : "They"} will be shown then.` : ""}</p>`
             : "");
       }
+      body += kept("quiet", keptShared());
       body +=
         `<h4 class="b-group">Your bots</h4><dl class="facts">` +
         BOTS.map((b) => {
@@ -715,11 +738,7 @@
           return switchRow(`bot-${b.id}`, `<span class="n-botname"><span class="avatar" data-bot="${b.id}"></span>${b.name}</span>`, savingLine(`bot-${b.id}`, line), S.bots[b.id], `data-n-bot="${b.id}"${dis(`bot-${b.id}`)}`, `${b.name}'s notifications`);
         }).join("") +
         `</dl>` +
-        `<p class="b-hint" data-testid="kept-line">${
-          S.prefs === "device"
-            ? "This gateway can't keep these for your other devices, so Clawtrate keeps quiet hours and your bots' settings on this computer."
-            : "Quiet hours and your bots' settings are kept with your profile on the gateway, so your other devices use them too. The switches under This computer are this computer's."
-        }</p>`;
+        kept("bots", keptShared());
     }
     const foot = S.access === "read" ? accessBar(NEED) : "";
     return { title: "Notifications", body, foot };

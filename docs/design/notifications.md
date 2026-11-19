@@ -92,6 +92,8 @@ No new tokens.
 
 **When the gateway keeps no profile** (`users.prefs` answers `no_durable_identity`, research §4, read from source), the shared settings are kept on this computer instead, and Settings says so (section 7). They are never mixed: a value from the gateway is never copied to the device, or the reverse, without the person changing it.
 
+**Where it is kept, on screen.** Every saved state says where it is kept, in the words `bots-lifecycle.md` (in review) uses for the same store. Under this computer's switches: "Kept on this computer." Under quiet hours, the bots' switches, the bot's page and a task's setting: "Kept for you on this gateway, so your other devices show the same." When the gateway keeps no profile, those read instead: "Kept on this computer: this connection has no profile on the gateway to keep it in, so your other devices won't show it."
+
 **When the person's preferences cannot be read** (the call fails or the connection never reached hello), no notification about a bot is shown until they are read: a notification that ignored someone's quiet hours or a switch they turned off would be worse than none. Settings says so.
 
 ### Saving and reading back
@@ -136,15 +138,15 @@ The device that started the run is not always this one: a message sent from a ph
 
 Every event that could notify is put through these steps, in this order; the first that applies decides.
 
-| #   | Step                                       | Outcome                                                                                                                                                                                                                                         |
-| --- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Show notifications is off on this computer | Nothing                                                                                                                                                                                                                                         |
-| 2   | Your settings have not been read           | Nothing (section 2)                                                                                                                                                                                                                             |
-| 3   | The event is not one that notifies         | Nothing. Not notified: a stop, which someone chose; a reply-less end (the gateway's "nothing to say"); runs the gateway starts itself, heartbeats and routines, which are `automation.md`'s; a helper's own task, which is not in the task list |
-| 4   | The task's setting                         | On: go on. Off: nothing. Same as the bot: the bot's switch decides, on to go on, off for nothing. A budget warning skips this step for its own switch (section 11)                                                                              |
-| 5   | The window is focused                      | On macOS and Windows: nothing when the event's bot is the one on screen; other bots go on. On Linux: nothing at all while the window is focused                                                                                                 |
-| 6   | Quiet hours are on now                     | A wait is held until they end (section 6). Anything else is not shown, ever                                                                                                                                                                     |
-| 7   | Otherwise                                  | Shown                                                                                                                                                                                                                                           |
+| #   | Step                                                                                             | Outcome                                                                                                                                                                                                                                         |
+| --- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | This build cannot show notifications (section 10), or Show notifications is off on this computer | Nothing                                                                                                                                                                                                                                         |
+| 2   | Your settings have not been read                                                                 | Nothing (section 2)                                                                                                                                                                                                                             |
+| 3   | The event is not one that notifies                                                               | Nothing. Not notified: a stop, which someone chose; a reply-less end (the gateway's "nothing to say"); runs the gateway starts itself, heartbeats and routines, which are `automation.md`'s; a helper's own task, which is not in the task list |
+| 4   | The task's setting                                                                               | On: go on. Off: nothing. Same as the bot: the bot's switch decides, on to go on, off for nothing. A budget warning skips this step for its own switch (section 11)                                                                              |
+| 5   | The window is focused                                                                            | On macOS and Windows: nothing when the event's bot is the one on screen; other bots go on. On Linux: nothing at all while the window is focused                                                                                                 |
+| 6   | Quiet hours are on now                                                                           | A wait is held until they end (section 6). Anything else is not shown, ever                                                                                                                                                                     |
+| 7   | Otherwise                                                                                        | Shown                                                                                                                                                                                                                                           |
 
 "The bot on screen" is the bot whose task the window shows. "Focused" is Electron's window focus (`BrowserWindow.isFocused`, its `focus` and `blur`, on every system); a window that is open but behind another app is not focused.
 
@@ -252,42 +254,40 @@ Under them a note, neutral, in the words for the system:
 
 **Your bots**, a group word, then one switch row per bot in the gateway's order, each with its picture and name, and a line: "On", "Off", or "On · 1 task off" / "Off · 2 tasks on" when tasks have their own setting. The row's switch is the bot's switch; the line's count is not a control (the bot's page lists them, section 8).
 
-**The foot**, one line, by where your settings are kept:
+**Where each group is kept**, one line in `--text-faint` under the group, by section 2: under This computer, "Kept on this computer."; under Quiet hours and under Your bots, "Kept for you on this gateway, so your other devices show the same.", or, when the gateway keeps no profile, "Kept on this computer: this connection has no profile on the gateway to keep it in, so your other devices won't show it."
 
-| Kept                                | The line                                                                                                                                                                   |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| With your profile                   | "Quiet hours and your bots' settings are kept with your profile on the gateway, so your other devices use them too. The switches under This computer are this computer's." |
-| This device (`no_durable_identity`) | "This gateway can't keep these for your other devices, so Clawtrate keeps quiet hours and your bots' settings on this computer."                                           |
+**When this build cannot show notifications** (section 10), This computer's three switches and the system's note are not shown. In their place, a neutral note: "This copy of Clawtrate can't show notifications on macOS. What your bots finish or wait on shows in the rail and on the dock's badge." (on Windows, "…on Windows. … in the rail and on the taskbar button."), and "Quiet hours and your bots' switches below apply on your other devices." Quiet hours and Your bots stay as above.
 
 **States.**
 
-| State                  | It shows                                                                                                                                                                                              |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Reading                | This computer's group as usual; for Quiet hours and Your bots, two grey blocks pulsing, `aria-busy`, and "Reading your settings from the gateway…"                                                    |
-| Couldn't read          | This computer's group as usual; a `--danger-soft` note: "Couldn't read your notification settings from the gateway. Until Clawtrate can, it shows no notifications about your bots." with "Try again" |
-| Read-only connection   | Every value; the shared switches and fields disabled; the access bar at the foot of the shared groups (section 2)                                                                                     |
-| Saving                 | The control disabled, its line "Saving…"                                                                                                                                                              |
-| Saved                  | The value read back, announced                                                                                                                                                                        |
-| Couldn't save          | The value read back (or last read), the line "Couldn't save. Otto's notifications are still on." (or "Quiet hours are still off.") and "Try again"                                                    |
-| Changed elsewhere      | The note of section 2 above the group, with the value read again                                                                                                                                      |
-| Same start and end     | "Start and end can't be the same time." under the time pair; nothing saved                                                                                                                            |
-| Show notifications off | The rest stays readable and changeable; a line under the switch: "No notifications on this computer. Your other devices keep theirs."                                                                 |
+| State                               | It shows                                                                                                                                                                                              |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reading                             | This computer's group as usual; for Quiet hours and Your bots, two grey blocks pulsing, `aria-busy`, and "Reading your settings from the gateway…"                                                    |
+| Couldn't read                       | This computer's group as usual; a `--danger-soft` note: "Couldn't read your notification settings from the gateway. Until Clawtrate can, it shows no notifications about your bots." with "Try again" |
+| Read-only connection                | Every value; the shared switches and fields disabled; the access bar at the foot of the shared groups (section 2)                                                                                     |
+| Saving                              | The control disabled, its line "Saving…"                                                                                                                                                              |
+| Saved                               | The value read back, announced                                                                                                                                                                        |
+| Couldn't save                       | The value read back (or last read), the line "Couldn't save. Otto's notifications are still on." (or "Quiet hours are still off.") and "Try again"                                                    |
+| Changed elsewhere                   | The note of section 2 above the group, with the value read again                                                                                                                                      |
+| Same start and end                  | "Start and end can't be the same time." under the time pair; nothing saved                                                                                                                            |
+| Show notifications off              | The rest stays readable and changeable; a line under the switch: "No notifications on this computer. Your other devices keep theirs."                                                                 |
+| This build can't show notifications | The note above in place of This computer's group; nothing on this screen says a notification will be shown here                                                                                       |
 
 ## 8. A bot's Notifications page
 
-**The row.** `bots.md` §8's frame gains one row, in a group of its own, "Notifications", after Tools: "Notifications", with the bot's switch as its value ("On", "Off") and a chevron. When Show notifications is off on this computer the value reads "Off on this computer". The row opens the page; it is the only change to that frame.
+**The row.** `bots.md` §8's frame gains one row, in a group of its own, "Notifications", after Tools: "Notifications", with the bot's switch as its value ("On", "Off") and a chevron. When Show notifications is off on this computer the value reads "Off on this computer"; when this build cannot show notifications (section 10), "Not shown on this computer". The row opens the page; it is the only change to that frame.
 
 **The page**, inside the tab with a quiet round Back and the title "Notifications":
 
-- A switch row: "Notify me about Otto", line "When Otto finishes or waits for you." It is the same switch as Otto's row in Settings.
+- A switch row: "Notify me about Otto", line "When Otto finishes or waits for you." It is the same switch as Otto's row in Settings. Under it, where it is kept: "Kept for you on this gateway, so your other devices show the same." (or "Kept on this computer: this connection has no profile on the gateway to keep it in, so your other devices won't show it.").
 - A group word "Tasks with their own setting", then one row per such task, its title and its setting ("On" or "Off") as a fact row; the setting is changed in that task's Details (section 9). With none: "No task has its own setting. Choose one in the task's Details."
-- Notes, when they apply: "Notifications are off on this computer." with "Settings" (opens Settings, Notifications); "Quiet until 07:00." while quiet hours are on.
+- Notes, when they apply: "Notifications are off on this computer." with "Settings" (opens Settings, Notifications); "Quiet until 07:00." while quiet hours are on; "This copy of Clawtrate can't show notifications. This switch applies on your other devices." when this build cannot show them.
 
 The page's states are section 7's for its controls: reading, couldn't read, read-only with the access bar, saving, couldn't save, changed elsewhere. A task in the list that is no longer on the gateway is not shown, and its setting is removed with the next write.
 
 ## 9. A task's setting
 
-**In the Work pane's Details tab**, which is about the open task, one row in a group "Notifications": "This task", with a `.b-select` whose value is "Same as Otto (on)", "Same as Otto (off)", "On" or "Off". It opens a `.menu` of three radio items: "Same as Otto (on)" (with the bot's current value in the brackets), "On", "Off". Choosing saves, by section 2's rules, and the row shows what was read back.
+**In the Work pane's Details tab**, which is about the open task, one row in a group "Notifications": "This task", with a `.b-select` whose value is "Same as Otto (on)", "Same as Otto (off)", "On" or "Off". It opens a `.menu` of three radio items: "Same as Otto (on)" (with the bot's current value in the brackets), "On", "Off". Choosing saves, by section 2's rules, and the row shows what was read back. Under the row, where it is kept: "Kept for you on this gateway, so your other devices show the same." (or "Kept on this computer: this connection has no profile on the gateway to keep it in, so your other devices won't show it."); when this build cannot show notifications, "This copy of Clawtrate can't show notifications. This setting applies on your other devices."
 
 - **On** shows this task's notifications even while the bot is off; **Off** shows none while the bot is on; **Same as Otto** follows the bot. It wins over the bot's switch and nothing else: this computer's switch, focus and quiet hours still apply (section 3).
 - **How many.** At most 40 tasks have their own setting, which keeps the value well inside the gateway's 4,096 bytes (research §4). Choosing On or Off for a 41st shows, under the row: "Up to 40 tasks can have their own setting. Set one back to "Same as" its bot first." with a link to the bot's page, and nothing is saved. Same as is always accepted: it removes the entry.
@@ -299,6 +299,7 @@ The page's states are section 7's for its controls: reading, couldn't read, read
 - **What the app can observe**: that a notification was shown (`show`), clicked (`click`), closed (`close`, not always), or refused (`failed`). Only `failed` is shown to the person (section 7).
 - **Signing.** macOS shows notifications only for a code-signed app (research §6). Clawtrate is signed ad hoc by default, and whether that is enough is not established. An unsigned or refused notification raises `failed`, which Settings reports.
 - **Windows** needs the app's AppUserModelID on a Start-menu shortcut, which the installer makes (research §7). Electron also names a ToastActivatorCLSID, which the installer does not set; whether a toast is shown and clicks reach the app without it is the first thing a builder checks (section 15).
+- **When a build cannot show notifications.** If the first step of section 15 finds that a build cannot show them (an app signed ad hoc on macOS, or the Windows installer's identity, may turn out to be such a case), or `Notification.isSupported()` answers false, that build shows none and promises none: the host never tries, the in-app marks and the dock or taskbar badge are all there is, and every screen here says so (sections 7 to 9). Which builds that covers is recorded in `docs/decisions.md` by that step; it is decided per build, never inferred from one `failed`.
 - **While Clawtrate is not running** nothing is shown, and a notification from before can only bring Clawtrate forward (section 5).
 - **Linux**: while Clawtrate's window is focused, no notification is shown. Nothing more is specified for Linux here.
 
@@ -356,6 +357,15 @@ The rows' statuses stay `todo`. Targets were changed only where the decisions on
 
 ## 15. For builders
 
+### First: whether a notification appears at all
+
+Nothing establishes yet that a notification appears, on either system, in the app as it is packaged:
+
+- **macOS**: notifications need a code-signed app, and Clawtrate is signed ad hoc by default. Whether that is enough is not known (section 10, research §6, §7).
+- **Windows**: the installer gives the Start-menu shortcut the app's AppUserModelID, but no ToastActivatorCLSID, which Electron also names. Whether a toast appears, and whether its click reaches the app, is not known.
+
+So the first thing a builder does is check each: a toast from the NSIS install, with and without a ToastActivatorCLSID; a notification from the ad hoc build and from a signed one; in each, that it appears and that `click` arrives. The outcome goes in `docs/decisions.md`. **Where one cannot show notifications, the design falls back to the in-app marks and the badge only**, and that build takes section 10's "cannot show notifications" state, so no screen promises a notification there. Nothing else in this design is built for a platform before this step has answered for it.
+
 ### What each part uses
 
 | Part                   | Uses                                                                                                                                                                                         |
@@ -383,7 +393,7 @@ The rows' statuses stay `todo`. Targets were changed only where the decisions on
 
 ### Order
 
-1. On Windows, check that a toast from the NSIS install appears and that its click reaches the app, with and without a ToastActivatorCLSID; on macOS, the same with the default ad hoc signature and with a signed build. Record the outcome in `docs/decisions.md`.
+1. The first step above, for macOS and for Windows, recorded in `docs/decisions.md`; a build that cannot show notifications gets the fallback state.
 2. The host's decision and showing, for replies, failures, and the waits this device has cards for, with this computer's switch.
 3. Opening, with every check of section 5.
 4. Your settings in `users.prefs` and Settings, Notifications; the bot's row and page; the task's setting.
@@ -401,6 +411,7 @@ The rows' statuses stay `todo`. Targets were changed only where the decisions on
 | `device`                         | `sender` (the default), `other` (another device at the interactive tier), `read` (read-only)                                                             |
 | `focus`                          | `otto` or `pip`: the window is focused on that bot                                                                                                       |
 | `quiet`                          | `1`: quiet hours are on now                                                                                                                              |
+| `platform`                       | `none`: this build cannot show notifications (with `os=mac` or `os=windows`)                                                                             |
 | `quietset`                       | `1`: quiet hours are set, 22:00 to 07:00, and not on now                                                                                                 |
 | `os`                             | `mac` (the default), `windows`, `linux`                                                                                                                  |
 | `master`, `previews`, `budgetsw` | `0` or `1`: this computer's switches                                                                                                                     |

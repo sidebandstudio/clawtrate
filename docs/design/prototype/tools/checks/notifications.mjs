@@ -87,6 +87,7 @@ await shown("another bot while the window is focused on Otto", "event=question&f
 await shown("Pip on screen does not silence Otto", "event=approval&focus=pip", ["Otto", "Wants to run a command."]);
 await notShown("Linux: nothing while the window is focused", "event=question&focus=otto&os=linux", ["On Linux nothing is shown then."]);
 await shown("Linux: shown while the window is not focused", "event=question&os=linux", ["Juniper"]);
+await notShown("a build that can't show notifications", "event=approval&platform=none", ["This copy of Clawtrate can't show notifications here. The rail and the badge show it."]);
 await notShown("before your settings are read", "event=finished&prefs=reading", ["Your settings haven't been read from the gateway"]);
 await notShown("a reply during quiet hours: never shown later", "event=finished&quiet=1", ["Quiet hours: this is never shown later."]);
 await notShown("a wait during quiet hours is held", "event=approval&quiet=1", ["Held until 07:00: Otto is waiting for you."]);
@@ -213,9 +214,14 @@ check(
     "Marlow",
     "Otto",
     "Pip",
-    "Quiet hours and your bots' settings are kept with your profile on the gateway, so your other devices use them too.",
   ]),
   missing(s, ["Show previews"]),
+);
+check(
+  "Settings: each group says where it is kept",
+  (await text(p, '[data-testid="kept-device"]')) === "Kept on this computer." &&
+    (await text(p, '[data-testid="kept-quiet"]')) === "Kept for you on this gateway, so your other devices show the same." &&
+    (await text(p, '[data-testid="kept-bots"]')) === "Kept for you on this gateway, so your other devices show the same.",
 );
 check("Settings: the section sits after Appearance and before System", await p.evaluate(() => [...document.querySelectorAll("[data-n-section]")].map((x) => x.textContent.trim()).join(",").includes("Appearance,Notifications,System")));
 check("Settings: previews are off and the others on by default", await p.evaluate(() => ["master", "budgetsw"].every((k) => document.querySelector(`[data-n-set="${k}"]`).getAttribute("aria-checked") === "true") && document.querySelector('[data-n-set="previews"]').getAttribute("aria-checked") === "false"));
@@ -266,7 +272,14 @@ async function settingsState(name, query, words, test) {
 }
 await settingsState("reading", "prefs=reading", ["Reading your settings from the gateway…"], () => !document.querySelector("[data-n-bot]") && Boolean(document.querySelector('[aria-busy="true"]')));
 await settingsState("couldn't read", "prefs=readfail", ["Couldn't read your notification settings from the gateway. Until Clawtrate can, it shows no notifications about your bots.", "Try again"]);
-await settingsState("kept on this computer", "prefs=device", ["This gateway can't keep these for your other devices, so Clawtrate keeps quiet hours and your bots' settings on this computer."]);
+await settingsState("kept on this computer when the gateway keeps no profile", "prefs=device", ["Kept on this computer: this connection has no profile on the gateway to keep it in, so your other devices won't show it."], () => document.querySelectorAll('#settings-dialog [data-testid^="kept-"]').length === 3);
+await settingsState(
+  "a build that can't show notifications, macOS: no switch promises one",
+  "platform=none",
+  ["This copy of Clawtrate can't show notifications on macOS. What your bots finish or wait on shows in the rail and on the dock's badge.", "Quiet hours and your bots' switches below apply on your other devices.", "Kept for you on this gateway, so your other devices show the same."],
+  () => !document.querySelector('[data-n-set="master"], [data-n-set="previews"], [data-n-set="budgetsw"], [data-testid="system-note"]'),
+);
+await settingsState("a build that can't show notifications, Windows", "platform=none&os=windows", ["can't show notifications on Windows.", "in the rail and on the taskbar button."]);
 await settingsState("set on a device in another zone", "prefs=elsewhere&quietset=1", ["22:00 to 07:00, Lisbon time, where they were set. That's 23:00 to 08:00 here. Saving here sets them in Berlin time."]);
 await settingsState("the system refused one", "failed=1", ["Your system didn't show Clawtrate's notification at 5:41 PM. Check Clawtrate in your system's notification settings."]);
 await settingsState(
@@ -306,6 +319,7 @@ check("the bot's settings: one Notifications row, in its own group after Tools",
 await click(p, '[data-testid="bot-notifications-row"]');
 s = await text(p, "#panel-settings");
 check("the bot's page: its switch and its tasks with their own setting", !missing(s, ["Notifications", "Notify me about Otto", "When Otto finishes or waits for you.", "Tasks with their own setting", "Certificate renewal warning", "Off"]), s);
+check("the bot's page: the switch says where it is kept", (await text(p, '[data-testid="kept-bot"]')) === "Kept for you on this gateway, so your other devices show the same.");
 check("the bot's page: the title takes focus", await p.evaluate(() => document.activeElement?.matches("[data-n-focus]")));
 await click(p, '[data-n-bot="otto"]');
 await p.waitForTimeout(650);
@@ -320,6 +334,17 @@ await p.close();
 p = await open("open=bot&access=read");
 check("the bot's page, read-only: the switch disabled and the access bar", (await p.isDisabled('#panel-settings [data-n-bot="otto"]')) && (await text(p, "#panel-settings")).includes("Request access"));
 await p.close();
+p = await open("open=bot&platform=none");
+check("a build that can't show notifications: the bot's page says so", (await text(p, "#panel-settings")).includes("This copy of Clawtrate can't show notifications. This switch applies on your other devices."));
+await p.close();
+p = await open("open=details&platform=none");
+check("a build that can't show notifications: the task's setting says so", (await text(p, "#panel-details")).includes("This copy of Clawtrate can't show notifications. This setting applies on your other devices."));
+await p.close();
+p = await open("platform=none&chrome=1");
+await click(p, '[data-n="panel"]');
+await click(p, '[data-tab="settings"]');
+check("a build that can't show notifications: the row reads Not shown on this computer", (await text(p, '[data-testid="bot-notifications-row"]')).includes("Not shown on this computer"));
+await p.close();
 p = await open("master=0&chrome=1");
 await click(p, '[data-n="panel"]');
 await click(p, '[data-tab="settings"]');
@@ -331,6 +356,7 @@ await p.close();
 p = await open("open=details");
 s = await text(p, '[data-testid="task-setting"]');
 check("Details: This task, Same as Otto (on)", s.includes("This task") && s.includes("Same as Otto (on)"), s);
+check("Details: the setting says where it is kept", (await text(p, '[data-testid="kept-task"]')) === "Kept for you on this gateway, so your other devices show the same.");
 await click(p, '[data-n="task-menu"]');
 const items = await p.$$eval("[data-n-task]", (els) => els.map((e) => e.textContent.trim()));
 check("the menu: three radio items, the current one checked", items.join("|") === "Same as Otto (on)|On|Off" && (await p.getAttribute('[data-n-task="same"]', "aria-checked")) === "true", items.join("|"));
