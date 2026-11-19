@@ -448,12 +448,37 @@ describe("Connect on this computer", () => {
     h.client.stop();
   });
 
-  it("an automated run with no sandbox refuses the look loudly and starts no program", async () => {
-    const h = harness({ world: productionWorld({ home: dir, appData: dir, platform: "darwin" }) });
+  it("an automated run with no sandbox refuses the real computer loudly, finds nothing and starts no program", async () => {
+    // A home that holds an OpenClaw and its program: the look must see none of it.
+    mkdirSync(join(dir, ".openclaw"));
+    const real = productionWorld({ home: dir, appData: dir, platform: "darwin" });
+    const h = harness({
+      world: { ...real, candidates: [...real.candidates, world().candidates[0]!] },
+    });
+    await h.client.start();
+    await h.setup.look();
+    expect(h.setup.current).toMatchObject({ phase: "found", look: { outcome: "not-found" } });
+    expect(h.logs.some((line) => line.includes("refused to start"))).toBe(true);
+    expect(h.requests).toEqual([]);
+    h.client.stop();
+  });
+
+  it("a sandbox that reaches the real home folder is refused, loudly, and starts no program", async () => {
+    mkdirSync(join(dir, "real-home"));
+    const reaching = sandboxWorld(
+      {
+        home: join(dir, "real-home"),
+        openclaw: join(dir, "bin/openclaw"),
+        instance: "su1-test",
+        stateDir: join(dir, ".openclaw-clawtrate-dev-su1-test"),
+      },
+      "darwin",
+    );
+    const h = harness({ world: reaching });
     await h.client.start();
     await h.setup.look();
     expect(h.setup.current).toMatchObject({ phase: "failed", failure: { kind: "refused" } });
-    expect(h.logs.some((line) => line.includes("refused to start"))).toBe(true);
+    expect(h.logs.some((line) => line.includes("real home folder"))).toBe(true);
     expect(h.requests).toEqual([]);
     h.client.stop();
   });

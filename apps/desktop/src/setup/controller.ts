@@ -16,7 +16,14 @@ import {
 import { LIMITS, lookHere, type FoundGateway } from "./look.ts";
 import { parseAuthMode, parseSetupCode, parseStatus } from "./parse.ts";
 import type { RunProgram } from "./programs.ts";
-import { guardPort, guardWorld, programPath, SetupRefusedError, type LookWorld } from "./world.ts";
+import {
+  emptyWorld,
+  guardPort,
+  guardWorld,
+  programPath,
+  SetupRefusedError,
+  type LookWorld,
+} from "./world.ts";
 
 /** A prepared operation expires after this long and can't be repeated (§2). */
 export const OPERATION_LIFETIME_MS = 2 * 60_000;
@@ -99,6 +106,15 @@ export class SetupController implements SetupHost {
   private world(): LookWorld {
     const { world, sandboxed, realHome } = this.options;
     if (world instanceof SetupRefusedError) throw world;
+    if (sandboxed && world.kind === "production") {
+      // No sandbox: the real computer is refused, loudly, and the look sees an empty one.
+      this.log(
+        new SetupRefusedError(
+          "this run is automated or a development build and was given no sandbox, so it looks at an empty computer",
+        ).message,
+      );
+      return emptyWorld(world.platform);
+    }
     guardWorld(world, { sandboxed, realHome });
     return world;
   }

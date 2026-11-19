@@ -22,7 +22,13 @@ import { readDevConnection, selectInstance, startHostRuntime } from "../host/run
 import { createAccessToken, startWebHost } from "./server.ts";
 import { SetupController } from "../setup/controller.ts";
 import { ProgramRunner } from "../setup/programs.ts";
-import { readSandbox, realHome, sandboxWorld, SetupRefusedError } from "../setup/world.ts";
+import {
+  productionWorld,
+  readSandbox,
+  realHome,
+  sandboxWorld,
+  SetupRefusedError,
+} from "../setup/world.ts";
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = join(APP_ROOT, "../..");
@@ -84,9 +90,14 @@ async function main(): Promise<void> {
     const sandbox = values["setup-sandbox"];
     let world;
     try {
+      // Without --setup-sandbox the real computer is refused and the look sees an empty one.
       world = sandbox
         ? sandboxWorld(readSandbox(sandbox), process.platform)
-        : new SetupRefusedError("the web preview looks only in a sandbox (--setup-sandbox)");
+        : productionWorld({
+            home: realHome(),
+            appData: values["data-dir"] ?? defaultDataDir(),
+            platform: process.platform,
+          });
     } catch (error) {
       world = error instanceof SetupRefusedError ? error : new SetupRefusedError(String(error));
     }

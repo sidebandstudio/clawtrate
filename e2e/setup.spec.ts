@@ -154,11 +154,12 @@ test.beforeAll(() => {
   });
 });
 
-test("an automated launch without a sandbox refuses the look, loudly, and runs no program", async () => {
+test("an automated launch without a sandbox refuses the real computer, loudly, and finds nothing", async () => {
   const launched = await launch({ sandbox: null });
   await thisComputer(launched.page).click();
+  // The same on every machine: whatever OpenClaw this computer has, the look sees none of it.
   await expect(
-    launched.page.getByRole("heading", { name: "Looking on this computer is off here" }),
+    launched.page.getByRole("heading", { name: "Clawtrate didn't find OpenClaw here" }),
   ).toBeVisible();
   await expect.poll(launched.log).toContain("The look on this computer refused to start");
   await close(launched);

@@ -6,7 +6,8 @@
 // a look whose world would reach the real one.
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { homedir, userInfo } from "node:os";
+import { randomBytes } from "node:crypto";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import {
   INSTANCE_PROFILE_PREFIX,
@@ -115,6 +116,24 @@ export function productionWorld(options: {
     env: { HOME: home, LANG: options.lang ?? "en_US.UTF-8", NO_COLOR: "1" },
     serviceFiles: serviceFilesUnder(home, platform),
     portAllowed: validPort,
+  };
+}
+
+/**
+ * The computer a run that must be sandboxed sees when it was given no
+ * sandbox: no program, no profile, no home that exists. The look runs no
+ * program in it and finds nothing, on any machine.
+ */
+export function emptyWorld(platform: NodeJS.Platform): LookWorld {
+  return {
+    kind: "sandbox",
+    platform,
+    home: join(tmpdir(), `clawtrate-no-sandbox-${randomBytes(8).toString("hex")}`),
+    candidates: [],
+    profiles: [],
+    env: {},
+    serviceFiles: [],
+    portAllowed: () => false,
   };
 }
 

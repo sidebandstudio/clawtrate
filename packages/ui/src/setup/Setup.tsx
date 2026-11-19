@@ -622,7 +622,8 @@ export function SetupFlow({
         <Found mark={<WarnIcon />} tone="warn" heading="Looking on this computer is off here">
           <Lede>
             This copy of Clawtrate is a development build or runs under a test, so it looks only in
-            a sandbox, and it has none. Use Advanced.
+            a sandbox, and the one it was given would reach this computer's own OpenClaw. Use
+            Advanced.
           </Lede>
           <Actions>
             <Primary onClick={advanced}>Use Advanced</Primary>

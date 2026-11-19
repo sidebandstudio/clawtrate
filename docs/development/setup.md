@@ -2,7 +2,7 @@
 
 The desktop app's first screen asks "Where does OpenClaw run?" ([`docs/design/setup.md`](../design/setup.md)). "This computer" looks for OpenClaw's gateway on the computer the app runs on and pairs with it read-only after the app's own dialog. On a developer's computer that would find, and could pair with, the OpenClaw you use every day. So the look never sees the real computer from a checkout:
 
-- A **development build** (`pnpm desktop`, `pnpm desktop:dev`) and **every automated run** look only in a **sandbox** you give them. Without one, "This computer" shows "Looking on this computer is off here", runs no program, and the app's output says why.
+- A **development build** (`pnpm desktop`, `pnpm desktop:dev`) and **every automated run** look only in a **sandbox** you give them. Without one, the real computer is refused: "This computer" looks at an empty computer instead, runs no program, and shows "Clawtrate didn't find OpenClaw here" on every machine, and the app's output says why. A sandbox that would reach the real computer is refused outright: "Looking on this computer is off here".
 - The **web preview** keeps the address-and-token form as its first screen. `--setup-look` shows the new first screen, and it too looks only in a sandbox. It never pairs: it has no dialog of its own to ask first.
 - Only a packaged app that nothing automates looks at the real computer, which is what a person installing Clawtrate gets.
 
