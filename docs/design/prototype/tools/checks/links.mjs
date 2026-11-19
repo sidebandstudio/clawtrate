@@ -133,6 +133,8 @@ try {
           await page.waitForFunction(() => document.activeElement.matches(".composer-input"));
           assert.equal(await input.inputValue(), existing);
           await open(scene);
+          // A new-task shortcut behind the dialog would leave the replacement in a detached composer.
+          await page.keyboard.press("Alt+KeyT");
           await button("Replace draft").click();
           await opened(example);
         } else {

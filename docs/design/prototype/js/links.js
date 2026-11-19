@@ -159,7 +159,10 @@
         event.preventDefault();
         event.stopImmediatePropagation();
       }
-      if (!dialog.open || event.key !== "Tab") return;
+      if (!dialog.open) return;
+      // The app's shortcuts (a new task, for one) would rebuild the composer behind the dialog.
+      event.stopPropagation();
+      if (event.key !== "Tab") return;
       const first = actions.firstElementChild;
       const last = actions.lastElementChild;
       if (event.shiftKey ? document.activeElement === first : document.activeElement === last) {
