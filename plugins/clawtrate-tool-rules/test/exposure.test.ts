@@ -96,3 +96,15 @@ describe("read as the gateway reads it", () => {
     expect(surelyDenied({ tools: { allow: ["read", "write"] } }, {}, "apply_patch")).toBe(false);
   });
 });
+
+describe("the gateway's implicit default bot", () => {
+  it("is warned about when the config names no bots, and not when it names an empty roster", () => {
+    expect(exposures({})).toEqual([
+      {
+        agentId: "main",
+        reasons: ["manages-gateway", "commands-on-gateway-host", "files-outside-workspace"],
+      },
+    ]);
+    expect(exposures({ agents: { entries: {} } })).toEqual([]);
+  });
+});

@@ -61,6 +61,10 @@ export function configuredAgents(config) {
   for (const entry of Array.isArray(agents.list) ? agents.list : []) {
     if (typeof rec(entry).id === "string") out.set(entry.id, rec(entry));
   }
+  const hasRoster = ["entries", "list"].some(
+    (key) => Object.hasOwn(agents, key) && agents[key] !== undefined,
+  );
+  if (!hasRoster) out.set("main", {});
   return out;
 }
 
