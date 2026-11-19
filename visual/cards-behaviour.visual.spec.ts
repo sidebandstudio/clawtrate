@@ -670,8 +670,6 @@ test.describe("approval cards", () => {
     // the middle of the page is the card's Always allow…, whose form takes focus a frame later.
     await page.getByTestId("transcript").click({ position: { x: 4, y: 4 } });
     await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
-    // The click can land on the card itself; focus nothing, so the key alone moves it there.
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await expect(approvalCard(page)).not.toBeFocused();
     await page.keyboard.press("ControlOrMeta+j");
     await expect(approvalCard(page)).toBeFocused();
