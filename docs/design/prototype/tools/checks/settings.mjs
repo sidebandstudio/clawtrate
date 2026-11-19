@@ -150,7 +150,7 @@ await stateWords("A gateway's page: what was recorded, Switch and Remove", "open
   const p = await open("waiting=1");
   await click(p, ".gateway-pill");
   await click(p, '#gateway-menu [data-gw="studio"]');
-  const [ok, miss] = await has(p, confirm, ["Switch to Studio gateway?", "1 message to Otto hasn't been sent to Home gateway yet. Switching drops it. Runs on Home gateway keep going.", "Cancel", "Switch"]);
+  const [ok, miss] = await has(p, confirm, ["Switch to Studio gateway?", "1 message to Otto hasn't been sent to Home gateway yet. Switching discards it: it isn't kept as a draft. Runs on Home gateway keep going.", "Cancel", "Switch"]);
   check("walk: switch, a message waiting: the confirmation names it", ok, miss);
   check("walk: switch, a message waiting: focus on Cancel", (await p.evaluate(() => document.activeElement?.textContent.trim())) === "Cancel");
   await press(p, "button", "Cancel");
@@ -198,7 +198,7 @@ await addWalk("cancelled", "Cancel", ["Nothing was added", "Clawtrate is connect
   const p = await open("waiting=1");
   await click(p, ".gateway-pill");
   await click(p, '#gateway-menu [data-s="add"]');
-  const [ok, miss] = await has(p, confirm, ["Add a gateway?", "1 message to Otto hasn't been sent to Home gateway yet.", "drops the message"]);
+  const [ok, miss] = await has(p, confirm, ["Add a gateway?", "1 message to Otto hasn't been sent to Home gateway yet.", "which discards the message: it isn't kept as a draft."]);
   check("walk: add from the menu with a message waiting: asks first", ok, miss);
   await p.close();
 }
@@ -271,6 +271,24 @@ const REMOVED_WORDS = [
   await p.close();
 }
 {
+  const p = await open("remove=home&rmfail=unknown");
+  await p.locator("#confirm-dialog [data-s-record]").check();
+  await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
+  const [ok, miss] = await has(p, settings, ["Clawtrate can't tell whether Home gateway removed this device's record", "Nothing else was removed. Look for this device in Home gateway's device list on the gateway's computer.", "Remove from this device only"]);
+  check("walk: remove, no answer from the gateway: not claimed as removed, nothing else removed", ok && (await rail(p)).includes("Otto") && !(await text(p, settings)).includes("Home gateway removed it"), miss);
+  await press(p, "button", "Remove from this device only", 200);
+  const [ok2, miss2] = await has(p, settings, ["Home gateway is removed from this device", "On Home gateway: this device's record, device 9c2e41."]);
+  check("walk: remove, no answer, from this device only: the record is listed as staying", ok2 && !(await text(p, settings)).includes("Home gateway removed it"), miss2);
+  await p.close();
+}
+{
+  const p = await open("remove=home");
+  await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
+  const t = await text(p, settings);
+  check("walk: remove the gateway in use without the box: the record is listed as staying, never as removed", t.includes("On Home gateway: this device's record, device 9c2e41.") && !t.includes("Home gateway removed it"));
+  await p.close();
+}
+{
   const p = await open("remove=studio&rmfail=local");
   await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
   const [ok, miss] = await has(p, settings, ["Couldn't remove everything", "Still on this device", "Not tried", "Try again"]);
@@ -292,7 +310,7 @@ const REMOVED_WORDS = [
 
 {
   const p = await open("open=settings&section=appearance");
-  const [ok, miss] = await has(p, settings, ["Theme", "Match the system", "Light", "Dark", "Your messages", "Accent", "Neutral", "Kept on this device."]);
+  const [ok, miss] = await has(p, settings, ["Theme", "Follow system", "Light", "Dark", "Your messages", "Accent", "Neutral", "Kept on this device."]);
   check("Appearance: its words", ok, miss);
   await press(p, "radio", "Dark");
   check("walk: Appearance, Dark: the page is dark, announced", (await p.evaluate(() => document.documentElement.dataset.theme)) === "dark" && (await announced(p)) === "Theme: Dark");
@@ -336,7 +354,7 @@ await stateWords("System: turned on again, not restarted", "open=settings&sectio
 {
   const p = await open("open=settings&section=system&hw=pending&waiting=1");
   await press(p, "button", "Restart now");
-  const [ok, miss] = await has(p, confirm, ["Restart Clawtrate?", "1 message to Otto hasn't been sent yet. Restarting drops it. Runs on Home gateway keep going."]);
+  const [ok, miss] = await has(p, confirm, ["Restart Clawtrate?", "1 message to Otto hasn't been sent yet. Restarting discards it: it isn't kept as a draft. Runs on Home gateway keep going."]);
   check("walk: Restart now with a message waiting: asks first", ok, miss);
   await p.close();
 }
@@ -383,7 +401,7 @@ await stateWords("Updates, a development build", "open=settings&section=updates&
   await p.waitForTimeout(1000);
   check("walk: an update: ready, installs when Clawtrate restarts", (await text(p, settings)).includes("Clawtrate 0.2.0 is ready. It installs when Clawtrate restarts."));
   await press(p, "button", "Restart to Update");
-  const [ok, miss] = await has(p, confirm, ["Restart to update?", "1 message to Otto hasn't been sent yet. Restarting drops it."]);
+  const [ok, miss] = await has(p, confirm, ["Restart to update?", "1 message to Otto hasn't been sent yet. Restarting discards it: it isn't kept as a draft."]);
   check("walk: Restart to Update with a message waiting: asks first", ok, miss);
   await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
   check("walk: Restart to Update: Clawtrate 0.2.0", (await text(p, settings)).includes("Clawtrate 0.2.0") && (await text(p, settings)).includes("You're up to date"));
@@ -424,7 +442,7 @@ await stateWords("Update required, with a source: Update", "required=client&feed
 const J1 = "bot=juniper&task=j1&panel=open&tab=details";
 {
   const p = await open(J1);
-  const [ok, miss] = await has(p, '[data-testid="context-group"]', ["Context", "Compact replaces older turns in Juniper's context with a summary. Every turn stays here.", "Compact"]);
+  const [ok, miss] = await has(p, '[data-testid="context-group"]', ["Context", "Compact asks the gateway to replace older turns in Juniper's context with a summary. Every turn stays here.", "Compact"]);
   check("Compact: the Context group in Details", ok, miss);
   const before = await p.locator("#transcript [data-testid=transcript-turn]").count();
   await press(p, "button", "Compact");

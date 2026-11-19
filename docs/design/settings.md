@@ -181,10 +181,13 @@ Each line about the gateway in use is written only after its hello: if Home gate
 **When something would be lost.** Messages accepted by the composer and not yet sent, or sent and not yet confirmed, live in memory and are never sent to another gateway (`docs/decisions.md`, "Closing a task keeps the user's words"). When there are any, a confirmation names them, counted at that moment:
 
 > **Switch to Studio gateway?**
-> 1 message to Otto hasn't been sent to Home gateway yet. Switching drops it. Runs on Home gateway keep going.
+> 1 message to Otto hasn't been sent to Home gateway yet. Switching discards it: it isn't kept as a draft. Runs on Home gateway keep going.
 > [Cancel] [Switch]
 
-With nothing waiting there is no confirmation. Drafts are kept for each gateway and come back on return.
+- **Discarded, exactly.** Today such a message lives only in the core's memory; opening another gateway's address resets that state (`packages/core/src/client.ts`, the connection's `initialState` when the address differs), and nothing puts the text back in the composer. So the sentence says it is discarded, and the design adds no machinery to keep it.
+- A message that was sent and not yet confirmed is counted apart, because the gateway may already have it: "1 message to Otto was sent to Home gateway and isn't confirmed yet. Switching stops following it; Home gateway may still have it."
+- With nothing waiting there is no confirmation. Drafts, the text still in a composer, are kept on this device for each gateway's address (`packages/ui/src/Composer.tsx`) and come back on return.
+- Adding a gateway and restarting Clawtrate ask the same way, with the same words for what happens to the message.
 
 **Each step, as it is.**
 
@@ -227,7 +230,7 @@ With nothing waiting there is no confirmation. Drafts are kept for each gateway 
 
 **The steps, in order, each read back.**
 
-1. When the record box is ticked: `device.pair.remove` with this device's own id. The gateway's result names the removed id, and it ends the connection (research §3, live): that result is the read-back. If it is refused or fails, nothing else is done, and the result says so (below).
+1. When the record box is ticked: `device.pair.remove` with this device's own id. The gateway ends the connection after it answers (research §3, live), so nothing can be read over it afterwards: the read-back is the gateway's own result, and only a result that names this device's id counts as removed. A refusal, an error, a result naming another id, or no answer before the connection closes all count as not removed, and nothing else is done (below).
 2. Disconnect, when it is the gateway in use; stop the route's forward by its PID (`setup.md` §8).
 3. Delete the route's device tokens, then read the store: no token record for that route is left.
 4. Delete the saved route and its pinned key, then read them.
@@ -235,17 +238,18 @@ With nothing waiting there is no confirmation. Drafts are kept for each gateway 
 
 **How it ended.** The same two lists, each item marked by what was read back:
 
-| Outcome                                            | Title                                             | Then                                                                                                                                                                                                             |
-| -------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Every step done                                    | "Studio gateway is removed from this device"      | The lists, every "Removed" item done. When it was the gateway in use and others are saved: Your gateways, "Not connected. Choose a gateway to use." with Switch on each; when none is left, setup's first screen |
-| The gateway refused or failed to remove the record | "Home gateway didn't remove this device's record" | "Nothing was removed. Home gateway said: <the error category>." with "Remove from this device only" and "Cancel"                                                                                                 |
-| A local step failed                                | "Couldn't remove everything"                      | Each item marked done, left or not tried; "Try again" repeats only what is left                                                                                                                                  |
+| Outcome                                            | Title                                                                    | Then                                                                                                                                                                                                                                                                                                                                                    |
+| -------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every step done                                    | "Studio gateway is removed from this device"                             | The lists, every "Removed" item done; this device's record is listed as removed only when the gateway's result named it, and otherwise stays under "Stays" with its command. When it was the gateway in use and others are saved: Your gateways, "Not connected. Choose a gateway to use." with Switch on each; when none is left, setup's first screen |
+| The gateway refused or failed to remove the record | "Home gateway didn't remove this device's record"                        | "Nothing was removed. Home gateway said: <the error category>." with "Remove from this device only" and "Cancel"                                                                                                                                                                                                                                        |
+| No answer before the connection closed             | "Clawtrate can't tell whether Home gateway removed this device's record" | "Nothing else was removed. Look for this device in Home gateway's device list on the gateway's computer." with "Remove from this device only" and "Cancel"                                                                                                                                                                                              |
+| A local step failed                                | "Couldn't remove everything"                                             | Each item marked done, left or not tried; "Try again" repeats only what is left                                                                                                                                                                                                                                                                         |
 
 ## 8. Appearance
 
 Two groups, each a `.seg`:
 
-- **Theme**: "Match the system", "Light", "Dark". The same preference the gateway menu sets (`packages/ui/src/preferences.ts`, `useTheme`); choosing it here or there changes both.
+- **Theme**: "Follow system", "Light", "Dark". The same preference the gateway menu sets (`packages/ui/src/preferences.ts`, `useTheme`); choosing it here or there changes both. The gateway menu's item, "Match the system" as built, takes the same words, so one preference has one name.
 - **Your messages**: "Accent", "Neutral", with a small sample bubble of each beside the choice. The same preference as the gateway menu's "Your messages" (`useBubbles`).
 
 Both apply at once and are read back (section 2). They are this device's, per viewer: a phone and a desktop choose for themselves.
@@ -273,7 +277,7 @@ Desktop only. Two rows, each a title (15/500), a line under it, and a switch at 
 | Off (read back after the restart) | "Off. Clawtrate draws without the graphics hardware." | —             |
 | Turned on again, not restarted    | "Turns on when Clawtrate restarts."                   | "Restart now" |
 
-"Restart now", when nothing waits to be sent, restarts at once (`app.relaunch()`, then quit). When something waits, a confirmation: "Restart Clawtrate?" "1 message to Otto hasn't been sent yet. Restarting drops it. Runs on Home gateway keep going." with "Cancel" and "Restart".
+"Restart now", when nothing waits to be sent, restarts at once (`app.relaunch()`, then quit). When something waits, a confirmation: "Restart Clawtrate?" "1 message to Otto hasn't been sent yet. Restarting discards it: it isn't kept as a draft. Runs on Home gateway keep going." with "Cancel" and "Restart".
 
 ## 10. Updates
 
@@ -327,7 +331,7 @@ Nothing else is asked of that gateway while the window shows (the core already s
 
 **The gateway is too old** (`expectedProtocol` below the client's). This is not "Update required" for the person's Clawtrate. The Gateway pane's problem line, as built, says "This gateway speaks another protocol" with both versions, and one sentence more: "Update OpenClaw on the gateway's computer to use it with this version." The rail and the strip show "Can't use Home gateway" with "Switch gateway" when another is saved.
 
-**F-010's rule**, "more than 14 days old and a newer version exists", needs the client's release date and an update feed. There is no feed, so that rule shows nothing in this design (section 17).
+**F-010's rule**, "more than 14 days old and a newer version exists", needs the client's release date and an update feed. There is no feed, and publishing one is its own unit of work, so that rule shows nothing in this design. What this section designs is row F-518 (section 17).
 
 ## 12. Not offered: Language, security keys, routing traffic
 
@@ -341,7 +345,7 @@ Nothing else is asked of that gateway while the window shows (the core already s
 
 | State           | Sentence                                                                                                        | Button                                       |
 | --------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| Available       | "Compact replaces older turns in Juniper's context with a summary. Every turn stays here."                      | "Compact" (default, small)                   |
+| Available       | "Compact asks the gateway to replace older turns in Juniper's context with a summary. Every turn stays here."   | "Compact" (default, small)                   |
 | A run is active | "Compact is available when this run ends. The gateway would stop a run still going a minute after you compact." | "Compact", disabled                          |
 | Compacting      | "Compacting…" with the working mark                                                                             | none                                         |
 | Read-only       | "Compacting sends a message, which needs this device to be able to send."                                       | none; the access bar below, "Request access" |
@@ -428,34 +432,27 @@ For the gateway's own machine: "Otto is set to run commands on the gateway's mac
 
 ## 17. Parity rows
 
-**Reworded** in `docs/parity.md`, statuses unchanged. Each keeps its target and changes only its gateway dependency cell, to the evidence:
+**Reworded** in `docs/parity.md`, statuses unchanged unless named. The dependency cells, to the evidence:
 
-| Row   | The dependency cell becomes                                                                                                             |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| F-010 | Says that there is no update feed today and what the handshake does say: `PROTOCOL_MISMATCH` with `expectedProtocol`                    |
-| F-159 | Adds `system.info` for the gateway's own machine, the volumes, and that no clean-up a client can ask for frees a machine's files        |
-| F-229 | Says the interface ships English only, with no translation files or locale handling                                                     |
-| F-230 | One connection at a time through the setup flow's pairing; `gateway.identity.get` tells a second gateway from a second route            |
-| F-231 | Needs an update source: none is published; a signed macOS build; electron-builder's updater on Windows                                  |
-| F-279 | Adds the live replies: skipped, failed with history unchanged, and a run stopped after 60 s; the reply's `gateway-injected` row and key |
-| F-388 | As F-229                                                                                                                                |
-| F-389 | One connection at a time; messages waiting to send are dropped after a confirmation that names them                                     |
-| F-390 | The device record stays below admin, with the live refusals; admin removes it with `device.pair.remove`                                 |
-| F-391 | What Electron reports on macOS and Windows, and that nothing reports a screen saver                                                     |
-| F-393 | Electron's spellchecker per system, and the Windows dictionary download against the app's request filter                                |
-| F-394 | `app.disableHardwareAcceleration()` only before ready, so a restart                                                                     |
-| F-458 | No Linux package is built today                                                                                                         |
+| Row          | The dependency cell                                                                                                                                                                                                                                         |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-010        | No update feed today, and publishing one is its own unit of work; the protocol refusal is row F-518                                                                                                                                                         |
+| F-159        | Adds `system.info` for the gateway's own machine, the volumes, and that no clean-up a client can ask for frees a machine's files                                                                                                                            |
+| F-229, F-388 | No translation catalogue exists today: English only, no translation files or locale handling                                                                                                                                                                |
+| F-230        | One connection at a time through the setup flow's pairing; `gateway.identity.get` tells a second gateway from a second route                                                                                                                                |
+| F-231        | Needs an update source: none is published; a signed macOS build; electron-builder's updater on Windows                                                                                                                                                      |
+| F-279        | The live replies (skipped, failed with history unchanged, a run ended after about a minute), the reply's `gateway-injected` row and key; the gateway does not say which turns were summarized; a success needs a scripted model that writes a summary first |
+| F-389        | One connection at a time; messages waiting to send are dropped after a confirmation that names them                                                                                                                                                         |
+| F-390        | The device record stays below admin, with the live refusals; admin removes it with `device.pair.remove`                                                                                                                                                     |
+| F-391        | What Electron reports on macOS and Windows, and that nothing reports a screen saver                                                                                                                                                                         |
+| F-393        | Electron's spellchecker per system, and the Windows dictionary download against the app's request filter                                                                                                                                                    |
+| F-394        | `app.disableHardwareAcceleration()` only before ready, so a restart                                                                                                                                                                                         |
+| F-395        | What was looked for and not found: no method names a security key, WebAuthn, FIDO or a passkey. Status `gap`                                                                                                                                                |
+| F-458        | No Linux package is built today                                                                                                                                                                                                                             |
 
-**Asked for a decision**, rows left as they are, because the design differs from their target:
+**Targets decided** (round 1): F-228 is "same in kind": Theme (Follow system, Light, Dark) and the fill of your own messages (Accent, Neutral), each saved and read back (section 8). F-279: Compact asks the gateway, and the fold's line gives the sizes before and after that the gateway reported (section 13). F-391: without the screen saver, which nothing reports, on macOS and Windows (section 10). F-010 stays as it is, `todo`, waiting on an update source. F-229 and F-388 stay `todo`: no Language setting until a second language ships (section 12). F-395 is `gap`: the design draws no switch.
 
-| Row          | Where the design differs, and why                                                                                                                                                                                                                                                 |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| F-010        | The target is the client's age against its update feed. With no feed, nothing can tell a newer version exists; the design's "Update required" comes from the protocol mismatch instead (section 11)                                                                               |
-| F-228        | The target's Accent is "Bot color, Black". The design keeps what is built, Accent or Neutral (section 8): no colour for a bot's messages is defined in this design or by the gateway                                                                                              |
-| F-229, F-388 | No Language setting until a second language ships (section 12)                                                                                                                                                                                                                    |
-| F-279        | The target's line is "Compacted <n> turns". The gateway keeps recent messages intact and does not say which turns it summarized, so the design's line gives the context's size before and after, and "<n> earlier turns" names what is folded, not what was replaced (section 13) |
-| F-391        | The target installs when the screen is locked **or the screen saver is on**. Nothing reports a screen saver, so the design's rule is a locked screen only (section 10)                                                                                                            |
-| F-395        | The target is a switch, on by default, disabled on Linux. No system can honour it, so the design has no switch; `gap` would match the evidence (section 12)                                                                                                                       |
+**Added**: F-518, "Update required" from the gateway refusing this client's protocol as too old, and the strip when the gateway is the one too old (section 11). `todo`.
 
 ## 18. For builders
 
@@ -520,7 +517,7 @@ For the gateway's own machine: "Otto is set to run commands on the gateway's mac
 | `gateways`               | `one`: Home gateway alone                                                                                         |
 | `waiting`                | `1`: a message to Otto waits to be sent                                                                           |
 | `switchfail`             | `1`: Studio gateway can't be reached                                                                              |
-| `remove`                 | `studio` or `home`: that removal's confirmation open; `rmfail=remote` or `local`                                  |
+| `remove`                 | `studio` or `home`: that removal's confirmation open; `rmfail=remote`, `unknown` or `local`                       |
 | `os`                     | `mac`, `windows`, `linux`                                                                                         |
 | `build`                  | `dev`: a copy run from source                                                                                     |
 | `feed`                   | `1`: an update source exists (the future example); `upd=checking`, `current`, `downloading`, `ready`, `error`     |
@@ -533,27 +530,28 @@ For the gateway's own machine: "Otto is set to run commands on the gateway's mac
 
 The check walks these by clicking, and asserts each destination's words:
 
-| Walk                                  | From                             | Through                                              | To                                                                                          |
-| ------------------------------------- | -------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Switch, nothing waiting               | The gateway menu                 | Studio gateway                                       | Studio's bots only; "Switched to Studio gateway"                                            |
-| Switch, a message waiting             | `waiting=1`, the gateway menu    | the confirmation, Switch                             | Studio in use; Cancel leaves Home in use                                                    |
-| Switch fails                          | `switchfail=1`                   | Studio gateway, "Back to Home gateway"               | Home in use again                                                                           |
-| Add a new gateway                     | Your gateways                    | Add gateway…, the stand-in's "Paired: a new gateway" | "Added Lab gateway", three gateways                                                         |
-| Add the same gateway                  | Your gateways                    | Add gateway…, "Paired: the same gateway"             | "Home gateway is already here", two gateways                                                |
-| Add, cancelled                        | Your gateways                    | Add gateway…, Cancel                                 | "Nothing was added", Home in use                                                            |
-| Remove another gateway                | Studio's page                    | Remove…, the lists, Remove                           | "Studio gateway is removed from this device"; one gateway                                   |
-| Remove the gateway in use, with admin | Gateway pane                     | Remove this gateway…, the record checkbox, Remove    | Removed; "Not connected. Choose a gateway to use."                                          |
-| Remove, the gateway refuses           | `remove=home&rmfail=remote`      | Remove                                               | "Home gateway didn't remove this device's record", nothing removed                          |
-| Remove, a local step fails            | `remove=studio&rmfail=local`     | Remove, Try again                                    | Removed                                                                                     |
-| Appearance                            | Appearance                       | Dark, Neutral                                        | the page dark; neutral bubbles                                                              |
-| Spelling                              | System                           | the switch                                           | "Spelling isn't checked"                                                                    |
-| Hardware acceleration                 | System                           | the switch, Restart now                              | "Off. Clawtrate draws without the graphics hardware."                                       |
-| Updates, no source                    | Updates                          | —                                                    | "no update source"; no button, no switch                                                    |
-| Updates, with a source                | `feed=1`                         | Check for Updates                                    | "You're up to date"; then `upd=ready`, Restart to Update with `waiting=1`, the confirmation |
-| Update required                       | `required=client`                | —                                                    | "Update required" and Switch gateway; at phone width the App Store line                     |
-| Compact                               | Juniper's task, Details          | Compact                                              | "Compacting…", then "Context compacted", the fold opening "3 earlier turns"                 |
-| Compact while running, read-only      | `compact=running`; `access=read` | —                                                    | disabled with its sentence; the access bar                                                  |
-| Low disk                              | `disk=node`                      | Show the computer                                    | the Computer tab                                                                            |
+| Walk                                  | From                             | Through                                              | To                                                                                             |
+| ------------------------------------- | -------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Switch, nothing waiting               | The gateway menu                 | Studio gateway                                       | Studio's bots only; "Switched to Studio gateway"                                               |
+| Switch, a message waiting             | `waiting=1`, the gateway menu    | the confirmation, Switch                             | Studio in use; Cancel leaves Home in use                                                       |
+| Switch fails                          | `switchfail=1`                   | Studio gateway, "Back to Home gateway"               | Home in use again                                                                              |
+| Add a new gateway                     | Your gateways                    | Add gateway…, the stand-in's "Paired: a new gateway" | "Added Lab gateway", three gateways                                                            |
+| Add the same gateway                  | Your gateways                    | Add gateway…, "Paired: the same gateway"             | "Home gateway is already here", two gateways                                                   |
+| Add, cancelled                        | Your gateways                    | Add gateway…, Cancel                                 | "Nothing was added", Home in use                                                               |
+| Remove another gateway                | Studio's page                    | Remove…, the lists, Remove                           | "Studio gateway is removed from this device"; one gateway                                      |
+| Remove the gateway in use, with admin | Gateway pane                     | Remove this gateway…, the record checkbox, Remove    | Removed; "Not connected. Choose a gateway to use."                                             |
+| Remove, the gateway refuses           | `remove=home&rmfail=remote`      | Remove                                               | "Home gateway didn't remove this device's record", nothing removed                             |
+| Remove, no answer                     | `remove=home&rmfail=unknown`     | Remove                                               | "Clawtrate can't tell whether Home gateway removed this device's record", nothing else removed |
+| Remove, a local step fails            | `remove=studio&rmfail=local`     | Remove, Try again                                    | Removed                                                                                        |
+| Appearance                            | Appearance                       | Dark, Neutral                                        | the page dark; neutral bubbles                                                                 |
+| Spelling                              | System                           | the switch                                           | "Spelling isn't checked"                                                                       |
+| Hardware acceleration                 | System                           | the switch, Restart now                              | "Off. Clawtrate draws without the graphics hardware."                                          |
+| Updates, no source                    | Updates                          | —                                                    | "no update source"; no button, no switch                                                       |
+| Updates, with a source                | `feed=1`                         | Check for Updates                                    | "You're up to date"; then `upd=ready`, Restart to Update with `waiting=1`, the confirmation    |
+| Update required                       | `required=client`                | —                                                    | "Update required" and Switch gateway; at phone width the App Store line                        |
+| Compact                               | Juniper's task, Details          | Compact                                              | "Compacting…", then "Context compacted", the fold opening "3 earlier turns"                    |
+| Compact while running, read-only      | `compact=running`; `access=read` | —                                                    | disabled with its sentence; the access bar                                                     |
+| Low disk                              | `disk=node`                      | Show the computer                                    | the Computer tab                                                                               |
 
 ## 19. Not covered here
 

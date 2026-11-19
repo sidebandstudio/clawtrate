@@ -148,7 +148,7 @@
         `<button type="button" class="button" data-size="sm" disabled>Compact</button>`;
     else
       body =
-        `<p>Compact replaces older turns in ${esc(b.name)}'s context with a summary. Every turn stays here.</p>` +
+        `<p>Compact asks the gateway to replace older turns in ${esc(b.name)}'s context with a summary. Every turn stays here.</p>` +
         `<button type="button" class="button" data-size="sm" data-s="compact">Compact</button>`;
     return `<section class="work-section s-context" data-testid="context-group"><h3>Context</h3>${body}</section>`;
   }
@@ -290,7 +290,7 @@
       if (S.waiting && S.inUse && !confirmed) {
         return confirmBox({
           title: `Switch to ${esc(gw(id).name)}?`,
-          text: `${S.waiting} message to Otto hasn't been sent to ${esc(gw(S.inUse).name)} yet. Switching drops it. Runs on ${esc(gw(S.inUse).name)} keep going.`,
+          text: `${S.waiting} message to Otto hasn't been sent to ${esc(gw(S.inUse).name)} yet. Switching discards it: it isn't kept as a draft. Runs on ${esc(gw(S.inUse).name)} keep going.`,
           label: "Switch",
           run: () => switchTo(id, true),
         });
@@ -320,7 +320,7 @@
       if (S.waiting && S.inUse && !confirmed) {
         return confirmBox({
           title: "Add a gateway?",
-          text: `${S.waiting} message to Otto hasn't been sent to ${esc(gw(S.inUse).name)} yet. Adding a gateway disconnects from it while setup runs, which drops the message. Runs on ${esc(gw(S.inUse).name)} keep going.`,
+          text: `${S.waiting} message to Otto hasn't been sent to ${esc(gw(S.inUse).name)} yet. Adding a gateway disconnects from it while setup runs, which discards the message: it isn't kept as a draft. Runs on ${esc(gw(S.inUse).name)} keep going.`,
           label: "Add gateway",
           run: () => openAdd(true),
         });
@@ -427,8 +427,9 @@
     }
     function runRemoval(id, record, attempt = 1) {
       const g = gw(id);
-      if (record && RMFAIL === "remote") {
-        S.removal = { id, outcome: "remote" };
+      // Only a result that names this device's id counts as removed (settings.md section 7).
+      if (record && (RMFAIL === "remote" || RMFAIL === "unknown")) {
+        S.removal = { id, outcome: RMFAIL };
         return showRemoval();
       }
       if (RMFAIL === "local" && attempt === 1 && !S.localRetried) {
@@ -469,6 +470,11 @@
       if (r.outcome === "remote")
         return (
           `<div class="s-result" data-testid="removal-result">${D.result("danger", "warning", `${esc(g.name)} didn't remove this device's record`, `Nothing was removed. ${esc(g.name)} said: the request was refused.`)}` +
+          `<div class="b-actions" style="justify-content:center">${button("Cancel", 'data-s="rm-cancel"', "quiet")}${button("Remove from this device only", `data-s="rm-local" data-gw="${r.id}"`)}</div></div>`
+        );
+      if (r.outcome === "unknown")
+        return (
+          `<div class="s-result" data-testid="removal-result">${D.result("warn", "warning", `Clawtrate can't tell whether ${esc(g.name)} removed this device's record`, `Nothing else was removed. Look for this device in ${esc(g.name)}'s device list on the gateway's computer.`)}` +
           `<div class="b-actions" style="justify-content:center">${button("Cancel", 'data-s="rm-cancel"', "quiet")}${button("Remove from this device only", `data-s="rm-local" data-gw="${r.id}"`)}</div></div>`
         );
       if (r.outcome === "local")
@@ -574,7 +580,7 @@
       const body =
         (S.unsaved ? note("<p>Clawtrate couldn't save this. It applies until you close Clawtrate.</p>", "warn") : "") +
         `<div class="s-group"><h4>Theme</h4><div class="s-setting"><span class="s-setting-main"><strong>Theme</strong><span>The same choice as the gateway menu's.</span></span>` +
-        seg("Theme", "theme", themeNow(), [["system", "Match the system"], ["light", "Light"], ["dark", "Dark"]]) +
+        seg("Theme", "theme", themeNow(), [["system", "Follow system"], ["light", "Light"], ["dark", "Dark"]]) +
         `</div></div>` +
         `<div class="s-group"><h4>Your messages</h4><div class="s-setting"><span class="s-setting-main"><strong>Your messages</strong><span>The fill of what you send.` +
         `<span class="s-sample" data-fill="accent" aria-hidden="true">Accent</span><span class="s-sample" data-fill="neutral" aria-hidden="true">Neutral</span></span></span>` +
@@ -663,7 +669,7 @@
           }, 900);
       }, 900);
     }
-    // A restart drops what waits to be sent, so it asks first when something does.
+    // A restart discards what waits to be sent, so it asks first when something does.
     function restart(title, after) {
       const go = () => {
         S.waiting = 0;
@@ -673,7 +679,7 @@
       if (!S.waiting) return go();
       confirmBox({
         title,
-        text: `${S.waiting} message to Otto hasn't been sent yet. Restarting drops it. Runs on ${esc(inUseName())} keep going.`,
+        text: `${S.waiting} message to Otto hasn't been sent yet. Restarting discards it: it isn't kept as a draft. Runs on ${esc(inUseName())} keep going.`,
         label: "Restart",
         run: go,
       });
@@ -833,7 +839,7 @@
           S.unsaved = S.saveFail;
           rs();
           $('[data-s="theme"][aria-checked="true"]', settingsDialog)?.focus();
-          return announce(`Theme: ${{ system: "Match the system", light: "Light", dark: "Dark" }[el.dataset.value]}`);
+          return announce(`Theme: ${{ system: "Follow system", light: "Light", dark: "Dark" }[el.dataset.value]}`);
         case "bubbles":
           if (el.dataset.value === "neutral") document.documentElement.dataset.bubbles = "neutral";
           else delete document.documentElement.dataset.bubbles;
