@@ -70,7 +70,8 @@ describe("status says only what the plugin itself knows", () => {
         plugin: "clawtrate-tool-rules",
         version: PLUGIN_VERSION,
         rulesSchema: 1,
-        rules: { state: "available" },
+        rules: { state: "none" },
+        enforcing: "nothing",
         hook: { registered: true, lastCallAt: null },
         matches: { tools: [], fallback: [], exempt: ["ask_user"] },
       },
@@ -584,4 +585,55 @@ describe("a save the reader cannot reopen", () => {
     const fresh = new RulesStore(join(h.stateDir, "clawtrate-tool-rules"));
     expect(Object.fromEntries(fresh.scopes() ?? [])).toEqual((await h.call("get")).payload!.scopes);
   }, 60_000);
+});
+
+describe("status says whether rules are being enforced", () => {
+  it("tells the three states of the rules apart, and the hook from the rules", async () => {
+    let now = 1000;
+    const h = host({ now: () => now });
+    const status = async () => {
+      const { rules, enforcing, hook } = (await h.call("status")).payload!;
+      return { rules, enforcing, registered: (hook as { registered: boolean }).registered };
+    };
+    expect(await status()).toEqual({
+      rules: { state: "none" },
+      enforcing: "nothing",
+      registered: true,
+    });
+    now = 2000;
+    await h.save("otto", [{ action: "never", tools: ["write"] }]);
+    expect(await status()).toEqual({
+      rules: { state: "read", readAt: 2000 },
+      enforcing: "rules",
+      registered: true,
+    });
+    now = 3000;
+    writeFileSync(rulesFile(h.stateDir), "{ broken");
+    expect(await status()).toEqual({
+      rules: { state: "lost", reason: "the rules file is not JSON", keptCopyReadAt: 2000 },
+      enforcing: "kept-copy",
+      registered: true,
+    });
+    h.stop();
+    expect((await status()).enforcing).toBe("not-enforced");
+  });
+
+  it("says when every call is asked about, and when the hook is not there", async () => {
+    const h0 = host();
+    mkdirSync(join(h0.stateDir, "clawtrate-tool-rules"), { recursive: true });
+    writeFileSync(rulesFile(h0.stateDir), "{ broken");
+    const h = load({ stateDir: h0.stateDir });
+    expect((await h.call("status")).payload).toMatchObject({
+      rules: { state: "lost", reason: "the rules file is not JSON", keptCopyReadAt: null },
+      enforcing: "ask-every-call",
+      matches: null,
+    });
+    const without = host({ on: false });
+    await without.save("otto", [{ action: "never", tools: ["write"] }]);
+    expect((await without.call("status")).payload).toMatchObject({
+      rules: { state: "read" },
+      enforcing: "not-enforced",
+      hook: { registered: false, lastCallAt: null },
+    });
+  });
 });

@@ -112,6 +112,15 @@ function emitChanged(shared) {
   running?.emit(CHANGED_EVENT, {}, { scope: "operator.read" });
 }
 
+/** The rules' state for `status`: none, read (and when), or lost (why, and any copy kept). */
+function rulesState(view) {
+  if (view.kind === "read") return { state: "read", readAt: view.readAt };
+  if (view.kind === "lost") {
+    return { state: "lost", reason: view.problem, keptCopyReadAt: view.kept?.readAt ?? null };
+  }
+  return { state: "none" };
+}
+
 /** The rules' state in words, for the gateway's log. */
 function stateLine(view) {
   if (view.kind === "none") return "No rules file: nothing was saved, so nothing is enforced.";
@@ -307,16 +316,25 @@ export function createToolRules(api, options = {}) {
 
   method("status", "operator.read", () => {
     const view = store.view();
+    const registered = [...shared.active.values()].some((entry) => entry.hook);
     return {
       plugin: PLUGIN_ID,
       version: PLUGIN_VERSION,
       rulesSchema: RULES_SCHEMA,
-      rules:
-        view.kind === "lost"
-          ? { state: "unavailable", reason: view.problem }
-          : { state: "available" },
+      rules: rulesState(view),
+      // What the plugin applies to the next call, all things it knows taken together.
+      enforcing: !registered
+        ? "not-enforced"
+        : view.kind === "none"
+          ? "nothing"
+          : view.kind === "read"
+            ? "rules"
+            : view.kept
+              ? "kept-copy"
+              : "ask-every-call",
       hook: {
-        registered: [...shared.active.values()].some((entry) => entry.hook),
+        registered,
+        // When the hook last saw a call; it says nothing about the rules.
         lastCallAt: shared.lastCallAt,
       },
       matches: view.enforced ? matchesOf(view.enforced) : null,

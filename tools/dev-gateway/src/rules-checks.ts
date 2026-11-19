@@ -339,10 +339,11 @@ export const RULES_CHECKS: RulesCheck[] = [
           status.plugin,
           status.version,
           status.rulesSchema,
-          status.rules,
+          rec(status.rules).state,
+          status.enforcing,
           rec(status.hook).registered,
         ],
-        [PLUGIN, VERSION, 1, { state: "available" }, true],
+        [PLUGIN, VERSION, 1, "none", "nothing", true],
         "the plugin's status",
       );
       answered(await rules(reader, "get"), "get at the read tier");
@@ -746,7 +747,11 @@ export const RULES_CHECKS: RulesCheck[] = [
         await patchConfig(ctx, { plugins: { entries: { [PLUGIN]: { enabled: true } } } });
       }
       const status = await pluginRunning(ctx);
-      same(status.rules, { state: "available" }, "the plugin's rules once it runs again");
+      same(
+        [rec(status.rules).state, status.enforcing],
+        ["read", "rules"],
+        "the plugin's rules once it runs again",
+      );
     },
   },
   {
