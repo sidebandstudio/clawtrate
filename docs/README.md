@@ -7,6 +7,7 @@ Every document in the repository, by what you want to do.
 - [Developing Clawtrate](development/README.md): setup, the web preview and the desktop app.
 - [The development gateway](development/dev-gateway.md): the gateway with a scripted model that everything is built against, its instances, plugins, scripted accounts and scenarios.
 - [Testing](development/testing.md): each check, what CI runs, the fixture mode and the visual tests.
+- [The first screen and the look on this computer](development/setup.md): the sandbox a development build and every check need, and running the first screen against a development instance.
 - [Packaging](development/packaging.md): building the desktop app for macOS and Windows, signing, and the logo and icons.
 - [CONTRIBUTING.md](../CONTRIBUTING.md): how to pick up work and open a pull request.
 - [AGENTS.md](../AGENTS.md): the rules every change follows, written for coding agents and people alike.

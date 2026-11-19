@@ -101,7 +101,7 @@ Every operation that registers a device or changes something is confirmed in a d
 | Set up                | Set up OpenClaw on this computer?                                     | "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions." |
 | Remove a route        | Remove devbox from Clawtrate?                                         | What is forgotten, and what keeps running                                                                                                                                                                                          |
 
-The web preview host has no native dialogs, so it offers none of these operations. Looking on this computer works everywhere.
+The web preview host has no native dialogs, so it offers none of these operations. A browser viewing it is on another device, so looking on this computer is off there unless the host is started with an explicit option, and then it looks only in a sandbox (`docs/decisions.md`, "Setting up on this computer").
 
 ### Routes
 
