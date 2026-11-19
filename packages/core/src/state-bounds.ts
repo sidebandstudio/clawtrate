@@ -643,8 +643,10 @@ const sidebar = object<SidebarState>()({
   }),
 });
 /** Warning budgets, their counts and the providers' limits (`usage.ts`). */
-const usageId = id(MAX_BUDGET_ID_CHARS);
-const budgetKey = id(MAX_BUDGET_ID_CHARS + 8);
+// An id bound counts JSON characters: a plain id of `MAX_BUDGET_ID_CHARS` and its two quotes,
+// and a budget's key, `routine:` before such an id.
+const usageId = id(MAX_BUDGET_ID_CHARS + 2);
+const budgetKey = id("routine:".length + MAX_BUDGET_ID_CHARS + 2);
 const zone = text(MAX_TIME_ZONE_CHARS + 2);
 // A date, YYYY-MM-DD, quoted.
 const date = text(12);

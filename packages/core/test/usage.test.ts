@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseBridgeCommand } from "../src/bridge.ts";
+import { enforceState, initialState } from "../src/index.ts";
 import {
   COUNT_AFTER_RUN_MS,
   COUNT_COUNTING_MS,
@@ -404,6 +405,26 @@ describe("where a bot's runs came from", () => {
     expect([...named.entries()].map(([k, v]) => [k, [...v]])).toEqual([
       ["agent:marlow:main", ["r2", "queued-run"]],
       ["agent:pip:main", ["r7"]],
+    ]);
+  });
+});
+
+describe("budgets in the state", () => {
+  it("keeps a bot's and a routine's id of the longest length allowed, and the budget's key, as they are", () => {
+    const botId = "b".repeat(128);
+    const routineId = "r".repeat(128);
+    const [budget] = parseBudgets({
+      budgets: [{ botId, routineId, period: "daily", tokens: 1_000, timeZone: NY }],
+    }).budgets;
+    expect(budget?.id).toBe(`routine:${routineId}`);
+    const kept = enforceState({
+      ...initialState,
+      usage: { ...initialUsage, budgets: [budget!] },
+    }).usage!.budgets[0]!;
+    expect([kept.id, kept.botId, kept.routineId]).toEqual([
+      `routine:${routineId}`,
+      botId,
+      routineId,
     ]);
   });
 });
