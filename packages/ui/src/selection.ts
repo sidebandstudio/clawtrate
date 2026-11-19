@@ -173,8 +173,18 @@ export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
     () => (bot ? (state.tasksByBot[bot.id] ?? []) : []),
     [bot, state.tasksByBot],
   );
+  const gatewayId = state.connection.gatewayId;
+  const [linked, setLinked] = useState<{ task: Task; gatewayId: string | null } | null>(null);
   const remembered = bot ? taskByBot[bot.id] : undefined;
-  const task = tasks.find((t) => t.key === remembered) ?? tasks[0] ?? null;
+  const task =
+    tasks.find((t) => t.key === remembered) ??
+    (linked?.gatewayId === gatewayId &&
+    linked.task.key === remembered &&
+    linked.task.botId === bot?.id
+      ? linked.task
+      : null) ??
+    tasks[0] ??
+    null;
 
   // Leaving a task marks it read as of its latest activity, so its dot only
   // returns for activity that happens after this viewer saw it.
@@ -256,7 +266,8 @@ export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
 
   /** Open a task under any bot: one operation for the bot, the task and what is read. */
   const selectTask = useCallback(
-    (id: string, key: string) => {
+    (id: string, key: string, linkedTask: Task | null = null) => {
+      setLinked(linkedTask && { task: linkedTask, gatewayId });
       // The task shown may be only the bot's newest, nothing chosen: choosing it remembers it,
       // so a newer task of the bot does not take its place.
       if (id === bot?.id && key === remembered) return;
@@ -281,7 +292,7 @@ export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
         return next;
       });
     },
-    [bot, task, remembered, markRead, setFolded],
+    [bot, task, remembered, gatewayId, markRead, setFolded],
   );
 
   const isOpen = useCallback(
