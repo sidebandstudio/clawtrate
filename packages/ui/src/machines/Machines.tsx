@@ -292,7 +292,7 @@ export function useMachinesSection({
   toNav: ReactNode;
 }): { title: string; back: ReactNode; body: ReactNode; foot: ReactNode } {
   const bridge = useBridge();
-  const [read, setRead] = useState<Read>({ status: "loading" });
+  const [held, setHeld] = useState<{ key: string; read: Read } | null>(null);
   const [tick, setTick] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -307,24 +307,41 @@ export function useMachinesSection({
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
   const scopesKey = connection.scopes.join(" ");
+  // A read belongs to the connection and the access it was made with: nothing of another is drawn.
+  const key = `${connection.connectedAt ?? ""}\n${scopesKey}`;
+  const [forKey, setForKey] = useState(key);
+  if (forKey !== key) {
+    setForKey(key);
+    setErrors({});
+    setRenaming(null);
+    setRemoving(null);
+  }
   const now = Date.now();
   useEffect(() => {
     if (!active || !connected) return;
     let live = true;
     bridge.invoke({ type: "readMachines" }).then(
-      (view) => live && setRead({ status: "ready", view }),
+      (view) => live && setHeld({ key, read: { status: "ready", view } }),
       (error: unknown) =>
         live &&
-        setRead({
-          status: "error",
-          message: error instanceof Error ? error.message : String(error),
+        setHeld({
+          key,
+          read: {
+            status: "error",
+            message: error instanceof Error ? error.message : String(error),
+          },
         }),
     );
     return () => {
       live = false;
     };
-  }, [bridge, active, connected, connection.connectedAt, scopesKey, tick]);
+  }, [bridge, active, connected, key, tick]);
   const reload = useCallback(() => setTick((n) => n + 1), []);
+  const read: Read = !connected
+    ? { status: "error", message: "Not connected to the gateway." }
+    : held && held.key === key
+      ? held.read
+      : { status: "loading" };
   const admin = connection.canAdmin && !info.readOnly;
   const pairing = holdsPairing(connection) && !info.readOnly;
   const nameOf = (id: string) => bots.find((bot) => bot.id === id)?.name ?? id;

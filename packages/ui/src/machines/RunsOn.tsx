@@ -19,31 +19,44 @@ type Read =
   | { status: "error"; message: string }
   | { status: "ready"; placement: BotPlacement };
 
-/** A bot's placement, read when shown and again on `reload()`, the connection or its access changing. */
+/**
+ * A bot's placement, read when shown and again on `reload()`. A read belongs to
+ * the bot and the connection's access it was made for: while another bot's, an
+ * earlier connection's or other scopes' read is all there is, nothing is drawn.
+ */
 export function usePlacement(botId: string, connection: ConnectionState, active: boolean) {
   const bridge = useBridge();
-  const [read, setRead] = useState<Read>({ status: "loading" });
+  const [held, setHeld] = useState<{ key: string; read: Read } | null>(null);
   const [tick, setTick] = useState(0);
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
   const scopesKey = connection.scopes.join(" ");
+  const key = `${botId}\n${connection.connectedAt ?? ""}\n${scopesKey}`;
   useEffect(() => {
     if (!active || !connected) return;
     let live = true;
     bridge.invoke({ type: "readPlacement", botId }).then(
-      (placement) => live && setRead({ status: "ready", placement }),
+      (placement) => live && setHeld({ key, read: { status: "ready", placement } }),
       (error: unknown) =>
         live &&
-        setRead({
-          status: "error",
-          message: error instanceof Error ? error.message : String(error),
+        setHeld({
+          key,
+          read: {
+            status: "error",
+            message: error instanceof Error ? error.message : String(error),
+          },
         }),
     );
     return () => {
       live = false;
     };
-  }, [bridge, botId, active, connected, connection.connectedAt, scopesKey, tick]);
+  }, [bridge, botId, active, connected, key, tick]);
   const reload = useCallback(() => setTick((n) => n + 1), []);
+  const read: Read = !connected
+    ? { status: "error", message: "Not connected to the gateway." }
+    : held && held.key === key
+      ? held.read
+      : { status: "loading" };
   return { read, reload };
 }
 
