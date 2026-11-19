@@ -101,7 +101,7 @@
       return (
         html +
         `<div class="work-empty"><span class="empty-mark">${icon("memory")}</span><h4>Nothing stored yet</h4><p>${name} hasn't saved anything yet. When it does, it shows here.</p></div>` +
-        (isAdmin() ? `<div class="b-actions" style="margin-top:12px">${button("Add to memory", 'data-c="mem-add" data-size="sm"')}</div>` : "")
+        (X.add ? addForm() + (X.refused || "") : isAdmin() ? `<div class="b-actions" style="margin-top:12px">${button("Add to memory", 'data-c="mem-add" data-size="sm"')}</div>` : "")
       );
     const over = rootUsed() > FILE_BUDGET;
     const groups = [
@@ -145,8 +145,9 @@
     );
   }
 
+  const IMPORTED = ["Printer is on the second floor.", "Guest Wi-Fi changes on the first of the month.", "The NAS scrub runs on the first Sunday.", "The camera's reservation is 192.0.2.40.", "UPS holds about 40 minutes.", "Thermostat warms at 6:30 on weekdays."];
   function importReview() {
-    const found = ["Printer is on the second floor.", "Guest Wi-Fi changes on the first of the month.", "The NAS scrub runs on the first Sunday.", "The camera's reservation is 192.0.2.40.", "UPS holds about 40 minutes.", "Thermostat warms at 6:30 on weekdays."];
+    const found = IMPORTED;
     return (
       `<div class="c-form" role="group" aria-label="Import"><p style="margin:0"><b>6 items from house-notes.md</b></p>` +
       found.map((f, i) => `<label class="b-check" style="flex-direction:row;color:var(--text)"><input type="checkbox" checked data-c-imp="${i}" /> ${esc(f)} <span class="b-faint">· As a note</span></label>`).join("") +
@@ -158,6 +159,8 @@
   function itemView(bot) {
     const name = esc(botName(bot));
     const i = list(bot).find((x) => x.id === X.item) || list(bot)[0];
+    if (!i) return sub("Memory", "memory", `Back to what ${name} remembers`) + `<div class="work-empty"><h4>Nothing stored yet</h4></div>`;
+    X.item = i.id;
     let html = sub(i.group === "root" ? "Root memory" : i.group === "user" ? "About you" : "Note", "memory", `Back to what ${name} remembers`);
     const needsPlugin = i.group === "notes" && !X.plugin;
     if (X.edit === i.id) {
@@ -287,10 +290,13 @@
       case "mem-import-cancel":
         X.import = false;
         return rerender();
-      case "mem-import-save":
+      case "mem-import-save": {
+        const chosen = [...panel.querySelectorAll("[data-c-imp]")].filter((x) => x.checked).map((x) => Number(x.dataset.cImp));
+        chosen.forEach((k) => list(bot).push({ id: `imp${k}`, group: "notes", text: IMPORTED[k], file: "memory/house-notes.md", line: k + 1, rev: "b7d1", changed: "just now", saver: "Imported in Clawtrate from this device", size: "80 B" }));
         X.import = false;
         rerender();
-        return announce("Added 6 items");
+        return announce(`Added ${chosen.length} item${chosen.length === 1 ? "" : "s"}`);
+      }
       case "mem-clear":
         return D.confirmBox({
           title: `Clear ${botName(bot)}'s memory?`,
