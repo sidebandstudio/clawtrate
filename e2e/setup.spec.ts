@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { devGateway } from "./global-setup.ts";
 import { openInstance, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
@@ -238,7 +238,8 @@ test("F-515: another version is named, offers Advanced, and runs nothing for the
   mkdirSync(join(dir, "bin"));
   writeFileSync(
     wrapper,
-    `#!/bin/sh\nout=$("${OPENCLAW}" "$@")\ncode=$?\nprintf '%s\\n' "$out" | /usr/bin/sed 's/2026\\.10\\.6/2026.9.37/g'\nexit $code\n`,
+    // The real program's folder first on PATH, as the look gives it: `node` may live beside it.
+    `#!/bin/sh\nPATH="${dirname(OPENCLAW)}:$PATH"\nout=$("${OPENCLAW}" "$@")\ncode=$?\nprintf '%s\\n' "$out" | /usr/bin/sed 's/2026\\.10\\.6/2026.9.37/g'\nexit $code\n`,
   );
   chmodSync(wrapper, 0o755);
   const launched = await launch({ sandbox: writeSandbox(dir, { openclaw: wrapper }) });
