@@ -573,8 +573,7 @@ describe("a thread's state (11.2)", () => {
     expect(workMayContinue([{ ...l, call: { ...l.call, runStopped: true } }])).toBe(true);
     const unreturned = { ...l, state: "unknown" as const, call: { ...l.call, runStopped: true } };
     expect(workMayContinue([unreturned])).toBe(false);
-    // Read from history, a run another client stopped has no end of its own: the later call the
-    // stop cut short says so, with the gateway's "Aborted".
+    // A later call's "Aborted" alone is no observed stop of the handoff's run: no note.
     const aborted: T3CallLike = {
       ...l,
       id: "call_w",
@@ -583,10 +582,7 @@ describe("a thread's state (11.2)", () => {
       state: "unknown",
       call: { ...l.call, status: "returned", isError: true, text: "Aborted" },
     };
-    expect(workMayContinue([l, aborted])).toBe(true);
-    expect(
-      workMayContinue([l, { ...aborted, call: { ...aborted.call, text: "Something else" } }]),
-    ).toBe(false);
+    expect(workMayContinue([l, aborted])).toBe(false);
   });
 });
 
@@ -991,7 +987,7 @@ describe("the words follow the record", () => {
 });
 
 describe("work that may continue is the stopped run's (11, F-137)", () => {
-  it("F-137: an abort in another gateway run on the same thread adds no note; one in the run that handed off does", () => {
+  it("F-137: an abort alone, in another gateway run or the one that handed off, adds no note; the handoff's run seen to stop does", () => {
     const head = t3(live("t3_thread_launch", LAUNCH_ARGS, LAUNCHED))!;
     const wait = t3(live("t3_thread_wait", { threadId: THREAD }, null, { open: true }))!;
     const cut = (runId: string): T3CallLike => ({
@@ -1001,7 +997,9 @@ describe("work that may continue is the stopped run's (11, F-137)", () => {
     });
     expect(head.call.runId).toBe("run-1");
     expect(workMayContinue([head, cut("run-other")])).toBe(false);
-    expect(workMayContinue([head, cut("run-1")])).toBe(true);
+    expect(workMayContinue([head, cut("run-1")])).toBe(false);
+    const stopped = { ...head, call: { ...head.call, runStopped: true } };
+    expect(workMayContinue([stopped, cut("run-1")])).toBe(true);
   });
 });
 
@@ -1093,4 +1091,14 @@ it("F-314: text cut only in the app does not say the gateway stored a cut result
   expect(readLines(readDimensions(null, call.cut === true))[0]).not.toContain(
     "stored result was cut",
   );
+});
+
+it("F-137: a stopped run that only asked T3 Code to stop did not hand off work", () => {
+  const args = { threadId: THREAD };
+  const interruption = t3(
+    live("t3_thread_interrupt", { ...args, stop: true }, { ...args, status: "no_active_run" }),
+  )!;
+  expect(
+    workMayContinue([{ ...interruption, call: { ...interruption.call, runStopped: true } }]),
+  ).toBe(false);
 });

@@ -369,27 +369,13 @@ export function threadTitle(calls: readonly T3Call[]): string {
 }
 
 /**
- * Whether the run that made the thread's latest sending call was stopped after
- * that call was made (11, F-137): that run reads as stopped, or a later call of
- * the same gateway run was cut short by the stop, as the gateway's own
- * "Aborted" says. An abort in another run says nothing of this handoff.
+ * Whether work handed to T3 Code may continue after a stop (11, F-137): the
+ * starting host saw the run that made the latest handoff, a launch or a
+ * follow-up that was made, stop. Asking T3 Code to stop hands off nothing.
  */
 export function workMayContinue(calls: readonly T3Call[]): boolean {
-  const at = calls.findLastIndex((c) => SENDING[c.role]);
-  const sending = calls[at];
-  if (sending?.state !== "made") return false;
-  const run = sending.call.runId ?? null;
-  const abortedAfter =
-    run !== null &&
-    calls
-      .slice(at + 1)
-      .some(
-        (c) =>
-          c.call.runId === run &&
-          c.state === "unknown" &&
-          /^aborted\.?$/i.test((c.call.text ?? "").trim()),
-      );
-  return sending.call.runStopped === true || abortedAfter;
+  const handoff = calls.findLast((c) => c.role === "launch" || c.role === "send");
+  return handoff?.state === "made" && handoff.call.runStopped === true;
 }
 
 // What a read read ------------------------------------------------------------------

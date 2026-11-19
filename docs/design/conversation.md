@@ -834,7 +834,7 @@ The same component, for work a bot sends to T3 Code. It is drawn only from the b
 
 **Transitions.** Call started, then Call made or Failed. A call that needs approval goes from Call started to Waiting for approval and, when allowed, back to Call started: it is the same call, and no second start is reported. A stop before the call returns leads to Not sent or Delivery unknown. Delivery unknown moves to Call made or Failed only when a later tool event carries an identifier that names this call. Call made, Failed and Not sent are final for the call. A thread, which many calls share, has a state of its own (11.2).
 
-**When the bot is stopped** and a thread's latest sending call was made, the card adds a line in medium weight: "The call was made. Work handed to T3 Code may continue there." The stop note says the same. A call that had not returned when the bot was stopped gets no such line: it is Delivery unknown, or Not sent when the gateway confirms it. (F-137, F-470)
+**When the bot is stopped**, the card adds a line in medium weight, "The call was made. Work handed to T3 Code may continue there.", on this evidence only: the starting host saw the run that made the latest handoff stop. The latest handoff is a launch or a follow-up that was made; asking T3 Code to stop hands off nothing. The stop note says the same. A call that had not returned when the bot was stopped gets no such line: it is Delivery unknown, or Not sent when the gateway confirms it. (F-137, F-470)
 
 Touch and hold offers "Copy sent text" and "Copy raw" (the raw of the call whose item is open, or of the thread's first call). (F-444) The Work pane's Coding section lists these cards across the bot's tasks, one row per thread; its rows use this card's folded form. (F-136)
 
