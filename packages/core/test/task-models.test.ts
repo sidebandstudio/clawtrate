@@ -190,6 +190,8 @@ describe("a task's model and effort", () => {
       after: 5_000,
     });
     expect(taskModelLine(line!, word)).toBe("Model changed to acme/dev-2 · from the next turn");
+    // Made in this conversation: a task started afresh under the same key does not show it.
+    expect(line?.sessionId).toBe("session-1");
   });
 
   it("F-043: an effort alone writes thinkingLevel, and choosing what the task has writes nothing", async () => {

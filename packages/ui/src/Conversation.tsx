@@ -294,7 +294,10 @@ function TranscriptView({
   let previous: number | null = null;
   const endingsBefore = live.endingsBefore;
   // A change of the task's model or effort, where it was saved: before the first message after it.
-  const modelLines = [...(useClawtrateState().taskModels[task.key]?.events ?? [])];
+  // Only the present conversation's: a task started afresh under the same key keeps none of them.
+  const modelLines = (useClawtrateState().taskModels[task.key]?.events ?? []).filter(
+    (event) => event.sessionId === null || event.sessionId === task.sessionId,
+  );
   for (const item of transcript.items) {
     const at = item.timestamp;
     if (

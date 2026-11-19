@@ -62,6 +62,11 @@ export type TaskModelEvent = {
   followed: boolean;
   /** The gateway's reason, for a refusal. */
   error: string | null;
+  /**
+   * The task's session it was made in: a task the gateway started afresh under
+   * the same key (a reset) is another conversation, and does not show it.
+   */
+  sessionId: string | null;
 };
 
 /** The `thinking` this app sent with the message that started a turn (25.5). */
@@ -228,6 +233,7 @@ function readEvent(value: unknown): TaskModelEvent | null {
     wasModel: text(raw.wasModel),
     wasEffort: text(raw.wasEffort),
     followed: raw.followed === true,
+    sessionId: text(raw.sessionId),
     error: typeof raw.error === "string" ? cut(raw.error, MAX_TASK_MODEL_ERROR_CHARS) : null,
   };
 }
@@ -509,6 +515,7 @@ export class TaskModelsEngine {
         wasEffort,
         followed,
         error,
+        sessionId,
       });
       try {
         await this.ctx.ensureWrite();

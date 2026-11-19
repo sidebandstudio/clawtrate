@@ -119,6 +119,7 @@ const line = (
   wasEffort: "low",
   followed: false,
   error: null,
+  sessionId: null,
   ...change,
 });
 
@@ -264,6 +265,7 @@ export function modelCommand(
     wasEffort: was,
     followed: Boolean(command.model && effort && !command.effort),
     error: null,
+    sessionId: task.sessionId,
   };
   const next = withRow(state, (row) => ({
     ...row,

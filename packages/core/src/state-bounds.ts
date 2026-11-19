@@ -897,6 +897,7 @@ const taskModelEvent = object<TaskModelEvent>()({
   wasEffort: taskModelId,
   followed: FLAG,
   error: text(MAX_TASK_MODEL_ERROR_CHARS),
+  sessionId: ID,
 });
 export const TASK_MODEL: Bound = object<TaskModelView>()({
   catalog: ENUM,
