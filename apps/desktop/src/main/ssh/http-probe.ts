@@ -29,6 +29,7 @@ export function probeHttp(
   gatewayPort: number,
   channel: () => ChannelFacts,
   timeoutMs = 5000,
+  signal?: AbortSignal,
 ): Promise<ProbeResult> {
   return new Promise((resolve) => {
     let settled = false;
@@ -42,6 +43,8 @@ export function probeHttp(
       resolve(result);
     };
     const timer = setTimeout(() => finish("no-answer"), timeoutMs);
+    if (signal?.aborted) finish("no-answer");
+    signal?.addEventListener("abort", () => finish("no-answer"), { once: true });
     socket.on("connect", () => {
       socket.write(
         `GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:${gatewayPort}\r\nConnection: close\r\n\r\n`,

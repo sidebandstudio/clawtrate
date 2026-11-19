@@ -31,6 +31,7 @@ import {
 } from "./known-hosts.ts";
 import {
   type FoundService,
+  type GatewayService,
   type LookFacts,
   lookScript,
   MAX_LOOK_OUTPUT,
@@ -218,7 +219,15 @@ export class SshTransport {
   private readonly captures = new Map<string, Capture>();
   /** Each route id's latest preparation, at most `MAX_SSH_ROUTES`; an older one is stale. */
   private readonly routes = new Map<string, string>();
-  private readonly forwards = new Set<ForwardSupervisor>();
+  /** One forward per route id, with the preparation and service it was opened for. */
+  private readonly forwards = new Map<
+    string,
+    { generation: string; service: GatewayService; forward: ForwardSupervisor }
+  >();
+  /** Ends every run in flight when `closeAll` is called; replaced afterwards. */
+  private stopAll = new AbortController();
+  /** Every public call in flight, so that `closeAll` waits for them. */
+  private inflight: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
   private client: Promise<{ ok: true } | NotSupportedHere> | null = null;
 
@@ -243,6 +252,7 @@ export class SshTransport {
         return { ok: false, kind: "not-supported-here", reason: "ssh-missing" } as const;
       }
       const run = await runSsh(this.processes, this.world, ["-V"], {
+        signal: this.signal(),
         timeoutMs: 5000,
         maxStdout: 4096,
       });
@@ -359,6 +369,7 @@ export class SshTransport {
 
   private async probe(config: string, alias: string, extra: string[] = []) {
     const run = await runSsh(this.processes, this.world, this.probeArgs(config, alias, extra), {
+      signal: this.signal(),
       timeoutMs: PROBE_TIMEOUT_MS,
       maxStdout: 4096,
       // The key question is settled once the server's key was checked or written.
@@ -593,7 +604,7 @@ export class SshTransport {
         stdin: script.text,
         timeoutMs: LOOK_TIMEOUT_MS,
         maxStdout: MAX_LOOK_OUTPUT,
-        ...(options.signal ? { signal: options.signal } : {}),
+        signal: this.signal(options.signal),
       },
     );
     if (run.timedOut || run.cancelled) return { ok: false, kind: "cant-tell", reason: "timed-out" };
@@ -619,13 +630,21 @@ export class SshTransport {
     const expected = found.service;
     const gatewayPort = expected.port;
     if (!isGatewayPort(gatewayPort)) throw new Error("Not a gateway port.");
+    const open = this.forwards.get(route.id);
+    if (open && open.forward.state.phase !== "closed") {
+      // One forward per route: the same one again, or none while another is open.
+      if (open.generation === route.generation && sameService(open.service, expected))
+        return open.forward;
+      throw new Error("Another forward is open for this route; close it first.");
+    }
     if (this.forwards.size >= MAX_SSH_FORWARDS) throw new Error("Too many forwards at once.");
     const forward = new ForwardSupervisor({
       pickPort: freeLoopbackPort,
       start: (localPort) => this.startForward(route, localPort, gatewayPort),
-      probe: (localPort, process) => probeHttp(localPort, gatewayPort, () => process.channel()),
-      verify: async (): Promise<VerifyResult> => {
-        const look = await this.look(route);
+      probe: (localPort, process, signal) =>
+        probeHttp(localPort, gatewayPort, () => process.channel(), 5000, signal),
+      verify: async (signal): Promise<VerifyResult> => {
+        const look = await this.look(route, { signal });
         if (look.ok) {
           const now = serviceOnPort(look.facts, gatewayPort);
           if (!now.ok) return { kind: now.reason === "not-running" ? "not-running" : "cant-tell" };
@@ -638,9 +657,11 @@ export class SshTransport {
       setTimer: (callback, ms) => setTimeout(callback, ms),
       clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
     });
-    this.forwards.add(forward);
+    this.forwards.set(route.id, { generation: route.generation, service: expected, forward });
     forward.onState((state) => {
-      if (state.phase === "closed") this.forwards.delete(forward);
+      if (state.phase === "closed" && this.forwards.get(route.id)?.forward === forward) {
+        this.forwards.delete(route.id);
+      }
     });
     forward.open();
     return forward;
@@ -723,7 +744,7 @@ export class SshTransport {
     route: Route,
   ): Promise<HostKeyCheck | Failed | NotSupportedHere | AppFilesUnsafe | StaleRoute> {
     if (!this.current(route)) return Promise.resolve(STALE);
-    return guardedAsync(() => this.checkHostKeyInner(route));
+    return this.track(guardedAsync(() => this.checkHostKeyInner(route)));
   }
 
   /** After the host's confirmation: pins exactly the bytes captured at first contact. */
@@ -744,7 +765,7 @@ export class SshTransport {
     options: { signal?: AbortSignal } = {},
   ): Promise<LookResult | AppFilesUnsafe | StaleRoute> {
     if (!this.current(route)) return Promise.resolve(STALE);
-    return guardedAsync(() => this.lookInner(route, options));
+    return this.track(guardedAsync(() => this.lookInner(route, options)));
   }
 
   /** Forgets the route: its pin and its files. Its forwards must be closed first. */
@@ -758,7 +779,26 @@ export class SshTransport {
 
   /** Closes every forward and ends every process this transport started. */
   async closeAll(): Promise<void> {
-    await Promise.all([...this.forwards].map((forward) => forward.close()));
+    const forwards = [...this.forwards.values()].map((open) => open.forward);
+    this.stopAll.abort();
+    await Promise.all(forwards.map((forward) => forward.close()));
+    let seen: Promise<unknown>;
+    do {
+      seen = this.inflight;
+      await seen;
+    } while (seen !== this.inflight);
+    await this.processes.endAll();
+    this.stopAll = new AbortController();
+  }
+
+  /** The signal a run stops on: the caller's, or `closeAll`. */
+  private signal(other?: AbortSignal): AbortSignal {
+    return other ? AbortSignal.any([other, this.stopAll.signal]) : this.stopAll.signal;
+  }
+
+  private track<T>(work: Promise<T>): Promise<T> {
+    this.inflight = Promise.allSettled([this.inflight, work]);
+    return work;
   }
 }
 

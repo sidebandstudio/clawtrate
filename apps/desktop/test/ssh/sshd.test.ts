@@ -599,6 +599,35 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     }
   });
 
+  it("keeps one forward per route, and closeAll ends every process and LOOK it started", async () => {
+    const look = await transport.look(route);
+    if (!look.ok) throw new Error("look failed");
+    const found = serviceOnPort(look.facts, gateway.port);
+    if (!found.ok) throw new Error("no service");
+    const forward = transport.openForward(route, found);
+    expect(transport.openForward(route, found)).toBe(forward);
+    expect(() =>
+      transport.openForward(route, {
+        ...found,
+        service: { ...found.service, configPath: "/srv/other.json" },
+      }),
+    ).toThrow();
+    // A LOOK and the forward in flight, and closeAll at once.
+    const startedBefore = started.length;
+    const inFlight = transport.look(route);
+    let lookDone = false;
+    void inFlight.then(() => (lookDone = true));
+    await transport.closeAll();
+    expect(lookDone).toBe(true);
+    expect(forward.state).toEqual({ phase: "closed", reason: "closed" });
+    expect(transport.processes.running.size).toBe(0);
+    for (const s of started.slice(startedBefore))
+      if (s.pid) expect(alive(s.pid), s.args.join(" ")).toBe(false);
+    for (const s of started) if (s.pid) expect(alive(s.pid)).toBe(false);
+    // The transport works again afterwards.
+    expect((await transport.look(route)).ok).toBe(true);
+  });
+
   it("every ssh ran with -F on the app's own file, no agent, and no SSH_AUTH_SOCK", () => {
     expect(started.length).toBeGreaterThan(10);
     for (const s of started) {

@@ -32,6 +32,7 @@ function harness(verifyResults: VerifyResult[] = [], probeResults: ProbeResult[]
   const processes: FakeProcess[] = [];
   let nextPort = 50000;
   const verifies: Array<(result: VerifyResult) => void> = [];
+  const signals: AbortSignal[] = [];
   const deps: ForwardDeps = {
     pickPort: async () => nextPort++,
     start: (port) => {
@@ -59,8 +60,8 @@ function harness(verifyResults: VerifyResult[] = [], probeResults: ProbeResult[]
       return process;
     },
     probe: async () => probeResults.shift() ?? "http",
-    verify: () =>
-      ++verifyCalls && verifyResults.length
+    verify: (signal) =>
+      ++verifyCalls && signals.push(signal) && verifyResults.length
         ? Promise.resolve(verifyResults.shift()!)
         : new Promise((resolve) => verifies.push(resolve)),
     now: () => now,
@@ -88,6 +89,7 @@ function harness(verifyResults: VerifyResult[] = [], probeResults: ProbeResult[]
     flush,
     pending: () => timers.map((timer) => timer.at - now),
     verifyCalls: () => verifyCalls,
+    signals,
     async advance(ms: number) {
       now += ms;
       for (const timer of timers.filter((t) => t.at <= now)) {
@@ -335,15 +337,67 @@ describe("the forward's states", () => {
     expect(h.processes).toHaveLength(1);
   });
 
+  it("resolves close only once a retiring process has ended", async () => {
+    const h = harness([{ kind: "not-running" }]);
+    let release: () => void = () => {};
+    h.forward.open();
+    await h.flush();
+    const first = h.last();
+    first.end = () =>
+      new Promise<void>((resolve) => {
+        release = () => {
+          first.ended = true;
+          resolve();
+        };
+      });
+    first.listen();
+    await h.flush();
+    expect(h.forward.state).toMatchObject({
+      phase: "waiting",
+      cause: { kind: "gateway-not-running" },
+    });
+    let closed = false;
+    const closing = h.forward.close().then(() => (closed = true));
+    await h.flush();
+    expect(closed).toBe(false);
+    expect(h.forward.state.phase).not.toBe("closed");
+    release();
+    await closing;
+    expect(first.ended).toBe(true);
+    expect(h.forward.state).toEqual({ phase: "closed", reason: "closed" });
+  });
+
+  it("stops its LOOK when closed, and resolves only once the LOOK has ended", async () => {
+    const h = harness();
+    h.forward.open();
+    await h.up();
+    // The LOOK in flight ends only when its signal says so.
+    const pending = h.verifies.shift()!;
+    expect(h.forward.state.phase).toBe("verifying");
+    const signal = h.signals.at(-1) ?? null;
+    expect(signal?.aborted).toBe(false);
+    let closed = false;
+    const closing = h.forward.close().then(() => (closed = true));
+    await h.flush();
+    expect(signal?.aborted).toBe(true);
+    expect(closed).toBe(false);
+    pending({ kind: "cant-tell" });
+    await closing;
+    expect(closed).toBe(true);
+  });
+
   it("closes while waiting or while the LOOK runs, and ignores what arrives late", async () => {
     const h = harness();
     h.forward.open();
     await h.up();
     const late = h.verifies.shift()!;
-    await h.forward.close();
+    const closing = h.forward.close();
+    // A LOOK that answers "same" after close was asked for doesn't bring it up.
     late({ kind: "same" });
+    await closing;
     await h.flush();
     expect(h.forward.state).toEqual({ phase: "closed", reason: "closed" });
+    expect(h.states.some((s) => s.phase === "up")).toBe(false);
 
     const w = harness();
     w.forward.open();

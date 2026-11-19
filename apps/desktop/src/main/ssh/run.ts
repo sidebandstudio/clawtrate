@@ -18,7 +18,7 @@ export const defaultSpawn: Spawn = (file, args, env) =>
 
 /** The processes this module started and has not yet seen end, at most `MAX_SSH_PROCESSES`. */
 export class ProcessTable {
-  readonly running = new Set<number>();
+  readonly running = new Set<ChildProcess>();
   readonly spawnProcess: Spawn;
 
   constructor(spawnProcess: Spawn = defaultSpawn) {
@@ -28,13 +28,17 @@ export class ProcessTable {
   start(world: SshWorld, args: readonly string[]): ChildProcess {
     if (this.running.size >= MAX_SSH_PROCESSES) throw new Error("Too many ssh processes at once.");
     const child = this.spawnProcess(world.ssh, args, childEnv(world));
-    const pid = child.pid;
     child.once("close", () => closed.add(child));
-    if (pid !== undefined) {
-      this.running.add(pid);
-      child.once("close", () => this.running.delete(pid));
+    if (child.pid !== undefined) {
+      this.running.add(child);
+      child.once("close", () => this.running.delete(child));
     }
     return child;
+  }
+
+  /** Ends every process still running, by PID, and resolves once each is gone. */
+  async endAll(): Promise<void> {
+    await Promise.all([...this.running].map((child) => endProcess(child)));
   }
 }
 
@@ -121,7 +125,8 @@ export function runSsh(
       cancelled = true;
       void finish();
     };
-    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+    else options.signal?.addEventListener("abort", abort, { once: true });
     child.once("error", () => {});
     child.once("close", (code) => {
       clearTimeout(timer);

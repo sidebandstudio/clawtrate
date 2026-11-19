@@ -74,9 +74,9 @@ export type ForwardDeps = {
   pickPort(): Promise<number>;
   start(localPort: number): ForwardProcess;
   /** Makes one connection through the forward: did the far end answer as an HTTP service? */
-  probe(localPort: number, process: ForwardProcess): Promise<ProbeResult>;
-  /** Runs the LOOK again and compares the gateway service on the gateway's port. */
-  verify(): Promise<VerifyResult>;
+  probe(localPort: number, process: ForwardProcess, signal: AbortSignal): Promise<ProbeResult>;
+  /** Runs the LOOK again and compares the gateway service on the gateway's port; `signal` ends it. */
+  verify(signal: AbortSignal): Promise<VerifyResult>;
   now(): number;
   setTimer(callback: () => void, ms: number): unknown;
   clearTimer(timer: unknown): void;
@@ -108,6 +108,10 @@ export class ForwardSupervisor {
   private downSince: number;
   private everUp = false;
   private closing: Promise<void> | null = null;
+  /** Ends the probe and the LOOK in flight when the forward closes. */
+  private readonly stop = new AbortController();
+  /** Everything this forward started that may still be running: retiring processes, probes, LOOKs. */
+  private work: Promise<unknown> = Promise.resolve();
 
   private readonly deps: ForwardDeps;
 
@@ -130,14 +134,14 @@ export class ForwardSupervisor {
   /** Starts the first attempt. */
   open(): void {
     if (this.generation !== 0) return;
-    void this.attempt();
+    this.track(this.attempt());
   }
 
   /** Tries again now: "Retry now", waking from sleep, or a network change. */
   retryNow(): void {
     if (this.current.phase !== "waiting") return;
     this.clearTimer();
-    void this.attempt();
+    this.track(this.attempt());
   }
 
   /** Ends the forward; resolves once its process is gone. Nothing restarts it. */
@@ -159,15 +163,28 @@ export class ForwardSupervisor {
     return this.current.phase === "closed" || this.closing !== null;
   }
 
+  private track(work: Promise<unknown>): void {
+    this.work = Promise.allSettled([this.work, work]);
+  }
+
+  /** Ends everything; resolves only once its process, any retiring one, and its probe and LOOK have ended. */
   private finish(reason: "closed" | "key-changed" | "different-gateway"): Promise<void> {
     if (this.closing) return this.closing;
     this.generation++;
     this.clearTimer();
+    this.stop.abort();
     const process = this.process;
     this.process = null;
-    this.closing = (process ? process.end() : Promise.resolve()).then(() => {
+    if (process) this.track(process.end());
+    this.closing = (async () => {
+      // Work tracked while waiting is waited for too.
+      let seen: Promise<unknown>;
+      do {
+        seen = this.work;
+        await seen;
+      } while (seen !== this.work);
       this.set({ phase: "closed", reason });
-    });
+    })();
     return this.closing;
   }
 
@@ -192,7 +209,7 @@ export class ForwardSupervisor {
         void this.finish("key-changed");
       } else if (failure.kind === "local-port-taken" && this.portRetries < PORT_RETRIES) {
         this.portRetries++;
-        void this.attempt();
+        this.track(this.attempt());
       } else {
         this.fail(causeOf(failure));
       }
@@ -202,19 +219,20 @@ export class ForwardSupervisor {
       this.portRetries = 0;
       this.set({ phase: "verifying", localPort: port, attempt: this.failures + 1 });
       // The listener is only the cue: up needs one answered connection through it, then the LOOK.
-      void this.deps
-        .probe(port, process)
+      const checked = this.deps
+        .probe(port, process, this.stop.signal)
         .catch((): ProbeResult => "no-answer")
         .then((answer) => {
           if (generation !== this.generation || this.closed()) return;
           if (answer === "forwarding-refused") return this.restart({ kind: "forwarding-refused" });
           if (answer === "gateway-closed") return this.restart({ kind: "gateway-not-running" });
           if (answer !== "http") return this.restart({ kind: "cant-tell" });
-          return this.deps.verify().then(
+          return this.deps.verify(this.stop.signal).then(
             (result) => this.verified(generation, port, result),
             () => this.verified(generation, port, { kind: "cant-tell" }),
           );
         });
+      this.track(checked);
     });
   }
 
@@ -252,7 +270,7 @@ export class ForwardSupervisor {
     const process = this.process;
     this.process = null;
     this.generation++;
-    void process?.end();
+    if (process) this.track(process.end());
     this.fail(cause);
   }
 
@@ -271,7 +289,7 @@ export class ForwardSupervisor {
     this.clearTimer();
     this.timer = this.deps.setTimer(() => {
       this.timer = null;
-      void this.attempt();
+      this.track(this.attempt());
     }, retryInMs);
   }
 }
