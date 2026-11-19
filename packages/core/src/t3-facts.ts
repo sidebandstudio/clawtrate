@@ -153,7 +153,7 @@ export function t3ArgFacts(args: unknown): T3Facts | null {
     if (environment) out.argEnvironment = environment;
   }
   const title = str(a.title);
-  if (title) out.argTitle = title.slice(0, 256);
+  if (title) out.argTitle = title.length > 256 ? title.slice(0, 255) + "…" : title;
   const message = str(a.message);
   if (message) {
     out.argMessage =

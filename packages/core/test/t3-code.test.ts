@@ -1023,6 +1023,18 @@ describe("the folded line says what the thread is for (11.2)", () => {
       "Make the weekly check skip machines that are asleep.",
     );
     expect(threadTitle([send])).toBe("Also a test.");
+    // A retained title of more than 256 characters is visibly shortened.
+    const long = "t".repeat(257);
+    const titled = t3(live("t3_thread_launch", { ...LAUNCH_ARGS, title: long }, LAUNCHED))!;
+    expect(threadTitle([titled])).toBe(`${"t".repeat(255)}…`);
+  });
+
+  it("F-133: a launch with a title and no message sent no text: the title stays a launch field", () => {
+    const titleOnly = t3(
+      live("t3_thread_launch", { ...LAUNCH_ARGS, message: undefined }, LAUNCHED),
+    )!;
+    expect(titleOnly.facts?.argTitle).toBe("Skip machines that are asleep");
+    expect(titleOnly.sent).toBeNull();
   });
 });
 

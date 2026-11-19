@@ -70,7 +70,7 @@ export type T3Call = {
   state: T3CallState;
   /** T3 Code's status in the call's returned, non-error result, as sent; null without one. */
   reported: string | null;
-  /** What was sent: a launch's `message` (else its `title`), a follow-up's `message`. */
+  /** What was sent: a launch's or a follow-up's `message`; a title is not a sent message. */
   sent: string | null;
   /** The sent text here is shorter than what was sent: Raw has all of it. */
   sentShort: boolean;
@@ -184,7 +184,7 @@ export function t3CallOf(call: ActionCall, ctx: ReadingContext = {}): T3Call | n
     asked,
     state,
     reported: state === "made" ? (facts?.status ?? null) : null,
-    sent: role === "launch" ? (sentText ?? facts?.argTitle ?? str(call.args.title)) : sentText,
+    sent: sentText,
     sentShort: facts?.argMessageShort === true,
     unread,
     error: state === "failed" ? reasonOf(call, facts) : null,
