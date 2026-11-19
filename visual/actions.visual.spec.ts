@@ -429,7 +429,7 @@ test.describe("action cards", () => {
        const empty = { catalog: "idle", catalogError: null, models: [], account: null, held: null,
          saving: false, refused: null, events: [], requested: [] };
        return { ...state, taskModels: { ...state.taskModels,
-         [key]: { ...(state.taskModels[key] ?? empty), requested: [{ runId: "run-1", effort: "high" }] } } };`,
+         [key]: { ...(state.taskModels[key] ?? empty), requested: [{ runId: "run-1", effort: "high", from: "thinkingLevel" }] } } };`,
     );
     await expect(page.getByTestId("run-line")).toContainText(
       "scripted/dev-1 · high effort requested",
