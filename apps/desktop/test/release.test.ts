@@ -25,9 +25,11 @@ describe("signing", () => {
     expect(plan).toEqual({ mac: "ad-hoc", notarize: null, windows: "unsigned" });
     expect(signingProblems({}, "mac")).toEqual([]);
     expect(signingSummary(plan, "mac")).toBe(
-      "Signing: none. The macOS app is signed ad hoc and not notarized.",
+      "Signing plan: none. The macOS app will be signed ad hoc and not notarized.",
     );
-    expect(signingSummary(plan, "win")).toBe("Signing: none. The Windows installer is unsigned.");
+    expect(signingSummary(plan, "win")).toBe(
+      "Signing plan: none. The Windows installer will be unsigned.",
+    );
   });
 
   it("signs and notarizes from the owner's variables, naming the method and never a value", () => {
@@ -52,7 +54,7 @@ describe("signing", () => {
       "mac",
     );
     expect(summary).toBe(
-      "Signing: the macOS app is signed with a Developer ID and notarized (api-key).",
+      "Signing plan: the macOS app will be signed with a Developer ID and notarized (api-key).",
     );
     expect(summary).not.toMatch(/secret|k\.p8/);
     expect(

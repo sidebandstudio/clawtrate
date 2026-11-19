@@ -45,7 +45,7 @@ Windows: `WIN_CSC_LINK` (a `.pfx` file's path, or its base64) and `WIN_CSC_KEY_P
 
 A certificate and its password go together. A build given one without the other stops before it starts, naming the missing variable; it never builds unsigned, or with an empty password, without saying so. For a certificate that has no password, set the password variable to an empty string (`CSC_KEY_PASSWORD=`). A certificate variable that is set but blank stops the build too, and so does a blank `WIN_` variable that would hide a generic one electron-builder would otherwise use.
 
-Every build prints one line saying which signing it does, such as `Signing: none. The macOS app is signed ad hoc and not notarized.`, and a macOS build then reads each app's signature back with `codesign --display` and prints `ad hoc` or `certificate`. It fails if that is not what the variables asked for: electron-builder skips signing in a pull request's CI run even with an identity set.
+Before it builds, every build prints its signing plan in one line, such as `Signing plan: none. The macOS app will be signed ad hoc and not notarized.`, and a macOS build then reads each app's signature back with `codesign --display` and prints `ad hoc` or `certificate`. It fails if that is not what the variables asked for: electron-builder skips signing in a pull request's CI run even with an identity set. These lines are Clawtrate's own and name variables, never their values. electron-builder's own output is passed through unchanged, and it can print the signing identity's name and hash, the identities in a keychain when the one asked for is missing, and the path of a certificate file it cannot read, so keep the log of a signed build private.
 
 ## The update feed
 

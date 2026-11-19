@@ -1,5 +1,6 @@
-// Which signing a build does, decided from the names of the variables in its
-// environment, before electron-builder runs. Values are never printed.
+// Which signing a build plans, decided from the names of the variables in its
+// environment, before electron-builder runs. Nothing here prints a value;
+// electron-builder's own output, which the build passes through, can.
 // docs/development/packaging.md lists the variables.
 
 export type Env = Record<string, string | undefined>;
@@ -145,18 +146,18 @@ export function signingPlan(env: Env): SigningPlan {
   };
 }
 
-/** The one line a build prints about its signing. */
+/** The one line a build prints, before building, about the signing it plans. */
 export function signingSummary(plan: SigningPlan, target: "mac" | "win"): string {
   if (target === "win") {
     return plan.windows === "certificate"
-      ? "Signing: the Windows installer is signed with the certificate WIN_CSC_LINK or CSC_LINK names."
-      : "Signing: none. The Windows installer is unsigned.";
+      ? "Signing plan: the Windows installer will be signed with the certificate WIN_CSC_LINK or CSC_LINK names."
+      : "Signing plan: none. The Windows installer will be unsigned.";
   }
   if (plan.mac === "ad-hoc")
-    return "Signing: none. The macOS app is signed ad hoc and not notarized.";
+    return "Signing plan: none. The macOS app will be signed ad hoc and not notarized.";
   return plan.notarize
-    ? `Signing: the macOS app is signed with a Developer ID and notarized (${plan.notarize}).`
-    : "Signing: the macOS app is signed with a Developer ID and not notarized.";
+    ? `Signing plan: the macOS app will be signed with a Developer ID and notarized (${plan.notarize}).`
+    : "Signing plan: the macOS app will be signed with a Developer ID and not notarized.";
 }
 
 /** What `codesign --display --verbose=2` (its error output) says of an app's signature. */
