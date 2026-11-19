@@ -290,9 +290,13 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
 
   it("a route is one endpoint: prepared again for another, its earlier objects, capture and pin don't carry over", async () => {
     const own = ownWorld("move");
+    const ownGateway = await httpGateway();
     try {
       const a = await own.server("a");
       const b = await own.server("b");
+      const ownStub = installStubOpenclaw(own.t.home);
+      ownStub.setVersion("OpenClaw 2026.10.6 (fe06181)\n");
+      ownStub.setStatus("default", statusJson({ port: ownGateway.port, home: own.t.home }));
       const block = (port: number) =>
         `Host movebox\n  HostName 127.0.0.1\n  Port ${port}\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n`;
       own.t.writeConfig(block(a.port));
@@ -303,11 +307,34 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       expect(own.transport.trustCapturedKey(first, contact.presented.captureId).ok).toBe(true);
       // Prepared again for the same endpoint, the route keeps its pin: this checks that pin, and captures nothing.
       const firstConfig = own.transport.configPath(first);
-      const pending = await own.transport.checkHostKey(own.prepare("move", "movebox"));
+      const again = own.prepare("move", "movebox");
+      const pending = await own.transport.checkHostKey(again);
       expect(pending).toMatchObject({ ok: true, state: "pinned" });
 
+      // While its forward is open, the route is not prepared for another endpoint, nor forgotten.
+      const look = await own.transport.look(again);
+      if (!look.ok) throw new Error("look failed");
+      const found = serviceOnPort(look.facts, ownGateway.port);
+      if (!found.ok) throw new Error("no service");
+      const opened = await own.transport.openForward(again, found);
+      if (!opened.ok) throw new Error(`forward refused: ${opened.kind}`);
+      await waitFor(() => opened.forward.state.phase === "up", 20000, "the forward to come up");
+      if (opened.forward.state.phase !== "up") throw new Error("expected up");
+      const oldPort = opened.forward.state.localPort;
       own.t.writeConfig(block(b.port));
+      expect(own.transport.prepareRoute("move", "movebox")).toEqual({
+        ok: false,
+        kind: "forward-open",
+      });
+      expect(own.transport.forget(again)).toEqual({ ok: false, kind: "forward-open" });
+      expect(await httpGet(oldPort)).toBe(200);
+      expect((await own.transport.look(again)).ok).toBe(true);
+      await opened.forward.close();
+
       const moved = own.prepare("move", "movebox");
+      // Closed and moved: the old route is stale, and its old port no longer answers.
+      expect(await own.transport.look(again)).toEqual({ ok: false, kind: "stale-route" });
+      expect(await httpGet(oldPort)).toBeNull();
       expect(moved.alias).not.toBe(first.alias);
       expect(moved.endpoint).toBe(`${own.t.world.localUser}@[127.0.0.1]:${b.port}`);
       expect(own.transport.configPath(moved)).not.toBe(firstConfig);
@@ -338,6 +365,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       own.transport.forget(moved);
     } finally {
       await own.close();
+      await ownGateway.close();
     }
   });
 

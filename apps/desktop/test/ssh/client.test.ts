@@ -3,15 +3,18 @@
 // OpenSSH 8.4 or later elsewhere. The clients here are stand-ins that only
 // print a version, so no real `ssh` runs.
 
-import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { type ChildProcess, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { parseDestination } from "../../src/main/ssh/destination.ts";
 import { AppKnownHosts, fingerprintOf } from "../../src/main/ssh/known-hosts.ts";
 import { routeConfigText } from "../../src/main/ssh/route-config.ts";
+import type { Spawn } from "../../src/main/ssh/run.ts";
 import { SshTransport } from "../../src/main/ssh/transport.ts";
 import { productionWorld, type SshWorld } from "../../src/main/ssh/world.ts";
 import { tempDir, testEnv } from "./harness.ts";
@@ -42,6 +45,91 @@ function worldWith(version: string | null, platform: NodeJS.Platform, name: stri
     agent: "none",
     platform,
     env: testEnv(),
+  };
+}
+
+type Held = {
+  args: string[];
+  answered: boolean;
+  stdin: () => string;
+  answer(stderr: string, stdout?: string, exit?: number): void;
+};
+
+/**
+ * A spawn whose children are held: each waits, without running anything,
+ * until the test answers it with error output, standard output and an exit.
+ */
+function heldSpawn(): {
+  spawn: Spawn;
+  held: Held[];
+  next(): Promise<Held>;
+  /** The result of `work`, answering every run it starts after those already answered with exit 255. */
+  settle<T>(work: Promise<T>): Promise<T>;
+} {
+  const held: Held[] = [];
+  let waiting: Array<() => void> = [];
+  let pid = 0;
+  /** How many runs `next` has handed out, in the order they started. */
+  let taken = 0;
+  const spawnHeld: Spawn = (_file, args) => {
+    const child = new EventEmitter() as ChildProcess;
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    let input = "";
+    stdin.on("data", (chunk: Buffer) => (input += chunk.toString("utf8")));
+    let closed = false;
+    const close = (code: number | null) => {
+      if (closed) return;
+      closed = true;
+      setTimeout(() => child.emit("close", code), 10);
+    };
+    Object.assign(child, {
+      pid: ++pid,
+      stdin,
+      stdout,
+      stderr,
+      kill: () => {
+        close(null);
+        return true;
+      },
+    });
+    const run: Held = {
+      args: [...args],
+      answered: false,
+      stdin: () => input,
+      answer: (err, out = "", exit = 0) => {
+        run.answered = true;
+        stderr.write(err);
+        stdout.write(out);
+        close(exit);
+      },
+    };
+    held.push(run);
+    for (const wake of waiting) wake();
+    waiting = [];
+    return child;
+  };
+  return {
+    spawn: spawnHeld,
+    held,
+    next: () => {
+      const index = taken++;
+      return new Promise((resolve) => {
+        const check = () => (held.length > index ? resolve(held[index]!) : waiting.push(check));
+        check();
+      });
+    },
+    settle: async <T>(work: Promise<T>): Promise<T> => {
+      for (;;) {
+        const done = await Promise.race([
+          work.then((value) => ({ value })),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 100)),
+        ]);
+        if (done) return done.value;
+        for (const run of held) if (!run.answered) run.answer("", "", 255);
+      }
+    },
   };
 }
 
@@ -151,6 +239,96 @@ describe.skipIf(process.platform === "win32")("the ssh client", () => {
     ).toEqual({ ok: false, kind: "not-a-found-service" });
     transport.prepareRoute("1", "devbox");
     expect(await transport.openForward(route, found)).toEqual({ ok: false, kind: "stale-route" });
+  });
+
+  it("work begun on a route prepared again before it finishes is stale, and pins nothing", async () => {
+    const version = "OpenSSH_9.9p2, LibreSSL 3.3.6\n";
+    const key = Buffer.concat([
+      Buffer.from([0, 0, 0, 11]),
+      Buffer.from("ssh-ed25519"),
+      Buffer.from([0, 0, 0, 32]),
+      Buffer.alloc(32, 3),
+    ]).toString("base64");
+    const fingerprint = fingerprintOf(key);
+    const make = (name: string) => {
+      const world = worldWith(version.trim(), "darwin", name);
+      const fake = heldSpawn();
+      const transport = new SshTransport(world, { spawn: fake.spawn });
+      const block = (host: string) => `Host devbox\n  HostName ${host}\n`;
+      writeFileSync(world.personConfig, block("devbox.example"));
+      const route = transport.prepareRoute("1", "devbox");
+      if (!route.ok) throw new Error(JSON.stringify(route));
+      const moveAway = () => {
+        writeFileSync(world.personConfig, block("other.example"));
+        const moved = transport.prepareRoute("1", "devbox");
+        if (!moved.ok) throw new Error(JSON.stringify(moved));
+      };
+      const pinnedLines = () => {
+        const file = join(world.appDir, "known_hosts");
+        return existsSync(file) ? readFileSync(file, "utf8") : "";
+      };
+      return { world, fake, transport, route, moveAway, pinnedLines };
+    };
+
+    // The version check is still running when the route moves: nothing more starts.
+    const a = make("stale-version");
+    const checking = a.transport.checkHostKey(a.route);
+    const versionRun = await a.fake.next();
+    expect(versionRun.args).toEqual(["-V"]);
+    a.moveAway();
+    versionRun.answer(version);
+    expect(await a.fake.settle(checking)).toEqual({ ok: false, kind: "stale-route" });
+    expect(a.fake.held.map((run) => run.args[0])).toEqual(["-V"]);
+
+    // The prior-trust lookup answers after the route moved: its key is not pinned for the old route.
+    const b = make("stale-prior");
+    writeFileSync(b.world.personKnownHosts, `devbox.example ssh-ed25519 ${key}\n`);
+    const looking = b.transport.checkHostKey(b.route);
+    (await b.fake.next()).answer(version);
+    const lookup = await b.fake.next();
+    expect(lookup.args[1]).toBe(b.transport.configPath(b.route, "lookup"));
+    b.moveAway();
+    lookup.answer(
+      [
+        `debug1: Server host key: ssh-ed25519 ${fingerprint}`,
+        `debug1: Host 'devbox.example' is known and matches the ED25519 host key.`,
+        `debug1: Found key in ${b.world.personKnownHosts}:1`,
+        "",
+      ].join("\n"),
+      "",
+      255,
+    );
+    expect(await b.fake.settle(looking)).toEqual({ ok: false, kind: "stale-route" });
+    expect(b.pinnedLines()).not.toContain(b.route.alias);
+    expect(b.fake.held).toHaveLength(2);
+
+    // A LOOK that answers whole after the route moved is not that route's answer.
+    const c = make("stale-look");
+    new AppKnownHosts(join(c.world.appDir, "known_hosts")).pin(
+      c.route.alias,
+      { type: "ssh-ed25519", key, fingerprint },
+      c.route.endpoint,
+      new Date(0),
+      false,
+    );
+    const look = c.transport.look(c.route);
+    (await c.fake.next()).answer(version);
+    const lookRun = await c.fake.next();
+    c.moveAway();
+    const id = /^request_id='([0-9a-f-]+)'$/m.exec(lookRun.stdin())![1]!;
+    const b64 = (text: string) => Buffer.from(text).toString("base64");
+    lookRun.answer(
+      "",
+      [
+        `{"k":"begin","id":"${id}"}`,
+        `{"k":"uname","s":"${b64("Linux")}","m":"${b64("x86_64")}","n":"${b64("devbox")}"}`,
+        `{"k":"signs","state":0,"launchd":0,"systemd":0,"cstate":0,"claunchd":0,"csystemd":0}`,
+        `{"k":"end","id":"${id}"}`,
+        "",
+      ].join("\n"),
+      0,
+    );
+    expect(await c.fake.settle(look)).toEqual({ ok: false, kind: "stale-route" });
   });
 
   it("turns a spawn that fails into a typed result, never an exception", async () => {

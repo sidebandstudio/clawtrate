@@ -33,6 +33,7 @@ export {
   type NotSupportedHere,
   type OpenForwardResult,
   type StaleRoute,
+  type RouteForwardOpen,
   type AppFilesUnsafe,
   forwardNote,
   type PinResult,

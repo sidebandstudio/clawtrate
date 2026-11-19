@@ -206,6 +206,7 @@ export type OpenForwardResult =
 /** A route prepared again since, or forgotten: nothing is done with it. */
 export type StaleRoute = { ok: false; kind: "stale-route" };
 const STALE: StaleRoute = { ok: false, kind: "stale-route" };
+export type RouteForwardOpen = { ok: false; kind: "forward-open" };
 
 type Capture = {
   id: string;
@@ -299,8 +300,9 @@ export class SshTransport {
   private prepareRouteInner(
     routeId: string,
     typed: unknown,
-  ): (Route & { ok: true }) | ConfigRefusal | InvalidDestination {
+  ): (Route & { ok: true }) | ConfigRefusal | InvalidDestination | RouteForwardOpen {
     if (!isRouteId(routeId)) throw new Error("Not a route id.");
+    if (this.forwards.has(routeId)) return { ok: false, kind: "forward-open" };
     const destination = parseDestination(typed);
     if (!destination) {
       return {
@@ -330,7 +332,7 @@ export class SshTransport {
     // An earlier preparation's objects are stale from here on, and its files for another endpoint go.
     this.routes.delete(routeId);
     while (this.routes.size >= MAX_SSH_ROUTES) {
-      const oldest = this.routes.keys().next().value;
+      const oldest = [...this.routes.keys()].find((id) => !this.forwards.has(id));
       if (oldest === undefined) break;
       this.routes.delete(oldest);
     }
@@ -420,12 +422,16 @@ export class SshTransport {
    * already trusts, first contact, or changed. A key is captured without
    * signing in; a changed key is never replaced here.
    */
-  private async checkHostKeyInner(route: Route): Promise<HostKeyCheck | Failed | NotSupportedHere> {
+  private async checkHostKeyInner(
+    route: Route,
+  ): Promise<HostKeyCheck | Failed | NotSupportedHere | StaleRoute> {
     const client = await this.checkClient();
     if (!client.ok) return client;
+    if (!this.current(route)) return STALE;
     const pin = this.known.get(route.alias, route.endpoint);
     if (pin) {
       const { run, lines } = await this.probe(this.configPath(route), route.alias);
+      if (!this.current(route)) return STALE;
       if (lines.matches)
         return {
           ok: true,
@@ -438,6 +444,7 @@ export class SshTransport {
         return this.failed(route, failure);
       }
       const captured = await this.capture(route, true);
+      if (!this.current(route)) return STALE;
       if (!captured.ok) return captured;
       if (captured.capture.key.fingerprint === pin.fingerprint) {
         this.captures.delete(captured.capture.id);
@@ -460,6 +467,7 @@ export class SshTransport {
       };
     }
     const prior = await this.priorTrust(route);
+    if (!this.current(route)) return STALE;
     if (prior) {
       const pinned = this.known.pin(
         route.alias,
@@ -476,6 +484,7 @@ export class SshTransport {
       };
     }
     const captured = await this.capture(route, false);
+    if (!this.current(route)) return STALE;
     if (!captured.ok) return captured;
     return { ok: true, state: "first-contact", presented: this.shown(captured.capture) };
   }
@@ -484,6 +493,7 @@ export class SshTransport {
   private async priorTrust(route: Route): Promise<HostKey | null> {
     if (!existsSync(this.world.personKnownHosts)) return null;
     const { lines } = await this.probe(this.configPath(route, "lookup"), route.alias);
+    if (!this.current(route)) return null;
     if (!lines.matches || !lines.foundIn || !lines.serverKey) return null;
     const norm = (path: string) => {
       const p = path.replaceAll("\\", "/");
@@ -513,7 +523,7 @@ export class SshTransport {
   private async capture(
     route: Route,
     replaces: boolean,
-  ): Promise<{ ok: true; capture: Capture } | Failed> {
+  ): Promise<{ ok: true; capture: Capture } | Failed | StaleRoute> {
     const id = randomUUID();
     const file = join(this.world.appDir, `capture-${id}`);
     // The capture has a configuration of its own, so that its file's path is a quoted value, never split.
@@ -522,6 +532,7 @@ export class SshTransport {
     try {
       createOwn(config, routeConfigText(route.id, route.target, this.world, file, "capture"));
       const { run } = await this.probe(config, route.alias);
+      if (!this.current(route)) return STALE;
       const lines = (readOwn(file, 64 * 1024) ?? "")
         .split("\n")
         .filter((line) => line.trim() !== "");
@@ -611,9 +622,10 @@ export class SshTransport {
   private async lookInner(
     route: Route,
     options: { signal?: AbortSignal } = {},
-  ): Promise<LookResult> {
+  ): Promise<LookResult | StaleRoute> {
     const client = await this.checkClient();
     if (!client.ok) return client;
+    if (!this.current(route)) return STALE;
     if (!this.known.get(route.alias, route.endpoint)) return { ok: false, kind: "not-pinned" };
     const script = lookScript();
     const run = await runSsh(
@@ -627,6 +639,7 @@ export class SshTransport {
         signal: this.signal(options.signal),
       },
     );
+    if (!this.current(route)) return STALE;
     if (run.timedOut || run.cancelled) return { ok: false, kind: "cant-tell", reason: "timed-out" };
     if (run.overflow) return { ok: false, kind: "cant-tell", reason: "too-large" };
     if (run.spawnFailed || run.exit === 255) return this.failed(route, runFailure(run));
@@ -755,7 +768,12 @@ export class SshTransport {
   prepareRoute(
     routeId: string,
     typed: unknown,
-  ): (Route & { ok: true }) | ConfigRefusal | InvalidDestination | AppFilesUnsafe {
+  ):
+    | (Route & { ok: true })
+    | ConfigRefusal
+    | InvalidDestination
+    | AppFilesUnsafe
+    | RouteForwardOpen {
     return guarded(() => this.prepareRouteInner(routeId, typed));
   }
 
@@ -793,8 +811,9 @@ export class SshTransport {
   }
 
   /** Forgets the route: its pin and its files. Its forwards must be closed first. */
-  forget(route: Route): { ok: true } | AppFilesUnsafe | StaleRoute {
+  forget(route: Route): { ok: true } | AppFilesUnsafe | StaleRoute | RouteForwardOpen {
     if (!this.current(route)) return STALE;
+    if (this.forwards.has(route.id)) return { ok: false, kind: "forward-open" };
     return guarded(() => {
       this.forgetInner(route);
       return { ok: true } as const;
