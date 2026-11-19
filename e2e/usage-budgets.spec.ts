@@ -788,14 +788,29 @@ test("F-396: the warning appears in the bot's task once the gateway's figure pas
   test.setTimeout(420_000);
   // A task of Juniper's own for this check.
   const label = `Budget check ${STAMP}`;
-  await gatewayCall("sessions.create", { agentId: "main", label });
+  const created = await gatewayCall<{ key: string }>("sessions.create", { agentId: "main", label });
   await botRow(page, "Juniper").first().click();
   await expect(page.getByTestId("task").filter({ hasText: label })).toBeVisible({
     timeout: 30_000,
   });
   await page.getByTestId("task").filter({ hasText: label }).first().click();
+  // Enough use this week that one more run passes 80 percent of the first budget, and that
+  // the smallest budget, 1,000 tokens, is reached afterwards: at least 900 tokens before it.
+  let before = (await gatewayTotal("main", "week")).total;
+  for (let run = 0; before < 900 && run < 6; run += 1) {
+    await gatewayCall("chat.send", {
+      sessionKey: created.key,
+      message: "Warm-up for the budget check.",
+      idempotencyKey: `${created.key}-warm-${run}`,
+    });
+    const was = before;
+    await expect
+      .poll(async () => (await gatewayTotal("main", "week")).total, { timeout: 120_000 })
+      .toBeGreaterThan(was);
+    before = (await gatewayTotal("main", "week")).total;
+  }
+  expect(before).toBeGreaterThanOrEqual(900);
   // A weekly budget the next run passes 80 percent of, and not 100.
-  const before = (await gatewayTotal("main", "week")).total;
   const tokens = Math.max(1_000, Math.ceil((before + 100) / 0.8));
   await usagePage(page, "Juniper");
   await setBudget(page, "Weekly", tokens);
