@@ -1,0 +1,24 @@
+name: Idea
+description: Something Clawtrate should do that it does not do yet.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/sidebandstudio/clawtrate/blob/main/docs/roadmap.md) first. Most of the plan already has an issue, and a comment there is better than a new one.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The task, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What Clawtrate could do
+  - type: textarea
+    id: gateway
+    attributes:
+      label: What it needs from the gateway
+      description: Optional. The OpenClaw methods, events or plugin it would rely on, if you know.
