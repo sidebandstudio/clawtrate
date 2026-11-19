@@ -271,13 +271,14 @@ export class RulesStore {
     }
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     writeFileAtomic(this.dir, RULES_FILE, text);
-    // Written; if the file cannot be looked at now, the next read looks again.
+    // Written, but not read: another writer can replace the file between the
+    // rename and any look at it, so the next look reads the file installed.
+    this.seen = undefined;
     try {
-      this.seen = statKey(statOrNull(this.path));
+      this.observed = statKey(statOrNull(this.path));
     } catch {
-      this.seen = undefined;
+      this.observed = undefined;
     }
-    this.observed = this.seen;
     this.#set({ kind: "read", scopes, readAt: this.now(), problem: null }, false);
   }
 }

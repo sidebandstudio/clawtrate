@@ -19,6 +19,8 @@ const io = vi.hoisted(() => ({
   truncateFails: false,
   appendFails: 0,
   renameFails: false,
+  /** Run once right after the next rename: another writer replacing the file. */
+  afterRename: null as null | (() => void),
 }));
 vi.mock("node:fs", async (importOriginal) => {
   const real = await importOriginal<typeof fs>();
@@ -41,7 +43,10 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     renameSync: (...args: Parameters<typeof real.renameSync>) => {
       if (io.renameFails) throw Object.assign(new Error("injected"), { code: "ENOSPC" });
-      return real.renameSync(...args);
+      real.renameSync(...args);
+      const after = io.afterRename;
+      io.afterRename = null;
+      after?.();
     },
     truncateSync: (...args: Parameters<typeof real.truncateSync>) => {
       if (io.truncateFails) throw Object.assign(new Error("injected"), { code: "EIO" });
@@ -60,6 +65,7 @@ afterEach(() => {
   io.truncateFails = false;
   io.appendFails = 0;
   io.renameFails = false;
+  io.afterRename = null;
   cleanups.splice(0).forEach((done) => done());
 });
 const scope = (tool: string) =>
@@ -163,5 +169,16 @@ describe("a decision that could not be written", () => {
     const reread = ids(new DecisionLog(dir, { now: () => 1 }));
     for (const id of [a, b, c]) expect(reread).toContain(id);
     expect(reread).toHaveLength(13);
+  });
+});
+
+describe("a save replaced by another writer before it is looked at", () => {
+  it("is not taken as read: the next look reads the file there", () => {
+    const rules = store();
+    const replacement = new Map([["otto", scope("edit")]]);
+    io.afterRename = () =>
+      writeFileSync(io.path, `${JSON.stringify(serializeRules(replacement), null, 2)}\n`);
+    rules.write(new Map([["otto", scope("write")]]));
+    expect(rules.view().enforced).toEqual(replacement);
   });
 });
