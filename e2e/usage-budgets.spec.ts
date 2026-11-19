@@ -533,6 +533,23 @@ async function settledWeek(bot: string, botId: string, since: number) {
   await expect(page.getByTestId("usage-sources")).toBeVisible({ timeout: 30_000 });
 }
 
+/**
+ * The open page's Messages from other bots line against the figure worked out from the
+ * gateway's records. On a gateway many checks have used (a runner's shard), a bot's task
+ * histories can be longer than the page reads, or have more sending tasks: the page then says
+ * "Partial: some tasks weren't read in full", and its line is a part of the figure, never
+ * more and never less than the run the check made sure of. Otherwise it is the figure exactly.
+ */
+async function otherBotsLine(expected: number, atLeast: number) {
+  const partial = page.getByTestId("usage-page").getByText(/Partial: some tasks weren't read/);
+  const line = () => bar(page, "usage-sources", "Messages from other bots");
+  if (await partial.count()) {
+    const shown = await line();
+    expect(shown).toBeLessThanOrEqual(expected);
+    expect(shown).toBeGreaterThanOrEqual(atLeast);
+  } else await expect.poll(line, { timeout: 30_000 }).toBe(expected);
+}
+
 test("F-131: the Messages from other bots line counts only the run a send's result names", async () => {
   test.setTimeout(300_000);
   // Marlow's main task holds a run a person started and a run Pip's send started (the seed's
@@ -597,9 +614,7 @@ test("F-131: the Messages from other bots line counts only the run a send's resu
   await settledWeek("Marlow", "marlow", reply.at);
   // Never the recipient task's whole total charged to the send, never the person's run:
   // exactly the runs the results name.
-  await expect
-    .poll(() => bar(page, "usage-sources", "Messages from other bots"), { timeout: 30_000 })
-    .toBe(marlow.expected);
+  await otherBotsLine(marlow.expected, sent);
   const sum = async () =>
     (
       await Promise.all(
@@ -614,9 +629,7 @@ test("F-131: the Messages from other bots line counts only the run a send's resu
   const pip = await otherBots("pip");
   expect(pip.unconfirmed).toBeGreaterThanOrEqual(reply.tokens);
   await settledWeek("Pip", "pip", reply.at);
-  await expect
-    .poll(() => bar(page, "usage-sources", "Messages from other bots"), { timeout: 30_000 })
-    .toBe(pip.expected);
+  await otherBotsLine(pip.expected, 0);
   const pipTotal = (await gatewayTotal("pip", "week")).total;
   await expect.poll(sum, { timeout: 30_000 }).toBe(pipTotal);
 });
