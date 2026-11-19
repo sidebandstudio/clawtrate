@@ -77,6 +77,47 @@ test.describe("approval cards", () => {
     );
   });
 
+  test("F-171: a warning field the client cut is said to be cut under the warnings; a whole one is not", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=approval-pending", "light");
+    const card = approvalCard(page);
+    const notice = card.getByText("Some gateway warning text could not be shown in full.");
+    // The gateway's warning, whole: only its own line, and no notice.
+    await expect(card.locator(".request-warnings li")).toHaveText([
+      "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+    ]);
+    await expect(notice).toHaveCount(0);
+    // A 2,048-character warning and a second line, as the client keeps them: the first line
+    // shortened to the field's bound, the second dropped, and the field's path marked cut.
+    await page.evaluate((kept) => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (change: (state: Record<string, unknown>) => Record<string, unknown>) => void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const transcripts = state.transcripts as Record<string, Record<string, unknown>>;
+        const key = "agent:otto:transcode-cache";
+        const t = transcripts[key]!;
+        const approvals = (t.approvals as Array<Record<string, unknown>>).map((each, index) =>
+          index !== 0
+            ? each
+            : {
+                ...each,
+                cut: ["exec.warningText"],
+                exec: { ...(each.exec as Record<string, unknown>), warningText: kept },
+              },
+        );
+        return { ...state, transcripts: { ...transcripts, [key]: { ...t, approvals } } };
+      });
+    }, "A".repeat(2_046));
+    await expect(card.locator(".request-warnings li")).toHaveText(["A".repeat(2_046)]);
+    await expect(notice).toBeVisible();
+  });
+
   test("F-163: keyboard order is Show full request, Allow once, Always allow…, Deny, Raw", async ({
     page,
   }) => {

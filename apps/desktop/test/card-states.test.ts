@@ -2,6 +2,7 @@
 // scene is built by the engine's reducers from gateway-shaped events, and the
 // card's words come from the same selection and wording the interface uses.
 import {
+  admitApproval,
   applyAgentEvent,
   emptyActivity,
   initialState,
@@ -196,6 +197,28 @@ describe("approval cards from the engine's state", () => {
         exec: { ...card.exec!, warningText: null, commandAnalysis: null },
       }),
     ).toEqual([]);
+  });
+
+  it("F-171: a warning field longer than the client keeps is cut: its first line is shortened, a later line is dropped, and the card says the field was cut", () => {
+    const long = "A".repeat(2_048);
+    const later = "The second warning.";
+    const received = parseExecApproval({
+      id: "ap-long",
+      createdAtMs: 1_000,
+      expiresAtMs: 2_000,
+      request: { command: "sleep 2", host: "gateway", warningText: `${long}\n${later}` },
+    })!;
+    expect(approvalWarnings(received)).toEqual([long, later]);
+    // The client keeps at most 2,048 characters of `warningText` (`MAX_APPROVAL_FIELD_CHARS`):
+    // the 2,048-character first line and its newline already reach it, so the kept text is a
+    // shortened first line and the second line is gone. The card records the cut path.
+    const kept = admitApproval(received);
+    expect(kept.cut).toContain("exec.warningText");
+    const shown = approvalWarnings(kept);
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.length).toBeLessThan(long.length);
+    expect(long.startsWith(shown[0]!)).toBe(true);
+    expect(shown).not.toContain(later);
   });
 
   it("F-164: the full request carries the exact command and the request's own fields", () => {

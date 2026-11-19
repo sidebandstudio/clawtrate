@@ -463,6 +463,9 @@ function PendingApproval({
   const failureOrSending = phase !== "choose";
   const failed = phase === "unknown" || retrying;
   const formShown = formOpen && view.always;
+  const warningCut = card.cut?.some(
+    (path) => path === "exec.warningText" || path === "exec.commandAnalysis",
+  );
 
   return (
     <section
@@ -506,6 +509,9 @@ function PendingApproval({
             </li>
           ))}
         </ul>
+      )}
+      {warningCut && (
+        <p className="request-asker">Some gateway warning text could not be shown in full.</p>
       )}
       {card.runEnded && (
         <p className="request-ended">

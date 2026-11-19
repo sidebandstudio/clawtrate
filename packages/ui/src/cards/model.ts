@@ -86,9 +86,7 @@ function machineOf(card: ApprovalCard): string | null {
 }
 
 /**
- * Every warning the gateway attached to the request, in its words and its order:
- * each line of the exec tool's `warningText`, then its analysis's `warningLines`.
- * Clawtrate adds none of its own.
+ * Distinct nonempty lines of warningText and commandAnalysis.warningLines that the client retained, with surrounding whitespace removed.
  */
 export function approvalWarnings(card: ApprovalCard): string[] {
   const analysis = record(card.exec?.commandAnalysis);
