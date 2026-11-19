@@ -17,9 +17,7 @@
     String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
   // Every display setting and the access tier are kept when moving between screens.
-  const KEEP = ["theme", "width", "motion", "chrome", "access", "picked", "device", "app"];
-  // The web preview (?app=preview) is a browser: only there is the browser sign-in offered (section 10).
-  const preview = params.get("app") === "preview";
+  const KEEP = ["theme", "width", "motion", "chrome", "access", "picked", "device"];
   // On the iPhone the window is "Plugins" (F-380), with its own words.
   const iphone = params.get("device") === "iphone";
   const go = (to, extra = {}) => {
@@ -250,7 +248,7 @@
     return (
       group("Accounts") +
       `<ul class="c-rows"><li class="c-account"><span class="c-row-text"><span class="c-row-name">Shared by everyone on this gateway</span><span class="c-row-sub c-account-state">${words[0]}</span></span>` +
-      `<span class="c-row-end">${admin ? link(words[1], preview ? "signin-starting" : "signin-cli", { id: a.id }, { variant: state === "authorized" ? "quiet" : "" }) : ""}</span></li></ul>`
+      `<span class="c-row-end">${admin ? link(words[1], "signin-cli", { id: a.id }, { variant: state === "authorized" ? "quiet" : "" }) : ""}</span></li></ul>`
     );
   };
   const connectorPage = () => {
@@ -301,7 +299,6 @@
           ]
         : [["Command", `<span class="mono">${esc([s.command, ...s.args].join(" "))}</span>`]]),
     ];
-    const signedFromHere = params.get("signed") === "1";
     return {
       title: name,
       back: go("installed"),
@@ -312,9 +309,8 @@
         group("Sign-in") +
         `<p class="c-state" data-c="signin">Not reported.</p>` +
         `<p class="c-line">The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.</p>` +
-        (signedFromHere ? `<p class="c-line">Last signed in from Clawtrate: Nov 19, 5:12 PM.</p>` : "") +
         (s.signin === "each" ? `<p class="c-line">Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender. Clawtrate offers no sign-in for it.</p>` : "") +
-        (s.signin === "oauth" && admin ? `<div class="c-actions">${link("Sign in", preview ? "signin-starting" : "signin-cli", { id: name, server: "1" })}</div>` : "") +
+        (s.signin === "oauth" && admin ? `<div class="c-actions">${link("Sign in", "signin-cli", { id: name, server: "1" })}</div>` : "") +
         (s.kind === "remote"
           ? group("Accounts") +
             `<p class="c-line">A second name for the same server, with its own sign-in. Bots tell them apart by name.</p>` +
@@ -374,42 +370,14 @@
     const isServer = params.get("server") === "1";
     return isServer ? { name: id, host: "auth.notes.example", back: go("server", { id }), isServer } : { name: app(id).name, host: app(id).host || "auth.example", back: go("connector", { id }), isServer, id };
   };
-  const signin = (stage) => {
+  const signin = () => {
     const t = signinTarget();
     const keep = { id: params.get("id") || "calendrop", ...(t.isServer ? { server: "1" } : {}) };
-    const done = t.isServer ? go("server", { id: t.name, signed: "1" }) : go("connector", { id: keep.id, auth: "authorized" });
-    const bodies = {
-      starting:
-        `<p class="c-state" aria-busy="true">Asking the gateway to start the sign-in…</p>` +
-        `<div class="c-actions">${link("Cancel", "signin-cancelled", keep, { variant: "quiet" })}</div>` +
-        proto("the gateway answers", [
-          link("With a sign-in page", "signin-waiting", keep, { variant: "quiet" }),
-          link("\"Open Settings on this Gateway…\"", "signin-cli", keep, { variant: "quiet" }),
-          link("\"This connector cannot…\"", "signin-cannot", keep, { variant: "quiet" }),
-        ]),
-      waiting:
-        `<p class="c-text">Sign in on ${t.name}'s page.</p>` +
-        address(t.host) +
-        `<div class="c-open"><a class="button" data-variant="primary" data-size="sm" href="${go("signin-waiting", { ...keep, opened: "1" })}">Open in your browser</a></div>` +
-        (params.get("opened") ? `<p class="c-line">Opened in a new tab of your browser.</p>` : "") +
-        `<p class="c-state c-waiting">${CTglyph()}Waiting for the sign-in. This works for 10 minutes.</p>` +
-        `<div class="c-actions">${link("Cancel", "signin-cancelled", keep, { variant: "quiet" })}</div>` +
-        (params.get("loopback") === "1" ? note("", "", "The sign-in page returns to the gateway's own address, which only a browser on the gateway's machine can reach.") + cliSteps(t, keep) : "") +
-        proto("the sign-in", [
-          link("Approved", "signin-done", keep, { variant: "quiet" }),
-          link("Refused", "signin-failed", keep, { variant: "quiet" }),
-          link("10 minutes pass", "signin-expired", keep, { variant: "quiet" }),
-          link("Drop connection", "signin-dropped", keep, { variant: "quiet" }),
-        ]),
-      done: result("ok", "check", `Signed in to ${t.name}.`, "The gateway keeps the sign-in.", `<a class="button" data-size="sm" href="${done}">Done</a>`),
-      failed: result("danger", "x", "Sign-in didn't finish.", "Sign-in did not finish. Check the connector settings and try again, or run openclaw mcp login with this connector's name in this Gateway's terminal.", link("Try again", "signin-starting", keep)),
-      expired: result("danger", "clock", "The sign-in expired", "before it finished.", link("Try again", "signin-starting", keep)),
-      cancelled: result("", "x", "Sign-in cancelled.", "Nothing changed on the gateway.", `<a class="button" data-size="sm" href="${t.back}">Back</a>`),
-      dropped: result("danger", "warning", "The sign-in ended with the connection.", "A sign-in belongs to the connection that started it. Start a new one once Clawtrate is connected again.", link("Try again", "signin-starting", keep)),
-      cannot: note("danger", "The gateway can't start this sign-in from here.", "This connector cannot use operator browser sign-in. Check its existing account settings."),
-      cli: `<p class="c-text">The gateway starts this sign-in from its own command line or its own settings page.</p>` + cliSteps(t, keep),
+    return {
+      title: `Sign in to ${t.name}`,
+      back: t.back,
+      body: `<p class="c-text">The gateway starts this sign-in from its own command line or its own settings page.</p>` + cliSteps(t, keep) + `<div class="c-actions"><a class="button" data-size="sm" href="${t.back}">Back to ${t.name}</a></div>`,
     };
-    return { title: `Sign in to ${t.name}`, back: t.back, body: bodies[stage] };
   };
   // The gateway's command-line sign-in, in full (section 10).
   const cliSteps = (t, keep) =>
@@ -422,7 +390,6 @@
     const full = `https://${host}/authorize?response_type=code&client_id=example-registered-client&state=example-state-7f3a`;
     return `<div class="c-address" aria-label="Sign-in address"><p class="c-address-host">${host}</p><p class="c-address-full mono">${esc(full)}</p>${copyButton("sign-in address", full)}</div>`;
   };
-  const CTglyph = () => `<span class="glyph" data-state="waiting" aria-hidden="true"></span>`;
 
   // The conversation's connect card (section 11) -------------------------------------------
 
@@ -639,21 +606,13 @@
       return windowHtml({
         title: "Add a custom connector",
         body:
-          result("ok", "check", `Added ${esc(name)}.`, cmd ? "The gateway will run it at a bot's next run." : "The gateway lists it. Its tools reach bots from their next run, unless a bot's settings deny them.", link(`Open ${esc(name)}`, "server", { id: cmd ? "search-index" : "notes-work", last: "notyet" }, { variant: "primary" }) + (params.get("signin") === "oauth" ? link("Sign in", "signin-starting", { id: "notes-work", server: "1" }) : "")) +
+          result("ok", "check", `Added ${esc(name)}.`, cmd ? "The gateway will run it at a bot's next run." : "The gateway lists it. Its tools reach bots from their next run, unless a bot's settings deny them.", link(`Open ${esc(name)}`, "server", { id: cmd ? "search-index" : "notes-work", last: "notyet" }, { variant: "primary" }) + (params.get("signin") === "oauth" ? link("Sign in", "signin-cli", { id: "notes-work", server: "1" }) : "")) +
           proto("the write", [link("Refused", "add-server-refused", { name }, { variant: "quiet" }), link("No answer", "add-server-checking", { name }, { variant: "quiet" })]),
       });
     },
     "add-server-refused": () => windowHtml({ title: "Add a custom connector", body: result("danger", "x", `Couldn't add ${esc(params.get("name") || "notes-work")}:`, `mcp.servers.${esc(params.get("name") || "notes-work")}.url: Expected http:// or https:// URL. Nothing saved.`, link("Back to the form", "add-server")) }),
     "add-server-checking": () => windowHtml({ title: "Add a custom connector", body: `<p class="c-state" aria-busy="true">Checking what the gateway has…</p>` + proto("the read-back", [link("Lists it", "add-server-saved", { name: params.get("name") || "notes-work" }, { variant: "quiet" }), link("Doesn't list it", "add-server-refused", { name: params.get("name") || "notes-work" }, { variant: "quiet" })]) }),
-    "signin-starting": () => windowHtml(signin("starting")),
-    "signin-waiting": () => windowHtml(signin("waiting")),
-    "signin-done": () => windowHtml(signin("done")),
-    "signin-failed": () => windowHtml(signin("failed")),
-    "signin-expired": () => windowHtml(signin("expired")),
-    "signin-cancelled": () => windowHtml(signin("cancelled")),
-    "signin-dropped": () => windowHtml(signin("dropped")),
-    "signin-cannot": () => windowHtml(signin("cannot")),
-    "signin-cli": () => windowHtml(signin("cli")),
+    "signin-cli": () => windowHtml(signin()),
     chat: () => "",
     picker: () => picker(),
   };
@@ -668,10 +627,6 @@
     "server-removed": `Removed ${params.get("id") || "notes-work"}`,
     "add-server-saved": `Added ${params.get("name") || "notes-work"}`,
     "add-server-refused": `Couldn't add ${params.get("name") || "notes-work"}`,
-    "signin-waiting": "Waiting for the sign-in",
-    "signin-done": `Signed in to ${signinTarget().name}`,
-    "signin-failed": "Sign-in didn't finish",
-    "signin-cancelled": "Sign-in cancelled",
   };
 
   // The app behind the window: the rail with its footer, as visual-language.md §7 has it.

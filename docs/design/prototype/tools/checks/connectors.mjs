@@ -100,7 +100,6 @@ const STATES = [
   ["screen=server&id=notes-work&last=none", ["Not reported: the gateway's tool list doesn't mention this server."]],
   ["screen=server&id=search-index", ["Runs a command", "/opt/example/bin/search-server --stdio --index ./notes", "spawn /opt/example/bin/search-server ENOENT"]],
   ["screen=server&id=team-notes", ["Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender.", "Clawtrate offers no sign-in for it."]],
-  ["screen=server&id=notes-work&signed=1", ["Last signed in from Clawtrate: Nov 19, 5:12 PM."]],
   ["screen=server&id=notes-work&device=iphone", ["Change it from Clawtrate on your computer."]],
   ["screen=server-remove-confirm&id=notes-work", ["Remove notes-work from the gateway?", "the server's entry in the gateway's settings, with its headers", "its tools, from every bot that has them", "its sign-in, kept by the gateway in its state, not encrypted there. Removing the server does not delete it, and the gateway finds it again if a server with the same name and URL is added.", "To sign out first, run this on the gateway's machine before removing the server:", "openclaw mcp logout notes-work"]],
   ["screen=server-remove-confirm&id=search-index", ["Remove search-index from the gateway?", "nothing else: it has no sign-in the gateway keeps"]],
@@ -114,18 +113,8 @@ const STATES = [
   ["screen=add-server-saved&name=search-index&type=command", ["Added search-index.", "The gateway will run it at a bot's next run."]],
   ["screen=add-server-refused&name=notes-work", ["Couldn't add notes-work:", "Expected http:// or https:// URL", "Nothing saved."]],
   ["screen=add-server-checking&name=notes-work", ["Checking what the gateway has…"]],
-  ["screen=signin-starting&id=calendrop", ["Sign in to Calendrop", "Asking the gateway to start the sign-in…", "Cancel"]],
-  ["screen=signin-waiting&id=calendrop&app=preview", ["Sign in on Calendrop's page.", "auth.calendrop.example", "https://auth.calendrop.example/authorize?response_type=code", "Open in your browser", "Waiting for the sign-in. This works for 10 minutes.", "Cancel"]],
-  ["screen=signin-waiting&id=calendrop&app=preview&opened=1", ["Opened in a new tab of your browser."]],
-  ["screen=signin-done&id=calendrop", ["Signed in to Calendrop.", "The gateway keeps the sign-in."]],
-  ["screen=signin-failed&id=calendrop", ["Sign-in didn't finish.", "Sign-in did not finish. Check the connector settings and try again, or run openclaw mcp login with this connector's name in this Gateway's terminal.", "Try again"]],
-  ["screen=signin-expired&id=calendrop", ["The sign-in expired", "before it finished."]],
-  ["screen=signin-cancelled&id=calendrop", ["Sign-in cancelled."]],
-  ["screen=signin-dropped&id=calendrop", ["The sign-in ended with the connection.", "A sign-in belongs to the connection that started it."]],
-  ["screen=signin-cannot&id=calendrop", ["The gateway can't start this sign-in from here.", "This connector cannot use operator browser sign-in. Check its existing account settings."]],
+  ["screen=signin-cli&id=notes-work&server=1", ["Sign in to notes-work", "openclaw mcp login notes-work", "Back to notes-work"]],
   ["screen=signin-cli&id=calendrop", ["The gateway starts this sign-in from its own command line or its own settings page.", "On the gateway's machine, run:", "openclaw mcp login calendrop", "It prints an address. Open it in a browser and sign in to Calendrop.", "MCP OAuth credentials saved", "openclaw mcp login calendrop --code <code>", "Or sign in from Settings on the gateway's own web page."]],
-  ["screen=signin-waiting&id=calendrop&app=preview&loopback=1", ["The sign-in page returns to the gateway's own address, which only a browser on the gateway's machine can reach.", "openclaw mcp login calendrop"]],
-  ["screen=signin-waiting&id=notes-work&server=1", ["Sign in to notes-work", "auth.notes.example"]],
   ["screen=chat", ["Add today's standup to team-notes.", "team-notes asks for a sign-in", "The gateway sees every device using Clawtrate as one sender, so this sign-in is shared by everyone who uses this gateway from Clawtrate.", "After you sign in, ask Pip again.", "auth.teamnotes.example", "https://auth.teamnotes.example/authorize?response_type=code", "Open in your browser", "Anyone who opens this link completes this sign-in."]],
   ["screen=chat&card=opened", ["Opened at 5:12 PM. If the page didn't finish, open it again.", "Reopen"]],
   ["screen=chat&card=connected", ["MCP server \"team-notes\" is connected. Its tools become available on the next message."]],
@@ -204,20 +193,13 @@ await walk("Connect apps, add a connector, sign in, signed in", "screen=home", [
   [link("Open Quillnote"), "connector"],
   [link("Sign in"), "signin-cli"],
 ], ["openclaw mcp login quillnote", "openclaw mcp login quillnote --code <code>"]);
-await walk("the web preview: sign in in the browser, then the page shows what the gateway reports", "screen=connector&id=calendrop&app=preview", [
-  [link("Sign in"), "signin-starting"],
-  [link("With a sign-in page"), "signin-waiting"],
-  [link("Open in your browser"), "signin-waiting"],
-  [link("Approved"), "signin-done"],
-  [link("Done"), "connector"],
-], ["Signed in.", "Whether it still works shows when a bot next uses Calendrop."]);
 {
   const p = await open("screen=connector&id=calendrop");
   await link("Sign in")(p);
   await at(p, "signin-cli");
-  check("the desktop app never offers the browser sign-in", !(await text(p)).includes("Open in your browser") && !(await text(p)).includes("Asking the gateway"));
+  check("neither app offers a browser sign-in (ruling 2)", !(await text(p)).includes("Open in your browser") && !(await text(p)).includes("Asking the gateway"));
   await p.close();
-  const q = await open("screen=signin-waiting&id=calendrop&app=preview");
+  const q = await open("screen=chat");
   const order = await q.evaluate(() => {
     const addr = document.querySelector(".c-address");
     const btn = [...document.querySelectorAll(".c-open a")].find((a) => a.textContent === "Open in your browser");
@@ -275,13 +257,7 @@ await walk("add another account to a tool server", "screen=server&id=notes-work"
   check("Add another account keeps the address and leaves the name empty", (await p.inputValue("#c-url")) === "https://notes.example/mcp" && (await p.inputValue("#c-name")) === "");
   await p.close();
 }
-await walk("sign in to a tool server (web preview)", "screen=server&id=notes-work&app=preview", [[link("Sign in"), "signin-starting"], [link("With a sign-in page"), "signin-waiting"], [link("Approved"), "signin-done"], [link("Done"), "server"]], ["Last signed in from Clawtrate: Nov 19, 5:12 PM.", "Not reported."]);
-await walk("sign-in in the web preview: the gateway answers with its command line", "screen=connector&id=calendrop&app=preview", [[link("Sign in"), "signin-starting"], [link('"Open Settings on this Gateway…"'), "signin-cli"]], ["openclaw mcp login calendrop"]);
-await walk("sign-in: the gateway can't start it", "screen=signin-starting&id=calendrop", [[link('"This connector cannot…"'), "signin-cannot"]]);
-for (const [label, to] of [["Refused", "signin-failed"], ["10 minutes pass", "signin-expired"], ["Drop connection", "signin-dropped"]]) {
-  await walk(`sign-in: ${label}, then try again`, "screen=signin-waiting&id=calendrop&app=preview", [[link(label), to], [link("Try again"), "signin-starting"]]);
-}
-await walk("sign-in: cancelled", "screen=signin-waiting&id=calendrop&app=preview", [[link("Cancel"), "signin-cancelled"], [link("Back"), "connector"]]);
+await walk("sign in to a tool server: the gateway's own steps, then back", "screen=server&id=notes-work", [[link("Sign in"), "signin-cli"], [link("Back to notes-work"), "server"]], ["Not reported."]);
 await walk("add a server by address: Clawtrate's checks, then saved", "screen=add-server", [
   [submit],
   [typeIn("#c-name", "notes-work")],
