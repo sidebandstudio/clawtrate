@@ -4,7 +4,8 @@
 // away card, at the four widths and in both themes.
 // Run from the repository root:  node docs/design/prototype/tools/checks/routines.mjs
 import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium, pageUrl } from "./browser.mjs";
 // The pinned gateway schema: every request a page sends is checked against it.
@@ -415,7 +416,10 @@ p = await open("view=run&routine=reminder&run=0&state=ran-once");
 check("a reminder's run is in the main conversation: no transcript of its own, its summary and a way there", (await text(p, ".b-note")).startsWith("This run happened in Marlow's main conversation.") && (await text(p, '[data-testid="returned"]')) === "Posted the reminder in Marlow's main conversation." && (await has(p, '.b-note [data-r="open-bot"]')) && !(await has(p, '[data-testid="scheduled-message"]')));
 await p.close();
 p = await open("view=routine&routine=digest");
-await event(p, { action: "updated", job: { id: "digest", sessionTarget: "current" } });
+for (const sessionTarget of ["session:planning", "current"]) {
+  await event(p, { action: "updated", job: { id: "digest", sessionTarget } });
+  check(`F-188 a ${sessionTarget} routine names its shared conversation`, (await text(p, '[data-fact="runs-in"] dd')) === "The conversation it was made in");
+}
 await p.click('[data-testid="run-row"]');
 check("F-190 a recorded isolated run still shows its transcript after the routine switches to current", (await text(p, '[data-testid="scheduled-message"] p')).startsWith("Summarise the notes I added yesterday,"));
 await p.click('[data-r="back-to-routine"]');
@@ -598,7 +602,8 @@ const CRON_TABLE = [
 const springExpr = "30 2 14 3 *";
 const springRun = "2027-03-14T07:30:00.000Z";
 if (process.env.OPENCLAW_PACKAGE_DIR) {
-  const { Cron } = await import(new URL("../croner/dist/croner.js", `file://${process.env.OPENCLAW_PACKAGE_DIR.replace(/\/?$/, "/")}`).href);
+  const gatewayRequire = createRequire(resolve(process.env.OPENCLAW_PACKAGE_DIR, "package.json"));
+  const { Cron } = gatewayRequire("croner");
   const from = new Date(Date.UTC(2026, 10, 18, 15, 12));
   const spring = new Cron(springExpr, { timezone: "America/New_York", catch: false });
   check("F-195 pinned Croner shifts 2:30 AM into 3:30 AM", spring.nextRun(from)?.toISOString() === springRun);
