@@ -1518,5 +1518,5 @@ F-488 is met as written; its check names the labels this list gives. Not every c
 - Question records that are forms, carry a resource or a link, or ask for a secret. Section 13 shows them readable and not answerable until they have a design.
 - Changing the model or the effort. Both belong to the task and the turn; a bot's own default needs the admin tier.
 - The Work pane's Coding section, beyond the card form its rows use. (F-136)
-- A conversation shared by several bots.
+- A conversation shared by several bots; `group-chats.md` designs groups as one task per bot.
 - The gateway's record of tool actions, which Raw links to.

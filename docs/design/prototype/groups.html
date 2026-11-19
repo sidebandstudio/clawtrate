@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: group chats</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/conversation.css" />
+    <link rel="stylesheet" href="css/bots.css" />
+    <link rel="stylesheet" href="css/groups.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/icons.js"></script>
+    <script src="js/prototype.js"></script>
+    <script src="js/components.js" defer></script>
+    <script src="js/samples.js" defer></script>
+    <script src="js/kinds.js" defer></script>
+    <script src="js/behaviors.js" defer></script>
+    <script src="js/groups.js" defer></script>
+  </head>
+  <body>
+    <header class="proto-bar" id="proto-bar"></header>
+    <main class="proto-stage">
+      <div class="proto-frame">
+        <!-- The shell of app.html, with groups in the rail. js/groups.js fills it. -->
+        <div class="app" id="root">
+          <div class="shell" data-panel="closed" data-view="detail">
+            <nav class="rail" aria-label="Bots">
+              <div class="rail-top">
+                <button type="button" class="icon-button rail-status" data-action="gateway-menu" aria-haspopup="menu" aria-expanded="false">
+                  <i data-icon="settings"></i>
+                  <span class="status-dot" data-status="connected"></span>
+                </button>
+                <button type="button" class="icon-button" data-action="search" aria-label="Search" title="Search (⌘K)">
+                  <i data-icon="search"></i>
+                </button>
+                <button type="button" class="icon-button" id="new-button" data-action="new-menu" aria-haspopup="menu" aria-expanded="false" aria-label="New" title="New">
+                  <i data-icon="plus"></i>
+                </button>
+              </div>
+
+              <ul class="bot-list" id="bot-list" data-testid="bot-list"></ul>
+
+              <div class="rail-footer">
+                <button type="button" class="gateway-pill" data-action="gateway-menu" aria-haspopup="menu" aria-expanded="false">
+                  <span class="status-dot" data-status="connected"></span>
+                  <span class="gateway-pill-text">
+                    <strong>Home gateway</strong>
+                    <span id="gateway-state">Connected</span>
+                  </span>
+                </button>
+              </div>
+
+              <ul class="menu gateway-menu" id="gateway-menu" role="menu" aria-label="Gateway" hidden>
+                <li class="menu-head" role="presentation">
+                  <strong>Home gateway</strong>
+                  <span id="gateway-menu-state">Connected · gateway.local</span>
+                </li>
+                <li class="menu-rule" role="separator"></li>
+                <li class="menu-label" role="presentation">Theme</li>
+                <li role="none"><button type="button" class="menu-item" role="menuitemradio" data-theme-choice="system" aria-checked="false">Match the system<span class="glyph" data-state="check"></span></button></li>
+                <li role="none"><button type="button" class="menu-item" role="menuitemradio" data-theme-choice="light" aria-checked="false">Light<span class="glyph" data-state="check"></span></button></li>
+                <li role="none"><button type="button" class="menu-item" role="menuitemradio" data-theme-choice="dark" aria-checked="false">Dark<span class="glyph" data-state="check"></span></button></li>
+                <li class="menu-rule" role="separator"></li>
+                <li role="none"><button type="button" class="menu-item" role="menuitem" data-tone="danger" data-action="disconnect">Disconnect</button></li>
+              </ul>
+            </nav>
+
+            <div class="main-pane">
+              <section class="conversation" aria-label="Conversation">
+                <!-- The status strip is rendered inside the conversation, so it is
+                     centred on the conversation whether or not Work is docked. -->
+                <div class="status-strip" id="status-strip" role="status" data-testid="status-strip" hidden></div>
+                <header class="conversation-header">
+                  <div class="header-side">
+                    <button type="button" class="icon-button back-button" data-action="back" aria-label="Back to bots">
+                      <i data-icon="back"></i>
+                    </button>
+                  </div>
+                  <button type="button" class="title-pill" id="title-pill" data-action="details"></button>
+                  <div class="header-side" data-side="end"></div>
+                </header>
+
+                <div class="transcript-wrap">
+                  <div class="transcript" id="transcript" tabindex="0" data-testid="transcript"></div>
+                  <button type="button" class="jump-latest" id="jump-latest" data-action="jump" hidden>
+                    Jump to latest <i data-icon="arrow-down"></i>
+                  </button>
+                </div>
+
+                <div id="composer-slot"></div>
+              </section>
+            </div>
+          </div>
+          <div class="rail-tooltip" id="rail-tooltip" role="tooltip" data-testid="rail-tooltip" hidden></div>
+          <!-- One menu element serves the "+" button, a group's menu and a message's menu. -->
+          <ul class="menu rail-menu" id="rail-menu" role="menu" hidden></ul>
+          <dialog class="b-dialog" id="g-dialog" aria-labelledby="g-dialog-title"></dialog>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

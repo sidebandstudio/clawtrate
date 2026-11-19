@@ -31,6 +31,7 @@ Every document in the repository, by what you want to do.
 - [Work pane](design/work-pane.md): what sits beside the conversation, a task's files, what a bot made and the bot's computer.
 - [Bots](design/bots.md): creating a bot on an account, connecting accounts, a bot's settings and the optional T3 Code integration.
 - [Controls](design/controls.md): what each bot may do and who enforces it, saved approvals, activity, memory, where a bot runs, usage and warning budgets.
+- [Group chats](design/group-chats.md): a group of two to six bots, one task each: making and showing it, who answers, several runs at once, approvals, and where the group is kept.
 - [Setting up](design/setup.md): the first run, where OpenClaw runs and what Clawtrate found there, connecting on this computer or over SSH, installing OpenClaw, setup codes and approvals.
 - [Prototype](design/prototype/README.md): static pages that show the design working.
 
@@ -41,6 +42,8 @@ Every document in the repository, by what you want to do.
 - [Provider accounts and T3 Code](research/provider-accounts-and-t3-code.md): how OpenClaw handles provider accounts, and how a bot can work with T3 Code.
 - [The setup flow](research/setup-flow.md): first pairing, setup codes, the gateway's identity, installing and removing OpenClaw, SSH from a shipped app, and Tailscale, from OpenClaw's source and live runs.
 - `research/setup-flow/`: the probe behind the setup flow note.
+- [Group chats](research/group-chats.md): what a group of bots can be on the gateway, from OpenClaw's source and a development instance: one task per bot, sending to several, who sees what, mentions, stopping, where a group can be kept, and approvals.
+- `research/group-chats/`: the probe behind the group chats note.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
 ## Writing docs
