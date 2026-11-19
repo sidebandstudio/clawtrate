@@ -430,6 +430,26 @@ test("F-157: device access is asked for by name only; with it alone, only this d
   await expect(list).toContainText("Desk");
 });
 
+test("F-157: a paired-device list cut to its bound says how many it leaves out", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    fixture.invoke = async (command) => {
+      const result = await original(command);
+      return command.type === "readMachines"
+        ? { ...(result as object), devicesOmitted: 3 }
+        : result;
+    };
+  });
+  await openMachines(page);
+  await expect(page.getByTestId("devices-omitted")).toHaveText(
+    "3 more paired devices aren't listed.",
+  );
+});
+
 test("F-157: a rename that completes after its form was cancelled leaves another form open", async ({
   page,
 }) => {

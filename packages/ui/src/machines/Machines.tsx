@@ -658,6 +658,11 @@ export function useMachinesSection({
           <dl className="facts m-facts" data-testid="device-list">
             {devices.map(deviceRow)}
           </dl>
+          {view.devicesOmitted > 0 && (
+            <p className="b-hint" data-testid="devices-omitted">
+              {view.devicesOmitted} more paired devices aren't listed.
+            </p>
+          )}
           {!connection.canAdmin && (
             <p className="b-hint" data-testid="devices-own-only">
               Without admin access, the gateway lists only this device.
