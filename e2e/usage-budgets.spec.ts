@@ -153,9 +153,12 @@ const n = (text: string | null) => {
 async function startOwnHost(readOnly = false): Promise<Host> {
   const data = mkdtempSync(join(tmpdir(), "clawtrate-usage-"));
   const started = startHost(INSTANCE, STATIC, data, { readOnly });
-  started.gated.release();
-  const host = { child: started.host, url: await started.url, data };
+  // Kept before it is waited for, so the teardown stops it and removes its folder even when it
+  // never gives its address.
+  const host = { child: started.host, url: "", data };
   hosts.push(host);
+  started.gated.release();
+  host.url = await started.url;
   return host;
 }
 
