@@ -572,7 +572,7 @@ test("F-021: an ordinary question cancelled elsewhere leaves the owner waiting o
   }
 });
 
-test("F-169: a message sent while an approval is pending is accepted as a steer into the run and leaves the card pending; Stop aborts that run, and the card closes as Cancelled once the gateway cancels that run's request", async () => {
+test("F-169: a send during an approval leaves it pending and Stop cancels the originating run's request when the gateway confirms it", async () => {
   test.setTimeout(300_000);
   const { title, key } = await hostTask("otto", "Steer and stop", "#sleep 9");
   const op = await adminClient();
@@ -608,7 +608,7 @@ test("F-169: a message sent while an approval is pending is accepted as a steer 
   await composer.fill("Keep going once you can.");
   await page.keyboard.press("Enter");
   await expect(transcript(page)).toContainText("Keep going once you can.", { timeout: 30_000 });
-  // The message joined the run: the request is still pending, here and on the gateway.
+  // The request remains pending during the send, here and on the gateway.
   await expect(card).toHaveAttribute("data-state", "pending");
   const listed = async () =>
     (
@@ -618,7 +618,7 @@ test("F-169: a message sent while an approval is pending is accepted as a steer 
     ).find((each) => each.request.sessionKey === key)?.id ?? null;
   const id = await listed();
   expect(id).not.toBeNull();
-  // The steer was accepted into the run that asked: the gateway started no run of its own for it.
+  // No other run has started yet. This says nothing about how the gateway admitted the message.
   expect(
     new Set(lifecycle("start").map((event) => (event.payload as { runId?: string }).runId)),
   ).toEqual(new Set([runId]));

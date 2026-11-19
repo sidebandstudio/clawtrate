@@ -55,6 +55,7 @@ describe("F-169: pending approvals and Stop", () => {
     gateway.emit("exec.approval.requested", item);
     await until(() => transcript().approvals.length === 1);
     await client.stopRun(KEY, "run-1").catch(() => undefined);
+    expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "run-1" }]);
     await sleep(30);
     expect(transcript().approvals[0]!.status).toBe("pending");
     // The gateway cancels it when it stops the run; its own snapshot says so.
