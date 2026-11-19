@@ -195,6 +195,7 @@ export function Settings({
 
   const accountsSection = useAccountsSection({ accounts, bots, connection, info, announce, toNav });
   const checkInsSection = useCheckInsSection({
+    active: section === "checkins",
     checkIns,
     bots,
     connection,

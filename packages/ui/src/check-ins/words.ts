@@ -1,7 +1,8 @@
 // What a bot's check-ins say (automation.md section 13), from its heartbeat
 // job: the job is what will run, so it is the source of the words. Silence
 // when nothing needs the person is what the gateway's own prompt asks for,
-// not something the gateway guarantees, so no sentence here promises it.
+// not something the gateway guarantees, so no sentence here promises it; and
+// the gateway can skip a scheduled attempt, so none promises a run either.
 
 import { everyText, type CheckInJob, type CheckInSetting } from "@clawtrate/core";
 
@@ -45,12 +46,13 @@ export function sentence(
   job: CheckInJob | undefined,
   settings: readonly CheckInSetting[] | null,
 ): string {
-  if (job && !job.enabled) return `${name} doesn't check in on a schedule.`;
+  const background = `It still reports when a command it started in the background finishes.`;
+  if (job && !job.enabled) return `${name} doesn't check in on a schedule. ${background}`;
   if (!checksIn(job)) {
     if (settings === null) return `${name} doesn't check in.`;
     return settings.length > 0
       ? `${name} doesn't check in. Once any bot has a check-in setting of its own, only those bots check in.`
-      : `${name} doesn't check in. Without a setting of its own, only the gateway's default bot checks in.`;
+      : `${name} doesn't check in. The gateway's default for check-ins doesn't cover it.`;
   }
   return job.everyMs === DAY
     ? `Once a day, ${name} looks for anything that needs you.`
@@ -76,20 +78,23 @@ export function everyFor(choice: Choice, every: string): string {
         : every;
 }
 
-export function choiceWords(choice: Choice, name: string): string {
+/** `quiet`: the prompt the bot will get asks it to reply NO_REPLY when nothing needs attention. */
+export function choiceWords(choice: Choice, name: string, quiet: boolean): string {
   switch (choice) {
     case "off":
       return `${name} doesn't check in on a schedule.`;
     case "daily":
       return `Once a day, ${name} looks for anything that needs you.`;
     case "asneeded":
-      return `Every 30 minutes, ${name} looks for anything that needs you. The gateway's own prompt asks it to stay quiet when nothing does.`;
+      return quiet
+        ? `Every 30 minutes, ${name} looks for anything that needs you. Its prompt asks it to stay quiet when nothing does.`
+        : `Every 30 minutes, ${name} looks for anything that needs you.`;
     case "every":
       return `${name} looks for anything that needs you as often as you choose.`;
   }
 }
 
-/** Whether a custom prompt leaves out the gateway's way of saying nothing. */
+/** Whether a prompt keeps the gateway's way of saying nothing; "" is the built-in prompt, which does. */
 export const asksForSilence = (prompt: string) =>
   prompt.trim() === "" || prompt.includes("NO_REPLY");
 
