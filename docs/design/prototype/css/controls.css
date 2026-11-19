@@ -569,6 +569,13 @@ button.c-mem:hover {
   font-weight: var(--weight-medium);
 }
 
+/* A group with nothing in it is one line. */
+.c-glance-block[data-empty] h4 {
+  justify-content: flex-start;
+  gap: 8px;
+  margin: 0;
+}
+
 .c-glance-block[data-kind="unknown"] h4 {
   color: var(--danger);
 }
@@ -737,7 +744,13 @@ button.c-log .c-tag {
 }
 
 @media (max-width: 599px) {
+  /* Stacked, and tight enough that the whole glance stays on the phone's first screen with the not-enforced note (section 19). */
   .c-glance {
     grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .c-glance-block {
+    padding: 8px 12px;
   }
 }

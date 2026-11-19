@@ -41,17 +41,16 @@
   };
   const weekTotal = (bot) => fig(bot, "week").total;
 
-  // Otto's budget: a warning by default; the budget plugin only when chosen and proven.
-  const enforcedKinds = ["enforced", "enforcedreached", "unconsented", "pluginstopped", "behind", "unenforced"];
-  const limitFor = { warn: 2000000, reached: 1600000, enforcedreached: 1600000, unenforced: 1600000 };
+  // Otto's budget: a warning, always (section 17). A Daily budget counts today's total, a Weekly one this week's.
+  const limitFor = { warn: 2000000, reached: 1600000, daily: 400000 };
   const G = {
-    otto: BUDGET === "none" ? null : { kind: "weekly", limit: limitFor[BUDGET] || 2500000, stop: enforcedKinds.includes(BUDGET), plugin: BUDGET === "unconsented" ? "unconsented" : BUDGET === "pluginstopped" || BUDGET === "unenforced" ? "stopped" : BUDGET === "behind" ? "behind" : "running" },
+    otto: BUDGET === "none" ? null : { kind: BUDGET === "daily" ? "daily" : "weekly", limit: limitFor[BUDGET] || 2500000 },
     routine: { name: "Weekly cleanup", bot: "otto", kind: "daily", limit: 200000, used: 41000 },
   };
-  const usedOf = (bot) => weekTotal(bot);
+  const usedOf = (bot) => (G[bot]?.kind === "daily" ? fig(bot, "today").total : weekTotal(bot));
   const pctOf = (bot) => Math.round((usedOf(bot) / G[bot].limit) * 100);
-  const holds = (g) => g.stop && g.plugin === "running";
-  const COVERAGE = "Stops Otto at the limit for runs from apps and channels (the gateway's own runner) and from the command line. Not for runs on the Codex harness: those are warned only.";
+  const periodWords = (g) => (g.kind === "daily" ? "today" : "this week");
+  const kindWord = (g) => (g.kind === "daily" ? "daily" : "weekly");
 
   function meter(used, limit, words, label, right) {
     const pct = Math.min(100, Math.round((used / limit) * 100));
@@ -79,7 +78,7 @@
   CT.botsExtraGroups = (id) => {
     const g = G[id];
     let value = USAGE === "error" ? "Couldn't load" : `This week: ${short(weekTotal(id))} tokens · about $${fig(id, "week").cost.toFixed(2)}`;
-    if (g) value = `${g.stop && !holds(g) ? "Budget not being enforced now · " : ""}Budget ${short(usedOf(id))} of ${short(g.limit)} · ${value}`;
+    if (g) value = `Budget ${short(usedOf(id))} of ${short(g.limit)} ${periodWords(g)} · ${value}`;
     return (prevExtra ? prevExtra(id) : "") + `<h3 class="b-tabgroup">Usage</h3><dl class="facts">${openRow("Usage", value, `data-bs="usage" aria-label="Usage: ${value}. Open."`)}</dl>`;
   };
   CT.botsRunsOn = (id) => {
@@ -125,25 +124,14 @@
     if (U.form) return html + budgetForm(bot);
     const used = usedOf(bot);
     const pct = pctOf(bot);
-    if (g.stop && !holds(g)) html += note(`<p><b>${name}'s budget isn't being enforced now.</b> You chose to stop ${name} at the limit.</p>`, "danger");
-    html += meter(used, g.limit, `${short(used)} of ${short(g.limit)} tokens this week`, `${name}'s weekly budget: ${fmt(used)} of ${fmt(g.limit)} tokens`);
-    html += `<p class="c-sentence">${mark(holds(g) ? "budget" : "shown")}</p>`;
-    if (g.stop) {
-      const words = {
-        running: COVERAGE,
-        unconsented: `The budget plugin can't stop ${name}: the gateway's owner hasn't let it read conversations. This budget is a warning until they do.`,
-        stopped: `The budget plugin isn't running (or is older than this budget needs), so nothing stops ${name} at the limit. This budget is a warning until it runs.`,
-        behind: `${COVERAGE} The plugin's count is from 5:12 PM; runs since then may not be counted, so ${name} can pass the limit.`,
-      }[g.plugin];
-      html += `<p class="b-hint">${words}</p>`;
-    } else html += `<p class="b-hint">A warning: at 80% a line in ${name}'s task, at 100% Clawtrate stops sending from this device. Other apps, channels and routines aren't stopped. Stopping ${name} at the limit needs Clawtrate's budget plugin, with the gateway's owner's permission to read conversations.</p>`;
-    if (pct >= 100)
-      html += holds(g)
-        ? note(`<p><b>${name}'s weekly budget is used up.</b> On the routes above, the gateway refuses new runs of ${name} until Monday at 00:00. A run already going is not stopped.</p>`, "danger")
-        : note(`<p><b>${name}'s weekly budget is used up, so Clawtrate won't send from here.</b> This is shown only: other apps, channels and ${name}'s routines aren't stopped.</p>`, "warn");
-    else if (pct >= 80) html += note(`<p>${name} has used ${pct}% of its weekly budget.</p>`, "warn");
-    html += `<p class="b-hint">Counts the total the gateway reports: input, output and cache, the same figure as Usage below. Resets Monday at 00:00, your time. Refused sends are not replayed.</p>`;
-    if (B.access !== "read") html += `<div class="b-actions">${button("Raise budget", 'data-c="budget-edit" data-size="sm"')}${pct >= 100 && !holds(g) && isAdmin() ? button("Pause Weekly cleanup", 'data-c="pause-routine" data-size="sm"', "quiet") : ""}</div>`;
+    html += meter(used, g.limit, `${short(used)} of ${short(g.limit)} tokens ${periodWords(g)}`, `${name}'s ${kindWord(g)} budget: ${fmt(used)} of ${fmt(g.limit)} tokens`);
+    html += `<p class="c-sentence">${mark("shown")}</p>`;
+    html += `<p class="b-hint">A warning: at 80% a line in ${name}'s task, at 100% Clawtrate stops sending from this device. Other apps, channels and routines aren't stopped, and nothing on the gateway stops ${name} at the limit.</p>`;
+    if (pct >= 100) html += note(`<p><b>${name}'s ${kindWord(g)} budget is used up, so Clawtrate won't send from here.</b> This is shown only: other apps, channels and ${name}'s routines aren't stopped.</p>`, "warn");
+    else if (pct >= 80) html += note(`<p>${name} has used ${pct}% of its ${kindWord(g)} budget.</p>`, "warn");
+    html += `<p class="b-hint">Counts the total the gateway reports ${periodWords(g)}: input, output and cache, the same figure as Usage below. ${g.kind === "daily" ? "Resets at 00:00" : "Resets Monday at 00:00"}, your time. Refused sends are not replayed.</p>`;
+    if (B.access !== "read") html += `<div class="b-actions">${button("Raise budget", 'data-c="budget-edit" data-size="sm"')}${pct >= 100 && isAdmin() ? button("Pause Weekly cleanup", 'data-c="pause-routine" data-size="sm"', "quiet") : ""}</div>`;
+    if (pct >= 100 && isAdmin()) html += `<p class="b-hint">Pausing stops the routine itself, not the budget.</p>`;
     return html;
   }
 
@@ -159,7 +147,7 @@
         .map(([v, l]) => `<button type="button" role="radio" aria-checked="${f.kind === v}" tabindex="${f.kind === v ? 0 : -1}" data-c="budget-kind" data-value="${v}">${l}</button>`)
         .join("")}</div>` +
       `<label>Tokens<input class="input" inputmode="numeric" data-c-budget value="${esc(f.value)}" aria-describedby="c-budget-help${bad && f.value ? " c-budget-error" : ""}"${bad && f.value ? ' aria-invalid="true"' : ""} /></label>` +
-      `<p class="b-hint" id="c-budget-help" style="margin:0">Counts the total the gateway reports: input, output and cache. A warning unless you choose otherwise.</p>` +
+      `<p class="b-hint" id="c-budget-help" style="margin:0">Counts the total the gateway reports ${f.kind === "daily" ? "each day" : "each week"}: input, output and cache. A warning: nothing on the gateway stops a bot at its budget.</p>` +
       (bad && f.value ? `<p class="b-field-error" id="c-budget-error" role="alert" style="margin:0">Enter a whole number of 1,000 or more.</p>` : "") +
       `<div class="b-actions">${button("Save budget", `data-c="budget-save" data-size="sm"${bad ? " disabled" : ""}`, "primary")}${button("Cancel", 'data-c="budget-cancel" data-size="sm"', "quiet")}</div></div>`
     );
@@ -210,7 +198,7 @@
     body += USAGE === "nolimits" ? `<p class="b-hint">No limits reported.</p>` : meter(62, 100, "OpenAI · Weekly · 62% used · resets Nov 20 · as of 5:40 PM", "OpenAI's weekly limit: 62% used, as of 5:40 PM", "") + `<p class="b-hint">xAI: no limits reported. xAI reports a balance of $12.40, as of 5:38 PM. Neither says which of your accounts it is about.</p>`;
     body += `<h4 class="b-group">Budgets</h4><dl class="facts">`;
     const g = G.otto;
-    if (g) body += `<div class="b-row"><span class="b-row-main"><span>Otto · weekly · ${short(usedOf("otto"))} of ${short(g.limit)} tokens</span><small>${holds(g) ? markWords("budget") : g.stop ? "Not being enforced now" : markWords("shown")}</small></span></div>`;
+    if (g) body += `<div class="b-row"><span class="b-row-main"><span>Otto · ${kindWord(g)} · ${short(usedOf("otto"))} of ${short(g.limit)} tokens ${periodWords(g)}</span><small>${markWords("shown")}</small></span></div>`;
     body += `<div class="b-row"><span class="b-row-main"><span>Routine Weekly cleanup (Otto) · daily · ${short(G.routine.used)} of ${short(G.routine.limit)} tokens</span><small>${markWords("shown")}</small></span></div></dl>`;
     if (B.access !== "read") body += `<div class="b-actions" style="margin-top:8px">${button("Add a budget", 'data-c="budget-add" data-size="sm"')}</div>`;
     body += `<h4 class="b-group">By bot</h4>` + periodSeg() + `<p class="b-hint" style="margin-top:0">From the gateway's usage records, as of 5:41 PM.</p>${bars(app.bots.map((b) => [b.name, fig(b.id).total]))}`;
@@ -219,6 +207,7 @@
 
   // Settings, Machines (section 15).
   CT.botsSections.push(["machines", "Machines"]);
+  const ALWAYS = p("override") === "1";
   CT.botsSectionViews.machines = ({ back }) => {
     const pairing = p("devices") !== "noscope";
     let body =
@@ -240,9 +229,9 @@
         ]
           .map(([v, l]) => `<div><button type="button" class="b-open" role="radio" aria-checked="${v === "miss"}" tabindex="${v === "miss" ? 0 : -1}" data-c="node-approvals" data-value="${v}"><span>${l}</span>${v === "miss" ? icon("check") : ""}</button></div>`)
           .join("") +
-        `</dl><p class="c-subgroup">Entries</p><dl class="facts">${fact("Otto", "Its own entry: Ask on every command")}${fact("Pip", "No entry: the defaults")}</dl>` +
-        `<p class="c-subgroup">Effective, for the bots set to media-box</p><dl class="facts">${fact("Otto", "Review first (Otto's policy), then Ask every time (its entry here)")}${fact("Pip", "Never (Pip's policy): nothing runs")}</dl>` +
-        `<p class="b-hint">A machine's file can make a command ask or refuse; it adds to a bot's own policy. "Allow every command" still meets each bot's own policy. ${mark("set")}</p>`;
+        `</dl><p class="c-subgroup">Entries</p><dl class="facts">${fact("Otto", ALWAYS ? "Its own entry: Ask on every command" : "No entry: the defaults")}${fact("Pip", "No entry: the defaults")}</dl>` +
+        `<p class="c-subgroup">Effective, for the bots set to media-box</p><dl class="facts">${fact("Otto", ALWAYS ? "Every command asks: its entry here asks every time, so the gateway skips Otto's reviewer" : "Review first: commands on the allowlist run, and the reviewer decides the rest, because this file asks only for commands not on it, as Otto's policy does")}${fact("Pip", "Never (Pip's policy): nothing runs")}</dl>` +
+        `<p class="b-hint">The gateway takes the stricter of a bot's policy and this file, and the more asking of the two; it uses a bot's reviewer only when this file doesn't ask more. "Allow every command" still meets each bot's own policy. ${mark("set")}</p>`;
     body += `<div class="b-actions">${button("Rename", `data-c="node-rename" data-size="sm"${pairing ? "" : " disabled"}`)}${button("Remove studio-mac…", `data-c="node-remove" data-size="sm"${pairing ? "" : " disabled"}`, "quiet")}</div>`;
     body += `<h4 class="b-group">Paired devices</h4>`;
     body += pairing ? `<dl class="facts">${fact("This device", "Clawtrate on this Mac · Connected")}${fact("Clawtrate on iPhone", "Last seen 4:58 PM")}</dl>` : `<p class="b-hint">Seeing paired devices needs device access.</p>`;
@@ -272,21 +261,19 @@
     if (lim === "near" && bot === "otto") add(`<p>OpenAI reports 92% of a weekly limit used, as of 5:40 PM. It doesn't say which of your OpenAI accounts.</p><button type="button" class="icon-button" data-variant="quiet" data-c="banner-close" aria-label="Close">${icon("x")}</button>`, "neutral");
     if (lim === "reached" && bot === "otto") add(`<p>OpenAI reports a weekly limit reached, as of 5:40 PM. Runs that use it wait or fail until it resets, Nov 20.</p><button type="button" class="icon-button" data-variant="quiet" data-c="banner-close" aria-label="Close">${icon("x")}</button>`);
     const g = G[bot];
-    if (bot === "otto" && g && pctOf(bot) >= 100 && !holds(g)) add(`<p>Otto's weekly budget is used up, so Clawtrate won't send from here. This is shown only: other apps, channels and Otto's routines aren't stopped.</p>${button("Raise budget", 'data-c="raise-from-composer" data-size="sm"')}`);
+    if (bot === "otto" && g && pctOf(bot) >= 100) add(`<p>Otto's ${kindWord(g)} budget is used up, so Clawtrate won't send from here. This is shown only: other apps, channels and Otto's routines aren't stopped.</p>${button("Raise budget", 'data-c="raise-from-composer" data-size="sm"')}`);
   }
   const otto = app.bots.find((b) => b.id === "otto");
-  if (BUDGET === "warn" || BUDGET === "enforcedreached") {
+  if (BUDGET === "warn") {
     const t = otto.tasks.find((x) => x.id === "o3");
     t.html =
       `<div class="stamp">Today 5:58 PM</div>` +
       `<div class="turn" data-role="user"><div class="msg" data-role="user"><div class="bubble">Did last night's backup finish?</div></div></div>` +
-      (BUDGET === "warn"
-        ? `<div class="event-line" data-side="center" data-testid="budget-line">Otto has used 82% of its weekly budget: 1.64M of 2M tokens.</div>`
-        : `<div class="card turn-error" role="alert" data-testid="budget-error">${icon("warning")}<p class="turn-error-title">Otto didn't start: its weekly budget is used up</p><p class="turn-error-reason">It resets Monday at 00:00. The gateway refused this run before the model was asked; Clawtrate's budget plugin holds this budget for runs from apps, channels and the command line.</p><div class="turn-error-actions">${button("Raise budget", 'data-c="raise-from-composer" data-size="sm"', "primary")}</div></div>`);
+      `<div class="event-line" data-side="center" data-testid="budget-line">Otto has used 82% of its weekly budget: 1.64M of 2M tokens.</div>`;
   }
   const diskTask = otto.tasks.find((x) => x.id === "o1");
   if (p("saveline") === "1" && diskTask && typeof diskTask.html === "string") diskTask.html += `<button type="button" class="event-line link-button" data-side="center" data-c="saved-to-memory" data-testid="memory-line">Saved to memory: memory/2026-11-17.md</button>`;
-  if (BUDGET === "warn" || BUDGET === "enforcedreached" || p("saveline") === "1") app.openTask(app.model.selectedBot, app.model.selectedTask);
+  if (BUDGET === "warn" || p("saveline") === "1") app.openTask(app.model.selectedBot, app.model.selectedTask);
 
   // Wiring ---------------------------------------------------------------------------------------
 
@@ -302,7 +289,7 @@
         return BS.render();
       case "budget-new":
       case "budget-edit":
-        U.form = { value: G[bot] ? String(G[bot].limit) : "", kind: "weekly" };
+        U.form = { value: G[bot] ? String(G[bot].limit) : "", kind: G[bot]?.kind || "weekly" };
         BS.render();
         return setTimeout(() => $("[data-c-budget]", panel)?.focus(), 30);
       case "budget-kind":
@@ -313,7 +300,7 @@
         return BS.render();
       case "budget-save": {
         const n = Number(U.form.value.replace(/[, ]/g, ""));
-        G[bot] = { ...(G[bot] || { stop: false, plugin: "running" }), kind: U.form.kind, limit: n };
+        G[bot] = { kind: U.form.kind, limit: n };
         U.form = null;
         BS.render();
         composerNotes();

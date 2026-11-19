@@ -58,6 +58,12 @@
     [`${tab}&bview=rules&rules=old`, "The rules plugin too old"],
     [`${tab}&bview=rules&rules=unchecked`, "The rules plugin not checked yet"],
     [`${tab}&bview=rules&rules=stopped&held=1`, "Denied until the rules plugin runs"],
+    [`${tab}&bview=rules&held=1`, "The plugin running again, the hold still in place"],
+    [`${tab}&bview=rules&held=changed`, "The deny list changed since the hold"],
+    [`${tab}&bview=rules&rules=stopped&read=none`, "This device never read the plugin's rules"],
+    [`${tab}&bview=rules&rules=stopped&width=phone`, "The phone: the plugin stopped"],
+    [`${tab}&bview=rules&msg=gateway`, "The gateway's pairs leave Otto no bot to message"],
+    [`${tab}&bview=rules&machine=gatewayhost&cmdpolicy=allowlist`, "Creating a bot: a policy that isn't Ask"],
     [`${tab}&bview=rules&machine=gatewayhost`, "Commands on the gateway's machine: plugin rules are advice"],
     [`${tab}&bview=rules&rules=loading`, "Loading"],
     [`${tab}&bview=rules&rules=error`, "Couldn't load"],
@@ -69,6 +75,9 @@
     [`bot=pip&panel=open&tab=settings&newbot=step3`, "A new bot whose defaults write failed"],
     [`${tab}&bview=rule&line=files`, "One line: Change files, Limited"],
     [`${tab}&bview=rule&line=exec`, "One line: Run commands, with its four facts"],
+    [`${tab}&bview=rule&line=exec&rules=stopped`, "Run commands while the rules plugin is stopped"],
+    [`${tab}&bview=rule&line=exec&rules=stopped&held=1`, "Run commands in the hold"],
+    [`${tab}&bview=rule&line=exec&override=1`, "Run commands when media-box's file asks every time"],
     [`${tab}&bview=rule&line=exec&cmdpolicy=allowlist`, "A command policy set outside Clawtrate: only listed commands"],
     [`${tab}&bview=rule&line=exec&cmdpolicy=legacy`, "A legacy command policy"],
     ["bot=otto&task=o1&rules=stopped&held=1", "Clawtrate's hold, as a line in the task"],
@@ -83,7 +92,8 @@
     [`${tab}&bview=rule&line=files&form=open&limit=allow`, "20 allow rules already"],
     [`${tab}&bview=rule&line=files&form=open&limit=ask`, "20 ask rules already"],
     [`${tab}&bview=rule&line=files&form=open&limit=never`, "Near 50 never rules"],
-    [`${tab}&bview=rule&line=files&form=fromcard`, "The rule form filled in from an expired request"],
+    [`${tab}&bview=rule&line=files&form=fromcard`, "The rule form from an expired request: an Ask rule still applies"],
+    [`${tab}&bview=rule&line=files&form=fromcard&asker=fallback`, "The rule form from an expired request: only the catch-all asked"],
     [`${tab}&bview=rule&line=files&form=fromcard&access=write`, "An expired request's rule, below admin"],
     [`bot=pip&panel=open&tab=settings&bview=rule&line=message`, "A line for a bot with no routines"],
     [`${tab}&bview=rule&line=files&rules=stopped`, "One line while the rules plugin is stopped"],
@@ -96,14 +106,12 @@
     ["open=settings&section=permissions&rules=stopped", "Rules while the plugin is stopped"],
     ["open=settings&section=permissions&access=write", "Rules below admin"],
     ["open=settings&section=permissions&part=saved", "Saved approvals"],
-    ["open=settings&section=permissions&part=saved&saved=revoked", "A grant revoked"],
-    ["open=settings&section=permissions&part=saved&saved=ended", "A grant ended by its rule's edit"],
+    ["open=settings&section=permissions&part=saved&saved=revoked", "A routine's grant revoked"],
     ["open=settings&section=permissions&part=saved&saved=empty", "No saved approvals"],
     ["open=settings&section=permissions&part=saved&saved=error", "Saved approvals couldn't load"],
     ["open=settings&section=permissions&part=saved&access=read", "Saved approvals, read-only"],
     ["open=settings&section=permissions&part=saved&access=write", "Saved approvals below admin"],
     ["open=settings&section=permissions&part=activity", "Activity"],
-    ["open=settings&section=permissions&part=activity&audit=grant", "Activity: only those allowed by a saved approval"],
     ["open=settings&section=permissions&part=activity&audit=loading", "Activity loading"],
     ["open=settings&section=permissions&part=activity&audit=partial", "Activity with expired records"],
     ["open=settings&section=permissions&part=activity&audit=empty", "No activity"],
@@ -151,21 +159,18 @@
     [`${tab}&bview=usage&budget=none`, "No budget"],
     [`${tab}&bview=usage&budget=warn`, "A warning budget at 82 percent"],
     [`${tab}&bview=usage&budget=reached`, "A warning budget used up"],
-    [`${tab}&bview=usage&budget=enforced`, "A budget the plugin holds, with its routes"],
-    [`${tab}&bview=usage&budget=enforcedreached`, "A held budget used up"],
-    [`${tab}&bview=usage&budget=unconsented`, "The budget plugin not permitted"],
-    [`${tab}&bview=usage&budget=pluginstopped`, "The budget plugin stopped"],
-    [`${tab}&bview=usage&budget=behind`, "The budget plugin's count behind"],
-    [`${tab}&bview=usage&budget=unenforced`, "Chosen to stop, not being enforced now"],
+    [`${tab}&bview=usage&budget=daily`, "A Daily budget, counted today"],
     [`${tab}&bview=usage&budget=invalid`, "A budget form with an invalid number"],
     ["open=settings&section=usage", "Settings, Usage"],
     ["open=settings&section=usage&usage=nolimits", "No provider limits reported"],
     ["bot=otto&task=o3&budget=warn", "The 80 percent line in a task"],
-    ["bot=otto&task=o3&budget=enforcedreached", "A run refused by the budget plugin"],
     ["bot=otto&budget=reached", "The composer held back by a warning budget"],
     ["bot=otto&plimit=near", "A provider's limit near"],
     ["bot=otto&plimit=reached", "A provider's limit reached"],
     ["bot=otto&task=o1&saveline=1", "Saved to memory, in a task"],
+    ["bot=otto&task=o1&ask=full", "A rules-plugin card at the allow limit, answered live"],
+    ["bot=pip&task=p1&cmd=create", "Pip runs the gateway's command line to create a bot"],
+    ["bot=pip&task=p1&cmd=create&rules=noplugin", "The same, with no rules plugin"],
     [`${tab}&width=phone`, "The phone: a bot's settings"],
     [`${tab}&bview=rules&width=phone`, "The phone: what Otto may do"],
     ["open=settings&section=permissions&part=activity&width=phone", "The phone: Activity"],
@@ -1230,24 +1235,24 @@
     {
       id: "controls",
       title: "Controls",
-      note: "What docs/design/controls.md adds to the conversation, and a link to every state of its pages. A refused call says what decided it, recorded or inferred; an ask says who asks; an answer and what then happened are two lines; only a gateway setting is called enforced without qualification.",
+      note: "What docs/design/controls.md adds to the conversation, and a link to every state of its pages. A refused call says what decided it, recorded, inferred or not recorded; an ask says who asks and offers what it can complete; an answer and what then happened are two lines; only a gateway setting is called enforced without qualification.",
       specimens: [
         ...[
-          ["gateway", "The gateway's settings for every bot", "Recorded: removed from Otto's tools by the gateway's settings for every bot (read 5:41 PM). Set on the gateway.", JSON.stringify({ result: "Tool exec not found", details: {} })],
-          ["bot", "The bot's own deny list", "Recorded: removed from Otto's tools by Otto's settings (read 5:41 PM). The gateway enforces this.", JSON.stringify({ result: "Tool exec not found", details: {} })],
-          ["inferred", "The bot's own deny list, not read before the call", "Inferred: Otto's settings deny this tool now; Clawtrate didn't read them before this call.", JSON.stringify({ result: "Tool exec not found", details: {} })],
+          ["gateway", "The gateway's settings for every bot", "Inferred: the gateway's settings for every bot denied this tool when Clawtrate read them at 5:41 PM. The gateway's answer, not found, doesn't say why. Set on the gateway.", JSON.stringify({ result: "Tool exec not found", details: {} })],
+          ["bot", "The bot's own deny list", "Inferred: Otto's settings denied this tool when Clawtrate read them at 5:41 PM. The gateway's answer, not found, doesn't say why. The gateway enforces this.", JSON.stringify({ result: "Tool exec not found", details: {} })],
+          ["inferred", "A not-found call no read explains", "Cause not recorded. The gateway answered 'Tool exec not found'.", JSON.stringify({ result: "Tool exec not found", details: {} })],
           ["plugin", "A rule of Clawtrate's rules plugin", "Clawtrate's rules plugin: Otto's rule 'never matching rm -rf *', version 1.", JSON.stringify({ details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason: "Otto's rule: never run commands matching rm -rf *" } })],
           ["person", "A person, on the card", "You denied it at 5:43 PM.", JSON.stringify({ details: { status: "error", error: "Denied by user. The tool call did not run." } })],
           ["expired", "No answer in time", "No one answered within 10 minutes.", JSON.stringify({ details: { status: "error", error: "Approval timed out" } })],
           ["nobody", "Nobody could be asked", "No one could be asked: a routine's run has no place to ask.", JSON.stringify({ details: { status: "error", error: "Plugin approval unavailable: cron runs have no approval-capable initiating surface." } })],
-          ["changed", "A change while it waited", "The gateway's settings changed while it waited.", JSON.stringify({ details: { status: "error", error: "Plugin approval required (gateway unavailable)" } })],
+          ["changed", "The gateway couldn't take the ask", "Cause not recorded. The gateway answered 'Plugin approval required (gateway unavailable)'.", JSON.stringify({ details: { status: "error", error: "Plugin approval required (gateway unavailable)" } })],
         ].map(([key, name, decided, raw]) => ({
           name: `Refused by: ${name}`,
           html: A(
             {
               ...C.rm,
               id: `call_ctl_${key}`,
-              ...({ person: { status: "denied", deniedWord: "Denied" }, expired: { status: "denied", deniedWord: "Expired" }, nobody: { status: "denied", deniedWord: "Not run" }, changed: { status: "denied", deniedWord: "Not run" } }[key] || { blockedBy: "policy" }),
+              ...({ person: { status: "denied", deniedWord: "Denied" }, expired: { status: "denied", deniedWord: "Expired" }, nobody: { status: "denied", deniedWord: "Not run" }, changed: { status: "denied", deniedWord: "Not run" }, inferred: { status: "denied", deniedWord: "Not run" } }[key] || { blockedBy: "policy" }),
               body: CT.stepBody({
                 readable: CT.fields([
                   ["Command", "rm -rf /srv/media/transcode-cache", { mono: true }],
@@ -1261,24 +1266,21 @@
           ),
         })),
         {
-          name: "An ask from a rule, with its save form",
-          note: "Who asks, its 10-minute wait, what the saved answer will cover, and Every bot only for admin.",
+          name: "An ask from a rule",
+          note: "Who asks and its 10-minute wait. Allow once and Deny only: the gateway tells the plugin the decision alone, so no card makes a standing permission. For admin, Make a rule… opens the rule form filled in from the request.",
           still: true,
           html:
             `<section class="card request" data-kind="approval" data-state="pending" role="region" aria-label="Otto wants to change a file. Needs approval.">` +
             `<header class="request-head"><h3 class="request-title">Otto wants to change a file</h3><span class="tag" data-tone="warn">Needs approval</span></header>` +
             `<p class="request-summary">Write notes/disk-2026-11-16.md in Otto's workspace.</p>` +
-            `<p class="request-asker">Asked by Clawtrate's rules plugin: Otto's rule 'ask before changing files', version 2. <button type="button" class="link-button">Edit rule</button></p>` +
-            `<div class="c-form" role="group" aria-label="Always allow"><p style="margin:0"><b>For</b></p><div class="seg" role="radiogroup" aria-label="For"><button type="button" role="radio" aria-checked="true">Otto only</button><button type="button" role="radio" aria-checked="false" aria-disabled="true">Every bot</button></div>` +
-            `<p class="c-sentence" style="margin:0">Saving for every bot needs admin access.</p>` +
-            `<p style="margin:0"><b>Lasts</b></p><div class="seg" role="radiogroup" aria-label="Lasts"><button type="button" role="radio" aria-checked="true">1 hour</button><button type="button" role="radio" aria-checked="false">1 day</button><button type="button" role="radio" aria-checked="false">Until revoked</button></div>` +
-            `<p class="c-sentence" style="margin:0">Covers: changing notes/disk-2026-11-16.md. It answers this rule only, at this version, and stops applying if the rule is edited.</p></div>` +
-            `<div class="request-actions"><button type="button" class="button" data-variant="primary">Allow and save</button><button type="button" class="button">Back</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet">Deny</button></div>` +
+            `<p class="request-asker">Asked by Clawtrate's rules plugin: Otto's rule 'Ask first · notes/**', version 1. <button type="button" class="link-button">Edit rule</button></p>` +
+            `<div class="request-actions"><button type="button" class="button" data-variant="primary">Allow once</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet">Deny</button></div>` +
+            `<p class="c-sentence"><button type="button" class="link-button">Make a rule…</button></p>` +
             `<p class="request-foot">Waits 10 minutes; if no one answers, Otto doesn't do it.</p></section>`,
         },
         {
-          name: "An ask whose answers can't be saved",
-          note: "The rule says Ask every time, or the scope is full: Always allow is not offered as something it can't complete.",
+          name: "A messaging ask",
+          note: "Each message is its own decision: Allow once and Deny.",
           still: true,
           html:
             `<section class="card request" data-kind="approval" data-state="pending" role="region" aria-label="Otto wants to message Pip. Needs approval.">` +
@@ -1289,32 +1291,30 @@
             `<p class="request-foot">Waits 10 minutes; if no one answers, Otto doesn't do it.</p></section>`,
         },
         {
-          name: "An ask when the scope's allow entries are full",
-          note: `Nothing is removed by itself. Before anyone answers, the card says Always allow will save nothing; answered, the call runs once and the next identical call asks again. The link opens <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files">the rules list</a>.`,
+          name: "An ask at the allow limit",
+          note: `Nothing is removed by itself. The card offers Allow once and Deny, and in place of Make a rule… says the limit, with the way to <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files">the rules list</a>. Allow once runs the call once, and the next matching call asks again. <a href="controls.html?bot=otto&amp;task=o1&amp;ask=full">Answer it live</a>.`,
           still: true,
           html:
             `<section class="card request" data-kind="approval" data-state="pending" role="region" aria-label="Otto wants to change a file. Needs approval.">` +
             `<header class="request-head"><h3 class="request-title">Otto wants to change a file</h3><span class="tag" data-tone="warn">Needs approval</span></header>` +
             `<p class="request-summary">Write notes/disk-2026-11-18.md in Otto's workspace.</p>` +
-            `<div class="request-actions"><button type="button" class="button" data-variant="primary">Allow once</button><button type="button" class="button">Always allow…</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet">Deny</button></div>` +
-            `<p class="c-sentence">Always allow will run this once and save nothing: Otto has 20 allow rules and saved answers, the most a scope can hold. <a class="link-button" href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files">Open the rules list</a></p></section>` +
-            `<section class="card request" data-kind="approval" data-state="resolved" role="region" aria-label="Otto wanted to change a file. Answered."><header class="request-head"><h3 class="request-title">Otto wanted to change a file</h3><span class="tag">Allowed this once</span></header>` +
-            `<p class="c-outcome">Your answer: Always allow, 5:41 PM.</p><p class="c-outcome">Then: Ran, once.</p>` +
-            `<p class="c-outcome">Nothing was saved: Otto has 20 allow rules and saved answers, the most a scope can hold. The next identical call asks again. <a class="link-button" href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files">Open the rules list</a></p></section>`,
+            `<p class="request-asker">Asked by Clawtrate's rules plugin: Otto's rule 'Ask first · notes/**', version 1.</p>` +
+            `<div class="request-actions"><button type="button" class="button" data-variant="primary">Allow once</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet">Deny</button></div>` +
+            `<p class="c-sentence">Otto has 20 allow rules, the most a scope can hold. <a class="link-button" href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files">Open the rules list</a></p></section>` +
+            `<section class="card request" data-kind="approval" data-state="resolved" role="region" aria-label="Otto wanted to change a file. Allowed once."><header class="request-head"><h3 class="request-title">Otto wanted to change a file</h3><span class="tag">Allowed once</span></header>` +
+            `<p class="c-outcome">Your answer: Allowed once, 5:44 PM.</p><p class="c-outcome">Then: Ran.</p><p class="c-outcome">Nothing was saved and no rule was removed.</p></section>`,
         },
         {
           name: "An answer, and what then happened",
-          note: "The gateway acknowledged the answer; the call is its own fact. Shown live: a settings change while the card waited ended the call.",
+          note: "The gateway acknowledged the answer; the call is its own fact. When it was tried, a settings change while the card waited ended the call with this answer; the answer alone doesn't say why.",
           still: true,
           html:
             `<section class="card request" data-kind="approval" data-state="resolved" role="region" aria-label="Otto wanted to run a command. Answered."><header class="request-head"><h3 class="request-title">Otto wanted to run a command</h3><span class="tag">Allowed once</span></header>` +
-            `<p class="c-outcome">Your answer: Allowed once, 5:44 PM.</p><p class="c-outcome">Then: Didn't run: the gateway's settings changed while it waited.</p></section>` +
-            `<section class="card request" data-kind="approval" data-state="resolved" role="region" aria-label="Otto wanted to change a file. Answered."><header class="request-head"><h3 class="request-title">Otto wanted to change a file</h3><span class="tag" data-tone="accent">Always allowed</span></header>` +
-            `<p class="c-outcome">Your answer: Always allow, for Otto, 1 hour, 5:41 PM.</p><p class="c-outcome">Then: Ran.</p><p class="c-outcome">Saving it wasn't confirmed. <button type="button" class="link-button">Check again</button></p></section>`,
+            `<p class="c-outcome">Your answer: Allowed once, 5:44 PM.</p><p class="c-outcome">Then: Didn't run. The gateway answered 'Plugin approval required (gateway unavailable)'.</p></section>`,
         },
         {
           name: "An expired ask",
-          note: `Make a rule… (admin; below admin it is absent) opens <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files&amp;form=fromcard">the rule form filled in from the request</a>. It saves only when the person adds the rule, and the expired call never runs.`,
+          note: `Make a rule… (admin; below admin it is absent) opens <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files&amp;form=fromcard">the rule form filled in from the request</a>, which says what the rule will change given the rules already there. It saves only when the person adds the rule, and the expired call never runs.`,
           still: true,
           html: `<section class="card request" data-kind="approval" data-state="resolved" role="region" aria-label="Otto wanted to change a file. Expired."><header class="request-head"><h3 class="request-title">Otto wanted to change a file</h3><span class="tag">Expired</span></header><p class="c-outcome">Expired. Nothing ran.</p><div class="request-actions"><button type="button" class="button">Make a rule…</button></div></section>`,
         },
@@ -1334,12 +1334,11 @@
         },
         {
           name: "Budget lines",
-          note: "By default a budget is a warning and says so; the budget plugin's refusal names the routes it holds.",
+          note: "A budget is a warning, and says so: Clawtrate holds back only its own sends.",
           still: true,
           html:
             `<div class="event-line" data-side="center">Otto has used 82% of its weekly budget: 1.64M of 2M tokens.</div>` +
-            `<div class="c-composer-note"><p>Otto's weekly budget is used up, so Clawtrate won't send from here. This is shown only: other apps, channels and Otto's routines aren't stopped.</p><button type="button" class="button" data-size="sm">Raise budget</button></div>` +
-            `<div class="card turn-error" role="alert">${CT.icon("warning")}<p class="turn-error-title">Otto didn't start: its weekly budget is used up</p><p class="turn-error-reason">It resets Monday at 00:00. The gateway refused this run before the model was asked; Clawtrate's budget plugin holds this budget for runs from apps, channels and the command line.</p><div class="turn-error-actions"><button type="button" class="button" data-variant="primary" data-size="sm">Raise budget</button></div></div>`,
+            `<div class="c-composer-note"><p>Otto's weekly budget is used up, so Clawtrate won't send from here. This is shown only: other apps, channels and Otto's routines aren't stopped.</p><button type="button" class="button" data-size="sm">Raise budget</button></div>`,
         },
         {
           name: "A provider's limit",

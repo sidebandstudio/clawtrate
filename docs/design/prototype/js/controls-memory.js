@@ -30,11 +30,11 @@
     import: MEM === "import",
     conflict: MEM === "conflict",
     refused: null,
-    sharedNote: null,
+    sharedSel: 1, // the item the copy acts on: the quiet-hours note
   };
 
   // Otto's memory files, as the workspace reader returns them, split into items.
-  const searchable = MEM === "unsearchable" ? "Not confirmed for this revision" : "This revision found by search at 5:42 PM";
+  const searchable = MEM === "unsearchable" ? "Not confirmed for this revision" : "This revision returned by a search at 5:42 PM";
   const items = {
     otto: [
       { id: "m1", group: "root", text: "The media box is media-box; its disk is /srv, 2 TB.", file: "MEMORY.md", line: 3, rev: "7c1e", changed: "Nov 17, 5:41 PM", saver: "Otto, in 'Disk almost full on the media box', this revision" },
@@ -74,8 +74,9 @@
     );
   }
 
-  const loadsOf = (i) => (i.group === "notes" ? "Not loaded; found by search" : MEM === "over" && i.line > 4 ? "Past the budget: not loaded" : "Loads into new private tasks; fits its budget");
-  const searchOf = (i) => (searchOff ? "Search is off for this bot" : i.group === "notes" ? (i.id === "n1" ? searchable : "This revision found by search at 5:42 PM") : "Not searched; loaded instead");
+  // Past its budget the gateway keeps the start and the end of MEMORY.md and leaves out the middle (row 25).
+  const loadsOf = (i) => (i.group === "notes" ? "Not loaded into tasks" : MEM === "over" && i.group === "root" ? "Over budget: the middle of MEMORY.md isn't loaded" : "Loads into new private tasks; fits its budget");
+  const searchOf = (i) => (searchOff ? "Search is off for this bot" : i.group === "notes" ? (i.id === "n1" ? searchable : "This revision returned by a search at 5:42 PM") : "Not searched; loaded instead");
   const itemRow = (i) =>
     `<li><button type="button" class="c-mem" data-bs="memitem" data-c-item="${i.id}" aria-label="${esc(`${i.text} ${i.file}. Stored. ${loadsOf(i)}. Open.`)}">${icon(i.group === "root" ? "plan" : i.group === "user" ? "approval" : "note")}` +
     `<span class="c-mem-text"><span>${esc(i.text)}</span><small>${esc(i.file)}${i.size ? ` · ${i.size}` : ""} · Stored, revision ${i.rev} · ${loadsOf(i)}${i.group === "notes" && i.id === "n1" && MEM === "unsearchable" ? " · Not yet confirmed searchable" : ""}</small>` +
@@ -85,7 +86,7 @@
   function conditions(name) {
     return (
       `<p class="b-hint">Loaded at the start of ${name}'s new private tasks. Not in its routines, helpers, or group and channel tasks, and not text the gateway doesn't trust. ` +
-      `MEMORY.md is cut past ${fmt(FILE_BUDGET)} characters, and all loaded files together past ${fmt(TOTAL_BUDGET)} (now ${fmt(totalUsed())}). ` +
+      `Past ${fmt(FILE_BUDGET)} characters MEMORY.md is cut in the middle: the gateway keeps the start and the end (about three quarters of what fits from the start, a quarter from the end). All loaded files together are limited to ${fmt(TOTAL_BUDGET)} (now ${fmt(totalUsed())}). ` +
       `If you keep your own USER.md on this gateway, ${name}'s tasks with you use yours instead of About you. A task already open may keep the earlier copy until it starts again.</p>`
     );
   }
@@ -109,7 +110,7 @@
       [
         "root",
         "Root memory",
-        meter(rootUsed(), FILE_BUDGET, `MEMORY.md: ${fmt(rootUsed())} of ${fmt(FILE_BUDGET)} characters.${over ? ` ${fmt(rootUsed() - FILE_BUDGET)} characters at the end aren't loaded.` : ""}`, `Root memory ${fmt(rootUsed())} of ${fmt(FILE_BUDGET)} characters`) +
+        meter(rootUsed(), FILE_BUDGET, `MEMORY.md: ${fmt(rootUsed())} of ${fmt(FILE_BUDGET)} characters.${over ? " The gateway keeps the start and the end and leaves out about 1,250 characters from the middle." : ""}`, `Root memory ${fmt(rootUsed())} of ${fmt(FILE_BUDGET)} characters`) +
           meter(totalUsed(), TOTAL_BUDGET, `All loaded files: ${fmt(totalUsed())} of ${fmt(TOTAL_BUDGET)} characters.`, `All loaded files ${fmt(totalUsed())} of ${fmt(TOTAL_BUDGET)} characters`) +
           conditions(name),
       ],
@@ -117,7 +118,7 @@
       [
         "notes",
         "Notes",
-        `<p class="b-hint">Found when ${name} searches its memory. ${searchOff ? `Search is off for ${name} in the gateway's settings.` : MEM === "nosearch" ? `${name}'s memory search isn't set up on this gateway: Memory provider unavailable. Files are still listed.` : "Search: available. A revision counts as searchable only once a search returns it."}</p>`,
+        `<p class="b-hint">Not loaded into tasks. ${name} finds notes by searching its memory, or reads one by name; a read by name doesn't need the index. ${searchOff ? `Search is off for ${name} in the gateway's settings.` : MEM === "nosearch" ? `${name}'s memory search isn't set up on this gateway: Memory provider unavailable. Files are still listed.` : "Search: available. A revision counts as searchable only once a search returns it."}</p>`,
       ],
     ];
     groups.forEach(([g, title, foot]) => {
@@ -141,7 +142,7 @@
     const a = X.add;
     return (
       `<div class="c-form" role="group" aria-label="Add to memory"><label>What to remember<textarea class="c-textarea" data-c-memtext>${esc(a.text)}</textarea></label>` +
-      `<label>Where<select class="input" data-c-memwhere><option value="root"${a.where === "root" ? " selected" : ""}>Root memory (loads into new tasks)</option><option value="note"${a.where === "note" ? " selected" : ""}${X.plugin ? "" : " disabled"}>As a note (found by search)${X.plugin ? "" : ", needs Clawtrate's memory plugin"}</option></select></label>` +
+      `<label>Where<select class="input" data-c-memwhere><option value="root"${a.where === "root" ? " selected" : ""}>Root memory (loads into new tasks)</option><option value="note"${a.where === "note" ? " selected" : ""}${X.plugin ? "" : " disabled"}>As a note (not loaded; found by searching)${X.plugin ? "" : ", needs Clawtrate's memory plugin"}</option></select></label>` +
       `<div class="b-actions">${button("Save", `data-c="mem-add-save" data-size="sm"${a.text.trim() ? "" : " disabled"}`, "primary")}${button("Cancel", 'data-c="mem-add-cancel" data-size="sm"', "quiet")}</div></div>`
     );
   }
@@ -178,7 +179,7 @@
       fact("File", `<span class="mono">${esc(i.file)}</span>, line ${i.line}`) +
       fact("Scope", `${name} only`) +
       fact("Stored", `Revision ${i.rev}, changed ${esc(i.changed)}`) +
-      fact("Loads", i.group === "notes" ? "Not loaded; found by search" : `Into ${name}'s new private tasks, within the conditions on the memory page. A task already open may keep the earlier copy.`) +
+      fact("Loads", i.group === "notes" ? `Not loaded into tasks. ${name} can search for it or read it by name.` : `Into ${name}'s new private tasks, within the conditions on the memory page. A task already open may keep the earlier copy.`) +
       fact("Searchable", esc(searchOf(i))) +
       fact("Saved by", i.saver ? esc(i.saver) : "Who saved this revision isn't recorded.") +
       fact("Held by", i.group === "notes" ? markWords("memory") : "The gateway's file writer") +
@@ -217,11 +218,24 @@
       return { title: "Memory", back, body, foot: isAdmin() ? "" : D.adminBar("Changing shared memory needs admin access.") };
     }
     body += `<p class="c-effective"><b>Searched by</b> Juniper, Marlow, Otto. <b>Not by</b> Pip: its memory search is off.</p>`;
-    body += `<h4 class="b-group"><span class="mono">/srv/bots/shared</span></h4><ul class="c-mems">${sharedItems
-      .map((s, i) => `<li><button type="button" class="c-mem" data-c="shared-item" data-value="${i}">${icon("note")}<span class="c-mem-text"><span>${esc(s.text)}</span><small>${esc(s.file)} · Stored · Searchable for Otto: not confirmed for this revision · Who saved it isn't recorded.</small></span></button></li>`)
+    const order = sharedItems.map((s, i) => i).sort((a, b) => Number(Boolean(sharedItems[b].copies)) - Number(Boolean(sharedItems[a].copies)));
+    body += `<h4 class="b-group"><span class="mono">/srv/bots/shared</span></h4><ul class="c-mems">${order
+      .map((i) => {
+        const s = sharedItems[i];
+        const copied = s.copies ? Object.entries(s.copies).filter(([, r]) => r === "copied").map(([b]) => b) : [];
+        return `<li><button type="button" class="c-mem" data-c="shared-item" data-value="${i}" aria-pressed="${X.sharedSel === i}">${icon("note")}<span class="c-mem-text"><span>${esc(s.text)}</span><small>${esc(s.file)} · Stored · Searchable for Otto: not confirmed for this revision · Who saved it isn't recorded.${copied.length ? ` · Copied to ${copied.length} bots` : ""}</small></span></button></li>`;
+      })
       .join("")}</ul>`;
+    const sel = sharedItems[X.sharedSel];
+    if (sel?.copies) {
+      const by = (k) => Object.entries(sel.copies).filter(([, r]) => r === k).map(([b]) => botName(b));
+      const list = (n) => (n.length > 1 ? `${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}` : n[0]);
+      body += `<p class="b-hint" role="status" data-testid="copy-result">${by("copied").length ? `Copied to ${list(by("copied"))}.` : ""}${by("refused").length ? ` Not copied to ${list(by("refused"))}: its root memory would pass its budget.` : ""}${by("unknown").length ? ` Not known for ${list(by("unknown"))}: the gateway didn't answer.` : ""}</p>`;
+      if (isAdmin())
+        body += `<div class="b-actions">${by("refused").length ? button(`Try ${list(by("refused"))} again`, 'data-c="shared-retry" data-size="sm"') : ""}${by("unknown").length ? button("Check again", 'data-c="shared-check" data-size="sm"') : ""}${button("Remove the copies", 'data-c="shared-uncopy" data-size="sm"', "quiet")}</div>`;
+    }
     if (!plugin) body += `<p class="b-hint">Changing shared memory needs Clawtrate's memory plugin running.</p>`;
-    else if (isAdmin()) body += `<div class="b-actions" style="margin-top:12px">${button("Add", 'data-c="shared-new" data-size="sm"')}${button("Copy into every bot's root memory…", 'data-c="shared-pin" data-size="sm"')}</div>${X.sharedNote || ""}`;
+    else if (isAdmin()) body += `<div class="b-actions" style="margin-top:12px">${button("Add", 'data-c="shared-new" data-size="sm"')}${button("Copy into bots' root memory…", 'data-c="shared-pin" data-size="sm"')}</div>`;
     body += `<p class="b-hint">Each bot that searches this folder finds a change once its index has it. ${mark(plugin ? "memory" : "set")}</p>`;
     return { title: "Memory", back, body, foot: isAdmin() ? "" : D.adminBar("Changing shared memory needs admin access.") };
   };
@@ -263,7 +277,7 @@
       case "mem-add-save": {
         const text = X.add.text.trim();
         if (X.add.where === "root" && rootUsed() + text.length > FILE_BUDGET) {
-          X.refused = note(`<p>Root memory would be ${fmt(rootUsed() + text.length)} of ${fmt(FILE_BUDGET)} characters, so the end wouldn't load. Move something out first.</p>`, "warn");
+          X.refused = note(`<p>Root memory would be ${fmt(rootUsed() + text.length)} of ${fmt(FILE_BUDGET)} characters, so part of its middle wouldn't load. Move something out first.</p>`, "warn");
           return rerender();
         }
         list(bot).push({ id: `x${Date.now()}`, group: X.add.where === "root" ? "root" : "notes", text, file: X.add.where === "root" ? "MEMORY.md" : "memory/2026-11-18.md", line: 6, rev: "e4a9", changed: "just now", saver: "Added in Clawtrate from this device, this revision" });
@@ -319,7 +333,7 @@
         return announce("Memory saved");
       case "mem-pin":
         if (MEM === "over" || rootUsed() + i.text.length > FILE_BUDGET || MEM === "full") {
-          X.refused = note(`<p>Root memory would be ${fmt(Math.max(rootUsed(), 19960) + 180)} of ${fmt(FILE_BUDGET)} characters, so the end wouldn't load. Move something out first. Both files are unchanged.</p>`, "warn");
+          X.refused = note(`<p>Root memory would be ${fmt(Math.max(rootUsed(), 19960) + 180)} of ${fmt(FILE_BUDGET)} characters, so part of its middle wouldn't load. Move something out first. Both files are unchanged.</p>`, "warn");
           return rerender();
         }
         Object.assign(i, { group: "root", file: "MEMORY.md", line: 6, rev: "e4a9", changed: "just now" });
@@ -350,19 +364,36 @@
             announce("Deleted");
           },
         });
-      case "shared-pin":
+      case "shared-pin": {
+        const it = sharedItems[X.sharedSel];
         return D.confirmBox({
-          title: "Copy this into every bot's root memory?",
-          text: "This puts the text into the root memory of Juniper, Marlow, Otto and Pip, so it loads into each one's new private tasks. Each copy is that bot's own; editing the shared file later doesn't change them. All or nothing.",
+          title: "Copy this into bots' root memory?",
+          text: `"${it.text}" This adds the text to the root memory file of Juniper, Marlow, Otto and Pip, one bot at a time. Each copy is that bot's own; editing the shared file later doesn't change them. Whether a copy is loaded into a task follows that bot's memory conditions.`,
           label: "Copy",
           run: () => {
-            X.sharedNote = `<p class="b-hint" role="status">Nothing was copied: Pip's root memory would pass its budget.</p>`;
+            // One write per bot, each with its own result (section 13). Pip's root memory is full.
+            it.copies = { juniper: "copied", marlow: "copied", otto: "copied", pip: "refused" };
             D.renderSettings();
+            announce("Copied to 3 bots, not to Pip");
           },
         });
+      }
+      case "shared-retry":
+        return announce("Pip's root memory is still full. Nothing was copied to Pip.");
+      case "shared-check":
+        return announce("Checked each bot's file for the copy's mark.");
+      case "shared-uncopy": {
+        const it = sharedItems[X.sharedSel];
+        delete it.copies;
+        D.renderSettings();
+        return announce("Removed the copies from Juniper, Marlow and Otto");
+      }
+      case "shared-item":
+        X.sharedSel = Number(t.dataset.value);
+        D.renderSettings();
+        return announce("Chosen for copying");
       case "shared-add":
       case "shared-new":
-      case "shared-item":
         return announce("Shared items open like a bot's, with the same facts and actions.");
     }
   });
