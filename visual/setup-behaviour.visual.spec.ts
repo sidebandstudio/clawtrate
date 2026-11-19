@@ -217,3 +217,77 @@ test("On Windows, This computer leads to the Windows card, which runs nothing an
   await expect(page.getByRole("button", { name: "Use Advanced" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Use another computer" })).toBeVisible();
 });
+
+test("F-492: a device already paired with more than read is told so, and nothing on the card says read-only", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=found-paired", "light");
+  await expect(
+    page.getByText("This device is already paired with this gateway and can also send."),
+  ).toBeVisible();
+  await expect(page.getByText(/only read|read-only/)).toHaveCount(0);
+});
+
+test("F-516: a bind or a service the look didn't establish is not reported", async ({ page }) => {
+  await openFixture(page, "setup=found-not-reported", "light");
+  const facts = page.getByTestId("setup-found").locator("dl > div");
+  await expect(facts.nth(2)).toHaveText("ListensNot reported");
+  await expect(facts.nth(3)).toHaveText("ServiceNot reported");
+  await openFixture(page, "setup=stopped-by-hand", "light");
+  await expect(page.getByTestId("setup-found").locator("dl > div").nth(1)).toHaveText(
+    "ServiceNone registered",
+  );
+  await expect(page.getByText(/started by hand/)).toHaveCount(0);
+});
+
+test("a program that couldn't be started has its own card", async ({ page }) => {
+  await openFixture(page, "setup=cant-run", "light");
+  await expect(
+    page.getByRole("heading", { name: "Clawtrate couldn't run OpenClaw here" }),
+  ).toBeVisible();
+  await expect(page.getByText(/answered in a way/)).toHaveCount(0);
+});
+
+test("F-492 F-516: a gateway whose answer Clawtrate couldn't place is not offered, and leads to Advanced", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=endpoint", "light");
+  await expect(page.getByText(/couldn't confirm where this gateway answers/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Use Advanced" })).toBeVisible();
+});
+
+test("F-515: the too-old card speaks of the version it read, and of no protocol", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=too-old", "light");
+  await expect(
+    page.getByText(
+      /OpenClaw 2026\.6\.2 is older than the oldest version this Clawtrate connects to \(2026\.7\.0\)/,
+    ),
+  ).toBeVisible();
+  await expect(page.getByText(/protocol/)).toHaveCount(0);
+});
+
+test("a refused sandbox says why it was refused", async ({ page }) => {
+  await openFixture(page, "setup=refused", "light");
+  await expect(
+    page.getByText(/its file is missing, isn't in the temporary folder, or has the wrong shape/),
+  ).toBeVisible();
+  await expect(page.getByText(/would reach/)).toHaveCount(0);
+  await openFixture(page, "setup=refused-home", "light");
+  await expect(
+    page.getByText(/its home or working folder is in this computer's home folder/),
+  ).toBeVisible();
+});
+
+test("connected, with bots that couldn't be read, says so and doesn't open the app", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=bots", "light");
+  await expect(page.getByRole("alert")).toHaveText(
+    /Connected, but Clawtrate couldn't read your bots\./,
+  );
+  await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  await expect(page.getByTestId("bot-list")).toHaveCount(0);
+});

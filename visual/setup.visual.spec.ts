@@ -28,6 +28,12 @@ const STATES = [
   "unreachable",
   "changed",
   "refused",
+  "refused-home",
+  "found-paired",
+  "found-not-reported",
+  "cant-run",
+  "endpoint",
+  "bots",
 ];
 const EVERY_WIDTH = new Set(["first", "found", "connecting"]);
 
