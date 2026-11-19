@@ -26,20 +26,39 @@ export type SshWorld = {
   appDir: string;
   /** The local account name, used when neither the destination nor the configuration names a user. */
   localUser: string;
-  /** "inherit": the person's running key agent signs in. "none": no agent, `IdentityAgent none`. */
-  agent: "inherit" | "none";
+  /**
+   * The key agent `ssh` uses, chosen by the app: "none" (`IdentityAgent none`),
+   * the socket of the agent the person runs, or, on Windows, the bundled
+   * client's own agent pipe. A person's `IdentityAgent` setting overrides it.
+   */
+  agent: SshAgent;
   platform: NodeJS.Platform;
-  /** The environment `ssh` is started with; `SSH_AUTH_SOCK` is removed when `agent` is "none". */
+  /** The environment the app runs in; `ssh` gets only a few of its values (`childEnv`). */
   env: NodeJS.ProcessEnv;
 };
 
+export type SshAgent = "none" | { socket: string } | "windows-pipe";
+
+/** An agent socket path the configuration can name: absolute and plain. */
+export const isAgentSocket = (path: string) =>
+  isAbsolute(path) &&
+  /^[\p{L}\p{N} ._+@/(),'&!~#=[\]-]{1,1024}$/u.test(path) &&
+  !path.includes("  ");
+
+/** The agent the app chooses for the person: the socket `SSH_AUTH_SOCK` names, or none. */
+export function chooseAgent(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): SshAgent {
+  if (platform === "win32") return "windows-pipe";
+  const socket = env.SSH_AUTH_SOCK;
+  return socket && isAgentSocket(socket) ? { socket } : "none";
+}
+
 /** The world of the person running the app, with the app's own files under `appDir`. */
-export function productionWorld(appDir: string): SshWorld {
+export function productionWorld(appDir: string, env: NodeJS.ProcessEnv = process.env): SshWorld {
   const home = homedir();
   const platform = process.platform;
   const ssh =
     platform === "win32"
-      ? join(process.env.WINDIR ?? "C:\\Windows", "System32", "OpenSSH", "ssh.exe")
+      ? join(env.WINDIR ?? "C:\\Windows", "System32", "OpenSSH", "ssh.exe")
       : "/usr/bin/ssh";
   return {
     home,
@@ -48,9 +67,9 @@ export function productionWorld(appDir: string): SshWorld {
     ssh,
     appDir,
     localUser: userInfo().username,
-    agent: "inherit",
+    agent: chooseAgent(platform, env),
     platform,
-    env: process.env,
+    env,
   };
 }
 
@@ -120,12 +139,38 @@ export function guardWorld(
   );
 }
 
-/** The environment `ssh` is started with: the world's, without the agent when it is "none". */
+/** What `ssh` is started with on Windows, from the app's environment: what the system needs, no more. */
+const WINDOWS_ENV = [
+  "SystemRoot",
+  "WINDIR",
+  "SystemDrive",
+  "ComSpec",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "ProgramData",
+  "TEMP",
+  "TMP",
+  "USERNAME",
+  "USERDOMAIN",
+  "COMPUTERNAME",
+];
+
+/**
+ * The environment `ssh` is started with: a fixed `PATH` on macOS and Linux,
+ * and the system's own variables on Windows. Nothing else of the app's
+ * environment reaches it, and no agent variable: the configuration names the
+ * agent.
+ */
 export function childEnv(world: SshWorld): NodeJS.ProcessEnv {
-  const env = { ...world.env };
-  if (world.agent === "none") {
-    delete env.SSH_AUTH_SOCK;
-    delete env.SSH_AGENT_PID;
+  if (world.platform !== "win32") return { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of WINDOWS_ENV) {
+    const value = world.env[name];
+    if (value !== undefined) env[name] = value;
   }
+  env.PATH = join(world.env.SystemRoot ?? world.env.WINDIR ?? "C:\\Windows", "System32");
   return env;
 }

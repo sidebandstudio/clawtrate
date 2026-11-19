@@ -2,7 +2,7 @@
 // host writes: every honored setting, every refusal, and hostile input.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 
@@ -193,6 +193,74 @@ describe("the person's SSH configuration", () => {
     expect(resolveWith("Include config.d/none\n")).toMatchObject({ ok: true, port: 22 });
   });
 
+  it("honors IdentityAgent as the person set it, off included, and refuses one it can't name", () => {
+    expect(resolveWith("Host devbox\n  IdentityAgent none\n")).toMatchObject({
+      identityAgent: "none",
+    });
+    expect(resolveWith("Host devbox\n  IdentityAgent SSH_AUTH_SOCK\n")).toMatchObject({
+      identityAgent: "world",
+    });
+    expect(resolveWith("Host devbox\n  Port 22\n")).toMatchObject({ identityAgent: "world" });
+    expect(
+      resolveWith('Host devbox\n  IdentityAgent "~/Library/Group Containers/agent.sock"\n'),
+    ).toMatchObject({
+      identityAgent: { socket: `${world.home}/Library/Group Containers/agent.sock` },
+    });
+    for (const line of [
+      "IdentityAgent $SSH_AUTH_SOCK",
+      "IdentityAgent /srv/elsewhere.sock",
+      "IdentityAgent agent.sock",
+    ]) {
+      expect(resolveWith(`Host devbox\n  ${line}\n`), line).toMatchObject({
+        ok: false,
+        category: "invalid-value",
+        setting: "IdentityAgent",
+      });
+    }
+  });
+
+  it("honors PubkeyAuthentication as the person set it, off included", () => {
+    expect(resolveWith("Host devbox\n  PubkeyAuthentication no\n")).toMatchObject({
+      pubkeyAuthentication: "no",
+    });
+    expect(resolveWith("Host devbox\n  PubkeyAuthentication host-bound\n")).toMatchObject({
+      pubkeyAuthentication: "host-bound",
+    });
+    expect(resolveWith("Host devbox\n  Port 22\n")).toMatchObject({ pubkeyAuthentication: null });
+    expect(resolveWith("Host devbox\n  PubkeyAuthentication maybe\n")).toMatchObject({
+      ok: false,
+      setting: "PubkeyAuthentication",
+    });
+  });
+
+  it("refuses a key, certificate or Include that a link leads out of the home folder", () => {
+    const outside = join(root, "outside");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "id"), "");
+    writeFileSync(join(outside, "conf"), "Host devbox\n  Port 2222\n");
+    symlinkSync(outside, join(world.home, "out"), "dir");
+    try {
+      for (const setting of ["IdentityFile", "CertificateFile"]) {
+        expect(resolveWith(`Host devbox\n  ${setting} ~/out/id\n`), setting).toMatchObject({
+          ok: false,
+          category: "invalid-value",
+          setting,
+        });
+      }
+      expect(resolveWith("Include ~/out/conf\n")).toMatchObject({
+        ok: false,
+        category: "unreadable",
+      });
+      // Spelled outside but walked inside is inside: a link into the home folder is fine.
+      symlinkSync(join(world.home, ".ssh"), join(outside, "back"), "dir");
+      expect(resolveWith(`Host devbox\n  IdentityFile ~/out/back/id\n`)).toMatchObject({
+        ok: true,
+      });
+    } finally {
+      rmSync(join(world.home, "out"));
+    }
+  });
+
   it("does not follow an Include out of the home folder", () => {
     expect(resolveWith("Include /etc/ssh/ssh_config\n")).toMatchObject({
       ok: false,
@@ -345,6 +413,8 @@ const target = (overrides: Partial<Target> = {}): Target => ({
   identityFiles: [],
   identitiesOnly: null,
   certificateFiles: [],
+  identityAgent: "world",
+  pubkeyAuthentication: null,
   ...overrides,
 });
 
@@ -357,7 +427,7 @@ describe("the configuration the host writes", () => {
         identitiesOnly: true,
         certificateFiles: ["/srv/you/.ssh/id_ed25519-cert.pub"],
       }),
-      { ...world, agent: "inherit" },
+      { ...world, agent: { socket: "/srv/agent.sock" } },
       "/srv/app/known_hosts",
     );
     expect(text).toBe(
@@ -386,12 +456,38 @@ describe("the configuration the host writes", () => {
         "  ControlMaster no",
         "  ControlPath none",
         "  RequestTTY no",
+        "  IdentityAgent /srv/agent.sock",
         "",
       ].join("\n"),
     );
     expect(text).not.toMatch(
       /Forward [0-9]|LocalForward|RemoteForward|DynamicForward|ProxyCommand|ProxyJump/,
     );
+  });
+
+  it("writes the agent the app chose, or the person's, and PubkeyAuthentication as set", () => {
+    const sock = { ...world, agent: { socket: "/srv/agent.sock" } } as const;
+    expect(routeConfigText("1", target(), sock, "/srv/kh")).toContain(
+      "\n  IdentityAgent /srv/agent.sock\n",
+    );
+    expect(routeConfigText("1", target({ identityAgent: "none" }), sock, "/srv/kh")).toContain(
+      "\n  IdentityAgent none\n",
+    );
+    expect(
+      routeConfigText(
+        "1",
+        target({ identityAgent: { socket: "/srv/you/1p.sock" } }),
+        world,
+        "/srv/kh",
+      ),
+    ).toContain("\n  IdentityAgent /srv/you/1p.sock\n");
+    expect(
+      routeConfigText("1", target({ pubkeyAuthentication: "no" }), world, "/srv/kh"),
+    ).toContain("\n  PubkeyAuthentication no\n");
+    expect(routeConfigText("1", target(), world, "/srv/kh")).not.toContain("PubkeyAuthentication");
+    expect(
+      routeConfigText("1", target(), { ...world, agent: "windows-pipe" }, "/srv/kh"),
+    ).not.toContain("IdentityAgent");
   });
 
   it("adds IdentityAgent none when the world has no agent", () => {

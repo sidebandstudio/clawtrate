@@ -192,6 +192,8 @@ describe("ssh's three failures, told apart", () => {
       identityFiles: [],
       identitiesOnly: null,
       certificateFiles: [],
+      identityAgent: "world",
+      pubkeyAuthentication: null,
     },
   } satisfies Route;
 

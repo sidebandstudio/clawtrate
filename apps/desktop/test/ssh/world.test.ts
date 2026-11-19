@@ -89,9 +89,16 @@ describe("the guard", () => {
   });
 
   it("refuses the real agent", () => {
-    expect(() => guardWorld({ ...world, agent: "inherit" })).toThrow(SshWorldRefused);
+    expect(() => guardWorld({ ...world, agent: { socket: "/srv/agent.sock" } })).toThrow(
+      SshWorldRefused,
+    );
     expect(
-      () => new SshTransport({ ...world, agent: "inherit", appDir: join(root, "never-made-2") }),
+      () =>
+        new SshTransport({
+          ...world,
+          agent: { socket: "/srv/agent.sock" },
+          appDir: join(root, "never-made-2"),
+        }),
     ).toThrow(SshWorldRefused);
     expect(existsSync(join(root, "never-made-2"))).toBe(false);
   });
@@ -112,13 +119,23 @@ describe("the guard", () => {
     expect(started).toEqual([]);
   });
 
+  it("refuses an agent the person's configuration names, under a test run", () => {
+    const transport = new SshTransport({ ...world, appDir: join(root, "agent-app") });
+    writeFileSync(world.personConfig, 'Host devbox\n  IdentityAgent "~/agent.sock"\n');
+    expect(() => transport.prepareRoute("1", "devbox")).toThrow(SshWorldRefused);
+  });
+
   it("refuses a relative path", () => {
     expect(() => guardWorld({ ...world, personConfig: "config" })).toThrow(SshWorldRefused);
   });
 
   it("is off outside an automated run, where the person's own .ssh and agent are what production uses", () => {
     expect(() =>
-      guardWorld({ ...world, agent: "inherit", personConfig: join(realSsh, "config") }, [], {}),
+      guardWorld(
+        { ...world, agent: { socket: "/srv/agent.sock" }, personConfig: join(realSsh, "config") },
+        [],
+        {},
+      ),
     ).not.toThrow();
   });
 
@@ -129,9 +146,34 @@ describe("the guard", () => {
     });
     expect(env.SSH_AUTH_SOCK).toBeUndefined();
     expect(env.SSH_AGENT_PID).toBeUndefined();
+  });
+
+  it("starts ssh with a minimal environment of its own choosing, whatever the app's holds", () => {
+    const busy = {
+      HOME: "/srv/you",
+      SSH_AUTH_SOCK: "/srv/agent.sock",
+      LD_PRELOAD: "/srv/x.so",
+      PATH: "/srv/bin",
+    };
+    expect(childEnv({ ...world, agent: { socket: "/srv/agent.sock" }, env: busy })).toEqual({
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    });
     expect(
-      childEnv({ ...world, agent: "inherit", env: { SSH_AUTH_SOCK: "/srv/agent.sock" } })
-        .SSH_AUTH_SOCK,
-    ).toBe("/srv/agent.sock");
+      childEnv({
+        ...world,
+        platform: "win32",
+        agent: "windows-pipe",
+        env: {
+          ...busy,
+          SystemRoot: "C:\\Windows",
+          USERPROFILE: "C:\\ProgramData\\you",
+          NODE_OPTIONS: "--x",
+        },
+      }),
+    ).toEqual({
+      SystemRoot: "C:\\Windows",
+      USERPROFILE: "C:\\ProgramData\\you",
+      PATH: join("C:\\Windows", "System32"),
+    });
   });
 });

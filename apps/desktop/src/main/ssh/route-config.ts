@@ -29,6 +29,18 @@ export function pathValue(path: string, platform: NodeJS.Platform): string {
   return value.includes(" ") ? `"${value}"` : value;
 }
 
+/**
+ * The agent, always chosen here: the person's `IdentityAgent` when they set
+ * one, else the world's. On Windows the bundled client's own pipe is its
+ * default and is left unnamed.
+ */
+function agentLines(target: Target, world: SshWorld, p: (path: string) => string): string[] {
+  const agent = target.identityAgent === "world" ? world.agent : target.identityAgent;
+  if (agent === "none") return ["  IdentityAgent none"];
+  if (agent === "windows-pipe") return [];
+  return [`  IdentityAgent ${p(agent.socket)}`];
+}
+
 /** The text of a route's configuration for one purpose. */
 export function routeConfigText(
   routeId: string,
@@ -77,7 +89,10 @@ export function routeConfigText(
     "  ControlMaster no",
     "  ControlPath none",
     "  RequestTTY no",
-    ...(world.agent === "none" ? ["  IdentityAgent none"] : []),
+    ...agentLines(target, world, p),
+    ...(target.pubkeyAuthentication === null
+      ? []
+      : [`  PubkeyAuthentication ${target.pubkeyAuthentication}`]),
   ];
   for (const line of lines) {
     if (/\p{Cc}/u.test(line)) throw new UnsafeConfigValue("A value holds a control character.");

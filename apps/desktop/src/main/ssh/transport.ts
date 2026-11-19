@@ -45,7 +45,7 @@ import {
   readProbeLines,
   type SshFailure,
 } from "./ssh-output.ts";
-import { guardWorld, type SshWorld } from "./world.ts";
+import { guardWorld, isAutomatedRun, type SshWorld, SshWorldRefused } from "./world.ts";
 
 /** How long a captured key may wait for the person's decision. */
 export const CAPTURE_TTL_MS = 2 * 60 * 1000;
@@ -236,6 +236,11 @@ export class SshTransport {
     }
     const target = resolveTarget(this.world, destination);
     if (!target.ok) return target;
+    if (isAutomatedRun() && target.identityAgent !== "world" && target.identityAgent !== "none") {
+      throw new SshWorldRefused(
+        "An automated run must not use an SSH agent, the configuration's included.",
+      );
+    }
     guardWorld(this.world, [...target.identityFiles, ...target.certificateFiles]);
     const route: Route = {
       id: routeId,

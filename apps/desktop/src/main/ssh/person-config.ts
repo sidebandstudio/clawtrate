@@ -7,10 +7,11 @@
 // and `ssh -G` is never used: it would evaluate `Match exec`.
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import { type Destination, isHost, isUser, parsePort } from "./destination.ts";
-import { guardWorld, type SshWorld, SshWorldRefused } from "./world.ts";
+import { physicalPath, within } from "./paths.ts";
+import { guardWorld, isAgentSocket, type SshWorld, SshWorldRefused } from "./world.ts";
 
 export type RefusalCategory =
   "jump-host" | "command-or-forward" | "host-key" | "unsupported" | "invalid-value" | "unreadable";
@@ -36,6 +37,9 @@ export type Target = {
   identityFiles: string[];
   identitiesOnly: boolean | null;
   certificateFiles: string[];
+  /** The person's `IdentityAgent`: "world" when they set none (or `SSH_AUTH_SOCK`), so the app's choice stands. */
+  identityAgent: "world" | "none" | { socket: string };
+  pubkeyAuthentication: "yes" | "no" | "unbound" | "host-bound" | null;
 };
 
 const TAKEN = new Map([
@@ -45,6 +49,8 @@ const TAKEN = new Map([
   ["identityfile", "IdentityFile"],
   ["identitiesonly", "IdentitiesOnly"],
   ["certificatefile", "CertificateFile"],
+  ["identityagent", "IdentityAgent"],
+  ["pubkeyauthentication", "PubkeyAuthentication"],
 ]);
 
 const REFUSED = new Map<string, [string, RefusalCategory]>([
@@ -81,7 +87,6 @@ const REFUSED = new Map<string, [string, RefusalCategory]>([
 const IGNORED = new Set([
   "addkeystoagent",
   "usekeychain",
-  "identityagent",
   "serveraliveinterval",
   "serveralivecountmax",
   "connecttimeout",
@@ -103,7 +108,6 @@ const IGNORED = new Set([
   "pubkeyacceptedkeytypes",
   "casignaturealgorithms",
   "preferredauthentications",
-  "pubkeyauthentication",
   "passwordauthentication",
   "kbdinteractiveauthentication",
   "challengeresponseauthentication",
@@ -201,11 +205,13 @@ function singleValue(value: string): string | null {
 /** Characters a path may hold: letters, digits, space and `._+@-/`, and a Windows drive. */
 const PATH_CHARS = /^(?:[A-Za-z]:)?[\p{L}\p{N} ._+@/-]+$/u;
 
+/**
+ * Whether `path` is inside `home`, both by its spelling and as the file system
+ * walks it: a link that leads out of the home folder doesn't count as inside.
+ */
 function insideHome(path: string, home: string, platform: NodeJS.Platform): boolean {
-  const fold = (p: string) => (platform === "darwin" || platform === "win32" ? p.toLowerCase() : p);
-  const h = fold(resolve(home));
-  const p = fold(resolve(path));
-  return p.startsWith(h.endsWith(sep) ? h : h + sep);
+  const strictly = (p: string, h: string) => within(p, h, platform) && !within(h, p, platform);
+  return strictly(resolve(path), resolve(home)) && strictly(physicalPath(path), physicalPath(home));
 }
 
 /** A key or certificate path from the person's file: under their home, absolute, plain. */
@@ -223,7 +229,7 @@ export function resolvePersonPath(raw: string, world: SshWorld): string | null {
   guardWorld(world, [path]);
   const shown = world.platform === "win32" ? path.replaceAll("\\", "/") : path;
   if (!PATH_CHARS.test(shown)) return null;
-  if (!insideHome(resolve(path), world.home, world.platform)) return null;
+  if (!insideHome(path, world.home, world.platform)) return null;
   return path;
 }
 
@@ -234,6 +240,8 @@ type Found = {
   identitiesOnly?: boolean;
   identityFiles: string[];
   certificateFiles: string[];
+  identityAgent?: "world" | "none" | { socket: string };
+  pubkey?: "yes" | "no" | "unbound" | "host-bound";
 };
 
 type Reader = (path: string) => string | null;
@@ -260,7 +268,8 @@ function includedFiles(raw: string, from: string, world: SshWorld): string[] {
   if (value.startsWith("~/")) path = `${world.home}/${value.slice(2)}`;
   else if (isAbsolute(value)) path = value;
   else path = `${dirname(from)}/${value}`;
-  if (!insideHome(resolve(path), world.home, world.platform)) throw new Unreadable();
+  guardWorld(world, [path]);
+  if (!insideHome(path, world.home, world.platform)) throw new Unreadable();
   const last = basename(path);
   if (/[*?]/.test(dirname(path))) throw new Unreadable();
   if (!/[*?]/.test(last)) return [path];
@@ -353,6 +362,29 @@ function walk(
         found.port ??= port;
         break;
       }
+      case "identityagent": {
+        if (value === "none") found.identityAgent ??= "none";
+        else if (value === "SSH_AUTH_SOCK") found.identityAgent ??= "world";
+        else {
+          const socket = resolvePersonPath(value, world);
+          if (socket === null || !isAgentSocket(socket)) return bad();
+          found.identityAgent ??= { socket };
+        }
+        break;
+      }
+      case "pubkeyauthentication": {
+        const choice = value.toLowerCase();
+        if (
+          choice !== "yes" &&
+          choice !== "no" &&
+          choice !== "unbound" &&
+          choice !== "host-bound"
+        ) {
+          return bad();
+        }
+        found.pubkey ??= choice;
+        break;
+      }
       case "identitiesonly":
         if (!/^(yes|no)$/i.test(value)) return bad();
         found.identitiesOnly ??= value.toLowerCase() === "yes";
@@ -421,5 +453,7 @@ export function resolveTarget(
     identityFiles: found.identityFiles.length ? found.identityFiles : defaultIdentities(world),
     identitiesOnly: found.identitiesOnly ?? null,
     certificateFiles: found.certificateFiles,
+    identityAgent: found.identityAgent ?? "world",
+    pubkeyAuthentication: found.pubkey ?? null,
   };
 }
