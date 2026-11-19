@@ -182,6 +182,38 @@ export function BotSettings({
     </div>
   ) : null;
 
+  // --- Where the bot runs (controls.md section 14): its own read, whatever the accounts do --
+  if (view === "runs") {
+    return (
+      <div ref={rootRef}>
+        <RunsOnPage
+          botId={bot.id}
+          botName={name}
+          read={placement.read}
+          reload={placement.reload}
+          nameOf={nameOf}
+          connection={connection}
+          info={info}
+          announce={announce}
+          onBack={() => go("main", "[data-bs='runs-on']")}
+        />
+      </div>
+    );
+  }
+
+  const runsOnRow = (
+    <RunsOnRow
+      botName={name}
+      read={placement.read}
+      nameOf={nameOf}
+      onOpen={() => {
+        // The page reads the gateway each time it opens.
+        placement.reload();
+        go("runs");
+      }}
+    />
+  );
+
   if (!binding) {
     const failed = accounts.status === "error";
     return (
@@ -211,6 +243,7 @@ export function BotSettings({
             <div className="skeleton" style={{ height: 52, width: "100%" }} />
           </div>
         )}
+        {runsOnRow}
       </div>
     );
   }
@@ -247,25 +280,6 @@ export function BotSettings({
   // Every lock this tab names is worded from its evidence and that evidence's age.
   const age = { now, connected: !offline, connectedAt: connection.connectedAt };
   const lock = lockClaim(binding, age);
-
-  // --- Where the bot runs (controls.md section 14) ----------------------------------------
-  if (view === "runs") {
-    return (
-      <div ref={rootRef}>
-        <RunsOnPage
-          botId={bot.id}
-          botName={name}
-          read={placement.read}
-          reload={placement.reload}
-          nameOf={nameOf}
-          connection={connection}
-          info={info}
-          announce={announce}
-          onBack={() => go("main", "[data-bs='runs-on']")}
-        />
-      </div>
-    );
-  }
 
   // --- The tab's first page --------------------------------------------------------------
   if (view === "main") {
@@ -363,16 +377,7 @@ export function BotSettings({
         {binding.mode === "default-model" && (
           <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
         )}
-        <RunsOnRow
-          botName={name}
-          read={placement.read}
-          nameOf={nameOf}
-          onOpen={() => {
-            // The page reads the gateway each time it opens.
-            placement.reload();
-            go("runs");
-          }}
-        />
+        {runsOnRow}
         {foot}
       </div>
     );
