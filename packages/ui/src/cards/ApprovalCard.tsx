@@ -16,7 +16,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { useView, viewKeys } from "../actions/view-state.ts";
+import { onSummaryClick, useView, viewKeys } from "../actions/view-state.ts";
 import { useCardEnv, useMinuteClock } from "./context.tsx";
 import {
   allowLabel,
@@ -230,7 +230,10 @@ export function ApprovalCardView({ card, domId }: { card: Approval; domId: strin
         id={domId}
         data-testid="approval-card"
         open={opened}
-        onToggle={(event) => setOpened((event.currentTarget as HTMLDetailsElement).open)}
+        onClick={onSummaryClick(env.taskKey, viewKeys.approval(card.id))}
+        onToggle={(event) => {
+          if (event.currentTarget.open !== opened) setOpened(event.currentTarget.open);
+        }}
         {...track}
       >
         <summary ref={resolvedLine}>

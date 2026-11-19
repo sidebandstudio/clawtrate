@@ -50,6 +50,26 @@ const approvalCard = (page: Page) => page.getByTestId("approval-card");
 const questionCard = (page: Page) => page.getByTestId("question-card");
 
 test.describe("approval cards", () => {
+  test("F-163: a resolved approval opened immediately before a redraw stays open", async ({
+    page,
+  }) => {
+    // The click and the switch of task in one task: the card is gone before its toggle is reported.
+    await openFixture(page, "scene=approval-allowed-once", "light");
+    const card = page.getByTestId("approval-card");
+    await expect(card).toHaveCount(1);
+    const tasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
+    const other = tasks.filter({ hasText: "Disk almost full on the media box" }).first();
+    const original = tasks.filter({ hasText: "Tidy the transcode cache" }).first();
+    const element = await other.elementHandle();
+    await card.locator(":scope > summary").evaluate((summary, other) => {
+      (summary as HTMLElement).click();
+      (other as HTMLElement).click();
+    }, element);
+    await expect(card).toHaveCount(0);
+    await original.click();
+    await expect(card).toHaveAttribute("open", "");
+  });
+
   test("F-163: a resolved card the reader opened, with its Raw, stays open when it is drawn again", async ({
     page,
   }) => {
