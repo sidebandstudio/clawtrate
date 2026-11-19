@@ -293,6 +293,8 @@ export function useMachinesSection({
     bots: string[];
   } | null>(null);
   const [busy, setBusy] = useState(false);
+  /** A defaults write, and the file revision it was made over: the choices wait until that changes. */
+  const [writing, setWriting] = useState<{ id: string; over: string | null } | null>(null);
   const granted = useGranted(connection);
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
@@ -305,6 +307,7 @@ export function useMachinesSection({
     setRenaming(null);
     setRemoving(null);
     setBusy(false);
+    setWriting(null);
   }
   // The key now shown: a write that completes under another one changes nothing.
   const currentKey = useRef(key);
@@ -381,6 +384,7 @@ export function useMachinesSection({
   const { view } = read;
   const setDefaults = async (machine: MachineRow, file: ApprovalsFile, choice: DefaultsChoice) => {
     setErrors((all) => ({ ...all, [machine.id]: "" }));
+    setWriting({ id: machine.id, over: file.hash });
     try {
       await bridge.invoke({
         type: "setMachineDefaults",
@@ -392,6 +396,7 @@ export function useMachinesSection({
       announce(`Saved. ${machine.name}: ${CHOICE_WORDS[choice]}`);
     } catch (failure) {
       if (currentKey.current !== key) return;
+      setWriting(null);
       setErrors((all) => ({
         ...all,
         [machine.id]: failure instanceof Error ? failure.message : String(failure),
@@ -430,7 +435,8 @@ export function useMachinesSection({
           <DefaultsChoices
             labelledBy={titleId}
             value={checked}
-            disabled={!admin}
+            // Until the page shows the file this write made, another choice would be made over it.
+            disabled={!admin || (writing?.id === machine.id && writing.over === file.hash)}
             onChoose={(choice) => void setDefaults(machine, file, choice)}
           />
           {checked === null && (

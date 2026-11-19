@@ -358,6 +358,23 @@ test("F-156: a machine's defaults are one radio group: one tab stop, arrows move
   await expect(page.getByTestId("machines")).not.toContainText("Every command asks");
 });
 
+test("F-156: a second choice waits until the file the first one wrote is shown", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openMachines(page);
+  const group = page
+    .locator('[data-testid="approvals-file"][data-machine="media-box"]')
+    .getByRole("radiogroup");
+  await group.getByRole("radio", { checked: true }).focus();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowDown");
+  await expect(settingsAnnouncer(page)).toHaveText("Saved. media-box: Ask every time");
+  await expect(group.getByRole("radio", { checked: true })).toHaveAccessibleName("Ask every time");
+  expect((await sent(page)).filter((c) => c.type === "setMachineDefaults")).toHaveLength(1);
+  await expect(page.getByTestId("approvals-error")).toHaveCount(0);
+});
+
 test("F-156: an approvals file is shown only with admin, and a machine not connected says so", async ({
   page,
 }) => {
