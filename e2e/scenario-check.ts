@@ -11,8 +11,9 @@
 // scenario checks, with an admin client and a read-only one of their own.
 // Then the computer checks (computer-checks.ts) run on a second instance,
 // `e2e-<run>-computer`, started with `--with-plugin clawtrate-computer`,
-// whose bots Marlow and Pip have browsers of their own; it is recorded and
-// reset the same way.
+// whose bots Marlow and Pip have browsers of their own; and the rules checks
+// (rules-checks.ts) on a third, `e2e-<run>-rules`, started with
+// `--with-plugin clawtrate-tool-rules`. Each is recorded and reset the same way.
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -31,6 +32,11 @@ import {
   type ComputerClient,
 } from "../tools/dev-gateway/src/computer-checks.ts";
 import { loadDevPlugin } from "../tools/dev-gateway/src/dev-plugins.ts";
+import {
+  RULES_CLIENTS,
+  runRulesChecks,
+  type RulesClient,
+} from "../tools/dev-gateway/src/rules-checks.ts";
 import { PLUGIN_RULE } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import {
@@ -57,6 +63,8 @@ async function main(): Promise<number> {
   const runId = newRunId();
   const computerName = `${name}-computer`;
   const computerRunId = newRunId();
+  const rulesName = `${name}-rules`;
+  const rulesRunId = newRunId();
   const self = processIdentity(process.pid);
   if (self.state !== "alive") throw new Error("could not determine this process's start time");
   const record: RunRecord = {
@@ -65,6 +73,7 @@ async function main(): Promise<number> {
     instances: [
       { name, runId },
       { name: computerName, runId: computerRunId },
+      { name: rulesName, runId: rulesRunId },
     ],
     host: null,
     dirs: [],
@@ -166,7 +175,8 @@ async function main(): Promise<number> {
       await reader.close();
     }
     const computer = await computerChecks(computerName, computerRunId, startInstance);
-    return scenariosFailed === 0 && accountsFailed === 0 && computer === 0 ? 0 : 1;
+    const rules = await rulesChecks(rulesName, rulesRunId, startInstance);
+    return scenariosFailed === 0 && accountsFailed === 0 && computer === 0 && rules === 0 ? 0 : 1;
   } finally {
     const problems = cleanUpOnce();
     if (problems.length > 0) {
@@ -218,6 +228,43 @@ async function computerChecks(
       drainTimeoutMs: declaration.drainTimeoutMs,
     });
     console.log(`${passed} of ${passed + failed} computer checks passed`);
+    return failed;
+  } finally {
+    for (const op of Object.values(clients)) await op.close();
+  }
+}
+
+/** Start the rules instance, run the rules checks on it, and return how many failed. */
+async function rulesChecks(
+  name: string,
+  runId: string,
+  startInstance: (instance: string, id: string, extra: string[]) => Promise<void>,
+): Promise<number> {
+  console.log(`Starting instance ${name} for the rules checks`);
+  await startInstance(name, runId, ["--with-plugin", "clawtrate-tool-rules"]);
+  const inst = openInstance(name);
+  const ports = instancePorts(inst);
+  for (const port of [ports.gatewayPort, ports.providerPort]) {
+    if (FORBIDDEN_PORTS.includes(port)) {
+      throw new Error(`instance ${name} is on port ${port}, which the check never uses`);
+    }
+  }
+  const clients: Partial<Record<RulesClient, OperatorSession>> = {};
+  try {
+    for (const [client, { scopes, caps }] of Object.entries(RULES_CLIENTS)) {
+      clients[client as RulesClient] = await openOperator(
+        inst,
+        `Clawtrate rules check (${client})`,
+        [...scopes],
+        [...caps],
+      );
+    }
+    const { passed, failed } = await runRulesChecks({
+      clients: clients as Record<RulesClient, OperatorSession>,
+      gatewayLog: join(inst.runDir, "gateway.log"),
+      stateDir: inst.stateDir,
+    });
+    console.log(`${passed} of ${passed + failed} rules checks passed`);
     return failed;
   } finally {
     for (const op of Object.values(clients)) await op.close();
