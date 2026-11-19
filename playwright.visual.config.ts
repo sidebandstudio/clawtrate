@@ -17,7 +17,7 @@ export default defineConfig({
   timeout: 60_000,
   fullyParallel: true,
   // Playwright's default is half the cores, which is one worker on CI's three-core macOS runner.
-  workers: process.env.CI ? "100%" : undefined,
+  ...(process.env.CI ? { workers: "100%" } : {}),
   // In CI a failed test runs once more. One that then passes is reported as flaky by name in
   // the list reporter's summary, so it stays visible and still needs fixing.
   retries: process.env.CI ? 1 : 0,

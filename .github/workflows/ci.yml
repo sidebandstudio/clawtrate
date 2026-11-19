@@ -34,7 +34,8 @@ jobs:
         run: |
           code=true
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            files=$(git diff --name-only "origin/$BASE...HEAD")
+            # Without rename detection a file moved into docs/ also lists the path it left.
+            files=$(git diff --name-only --no-renames "origin/$BASE...HEAD")
             printf '%s\n' "$files"
             if ! printf '%s\n' "$files" | grep -qvE '^(docs/|[^/]+\.md$|LICENSE$|\.github/ISSUE_TEMPLATE/|\.github/pull_request_template\.md$)'; then
               code=false
