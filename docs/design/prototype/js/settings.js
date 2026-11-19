@@ -657,9 +657,9 @@
         );
       };
       const body =
+        savedHere() +
         removalResult() +
         added +
-        savedHere() +
         `<p class="s-lead">Clawtrate saves a separate connection for each gateway and uses one at a time.</p>` +
         (S.conn === "none" ? note("<p>Not connected. Choose a gateway to use.</p>", "warn") : "") +
         `<ul class="b-choices s-gateways" data-testid="gateway-list">${S.order.map(row).join("")}</ul>` +
@@ -832,6 +832,7 @@
                 : `<p>This copy can't update itself. A newer Clawtrate is needed to use ${esc(name)}.</p>`);
       const tried = S.lastTry ? `<p class="s-tried" role="status">Tried again at 5:42 PM: protocol ${theirs} again.</p>` : "";
       showEmpty(`Can't use ${esc(name)}`, `The address saved for it replied with protocol ${theirs}.`);
+      $("#new-button").hidden = true;
       $("#transcript").innerHTML =
         `<div class="transcript-inner"><section class="s-refusal" aria-labelledby="s-refusal-title" data-testid="refusal">` +
         `<h2 id="s-refusal-title" tabindex="-1">Can't use ${esc(name)}</h2>` +

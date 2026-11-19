@@ -526,7 +526,7 @@ for (const [dir, theirs] of [["client", 5], ["gateway", 3]]) {
       : [`Can't use Home gateway`, lead, "Update OpenClaw on the gateway's computer to use it with this version.", "Try again", "Your gateways"];
     const [ok, miss] = await has(p, '[data-testid="refusal"]', words);
     check(`F-518 ${name}: that connection's words`, ok, miss);
-    check(`F-518 ${name}: the app stays; the rail empty; no composer`, !(await p.evaluate(() => document.querySelector(".shell").hidden)) && !/Otto|Juniper/.test(await rail(p)) && (await p.locator("#composer").isHidden()));
+    check(`F-518 ${name}: the app stays; the rail empty; no composer, no New`, !(await p.evaluate(() => document.querySelector(".shell").hidden)) && !/Otto|Juniper/.test(await rail(p)) && (await p.locator("#composer").isHidden()) && (await p.locator("#new-button").isHidden()));
     check(`F-518 ${name}: the strip, with Try again`, (await text(p, "#status-strip")).includes(`Can't use Home gateway`) && (await text(p, "#status-strip")).includes(`protocol ${theirs}`));
     check(`F-518 ${name}: no Update, no product version unlabelled`, (await p.getByRole("button", { name: "Update", exact: true }).count()) === 0 && !/OpenClaw \d/.test(await text(p, '[data-testid="refusal"]')));
     await click(p, '[data-testid="refusal"] [data-s="refusal-retry"]', 800);
