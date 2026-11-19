@@ -83,8 +83,9 @@ export type RoutinesState = {
   omitted: number;
   /**
    * The last routine the `removed` event took away: `ranOnce` only when the
-   * gateway's `finished` for its successful run came just before, as the
-   * gateway sends them when a one-shot removes itself.
+   * gateway's `finished` came just before with a snapshot of the one-shot
+   * consumed (succeeded, no next run left), as the gateway sends them when a
+   * one-shot removes itself.
    */
   removed: { id: string; ranOnce: boolean; runAt: number | null } | null;
 };
@@ -287,7 +288,10 @@ export function parseRunConversation(
  * One `cron` event applied to the list; the same list when it changes nothing.
  * `started` and `finished` carry their run's `runAtMs`, so one that arrives
  * after a newer run's is told apart: an older finish never clears a newer
- * start, and a start older than the last finished run never marks it running.
+ * start or replaces a newer finish, and an older start never replaces the
+ * last finished run or a newer start. A `finished` only updates a routine
+ * already listed: the gateway also finishes a run whose job was removed while
+ * it ran, with the removed job's snapshot.
  */
 export function applyCronEvent(routines: Routine[], payload: RawRecord): Routine[] {
   const jobId = str(payload.jobId);
@@ -303,10 +307,13 @@ export function applyCronEvent(routines: Routine[], payload: RawRecord): Routine
   const runAt = num(payload.runAtMs);
   if (action === "started") {
     if (runAt !== null && current?.lastRunAt != null && runAt <= current.lastRunAt) return routines;
+    if (runAt !== null && current?.runningAt != null && runAt < current.runningAt) return routines;
     next = { ...next, runningAt: runAt ?? next.runningAt };
   }
   if (action === "finished") {
-    if (runAt !== null && current?.runningAt != null && runAt < current.runningAt) return routines;
+    if (!current) return routines;
+    if (runAt !== null && current.runningAt !== null && runAt < current.runningAt) return routines;
+    if (runAt !== null && current.lastRunAt !== null && runAt < current.lastRunAt) return routines;
     next = { ...next, runningAt: null };
   }
   if (at < 0) return routines.length < MAX_ROUTINES ? [...routines, next] : routines;
@@ -321,14 +328,46 @@ export type RoutinesContext = {
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+/**
+ * A refusal another try would get again: a scope this connection lacks, a
+ * method this gateway lacks, or no connection to ask on (the next connect reads).
+ */
+const permanent = (error: unknown) =>
+  asRecord(asRecord(error)?.details)?.code === "MISSING_SCOPE" ||
+  errorText(error).startsWith("unknown method") ||
+  (error instanceof Error && error.name === "NotSentError");
+
+/**
+ * A `finished` whose snapshot is a one-shot the gateway deletes: run to a
+ * success with `deleteAfterRun` and no next run left (OpenClaw 2026.10.6,
+ * `applyJobResult`). A forced run before its time keeps its next run.
+ */
+function consumedOneShot(record: RawRecord): boolean {
+  const job = asRecord(record.job);
+  const state = asRecord(job?.state);
+  return (
+    job?.deleteAfterRun === true &&
+    str(record.completionStatus) === "succeeded" &&
+    num(state?.nextRunAtMs) === null &&
+    num(record.nextRunAtMs) === null
+  );
+}
+
 export class RoutinesEngine {
   /** Each load's number: an answer to an older one is dropped. */
   private loadSeq = 0;
   /** An event arrived while the list was being read: that read may be older than it. */
   private invalidated = false;
   private recheck: ReturnType<typeof setTimeout> | null = null;
-  /** The last `finished` applied: a `removed` of the same job right after it is the gateway's own. */
-  private lastFinished: { jobId: string; ok: boolean; runAt: number | null } | null = null;
+  /**
+   * The last `finished` of a listed routine; `consumed` when its snapshot shows
+   * a one-shot the gateway is about to delete. A `removed` of the same job
+   * right after it is then the gateway's own. The id is the listed routine's,
+   * already bounded.
+   */
+  private lastFinished: { jobId: string; consumed: boolean; runAt: number | null } | null = null;
+  /** The list read in flight: a load asked for meanwhile joins it and has it read again. */
+  private loading: Promise<void> | null = null;
 
   private readonly ctx: RoutinesContext;
 
@@ -342,7 +381,19 @@ export class RoutinesEngine {
    * running, and after a failed read, the list is read again on a timer, so a
    * dropped `finished` or a failed refresh does not leave a mark behind.
    */
-  async load(): Promise<void> {
+  load(): Promise<void> {
+    if (this.loading) {
+      this.invalidated = true;
+      return this.loading;
+    }
+    const loading = this.loadOnce().finally(() => {
+      if (this.loading === loading) this.loading = null;
+    });
+    this.loading = loading;
+    return loading;
+  }
+
+  private async loadOnce(): Promise<void> {
     const seq = ++this.loadSeq;
     this.clearRecheck();
     if (this.ctx.get().status !== "loaded")
@@ -355,7 +406,7 @@ export class RoutinesEngine {
       } catch (error) {
         if (seq !== this.loadSeq) return;
         this.ctx.update((state) => ({ ...state, status: "error", error: errorText(error) }));
-        this.schedule(RETRY_MS);
+        if (!permanent(error)) this.schedule(RETRY_MS);
         return;
       }
       if (seq !== this.loadSeq) return;
@@ -450,19 +501,25 @@ export class RoutinesEngine {
     const routines = applyCronEvent(before.routines, record);
     const finished = this.lastFinished;
     this.lastFinished =
-      action === "finished" && jobId
-        ? { jobId, ok: str(record.status) === "ok", runAt: num(record.runAtMs) }
+      action === "finished" && kept
+        ? { jobId: kept.id, consumed: consumedOneShot(record), runAt: num(record.runAtMs) }
         : null;
     const removed =
       action === "removed" && jobId
         ? {
             id: jobId,
-            ranOnce: kept?.deleteAfterRun === true && finished?.jobId === jobId && finished.ok,
+            ranOnce: finished?.jobId === jobId && finished.consumed,
             runAt: finished?.jobId === jobId ? finished.runAt : null,
           }
         : before.removed;
     // A retained routine gone while others were left out: read again to fill its place.
-    const refill = action === "removed" && kept !== undefined && before.omitted > 0;
+    // A finish for a routine not listed (added while away, or never seen): the gateway says.
+    const refill =
+      (action === "removed" && kept !== undefined && before.omitted > 0) ||
+      (action === "finished" &&
+        kept === undefined &&
+        before.omitted === 0 &&
+        parseRoutine(record.job) !== null);
     if (routines !== before.routines || removed !== before.removed)
       this.ctx.update((state) => ({ ...state, routines, removed }));
     if (refill) void this.load();
@@ -472,6 +529,7 @@ export class RoutinesEngine {
   /** A dropped connection's answers no longer count. */
   onClose(): void {
     this.loadSeq += 1;
+    this.loading = null;
     this.clearRecheck();
     this.lastFinished = null;
   }

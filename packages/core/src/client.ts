@@ -4400,7 +4400,7 @@ export class ClawtrateClient {
       if (generation !== this.generation) return;
       this.accounts.onHello();
       // Every connect reads the list again: runs that started or ended while away are in it.
-      void this.routines.load();
+      if (this.state.connection.status === "connected") void this.routines.load();
     });
   }
 
