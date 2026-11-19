@@ -4,7 +4,7 @@
 // that id stops only the queued turn, and the waiting run goes on. These fakes do what the
 // gateway does: only an abort naming the waiting run ends it and settles its approval.
 import { describe, expect, it } from "vitest";
-import { GatewayError, sleep, until } from "./fake-gateway.ts";
+import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
 import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
 
 const RUN = "run-w";
@@ -130,6 +130,26 @@ describe("Stop after a steer (F-097, F-169)", () => {
     task.client.sendMessage(KEY, "And skip the logs.");
     await until(() => task.gateway.calls("chat.send").length === 2);
     await sleep(100);
+    await stopNewest(task);
+    await stoppedRightly(task);
+    task.client.stop();
+  });
+
+  it("F-097 F-169: a steer history shows in flight before its send answer still leaves one current run", async () => {
+    const task = await waiting();
+    // The gateway queues the steer and its history reports it in flight, but answers the send
+    // only after this client has read that history.
+    const answer = deferred<unknown>();
+    const send = task.gateway.handlers["chat.send"]!;
+    task.gateway.handlers["chat.send"] = (params) => {
+      const reply = send(params);
+      task.gateway.emit("session.message", { sessionKey: KEY });
+      return answer.promise.then(() => reply);
+    };
+    task.client.sendMessage(KEY, "Only the notes folder.");
+    await until(() => run(task, "steer-1") !== undefined);
+    answer.resolve(undefined);
+    await until(() => task.transcript().outbox[0]?.status === "sent");
     await stopNewest(task);
     await stoppedRightly(task);
     task.client.stop();

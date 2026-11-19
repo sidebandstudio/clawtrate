@@ -1482,11 +1482,11 @@ export function registerSteerAlias(
   targetId: string,
 ): TaskActivity {
   if (aliasId === targetId) return activity;
-  // Its events may have come first: a run showing something of its own is its own run, and no
-  // alias is recorded; an empty one was only the bare acknowledgement, and goes.
+  // Its events or a history read may have come first: a run showing something of its own is its
+  // own run, and no alias is recorded; an empty one (the bare acknowledgement, or history's
+  // in-flight id with nothing under it) is only the steer, and goes.
   const shown = findRun(activity, aliasId);
-  if (shown && (shown.steps.length > 0 || shown.text || shown.origin !== "gateway"))
-    return activity;
+  if (shown && (shown.steps.length > 0 || shown.text || shown.origin === "local")) return activity;
   return {
     ...activity,
     runs: shown ? activity.runs.filter((run) => run !== shown) : activity.runs,
