@@ -452,3 +452,25 @@ describe("the forward and its observers", () => {
     expect(seen.at(-1)).toBe("closed");
   });
 });
+
+describe("the forward's attempts", () => {
+  it("is never up for a process that exited while its LOOK ran, and that LOOK is stopped", async () => {
+    const h = harness();
+    h.forward.open();
+    await h.up();
+    expect(h.forward.state.phase).toBe("verifying");
+    const look = h.verifies.shift()!;
+    const signal = h.signals.at(-1)!;
+    // ssh drops while the LOOK is still running.
+    h.last().exit({ kind: "dropped", exit: 255 });
+    await h.flush();
+    expect(h.forward.state).toMatchObject({ phase: "waiting", cause: { kind: "dropped" } });
+    expect(signal.aborted).toBe(true);
+    // The LOOK answers "same" anyway, before the retry: nothing is up.
+    look({ kind: "same" });
+    await h.flush();
+    expect(h.forward.state).toMatchObject({ phase: "waiting", cause: { kind: "dropped" } });
+    expect(h.states.some((s) => s.phase === "up")).toBe(false);
+    await h.forward.close();
+  });
+});

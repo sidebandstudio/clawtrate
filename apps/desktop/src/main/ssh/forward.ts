@@ -219,8 +219,14 @@ export class ForwardSupervisor {
       return;
     }
     this.process = process;
+    // Ends this attempt's probe and LOOK when its process exits, as well as when the forward closes.
+    const attemptStop = new AbortController();
+    const signal = AbortSignal.any([this.stop.signal, attemptStop.signal]);
     process.onExit((failure) => {
       if (generation !== this.generation || this.closed()) return;
+      // The attempt is over: what its probe or LOOK says later is about a process that is gone.
+      this.generation++;
+      attemptStop.abort();
       this.process = null;
       if (failure.kind === "host-key-changed") {
         void this.finish("key-changed");
@@ -237,14 +243,14 @@ export class ForwardSupervisor {
       this.set({ phase: "verifying", localPort: port, attempt: this.failures + 1 });
       // The listener is only the cue: up needs one answered connection through it, then the LOOK.
       const checked = this.deps
-        .probe(port, process, this.stop.signal)
+        .probe(port, process, signal)
         .catch((): ProbeResult => "no-answer")
         .then((answer) => {
           if (generation !== this.generation || this.closed()) return;
           if (answer === "forwarding-refused") return this.restart({ kind: "forwarding-refused" });
           if (answer === "gateway-closed") return this.restart({ kind: "gateway-not-answering" });
           if (answer !== "http") return this.restart({ kind: "cant-tell" });
-          return this.deps.verify(this.stop.signal).then(
+          return this.deps.verify(signal).then(
             (result) => this.verified(generation, port, result),
             () => this.verified(generation, port, { kind: "cant-tell" }),
           );
