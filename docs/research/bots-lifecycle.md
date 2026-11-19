@@ -103,9 +103,13 @@ avatar that is not an image, data:text/plain: {"ok":true}
   read back: {"avatar":"data:text/plain;base64,aGVsbG8","avatarUrl":""}
 ```
 
+### An outside address
+
+`agents.list` projects an `http(s)` `avatar` as `avatarUrl` unchanged (`resolveAgentAvatarUrlFromSource`, lines 143-155 above). In this repository, `safeAvatarUrl` keeps an `https` address (`packages/core/src/mapping.ts`) and `Avatar` hands it to an image element (`packages/ui/src/Avatar.tsx`), so a screen that shows the picture would contact that host as soon as it opened. **Source**, confirmed in round 1; the round 1 review also saw an `https` address come back unchanged, live, and made no request to it.
+
 ### For the design
 
-A picture is saved only when `agents.list` returns it: an `ok` from `agents.update` is not enough. Clawtrate's own state keeps a picture of at most 32,768 characters (`packages/core/src/state-bounds.ts`, `MAX_AVATAR_CHARS`; `MAX_CREATE_AVATAR_CHARS` in `accounts-engine.ts`), so an uploaded photo is cropped and saved small (the design uses 128 Ã— 128); the 25 MB limit of F-270 applies to the file chosen, before cropping. The gateway keeps the picture, not the shape and colour a character was drawn from, so an editor cannot say which were chosen.
+A picture is saved only when `agents.list` returns it: an `ok` from `agents.update` is not enough, because saving and showing have different limits. Clawtrate's own state keeps a picture of at most 32,768 characters (`packages/core/src/state-bounds.ts`, `MAX_AVATAR_CHARS`; `MAX_CREATE_AVATAR_CHARS` in `accounts-engine.ts`), so an uploaded photo is cropped, encoded and measured against that before it is sent; the 25 MB limit of F-270 applies to the file chosen, before cropping. The gateway keeps the picture, not the shape and colour a character was drawn from, so an editor cannot say which were chosen. A picture at an outside address is drawn as the bot's character until the person allows it, under the remote-content rule on `origin/e3-remote-content-rule` (pull request #151, not merged).
 
 ## 4. An image tool
 
@@ -126,9 +130,13 @@ tools.effective: {"keys":["agentId","profile","groups","toolAccess","notices"],â
 
 `tools.catalog` lists every core tool and says nothing about this gateway's providers. `tools.effective` needs an existing task's key (`unknown session key` otherwise) and separates the tools offered (`groups`) from those excluded, with the gateway's reason (`toolAccess.tools`).
 
+### What later research adds
+
+Research on what the image tool returns is on `origin/r5-image-tool-research` (`docs/research/image-generation.md`, pull request #172). It is not merged, and its review asks for fixes, so this note takes from it only what the design may not claim. By that note: no image method exists; a picture comes back as part of a run rather than to a client's own call, and whether at once or in a later run of the gateway's own depends on whether the task is bound to a saved session; a foreground picture is also served over an authenticated HTTP route by its path, and whether a paired device's credentials work there is not established. A tool listed as `available` says nothing about a provider being ready; `unavailable` with reason `runtime` means the gateway has nothing to run it with (`createToolAccessDiagnostics`, `<openclaw>/dist/tool-access-diagnostics-*.mjs`; confirmed in source). A refusal, a provider error and a provider that never answers look the same to a client. `agents.update` accepts the bytes as a `data:` picture; a ticketed download address must never be saved, since it stops answering when its ticket expires (`artifacts.download` answers with the address and its `expiresAt`; confirmed in source).
+
 ### For the design
 
-The Generate tab can say truthfully whether the tool is offered, and why not, from `tools.effective` for the bot's latest task; with no task, it says it cannot tell yet. When the tool is offered, generating from the picture editor stays undesigned until a probe with a real image provider shows what `tools.invoke` returns.
+The Generate tab can say truthfully whether the tool is offered, and why not, from `tools.effective` for the bot's latest task: excluded with the gateway's reason, unavailable, not listed, no task yet, or the read failed. When the tool is offered, generating from the picture editor stays undesigned: the tab says it isn't available in this version and why, and draws nothing as working. What it would need is the bytes of the picture from the bot's reply, saved as a `data:` picture and confirmed by the bot list's read-back.
 
 ## 5. Instructions and memory
 
@@ -334,4 +342,3 @@ agents.files.set 699,051 euro signs: 699,051 characters, 2,097,153 bytes: {"mess
 ### For the design
 
 The bound is in bytes, not characters, and a refused write leaves the file as it was. Clawtrate checks the byte length itself before sending, in the Instructions page and in an import, so this refusal is never the way a person learns of the limit. `UNAVAILABLE` here is not an unknown outcome: the read after it shows the file unchanged. A file this size is also far past what the gateway loads into a task by default (section 5).
-

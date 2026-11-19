@@ -10,7 +10,8 @@
 //   prefs=device        the gateway keeps no preferences for this connection
 //   primfail=1          saving the primary bot fails
 //   ptab=bot|generate|upload   the picture editor's tab
-//   imagetool=1|unknown the gateway offers the bot its image tool, or the bot has no task to ask about
+//   imagetool=1|unknown|unlisted|unavailable|unreadable  offered; no task to ask about; not listed; listed as unavailable; the inventory unreadable
+//   outside=1|http      Marlow's picture is at an https (or http) address
 //   upload=crop|toolarge|notimage   the Upload tab with a file chosen
 //   picfail=1|dropped   the gateway refuses the picture, or takes it and its list shows none
 //   edit=name|label     the hero's name or label open for editing
@@ -54,8 +55,24 @@
     opener: null,
   };
   // Bots whose picture is at an outside address (agents.list identity.avatarUrl).
+  // Under the remote-content rule the character is drawn until the person allows
+  // that bot's picture at that exact address, on this device; only https can be.
   const OUTSIDE = {};
+  if (p("outside") === "1") OUTSIDE.marlow = "https://pictures.example/marlow.png";
+  if (p("outside") === "http") OUTSIDE.marlow = "http://pictures.example/marlow.png";
   L.outsidePicture = (id) => OUTSIDE[id] || null;
+  L.allowed = {}; // bot id -> the exact address allowed on this device
+  const pictureShown = (id) => (OUTSIDE[id] ? L.allowed[id] === OUTSIDE[id] : false);
+  // Draw an allowed outside picture wherever the bot's avatar appears; the rest stay the character.
+  function paintAllowed(root = document) {
+    for (const id of Object.keys(OUTSIDE))
+      $$(`.avatar[data-bot="${id}"]`, root).forEach((el) => {
+        if (pictureShown(id)) {
+          el.dataset.photo = "true";
+          el.style.backgroundImage = PHOTO_OUTSIDE;
+        }
+      });
+  }
   const primaryId = () => (L.primary && botOf(L.primary) ? L.primary : botOf(GATEWAY_DEFAULT) ? GATEWAY_DEFAULT : app.bots[0]?.id);
   // What a delete or a copy reads at that moment: each bot's workspace folder,
   // its tasks, its routines, its channel routes, its memory files.
@@ -77,7 +94,7 @@
 
   CT.railStar = (b) => (b.id === primaryId() ? `<span class="lc-star" role="img" aria-label="Primary bot" title="Primary bot">${starSvg}</span>` : "");
   const starSvg = `<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.3l1.38 2.8 3.09.45-2.24 2.18.53 3.08L6 8.35 3.24 9.8l.53-3.08L1.53 4.55l3.09-.45z" fill="currentColor"/></svg>`;
-  const refreshRail = () => app.openTask(app.model.selectedBot, app.model.selectedTask);
+  const refreshRail = () => (app.openTask(app.model.selectedBot, app.model.selectedTask), paintAllowed());
 
   // A bot's menu: Duplicate, Export and Delete, or Replace for the primary bot.
   CT.railMenuExtra = (b, item) => {
@@ -131,6 +148,7 @@
     const view = VIEWS[d.kind](d);
     dialog.innerHTML = view;
     CT.hydrate(dialog);
+    paintAllowed(dialog);
     if (focus) requestAnimationFrame(() => ($("[data-lc-focus]", dialog) || $("#lc-title", dialog))?.focus());
   }
 
@@ -228,6 +246,7 @@
   const COLOR_NAMES = ["Green", "Blue", "Orange", "Violet", "Yellow", "Pink", "Sky", "Lime"];
   const PHOTO = "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%23f6bd3b'/><stop offset='1' stop-color='%23ff8552'/></linearGradient></defs><rect width='120' height='120' fill='url(%23g)'/><circle cx='84' cy='34' r='14' fill='%23fff4d6'/><path d='M0 92 L34 58 L62 86 L82 70 L120 100 L120 120 L0 120Z' fill='%23a5502a'/></svg>\")";
 
+  const PHOTO_OUTSIDE = "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' fill='%23ff8552'/><circle cx='60' cy='48' r='22' fill='%23fff1e8'/><rect x='24' y='78' width='72' height='42' rx='20' fill='%23fff1e8'/></svg>\")";
   VIEWS.picture = (d) => {
     const id = d.bot;
     const tab = d.tab;
@@ -264,11 +283,16 @@
         refused;
       foot = button(saving ? "Saving…" : "Set picture", `data-lc="set-picture" data-size="lg"${d.body && d.color && !saving ? "" : " disabled"}${saving ? ' aria-busy="true"' : ""}`, "primary");
     } else if (tab === "generate") {
-      body = p("imagetool") === "unknown"
-        ? `<div class="b-result"><span class="empty-mark">${icon("image")}</span><h3>Not known yet</h3><p>The gateway says which tools ${esc(nameOf(id))} is offered for one of its tasks, and ${esc(nameOf(id))} has none yet. Start a task, then look here again.</p></div>`
-        : p("imagetool")
-        ? `<div class="b-result"><span class="empty-mark">${icon("image")}</span><h3>Generating a picture isn't available in this version</h3><p>The gateway offers ${esc(nameOf(id))} an image tool, but Clawtrate can't use it here yet. You can ask ${esc(nameOf(id))} for a picture in a task, then upload it.</p></div>`
-        : `<div class="b-result"><span class="empty-mark">${icon("image")}</span><h3>Image generation isn't available on this gateway</h3><p>The gateway doesn't offer ${esc(nameOf(id))} its image tool: “Denied by tools.deny”, in the gateway's own words.</p></div>`;
+      const who = esc(nameOf(id));
+      const g = {
+        excluded: ["Image generation isn't available on this gateway", `The gateway doesn't offer ${who} its image tool: “Denied by tools.deny”, in the gateway's own words.`],
+        unavailable: ["Image generation isn't available on this gateway", `The gateway lists its image tool for ${who} as unavailable: it has nothing to make pictures with.`],
+        unlisted: ["Image generation isn't available on this gateway", `The gateway doesn't list an image tool for ${who}'s task.`],
+        unknown: ["Not known yet", `The gateway says which tools ${who} is offered for one of its tasks, and ${who} has none yet. Start a task, then look here again.`],
+        unreadable: ["Couldn't read the tools", `Clawtrate couldn't read which tools the gateway offers ${who}: the gateway didn't answer.`],
+        offered: ["Generating a picture isn't available in this version", `The gateway lists an image tool for ${who}, which doesn't say a provider is ready, and a picture comes back in ${who}'s reply, not to this screen. You can ask ${who} for a picture in a task, then upload it.`],
+      }[{ 1: "offered", unknown: "unknown", unlisted: "unlisted", unreadable: "unreadable", unavailable: "unavailable" }[p("imagetool")] || "excluded"];
+      body = `<div class="b-result"><span class="empty-mark">${icon("image")}</span><h3>${g[0]}</h3><p>${g[1]}</p></div>` + (p("imagetool") === "unreadable" ? `<div class="b-actions lc-center-actions">${button("Try again", 'data-lc="tools-reread" data-size="sm"')}</div>` : "");
       foot = button("Generate", 'data-size="lg" disabled', "primary");
     } else {
       const up = d.upload;
@@ -280,7 +304,9 @@
           refused;
       else
         body =
-          `<div class="lc-drop" data-lc-drop><span class="empty-mark">${icon("image")}</span><p>Drop an image here</p>${button("Browse files", 'data-lc="browse" data-size="sm" data-lc-focus')}<p class="b-hint">PNG, JPEG, WebP or GIF, under 25 MB.</p></div>` +
+          (p("width") === "phone" || matchMedia("(max-width: 687px)").matches
+            ? `<div class="lc-drop lc-drop-phone" data-lc-drop><span class="empty-mark">${icon("image")}</span>${button("Choose from Photos", 'data-lc="browse" data-size="sm" data-lc-focus')}${button("Take Photo", 'data-lc="browse" data-size="sm"')}<p class="b-hint">PNG, JPEG, WebP or GIF, under 25 MB.</p></div>`
+            : `<div class="lc-drop" data-lc-drop><span class="empty-mark">${icon("image")}</span><p>Drop an image here</p>${button("Browse files", 'data-lc="browse" data-size="sm" data-lc-focus')}<p class="b-hint">PNG, JPEG, WebP or GIF, under 25 MB.</p></div>`) +
           (up === "toolarge" ? note(`<p><b>That image is 31.4 MB.</b> Choose one under 25 MB. ${esc(nameOf(id))}'s picture is unchanged.</p>`, "warn") : "") +
           (up === "notimage" ? note(`<p><b>notes.pdf isn't an image.</b> Choose a PNG, JPEG, WebP or GIF file.</p>`, "warn") : "");
       foot = button(saving ? "Saving…" : "Set picture", `data-lc="set-picture" data-size="lg"${up === "crop" && !saving ? "" : " disabled"}${saving ? ' aria-busy="true"' : ""}`, "primary");
@@ -321,7 +347,7 @@
   function decorateHero() {
     const id = app.model.selectedBot;
     const b = botOf(id);
-    const key = `${id}:${b.name}:${b.label}:${E.field}:${E.status}:${E.error}:${isAdmin()}:${Boolean(L.photo[id])}`;
+    const key = `${id}:${b.name}:${b.label}:${E.field}:${E.status}:${E.error}:${isAdmin()}:${Boolean(L.photo[id])}:${pictureShown(id)}`;
     // The app redraws the hero on its own; redecorate whenever its markup isn't ours.
     if (!b || (hero.dataset.lc === key && hero.querySelector("[data-lc-hero]"))) return;
     hero.dataset.lc = key;
@@ -347,9 +373,15 @@
           : b.label
             ? `<p>${esc(b.label)}</p>`
             : "") +
+      (OUTSIDE[id] && !pictureShown(id)
+        ? OUTSIDE[id].startsWith("https://")
+          ? `<div class="lc-outside" data-lc-outside><p>${esc(b.name)}'s picture is at <span class="mono lc-address">${esc(OUTSIDE[id])}</span>. Loading it lets that host see this device's network address, each time it loads.</p>${button("Load picture", 'data-lc="allow-picture" data-size="sm"')}</div>`
+          : `<div class="lc-outside" data-lc-outside><p>${esc(b.name)}'s picture is at <span class="mono lc-address">${esc(OUTSIDE[id])}</span>, an http address, which Clawtrate doesn't load.</p></div>`
+        : "") +
       (E.status === "saving" ? `<p class="b-hint lc-hero-line" role="status">Saving…</p>` : "") +
       (E.error ? `<p class="b-hint lc-hero-line" data-tone="danger" role="alert">${E.error}</p>` : "");
     CT.hydrate(hero);
+    paintAllowed(hero);
     if (nameEdit || labelEdit) {
       const input = $("[data-lc-inline]", hero);
       if (E.status !== "saving") requestAnimationFrame(() => (input.focus(), input.select()));
@@ -1164,12 +1196,24 @@
         return savePrimary(L.dialog.pick || primaryId());
       case "open-picture":
         return openDialog("picture", el, { bot: app.model.selectedBot, tab: p("ptab") || "bot", upload: p("upload") || null });
+      case "tools-reread":
+        return announce("Reading the tools again");
       case "browse":
         L.dialog.upload = "crop";
         paint();
         return $('[data-lc="set-picture"]', dialog)?.focus();
       case "set-picture":
         return setPicture();
+      case "allow-picture": {
+        // Kept on this device, per bot and per exact address; nothing is written to the gateway.
+        const id = app.model.selectedBot;
+        L.allowed[id] = OUTSIDE[id];
+        hero.dataset.lc = "";
+        decorateHero();
+        paintAllowed();
+        $('[data-lc="open-picture"]', hero)?.focus();
+        return announce(`Loading ${nameOf(id)}'s picture`);
+      }
       case "edit-name":
         return startEdit("name");
       case "edit-label":
@@ -1313,6 +1357,7 @@
     $('[data-action="new-bot"]', menu).closest("li").insertAdjacentHTML("afterend", `<li role="none"><button type="button" class="menu-item" role="menuitem" data-lc="open-import">Import a bot…</button></li>`);
   }).observe($("#rail-menu"), { attributes: true, attributeFilter: ["hidden"] });
 
+  new MutationObserver(() => paintAllowed($("#bot-list"))).observe($("#bot-list"), { childList: true });
   // First paint: a dialog from the address.
   refreshRail();
   decorateHero();

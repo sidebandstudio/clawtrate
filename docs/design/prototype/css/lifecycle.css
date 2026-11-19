@@ -509,3 +509,31 @@
   max-height: 160px;
   overflow: auto;
 }
+
+/* A picture at an outside address: the address in full, and the choice to load it. */
+.lc-outside {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  margin: 10px auto 0;
+  max-width: 320px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.lc-outside p {
+  margin: 0;
+}
+
+.lc-address {
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.lc-center-actions {
+  justify-content: center;
+}
+
+.lc-drop-phone .button {
+  width: 100%;
+}

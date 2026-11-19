@@ -184,7 +184,7 @@ t = await dlg(p);
 check("F-269 with no image tool, Generate is disabled with the row's words and the gateway's reason", t.includes("Image generation isn't available on this gateway") && t.includes("The gateway doesn't offer Juniper its image tool: “Denied by tools.deny”, in the gateway's own words.") && (await p.evaluate(() => [...document.querySelectorAll("#lc-dialog button")].find((x) => x.textContent === "Generate" && !x.dataset.lcTab).disabled)));
 await p.close();
 p = await open(`bot=juniper&${settings}&lc=picture&ptab=generate&imagetool=1`);
-check("S4 with the tool offered, it says generating isn't in this version", (await dlg(p)).includes("Generating a picture isn't available in this version") && (await dlg(p)).includes("The gateway offers Juniper an image tool, but Clawtrate can't use it here yet."));
+check("S4 with the tool offered, it says generating isn't in this version", (await dlg(p)).includes("Generating a picture isn't available in this version") && (await dlg(p)).includes("The gateway lists an image tool for Juniper, which doesn't say a provider is ready, and a picture comes back in Juniper's reply, not to this screen."));
 await p.close();
 p = await open(`bot=juniper&${settings}&lc=picture&ptab=generate&imagetool=unknown`);
 check("S4 with no task to ask about, it says it can't tell yet", (await dlg(p)).includes("The gateway says which tools Juniper is offered for one of its tasks, and Juniper has none yet. Start a task, then look here again."));
@@ -209,6 +209,43 @@ check("S2 below admin the picture, name and label are not buttons", await p.eval
 await p.close();
 p = await open(`bot=juniper&${settings}&lc=picture&access=read`);
 check("S2 below admin the editor asks for admin by its bar", (await dlg(p)).includes("Changing Juniper's picture needs admin access."));
+await p.close();
+
+// A picture at an outside address (section 4) -------------------------------------------------------
+const photoOn = (p, sel) => p.evaluate((x) => [...document.querySelectorAll(x)].map((el) => el.dataset.photo === "true"), sel);
+p = await open(`bot=marlow&${settings}&outside=1`);
+t = await hero(p);
+check("S4 an https picture: the character is drawn, with the full address and the choice", t.includes("Marlow's picture is at https://pictures.example/marlow.png. Loading it lets that host see this device's network address, each time it loads.") && t.includes("Load picture"));
+check("S4 ... nothing outside is loaded before the choice: hero and rail draw the character", (await photoOn(p, '#work-hero .avatar[data-bot="marlow"]')).every((x) => !x) && (await photoOn(p, '#bot-list .avatar[data-bot="marlow"]')).every((x) => !x));
+await clickText(p, "#work-hero", "Load picture");
+await p.waitForTimeout(80);
+check("S4 after the choice the picture is drawn in the hero and the rail, and the line goes", (await photoOn(p, '#work-hero .avatar[data-bot="marlow"]')).every((x) => x) && (await photoOn(p, '#bot-list .avatar[data-bot="marlow"]')).every((x) => x) && !(await hero(p)).includes("Load picture") && (await announced(p)) === "Loading Marlow's picture");
+await p.close();
+p = await open(`bot=marlow&${settings}&outside=1&lc=choose`);
+check("S4 the chooser draws the character for an outside picture", (await photoOn(p, '#lc-dialog .avatar[data-bot="marlow"]')).every((x) => !x));
+await p.close();
+p = await open(`bot=marlow&${settings}&outside=http`);
+t = await hero(p);
+check("S4 an http picture is never loaded, and says so", t.includes("Marlow's picture is at http://pictures.example/marlow.png, an http address, which Clawtrate doesn't load.") && !t.includes("Load picture"));
+await p.close();
+p = await open(`bot=marlow&${settings}&outside=1&lc=export&delbot=marlow`);
+check("S9 an outside picture is left out of a file", (await dlg(p)).includes("PictureLeft out: it's an outside address"));
+await p.close();
+for (const [tool, words] of [
+  ["unlisted", "The gateway doesn't list an image tool for Juniper's task."],
+  ["unavailable", "The gateway lists its image tool for Juniper as unavailable: it has nothing to make pictures with."],
+  ["unreadable", "Clawtrate couldn't read which tools the gateway offers Juniper: the gateway didn't answer."],
+]) {
+  p = await open(`bot=juniper&${settings}&lc=picture&ptab=generate&imagetool=${tool}`);
+  check(`S4 Generate when the tool is ${tool}`, (await dlg(p)).includes(words) && (await p.evaluate(() => [...document.querySelectorAll("#lc-dialog button")].find((x) => x.textContent === "Generate" && !x.dataset.lcTab).disabled)));
+  await p.close();
+}
+
+p = await open(`bot=juniper&${settings}&lc=picture&ptab=upload&width=phone&view=detail`, { width: 390, height: 844 });
+t = await dlg(p);
+check("F-270 on the phone Upload offers Choose from Photos and Take Photo", has(t, "Choose from Photos", "Take Photo", "PNG, JPEG, WebP or GIF, under 25 MB.") && !t.includes("Drop an image here"));
+await clickText(p, "#lc-dialog", "Take Photo");
+check("F-270 ... then the same crop", (await dlg(p)).includes("Clawtrate saves the circle's square at 128 by 128 pixels."));
 await p.close();
 
 // The name and the label (section 5) ------------------------------------------------------------------
