@@ -17,15 +17,22 @@ export const MAX_ROUTINES = 200;
 export const MAX_ROUTINE_TEXT_CHARS = 4_096;
 /** Runs read for a routine's page, newest first: older runs drop out of the list (F-355). */
 export const MAX_ROUTINE_RUNS = 20;
-/** Past runs across routines read for the calendar. */
-export const MAX_CALENDAR_RUNS = 200;
+/** Past runs across routines read for the calendar's dates; past it the read says it is partial. */
+export const MAX_CALENDAR_RUNS = 1_000;
 /** A run's conversation sent to a viewer, in JSON characters; later items are counted, not sent. */
 export const MAX_RUN_CONVERSATION_CHARS = 160_000;
 /** A run's summary or error as shown. */
 export const MAX_ROUTINE_RUN_TEXT_CHARS = 2_048;
 /** `cron.list` and `cron.runs` take at most 200 a page (protocol schema). */
 const PAGE = 200;
-const MAX_PAGES = 4;
+/** Pages of a run's conversation read back to its first message (`cron.history`, newest page first). */
+const MAX_HISTORY_PAGES = 5;
+/** While a routine is marked running, the list is read again this often: a `finished` can be dropped. */
+export const RUNNING_RECHECK_MS = 60_000;
+/** After a failed read, the next one. */
+export const RETRY_MS = 30_000;
+/** Reads in a row an event may invalidate before the newest is published anyway. */
+const MAX_REREADS = 3;
 
 export type RoutineSchedule = {
   kind: "cron" | "every" | "at" | "other";
@@ -72,7 +79,14 @@ export type RoutinesState = {
   /** `cron.status.enabled`: false when the gateway's scheduler is off; null before it is read. */
   schedulerOn: boolean | null;
   routines: Routine[];
+  /** Routines past `MAX_ROUTINES` the gateway listed (heartbeat jobs among those not read); the list says so. */
   omitted: number;
+  /**
+   * The last routine the `removed` event took away: `ranOnce` only when the
+   * gateway's `finished` for its successful run came just before, as the
+   * gateway sends them when a one-shot removes itself.
+   */
+  removed: { id: string; ranOnce: boolean; runAt: number | null } | null;
 };
 
 export const initialRoutinesState: RoutinesState = {
@@ -81,6 +95,7 @@ export const initialRoutinesState: RoutinesState = {
   schedulerOn: null,
   routines: [],
   omitted: 0,
+  removed: null,
 };
 
 export type RoutineRun = {
@@ -106,19 +121,28 @@ export type RoutineRun = {
 /**
  * A run's conversation, as `cron.history` keeps it. `kept` only on positive
  * evidence: the first row is the scheduler's message for this job and this
- * run's session. Anything else is `none`, and the run's summary stands in.
+ * run's session. `none` when the gateway returned none (or refused, as it
+ * does for a run it has no transcript of); `too-long` when its first message
+ * is further back than Clawtrate reads. A failed read is thrown, not `none`.
  */
 export type RunConversation =
   | {
       status: "kept";
-      /** The instruction as recorded with this run, not as the routine reads now. */
+      /** The scheduler's message as recorded with this run, whole: never the routine's current instruction. */
       message: string;
-      /** What the gateway appended to it for an unattended run. */
-      added: string;
       items: TranscriptItem[];
       omitted: number;
     }
-  | { status: "none"; reason: "no-session" | "not-kept"; error: string | null };
+  | { status: "none"; reason: "no-session" | "not-kept" | "too-long"; error: string | null };
+
+/** Which run: its id, else its start (`cron.history` takes either), and its session if it had one. */
+export type RunSelector = { runId: string | null; runAt: number; sessionKey: string | null };
+
+/** One bot's routines as `cron.list` filtered to it gives them. */
+export type BotRoutines = { routines: Routine[]; omitted: number };
+
+/** The calendar's recorded runs for its dates, and whether older ones in them were left unread. */
+export type CalendarRuns = { runs: RoutineRun[]; partial: boolean };
 
 const str = (value: unknown): string | null =>
   typeof value === "string" && value.length > 0 ? value : null;
@@ -215,26 +239,25 @@ export function parseRun(value: unknown): RoutineRun | null {
   };
 }
 
-/** Finished runs, newest first, at most `max`. */
+/**
+ * Runs in the gateway's order, at most `max`. The gateway orders them by when
+ * they finished, newest first, and pages in that order; that order is the
+ * contract (docs/decisions.md), so a run that started earlier but finished
+ * later stays above one that started after it.
+ */
 export function parseRuns(result: unknown, max: number): RoutineRun[] {
   return arr(asRecord(result)?.entries)
     .map(parseRun)
     .filter((run): run is RoutineRun => run !== null)
-    .sort((a, b) => b.runAt - a.runAt)
     .slice(0, max);
 }
 
-// The gateway appends the time and its instructions for unattended runs after
-// the job's own text, starting with this line (observed on 2026.10.6).
-const ADDED_FROM = "\nCurrent time: ";
-
-/** `cron.history` for one run, read as a conversation only on positive evidence. */
+/** `cron.history`'s messages for one run, oldest first, read as a conversation only on positive evidence. */
 export function parseRunConversation(
-  result: unknown,
+  messages: unknown[],
   jobId: string,
   sessionKey: string,
 ): RunConversation {
-  const messages = arr(asRecord(result)?.messages);
   const first = asRecord(messages[0]);
   const provenance = asRecord(first?.provenance);
   const content = str(first?.content);
@@ -246,7 +269,6 @@ export function parseRunConversation(
     provenance.sourceSessionKey !== sessionKey
   )
     return { status: "none", reason: "not-kept", error: null };
-  const at = content.lastIndexOf(ADDED_FROM);
   const items: TranscriptItem[] = [];
   let size = 0;
   let omitted = 0;
@@ -258,29 +280,35 @@ export function parseRunConversation(
       size += each;
     }
   }
-  return {
-    status: "kept",
-    message: cutText(at < 0 ? content : content.slice(0, at), MAX_ROUTINE_TEXT_CHARS),
-    added: cutText(at < 0 ? "" : content.slice(at + 1), MAX_ROUTINE_TEXT_CHARS),
-    items,
-    omitted,
-  };
+  return { status: "kept", message: cutText(content, MAX_ROUTINE_TEXT_CHARS), items, omitted };
 }
 
-/** One `cron` event applied to the list; the same list when it changes nothing. */
+/**
+ * One `cron` event applied to the list; the same list when it changes nothing.
+ * `started` and `finished` carry their run's `runAtMs`, so one that arrives
+ * after a newer run's is told apart: an older finish never clears a newer
+ * start, and a start older than the last finished run never marks it running.
+ */
 export function applyCronEvent(routines: Routine[], payload: RawRecord): Routine[] {
   const jobId = str(payload.jobId);
   const action = str(payload.action);
   if (!jobId) return routines;
   if (action === "removed") return routines.filter((each) => each.id !== jobId);
   const at = routines.findIndex((each) => each.id === jobId);
+  const current = at >= 0 ? routines[at]! : null;
   const fromJob = parseRoutine(payload.job);
   if (asRecord(payload.job) && !fromJob) return routines;
-  let next = fromJob ?? (at >= 0 ? routines[at]! : null);
+  let next = fromJob ?? current;
   if (!next) return routines;
-  // The events carry the job as it is; `started` and `finished` also say so outright.
-  if (action === "started") next = { ...next, runningAt: num(payload.runAtMs) ?? next.runningAt };
-  if (action === "finished") next = { ...next, runningAt: null };
+  const runAt = num(payload.runAtMs);
+  if (action === "started") {
+    if (runAt !== null && current?.lastRunAt != null && runAt <= current.lastRunAt) return routines;
+    next = { ...next, runningAt: runAt ?? next.runningAt };
+  }
+  if (action === "finished") {
+    if (runAt !== null && current?.runningAt != null && runAt < current.runningAt) return routines;
+    next = { ...next, runningAt: null };
+  }
   if (at < 0) return routines.length < MAX_ROUTINES ? [...routines, next] : routines;
   return routines.map((each, index) => (index === at ? next : each));
 }
@@ -296,8 +324,11 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 export class RoutinesEngine {
   /** Each load's number: an answer to an older one is dropped. */
   private loadSeq = 0;
-  /** An event arrived while a list was being read: read it again once that one lands. */
-  private stale = false;
+  /** An event arrived while the list was being read: that read may be older than it. */
+  private invalidated = false;
+  private recheck: ReturnType<typeof setTimeout> | null = null;
+  /** The last `finished` applied: a `removed` of the same job right after it is the gateway's own. */
+  private lastFinished: { jobId: string; ok: boolean; runAt: number | null } | null = null;
 
   private readonly ctx: RoutinesContext;
 
@@ -305,65 +336,152 @@ export class RoutinesEngine {
     this.ctx = ctx;
   }
 
+  /**
+   * Read the list again. A read an event overtook is not published, since it
+   * may be older than the event: it is read again. While a routine is marked
+   * running, and after a failed read, the list is read again on a timer, so a
+   * dropped `finished` or a failed refresh does not leave a mark behind.
+   */
   async load(): Promise<void> {
     const seq = ++this.loadSeq;
-    this.stale = false;
-    this.ctx.update((state) => ({ ...state, status: "loading" }));
-    try {
-      const status = asRecord(await this.ctx.request("cron.status", {}));
-      const routines: Routine[] = [];
-      let omitted = 0;
-      let offset = 0;
-      for (let page = 0; page < MAX_PAGES; page += 1) {
-        const result = asRecord(
-          await this.ctx.request("cron.list", { includeDisabled: true, limit: PAGE, offset }),
-        );
-        for (const job of arr(result?.jobs)) {
-          const routine = parseRoutine(job);
-          if (!routine) continue;
-          if (routines.length < MAX_ROUTINES) routines.push(routine);
-          else omitted += 1;
-        }
-        const nextOffset = num(result?.nextOffset);
-        if (result?.hasMore !== true || nextOffset === null) break;
-        offset = nextOffset;
+    this.clearRecheck();
+    if (this.ctx.get().status !== "loaded")
+      this.ctx.update((state) => ({ ...state, status: "loading" }));
+    for (let attempt = 1; ; attempt += 1) {
+      this.invalidated = false;
+      let read: Awaited<ReturnType<RoutinesEngine["read"]>>;
+      try {
+        read = await this.read();
+      } catch (error) {
+        if (seq !== this.loadSeq) return;
+        this.ctx.update((state) => ({ ...state, status: "error", error: errorText(error) }));
+        this.schedule(RETRY_MS);
+        return;
       }
       if (seq !== this.loadSeq) return;
-      this.ctx.update(() => ({
-        status: "loaded",
-        error: null,
-        schedulerOn: typeof status?.enabled === "boolean" ? status.enabled : null,
-        routines,
-        omitted,
-      }));
-      if (this.stale) void this.load();
-    } catch (error) {
-      if (seq !== this.loadSeq) return;
-      this.ctx.update((state) => ({ ...state, status: "error", error: errorText(error) }));
+      if (this.invalidated && attempt < MAX_REREADS) continue;
+      if (this.invalidated && this.ctx.get().status === "loaded") {
+        // Overtaken every time: keep what the events made and look again soon.
+        this.schedule(RETRY_MS);
+        return;
+      }
+      this.ctx.update((state) => ({ ...state, status: "loaded", error: null, ...read }));
+      this.scheduleIfRunning();
+      return;
     }
+  }
+
+  private async read(): Promise<Pick<RoutinesState, "schedulerOn" | "routines" | "omitted">> {
+    const status = asRecord(await this.ctx.request("cron.status", {}));
+    return {
+      schedulerOn: typeof status?.enabled === "boolean" ? status.enabled : null,
+      ...(await this.list({})),
+    };
+  }
+
+  /** `cron.list` up to `MAX_ROUTINES` routines, the rest counted. */
+  private async list(filter: { agentId?: string }): Promise<BotRoutines> {
+    const routines: Routine[] = [];
+    let omitted = 0;
+    let offset = 0;
+    for (;;) {
+      const result = asRecord(
+        await this.ctx.request("cron.list", {
+          includeDisabled: true,
+          limit: PAGE,
+          offset,
+          ...filter,
+        }),
+      );
+      const jobs = arr(result?.jobs);
+      for (const job of jobs) {
+        const routine = parseRoutine(job);
+        if (!routine) continue;
+        if (routines.length < MAX_ROUTINES) routines.push(routine);
+        else omitted += 1;
+      }
+      const nextOffset = num(result?.nextOffset);
+      if (result?.hasMore !== true || nextOffset === null || nextOffset <= offset) break;
+      // Past the cap, the rest is counted from the gateway's total, not read.
+      const total = num(result?.total);
+      if (routines.length >= MAX_ROUTINES && total !== null) {
+        omitted += Math.max(0, total - nextOffset);
+        break;
+      }
+      offset = nextOffset;
+    }
+    return { routines, omitted };
+  }
+
+  /**
+   * One bot's routines, read when the kept list is missing some of the
+   * gateway's (`omitted`) and that bot is chosen; returned, not kept.
+   */
+  botRoutines(botId: string): Promise<BotRoutines> {
+    return this.list({ agentId: botId });
+  }
+
+  private schedule(ms: number): void {
+    this.clearRecheck();
+    this.recheck = setTimeout(() => {
+      this.recheck = null;
+      void this.load();
+    }, ms);
+  }
+
+  private scheduleIfRunning(): void {
+    if (this.recheck === null && this.ctx.get().routines.some((each) => each.runningAt !== null))
+      this.schedule(RUNNING_RECHECK_MS);
+  }
+
+  private clearRecheck(): void {
+    if (this.recheck !== null) clearTimeout(this.recheck);
+    this.recheck = null;
   }
 
   onEvent(payload: unknown): void {
     const record = asRecord(payload);
     if (!record) return;
-    if (this.ctx.get().status === "loading") this.stale = true;
-    this.ctx.update((state) => {
-      const routines = applyCronEvent(state.routines, record);
-      return routines === state.routines ? state : { ...state, routines };
-    });
+    this.invalidated = true;
+    const jobId = str(record.jobId);
+    const action = str(record.action);
+    const before = this.ctx.get();
+    const kept = before.routines.find((each) => each.id === jobId);
+    const routines = applyCronEvent(before.routines, record);
+    const finished = this.lastFinished;
+    this.lastFinished =
+      action === "finished" && jobId
+        ? { jobId, ok: str(record.status) === "ok", runAt: num(record.runAtMs) }
+        : null;
+    const removed =
+      action === "removed" && jobId
+        ? {
+            id: jobId,
+            ranOnce: kept?.deleteAfterRun === true && finished?.jobId === jobId && finished.ok,
+            runAt: finished?.jobId === jobId ? finished.runAt : null,
+          }
+        : before.removed;
+    // A retained routine gone while others were left out: read again to fill its place.
+    const refill = action === "removed" && kept !== undefined && before.omitted > 0;
+    if (routines !== before.routines || removed !== before.removed)
+      this.ctx.update((state) => ({ ...state, routines, removed }));
+    if (refill) void this.load();
+    else this.scheduleIfRunning();
   }
 
   /** A dropped connection's answers no longer count. */
   onClose(): void {
     this.loadSeq += 1;
+    this.clearRecheck();
+    this.lastFinished = null;
   }
 
   reset(): void {
-    this.loadSeq += 1;
+    this.onClose();
     this.ctx.update(() => initialRoutinesState);
   }
 
-  /** A routine's runs, newest first, at most `MAX_ROUTINE_RUNS`. */
+  /** A routine's runs in the gateway's order (newest finished first), at most `MAX_ROUTINE_RUNS`. */
   async runs(id: string): Promise<RoutineRun[]> {
     return parseRuns(
       await this.ctx.request("cron.runs", { id, limit: MAX_ROUTINE_RUNS }),
@@ -371,37 +489,76 @@ export class RoutinesEngine {
     );
   }
 
-  /** The latest runs across routines, for the calendar's past days. */
-  async calendarRuns(): Promise<RoutineRun[]> {
-    return parseRuns(
-      await this.ctx.request("cron.runs", { scope: "all", limit: MAX_CALENDAR_RUNS }),
-      MAX_CALENDAR_RUNS,
-    );
+  /**
+   * Every routine's runs that started from `from` to `to`, for the calendar.
+   * The gateway pages all runs newest finished first and has no date filter,
+   * so pages are read until one reaches before `from`, at most
+   * `MAX_CALENDAR_RUNS` entries; `partial` when that stopped it first.
+   */
+  async calendarRuns(from: number, to: number): Promise<CalendarRuns> {
+    const runs: RoutineRun[] = [];
+    let offset = 0;
+    while (offset < MAX_CALENDAR_RUNS) {
+      const result = asRecord(
+        await this.ctx.request("cron.runs", {
+          scope: "all",
+          limit: Math.min(PAGE, MAX_CALENDAR_RUNS - offset),
+          offset,
+        }),
+      );
+      const entries = arr(result?.entries);
+      for (const run of parseRuns(result, PAGE))
+        if (run.runAt >= from && run.runAt < to) runs.push(run);
+      const last = asRecord(entries.at(-1));
+      // Finished before `from`, so every later page's runs started before it too.
+      const reachedStart = (num(last?.ts) ?? num(last?.runAtMs) ?? from) < from;
+      const nextOffset = num(result?.nextOffset);
+      if (reachedStart || result?.hasMore !== true || nextOffset === null || nextOffset <= offset)
+        return { runs, partial: false };
+      offset = nextOffset;
+    }
+    return { runs, partial: true };
   }
 
   /**
    * One run's conversation. A run with no session of its own (a reminder in
-   * the main conversation) has none to read; a run whose conversation the
-   * gateway refuses or no longer keeps is `not-kept`.
+   * the main conversation) has none to read. The gateway returns the newest
+   * page first, so older pages are read back to the first message, the
+   * scheduler's. Its refusal for a run it has no transcript of is `none`;
+   * any other failure is thrown.
    */
-  async conversation(
-    id: string,
-    runId: string,
-    sessionKey: string | null,
-  ): Promise<RunConversation> {
-    if (!sessionKey) return { status: "none", reason: "no-session", error: null };
+  async conversation(id: string, run: RunSelector): Promise<RunConversation> {
+    if (!run.sessionKey) return { status: "none", reason: "no-session", error: null };
+    const selector = run.runId ? { runId: run.runId } : { runAtMs: run.runAt };
+    const pages: unknown[][] = [];
+    let cursor: string | null = null;
     try {
-      return parseRunConversation(
-        await this.ctx.request("cron.history", { id, runId }),
-        id,
-        sessionKey,
-      );
+      for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
+        const result = asRecord(
+          await this.ctx.request("cron.history", {
+            id,
+            ...selector,
+            limit: PAGE,
+            ...(cursor ? { cursor } : {}),
+          }),
+        );
+        pages.unshift(arr(result?.messages));
+        cursor = str(result?.nextCursor);
+        if (!cursor) break;
+      }
     } catch (error) {
+      const text = errorText(error);
+      if (!text.startsWith(UNAVAILABLE)) throw error;
       return {
         status: "none",
         reason: "not-kept",
-        error: cutText(errorText(error), MAX_ROUTINE_RUN_TEXT_CHARS),
+        error: cutText(text, MAX_ROUTINE_RUN_TEXT_CHARS),
       };
     }
+    if (cursor) return { status: "none", reason: "too-long", error: null };
+    return parseRunConversation(pages.flat(), id, run.sessionKey);
   }
 }
+
+// What the gateway answers for a run it has no transcript of (observed on 2026.10.6).
+const UNAVAILABLE = "The recorded cron transcript is unavailable.";

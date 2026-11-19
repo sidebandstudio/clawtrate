@@ -1,15 +1,25 @@
 // The calendar (automation.md section 4, F-197): a column per day in the
-// viewer's own time, the runs the gateway recorded on past days and the
-// scheduled times from now on, which the gateway does not list and are
-// computed from each schedule. A routine that runs more than four times a day
-// is one band per day; its recorded runs still show as chips.
+// viewer's own time, the runs the gateway recorded on those days and the
+// scheduled times from the gateway's next run on, which the gateway does not
+// list and are computed from each schedule. A routine that runs more than four
+// times a day is one band per day; its recorded runs still show as chips.
 
-import type { Bot, Routine, RoutineRun } from "@clawtrate/core";
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import type { Bot, Routine } from "@clawtrate/core";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Avatar } from "../Avatar.tsx";
 import { useBridge } from "../bridge.tsx";
+import { Note } from "../bots/parts.tsx";
 import { BackIcon, ChevronIcon } from "../icons.tsx";
-import { DAY, frequent, occurrences, scheduleWords, viewerZone, zoneCity } from "./schedule.ts";
+import { useKeyedRead } from "./read.ts";
+import {
+  frequent,
+  occurrences,
+  ownerOf,
+  scheduleWords,
+  viewerZone,
+  wallMinutes,
+  zoneCity,
+} from "./schedule.ts";
 
 const HOUR_PX = 28;
 
@@ -42,33 +52,28 @@ const dayName = (ms: number, now: number) =>
     : new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(ms);
 const dateName = (ms: number) =>
   new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(ms);
+/** "Thu Nov 19": a day's list and every chip and band in it are named by it. */
+const dayLabel = (ms: number) =>
+  new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" })
+    .format(ms)
+    .replace(",", "");
 const timeName = (ms: number) =>
   new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(ms);
 
-/** The runs the gateway recorded, for the calendar's past; read again as routines run. */
-function useRecordedRuns(revision: string): RoutineRun[] {
-  const bridge = useBridge();
-  const [runs, setRuns] = useState<RoutineRun[]>([]);
-  useEffect(() => {
-    let live = true;
-    bridge.invoke({ type: "readCalendarRuns" }).then(
-      (read) => live && setRuns(read),
-      () => live && setRuns([]),
-    );
-    return () => {
-      live = false;
-    };
-  }, [bridge, revision]);
-  return runs;
-}
+/** A top-of-the-hour cron schedule may start up to 5 minutes late, which the gateway does on purpose. */
+const mayStagger = (routine: Routine) =>
+  routine.schedule.kind === "cron" && /^0\s/u.test(routine.schedule.expr ?? "");
 
 export function Calendar({
+  gateway,
   routines,
   bots,
   days,
   now,
   onOpen,
 }: {
+  /** The gateway the routines are from: a read for another is never shown. */
+  gateway: string;
   routines: Routine[];
   bots: Bot[];
   days: number;
@@ -79,14 +84,19 @@ export function Calendar({
   const columns = Array.from({ length: days }, (_, index) => addDays(start, index));
   const end = addDays(start, days);
   const revision = routines.map((each) => `${each.id}:${each.lastRunAt}`).join(",");
-  const recorded = useRecordedRuns(revision);
+  const bridge = useBridge();
+  // Read again for other dates, another gateway's routines, or as routines run.
+  const [recorded, retry] = useKeyedRead(`${gateway}:${start}:${end}:${revision}`, () =>
+    bridge.invoke({ type: "readCalendarRuns", from: start, to: end }),
+  );
   const byId = useMemo(() => new Map(routines.map((each) => [each.id, each])), [routines]);
-  const botOf = (routine: Routine) => bots.find((each) => each.id === routine.botId);
+  const viewer = viewerZone();
+  const gridRef = useRef<HTMLDivElement>(null);
 
   const chips: Chip[] = [];
-  for (const run of recorded) {
+  for (const run of recorded.status === "ready" ? recorded.value.runs : []) {
     const routine = byId.get(run.jobId);
-    if (!routine || run.runAt < start || run.runAt >= end) continue;
+    if (!routine) continue;
     chips.push({
       key: `run:${run.runId ?? run.runAt}`,
       routine,
@@ -109,9 +119,8 @@ export function Calendar({
         guessed: false,
       });
     if (frequent(routine)) continue;
-    const from = Math.max(start, now);
-    const guessed = occurrences(routine, from, end);
-    for (const at of guessed)
+    const ahead = occurrences(routine, Math.max(start, now), end);
+    for (const at of ahead)
       chips.push({
         key: `next:${routine.id}:${at}`,
         routine,
@@ -119,22 +128,41 @@ export function Calendar({
         past: false,
         failed: false,
         running: false,
-        guessed: guessed.length === 1 && routine.nextRunAt === at && routine.gated,
+        guessed: ahead.length === 1 && routine.nextRunAt === at && routine.gated,
       });
   }
   chips.sort((a, b) => a.at - b.at || a.routine.name.localeCompare(b.routine.name));
   const bands = routines.filter((each) => each.enabled && frequent(each));
 
   const move = (by: number) => setStart((current) => addDays(current, by));
+  // Left and Right: the chip closest in time on the nearest earlier or later day that has one.
   const onKey = (event: KeyboardEvent) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const chip = (event.target as HTMLElement).closest<HTMLElement>("[data-minute]");
+    const lists = [...(gridRef.current?.querySelectorAll<HTMLElement>(".r-cal-day") ?? [])];
+    const day = chip ? lists.findIndex((list) => list.contains(chip)) : -1;
+    if (!chip || day < 0) return;
     event.preventDefault();
-    move(event.key === "ArrowLeft" ? -1 : 1);
+    const minute = Number(chip.dataset.minute);
+    const step = event.key === "ArrowLeft" ? -1 : 1;
+    for (let other = day + step; other >= 0 && other < lists.length; other += step) {
+      const candidates = [...lists[other]!.querySelectorAll<HTMLElement>("[data-minute]")];
+      if (candidates.length === 0) continue;
+      const closest = candidates.reduce((best, each) =>
+        Math.abs(Number(each.dataset.minute) - minute) <
+        Math.abs(Number(best.dataset.minute) - minute)
+          ? each
+          : best,
+      );
+      closest.focus();
+      return;
+    }
   };
   const range =
     days === 1
-      ? `${dayName(start, now)}, ${dateName(start)}`
-      : `${dateName(start)} – ${dateName(addDays(end, -1))}`;
+      ? `${dayName(start, now)} ${dateName(start)}`
+      : `${dayName(start, now)} ${dateName(start)} to ${dayLabel(addDays(end, -1))}`;
+  const top = (at: number) => (wallMinutes(at, viewer) / 60) * HOUR_PX;
 
   return (
     <div className="r-calendar" data-testid="calendar" data-days={days}>
@@ -159,26 +187,43 @@ export function Calendar({
           type="button"
           className="button"
           data-variant="quiet"
-          disabled={start === startOfDay(now)}
           onClick={() => setStart(startOfDay(now))}
         >
           Today
         </button>
-        <span className="r-cal-range" aria-live="polite" data-testid="calendar-range">
+        <span className="r-cal-range" role="status" data-testid="calendar-range">
           {range}
         </span>
-        <span className="r-zone">Your time, {zoneCity(viewerZone())}</span>
+        <span className="r-zone">Your time, {zoneCity(viewer)}</span>
       </div>
-      <div
-        className="r-cal-scroll"
-        tabIndex={0}
-        role="region"
-        aria-label={`Routines, ${range}. Left and Right move a day.`}
-        onKeyDown={onKey}
-      >
+      {recorded.status === "error" ? (
+        <Note tone="warn" testId="calendar-error">
+          <p>
+            <strong>Couldn&apos;t load the runs on these days.</strong> {recorded.error}
+          </p>
+          <button type="button" className="button" data-size="sm" onClick={retry}>
+            Try again
+          </button>
+        </Note>
+      ) : (
+        recorded.status === "ready" &&
+        recorded.value.partial && (
+          <Note testId="calendar-partial">
+            <p>
+              <strong>Some runs on these days aren&apos;t shown.</strong> The gateway recorded more
+              runs since then than Clawtrate reads at once.
+            </p>
+          </Note>
+        )
+      )}
+      <div className="r-cal-scroll">
         <div
+          ref={gridRef}
           className="r-cal"
+          role="group"
+          aria-label="Routines by day"
           style={{ ["--days" as string]: days, ["--hour" as string]: `${HOUR_PX}px` }}
+          onKeyDown={onKey}
         >
           <div className="r-cal-corner" aria-hidden="true" />
           {columns.map((day) => (
@@ -197,17 +242,21 @@ export function Calendar({
               <div className="r-cal-corner" aria-hidden="true" />
               {columns.map((day) => (
                 <div key={`bands:${day}`} className="r-cal-bands">
-                  {bands.map((routine) => (
-                    <button
-                      key={routine.id}
-                      type="button"
-                      className="r-cal-band"
-                      title={`${scheduleWords(routine.schedule).text} · ${routine.name}`}
-                      onClick={() => onOpen(routine.id)}
-                    >
-                      {scheduleWords(routine.schedule).text} · {routine.name}
-                    </button>
-                  ))}
+                  {bands.map((routine) => {
+                    const words = `${scheduleWords(routine.schedule).text} · ${routine.name}`;
+                    return (
+                      <button
+                        key={routine.id}
+                        type="button"
+                        className="r-cal-band"
+                        aria-label={`${words}, ${dayLabel(day)}`}
+                        title={words}
+                        onClick={() => onOpen(routine.id)}
+                      >
+                        {words}
+                      </button>
+                    );
+                  })}
                 </div>
               ))}
             </>
@@ -223,31 +272,25 @@ export function Calendar({
           </div>
           {columns.map((day) => {
             const mine = chips.filter((chip) => chip.at >= day && chip.at < addDays(day, 1));
-            const label = new Intl.DateTimeFormat("en-US", {
-              weekday: "long",
-              month: "short",
-              day: "numeric",
-            }).format(day);
+            const label = dayLabel(day);
             return (
               <ul
                 key={`day:${day}`}
                 className="r-cal-day"
-                aria-label={label}
+                aria-label={mine.length > 0 ? label : `${label}, nothing scheduled`}
                 data-testid="calendar-day"
               >
                 {startOfDay(now) === day && (
-                  <li
-                    className="r-now"
-                    aria-hidden="true"
-                    style={{ top: ((now - day) / DAY) * 24 * HOUR_PX }}
-                  />
+                  <li className="r-now" aria-hidden="true" style={{ top: top(now) }} />
                 )}
                 {mine.map((chip, index) => {
-                  const bot = botOf(chip.routine);
+                  const bot = ownerOf(bots, chip.routine.botId);
                   // Chips at the same time stack below one another.
                   const before = mine
                     .slice(0, index)
-                    .filter((other) => Math.abs(other.at - chip.at) < 45 * 60_000).length;
+                    .filter(
+                      (other) => Math.abs(top(other.at) - top(chip.at)) < 0.75 * HOUR_PX,
+                    ).length;
                   const outcome = chip.running
                     ? ", running"
                     : chip.past
@@ -255,11 +298,16 @@ export function Calendar({
                         ? ", failed"
                         : ", ran"
                       : "";
+                  const later = chip.guessed
+                    ? ", and later, as the gateway decides"
+                    : !chip.past && !chip.running && mayStagger(chip.routine)
+                      ? ", may start up to 5 minutes later"
+                      : "";
                   return (
                     <li
                       key={chip.key}
                       className="r-occ-slot"
-                      style={{ top: ((chip.at - day) / DAY) * 24 * HOUR_PX + before * 24 }}
+                      style={{ top: top(chip.at) + before * 24 }}
                     >
                       <button
                         type="button"
@@ -267,14 +315,15 @@ export function Calendar({
                         data-testid="occurrence"
                         data-past={chip.past || undefined}
                         data-outcome={chip.failed ? "failed" : undefined}
-                        aria-label={`${chip.routine.name}, ${bot?.name ?? chip.routine.botId}, ${label} ${timeName(chip.at)}${outcome}`}
-                        title={`${timeName(chip.at)}${chip.guessed ? ", and later, as the gateway decides" : ""}`}
+                        data-minute={wallMinutes(chip.at, viewer)}
+                        aria-label={`${chip.routine.name}, ${bot.name}, ${label} ${timeName(chip.at)}${outcome}`}
+                        title={`${timeName(chip.at)}${later}`}
                         onClick={() => onOpen(chip.routine.id)}
                       >
                         {chip.running && (
                           <span className="glyph" data-state="working" aria-hidden="true" />
                         )}
-                        {bot && <Avatar bot={bot} />}
+                        <Avatar bot={bot} />
                         <span>{chip.routine.name}</span>
                       </button>
                     </li>

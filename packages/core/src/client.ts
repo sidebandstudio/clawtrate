@@ -16,7 +16,14 @@ import {
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
-import { RoutinesEngine, type RoutineRun, type RunConversation } from "./routines.ts";
+import {
+  RoutinesEngine,
+  type BotRoutines,
+  type CalendarRuns,
+  type RoutineRun,
+  type RunConversation,
+  type RunSelector,
+} from "./routines.ts";
 import {
   admitApproval,
   applyApprovalRequested,
@@ -3437,23 +3444,24 @@ export class ClawtrateClient {
     return this.routines.load();
   }
 
-  /** A routine's runs, newest first, at most `MAX_ROUTINE_RUNS`; returned, not kept. */
+  /** One bot's routines, for a list that keeps fewer than the gateway has; returned, not kept. */
+  readBotRoutines(botId: string): Promise<BotRoutines> {
+    return this.routines.botRoutines(botId);
+  }
+
+  /** A routine's runs, newest finished first, at most `MAX_ROUTINE_RUNS`; returned, not kept. */
   readRoutineRuns(id: string): Promise<RoutineRun[]> {
     return this.routines.runs(id);
   }
 
-  /** The latest runs across routines, for the calendar; returned, not kept. */
-  readCalendarRuns(): Promise<RoutineRun[]> {
-    return this.routines.calendarRuns();
+  /** Every routine's runs that started from `from` to `to`, for the calendar; returned, not kept. */
+  readCalendarRuns(from: number, to: number): Promise<CalendarRuns> {
+    return this.routines.calendarRuns(from, to);
   }
 
   /** One run's conversation, when the gateway keeps it; returned, not kept. */
-  readRunConversation(
-    id: string,
-    runId: string,
-    sessionKey: string | null,
-  ): Promise<RunConversation> {
-    return this.routines.conversation(id, runId, sessionKey);
+  readRunConversation(id: string, run: RunSelector): Promise<RunConversation> {
+    return this.routines.conversation(id, run);
   }
 
   // Provider accounts (`accounts.ts`, `accounts-engine.ts`; bots.md sections 3 to 11) ----------

@@ -2,14 +2,18 @@
 // (2026.10.6) returned them (docs/decisions.md, "Routines: what the gateway
 // returns"), and the client applying the `cron` event it sends.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
 import {
   applyCronEvent,
   initialRoutinesState,
+  MAX_CALENDAR_RUNS,
   MAX_ROUTINE_RUNS,
+  MAX_ROUTINES,
   parseRoutine,
+  RETRY_MS,
   RoutinesEngine,
+  RUNNING_RECHECK_MS,
   type RoutinesState,
 } from "../src/routines.ts";
 import { FAST, grantingGateway, URL_A } from "./client-harness.ts";
@@ -61,8 +65,11 @@ const runEntry = (runAtMs: number, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-function engine(handlers: Record<string, (params: Record<string, unknown>) => unknown>) {
-  let state: RoutinesState = initialRoutinesState;
+function engine(
+  handlers: Record<string, (params: Record<string, unknown>) => unknown>,
+  start: RoutinesState = initialRoutinesState,
+) {
+  let state: RoutinesState = start;
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   const routines = new RoutinesEngine({
     request: async (method, params) => {
@@ -132,6 +139,186 @@ describe("F-191: the routine list", () => {
     });
     await routines.load();
     expect(state()).toMatchObject({ status: "error", error: "missing scope: operator.read" });
+    routines.onClose();
+  });
+
+  it("keeps 200 routines, counts the rest from the gateway's total, and refills a place a removal empties", async () => {
+    let first = 0;
+    let total = 450;
+    const jobs = (from: number, count: number) =>
+      Array.from({ length: count }, (_, index) => job({ id: `j${first + from + index}` }));
+    const { routines, requests, state } = engine({
+      "cron.status": () => ({ enabled: true }),
+      "cron.list": (params) => {
+        const offset = params.offset as number;
+        const count = Math.min(200, total - offset);
+        return {
+          jobs: jobs(offset, count),
+          total,
+          hasMore: offset + count < total,
+          nextOffset: offset + count < total ? offset + count : null,
+        };
+      },
+    });
+    await routines.load();
+    expect(state().routines).toHaveLength(MAX_ROUTINES);
+    expect(state().omitted).toBe(250);
+    // The first page filled the cap: the rest is counted, not read.
+    expect(requests.filter((r) => r.method === "cron.list")).toHaveLength(1);
+    first = 1;
+    total = 449;
+    routines.onEvent({ jobId: "j0", action: "removed" });
+    await until(() => state().omitted === 249);
+    expect(state().routines).toHaveLength(MAX_ROUTINES);
+    expect(state().routines.some((r) => r.id === "j0")).toBe(false);
+  });
+});
+
+describe("F-024: the list stays true when events and reads cross", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("an event that arrives while the list is read keeps that older read from being shown", async () => {
+    let answer: (value: unknown) => void = () => {};
+    let reads = 0;
+    const { routines, state } = engine(
+      {
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => {
+          reads += 1;
+          // The first read is the gateway's answer from before the run finished.
+          if (reads === 1) return new Promise((resolve) => (answer = resolve));
+          return { jobs: [job({}, { lastRunAtMs: 5, lastRunStatus: "ok" })], hasMore: false };
+        },
+      },
+      {
+        ...initialRoutinesState,
+        status: "loaded",
+        routines: [parseRoutine(job({}, { runningAtMs: 5 }))!],
+      },
+    );
+    const loading = routines.load();
+    await until(() => reads === 1);
+    routines.onEvent({ jobId: JOB, action: "finished", job: job(), runAtMs: 5, status: "ok" });
+    expect(state().routines[0]!.runningAt).toBeNull();
+    answer({ jobs: [job({}, { runningAtMs: 5 })], hasMore: false });
+    await loading;
+    expect(reads).toBe(2);
+    expect(state().routines[0]).toMatchObject({ runningAt: null, lastRunAt: 5 });
+    routines.onClose();
+  });
+
+  it("an older finish does not clear a newer start, and a start older than the last run marks nothing", () => {
+    const running = applyCronEvent([parseRoutine(job({}, { lastRunAtMs: 10 }))!], {
+      jobId: JOB,
+      action: "started",
+      job: job({}, { runningAtMs: 20, lastRunAtMs: 10 }),
+      runAtMs: 20,
+    });
+    expect(running[0]!.runningAt).toBe(20);
+    const late = applyCronEvent(running, {
+      jobId: JOB,
+      action: "finished",
+      job: job({}, { lastRunAtMs: 10 }),
+      runAtMs: 10,
+      status: "ok",
+    });
+    expect(late).toBe(running);
+    const stale = applyCronEvent([parseRoutine(job({}, { lastRunAtMs: 30 }))!], {
+      jobId: JOB,
+      action: "started",
+      job: job({}, { runningAtMs: 20 }),
+      runAtMs: 20,
+    });
+    expect(stale[0]!.runningAt).toBeNull();
+  });
+
+  it("a dropped finished is found by reading the list again while a routine is marked running", async () => {
+    vi.useFakeTimers();
+    let running = true;
+    const { routines, state } = engine({
+      "cron.status": () => ({ enabled: true }),
+      "cron.list": () => ({
+        jobs: [job({}, running ? { runningAtMs: 5 } : { lastRunAtMs: 5, lastRunStatus: "ok" })],
+        hasMore: false,
+      }),
+    });
+    await routines.load();
+    expect(state().routines[0]!.runningAt).toBe(5);
+    // The run finishes; its event never arrives (the gateway sends `cron` with dropIfSlow).
+    running = false;
+    await vi.advanceTimersByTimeAsync(RUNNING_RECHECK_MS);
+    expect(state().routines[0]).toMatchObject({ runningAt: null, lastRunAt: 5 });
+    routines.onClose();
+  });
+
+  it("a failed refresh is tried again, and the stale mark goes once it reads", async () => {
+    vi.useFakeTimers();
+    let fail = false;
+    let running = true;
+    const { routines, state } = engine({
+      "cron.status": () => ({ enabled: true }),
+      "cron.list": () => {
+        if (fail) throw new Error("request timed out");
+        return { jobs: [job({}, running ? { runningAtMs: 5 } : {})], hasMore: false };
+      },
+    });
+    await routines.load();
+    fail = true;
+    running = false;
+    await routines.load();
+    expect(state()).toMatchObject({ status: "error", error: "request timed out" });
+    expect(state().routines[0]!.runningAt).toBe(5);
+    fail = false;
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    expect(state()).toMatchObject({ status: "loaded", error: null });
+    expect(state().routines[0]!.runningAt).toBeNull();
+    routines.onClose();
+  });
+
+  it("says a one-shot removed itself only when its successful finish came just before", () => {
+    const oneShot = (over: Record<string, unknown> = {}) =>
+      job({
+        deleteAfterRun: true,
+        schedule: { kind: "at", at: "2026-11-20T09:00:00-05:00" },
+        ...over,
+      });
+    const once = parseRoutine(oneShot())!;
+    const start = { ...initialRoutinesState, status: "loaded" as const, routines: [once] };
+    const self = engine({}, start);
+    self.routines.onEvent({
+      jobId: JOB,
+      action: "finished",
+      job: oneShot(),
+      status: "ok",
+      runAtMs: 7,
+    });
+    self.routines.onEvent({ jobId: JOB, action: "removed" });
+    expect(self.state().removed).toEqual({ id: JOB, ranOnce: true, runAt: 7 });
+    // Removed by someone, after a run that ended some time before.
+    const manual = engine({}, start);
+    manual.routines.onEvent({
+      jobId: JOB,
+      action: "finished",
+      job: oneShot(),
+      status: "ok",
+      runAtMs: 7,
+    });
+    manual.routines.onEvent({ jobId: JOB, action: "updated", job: oneShot({ name: "Renamed" }) });
+    manual.routines.onEvent({ jobId: JOB, action: "removed" });
+    expect(manual.state().removed).toEqual({ id: JOB, ranOnce: false, runAt: null });
+    // Removed while running: the run is cancelled, and nothing ran once.
+    const cancelled = engine({}, start);
+    cancelled.routines.onEvent({
+      jobId: JOB,
+      action: "finished",
+      job: oneShot(),
+      status: "error",
+      runAtMs: 7,
+    });
+    cancelled.routines.onEvent({ jobId: JOB, action: "removed" });
+    expect(cancelled.state().removed).toMatchObject({ ranOnce: false });
   });
 });
 
@@ -184,18 +371,24 @@ describe("the cron event", () => {
 });
 
 describe("F-355: a routine's runs", () => {
-  it("are the 20 most recent, newest first, however many the gateway returns", async () => {
-    // Out of order and more than 20, so both the cut and the order are the engine's.
-    const entries = Array.from({ length: 27 }, (_, index) =>
-      runEntry(1_000_000 + ((index * 7) % 27) * 60_000),
-    );
+  it("are at most 20, in the gateway's order: newest finished first", async () => {
+    const entries = Array.from({ length: 27 }, (_, index) => runEntry(1_000_000 - index * 60_000));
     const { routines, requests } = engine({ "cron.runs": () => ({ entries, total: 27 }) });
     const runs = await routines.runs(JOB);
     expect(requests[0]!.params).toEqual({ id: JOB, limit: MAX_ROUTINE_RUNS });
-    expect(runs).toHaveLength(20);
     expect(runs.map((run) => run.runAt)).toEqual(
-      Array.from({ length: 20 }, (_, index) => 1_000_000 + (26 - index) * 60_000),
+      entries.slice(0, 20).map((entry) => entry.runAtMs),
     );
+  });
+
+  it("keep a run that started earlier but finished later above one that started after it", async () => {
+    // Overlapping runs: A started at 100 and finished at 900, B started at 200 and finished at 300.
+    const entries = [
+      runEntry(100, { ts: 900, runId: "A" }),
+      runEntry(200, { ts: 300, runId: "B" }),
+    ];
+    const { routines } = engine({ "cron.runs": () => ({ entries }) });
+    expect((await routines.runs(JOB)).map((run) => run.runId)).toEqual(["A", "B"]);
   });
 
   it("F-190: carry how each ended, its usage and whether it was started by hand", async () => {
@@ -223,6 +416,57 @@ describe("F-355: a routine's runs", () => {
   });
 });
 
+describe("F-197: the calendar's recorded runs", () => {
+  it("pages back until runs finished before the dates shown, and keeps those that started in them", async () => {
+    const DAY = 86_400_000;
+    const from = 10 * DAY;
+    const to = 17 * DAY;
+    // A busy routine fills the first page; the quiet one's run is further back.
+    const busy = Array.from({ length: 200 }, (_, index) =>
+      runEntry(to - 1 - index * 60_000, { jobId: "busy" }),
+    );
+    const quiet = [runEntry(from + DAY), runEntry(from - DAY)];
+    const { routines, requests } = engine({
+      "cron.runs": (params) =>
+        params.offset === 0
+          ? { entries: busy, hasMore: true, nextOffset: 200 }
+          : { entries: quiet, hasMore: false, nextOffset: null },
+    });
+    const read = await routines.calendarRuns(from, to);
+    expect(requests.map((r) => r.params)).toEqual([
+      { scope: "all", limit: 200, offset: 0 },
+      { scope: "all", limit: 200, offset: 200 },
+    ]);
+    expect(read.partial).toBe(false);
+    expect(read.runs).toHaveLength(201);
+    expect(read.runs.at(-1)!.runAt).toBe(from + DAY);
+  });
+
+  it("is partial when the most it reads does not reach back to the dates' start", async () => {
+    const { routines, requests } = engine({
+      "cron.runs": (params) => ({
+        entries: Array.from({ length: 200 }, (_, index) =>
+          runEntry(10_000_000 - (params.offset as number) - index),
+        ),
+        hasMore: true,
+        nextOffset: (params.offset as number) + 200,
+      }),
+    });
+    const read = await routines.calendarRuns(0, 20_000_000);
+    expect(read.partial).toBe(true);
+    expect(requests).toHaveLength(MAX_CALENDAR_RUNS / 200);
+  });
+
+  it("passes a failed read on", async () => {
+    const { routines } = engine({
+      "cron.runs": () => {
+        throw new Error("request timed out");
+      },
+    });
+    await expect(routines.calendarRuns(0, 1)).rejects.toThrow("request timed out");
+  });
+});
+
 describe("F-193: a run's conversation", () => {
   const recorded = (content: string, provenance: Record<string, unknown> = {}) => ({
     messages: [
@@ -241,18 +485,15 @@ describe("F-193: a run's conversation", () => {
     ],
   });
 
-  it("shows the message recorded with the run, not the routine's current instruction", async () => {
-    const { routines, requests } = engine({
-      "cron.history": () =>
-        recorded("first text\nCurrent time: Wednesday\n\nThis is an unattended scheduled run."),
-    });
-    const conversation = await routines.conversation(JOB, "run-1", SESSION);
-    expect(requests[0]!.params).toEqual({ id: JOB, runId: "run-1" });
-    expect(conversation).toMatchObject({
-      status: "kept",
-      message: "first text",
-      added: "Current time: Wednesday\n\nThis is an unattended scheduled run.",
-    });
+  const RUN = { runId: "run-1", runAt: 1_795_045_912_353, sessionKey: SESSION };
+
+  it("shows the message recorded with the run, whole, not the routine's current instruction", async () => {
+    const recordedText =
+      "first text\nCurrent time: Wednesday\n\nThis is an unattended scheduled run.";
+    const { routines, requests } = engine({ "cron.history": () => recorded(recordedText) });
+    const conversation = await routines.conversation(JOB, RUN);
+    expect(requests[0]!.params).toEqual({ id: JOB, runId: "run-1", limit: 200 });
+    expect(conversation).toMatchObject({ status: "kept", message: recordedText });
     expect(conversation.status === "kept" && conversation.items[0]!.blocks).toEqual([
       { kind: "text", text: "Three notes from yesterday." },
     ]);
@@ -265,7 +506,7 @@ describe("F-193: a run's conversation", () => {
       { messages: [] },
     ]) {
       const { routines } = engine({ "cron.history": () => result });
-      expect(await routines.conversation(JOB, "run-1", SESSION)).toMatchObject({
+      expect(await routines.conversation(JOB, RUN)).toMatchObject({
         status: "none",
         reason: "not-kept",
       });
@@ -277,16 +518,56 @@ describe("F-193: a run's conversation", () => {
         );
       },
     });
-    expect(await routines.conversation(JOB, "run-1", SESSION)).toEqual({
+    expect(await routines.conversation(JOB, RUN)).toEqual({
       status: "none",
       reason: "not-kept",
       error: "The recorded cron transcript is unavailable. Refresh the run and try again.",
     });
   });
 
+  it("passes any other failure on, so it reads as a failed read, not a missing conversation", async () => {
+    const { routines } = engine({
+      "cron.history": () => {
+        throw new Error("request timed out after 30000ms");
+      },
+    });
+    await expect(routines.conversation(JOB, RUN)).rejects.toThrow("request timed out");
+  });
+
+  it("asks by the run's start when it has a session but no run id", async () => {
+    const { routines, requests } = engine({ "cron.history": () => recorded("text") });
+    await routines.conversation(JOB, { ...RUN, runId: null });
+    expect(requests[0]!.params).toEqual({ id: JOB, runAtMs: RUN.runAt, limit: 200 });
+  });
+
+  it("reads older pages back to the scheduler's message, and says when it is further back than it reads", async () => {
+    const reply = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
+    const pages: Record<string, unknown> = {
+      first: { messages: [reply("newest")], nextCursor: "older" },
+      older: { messages: recorded("text").messages },
+    };
+    const { routines, requests } = engine({
+      "cron.history": (params) => pages[(params.cursor as string | undefined) ?? "first"],
+    });
+    const read = await routines.conversation(JOB, RUN);
+    expect(requests.map((r) => r.params.cursor)).toEqual([undefined, "older"]);
+    expect(read.status === "kept" && read.items.map((item) => item.blocks)).toEqual([
+      [{ kind: "text", text: "Three notes from yesterday." }],
+      [{ kind: "text", text: "newest" }],
+    ]);
+    const endless = engine({
+      "cron.history": () => ({ messages: [reply("more")], nextCursor: "again" }),
+    });
+    expect(await endless.routines.conversation(JOB, RUN)).toEqual({
+      status: "none",
+      reason: "too-long",
+      error: null,
+    });
+  });
+
   it("is not asked for when the run had no session of its own (a reminder in the main conversation)", async () => {
     const { routines, requests } = engine({});
-    expect(await routines.conversation(JOB, "run-1", null)).toEqual({
+    expect(await routines.conversation(JOB, { ...RUN, sessionKey: null })).toEqual({
       status: "none",
       reason: "no-session",
       error: null,

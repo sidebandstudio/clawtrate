@@ -20,7 +20,7 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
-import type { RoutineRun, RunConversation } from "./routines.ts";
+import type { BotRoutines, CalendarRuns, RoutineRun, RunConversation } from "./routines.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -119,12 +119,20 @@ export type BridgeCommand =
   | { type: "releaseFile"; id: string }
   // Routines (automation.md sections 3 to 8), at the read tier. Reads answer and keep nothing.
   | { type: "refreshRoutines" }
-  /** A routine's runs, newest first, at most `MAX_ROUTINE_RUNS`. */
+  /** One bot's routines, when the kept list is missing some of the gateway's. */
+  | { type: "readBotRoutines"; botId: string }
+  /** A routine's runs in the gateway's order, newest finished first, at most `MAX_ROUTINE_RUNS`. */
   | { type: "readRoutineRuns"; id: string }
-  /** The latest runs across routines, for the calendar. */
-  | { type: "readCalendarRuns" }
-  /** One run's conversation, when the gateway keeps it. */
-  | { type: "readRunConversation"; id: string; runId: string; sessionKey: string | null }
+  /** Every routine's runs that started from `from` to `to` (epoch ms), for the calendar. */
+  | { type: "readCalendarRuns"; from: number; to: number }
+  /** One run's conversation, when the gateway keeps it; the run by its id, else its start. */
+  | {
+      type: "readRunConversation";
+      id: string;
+      runId: string | null;
+      runAt: number;
+      sessionKey: string | null;
+    }
   // Provider accounts (bots.md sections 3 to 11). Writes need admin.
   /** Read the accounts, sign-ins, bindings and catalogue again. */
   | { type: "refreshAccounts" }
@@ -205,35 +213,39 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
               ? TranscriptItem | null
               : C extends { type: "retryCreation" }
                 ? { key: string }
-                : C extends { type: "readRoutineRuns" | "readCalendarRuns" }
-                  ? RoutineRun[]
-                  : C extends { type: "readRunConversation" }
-                    ? RunConversation
-                    : C extends { type: "listTaskFiles" }
-                      ? TaskFileList
-                      : C extends { type: "readTaskFile" | "readWorkspaceFile" }
-                        ? FileRead
-                        : C extends { type: "listWorkspace" }
-                          ? WorkspacePage
-                          : C extends { type: "readCheckoutDiff" }
-                            ? CheckoutDiff
-                            : C extends { type: "readFileChunk" }
-                              ? { data: string }
-                              : C extends { type: "cancelSignIn" }
-                                ? { cancelled: boolean }
-                                : C extends { type: "dismissSignIn" }
-                                  ? { dismissed: boolean }
-                                  : C extends { type: "saveApiKey" }
-                                    ? { profileId: string | null }
-                                    : C extends { type: "createBot" | "finishBot" }
-                                      ? { botId: string; missing: MissingStep[] }
-                                      : C extends { type: "newTask" | "newMainTask" }
-                                        ? { key: string }
-                                        : C extends { type: "archiveTask" }
-                                          ? ArchiveResult
-                                          : C extends { type: "listArchived" }
-                                            ? ArchivedList
-                                            : void;
+                : C extends { type: "readBotRoutines" }
+                  ? BotRoutines
+                  : C extends { type: "readRoutineRuns" }
+                    ? RoutineRun[]
+                    : C extends { type: "readCalendarRuns" }
+                      ? CalendarRuns
+                      : C extends { type: "readRunConversation" }
+                        ? RunConversation
+                        : C extends { type: "listTaskFiles" }
+                          ? TaskFileList
+                          : C extends { type: "readTaskFile" | "readWorkspaceFile" }
+                            ? FileRead
+                            : C extends { type: "listWorkspace" }
+                              ? WorkspacePage
+                              : C extends { type: "readCheckoutDiff" }
+                                ? CheckoutDiff
+                                : C extends { type: "readFileChunk" }
+                                  ? { data: string }
+                                  : C extends { type: "cancelSignIn" }
+                                    ? { cancelled: boolean }
+                                    : C extends { type: "dismissSignIn" }
+                                      ? { dismissed: boolean }
+                                      : C extends { type: "saveApiKey" }
+                                        ? { profileId: string | null }
+                                        : C extends { type: "createBot" | "finishBot" }
+                                          ? { botId: string; missing: MissingStep[] }
+                                          : C extends { type: "newTask" | "newMainTask" }
+                                            ? { key: string }
+                                            : C extends { type: "archiveTask" }
+                                              ? ArchiveResult
+                                              : C extends { type: "listArchived" }
+                                                ? ArchivedList
+                                                : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -503,15 +515,23 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         ? { type: "requestAccess", tier: "admin" }
         : { type: "requestAccess" };
     case "refreshRoutines":
-    case "readCalendarRuns":
       return { type: command.type };
+    case "readCalendarRuns":
+      return {
+        type: "readCalendarRuns",
+        from: count(command.from, Number.MAX_SAFE_INTEGER, "time"),
+        to: count(command.to, Number.MAX_SAFE_INTEGER, "time"),
+      };
+    case "readBotRoutines":
+      return { type: "readBotRoutines", botId: botId(command.botId) };
     case "readRoutineRuns":
       return { type: "readRoutineRuns", id: id(command.id, "routine id") };
     case "readRunConversation":
       return {
         type: "readRunConversation",
         id: id(command.id, "routine id"),
-        runId: id(command.runId, "run id"),
+        runId: command.runId === null ? null : id(command.runId, "run id"),
+        runAt: count(command.runAt, Number.MAX_SAFE_INTEGER, "run time"),
         sessionKey:
           command.sessionKey === null || command.sessionKey === undefined
             ? null
@@ -932,12 +952,18 @@ class ViewerSession implements BridgeSession {
         return client.requestAccess(command.tier === "admin" ? "admin" : "interactive");
       case "refreshRoutines":
         return client.refreshRoutines();
+      case "readBotRoutines":
+        return client.readBotRoutines(command.botId);
       case "readRoutineRuns":
         return client.readRoutineRuns(command.id);
       case "readCalendarRuns":
-        return client.readCalendarRuns();
+        return client.readCalendarRuns(command.from, command.to);
       case "readRunConversation":
-        return client.readRunConversation(command.id, command.runId, command.sessionKey);
+        return client.readRunConversation(command.id, {
+          runId: command.runId,
+          runAt: command.runAt,
+          sessionKey: command.sessionKey,
+        });
       case "refreshAccounts":
         return client.refreshAccounts();
       case "checkLock":

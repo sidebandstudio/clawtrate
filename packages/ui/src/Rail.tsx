@@ -144,10 +144,16 @@ function withRoutine(summary: BotSummary, running: Routine | null): BotSummary {
     : summary;
 }
 
+/** A routine run's row stays under its bot this long after it finished (Clawtrate's choice, the gateway's default retention). */
+const ROUTINE_ROW_MS = 24 * 60 * 60 * 1000;
+
 /**
- * Each of a bot's routines with a run, once, as a row under the bot: the
- * clock, the routine's name, its latest run's time and the failed mark when
- * that run failed (F-193). It opens that run.
+ * Each of a bot's isolated agent routines that is running or whose latest
+ * run finished in the last 24 hours, once, as a row under the bot: the clock,
+ * the routine's name, its latest run's time and the failed mark when that run
+ * failed (F-193). A finished row opens that run; a running one opens the
+ * routine, where the run in progress is. They are kept apart from the bot's
+ * tasks: not counted, never unread, and not part of the tasks' order.
  */
 function RoutineRows({
   bot,
@@ -158,10 +164,17 @@ function RoutineRows({
   bot: Bot;
   routines: Routine[];
   now: number;
-  onOpen: (id: string) => void;
+  onOpen: (id: string, runAt: number | null) => void;
 }) {
   const rows = routines
-    .filter((each) => each.botId === bot.id && (each.lastRunAt !== null || each.runningAt !== null))
+    .filter(
+      (each) =>
+        each.botId === bot.id &&
+        each.target === "isolated" &&
+        each.payload === "agentTurn" &&
+        (each.runningAt !== null ||
+          (each.lastRunAt !== null && now - each.lastRunAt < ROUTINE_ROW_MS)),
+    )
     .sort((a, b) => (b.runningAt ?? b.lastRunAt ?? 0) - (a.runningAt ?? a.lastRunAt ?? 0));
   if (rows.length === 0) return null;
   return (
@@ -178,7 +191,7 @@ function RoutineRows({
               data-routine={routine.id}
               data-state={routine.runningAt !== null ? "working" : failed ? "failed" : undefined}
               aria-label={`${routine.name}, routine run${routine.runningAt !== null ? ", running" : failed ? ", failed" : ""}`}
-              onClick={() => onOpen(routine.id)}
+              onClick={() => onOpen(routine.id, routine.runningAt === null ? at : null)}
             >
               <ClockIcon className="task-pin" />
               <span className="task-title">{routine.name}</span>
@@ -505,8 +518,8 @@ export function Rail({
   routines?: Routine[];
   routinesOpen?: boolean;
   onOpenRoutines?: () => void;
-  /** Open a routine's newest run. */
-  onOpenRoutineRun?: (id: string) => void;
+  /** Open a routine's run that started at `runAt`, or the routine itself (`null`) while it runs. */
+  onOpenRoutineRun?: (id: string, runAt: number | null) => void;
 }) {
   const send = useCommand();
   const bridge = useBridge();
@@ -1760,7 +1773,7 @@ export function Rail({
             bot={bot}
             routines={routines}
             now={now}
-            onOpen={(id) => onOpenRoutineRun?.(id)}
+            onOpen={(id, runAt) => onOpenRoutineRun?.(id, runAt)}
           />
         )}
       </li>
@@ -1826,8 +1839,7 @@ export function Rail({
         </button>
         {query === null ? (
           <>
-            {/* Shown once the gateway has a routine: with nothing to create one from yet, an empty view offers nothing. */}
-            {onOpenRoutines && (routines.length > 0 || routinesOpen) && (
+            {onOpenRoutines && (
               <button
                 type="button"
                 className="icon-button"

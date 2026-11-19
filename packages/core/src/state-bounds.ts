@@ -902,6 +902,11 @@ export const ROUTINES: Bound = object<RoutinesState>()({
   schedulerOn: FLAG,
   routines: list(MAX_ROUTINES, routine),
   omitted: NUMBER,
+  removed: object<NonNullable<RoutinesState["removed"]>>()({
+    id: ID,
+    ranOnce: FLAG,
+    runAt: NUMBER,
+  }),
 });
 
 /** Every part of the state but the transcripts, and the transcripts as one map. */
