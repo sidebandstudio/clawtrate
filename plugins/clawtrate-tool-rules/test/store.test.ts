@@ -2,7 +2,7 @@
 // they change on disk; the decision record, metadata only, for 30 days.
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { nextScope } from "../lib/rules.js";
@@ -221,5 +221,24 @@ describe("the decision record's own bounds", () => {
     expect(
       readFileSync(join(dir, "decisions.jsonl"), "utf8").trim().split("\n").length,
     ).toBeLessThanOrEqual(121);
+  });
+});
+
+describe("a known lost policy", () => {
+  it("stays lost when its file goes, until a valid store is read", () => {
+    const dir = folder();
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "rules.json");
+    writeFileSync(file, "{ not rules");
+    const store = new RulesStore(dir);
+    const lost = (view: ReturnType<RulesStore["view"]>) => [view.kind, view.enforced, view.kept];
+    expect(lost(store.view())).toEqual(["lost", null, null]);
+    rmSync(file);
+    expect(lost(store.view())).toEqual(["lost", null, null]);
+    expect(store.view().problem).toBe("the rules file is gone");
+    writeFileSync(file, JSON.stringify({ format: "clawtrate-tool-rules", schema: 1 }));
+    expect(lost(store.view())).toEqual(["lost", null, null]);
+    writeFileSync(file, JSON.stringify(serializeRules(new Map())));
+    expect(store.view()).toMatchObject({ kind: "read", enforced: new Map(), kept: null });
   });
 });

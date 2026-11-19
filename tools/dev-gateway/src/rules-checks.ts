@@ -13,7 +13,7 @@
 // asserts what it does and says so in its name (the plugin turned off in the
 // middle of a run, a run another bot's message started).
 
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OperatorSession } from "./operator.ts";
 import { drainSessions } from "./scenario-check.ts";
@@ -401,9 +401,9 @@ export const RULES_CHECKS: RulesCheck[] = [
         await ctx.clients.interactive.request("chat.abort", { sessionKey: key }).catch(() => {});
         await ctx.clients.interactive.terminal(askRun, 60_000);
       } finally {
-        rmSync(rulesFile(ctx), { force: true });
+        writeFileSync(rulesFile(ctx), JSON.stringify({ format: PLUGIN, schema: 1, scopes: {} }));
       }
-      same((await statusOf(ctx)).enforcing, "nothing", "status once the file is removed");
+      same((await statusOf(ctx)).enforcing, "rules", "status after reading a valid empty policy");
     },
   },
   {
@@ -421,7 +421,8 @@ export const RULES_CHECKS: RulesCheck[] = [
           status.enforcing,
           rec(status.hook).registered,
         ],
-        [PLUGIN, VERSION, 1, "none", "nothing", true],
+        // The check before it leaves a valid empty store.
+        [PLUGIN, VERSION, 1, "read", "rules", true],
         "the plugin's status",
       );
       answered(await rules(reader, "get"), "get at the read tier");

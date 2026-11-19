@@ -174,10 +174,14 @@ export class RulesStore {
     const first = this.seen === undefined;
     this.seen = key;
     let next;
-    if (stat !== null) next = this.#read(stat);
-    // No file: nothing was saved, unless this process read rules from one.
-    else if (this.good) next = this.#lost("the rules file is gone");
-    else next = { kind: "none", scopes: new Map(), readAt: null, problem: null };
+    // No file: nothing was saved, unless this process read rules from one or knew them lost.
+    if (stat !== null) {
+      next = this.#read(stat);
+    } else if (this.good || this.state.kind === "lost") {
+      next = this.#lost("the rules file is gone");
+    } else {
+      next = { kind: "none", scopes: new Map(), readAt: null, problem: null };
+    }
     this.#set(next, !first);
   }
 
