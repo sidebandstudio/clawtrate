@@ -1169,22 +1169,19 @@ export const PORT_RELEASE_MS = 10_000;
  * Wait until nothing listens on the port a stopped process held. Its PID can
  * look gone before its sockets are closed: a gateway killed while its threads
  * are busy can show as a zombie while its last threads still hold its
- * listening socket. True once the port is closed; false, naming the process,
- * when it is still open after `inst.portReleaseMs`.
+ * listening socket. Null once the port is closed; what is wrong, naming the
+ * process and the port, when it is still open after `inst.portReleaseMs`.
  */
-async function portReleased(inst: DevInstance, target: StopTarget): Promise<boolean> {
-  if (target.port === undefined) return true;
+async function portReleased(inst: DevInstance, target: StopTarget): Promise<string | null> {
+  if (target.port === undefined) return null;
   const deadline = Date.now() + inst.portReleaseMs;
   while (await inst.listening(target.port)) {
     if (Date.now() >= deadline) {
-      console.log(
-        `The ${target.role} (pid ${target.pid}) has exited, but its port ${target.port} is still open after ${inst.portReleaseMs / 1000} s`,
-      );
-      return false;
+      return `the ${target.role} (pid ${target.pid}) has exited, but its port ${target.port} is still open after ${inst.portReleaseMs / 1000} s`;
     }
     await sleep(100);
   }
-  return true;
+  return null;
 }
 
 /**
@@ -1380,6 +1377,8 @@ async function stopLocked(inst: DevInstance): Promise<void> {
     );
   }
   const targets: StopTarget[] = [];
+  /** Recorded processes already gone, perhaps ended by an earlier stop: only their ports are checked. */
+  const exited: StopTarget[] = [];
   for (const role of ["gateway", "provider"] as const) {
     const pid = marker[`${role}Pid`];
     const identity = marker[`${role}Identity`];
@@ -1389,22 +1388,30 @@ async function stopLocked(inst: DevInstance): Promise<void> {
         `could not determine whether its ${role} (pid ${String(pid)}) is running: ${verdict.reason}`,
       );
     }
-    if (verdict.state === "alive") {
-      const port = marker[`${role}Port`];
-      targets.push({ role, pid: pid!, identity: identity!, ...(port ? { port } : {}) });
-    }
+    if (verdict.state !== "alive" && verdict.state !== "dead") continue;
+    const port = marker[`${role}Port`];
+    const target = { role, pid: pid!, identity: identity!, ...(port ? { port } : {}) };
+    (verdict.state === "alive" ? targets : exited).push(target);
   }
   let confirmed = true;
-  for (const target of targets) {
-    // Stopped means its PID is gone and so is its listener: a reset checks the port next.
-    confirmed =
-      (await stopProcess(target, inst.identify)) && (await portReleased(inst, target)) && confirmed;
+  const openPorts: string[] = [];
+  // Stopped means its PID is gone and so is its listener: a reset checks the port next.
+  // Only a process proven alive is signalled; one already gone has only its port waited for.
+  for (const target of [...targets, ...exited]) {
+    if (targets.includes(target) && !(await stopProcess(target, inst.identify))) {
+      confirmed = false;
+      continue;
+    }
+    const open = await portReleased(inst, target);
+    if (open) openPorts.push(open);
   }
+  if (openPorts.length > 0) confirmed = false;
   // The gateway's browser and its helpers go with it, but not always at once.
   if (confirmed) confirmed = await settleBrowserProcesses(inst);
   if (!confirmed) {
     throw new StateInUseError(
-      `${label(inst)}: could not confirm that every process stopped; its records are kept.`,
+      `${label(inst)}: could not confirm that every process stopped; its records are kept.` +
+        (openPorts.length > 0 ? ` ${openPorts.join("; ")}.` : ""),
     );
   }
   rmSync(inst.runFile, { force: true });

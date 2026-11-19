@@ -5,7 +5,7 @@
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { list, openInstance, prune, reset, start, stop } from "../src/cli.ts";
 import { GATE_SCRIPT, gatedSpawn, OpenclawRunner } from "../src/env.ts";
 import { stateDirFor } from "../src/instance.ts";
@@ -448,22 +448,49 @@ describe("a stopped process is stopped once its port is closed too", () => {
     const gateway = liveProcess();
     const { stateDir, marker } = seedInstance(home, "alpha", { runRoot, gateway });
     const before = snapshot(stateDir);
-    const lines: string[] = [];
-    const log = vi.spyOn(console, "log").mockImplementation((line: string) => lines.push(line));
-    try {
-      const inst = testInstance(home, runRoot, "alpha", {
-        listening: async (port) => port === marker.gatewayPort,
-        portReleaseMs: 300,
-      });
-      await expect(reset(inst)).rejects.toThrow(/could not confirm that every process stopped/);
-    } finally {
-      log.mockRestore();
-    }
-    expect(lines.join("\n")).toContain(
-      `The gateway (pid ${gateway.pid}) has exited, but its port ${marker.gatewayPort} is still open`,
+    const inst = testInstance(home, runRoot, "alpha", {
+      listening: async (port) => port === marker.gatewayPort,
+      portReleaseMs: 300,
+    });
+    await expect(reset(inst)).rejects.toThrow(
+      `could not confirm that every process stopped; its records are kept. ` +
+        `the gateway (pid ${gateway.pid}) has exited, but its port ${marker.gatewayPort} is still open`,
     );
     expect(processState(gateway.pid, gateway.identity, processIdentity)).toBe("dead");
     expect(snapshot(stateDir)).toEqual(before);
+  });
+
+  /** An instance whose gateway's port stays open while `open.value` is true; its first stop times out. */
+  async function timedOutStop() {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const gateway = liveProcess();
+    const { marker } = seedInstance(home, "alpha", { runRoot, gateway });
+    const open = { value: true };
+    const inst = testInstance(home, runRoot, "alpha", {
+      listening: async (port) => open.value && port === marker.gatewayPort,
+      portReleaseMs: 300,
+    });
+    await expect(stop(inst)).rejects.toThrow(`its port ${marker.gatewayPort} is still open`);
+    expect(processState(gateway.pid, gateway.identity, processIdentity)).toBe("dead");
+    expect(existsSync(inst.runFile)).toBe(true);
+    return { inst, gateway, marker, open };
+  }
+
+  it("a stop run again while the port of a gateway an earlier stop ended stays open keeps the run file and names the port", async () => {
+    const { inst, gateway, marker } = await timedOutStop();
+    // The gateway is gone, so this stop signals nothing, but its port still counts.
+    await expect(stop(inst)).rejects.toThrow(
+      `the gateway (pid ${gateway.pid}) has exited, but its port ${marker.gatewayPort} is still open`,
+    );
+    expect(existsSync(inst.runFile)).toBe(true);
+  });
+
+  it("a stop run again once that port has closed succeeds and removes the run file", async () => {
+    const { inst, open } = await timedOutStop();
+    open.value = false;
+    await stop(inst);
+    expect(existsSync(inst.runFile)).toBe(false);
   });
 });
 
