@@ -345,7 +345,7 @@ A default OpenClaw (`~/.openclaw`, `ai.openclaw.gateway`) is never touched: prov
 | Checked | "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions."         |
 | Then    | "A gateway that listens on this computer only, as a LaunchAgent that starts when you log in, with no AI provider yet. You sign in to one when you make your first bot." (Linux: "as a systemd user service that starts with your session") |
 
-Under the facts (13, faint): "Nothing is asked for: no account and no model key." and "OpenClaw keeps running if you remove Clawtrate. Remove it in Settings first if you want it gone." Then "Set up OpenClaw…" (primary), which opens the host's dialog repeating the dependency sentence, and "Cancel".
+Under the facts (13, faint): "Nothing is asked for: no account and no model key." and "OpenClaw keeps running if you remove Clawtrate. Removing this gateway in Settings can also stop it; removing OpenClaw isn't offered in this version." Then "Set up OpenClaw…" (primary), which opens the host's dialog repeating the dependency sentence, and "Cancel".
 
 **The steps** (F-502), title "Setting up OpenClaw":
 

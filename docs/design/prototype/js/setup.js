@@ -499,7 +499,7 @@
         ],
       ]) +
       hint("Nothing is asked for: no account and no model key.") +
-      hint("OpenClaw keeps running if you remove Clawtrate. Remove it in Settings first if you want it gone.") +
+      hint("OpenClaw keeps running if you remove Clawtrate. Removing this gateway in Settings can also stop it; removing OpenClaw isn't offered in this version.") +
       actions(button("Set up OpenClaw…", { variant: "primary", host: "install" }), button("Cancel", { to: "notfound" })),
 
     installing: () =>
