@@ -9,7 +9,6 @@ export const MAX_DEPTH = 16;
 export const HASH = /^[a-f0-9]{64}$/;
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 export const missing = (error) => ["not-found", "ENOENT"].includes(error?.code);
-export const revision = (stat) => `${stat.dev}:${stat.ino}:${stat.ctimeMs}:${stat.mtimeMs}`;
 
 export class Refusal extends Error {
   constructor(message, details) {
@@ -110,8 +109,11 @@ export async function applyCas(root, path, file, assertCurrent, mutate) {
       (!stat?.isFile() ||
         stat.nlink !== 1 ||
         !before ||
+        stat.dev !== before.dev ||
+        stat.ino !== before.ino ||
         stat.size !== before.size ||
-        revision(stat) !== revision(before))
+        stat.ctimeMs !== before.ctimeMs ||
+        stat.mtimeMs !== before.mtimeMs)
     ) {
       throw new Refusal("The file changed during the operation", { retryRead: true });
     }

@@ -71,7 +71,7 @@ try {
   assert.equal(file.hash, hash);
   assert.equal(file.loadedIntoNewTasks, false);
   assert.equal(file.searchable, "unconfirmed");
-  assert.equal((file.savedBy as { hash: string }).hash, hash);
+  assert.equal(file.savedBy, undefined);
   assert.deepEqual((await request(reader, "list", { agentId })).files, [
     {
       path: note.path,
@@ -80,7 +80,6 @@ try {
       modifiedAt: file.modifiedAt,
       loadedIntoNewTasks: false,
       searchable: "unconfirmed",
-      savedBy: file.savedBy,
     },
   ]);
 

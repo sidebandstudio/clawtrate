@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -101,8 +102,6 @@ function setup({
                 if (savers.size > maxEntries) savers.delete(savers.keys().next().value!);
               },
               delete: async (key: string) => savers.delete(key),
-              lookupMany: async (keys: string[]) =>
-                keys.map((key) => ({ ok: true, value: savers.get(key) })),
             };
           },
         },
@@ -386,9 +385,11 @@ describe("memory changes", () => {
         hash: sha256("second"),
         loadedIntoNewTasks: false,
         searchable: "unconfirmed",
-        savedBy: { kind: "operator", id: "test-device", hash: sha256("second") },
       },
     });
+    expect([...savers.values()]).toMatchObject([
+      { kind: "operator", id: "test-device", hash: sha256("second") },
+    ]);
     expect(JSON.stringify([...savers.values()])).not.toContain("second");
     expect(events).toEqual(
       Array(2).fill({
@@ -397,8 +398,6 @@ describe("memory changes", () => {
         options: { scope: "operator.read" },
       }),
     );
-    writeFileSync(target, "outside edit");
-    expect((await call("read", note)).payload).not.toHaveProperty("savedBy");
   });
 
   it("refuses stale writes and deletes, including a concurrent second writer", async () => {
@@ -442,18 +441,68 @@ describe("memory changes", () => {
     expect(readFileSync(join(workspace, note.path), "utf8")).toBe("outside edit");
   });
 
-  it("does not credit an old saver when an outside edit restores the same bytes", async () => {
-    const { call, workspace } = setup();
+  it("does not attribute an identical replacement published before the write returns", async () => {
+    const { call, workspace, savers } = setup({
+      root: async (...args: Parameters<typeof fs.root>) => {
+        const root = await fs.root(...args);
+        const create = root.create.bind(root);
+        root.create = async (...options: unknown[]) => {
+          await create(...options);
+          const target = join(workspace, note.path);
+          const replacement = `${target}.replacement`;
+          writeFileSync(replacement, initial.content);
+          renameSync(replacement, target);
+        };
+        return root;
+      },
+    });
     expect((await call("write", initial)).ok).toBe(true);
-    const target = join(workspace, note.path);
-    expect((await call("read", note)).payload).toHaveProperty("savedBy");
-    writeFileSync(target, "intermediate");
-    writeFileSync(target, initial.content);
+    expect([...savers.values()]).toMatchObject([
+      { kind: "operator", hash: sha256(initial.content) },
+    ]);
+    expect([...savers.values()][0]).not.toHaveProperty("revision");
     expect((await call("read", note)).payload).not.toHaveProperty("savedBy");
     expect((await call("list", { agentId: "main" })).payload).toMatchObject({
       files: [expect.not.objectContaining({ savedBy: expect.anything() })],
     });
   });
+
+  it.each(["write", "delete"])(
+    "reports a committed note %s as uncertain after a config reload",
+    async (method) => {
+      const { call, workspace, events, reload } = setup({
+        root: async (...args: Parameters<typeof fs.root>) => {
+          const root = await fs.root(...args);
+          const operation = method === "delete" ? "remove" : "write";
+          const mutate = root[operation].bind(root);
+          root[operation] = async (...options: unknown[]) => {
+            await mutate(...options);
+            reload();
+          };
+          return root;
+        },
+      });
+      mkdirSync(join(workspace, "memory/nested"), { recursive: true });
+      writeFileSync(join(workspace, note.path), "first");
+      const change = { ...note, expectedHash: sha256("first") };
+      expect(
+        await call(method, method === "write" ? { ...change, content: "second" } : change),
+      ).toMatchObject({
+        ok: false,
+        error: {
+          message: expect.stringContaining("read the note again before retrying"),
+          details: { unknown: true },
+        },
+      });
+      expect(events).toHaveLength(1);
+      const reread = await call("read", note);
+      if (method === "write") {
+        expect(reread).toMatchObject({ ok: true, payload: { content: "second" } });
+      } else {
+        expect(reread).toMatchObject({ ok: false, error: { message: "Note does not exist" } });
+      }
+    },
+  );
 
   it("reports uncertain note replacement and removal and invalidates the view", async () => {
     const { call, workspace, events } = setup({

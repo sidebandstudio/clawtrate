@@ -14,7 +14,6 @@ import {
   read,
   requireHash,
   requireNativeMutations,
-  revision,
   rootOptions,
   sha256,
   sharedDirectory,
@@ -101,13 +100,6 @@ export function registerMemory(api, sdk) {
 
   function remember(key, metadata) {
     return savers().register(key, { ...metadata, at: Date.now() });
-  }
-
-  async function rememberWrite(fs, path, hash, saver) {
-    const file = await read(fs, path);
-    if (file.hash === hash) {
-      await remember(saverKey(fs, path), { ...saver, hash, revision: revision(file.stat) });
-    }
   }
 
   function changed() {
@@ -265,23 +257,9 @@ export function registerMemory(api, sdk) {
       hash: file.hash,
       size: file.stat.size,
       modifiedAt: file.stat.mtimeMs,
-      revision: revision(file.stat),
       ...FACTS,
       ...(folder.shared ? { sourceId: sourceIdFor(folder.sharedRoot, path) } : {}),
     };
-  }
-
-  async function withSavers(fs, files) {
-    const results = await savers()
-      .lookupMany(files.map(({ path }) => saverKey(fs, path)))
-      .catch(() => []);
-    return files.map(({ revision, ...file }, index) => {
-      const saved = results[index];
-      if (!saved?.ok || saved.value?.hash !== file.hash || saved.value.revision !== revision)
-        return file;
-      const { revision: _revision, ...savedBy } = saved.value;
-      return { ...file, savedBy };
-    });
   }
 
   async function list(params, call) {
@@ -350,10 +328,7 @@ export function registerMemory(api, sdk) {
     }
     folder.assertLocal?.();
     return {
-      files: await withSavers(
-        folder.fs,
-        files.sort((a, b) => b.modifiedAt - a.modifiedAt || a.path.localeCompare(b.path)),
-      ),
+      files: files.sort((a, b) => b.modifiedAt - a.modifiedAt || a.path.localeCompare(b.path)),
       truncated,
     };
   }
@@ -378,9 +353,7 @@ export function registerMemory(api, sdk) {
     if (method === "read") {
       const file = await read(fs, path);
       if (file.hash === null) throw new Refusal("Note does not exist");
-      const [data] = await withSavers(fs, [
-        stored(folder, selectedPath(folder, path, file.realPath), file),
-      ]);
+      const data = stored(folder, selectedPath(folder, path, file.realPath), file);
       folder.assertLocal?.();
       return { ...data, content: file.content };
     }
@@ -417,7 +390,8 @@ export function registerMemory(api, sdk) {
         throw error;
       }
       const newHash = sha256(content);
-      await rememberWrite(fs, path, newHash, call.saver).catch(() => {});
+      // Root writes return no publication identity to attach to saver metadata.
+      await remember(key, { ...call.saver, hash: newHash }).catch(() => {});
       changed();
       return { hash: newHash };
     });
@@ -459,7 +433,7 @@ export function registerMemory(api, sdk) {
         throw error;
       }
       const hash = sha256(content);
-      await rememberWrite(fs, ROOT_FILE, hash, call.saver).catch(() => {});
+      await remember(saverKey(fs, ROOT_FILE), { ...call.saver, hash }).catch(() => {});
       changed();
       return { hash };
     });
@@ -613,7 +587,15 @@ export function registerMemory(api, sdk) {
               );
             }
           } else {
-            assertCurrent();
+            try {
+              assertCurrent();
+            } catch (error) {
+              if (!mutation) throw error;
+              throw new Refusal(
+                "Memory may have changed. When access is restored, read the note again before retrying",
+                { unknown: true },
+              );
+            }
           }
           respond(true, data);
         } catch (error) {
