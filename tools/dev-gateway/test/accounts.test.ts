@@ -24,6 +24,7 @@ import {
 import {
   devConfig,
   lockOrder,
+  main,
   openInstance,
   PLUGIN_RULE,
   recordedStartOptions,
@@ -265,6 +266,14 @@ describe("local pairing at the gateway's default", () => {
       start(openInstance(null, { home, runRoot: join(home, "run") }), DEFAULT_PAIRING),
     ).rejects.toThrow(/default instance always requires explicit pairing/);
     expect(readdirSync(home)).toEqual([]);
+  });
+
+  it("is refused by every command but start and up", async () => {
+    for (const command of ["status", "stop", "seed", "reset", "approve"]) {
+      await expect(
+        main([command, "--instance", "probe", "--default-local-pairing"], {}),
+      ).rejects.toThrow(`--default-local-pairing is a start option; ${command} does not take it`);
+    }
   });
 
   it("is read back from the record of start options", () => {

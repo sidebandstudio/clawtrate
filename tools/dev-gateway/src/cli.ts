@@ -2011,6 +2011,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     process.exitCode = command ? 1 : 0;
     return;
   }
+  if (values["default-local-pairing"] && command !== "start" && command !== "up") {
+    throw new Error(`--default-local-pairing is a start option; ${command} does not take it`);
+  }
   const inst = openInstance(selected);
   const runId = values["run-id"];
   switch (command) {
