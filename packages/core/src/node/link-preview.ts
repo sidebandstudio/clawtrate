@@ -4,14 +4,20 @@
 // for it after a hover of 500 ms, or a touch and hold.
 //
 // What it fetches is a bot's text, so it is untrusted: `http:` and `https:`
-// only, no cookies or credentials, at most three redirects, each address
-// checked again, and never an address that resolves to this machine or a
-// private network (loopback, private, link-local, shared and unique-local
-// ranges), so a link cannot make the app reach a gateway or a router. What is
-// read is bounded: the first 512 KB of the page, a picture of at most 512 KB,
-// 8 seconds in all.
+// only, no cookies or credentials, and never an address on this machine or a
+// network that is not the public internet, decided on the parsed address
+// however it is written. A name is resolved once; if any address it resolves
+// to is inward the preview is refused, and otherwise the connection goes to
+// the address that was checked (the name is kept for TLS and the Host
+// header), so a second lookup cannot answer differently. At most three
+// redirects, each checked and pinned the same way before it is followed. What
+// is read is bounded: the first 512 KB of the page, a picture of at most
+// 512 KB, 8 seconds in all.
 
 import { lookup as dnsLookup } from "node:dns/promises";
+import { request as httpRequest, type IncomingMessage } from "node:http";
+import { request as httpsRequest } from "node:https";
+import type { LookupFunction } from "node:net";
 import type { LinkPreview, LinkPreviewer } from "../host.ts";
 
 export const PREVIEW_PAGE_BYTES = 524_288;
@@ -21,7 +27,24 @@ const MAX_REDIRECTS = 3;
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 type Lookup = (hostname: string) => Promise<{ address: string; family: number }[]>;
-type Fetch = typeof globalThis.fetch;
+
+/** Where one request goes: its address, and the address it was checked at, to connect to. */
+export type PinnedTarget = { url: URL; address: string; family: 4 | 6 };
+
+/** A response as the previewer reads it. */
+export type PreviewResponse = {
+  status: number;
+  header(name: string): string | null;
+  body: AsyncIterable<Uint8Array>;
+  close(): void;
+};
+
+/** One GET to a pinned target: it connects to `address`, never resolving the name again. */
+export type PreviewGet = (
+  target: PinnedTarget,
+  accept: string,
+  signal: AbortSignal,
+) => Promise<PreviewResponse>;
 
 /** An address as numbers: four bytes, or eight 16-bit words. */
 export type ParsedAddress = { family: 4; bytes: number[] } | { family: 6; words: number[] };
@@ -159,66 +182,119 @@ const plainName = (name: string) => name.toLowerCase().replace(/\.+$/, "");
 
 const INWARD_NAMES = /(^|\.)(localhost|local|internal|home\.arpa|localdomain)$/;
 
-async function publicTarget(url: URL, lookup: Lookup): Promise<boolean> {
-  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-  if (url.username || url.password) return false;
+/**
+ * The address to connect to for a URL: its literal address, or the first
+ * address its name resolves to, resolved once. Null when the URL is not a
+ * plain web address, when the name is an inward one, or when any address it
+ * resolves to is inward: a name that also answers inward is not trusted for
+ * the rest.
+ */
+async function checkedTarget(url: URL, lookup: Lookup): Promise<PinnedTarget | null> {
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.username || url.password) return null;
   const host = plainName(url.hostname.replace(/^\[|\]$/g, ""));
   const literal = parseAddress(host);
-  if (literal) return !isPrivateAddress(host);
-  if (!host || INWARD_NAMES.test(host)) return false;
+  if (literal)
+    return isPrivateAddress(host) ? null : { url, address: host, family: literal.family };
+  if (!host || INWARD_NAMES.test(host)) return null;
   const addresses = await lookup(host);
-  return addresses.length > 0 && addresses.every((each) => !isPrivateAddress(each.address));
+  if (addresses.length === 0 || addresses.some((each) => isPrivateAddress(each.address)))
+    return null;
+  const first = addresses[0]!;
+  const parsed = parseAddress(first.address)!;
+  return { url, address: first.address.replace(/%.*$/, ""), family: parsed.family };
+}
+
+/**
+ * The GET the previewer makes by default: Node's own HTTP and HTTPS, with the
+ * connection's lookup answering the checked address, so the socket goes
+ * there; the name stays in the Host header and in TLS (SNI and the
+ * certificate's name). No agent is shared, nothing is decompressed.
+ */
+export function pinnedGet(): PreviewGet {
+  return (target, accept, signal) =>
+    new Promise((resolve, reject) => {
+      const https = target.url.protocol === "https:";
+      const host = target.url.hostname.replace(/^\[|\]$/g, "");
+      const lookup: LookupFunction = (_name, options, callback) => {
+        if (options.all) callback(null, [{ address: target.address, family: target.family }]);
+        else callback(null, target.address, target.family);
+      };
+      const request = (https ? httpsRequest : httpRequest)(
+        {
+          protocol: target.url.protocol,
+          hostname: host,
+          ...(target.url.port ? { port: Number(target.url.port) } : {}),
+          path: `${target.url.pathname}${target.url.search}`,
+          method: "GET",
+          headers: {
+            accept,
+            "accept-encoding": "identity",
+            "user-agent": "Clawtrate link preview",
+          },
+          lookup,
+          agent: false,
+          signal,
+          ...(https && !parseAddress(host) ? { servername: plainName(host) } : {}),
+        },
+        (response: IncomingMessage) =>
+          resolve({
+            status: response.statusCode ?? 0,
+            header: (name) => {
+              const value = response.headers[name.toLowerCase()];
+              return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
+            },
+            body: response,
+            close: () => response.destroy(),
+          }),
+      );
+      request.on("error", reject);
+      request.end();
+    });
 }
 
 /** At most `limit` bytes of a body; `whole` says whether that was all of it. */
 async function readBounded(
-  response: Response,
+  response: PreviewResponse,
   limit: number,
 ): Promise<{ data: Uint8Array; whole: boolean }> {
-  const reader = response.body?.getReader();
-  if (!reader) return { data: new Uint8Array(0), whole: true };
   const parts: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) return { data: Buffer.concat(parts), whole: true };
-    if (total + value.length > limit) {
+  for await (const chunk of response.body) {
+    if (total + chunk.length > limit) {
       // A page's head is enough for its title; a picture must be whole.
-      parts.push(value.subarray(0, limit - total));
-      await reader.cancel();
+      parts.push(chunk.subarray(0, limit - total));
+      response.close();
       return { data: Buffer.concat(parts), whole: false };
     }
-    total += value.length;
-    parts.push(value);
+    total += chunk.length;
+    parts.push(chunk);
   }
+  return { data: Buffer.concat(parts), whole: true };
 }
 
-/** GET an address, following at most three redirects, every hop a public address. */
+/** GET an address, following at most three redirects, each hop checked and pinned before it is made. */
 async function getPublic(
   start: string,
   accept: string,
-  fetch: Fetch,
+  get: PreviewGet,
   lookup: Lookup,
   signal: AbortSignal,
-): Promise<{ response: Response; url: URL } | null> {
+): Promise<{ response: PreviewResponse; url: URL } | null> {
   let url = new URL(start);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    if (!(await publicTarget(url, lookup))) return null;
-    const response = await fetch(url, {
-      method: "GET",
-      redirect: "manual",
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-      headers: { accept },
-      signal,
-    });
-    const location = response.headers.get("location");
+    const target = await checkedTarget(url, lookup);
+    if (!target) return null;
+    const response = await get(target, accept, signal);
+    const location = response.header("location");
     if (response.status >= 300 && response.status < 400 && location) {
-      await response.body?.cancel();
+      response.close();
       url = new URL(location, url);
       continue;
     }
-    return response.ok ? { response, url } : null;
+    if (response.status >= 200 && response.status < 300) return { response, url };
+    response.close();
+    return null;
   }
   return null;
 }
@@ -256,18 +332,18 @@ export function readPreviewMeta(html: string): {
 }
 
 export function createLinkPreviewer(
-  options: { fetch?: Fetch; lookup?: Lookup; timeoutMs?: number } = {},
+  options: { get?: PreviewGet; lookup?: Lookup; timeoutMs?: number } = {},
 ): LinkPreviewer {
-  const fetch = options.fetch ?? globalThis.fetch;
+  const get = options.get ?? pinnedGet();
   const lookup: Lookup = options.lookup ?? ((host) => dnsLookup(host, { all: true }));
   return async (link: string): Promise<LinkPreview> => {
     const none: LinkPreview = { status: "none", url: link };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? PREVIEW_TIMEOUT_MS);
     try {
-      const page = await getPublic(link, "text/html", fetch, lookup, controller.signal);
-      if (!page || !/text\/html/i.test(page.response.headers.get("content-type") ?? "")) {
-        await page?.response.body?.cancel();
+      const page = await getPublic(link, "text/html", get, lookup, controller.signal);
+      if (!page || !/text\/html/i.test(page.response.header("content-type") ?? "")) {
+        page?.response.close();
         return none;
       }
       const { data: bytes } = await readBounded(page.response, PREVIEW_PAGE_BYTES);
@@ -277,15 +353,15 @@ export function createLinkPreviewer(
         const got = await getPublic(
           new URL(found.image, page.url).toString(),
           IMAGE_TYPES.join(","),
-          fetch,
+          get,
           lookup,
           controller.signal,
         ).catch(() => null);
-        const type = got?.response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
+        const type = got?.response.header("content-type")?.split(";")[0]?.trim() ?? "";
         if (got && IMAGE_TYPES.includes(type)) {
           const { data, whole } = await readBounded(got.response, PREVIEW_IMAGE_BYTES);
           if (whole) image = { mimeType: type, data: Buffer.from(data).toString("base64") };
-        } else await got?.response.body?.cancel();
+        } else got?.response.close();
       }
       if (!found.title && !found.description && !image) return none;
       return { status: "ok", url: link, title: found.title, description: found.description, image };

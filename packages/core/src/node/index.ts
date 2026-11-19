@@ -124,8 +124,12 @@ export type NodeHostOptions = {
 export {
   createLinkPreviewer,
   isPrivateAddress,
+  parseAddress,
+  pinnedGet,
   PREVIEW_IMAGE_BYTES,
   readPreviewMeta,
+  type PinnedTarget,
+  type PreviewGet,
 } from "./link-preview.ts";
 
 export function createNodeHost(options: NodeHostOptions): ClawtrateHost {
