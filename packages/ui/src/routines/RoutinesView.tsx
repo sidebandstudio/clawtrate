@@ -444,6 +444,7 @@ function Page({
                     type="button"
                     className="r-run"
                     data-testid="run-row"
+                    data-run-at={run.runAt}
                     aria-label={`${at}${run.manual ? ", started by hand" : ""}, ${outcome.text}`}
                     onClick={() => onRun(run)}
                   >
