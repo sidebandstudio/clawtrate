@@ -5,7 +5,7 @@
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { list, openInstance, prune, reset, start, stop } from "../src/cli.ts";
 import { GATE_SCRIPT, gatedSpawn, OpenclawRunner } from "../src/env.ts";
 import { stateDirFor } from "../src/instance.ts";
@@ -387,10 +387,20 @@ describe("a start holds the instance's lock until it is finished (B4)", () => {
     const runRoot = tempDir("clawtrate-run-");
     const faked = fakedInstance(home, runRoot, "alpha");
     let healthy = false;
+    // The gateway's port is open once it is healthy, and closes when its process exits.
+    const gatewayListening = () => {
+      const marker = readMarker(faked.stateDir);
+      return (
+        healthy &&
+        processState(marker?.gatewayPid, marker?.gatewayIdentity, processIdentity) === "alive"
+      );
+    };
     const inst = {
       ...faked,
       listening: async (port: number) =>
-        port === readMarker(faked.stateDir)?.gatewayPort ? healthy : faked.listening(port),
+        port === readMarker(faked.stateDir)?.gatewayPort
+          ? gatewayListening()
+          : faked.listening(port),
     };
     const events: string[] = [];
     const starting = start(inst, { seed: false }).then(() => events.push("started"));
@@ -405,6 +415,56 @@ describe("a start holds the instance's lock until it is finished (B4)", () => {
     expect(events).toEqual(["started", "stopped"]);
     expect(processState(marker.gatewayPid, marker.gatewayIdentity, processIdentity)).toBe("dead");
   }, 20_000);
+});
+
+describe("a stopped process is stopped once its port is closed too", () => {
+  // A gateway killed while busy can show as exited while its socket is still open (issue #153).
+  it("a reset waits for a stopped gateway's port to close, then removes the folder", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const gateway = liveProcess();
+    const { stateDir, marker } = seedInstance(home, "alpha", {
+      runRoot,
+      gateway,
+      provider: liveProcess(),
+    });
+    // The gateway's port answers for five more probes after its PID is gone.
+    let openAfterExit = 5;
+    const listening = async (port: number) => {
+      if (port !== marker.gatewayPort) return false;
+      if (processState(gateway.pid, gateway.identity, processIdentity) === "alive") return true;
+      if (openAfterExit === 0) return false;
+      openAfterExit -= 1;
+      return true;
+    };
+    await reset(testInstance(home, runRoot, "alpha", { listening }));
+    expect(openAfterExit).toBe(0);
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("a port still open after the wait fails the stop, naming the process and port, and the reset deletes nothing", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const gateway = liveProcess();
+    const { stateDir, marker } = seedInstance(home, "alpha", { runRoot, gateway });
+    const before = snapshot(stateDir);
+    const lines: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation((line: string) => lines.push(line));
+    try {
+      const inst = testInstance(home, runRoot, "alpha", {
+        listening: async (port) => port === marker.gatewayPort,
+        portReleaseMs: 300,
+      });
+      await expect(reset(inst)).rejects.toThrow(/could not confirm that every process stopped/);
+    } finally {
+      log.mockRestore();
+    }
+    expect(lines.join("\n")).toContain(
+      `The gateway (pid ${gateway.pid}) has exited, but its port ${marker.gatewayPort} is still open`,
+    );
+    expect(processState(gateway.pid, gateway.identity, processIdentity)).toBe("dead");
+    expect(snapshot(stateDir)).toEqual(before);
+  });
 });
 
 describe("lock files are used only through real directories (B4)", () => {

@@ -153,6 +153,8 @@ export type DevInstance = InstancePaths & {
   runner: OpenclawRunner;
   identify: Identify;
   listening: (port: number) => Promise<boolean>;
+  /** How long a stopped process's port may stay open after its PID is gone (`portReleased`). */
+  portReleaseMs: number;
   /** Spawns the scripted model (the gateway goes through the runner). */
   spawn: typeof spawn;
 };
@@ -166,6 +168,7 @@ export function openInstance(
     checkout?: string;
     identify?: Identify;
     listening?: (port: number) => Promise<boolean>;
+    portReleaseMs?: number;
     spawn?: typeof spawn;
   } = {},
 ): DevInstance {
@@ -192,6 +195,7 @@ export function openInstance(
     runner,
     identify,
     listening: options.listening ?? portOpen,
+    portReleaseMs: options.portReleaseMs ?? PORT_RELEASE_MS,
     spawn: options.spawn ?? spawn,
   };
 }
@@ -1156,7 +1160,32 @@ function childProcesses(pid: number, identify: Identify): { pid: number; identit
     });
 }
 
-type StopTarget = { role: string; pid: number; identity: string };
+type StopTarget = { role: string; pid: number; identity: string; port?: number };
+
+/** How long a stopped process's port may stay open once its PID is gone. */
+export const PORT_RELEASE_MS = 10_000;
+
+/**
+ * Wait until nothing listens on the port a stopped process held. Its PID can
+ * look gone before its sockets are closed: a gateway killed while its threads
+ * are busy can show as a zombie while its last threads still hold its
+ * listening socket. True once the port is closed; false, naming the process,
+ * when it is still open after `inst.portReleaseMs`.
+ */
+async function portReleased(inst: DevInstance, target: StopTarget): Promise<boolean> {
+  if (target.port === undefined) return true;
+  const deadline = Date.now() + inst.portReleaseMs;
+  while (await inst.listening(target.port)) {
+    if (Date.now() >= deadline) {
+      console.log(
+        `The ${target.role} (pid ${target.pid}) has exited, but its port ${target.port} is still open after ${inst.portReleaseMs / 1000} s`,
+      );
+      return false;
+    }
+    await sleep(100);
+  }
+  return true;
+}
 
 /**
  * The development browser's processes on an instance: Chromium and its
@@ -1360,10 +1389,17 @@ async function stopLocked(inst: DevInstance): Promise<void> {
         `could not determine whether its ${role} (pid ${String(pid)}) is running: ${verdict.reason}`,
       );
     }
-    if (verdict.state === "alive") targets.push({ role, pid: pid!, identity: identity! });
+    if (verdict.state === "alive") {
+      const port = marker[`${role}Port`];
+      targets.push({ role, pid: pid!, identity: identity!, ...(port ? { port } : {}) });
+    }
   }
   let confirmed = true;
-  for (const target of targets) confirmed = (await stopProcess(target, inst.identify)) && confirmed;
+  for (const target of targets) {
+    // Stopped means its PID is gone and so is its listener: a reset checks the port next.
+    confirmed =
+      (await stopProcess(target, inst.identify)) && (await portReleased(inst, target)) && confirmed;
+  }
   // The gateway's browser and its helpers go with it, but not always at once.
   if (confirmed) confirmed = await settleBrowserProcesses(inst);
   if (!confirmed) {
