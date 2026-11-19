@@ -272,7 +272,7 @@ Under them a note, neutral, in the words for the system:
 - Windows: "Clawtrate shows desktop notifications for events it receives while running and connected. Missed events can appear in your tasks when it reconnects. Closing its window quits it. It can't see whether Windows allows them or whether Do Not Disturb is on."
 - Linux: "Clawtrate shows desktop notifications for events it receives while running and connected. Missed events can appear in your tasks when it reconnects. None is shown while its window is focused."
 
-**When the system refused one** (Electron's `failed`, research §6), a `--warn-soft` note above the group: "Your system didn't show Clawtrate's notification at 5:41 PM. Check Clawtrate in your system's notification settings." It stays until a later notification is shown without `failed`. Nothing here ever says notifications are working: the app cannot know.
+**When a post failed** (Electron's `failed`, "an error … while creating and showing the native notification", research §6), a `--warn-soft` note above the group: "Clawtrate couldn't post a notification at 5:41 PM. Check your system's notification settings." with "Dismiss". It is cleared by a later positive `show` callback or when the person dismisses it, never by the mere absence of a later error. It does not say why: `failed` cannot tell permission, a Focus or another layer apart, and permission and Focus stay unknown. Nothing here ever says notifications are working: the app cannot know.
 
 **Quiet hours**, a group word, then a switch row "Quiet hours" with the line "Clawtrate posts no new notifications during quiet hours. Clawtrate can notify you after quiet hours if the item is still waiting and your settings allow it." With the switch on, the time pair (From, To), and under it the zone line of section 6. While they are on now, the "Quiet until" line of section 6.
 
@@ -322,7 +322,7 @@ The page's states are section 7's for its controls: reading, couldn't read, read
 ## 10. What the system decides, and what Clawtrate cannot see
 
 - **Whether notifications are allowed**, and whether a Focus, Do Not Disturb or Focus Assist is on: the system's alone, and Electron reports neither (research §6). No rule here depends on them; Settings says Clawtrate can't see them.
-- **What the app can observe**: that a notification was shown (`show`), clicked (`click`), closed (`close`, not always), or refused (`failed`). Only `failed` is shown to the person (section 7).
+- **What the app can observe**: that a notification was shown (`show`), clicked (`click`), closed (`close`, not always), or could not be created and shown (`failed`). Only `failed` is shown to the person, and a later `show` clears it (section 7). Neither establishes why, or that a banner was seen.
 - **Signing.** macOS shows notifications only for a code-signed app (research §6). Clawtrate is signed ad hoc by default, and whether that is enough is not established. An unsigned or refused notification raises `failed`, which Settings reports.
 - **Windows** needs the app's AppUserModelID on a Start-menu shortcut, which the installer makes (research §7). Electron also names a ToastActivatorCLSID, which the installer does not set; whether a toast is shown and clicks reach the app without it is the first thing a builder checks (section 15).
 - **When a build cannot show notifications.** If the first step of section 15 finds that a build cannot show them (an app signed ad hoc on macOS, or the Windows installer's identity, may turn out to be such a case), or `Notification.isSupported()` answers false, that build shows none and promises none: the host never tries, the in-app marks and the dock or taskbar badge are all there is, and every screen here says so (sections 7 to 9). Which builds that covers is recorded in `docs/decisions.md` by that step; it is decided per build, never inferred from one `failed`.
@@ -417,7 +417,7 @@ So the first thing a builder does is check each: a toast from the NSIS install, 
 - Keeps a record per shown notification (its opaque id, gateway identity, bot, task key, run id, card id, kind), at most one per task, dropped when withdrawn or once a click's target has been received; nothing of it on disk.
 - On quit (`before-quit`) withdraws every notification it shows; on switching gateways withdraws the old gateway's.
 - Holds waits during quiet hours in memory, by task and card id, and drops a held wait when it ends; holds at most one budget warning per budget and period start, apart from the waits.
-- Listens for `failed` and keeps its time for Settings.
+- Listens for `failed` and keeps its time for Settings; clears it on a later `show` or when the person dismisses the note.
 - Registers `Notification.handleActivation` on Windows only to bring the window forward for a notification it has no record of.
 
 ### What the engine supplies
@@ -455,7 +455,7 @@ So the first thing a builder does is check each: a toast from the NSIS install, 
 | `click`                       | `unlisted` (not in the rail, found by key), `gone` (not found by key), `botgone`, `itemgone`, `offline`, `othergw`, `stale`: what the host finds when the notification is clicked |
 | `prefs`                       | `reading`, `readfail`, `device` (`no_durable_identity`), `conflict`, `savefail`, `elsewhere` (a second device in Berlin)                                                          |
 | `access`                      | `read`: a read-only connection for the settings                                                                                                                                   |
-| `failed`                      | `1`: the system refused the last notification                                                                                                                                     |
+| `failed`                      | `1`: Electron reported `failed` for the last post                                                                                                                                 |
 | `tasks`                       | `full`: the task settings fill the value almost to the gateway's 4,096 bytes                                                                                                      |
 | `botsfull`                    | `1`: turning a bot off would not fit beside quiet hours                                                                                                                           |
 
