@@ -17,14 +17,18 @@ import {
   serverWords,
   SETTINGS_WORDS as W,
 } from "@clawtrate/ui/gateway-state";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Modal, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { CloseIcon } from "../components/icons.tsx";
+import { BackIcon, CloseIcon } from "../components/icons.tsx";
+import { FONT_LICENSES } from "../font-licenses.ts";
 import { Button, Dot, RoundButton, Txt } from "../components/ui.tsx";
 import { DEVICE_NAME } from "../host/index.ts";
 import { useRuntime } from "../runtime.ts";
-import { S, useTheme } from "../theme/index.ts";
+import { FONTS, S, useTheme } from "../theme/index.ts";
+
+/** Where the embedded fonts' licenses are read. */
+const LICENSES_TITLE = "Font licenses";
 
 function Fact({
   label,
@@ -74,6 +78,7 @@ export function Settings({
 }) {
   const { send } = useRuntime();
   const { c } = useTheme();
+  const [licenses, setLicenses] = useState(false);
   const state = gatewayState(connection);
   const dot = gatewayDot(state);
   const problem = gatewayProblem(connection);
@@ -87,119 +92,155 @@ export function Settings({
       onRequestClose={onClose}
     >
       <SafeAreaView edges={["bottom"]} style={{ flex: 1, backgroundColor: c.bg }}>
-        <View style={{ flexDirection: "row", alignItems: "center", padding: S["space-4"] }}>
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            padding: S["space-4"],
+            gap: S["space-3"],
+          }}
+        >
+          {licenses && (
+            <RoundButton label={W.title} onPress={() => setLicenses(false)} testID="licenses-back">
+              <BackIcon color={c.text} />
+            </RoundButton>
+          )}
           <Txt size={22} weight="strong" accessibilityRole="header" style={{ flex: 1 }}>
-            {W.title}
+            {licenses ? LICENSES_TITLE : W.title}
           </Txt>
           <RoundButton label={W.close} onPress={onClose} testID="settings-close">
             <CloseIcon color={c.text} />
           </RoundButton>
         </View>
-        <ScrollView
-          testID="settings"
-          contentContainerStyle={{ padding: S["space-4"], gap: S["space-4"] }}
-        >
-          <Txt size={S["text-sm"]} color="text-faint">
-            {W.gateway}
-          </Txt>
-          <View
-            style={{
-              backgroundColor: c["bg-bubble"],
-              borderRadius: S["radius-lg"],
-              overflow: "hidden",
-            }}
+        {licenses ? (
+          <ScrollView
+            testID="licenses"
+            contentContainerStyle={{ padding: S["space-4"], gap: S["space-4"] }}
           >
-            <Fact label={W.address}>
-              <Txt testID="gateway-address" selectable>
-                {connection.gatewayUrl ?? W.noAddress}
-              </Txt>
-            </Fact>
-            <Fact label={W.state} testID="gateway-state">
-              <Dot tone={dot === "disconnected" ? "off" : dot} />
-              <Txt testID="gateway-state-text">{state}</Txt>
-            </Fact>
-            <Fact label={W.device}>
-              <Txt testID="gateway-device">
-                {DEVICE_NAME}
-                {connection.deviceId ? ` · ${connection.deviceId.slice(0, 8)}` : ""}
-              </Txt>
-            </Fact>
-            <Fact label={W.scopes}>
-              <Txt testID="granted-scopes">{grantedWords(connection)}</Txt>
-            </Fact>
-            {connection.status === "connected" &&
-              connection.scopes.map((scope) => (
-                <Txt
-                  key={scope}
-                  size={S["text-sm"]}
-                  color="text-muted"
-                  style={{ paddingHorizontal: S["space-4"], paddingTop: 6 }}
-                >
-                  {scopeWords(scope)}
+            {FONT_LICENSES.map((license) => (
+              <View key={license.name} style={{ gap: S["space-2"] }}>
+                <Txt weight="medium" accessibilityRole="header">
+                  {license.name}
                 </Txt>
-              ))}
-            {server && (
-              <Fact label={W.server}>
-                <Txt>{server}</Txt>
-              </Fact>
-            )}
-          </View>
-          {problem && (
+                <Txt size={S["text-sm"]} selectable style={{ fontFamily: FONTS.mono }}>
+                  {license.text}
+                </Txt>
+              </View>
+            ))}
+          </ScrollView>
+        ) : (
+          <ScrollView
+            testID="settings"
+            contentContainerStyle={{ padding: S["space-4"], gap: S["space-4"] }}
+          >
+            <Txt size={S["text-sm"]} color="text-faint">
+              {W.gateway}
+            </Txt>
             <View
-              testID="gateway-problem"
-              accessibilityRole="alert"
               style={{
-                backgroundColor: c["danger-soft"],
-                borderRadius: S["radius-md"],
-                padding: S["space-4"],
-                gap: S["space-1"],
+                backgroundColor: c["bg-bubble"],
+                borderRadius: S["radius-lg"],
+                overflow: "hidden",
               }}
             >
-              <Txt weight="medium">{problem.title}</Txt>
-              <Txt size={S["text-md"]}>{problem.message}</Txt>
+              <Fact label={W.address}>
+                <Txt testID="gateway-address" selectable style={{ flexShrink: 1 }}>
+                  {connection.gatewayUrl ?? W.noAddress}
+                </Txt>
+              </Fact>
+              <Fact label={W.state} testID="gateway-state">
+                <Dot tone={dot === "disconnected" ? "off" : dot} />
+                <Txt testID="gateway-state-text">{state}</Txt>
+              </Fact>
+              <Fact label={W.device}>
+                <Txt testID="gateway-device">
+                  {DEVICE_NAME}
+                  {connection.deviceId ? ` · ${connection.deviceId.slice(0, 8)}` : ""}
+                </Txt>
+              </Fact>
+              <Fact label={W.scopes}>
+                <Txt testID="granted-scopes">{grantedWords(connection)}</Txt>
+              </Fact>
+              {connection.status === "connected" &&
+                connection.scopes.map((scope) => (
+                  <Txt
+                    key={scope}
+                    size={S["text-sm"]}
+                    color="text-muted"
+                    style={{ paddingHorizontal: S["space-4"], paddingTop: 6 }}
+                  >
+                    {scopeWords(scope)}
+                  </Txt>
+                ))}
+              {server && (
+                <Fact label={W.server}>
+                  <Txt>{server}</Txt>
+                </Fact>
+              )}
             </View>
-          )}
-          <View style={{ gap: S["space-2"] }}>
-            {actions.reconnect && (
-              <Button
-                label={W.reconnect}
-                variant="primary"
-                large
-                onPress={() => void send({ type: "retry" })}
-                testID="reconnect"
-              />
-            )}
-            {actions.disconnect && (
-              <Button
-                label={W.disconnect}
-                large
-                onPress={() => void send({ type: "suspend" })}
-                testID="disconnect"
-              />
-            )}
-            {actions.forget && (
-              <Button
-                label={W.useAnother}
-                variant="quiet"
-                large
-                testID="forget"
-                onPress={() => {
-                  onClose();
-                  onForget();
-                  void send({ type: "disconnect" });
+            {problem && (
+              <View
+                testID="gateway-problem"
+                accessibilityRole="alert"
+                style={{
+                  backgroundColor: c["danger-soft"],
+                  borderRadius: S["radius-md"],
+                  padding: S["space-4"],
+                  gap: S["space-1"],
                 }}
-              />
+              >
+                <Txt weight="medium">{problem.title}</Txt>
+                <Txt size={S["text-md"]}>{problem.message}</Txt>
+              </View>
             )}
-          </View>
-          {connection.gatewayUrl && (
-            <Txt size={S["text-sm"]} color="text-faint">
-              {pairingNote(gatewayLabel(connection.gatewayUrl), {
-                holdsAll: false,
-                readOnly: true,
-              })}
-            </Txt>
-          )}
-        </ScrollView>
+            <View style={{ gap: S["space-2"] }}>
+              {actions.reconnect && (
+                <Button
+                  label={W.reconnect}
+                  variant="primary"
+                  large
+                  onPress={() => void send({ type: "retry" })}
+                  testID="reconnect"
+                />
+              )}
+              {actions.disconnect && (
+                <Button
+                  label={W.disconnect}
+                  large
+                  onPress={() => void send({ type: "suspend" })}
+                  testID="disconnect"
+                />
+              )}
+              {actions.forget && (
+                <Button
+                  label={W.useAnother}
+                  variant="quiet"
+                  large
+                  testID="forget"
+                  onPress={() => {
+                    onClose();
+                    onForget();
+                    void send({ type: "disconnect" });
+                  }}
+                />
+              )}
+            </View>
+            {connection.gatewayUrl && (
+              <Txt size={S["text-sm"]} color="text-faint">
+                {pairingNote(gatewayLabel(connection.gatewayUrl), {
+                  holdsAll: false,
+                  readOnly: true,
+                })}
+              </Txt>
+            )}
+            <Button
+              label={LICENSES_TITLE}
+              variant="quiet"
+              onPress={() => setLicenses(true)}
+              testID="licenses-open"
+            />
+          </ScrollView>
+        )}
       </SafeAreaView>
     </Modal>
   );
