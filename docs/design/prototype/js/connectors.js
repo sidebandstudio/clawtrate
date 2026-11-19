@@ -17,7 +17,9 @@
     String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
   // Every display setting and the access tier are kept when moving between screens.
-  const KEEP = ["theme", "width", "motion", "chrome", "access", "picked", "device"];
+  const KEEP = ["theme", "width", "motion", "chrome", "access", "picked", "device", "app"];
+  // The web preview (?app=preview) is a browser: only there is the browser sign-in offered (section 10).
+  const preview = params.get("app") === "preview";
   // On the iPhone the window is "Plugins" (F-380), with its own words.
   const iphone = params.get("device") === "iphone";
   const go = (to, extra = {}) => {
@@ -155,7 +157,7 @@
   const NAV = [
     ["browse", "Browse"],
     ["installed", "On this gateway"],
-    ["add-server", "Add a tool server"],
+    ["add-server", "Add a custom connector"],
   ];
   const navOf = (s) =>
     s.startsWith("browse") || s.startsWith("app") || s.startsWith("add-") && !s.startsWith("add-server") ? "browse" : s.startsWith("add-server") || s === "command-confirm" ? "add-server" : "installed";
@@ -248,7 +250,7 @@
     return (
       group("Accounts") +
       `<ul class="c-rows"><li class="c-account"><span class="c-row-text"><span class="c-row-name">Shared by everyone on this gateway</span><span class="c-row-sub c-account-state">${words[0]}</span></span>` +
-      `<span class="c-row-end">${admin ? link(words[1], "signin-starting", { id: a.id }, { variant: state === "authorized" ? "quiet" : "" }) : ""}</span></li></ul>`
+      `<span class="c-row-end">${admin ? link(words[1], preview ? "signin-starting" : "signin-cli", { id: a.id }, { variant: state === "authorized" ? "quiet" : "" }) : ""}</span></li></ul>`
     );
   };
   const connectorPage = () => {
@@ -266,7 +268,7 @@
         `<p class="c-state" data-c="state">${state}</p>` +
         `<p class="c-text">${a.summary}</p>` +
         (a.bundled ? `<p class="c-line">Comes with OpenClaw, so it can be turned off but not removed.</p>` : "") +
-        group("Apps") +
+        group("Tools") +
         `<ul class="c-list">${(a.servers || [[a.id, false]]).map(([s]) => `<li><span class="mono">${s}</span>, a tool server</li>`).join("")}${(a.skills || []).map((k) => `<li>${k}, a skill</li>`).join("")}</ul>` +
         `<p class="c-line">Which bots may use these is in each bot's settings.</p>` +
         accountRow(a) +
@@ -294,7 +296,7 @@
       ...(s.kind === "remote"
         ? [
             ["Address", `<span class="mono">${s.url}</span>`],
-            ["Headers", s.headers.length ? `${s.headers.map((h) => `<span class="mono">${h}</span>`).join(", ")}. Hidden: the gateway doesn't show saved values.` : "None"],
+            ["Headers", s.headers.length ? `${s.headers.map((h) => `<span class="mono">${h}</span>`).join(", ")}. Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.` : "None"],
             ["Sign-in", s.signin === "oauth" ? "Signs in with OAuth" : s.signin === "each" ? "Each person signs in" : "None"],
           ]
         : [["Command", `<span class="mono">${esc([s.command, ...s.args].join(" "))}</span>`]]),
@@ -312,7 +314,7 @@
         `<p class="c-line">The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.</p>` +
         (signedFromHere ? `<p class="c-line">Last signed in from Clawtrate: Nov 19, 5:12 PM.</p>` : "") +
         (s.signin === "each" ? `<p class="c-line">Each person connects their own account when a bot first uses it, from the conversation.</p>` : "") +
-        (s.signin === "oauth" && admin ? `<div class="c-actions">${link("Sign in", "signin-starting", { id: name, server: "1" })}</div>` : "") +
+        (s.signin === "oauth" && admin ? `<div class="c-actions">${link("Sign in", preview ? "signin-starting" : "signin-cli", { id: name, server: "1" })}</div>` : "") +
         (s.kind === "remote"
           ? group("Accounts") +
             `<p class="c-line">A second name for the same server, with its own sign-in. Bots tell them apart by name.</p>` +
@@ -332,18 +334,18 @@
     const base = from ? SERVERS[from] : null;
     const remote = type === "remote";
     return {
-      title: "Add a tool server",
+      title: "Add a custom connector",
       body:
         (admin
           ? `<form class="c-form" id="c-server-form" novalidate data-type="${type}">` +
             `<fieldset class="c-type"><legend>Type</legend><div class="c-seg" role="radiogroup" aria-label="Type">` +
-            `<a role="radio" aria-checked="${remote}" href="${go("add-server", { type: "remote" })}">Remote</a>` +
+            `<a role="radio" aria-checked="${remote}" href="${go("add-server", { type: "remote" })}">Remote HTTPS</a>` +
             `<a role="radio" aria-checked="${!remote}" href="${go("add-server", { type: "command" })}">Command</a></div></fieldset>` +
             field("c-name", "Name", "", "Letters, digits, hyphens and underscores. Bots see it in tool names.", "notes-work") +
             (remote
-              ? field("c-url", "Server address", base ? base.url : "", "", "https://") +
+              ? field("c-url", "Server URL", base ? base.url : "", "", "https://") +
                 `<fieldset class="c-headers"><legend>Headers</legend><div class="c-header-row"><input class="input" id="c-h-name" aria-label="Header name" placeholder="Name" value="${base ? "Authorization" : ""}" /><input class="input" id="c-h-value" type="password" aria-label="Header value" placeholder="Value" /></div>` +
-                `<p class="c-line">Saved in the gateway's settings file on its machine, in plain text. Clawtrate can't read a value back once it's saved.</p></fieldset>` +
+                `<p class="c-line">Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved.</p></fieldset>` +
                 `<fieldset class="c-signin"><legend>Sign-in</legend>` +
                 radio("signin", "none", "None", !base) +
                 radio("signin", "oauth", "Sign in with OAuth", Boolean(base)) +
@@ -356,8 +358,8 @@
                 `<p class="c-line">The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can.</p>`) +
             `<div class="c-actions"><button type="submit" class="button" data-variant="primary" data-size="sm">${remote ? "Add to gateway" : "Continue"}</button></div>` +
             `</form>`
-          : `<p class="c-line">Adding a tool server writes the gateway's settings.</p>`) +
-        accessBar("Adding a tool server needs admin access.") +
+          : `<p class="c-line">Adding a custom connector writes the gateway's settings.</p>`) +
+        accessBar("Adding a custom connector needs admin access.") +
         granted(),
     };
   };
@@ -389,10 +391,12 @@
         ]),
       waiting:
         `<p class="c-text">Sign in on ${t.name}'s page.</p>` +
-        `<div class="c-open"><a class="button" data-variant="primary" data-size="sm" href="${go("signin-waiting", { ...keep, opened: "1" })}">Open the sign-in page</a><span class="c-host">${t.host}</span></div>` +
-        (params.get("opened") ? `<p class="c-line">Opened in your browser.</p>` : "") +
+        address(t.host) +
+        `<div class="c-open"><a class="button" data-variant="primary" data-size="sm" href="${go("signin-waiting", { ...keep, opened: "1" })}">Open in your browser</a></div>` +
+        (params.get("opened") ? `<p class="c-line">Opened in a new tab of your browser.</p>` : "") +
         `<p class="c-state c-waiting">${CTglyph()}Waiting for the sign-in. This works for 10 minutes.</p>` +
         `<div class="c-actions">${link("Cancel", "signin-cancelled", keep, { variant: "quiet" })}</div>` +
+        (params.get("loopback") === "1" ? note("", "", "The sign-in page returns to the gateway's own address, which only a browser on the gateway's machine can reach.") + cliSteps(t, keep) : "") +
         proto("the sign-in", [
           link("Approved", "signin-done", keep, { variant: "quiet" }),
           link("Refused", "signin-failed", keep, { variant: "quiet" }),
@@ -405,15 +409,20 @@
       cancelled: result("", "x", "Sign-in cancelled.", "Nothing changed on the gateway.", `<a class="button" data-size="sm" href="${t.back}">Back</a>`),
       dropped: result("danger", "warning", "The sign-in ended with the connection.", "A sign-in belongs to the connection that started it. Start a new one once Clawtrate is connected again.", link("Try again", "signin-starting", keep)),
       cannot: note("danger", "The gateway can't start this sign-in from here.", "This connector cannot use operator browser sign-in. Check its existing account settings."),
-      cli:
-        `<p class="c-text">The gateway starts this sign-in only from its own settings page or its command line.</p>` +
-        `<ol class="b-steps c-steps"><li><p>On the gateway's machine, run:</p>${command(`openclaw mcp login ${t.isServer ? t.name : keep.id}`, "sign-in command")}</li>` +
-        `<li><p>It prints an address. Open it in a browser and sign in to ${t.name}.</p></li>` +
-        `<li><p>If that browser is on the gateway's machine, the command finishes by itself within 5 minutes and prints "MCP OAuth credentials saved". If it is on another computer, copy the code from the address the page returns to (the part after <code>code=</code>) and run:</p>${command(`openclaw mcp login ${t.isServer ? t.name : keep.id} --code <code>`, "finishing command")}</li></ol>` +
-        (params.get("preview") === "1" ? note("", "", "The sign-in page returns to the gateway's own address, which only a browser on the gateway's machine can reach.") : "") +
-        `<p class="c-line">Or sign in from Settings on the gateway's own web page.</p>`,
+      cli: `<p class="c-text">The gateway starts this sign-in from its own command line or its own settings page.</p>` + cliSteps(t, keep),
     };
     return { title: `Sign in to ${t.name}`, back: t.back, body: bodies[stage] };
+  };
+  // The gateway's command-line sign-in, in full (section 10).
+  const cliSteps = (t, keep) =>
+    `<ol class="b-steps c-steps"><li><p>On the gateway's machine, run:</p>${command(`openclaw mcp login ${t.isServer ? t.name : keep.id}`, "sign-in command")}</li>` +
+    `<li><p>It prints an address. Open it in a browser and sign in to ${t.name}.</p></li>` +
+    `<li><p>If that browser is on the gateway's machine, the command finishes by itself within 5 minutes and prints "MCP OAuth credentials saved". If it is on another computer, copy the code from the address the page returns to (the part after <code>code=</code>) and run:</p>${command(`openclaw mcp login ${t.isServer ? t.name : keep.id} --code <code>`, "finishing command")}</li></ol>` +
+    `<p class="c-line">Or sign in from Settings on the gateway's own web page.</p>`;
+  // A sign-in address, shown in full before it is opened: its host first, then the whole address.
+  const address = (host) => {
+    const full = `https://${host}/authorize?response_type=code&client_id=example-registered-client&state=example-state-7f3a`;
+    return `<div class="c-address" aria-label="Sign-in address"><p class="c-address-host">${host}</p><p class="c-address-full mono">${esc(full)}</p>${copyButton("sign-in address", full)}</div>`;
   };
   const CTglyph = () => `<span class="glyph" data-state="waiting" aria-hidden="true"></span>`;
 
@@ -425,11 +434,13 @@
     const cardHtml = {
       open:
         `<p class="c-card-title"><b>Connect your team-notes account</b></p><p class="c-card-text">Pip asked to use team-notes for you. After you sign in, its tools reach Pip from your next message.</p>` +
-        `<div class="c-open"><a class="button" data-size="sm" data-variant="primary" href="${go("chat", { card: "opened" })}">Open the sign-in page</a><span class="c-host">${host}</span></div>` +
+        address(host) +
+        `<div class="c-open"><a class="button" data-size="sm" data-variant="primary" href="${go("chat", { card: "opened" })}">Open in your browser</a></div>` +
         `<p class="c-line" data-tone="${params.get("shared") === "1" ? "warn" : ""}">Anyone who opens this link signs in for you.</p>`,
       opened:
         `<p class="c-card-title"><b>Connect your team-notes account</b></p><p class="c-card-text">Opened at 5:12 PM. If the page didn't finish, open it again.</p>` +
-        `<div class="c-open"><a class="button" data-size="sm" href="${go("chat", { card: "opened" })}">Reopen</a><span class="c-host">${host}</span></div>` +
+        address(host) +
+        `<div class="c-open"><a class="button" data-size="sm" href="${go("chat", { card: "opened" })}">Reopen</a></div>` +
         `<p class="c-line">Anyone who opens this link signs in for you.</p>`,
       connected: `<p class="c-card-title">Connected team-notes. Its tools reach Pip from your next message.</p>`,
       error: `<p class="c-card-title"><b>team-notes can't ask you to sign in here:</b></p><p class="c-card-text mono">MCP server "team-notes" needs requester sign-in, but gateway.publicOrigin is not configured. Ask the operator to set the public Gateway HTTP(S) origin.</p>`,
@@ -558,7 +569,7 @@
           `<details class="c-fold"><summary>Comes with OpenClaw (${APPS.filter((a) => a.bundled).length})</summary>${rows(APPS.filter((a) => a.bundled), "connector")}</details>` +
           group("Tool servers") +
           `<ul class="c-rows">${Object.entries(SERVERS).map(([n, s]) => `<li class="c-row"><a class="c-row-main" href="${go("server", { id: n })}" aria-label="${n}, ${s.kind === "remote" ? "added by address" : "runs a command"}">${initial(n)}<span class="c-row-text"><span class="c-row-name mono">${n}</span><span class="c-row-sub">${s.kind === "remote" ? `Added by address · ${s.url}` : `Runs a command · ${esc(s.command)}`}</span></span></a></li>`).join("")}</ul>` +
-          (admin ? `<div class="c-actions">${link("Add a tool server", "add-server")}</div>` : ""),
+          (admin ? `<div class="c-actions">${link("Add a custom connector", "add-server")}</div>` : ""),
       }),
     connector: () => windowHtml(connectorPage()),
     "turnoff-confirm": () => {
@@ -579,7 +590,7 @@
         windowHtml(connectorPage()) +
         confirm(
           `Remove ${a.name} from the gateway?`,
-          goes([`${a.name}'s files on the gateway's machine`, "its settings on the gateway", params.get("bots") === "none" ? "its tools, from every bot that doesn't deny them" : "its tools, from every bot that has them: Juniper, Pip"], ["its sign-in, in the gateway's state database", `a note on the gateway that ${a.name} is off, so nothing turns it back on by itself`]),
+          goes([`${a.name}'s files on the gateway's machine`, "its settings on the gateway", params.get("bots") === "none" ? "its tools, from every bot that doesn't deny them" : "its tools, from every bot that has them: Juniper, Pip"], ["its sign-in, kept by the gateway in its state, not encrypted there", `a note on the gateway that ${a.name} is off, so nothing turns it back on by itself`]),
           [link("Cancel", "connector", { id: a.id }, { variant: "quiet" }), link("Remove", "removed", { id: a.id }, { variant: "primary" })],
           proto("the bots", [link("None has run since it was added", "remove-confirm", { id: a.id, bots: "none" }, { variant: "quiet" })]),
         )
@@ -587,7 +598,7 @@
     },
     removed: () => {
       const a = app(params.get("id") || "tasktide");
-      return windowHtml({ title: a.name, back: go("installed"), body: result("", "check", `Removed ${a.name}.`, "The gateway no longer lists it.") + goes([`${a.name}'s files`, "its settings", "its tools"], ["its sign-in, in the gateway's state database", "the note that it is off"], "done") + `<div class="c-actions">${link("Back to the list", "installed")}</div>` });
+      return windowHtml({ title: a.name, back: go("installed"), body: result("", "check", `Removed ${a.name}.`, "The gateway no longer lists it.") + goes([`${a.name}'s files`, "its settings", "its tools"], ["its sign-in, kept by the gateway in its state, not encrypted there", "the note that it is off"], "done") + `<div class="c-actions">${link("Back to the list", "installed")}</div>` });
     },
     server: () => windowHtml(serverPage()),
     "server-remove-confirm": () => {
@@ -597,8 +608,8 @@
         windowHtml(serverPage()) +
         confirm(
           `Remove ${name} from the gateway?`,
-          goes([`the server's entry in the gateway's settings${s.kind === "remote" ? ", with its headers" : ""}`, "its tools, from every bot that has them"], [s.signin === "oauth" ? "its sign-in, in the gateway's state database. The gateway finds it again if a server with the same name and address is added." : "nothing else: it has no sign-in the gateway keeps"]) +
-            (s.signin === "oauth" ? `<p>To delete the sign-in, run this on the gateway's machine before removing the server:</p>${command(`openclaw mcp logout ${name}`, "sign-out command")}` : ""),
+          goes([`the server's entry in the gateway's settings${s.kind === "remote" ? ", with its headers" : ""}`, "its tools, from every bot that has them"], [s.signin === "oauth" ? "its sign-in, kept by the gateway in its state, not encrypted there. Removing the server does not delete it, and the gateway finds it again if a server with the same name and URL is added." : "nothing else: it has no sign-in the gateway keeps"]) +
+            (s.signin === "oauth" ? `<p>To sign out first, run this on the gateway's machine before removing the server:</p>${command(`openclaw mcp logout ${name}`, "sign-out command")}` : ""),
           [link("Cancel", "server", { id: name }, { variant: "quiet" }), link("Remove", "server-removed", { id: name }, { variant: "primary" })],
           proto("the read-back", [link("Still lists it", "server-remove-failed", { id: name }, { variant: "quiet" })]),
         )
@@ -626,14 +637,14 @@
       const name = params.get("name") || "notes-work";
       const cmd = params.get("type") === "command";
       return windowHtml({
-        title: "Add a tool server",
+        title: "Add a custom connector",
         body:
           result("ok", "check", `Added ${esc(name)}.`, cmd ? "The gateway will run it at a bot's next run." : "The gateway lists it. Its tools reach bots from their next run, unless a bot's settings deny them.", link(`Open ${esc(name)}`, "server", { id: cmd ? "search-index" : "notes-work", last: "notyet" }, { variant: "primary" }) + (params.get("signin") === "oauth" ? link("Sign in", "signin-starting", { id: "notes-work", server: "1" }) : "")) +
           proto("the write", [link("Refused", "add-server-refused", { name }, { variant: "quiet" }), link("No answer", "add-server-checking", { name }, { variant: "quiet" })]),
       });
     },
-    "add-server-refused": () => windowHtml({ title: "Add a tool server", body: result("danger", "x", `Couldn't add ${esc(params.get("name") || "notes-work")}:`, `mcp.servers.${esc(params.get("name") || "notes-work")}.url: Expected http:// or https:// URL. Nothing saved.`, link("Back to the form", "add-server")) }),
-    "add-server-checking": () => windowHtml({ title: "Add a tool server", body: `<p class="c-state" aria-busy="true">Checking what the gateway has…</p>` + proto("the read-back", [link("Lists it", "add-server-saved", { name: params.get("name") || "notes-work" }, { variant: "quiet" }), link("Doesn't list it", "add-server-refused", { name: params.get("name") || "notes-work" }, { variant: "quiet" })]) }),
+    "add-server-refused": () => windowHtml({ title: "Add a custom connector", body: result("danger", "x", `Couldn't add ${esc(params.get("name") || "notes-work")}:`, `mcp.servers.${esc(params.get("name") || "notes-work")}.url: Expected http:// or https:// URL. Nothing saved.`, link("Back to the form", "add-server")) }),
+    "add-server-checking": () => windowHtml({ title: "Add a custom connector", body: `<p class="c-state" aria-busy="true">Checking what the gateway has…</p>` + proto("the read-back", [link("Lists it", "add-server-saved", { name: params.get("name") || "notes-work" }, { variant: "quiet" }), link("Doesn't list it", "add-server-refused", { name: params.get("name") || "notes-work" }, { variant: "quiet" })]) }),
     "signin-starting": () => windowHtml(signin("starting")),
     "signin-waiting": () => windowHtml(signin("waiting")),
     "signin-done": () => windowHtml(signin("done")),
@@ -756,11 +767,7 @@
         } catch {
           parsed = null;
         }
-        const local = parsed && ["localhost", "127.0.0.1"].includes(parsed.hostname);
-        set(
-          "c-url",
-          !url ? "Enter the server's address." : !parsed || !/^https?:$/.test(parsed.protocol) ? "Enter an address that starts with https://." : parsed.protocol === "http:" && !local ? "Use the server's https:// address. Plain http is accepted only for a server on the gateway's machine." : "",
-        );
+        set("c-url", !url ? "Enter the server's URL." : !parsed || !/^https?:$/.test(parsed.protocol) ? "Enter a URL that starts with https://." : parsed.protocol !== "https:" ? "Use the server's https:// URL." : "");
         if (errors.length) return errors[0].focus();
         const signinChoice = form.querySelector("input[name='signin']:checked").value;
         location.href = go("add-server-saved", { name, signin: signinChoice });

@@ -566,6 +566,37 @@
   color: var(--text-muted);
 }
 
+/* A sign-in address in full, before it is opened. */
+.c-address {
+  position: relative;
+  margin-top: var(--space-3);
+  padding: 10px 44px 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+
+.c-address p {
+  margin: 0;
+}
+
+.c-address-host {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.c-address-full {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.c-address .copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
 .c-waiting {
   display: flex;
   align-items: center;
