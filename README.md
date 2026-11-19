@@ -160,6 +160,10 @@ Where it matters which bot you ask:
 
 After `start`, the seed has left finished examples, played through a paired client called "Clawtrate seed" that answers and approves as the user and is unpaired afterwards: Juniper's "Show your work" (reasoning and steps), "A step that fails" and "Hand off to the coding agent" (an MCP call); Pip's "Ask Marlow about the plan" (a bot-to-bot exchange) and "Which route on Saturday" (an answered question); Marlow's "Notes for Pip", where Pip's message arrived; and Otto's "List the workspace (approved)" (a resolved approval).
 
+#### Scheduled jobs
+
+`pnpm dev-gateway routines --instance <name>` adds two sample routines (`tools/dev-gateway/src/routines.ts`): Marlow's "Morning digest" on weekdays at 8:00 AM New York time, whose message carries `#steps`, and Otto's "Weekly backup check" with `#slow 3`. It adds only those not listed by name yet. The development gateway's scheduler is off, so neither fires on its schedule; `openclaw --profile clawtrate-dev-<name> gateway call cron.run --params '{"id":"<id>","mode":"force"}'` runs one now, and the scripted model answers its directive as in a task. Results stay with the run (`delivery: {mode: "none"}`).
+
 ### 2. Open the web preview
 
 ```bash

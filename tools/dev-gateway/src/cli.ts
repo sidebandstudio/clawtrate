@@ -23,6 +23,7 @@
 // State is never reused: OpenClaw keeps credentials in SQLite stores that a
 // clean profile also has, so only a folder created empty by this start is safe.
 
+import { addScriptedRoutines } from "./routines.ts";
 import { FILES_BOT, seedWorkspaceFiles } from "./seed-files.ts";
 import { randomBytes } from "node:crypto";
 import {
@@ -1948,7 +1949,7 @@ export async function lockOrder(
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--with-plugin <plugin>]...\n" +
+  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--with-plugin <plugin>]...\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
@@ -1982,7 +1983,18 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     else await prune();
     return;
   }
-  const known = ["start", "up", "stop", "seed", "reset", "status", "approve", "lock", "unlock"];
+  const known = [
+    "start",
+    "up",
+    "stop",
+    "seed",
+    "routines",
+    "reset",
+    "status",
+    "approve",
+    "lock",
+    "unlock",
+  ];
   if (!command || !known.includes(command)) {
     console.log(USAGE);
     process.exitCode = command ? 1 : 0;
@@ -2003,6 +2015,22 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return stop(inst);
     case "seed":
       return seed(inst);
+    case "routines": {
+      const ids = await addScriptedRoutines(async (method, params) =>
+        parseJsonOutput(
+          await must(inst, [
+            "gateway",
+            "call",
+            method,
+            "--params",
+            JSON.stringify(params),
+            "--json",
+          ]),
+        ),
+      );
+      console.log(`Routines on ${label(inst)}: ${ids.join(", ")}`);
+      return;
+    }
     case "reset":
       return reset(inst, runId ? { runId } : {});
     case "status":
