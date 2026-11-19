@@ -13,6 +13,7 @@
 //   &files=loaded          the Work pane's Files states (files.ts), with &checkout=1, &fileload=failed
 //   &tab=files             the Work pane's tab
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
+//   ?setup=first           the desktop's first screen and a state of setup (setup.ts)
 
 import { App, BridgeProvider, rosterKey, rosterScope } from "@clawtrate/ui";
 import { StrictMode } from "react";
@@ -76,6 +77,7 @@ const sceneName = params.get("scene");
 const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   files: fileParams(params),
   accounts: accountParams(params),
+  setup: params.get("setup"),
 });
 // For tests and manual checks: change the state from the console.
 Object.assign(window, { clawtrateFixture: bridge });

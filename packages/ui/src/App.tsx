@@ -129,6 +129,7 @@ export function App({
           connection={state.connection}
           discovery={state.discovery}
           info={info}
+          setup={state.setup}
           mismatch={mismatch}
           inert={settingsOpen}
         />

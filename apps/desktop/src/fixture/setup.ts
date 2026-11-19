@@ -1,0 +1,132 @@
+// Setting up on this computer, in the fixture (docs/design/setup.md §3 to
+// §7): `?setup=<state>` shows the desktop's first screen and what the host
+// reports at each step, and the setup commands move through the walk the way
+// the host would. Nothing here looks at a computer or makes a code.
+
+import {
+  initialSetupState,
+  type BridgeCommand,
+  type ClawtrateState,
+  type HostInfo,
+  type SetupLook,
+  type SetupState,
+} from "@clawtrate/core";
+
+const running: SetupLook = {
+  outcome: "running",
+  reason: null,
+  version: "2026.10.6",
+  profile: "default",
+  listens: "loopback",
+  service: "launchagent",
+  port: 18789,
+  authMode: null,
+  others: [],
+};
+
+const looked = (look: Partial<SetupLook>): SetupState => ({
+  ...initialSetupState,
+  phase: "found",
+  look: { ...running, ...look },
+});
+
+const failed = (kind: NonNullable<SetupState["failure"]>["kind"], extra = {}): SetupState => ({
+  ...initialSetupState,
+  phase: "failed",
+  look: running,
+  failure: { kind, exitCode: null, port: null, ...extra },
+});
+
+/** Every setup state the fixture shows, by the name used in `?setup=`. */
+export const SETUP_STATES: Record<string, SetupState> = {
+  first: initialSetupState,
+  looking: { ...initialSetupState, phase: "looking", step: 1 },
+  "looking-slow": { ...initialSetupState, phase: "looking", step: 2, slow: true },
+  found: looked({}),
+  "found-others": looked({ others: ["service com.example.openclaw-gateway", "profile work"] }),
+  confirming: { ...looked({}), phase: "confirming" },
+  untested: looked({ outcome: "untested", version: "2026.9.37" }),
+  "too-old": looked({ outcome: "too-old", version: "2026.6.2" }),
+  stopped: looked({ outcome: "stopped", service: "launchagent-stopped" }),
+  "stopped-by-hand": looked({ outcome: "stopped", service: "none" }),
+  "program-missing": looked({ outcome: "program-missing" }),
+  "cant-tell": looked({ outcome: "cant-tell", reason: "timeout" }),
+  "cant-tell-shape": looked({ outcome: "cant-tell", reason: "shape" }),
+  "not-token": looked({ outcome: "not-token", authMode: "password" }),
+  "not-found": looked({ outcome: "not-found" }),
+  windows: looked({ outcome: "windows" }),
+  connecting: { ...looked({}), phase: "connecting", step: 1 },
+  "code-failed": failed("code-failed", { exitCode: 1 }),
+  "code-refused": failed("code-refused"),
+  grant: failed("grant"),
+  unreachable: failed("unreachable", { port: 18789 }),
+  changed: failed("changed"),
+  refused: {
+    ...initialSetupState,
+    phase: "failed",
+    failure: { kind: "refused", exitCode: null, port: null },
+  },
+};
+
+export function isSetupState(name: string | null): name is string {
+  return name !== null && Object.hasOwn(SETUP_STATES, name);
+}
+
+/** The desktop host, offering setup; `windows` is the same app on Windows. */
+export function setupInfo(info: HostInfo, name: string): HostInfo {
+  return {
+    ...info,
+    kind: "desktop",
+    devGateway: null,
+    setup: { look: true, pair: true, platform: name === "windows" ? "win32" : "darwin" },
+  };
+}
+
+/**
+ * The setup commands, answered as the host would: the look's steps, then
+ * the running card; Connect's steps, then the app. The fixture has no
+ * native dialog, so Connect goes straight to its steps.
+ */
+export function setupCommand(
+  command: BridgeCommand,
+  get: () => ClawtrateState,
+  set: (state: ClawtrateState) => void,
+  connected: () => ClawtrateState,
+  later: (ms: number, run: () => void) => void,
+): boolean {
+  const setup = (next: SetupState) => set({ ...get(), setup: next });
+  const current = () => get().setup ?? initialSetupState;
+  switch (command.type) {
+    case "setupLook": {
+      setup({ ...initialSetupState, phase: "looking", step: 0 });
+      later(300, () => current().phase === "looking" && setup({ ...current(), step: 1 }));
+      later(600, () => current().phase === "looking" && setup({ ...current(), step: 2 }));
+      later(900, () => current().phase === "looking" && setup(looked({})));
+      return true;
+    }
+    case "setupConnect": {
+      setup({ ...current(), phase: "connecting", step: 0, failure: null });
+      later(300, () => current().phase === "connecting" && setup({ ...current(), step: 1 }));
+      later(600, () => current().phase === "connecting" && setup({ ...current(), step: 2 }));
+      later(900, () => {
+        if (current().phase === "connecting")
+          set({ ...connected(), setup: { ...current(), phase: "done" } });
+      });
+      return true;
+    }
+    case "setupCancel": {
+      const { phase, look } = current();
+      setup(
+        phase === "looking" || !look
+          ? initialSetupState
+          : { ...initialSetupState, phase: "found", look },
+      );
+      return true;
+    }
+    case "setupReset":
+      setup(initialSetupState);
+      return true;
+    default:
+      return false;
+  }
+}
