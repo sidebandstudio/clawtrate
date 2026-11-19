@@ -227,7 +227,7 @@ describe("the setup connection's token gate", () => {
   });
 
   it("F-492: the grant check accepts the operator role with exactly read, on this protocol, and nothing else", () => {
-    const hello = (auth: Record<string, unknown>, protocol = PROTOCOL_VERSION) =>
+    const hello = (auth: Record<string, unknown>, protocol: number = PROTOCOL_VERSION) =>
       ({ protocol, auth }) as Parameters<typeof setupGrant>[0];
     expect(setupGrant(hello({ role: "operator", scopes: ["operator.read"] }))).toBe("read");
     expect(setupGrant(hello({ role: "operator", scopes: ["operator.read"] }, 3))).toBe("other");
