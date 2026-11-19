@@ -357,7 +357,12 @@ export function sentRunIds(messages: unknown): Map<string, Set<string>> {
       try {
         result = asRecord(JSON.parse(text)) ?? {};
       } catch {
-        continue;
+        // A result the gateway cut keeps its first fields: read those, or nothing.
+        const field = (name: string) =>
+          new RegExp(`"${name}"\\s*:\\s*"([^"\\\\]{1,256})"`).exec(text)?.[1];
+        const status = field("status");
+        if (!status) continue;
+        result = { runId: field("runId"), sessionKey: field("sessionKey"), status };
       }
     }
     const runId = result.runId;

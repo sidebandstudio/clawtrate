@@ -342,8 +342,14 @@ test("F-232 F-237: a bot's Usage page shows the gateway's own totals for each pe
     ["Marlow", "marlow"],
     ["Otto", "otto"],
     ["Pip", "pip"],
-  ] as const)
-    expect(await bar(page, "usage-bots", bot)).toBe((await gatewayTotal(id, "week")).total);
+  ] as const) {
+    const expected = (await gatewayTotal(id, "week")).total;
+    // The section reads again while any bot's figure is still being counted.
+    await expect.poll(() => bar(page, "usage-bots", bot), { timeout: 60_000 }).toBe(expected);
+  }
+  await expect(settings.getByTestId("usage-all")).not.toContainText("still being counted", {
+    timeout: 60_000,
+  });
   await expect(settings.getByTestId("usage-all-total")).toContainText(
     `Every bot: ${(await gatewayTotal(null, "week")).total.toLocaleString("en-US")} tokens`,
   );

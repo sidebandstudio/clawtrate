@@ -153,6 +153,15 @@ export type ReportState =
   | { status: "ready"; report: UsageReport }
   | { status: "error"; report: UsageReport | null; error: string };
 
+/** Whether any figure of a report is one the gateway said it is still counting. */
+export function stillCounted(report: UsageReport): boolean {
+  return (
+    report.figure.counting ||
+    (report.tasks ?? []).some((each) => each.computing) ||
+    (report.bots ?? []).some((each) => each.figure?.counting === true)
+  );
+}
+
 /** How soon a figure the gateway is still counting is read again. */
 export const COUNTING_AGAIN_MS = 5_000;
 
@@ -208,10 +217,7 @@ export function useUsageReport(
   }, [bridge, botId, period, detail, enabled, key]);
   // While the gateway says it is still counting, read again shortly: its next answer can be complete.
   const counting =
-    answer?.key === key &&
-    answer.state.status === "ready" &&
-    (answer.state.report.figure.counting ||
-      (answer.state.report.tasks ?? []).some((each) => each.computing));
+    answer?.key === key && answer.state.status === "ready" && stillCounted(answer.state.report);
   useEffect(() => {
     if (!counting || !enabled) return;
     const timer = setTimeout(retry, COUNTING_AGAIN_MS);

@@ -15,7 +15,15 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
 import { BudgetForm, type BudgetTarget } from "./Budget.tsx";
-import { Bars, Meter, PeriodChoice, ShownOnly, useNow, useUsageReport } from "./parts.tsx";
+import {
+  Bars,
+  Meter,
+  PeriodChoice,
+  ShownOnly,
+  stillCounted,
+  useNow,
+  useUsageReport,
+} from "./parts.tsx";
 import { asOf, budgetLine, costShort, full, kindWord } from "./words.ts";
 import "./usage.css";
 
@@ -266,7 +274,7 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
         <div aria-busy={report.status === "loading"} data-testid="usage-all">
           <p className="b-hint" style={{ marginTop: 0 }}>
             From the gateway's usage records, {asOf(r.figure.asOf)}.
-            {r.figure.counting ? " Some of the gateway's records are still being counted." : ""}
+            {stillCounted(r) ? " Some of the gateway's records are still being counted." : ""}
           </p>
           <Bars
             testId="usage-bots"
@@ -292,7 +300,7 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
                 Messages from other bots counts only runs a send's result names. The rest is not
                 attributed, never charged to one message.
                 {r.sources.partial
-                  ? r.figure.counting
+                  ? stillCounted(r)
                     ? " Partial: the gateway is still counting, so these may not add up to its total yet."
                     : " Partial: some tasks weren't read in full."
                   : ""}

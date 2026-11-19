@@ -475,7 +475,9 @@ export class UsageEngine {
       const sources = await this.sources(tasks, figure.tokens.total, range);
       // While the gateway is still counting, its total may not include what the histories show.
       report.sources =
-        figure.counting || tasks.some((task) => task.computing)
+        figure.counting ||
+        tasks.some((task) => task.computing) ||
+        (bots ?? []).some((each) => each.figure?.counting === true)
           ? { ...sources, partial: true }
           : sources;
     } catch (error) {
@@ -537,7 +539,7 @@ export class UsageEngine {
           await this.ctx.request("chat.history", {
             sessionKey: key,
             limit: ATTRIBUTION_HISTORY_ROWS,
-            maxChars: 200,
+            // Not cut to a display length: the send's result names its run in its text.
             toolResultMaxChars: 4_000,
           }),
         );

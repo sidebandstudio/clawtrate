@@ -306,9 +306,28 @@ describe("where a bot's runs came from", () => {
       sendResult("agent:marlow:main", null, "accepted"),
       sendResult("agent:otto:main", "r9", "forbidden"),
       { role: "toolResult", toolName: "read", content: "{}" },
+      // Cut by the gateway to a display length: its first fields are still read.
+      {
+        role: "toolResult",
+        toolName: "sessions_send",
+        details: { sessionKey: "agent:pip:main" },
+        content: [
+          {
+            type: "text",
+            text: '{\n  "runId": "r7",\n  "sessionKey": "agent:pip:main",\n  "status": "ok",\n  "reply": "Happy to he…',
+          },
+        ],
+      },
+      // Cut before its status: whether it was refused is not known, so it names nothing.
+      {
+        role: "toolResult",
+        toolName: "sessions_send",
+        content: [{ type: "text", text: '{\n  "runId": "r8",\n  "sessionKey": "agent:otto:mai' }],
+      },
     ]);
     expect([...named.entries()].map(([k, v]) => [k, [...v]])).toEqual([
       ["agent:marlow:main", ["r2"]],
+      ["agent:pip:main", ["r7"]],
     ]);
   });
 });
