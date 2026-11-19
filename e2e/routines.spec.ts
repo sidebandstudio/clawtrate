@@ -291,11 +291,11 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
   const title = `Bound conversation ${STAMP}`;
   const key = `agent:marlow:dashboard:${STAMP}`;
   await call("sessions.create", { key, agentId: "marlow", label: title });
-  await call("sessions.create", { key: "agent:marlow:main", agentId: "marlow", label: "Main" });
+  await call("sessions.create", { key: "agent:juniper:main", agentId: "juniper", label: "Main" });
   for (const target of ["current", `session:${key}`, "main"]) {
     const name = `Shared ${target} ${STAMP}`;
     const job = await add({
-      ...scriptedRoutine(name, "marlow", "Note the time."),
+      ...scriptedRoutine(name, target === "main" ? "juniper" : "marlow", "Note the time."),
       sessionTarget: target,
       ...(target === "current" ? { sessionKey: key } : {}),
       ...(target === "main" ? { payload: { kind: "systemEvent", text: "A reminder." } } : {}),
@@ -306,7 +306,7 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
     await view().getByTestId("run-row").first().click();
     await expect(view().getByTestId("run-summary")).toBeVisible();
     if (target === "main") {
-      await view().getByRole("button", { name: "Open Marlow's main conversation" }).click();
+      await view().getByRole("button", { name: "Open Juniper's main conversation" }).click();
       await expect(
         page.getByTestId("transcript").getByRole("heading", { name: "Main", exact: true }),
       ).toBeVisible();
