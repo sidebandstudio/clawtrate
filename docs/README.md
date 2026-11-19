@@ -7,6 +7,7 @@ Every document in the repository, by what you want to do.
 - [Developing Clawtrate](development/README.md): setup, the web preview and the desktop app.
 - [The development gateway](development/dev-gateway.md): the gateway with a scripted model that everything is built against, its instances, plugins, scripted accounts and scenarios.
 - [Testing](development/testing.md): each check, what CI runs, the fixture mode and the visual tests.
+- [The SSH transport's tests](development/ssh.md): running the tests of "Another computer" over SSH against an `sshd` of their own.
 - [Packaging](development/packaging.md): building the desktop app for macOS and Windows, signing, and the logo and icons.
 - [The iOS app](development/ios.md): what building the iOS app needs, the Simulator build and its checks.
 - [CONTRIBUTING.md](../CONTRIBUTING.md): how to pick up work and open a pull request.
@@ -19,6 +20,7 @@ Every document in the repository, by what you want to do.
 - [The engine's guide](../packages/core/README.md): the bridge, the commands the interface sends and the state it reads, for building the interface on `@clawtrate/core`.
 - [The development gateway tool](../tools/dev-gateway/README.md): scripted provider accounts, sign-ins and the account checks.
 - [The computer plugin](../plugins/clawtrate-computer/README.md): a bot's own browser, watched live and taken over by a person.
+- [The rules plugin](../plugins/clawtrate-tool-rules/README.md): what each bot may do with its tools, asked first or never, while the plugin runs.
 
 ## The plan
 

@@ -665,7 +665,9 @@ test.describe("approval cards", () => {
     // key: the app's handler, attached before the first paint, reads the transcript then.
     await expect(approvalCard(page)).toBeVisible();
     await expect(approvalCard(page)).toHaveAttribute("data-pending", "true");
-    await page.locator("body").click();
+    // The page takes focus from a click on the transcript's corner, away from every control:
+    // the middle of the page is the card's Always allow…, whose form takes focus a frame later.
+    await page.getByTestId("transcript").click({ position: { x: 4, y: 4 } });
     await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
     await expect(approvalCard(page)).not.toBeFocused();
     await page.keyboard.press("ControlOrMeta+j");
