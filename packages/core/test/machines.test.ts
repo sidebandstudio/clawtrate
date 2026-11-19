@@ -217,7 +217,7 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
 
 function engine(
   gw: ReturnType<typeof gateway>,
-  access: { admin?: boolean; pairing?: boolean; readOnly?: boolean } = {},
+  access: { admin?: boolean; pairing?: boolean; readOnly?: boolean; noBots?: boolean } = {},
 ) {
   const ctx: MachinesContext = {
     request: gw.request,
@@ -225,11 +225,14 @@ function engine(
     admin: () => access.admin ?? false,
     pairing: () => access.pairing ?? false,
     readOnly: () => access.readOnly ?? false,
-    bots: () => [
-      { id: "otto", name: "Otto" },
-      { id: "pip", name: "Pip" },
-      { id: "marlow", name: "Marlow" },
-    ],
+    bots: () =>
+      access.noBots
+        ? []
+        : [
+            { id: "otto", name: "Otto" },
+            { id: "pip", name: "Pip" },
+            { id: "marlow", name: "Marlow" },
+          ],
     latestTask: () => null,
     deviceId: () => "dev-self",
     now: () => 42,
@@ -475,6 +478,12 @@ describe("where a bot runs: the engine", () => {
     expect(gw.calls.map(([method]) => method)).not.toContain("secrets.store.list");
     const admin = await engine(gw, { admin: true }).readPlacement("otto");
     expect(admin.inventory.secrets).toEqual(["router-admin", "nas-backup"]);
+  });
+
+  it("F-274: the bot's workspace is the one the gateway lists, even before the client lists its bots", async () => {
+    const read = await engine(gateway(), { noBots: true }).readPlacement("otto");
+    expect(read.workspace).toBe("/srv/claw/workspaces/otto");
+    expect(read.sameSetting.workspace).toEqual([]);
   });
 
   it("F-047: a tool server is offered only by a listed tool of its own that the session doesn't deny", () => {

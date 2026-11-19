@@ -626,7 +626,8 @@ export class MachinesEngine {
     const { nodes, omitted } = nodeList;
     const bots = ctx.bots().map((bot) => ({ ...bot, workspace: workspaces.get(bot.id) ?? null }));
     const commands = readCommandPlace(config, botId, nodes);
-    const workspace = bots.find((bot) => bot.id === botId)?.workspace ?? null;
+    // The requested bot's from the gateway's own list, even before the client lists its bots.
+    const workspace = workspaces.get(botId) ?? null;
     const others = bots.filter((bot) => bot.id !== botId);
     const sameSetting = {
       machine:
