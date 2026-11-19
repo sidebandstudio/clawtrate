@@ -1,0 +1,559 @@
+/* The Library and Pages (docs/design/library.md). Builds on work.css: the file
+   row, the freshness line, the empty state. Tokens only; nothing new. */
+
+/* The filter row: pill radios, the chosen one on --bg-selected, as the tabs are. */
+.lib-filters {
+  display: flex;
+  gap: 2px;
+  margin: 0 0 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.lib-filters::-webkit-scrollbar {
+  display: none;
+}
+
+.lib-filter {
+  flex: none;
+  height: 30px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.lib-filter:hover {
+  color: var(--text);
+}
+
+.lib-filter[aria-checked="true"] {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+.lib-group h3 {
+  margin: 14px 4px 4px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text-faint);
+}
+
+.lib-group-note {
+  margin: 0 4px 6px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* A row: the file row, with its Pin button at the right. */
+.lib-row {
+  position: relative;
+}
+
+.lib-row .file-row {
+  grid-template-columns: 32px minmax(0, 1fr);
+  padding-right: 44px;
+}
+
+.lib-row .file-sub {
+  grid-column: 2;
+}
+
+.lib-pinmark {
+  display: inline-grid;
+  vertical-align: -2px;
+  margin-left: 6px;
+  color: var(--text-muted);
+}
+
+.lib-pinmark .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.lib-pin {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  transform: translateY(-50%);
+  opacity: 0;
+}
+
+.lib-row:hover .lib-pin,
+.lib-row:focus-within .lib-pin,
+.lib-pin[aria-pressed="true"],
+.lib-pin[aria-busy="true"],
+[data-input="touch"] .lib-pin {
+  opacity: 1;
+}
+
+.lib-pin[aria-pressed="true"] {
+  color: var(--text);
+}
+
+.lib-pin[aria-busy="true"] {
+  cursor: progress;
+}
+
+[data-input="touch"] .lib-row .file-row {
+  min-height: 56px;
+}
+
+[data-input="touch"] .lib-pin::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+}
+
+.lib-row[data-gone="true"] .file-row {
+  cursor: default;
+  padding-right: 88px;
+}
+
+.lib-unpin {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+}
+
+.lib-more {
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  margin-top: 2px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.lib-more:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.lib-look {
+  margin: 14px 4px 4px;
+}
+
+.lib-failed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
+  font-size: var(--text-md);
+}
+
+.lib-failed span {
+  flex: 1;
+}
+
+.lib-access {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  background: var(--bg-bubble);
+}
+
+.lib-access .access-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-md);
+}
+
+.lib-access code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.lib-hold {
+  position: absolute;
+  z-index: 30;
+  top: 100%;
+  left: 40px;
+}
+
+/* The Page, full window ---------------------------------------------------------------- */
+
+.page-view {
+  position: absolute;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  grid-template-rows: 56px auto 1fr;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.page-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.page-title {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.page-title strong {
+  overflow: hidden;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.page-title span {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-faint);
+}
+
+.page-bar [aria-pressed="true"] {
+  background: var(--bg-selected);
+}
+
+.page-note {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 8px 16px;
+  background: var(--bg-pane);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.page-note[hidden] {
+  display: none;
+}
+
+.page-links {
+  position: absolute;
+  z-index: 5;
+  top: 100%;
+  right: 16px;
+}
+
+.page-links .menu-item {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.page-body {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  min-height: 0;
+}
+
+.page-stage {
+  display: grid;
+  min-height: 0;
+  padding: 12px;
+}
+
+/* A page draws its own colours: its ground stays white in both themes. */
+.page-frame {
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.page-state {
+  align-self: center;
+  justify-self: center;
+  max-width: 44ch;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.page-state strong {
+  color: var(--text);
+}
+
+.page-chat {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.page-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  font-size: var(--text-base);
+}
+
+.page-chat-head strong {
+  font-weight: var(--weight-medium);
+}
+
+.page-chat-log {
+  display: grid;
+  align-content: end;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 16px;
+}
+
+.page-chat-log .msg[data-role="user"] {
+  justify-self: end;
+}
+
+.page-chat-log .bubble {
+  max-width: 280px;
+}
+
+.page-chat-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin: 10px 12px 12px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 22px;
+  background: var(--bg-bubble);
+}
+
+.page-chat-composer textarea {
+  flex: 1;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-md);
+  color: var(--text);
+  resize: none;
+  outline: none;
+}
+
+.page-chat .access-bar {
+  margin: 10px 12px 12px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  background: var(--bg-bubble);
+}
+
+.page-chat .access-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-md);
+}
+
+.page-view.chat-hidden .page-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.page-view.chat-hidden .page-chat {
+  display: none;
+}
+
+/* Narrow: the chat is a drawer over the frame's right, full width on a phone-wide window. */
+@media (max-width: 999px) {
+  .page-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .page-chat {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(360px, 100%);
+    box-shadow: var(--shadow-pop);
+  }
+}
+
+[data-width="800"] .page-body,
+[data-width="phone"] .page-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+[data-width="800"] .page-chat,
+[data-width="phone"] .page-chat {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(360px, 100%);
+  box-shadow: var(--shadow-pop);
+}
+
+/* Export, and the link confirmation ------------------------------------------------------ */
+
+.export-dialog {
+  position: absolute;
+  z-index: 60;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--bg-scrim);
+}
+
+.export-card {
+  width: min(460px, 100%);
+  padding: 20px;
+  border-radius: 18px;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+}
+
+.export-card h2 {
+  margin: 0 0 12px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.export-choices {
+  display: grid;
+  gap: 8px;
+}
+
+.export-choice {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  cursor: pointer;
+}
+
+.export-choice > span {
+  display: grid;
+  gap: 2px;
+}
+
+.export-choice span span,
+.export-one,
+.export-foot {
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+
+.export-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.confirm-address {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+[data-input="touch"] .export-dialog {
+  place-items: end center;
+  padding: 12px;
+}
+
+[data-input="touch"] .export-actions {
+  flex-direction: column-reverse;
+}
+
+[data-input="touch"] .export-actions .button {
+  height: 44px;
+}
+
+/* The iPhone's sheet in a Page's place ---------------------------------------------------- */
+
+.page-sheet {
+  position: absolute;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  grid-template-rows: 56px 1fr;
+  background: var(--bg);
+}
+
+.page-sheet-bar {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  align-items: center;
+  padding: 0 8px;
+  text-align: center;
+}
+
+.page-sheet-bar strong {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.page-sheet-body {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.page-sheet-body p {
+  margin: 0;
+  max-width: 32ch;
+}
+
+.page-sheet-lead {
+  font-size: var(--text-lg);
+  color: var(--text);
+}
+
+.page-sheet-body .button {
+  width: min(320px, 100%);
+  height: 48px;
+}
+
+/* One pane: the chat is a full-width sheet. */
+[data-width="phone"] .page-chat {
+  width: 100%;
+}
+
+@media (max-width: 687px) {
+  .page-chat {
+    width: 100%;
+  }
+}
+
+.export-choice input {
+  align-self: start;
+  margin: 3px 0 0;
+}

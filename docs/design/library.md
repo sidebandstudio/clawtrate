@@ -88,9 +88,9 @@ The conversation's polite live region speaks for the Library and Pages, and only
 filters        [All] Pages  Media  Links  Files  Pinned
 fresh          In Marlow's 10 most recent tasks of 23 · checked 5:41 PM   [Refresh]
 Today          [page]  Trail guide                                  [pin]
-                       Page · Saturday's trail plan · 5:37 PM
+                       Page · 5:37 PM · Saturday's trail plan
                [img]   ridge-profile.png
-                       PNG image · 1.2 KB · Saturday's trail plan · 5:31 PM
+                       PNG image · 1.2 KB · 5:31 PM · Saturday's trail plan
                …five rows…
                [Show more]
 This week      …
@@ -125,12 +125,12 @@ Today, This week and Older, each headed by its word (13, faint), newest first, t
 
 - **The tile**: the kind's icon on `--bg-pane`; a picture's 32 px thumbnail once its preview was fetched under `work-pane.md` §11's rules; a link's tile is the link icon.
 - **The title**: an item's title as the gateway gives it (`work-pane.md` §11), a Page's `title` from its block, or a link's text (its address when it has none). Cut in the middle so an extension stays.
-- **The second line** (13, faint): the type in words, the size when known, the task's title, the time: "PNG image · 1.2 KB · Saturday's trail plan · 5:31 PM"; "Page · Saturday's trail plan · 5:37 PM"; a link "trails.example · Saturday's trail plan · 5:33 PM" (its host).
+- **The second line** (13, faint): the type in words, the size when known, the time, then the task's title, which is what shortens when the line is too long: "PNG image · 1.2 KB · 5:31 PM · Saturday's trail plan"; "Page · 5:37 PM · Saturday's trail plan"; a link "trails.example · 5:34 PM · Saturday's trail plan" (its host).
 - **A pin mark** after the title when pinned.
 - **Pin** (section 4): a quiet round 28 px button at the right, shown on hover and focus and always on touch, named "Pin Trail guide" or "Unpin Trail guide" (`aria-pressed`).
 - The row is one button: "Trail guide, Page, in Saturday's trail plan, 5:37 PM. Open." Up and Down, Home and End move between rows; Enter opens.
 
-Two cards of one Page are two rows, one per occurrence, as `work-pane.md` §11 keeps one card per occurrence. The earlier one's second line ends "Shown again below" (section 5).
+Two cards of one Page are two rows, one per occurrence, as `work-pane.md` §11 keeps one card per occurrence. The earlier one's second line reads "Page · 5:33 PM · Shown again below · Saturday's trail plan" (section 5).
 
 ### Opening an item
 
@@ -219,11 +219,12 @@ The Page's HTML, read over the socket with `canvas.document.view {docId}` (`oper
 
 - parsed aside, where parsing loads nothing;
 - its `script`, `base`, `meta[http-equiv]`, `link`, `iframe`, `frame`, `object`, `embed` and `portal` elements removed;
+- every `a` element replaced by plain text holding the same words, so no link and no link style is left;
 - on every element, `href`, `xlink:href`, `action`, `formaction`, `target` and `ping` taken out, and `src`, `srcset`, `poster`, `data` and `background` taken out unless they are `data:` addresses;
 - `default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; font-src data:` first in its head, as a second layer for what an attribute cannot name (a style's `url()`);
 - in an `iframe` with `sandbox=""` (no scripts, no forms, no popups, an opaque origin), as `srcdoc`.
 
-**What the person sees in a link's place**: the link's own words, in the Page's own type, no longer a link: it is not underlined by the browser, not focusable, and a click on it does nothing. The note above the frame says links aren't followed and lists their addresses (below). A picture whose address was taken out shows its alternative text, as a broken picture does.
+**What the person sees in a link's place**: the link's own words, as plain text in the style of the sentence around them: not coloured or underlined as a link, not focusable, and a click on them does nothing. The note above the frame says links aren't followed and lists their addresses (below). A picture whose address was taken out shows its alternative text, as a broken picture does.
 
 So the Page has no access to the app, to the gateway connection or to other Pages, runs nothing, sends nothing and loads nothing. Research §4 showed no request reaching the probe's server in Chromium for one page; that is evidence, not the guarantee. **The builder writes a check, for each platform's rendering path, that loads Pages built to reach out in every way (scripts, forms, links, refreshes, pictures, styles, frames, objects, prefetch hints) and drives every interaction (clicking every element, submitting every form, pressing Enter in every field), and asserts that zero requests leave the frame**, counted by a loopback server of the check's own and by the platform's request hook (the desktop's request filter). A platform shows Pages only once that check passes on it; until then a Page there is unavailable, as on iPhone (section 8).
 
@@ -285,7 +286,7 @@ The iPhone app follows `visual-language.md` §12 (touch sizes, the three screens
 
 ### The Library in the conversation's info
 
-The task's info sheet (the Work pane's sheet on the phone) has a **Library** section for this conversation (F-371): the filters (All, Pages, Media, Links, Files, Pinned) scrolling sideways as one row, then Today, This week and Older, five rows each with "Show more". It lists what the bot handed over **and what the person sent**: `artifacts.list {sessionKey}` without `messageRole`, keeping the items whose message (by `messageSeq`, from `chat.history`) is the person's or the bot's, and leaving out what a tool returned (research §1). Rows are 56 pt with 17 pt titles. Its states are section 3's, with one task: "Couldn't load this conversation's library." and **Try Again**.
+The task's info sheet (the Work pane's sheet on the phone) has a **Library** section for this conversation (F-371): the filters (All, Pages, Media, Links, Files, Pinned) scrolling sideways as one row, then Today, This week and Older, five rows each with "Show more". It lists what the bot handed over **and what the person sent**: `artifacts.list {sessionKey}` without `messageRole`, keeping the items whose message (by `messageSeq`, from `chat.history`) is the person's or the bot's, and leaving out what a tool returned (research §1). Rows are 56 pt with 17 pt titles. Its freshness line reads "In this conversation · checked 5:41 PM", and it has no "Look in more tasks". Its states are section 3's, with one task: "Couldn't load this conversation's library" and **Try Again**.
 
 ### Touch and hold
 
@@ -317,7 +318,7 @@ This sheet is what the iPhone shows in a Page's place: the title, the bot and th
 | 1440 | In the docked pane, 360 px | Frame and the 360 px chat side by side |
 | 1100 | In the drawer, 360 px | Side by side |
 | 800 | In the drawer, the window less 56 px | The frame takes the width; Chat opens the chat as a 360 px drawer over the frame's right, with its own Close; it starts hidden |
-| 390 (one pane) | In the full-width sheet | The frame full width; Chat opens the chat as a full-width sheet |
+| 390 (one pane) | The iPhone: the conversation's Library in the info sheet (section 8). A desktop window this narrow: the bot's Library in the full-width sheet | The iPhone: the sheet of section 8. A desktop window this narrow: the frame full width, and Chat opens the chat as a full-width sheet |
 
 - **Themes**: everything uses the token set; the frame's ground stays white, as a Page's own styles expect, with a hairline in dark.
 - **Keyboard**: the filters are one radio group; rows move with arrows; Pin is reached with Tab from its row. In the Page view, Tab goes through the bar, the note's Links, the frame and the chat. ⌘E opens Export; ⌘↵ sends from the chat's field as the composer does.
@@ -403,20 +404,20 @@ Nothing new. A Page revision, a cross-task index or a count would let the Librar
 
 ### Prototype states
 
-`prototype/library.html` takes every parameter `work.html` takes, and these. The fixtures are Marlow's tasks, today being Thursday, November 19.
+`prototype/library.html` takes every parameter `work.html` takes, and these. The fixtures are Marlow's tasks, today being Thursday, November 19 (`bot=marlow&task=m2`: Saturday's trail plan, with the Page shown twice). The prototype bar's "Another device pins" and "Owner approves access" stand for what another device and the gateway's owner do.
 
 | Parameter | Values |
 | --- | --- |
 | `panel=open&tab=library` | Marlow's Library in the Work pane |
 | `filter` | `all`, `pages`, `media`, `links`, `files`, `pinned` |
 | `lib` | `loading`, `partial` (two tasks couldn't be read), `error`, `empty`, `offline`, `all` (every task read) |
-| `pins` | `device` (the gateway keeps no preferences), `full` |
-| `pinfail` | `conflict` (refused twice), `noanswer` |
+| `pins` | `device` (the gateway keeps no preferences), `full`, `none` |
+| `pinfail` | `conflict` (refused twice), `noanswer`, `limit` (the profile's 128 settings used) |
 | `page` | `trail-guide`, `trail-guide-1` (the earlier occurrence), `packing-list` (no scripts, no links): the Page view |
-| `pageload` | `failed`, `large` |
+| `pageload` | `failed`, `large`, `offline` |
 | `chat` | `hidden` |
-| `export` | `open` (with `page`) |
-| `info=library` | The iPhone's Library in the conversation's info (with `width=phone`) |
+| `export` | `open` (with `page`); `exportfail=1`: the system refuses the file |
+| `width=phone` | The iPhone's forms: with `panel=open&tab=library`, the conversation's Library in its info sheet; a Page opens the sheet of section 8. `device=desktop` shows a desktop window that narrow instead |
 | `hold` | An item id: its touch-and-hold menu (phone) |
 | `state=readonly` | The read-only connection |
 
