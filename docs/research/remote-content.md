@@ -8,7 +8,7 @@ How to read the citations, as in `gateway-capabilities.md` and `setup-flow.md`:
 - A path with no prefix is in this repository on `main` (`0882ea0b`). A path after a branch name, as in `m42-artifacts:packages/core/src/artifacts.ts`, is read with `git show` on that branch's tip: `m42-artifacts` `617b7884`, `m310-t3-thread-card` `6b46b01b`, `m61-ios-foundation` `6caf8044`, `m511b-accounts-b` `8d4ebd68`, `d6-bots-lifecycle-design` `cc39b52f`. None was checked out.
 - **Tried** means it was run here and the output is quoted. **Source** means it was read in shipped code only. **Docs** means it was read in a platform's documentation: Electron's comes from the `electron.d.ts` that ships with Electron 45.3.2, Node's from the `@types/node` the workspace installs (24.19.2; the project runs Node 26), React Native's and Apple's from their published pages, read through a search for this note. **Not established** marks what could not be settled here, with the reason.
 
-Where things were run: two probes, both offline. One ran the `m42-artifacts` link previewer under Node 26.0.0 with a stand-in `fetch` that records the address and answers itself, so nothing left the machine. The other ran Electron 45.3.2, unpacked from the release archive already in the machine's Electron download cache, with a temporary profile, a `file://` page and an HTTP server of its own on loopback. No gateway was started: every gateway fact here is read from source or from the capability map, which marks its own live results.
+Where things were run: three probes, all offline. The third, a browser on loopback, is in §4.3. One ran the `m42-artifacts` link previewer under Node 26.0.0 with a stand-in `fetch` that records the address and answers itself, so nothing left the machine. The other ran Electron 45.3.2, unpacked from the release archive already in the machine's Electron download cache, with a temporary profile, a `file://` page and an HTTP server of its own on loopback. No gateway was started: every gateway fact here is read from source or from the capability map, which marks its own live results.
 
 ## Summary
 
@@ -98,12 +98,17 @@ Versions from the `package.json` files: Electron 45.3.2 and React 19.3.1 (`apps/
 
 ### 3.3 The web preview
 
-The viewer's browser applies the page's policy and the web host's headers, and opens a `target="_blank"` link itself. The page can choose what it renders, and nothing else: no request filter, and the browser's own cookies for a picture's host go with the picture unless the image element is `crossorigin="anonymous"`, which also makes a picture without CORS headers fail. The web host sends `referrer-policy: no-referrer` for its page. **Source** for the headers; the rest is the browser's documented behavior and was **not tried** here.
+The viewer's browser applies the page's policy and the web host's headers, and opens a `target="_blank"` link itself. The page can choose what it renders, and nothing else: no request filter, and the browser's own cookies for a picture's host go with the picture unless the image element is `crossorigin="anonymous"`, which also makes a picture without CORS headers fail. The web host sends `referrer-policy: no-referrer` for its page. **Source** for the headers; the cookies are the browser's documented behavior.
+
+An `<img>` follows a redirect by itself: the page gets no event for the hop and cannot cancel it, and a policy of `img-src https:` admits any `https` host it leads to. The hop went to a third origin in the probe, with the cookie (§4.3, **tried**).
+
+The web host's access cookie is set with `HttpOnly; SameSite=Strict; Path=/` and no `Domain` (`apps/desktop/src/web-host/server.ts` lines 339-345), so it belongs to the host name alone: cookies do not tell ports apart, and a picture on another port of the same host carries it (§4.3, **tried**).
 
 ### 3.4 iOS (React Native 0.88.1, Expo 58)
 
 - **App Transport Security** applies to URLSession and the APIs built on it, and requires TLS for public host names. `NSAllowsLocalNetworking` (set on `m61-ios-foundation`, `apps/mobile/app.json`) lifts that for unqualified names and `.local` hosts; Apple's pages and its forum answers disagree about IP addresses. **Docs** (Apple's `NSAllowsLocalNetworking` and "Preventing insecure network connections"). So a plain-`http` picture on a public host fails on iOS whatever the app does, and one on a local name loads.
-- **Images.** `Image` takes `source {uri, method, headers, body, cache}`; `cache` is iOS only (**docs**, React Native's Image page). Whether it sends or stores cookies is **not established**.
+- **Images.** `Image` takes `source {uri, method, headers, body, cache}`; `cache` is iOS only (**docs**, React Native's Image page). None of these refuses a redirect, and the app sees no hop, so an `Image` cannot be held to the address it was given. Whether it sends or stores cookies is **not established**.
+- **App Transport Security and pictures.** It refuses plain `http` to a public host name, but not to a local name, because the iPhone branch sets `NSAllowsLocalNetworking`. It also says nothing about which `https` host a redirect reaches. It does not hold the desktop's `img-src https:` line.
 - **Links.** `Linking.openURL(url)` hands any address to the system, whatever app handles it (**docs**, React Native's Linking page). The scheme check is the app's, as `openableUrl` does.
 - **Fetch.** No option that checks the address a request connects to was found for React Native's `fetch`, and its redirect handling was not established.
 
@@ -136,6 +141,19 @@ A `file://` page under `img-src 'self' data: http:`, two `<img>` elements on a l
 ```
 
 The redirect's target came back to the filter as an image request, and once cancelled it never reached the server. Neither picture carried a `Referer` or an `Origin`. The third image, meant to show whether the cookie is sent back, was started from an inline `onload`, which the page's own policy blocked, so whether the session sends cookies with a picture is **not established**.
+
+### 4.3 The web preview's cookie and a picture's redirect
+
+Chromium from Playwright's cache, headless, and three loopback HTTP servers of the probe's own, on one host name and three ports chosen by the system. The first stands in for the web host: `/` answers `302` with `Set-Cookie: access=<invented>; HttpOnly; SameSite=Strict; Path=/`, and its page sends `Referrer-Policy: no-referrer` and holds one `<img>` naming the second server. The second answers `302` to the third, which answers a picture. Each server logs whether a request carried a cookie or a `Referer`:
+
+```
+{"server":"A","path":"/","cookie":false,"referer":false}
+{"server":"A","path":"/page","cookie":true,"referer":false}
+{"server":"B","path":"/allowed.gif","cookie":true,"referer":false}
+{"server":"C","path":"/elsewhere.gif","cookie":true,"referer":false}
+```
+
+The picture carried the web host's access cookie to another port, and the browser followed its redirect to a third origin, cookie included, with nothing in the page able to stop either.
 
 ## 5. What could not be established
 
