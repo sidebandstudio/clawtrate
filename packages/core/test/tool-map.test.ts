@@ -2,7 +2,7 @@
 // tool (`tools.effective`), kept per task: evidence of a call's tool before its
 // result, read when the task opens and again when the gateway reports its
 // plugins changed.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { builtinToolNames, mcpToolMap } from "../src/cards.ts";
 import { MAX_BUILTIN_TOOLS, MAX_MCP_TOOLS } from "../src/state-bounds.ts";
 import { grantingGateway, KEY, openTask } from "./client-harness.ts";
@@ -189,6 +189,56 @@ describe("the tool map from tools.effective", () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
       expect(transcript()?.mcpTools ?? {}).toEqual({});
     } finally {
+      client.stop();
+    }
+  });
+});
+
+describe("a released task's map reads", () => {
+  it("an outstanding map read is the only read for the same task across release and reopening", async () => {
+    const gateway = grantingGateway();
+    const pending: Array<(value: unknown) => void> = [];
+    gateway.handlers["tools.effective"] = () =>
+      new Promise<unknown>((resolve) => pending.push(resolve));
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      await until(() => pending.length === 1);
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      await until(() => transcript()?.status === "ready");
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      expect.soft(pending.length).toBe(1);
+      pending[0]!(answer([entry("old__tool", "old", "tool")]));
+      await until(() => pending.length === 2);
+      pending[1]!(answer([entry("new__tool", "new", "tool")]));
+      await until(() => "new__tool" in (transcript()?.mcpTools ?? {}));
+      expect(transcript()?.mcpTools).toEqual({ new__tool: { server: "new", tool: "tool" } });
+    } finally {
+      for (const resolve of pending) resolve(answer([]));
+      client.stop();
+    }
+  });
+
+  it("a release clears the actual timeout of a delayed tool-map retry", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["tools.effective"] = () => answer([entry("old__tool", "old", "tool")]);
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => "old__tool" in (transcript()?.mcpTools ?? {}));
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    const cleared = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      gateway.handlers["tools.effective"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      };
+      gateway.emit("plugins.changed", {});
+      await until(() => scheduled.mock.calls.some(([, ms]) => ms === 1000));
+      const index = scheduled.mock.calls.findIndex(([, ms]) => ms === 1000);
+      const retryTimer = scheduled.mock.results[index]!.value;
+      client.closeSession(KEY);
+      expect(cleared).toHaveBeenCalledWith(retryTimer);
+    } finally {
+      scheduled.mockRestore();
+      cleared.mockRestore();
       client.stop();
     }
   });

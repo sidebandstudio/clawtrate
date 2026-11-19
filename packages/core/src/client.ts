@@ -785,11 +785,22 @@ export class ClawtrateClient {
   /** Per task and list (`<key>\0<kind>`): the last list requested, and the newest applied. */
   private readonly listRequested = new Map<string, number>();
   private readonly listApplied = new Map<string, number>();
-  /** Per task: its `tools.effective` read in flight, and whether another was asked for meanwhile. */
+  /**
+   * Per tracked task: its `tools.effective` reads, queued for the opening that asked for them,
+   * whether another was asked for meanwhile, its failures and its retry's timer.
+   */
   private readonly toolReads = new Map<
     string,
-    { again: boolean; incarnation: number | undefined }
+    {
+      generation: number;
+      incarnation: number | undefined;
+      again: boolean;
+      failures: number;
+      timer: ReturnType<typeof setTimeout> | null;
+    }
   >();
+  /** Whether a `tools.effective` read is in flight: one at a time, across tasks. */
+  private toolMapReading = false;
   /** Whole reads from history in flight (`MAX_FULL_READS`). */
   private fullReads = 0;
   /** File content on its way to viewers, in chunks (`files.ts`): nothing else of a file is kept. */
@@ -1014,7 +1025,7 @@ export class ClawtrateClient {
       for (const listKey of [...map.keys()])
         if (listKey.startsWith(`${key}\u0000`)) map.delete(listKey);
     }
-    this.toolReads.delete(key);
+    this.forgetToolMapRead(key);
     if (this.state.connection.status === "connected") {
       this.request("sessions.messages.unsubscribe", { key }).catch(() => {});
     }
@@ -2966,37 +2977,57 @@ export class ClawtrateClient {
    * is in flight is made once it has answered, so a newer answer is always the
    * one applied last.
    */
-  private async readToolMap(key: string, generation: number): Promise<void> {
-    const running = this.toolReads.get(key);
-    if (running) {
-      running.again = true;
-      return;
+  private readToolMap(key: string, generation: number): void {
+    if (!this.tracked(key) || generation !== this.generation) return;
+    const incarnation = this.incarnations.get(key);
+    const queued = this.toolReads.get(key);
+    if (queued?.generation === generation && queued.incarnation === incarnation) {
+      queued.again = true;
+    } else {
+      this.forgetToolMapRead(key);
+      this.toolReads.set(key, { generation, incarnation, again: true, failures: 0, timer: null });
     }
-    const read = { again: false, incarnation: this.incarnations.get(key) };
-    this.toolReads.set(key, read);
-    // The reads, retries included, belong to the opening of the task that asked for them: once
-    // it is released (and perhaps opened again, which reads for itself), they stop.
-    const current = () =>
-      this.toolReads.get(key) === read &&
-      generation === this.generation &&
-      this.tracked(key) &&
-      this.incarnations.get(key) === read.incarnation;
-    try {
-      let failures = 0;
-      do {
-        read.again = false;
+    this.pumpToolMapReads();
+  }
+
+  private pumpToolMapReads(): void {
+    if (this.toolMapReading) return;
+    const entry = [...this.toolReads].find(([, read]) => read.again && read.timer === null);
+    if (!entry) return;
+    const [key, read] = entry;
+    this.toolMapReading = true;
+    read.again = false;
+    void this.readToolMapOnce(key, read.generation)
+      .then((ok) => {
+        if (this.toolReads.get(key) !== read) return;
         // A read that failed is tried again, a few times, a little later: without the map a
         // tool-server call history holds reads as a general card, and nothing else would read
         // the map again until the gateway's plugins change.
-        if (!(await this.readToolMapOnce(key, generation)) && failures < TOOL_MAP_RETRIES) {
-          failures += 1;
-          await new Promise<void>((resolve) => setTimeout(resolve, TOOL_MAP_RETRY_MS * failures));
+        if (!ok && read.failures < TOOL_MAP_RETRIES) {
+          read.failures += 1;
           read.again = true;
+          read.timer = setTimeout(() => {
+            read.timer = null;
+            this.pumpToolMapReads();
+          }, TOOL_MAP_RETRY_MS * read.failures);
+        } else if (read.again) {
+          this.toolReads.delete(key);
+          this.toolReads.set(key, read);
+        } else {
+          this.forgetToolMapRead(key);
         }
-      } while (read.again && current());
-    } finally {
-      if (this.toolReads.get(key) === read) this.toolReads.delete(key);
-    }
+      })
+      .finally(() => {
+        this.toolMapReading = false;
+        this.pumpToolMapReads();
+      });
+  }
+
+  /** Drop a task's queued map reads, and its retry's timer. */
+  private forgetToolMapRead(key: string): void {
+    const read = this.toolReads.get(key);
+    if (read?.timer != null) clearTimeout(read.timer);
+    this.toolReads.delete(key);
   }
 
   /** One read of a task's tool map; false when the read failed, so it may be tried again. */
@@ -4206,7 +4237,7 @@ export class ClawtrateClient {
     this.foreign.clear();
     this.listRequested.clear();
     this.listApplied.clear();
-    this.toolReads.clear();
+    for (const key of this.toolReads.keys()) this.forgetToolMapRead(key);
     this.approvalReads.clear();
     for (const { bytes } of this.attachmentContent.values()) this.attachmentBytes -= bytes;
     this.attachmentContent.clear();
