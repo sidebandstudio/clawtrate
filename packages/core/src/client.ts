@@ -122,6 +122,7 @@ import {
   finishRun,
   isActive,
   cachedSize,
+  isDefinitiveLifecycleError,
   isTerminal,
   markUnconfirmed,
   parkAfterStop,
@@ -649,6 +650,26 @@ function withLive(transcript: Transcript): Transcript {
       live.runId === transcript.live.runId &&
       live.text === transcript.live.text);
   return same ? transcript : { ...transcript, live };
+}
+
+/**
+ * A run that ended with no event of its own received here (read from history)
+ * keeps, for its run line's Raw, the last history row its end was read from,
+ * labelled as such (F-094). A run that has events of its own keeps those.
+ */
+function withHistoryRows(runs: Run[], messages: unknown): Run[] {
+  if (!Array.isArray(messages) || messages.length === 0) return runs;
+  return runs.map((run) => {
+    if (!isTerminal(run.state) || (run.lifecycle?.length ?? 0) > 0) return run;
+    let last: unknown = undefined;
+    for (const message of messages) {
+      const meta = asRecord(asRecord(message)?.__openclaw);
+      if (meta?.runId === run.id) last = message;
+    }
+    return last === undefined
+      ? run
+      : { ...run, lifecycle: [{ via: "chat.history (the run's last row)", record: last }] };
+  });
 }
 
 export class ClawtrateClient {
@@ -4825,12 +4846,15 @@ export class ClawtrateClient {
           .filter((message) => message.status === "sending" || message.status === "awaiting-access")
           .map((message) => message.id),
       );
-      const runs = settleUnboundStops(
-        settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx),
-        inFlightId,
-        historyIds,
-        awaitingAnswer,
-        ctx,
+      const runs = withHistoryRows(
+        settleUnboundStops(
+          settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx),
+          inFlightId,
+          historyIds,
+          awaitingAnswer,
+          ctx,
+        ),
+        messages,
       );
       // A Stop asked before the gateway named its run: the run in flight under the send's id
       // is that run, named now, and is stopped; so is one settled earlier with no known outcome.
@@ -4913,8 +4937,10 @@ export class ClawtrateClient {
     // Only tasks this client follows keep a stream baseline: the text, never the message.
     const projected = this.streams.project(payload);
     const text = payload.state === "delta" ? projected : null;
+    const before = payload.state === "error" ? this.runShape(key, runId) : null;
     this.updateActivity(key, (activity, ctx) => applyChatEvent(activity, payload, text, ctx));
-    if (payload.state === "error") this.noteLifecycle(key, runId, "chat (error)", payload);
+    if (payload.state === "error" && this.runShape(key, runId) !== before)
+      this.noteLifecycle(key, runId, "chat (error)", payload);
     // final, aborted or error: the durable transcript now owns the text.
     if (payload.state !== "delta" && payload.state !== "status") this.scheduleHistory(key);
   }
@@ -4951,13 +4977,23 @@ export class ClawtrateClient {
       this.updateForeign(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
       return;
     }
+    const before = this.runShape(key, payload.runId);
     this.updateActivity(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
-    const phase = asRecord(payload.data)?.phase;
+    const data = asRecord(payload.data);
+    const phase = data?.phase;
     if (
       payload.stream === "lifecycle" &&
-      (phase === "start" || phase === "waiting-approval" || phase === "end" || phase === "error")
+      (phase === "start" || phase === "waiting-approval" || phase === "end" || phase === "error") &&
+      // Only a frame the engine took: one it rejected (an older one, a repeat) is not behind a line.
+      this.runShape(key, payload.runId) !== before
     ) {
-      this.noteLifecycle(key, payload.runId, `agent (lifecycle ${String(phase)})`, payload);
+      const retried = phase === "error" && data && !isDefinitiveLifecycleError(data);
+      this.noteLifecycle(
+        key,
+        payload.runId,
+        retried ? "agent (lifecycle error, attempt retried)" : `agent (lifecycle ${String(phase)})`,
+        payload,
+      );
     }
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);
@@ -4970,6 +5006,21 @@ export class ClawtrateClient {
    * start, its wait for an approval, its end, and a chat error, the latest of each kind. A run the event names that this task
    * does not hold keeps nothing.
    */
+  /** What an event can change of a run, to tell whether the engine took it; null with no run. */
+  private runShape(key: string, runId: string): string | null {
+    const transcript = this.state.transcripts[key];
+    const run = transcript && findRun(transcript, runId);
+    if (!run) return null;
+    return JSON.stringify([
+      run.state,
+      run.endedAt,
+      run.reportedStartAt,
+      run.pendingCards.length,
+      run.attemptErrors.length,
+      run.error?.message ?? null,
+    ]);
+  }
+
   private noteLifecycle(key: string, runId: string, via: string, record: RawRecord): void {
     this.updateActivity(key, (activity) => {
       const run = findRun(activity, runId);

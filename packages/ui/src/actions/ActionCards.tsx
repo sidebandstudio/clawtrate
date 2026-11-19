@@ -924,7 +924,12 @@ export function RunLineView({
   );
 }
 
-/** The run line's Raw: the events that started and ended the run, as the gateway sent them. */
+/**
+ * The run line's Raw: what was received about the run's start and end, each
+ * labelled with where it came from. A frame the engine did not take is never
+ * here; a run read from history shows the row its end was read from; where
+ * nothing was received, it says so.
+ */
 export function runRaw(
   runId: string,
   lifecycle: Array<{ via: string; record: unknown }> | null,
@@ -933,13 +938,16 @@ export function runRaw(
     .filter((each) => each.record !== null && each.record !== undefined)
     .map(
       (each) =>
-        [`The event, as the gateway sent it (${each.via})`, each.record] as [string, unknown],
+        [
+          each.via.startsWith("chat.history")
+            ? "The row its end was read from, as the gateway's history keeps it (chat.history)"
+            : `The event, as the gateway sent it (${each.via})`,
+          each.record,
+        ] as [string, unknown],
     );
   const notes: string[] = [];
   if (!lifecycle || lifecycle.length === 0) {
-    notes.push(
-      "This run was read from the gateway's history, which keeps no event for a run's start or end.",
-    );
+    notes.push("Nothing the gateway sent about this run's start or end was received here.");
   } else if (events.length < lifecycle.length) {
     notes.push("An event was too long for this app to keep as received.");
   }

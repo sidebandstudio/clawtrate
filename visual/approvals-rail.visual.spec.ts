@@ -73,6 +73,29 @@ const execFields = (page: Page) =>
     CARD_TASK,
   );
 
+/** Replace the live fixture run's kept events, as the engine would hold them. */
+async function setRunLifecycle(page: Page, lifecycle: unknown[] | null): Promise<void> {
+  await page.evaluate(
+    ({ lifecycle }) => {
+      const fixture = (window as unknown as FixtureWindow).clawtrateFixture;
+      fixture.setState((state) => {
+        const transcripts = state.transcripts as Record<string, Record<string, unknown>>;
+        const key = "agent:otto:disk-space";
+        const t = transcripts[key]!;
+        const runs = (t.runs as Array<Record<string, unknown>>).map((run) =>
+          run.id === "run-live"
+            ? lifecycle === null
+              ? (({ lifecycle: _, ...rest }) => rest)(run)
+              : { ...run, lifecycle }
+            : run,
+        );
+        return { ...state, transcripts: { ...transcripts, [key]: { ...t, runs } } };
+      });
+    },
+    { lifecycle },
+  );
+}
+
 /** Nothing inside reaches past its own right edge: no horizontal scroll at this width. */
 async function fitsWidth(page: Page, target: Locator): Promise<void> {
   const box = await target.boundingBox();
@@ -174,6 +197,24 @@ for (const size of SIZES) {
         await line.locator("summary").click();
         await line.getByRole("button", { name: "Raw" }).click();
         await expect(raw(line)).toContainText("(agent (lifecycle start))");
+        // Nothing received about the run: Raw says so, and does not claim it was read from history.
+        await setRunLifecycle(page, null);
+        await line.getByRole("button", { name: "Raw" }).click();
+        await line.getByRole("button", { name: "Raw" }).click();
+        await expect(raw(line)).toContainText(
+          "Nothing the gateway sent about this run's start or end was received here.",
+        );
+        await expect(raw(line)).not.toContainText("history");
+        // A run read from history: the row its end was read from, labelled as that.
+        await setRunLifecycle(page, [
+          {
+            via: "chat.history (the run's last row)",
+            record: { role: "assistant", stopReason: "stop", __openclaw: { runId: "run-live" } },
+          },
+        ]);
+        await expect(raw(line)).toContainText(
+          "The row its end was read from, as the gateway's history keeps it (chat.history)",
+        );
         await openFixture(
           page,
           "scene=run-failed&bot=otto&task=agent:otto:disk-space&panel=closed",
