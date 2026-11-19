@@ -18,6 +18,8 @@ import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
 import {
   RoutinesEngine,
+  type BotRoutines,
+  type CalendarRuns,
   type GatewayHooks,
   type NewRoutine,
   type Routine,
@@ -27,6 +29,7 @@ import {
   type RoutineRunNow,
   type RoutineWrite,
   type RunConversation,
+  type RunSelector,
 } from "./routines.ts";
 import {
   admitApproval,
@@ -3450,23 +3453,24 @@ export class ClawtrateClient {
     return this.routines.load();
   }
 
-  /** A routine's runs, newest first, at most `MAX_ROUTINE_RUNS`; returned, not kept. */
+  /** One bot's routines, for a list that keeps fewer than the gateway has; returned, not kept. */
+  readBotRoutines(botId: string): Promise<BotRoutines> {
+    return this.routines.botRoutines(botId);
+  }
+
+  /** A routine's runs, newest finished first, at most `MAX_ROUTINE_RUNS`; returned, not kept. */
   readRoutineRuns(id: string): Promise<RoutineRun[]> {
     return this.routines.runs(id);
   }
 
-  /** The latest runs across routines, for the calendar; returned, not kept. */
-  readCalendarRuns(): Promise<RoutineRun[]> {
-    return this.routines.calendarRuns();
+  /** Every routine's runs that started from `from` to `to`, for the calendar; returned, not kept. */
+  readCalendarRuns(from: number, to: number): Promise<CalendarRuns> {
+    return this.routines.calendarRuns(from, to);
   }
 
   /** One run's conversation, when the gateway keeps it; returned, not kept. */
-  readRunConversation(
-    id: string,
-    runId: string,
-    sessionKey: string | null,
-  ): Promise<RunConversation> {
-    return this.routines.conversation(id, runId, sessionKey);
+  readRunConversation(id: string, run: RunSelector): Promise<RunConversation> {
+    return this.routines.conversation(id, run);
   }
 
   // Changing routines (automation.md sections 9 and 10): `operator.admin`, checked by the engine.
@@ -3478,7 +3482,7 @@ export class ClawtrateClient {
 
   /** One routine as the gateway has it now: what a save in doubt is checked against. */
   readRoutine(id: string): Promise<Routine | null> {
-    return this.routines.read(id);
+    return this.routines.readOne(id);
   }
 
   /** The routine a draft made, if the gateway lists it. */

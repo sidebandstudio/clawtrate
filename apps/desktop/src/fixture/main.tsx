@@ -23,7 +23,7 @@ import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
 import { accountParams } from "./accounts.ts";
-import { routineParams } from "./routines.ts";
+import { releaseRoutineReads, routineParams } from "./routines.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -81,7 +81,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   routines: routineParams(params),
 });
 // For tests and manual checks: change the state from the console.
-Object.assign(window, { clawtrateFixture: bridge });
+Object.assign(window, { clawtrateFixture: bridge, releaseRoutineReads });
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

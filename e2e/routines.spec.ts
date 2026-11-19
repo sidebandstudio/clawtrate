@@ -10,7 +10,7 @@ import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fullWhen, zonedTime } from "../packages/ui/src/routines/schedule.ts";
+import { zonedTime } from "../packages/ui/src/routines/schedule.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { scriptedRoutine, SCRIPTED_ROUTINES } from "../tools/dev-gateway/src/routines.ts";
@@ -23,6 +23,30 @@ const NY = "America/New_York";
 
 type Job = { id: string; name: string; state?: { nextRunAtMs?: number } };
 type RunEntry = { runId: string; runAtMs: number; status: string };
+
+/** "Tue Nov 17, 8:00 AM", with "Today, " or "Tomorrow, " before it when it is: the page's words for a time. */
+function spelled(ms: number, tz: string): string {
+  const day = (at: number) => new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(at);
+  const date = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  })
+    .formatToParts(ms)
+    .filter((part) => part.type !== "literal")
+    .map((part) => part.value)
+    .join(" ");
+  const time = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(ms);
+  const now = Date.now();
+  const relative =
+    day(ms) === day(now) ? "Today, " : day(ms) === day(now + 86_400_000) ? "Tomorrow, " : "";
+  return `${relative}${date}, ${time}`;
+}
 
 let host: { child: ChildProcess; data: string } | null = null;
 let page: Page;
@@ -48,7 +72,7 @@ const botRow = (name: string) =>
 
 async function openRoutines(): Promise<void> {
   if (await view().count()) {
-    const back = view().getByRole("button", { name: /^Back to (the routine|routines)$/ });
+    const back = view().getByRole("button", { name: /^Back to (.+, all runs|routines)$/ });
     while (await back.count()) await back.first().click();
     return;
   }
@@ -128,13 +152,32 @@ test("F-188 F-353: a routine's page shows its instruction, when it runs in words
   await expect(facts).toContainText("Weekdays at 8:00 AM");
   await expect(facts).toContainText("New York");
   await expect(facts).toContainText(NY);
-  // The gateway's own next run, in the routine's zone.
+  // The gateway's own next run, in the routine's zone, written out here rather than by the product's formatter.
   const next = (await call<Job>("cron.get", { id: job.id })).state!.nextRunAtMs!;
-  await expect(view().getByTestId("routine-next")).toContainText(fullWhen(next, Date.now(), NY));
+  await expect(view().getByTestId("routine-next")).toContainText(spelled(next, NY));
   await expect(facts).toContainText("A new conversation each time");
   await expect(facts).toContainText("Kept with the run");
   await expect(facts).toContainText("This gateway's webhooks start a bot directly, not a routine.");
   await expect(view().getByTestId("no-runs")).toContainText("No runs yet. The first is due");
+});
+
+test("F-353: a cron schedule with no zone runs in the gateway's, and its next run is said in the viewer's", async () => {
+  const name = `No zone ${STAMP}`;
+  const job = await add({
+    ...SCRIPTED_ROUTINES[0]!,
+    name,
+    schedule: { kind: "cron", expr: "0 9 * * *" },
+  });
+  await openRoutines();
+  await row(name).click();
+  await expect(view().getByTestId("routine-facts")).toContainText(
+    "Time zoneThe gateway's own time zone",
+  );
+  const next = (await call<Job>("cron.get", { id: job.id })).state!.nextRunAtMs!;
+  // The page is in New York (the browser's zone); the gateway's own zone is the host's.
+  await expect(view().getByTestId("routine-next")).toHaveText(
+    `${spelled(next, NY)}Your time. The schedule itself runs in the gateway's time zone.`,
+  );
 });
 
 test("live: added shows a routine another client made", async () => {
@@ -183,6 +226,16 @@ test("F-024: started marks the routine and its bot as working, and finished clea
   await expect(view().locator('[data-testid="run-row"][data-running="true"]')).toBeVisible();
   await expect(botRow("Otto").first()).toHaveAttribute("data-state", "working");
   await expect(botRow("Otto").first()).toContainText(`Running ${name}`);
+  // Its row under Otto opens the routine, where the run in progress is.
+  const otto = botRow("Otto").first();
+  if ((await otto.getAttribute("aria-expanded")) === "false") {
+    await otto.focus();
+    await page.keyboard.press("ArrowRight");
+  }
+  await view().getByRole("button", { name: "Back to routines" }).click();
+  await page.getByTestId("routine-task").filter({ hasText: name }).click();
+  await expect(view().getByRole("heading", { name })).toBeVisible();
+  await expect(view().locator('[data-testid="run-row"][data-running="true"]')).toBeVisible();
   await started;
   // finished: the mark clears and the run is listed with how it ended.
   await expect(view().getByTestId("routine-state")).not.toContainText("Running", {
@@ -209,18 +262,18 @@ test("F-190 F-193: a run opens its conversation as the run recorded it, from the
   await expect(view()).toContainText("Something else entirely.");
   await view().getByTestId("run-row").first().click();
   const message = view().getByTestId("scheduled-message");
-  // The job's own words, as recorded with the run; the gateway's additions are folded away.
-  await expect(message.locator("> p")).toHaveText("Summarise my notes. #steps");
-  await expect(message).not.toContainText("Something else entirely.");
-  await expect(message.locator("details")).not.toHaveAttribute("open");
-  await message.getByText("What the gateway added").click();
+  // The message as recorded with the run, whole: the job's words then the gateway's own.
+  await expect(message.locator("> p")).toContainText("Summarise my notes. #steps\nCurrent time: ");
   await expect(message).toContainText("This is an unattended scheduled run.");
+  await expect(message).not.toContainText("Something else entirely.");
   await expect(view().getByTestId("run-view")).toContainText(
     "I listed my workspace and read my instructions.",
   );
   await expect(view().getByTestId("run-view")).toContainText("600 tokens");
   // The rail: the routine's latest run under Marlow opens the same run.
-  await view().getByRole("button", { name: "Back to the routine" }).click();
+  await view()
+    .getByRole("button", { name: `Back to ${name}, all runs` })
+    .click();
   await view().getByRole("button", { name: "Back to routines" }).click();
   // A bot's rows, its routine runs among them, show while it is unfolded.
   const marlow = botRow("Marlow").first();
@@ -234,7 +287,7 @@ test("F-190 F-193: a run opens its conversation as the run recorded it, from the
   await expect(view().getByTestId("scheduled-message")).toContainText("Summarise my notes. #steps");
 });
 
-test("F-355: a routine's page lists its 20 most recent runs, newest first, when it has more", async () => {
+test("F-355: a routine's page lists the 20 runs that finished most recently, in the gateway's order, when it has more", async () => {
   test.setTimeout(240_000);
   const name = `Many runs ${STAMP}`;
   // No directive: the scripted model's shortest reply.
@@ -242,11 +295,8 @@ test("F-355: a routine's page lists its 20 most recent runs, newest first, when 
   for (let index = 0; index < 22; index += 1) expect((await runNow(job.id)).ok).toBe(true);
   const all = await call<{ entries: RunEntry[] }>("cron.runs", { id: job.id, limit: 200 });
   expect(all.entries.length).toBe(22);
-  const newest = all.entries
-    .map((entry) => entry.runAtMs)
-    .sort((a, b) => b - a)
-    .slice(0, 20)
-    .map(String);
+  // The gateway's order (newest finished first) is the contract; the page does not reorder it.
+  const newest = all.entries.slice(0, 20).map((entry) => String(entry.runAtMs));
   await openRoutines();
   await row(name).click();
   const rows = view().locator('[data-testid="run-row"][data-run-at]');
@@ -286,10 +336,14 @@ test("F-197: the week calendar shows today's recorded run and the coming schedul
   await expect(range).not.toHaveText(before!);
   await calendar.getByRole("button", { name: "Today" }).click();
   await expect(range).toHaveText(before!);
-  await calendar.getByRole("region").focus();
+  // Left and Right move between chips on nearby days; the dates stay.
+  const ran = calendar.locator('.r-occ[data-past="true"]', { hasText: digest.name });
+  await ran.focus();
   await page.keyboard.press("ArrowRight");
-  await expect(range).not.toHaveText(before!);
-  await page.keyboard.press("ArrowLeft");
+  if (mornings.length > 0) {
+    await expect(ran).not.toBeFocused();
+    await expect(calendar.locator(".r-occ:focus")).toHaveCount(1);
+  }
   await expect(range).toHaveText(before!);
   await view().getByRole("radio", { name: "List" }).click();
 });

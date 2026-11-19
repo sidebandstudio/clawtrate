@@ -108,7 +108,8 @@ export function Shell({
   // Whether Work is a drawer is decided here, from the width of .main-pane, and
   // in the stylesheet by the same width (DOCK_FROM); nowhere else.
   const overlay = mainWidth !== null && mainWidth < DOCK_FROM;
-  const drawerOpen = panelOpen && overlay;
+  // The Routines view takes the main pane, Work included: no drawer, scrim or inert rail behind it.
+  const drawerOpen = panelOpen && overlay && !routines;
 
   const setPanel = useCallback((open: boolean) => {
     if (open) {
@@ -306,6 +307,30 @@ export function Shell({
     [onePane],
   );
   const showList = useCallback(() => setView("list"), []);
+
+  // Entering Routines closes Work (automation.md section 1); leaving returns focus to what opened it.
+  const routinesOpener = useRef<HTMLElement | null>(null);
+  const openRoutines = (nav: RoutinesNav) => {
+    if (!routines) {
+      const active = document.activeElement as HTMLElement | null;
+      routinesOpener.current = canFocus(active) ? active : null;
+    }
+    if (panelOpen) {
+      keepFocus.current = true;
+      setPanel(false);
+    }
+    setRoutines(nav);
+    setView("detail");
+  };
+  const closeRoutines = () => {
+    setRoutines(null);
+    if (onePane) setView("list");
+    const opener = routinesOpener.current;
+    routinesOpener.current = null;
+    requestAnimationFrame(() => {
+      if (canFocus(opener)) opener.focus();
+    });
+  };
   const backToList = useCallback(() => {
     navigatedTo.current = "list";
     setView("list");
@@ -427,7 +452,7 @@ export function Shell({
     <div
       className="shell"
       ref={shellRef}
-      data-panel={panelOpen ? "open" : "closed"}
+      data-panel={panelOpen && !routines ? "open" : "closed"}
       data-view={view}
       inert={inert}
     >
@@ -449,14 +474,10 @@ export function Shell({
         onNewBot={interactive ? openNewBot : null}
         routines={state.routines.routines}
         routinesOpen={routines !== null}
-        onOpenRoutines={() => {
-          setRoutines(ROUTINES_HOME);
-          setView("detail");
-        }}
-        onOpenRoutineRun={(id) => {
-          setRoutines({ ...ROUTINES_HOME, routine: id, run: "latest" });
-          setView("detail");
-        }}
+        onOpenRoutines={() => openRoutines(ROUTINES_HOME)}
+        onOpenRoutineRun={(id, runAt) =>
+          openRoutines({ ...ROUTINES_HOME, routine: id, run: runAt === null ? null : { runAt } })
+        }
         inert={drawerOpen || inert}
         interactive={interactive}
         sidebar={state.sidebar}
@@ -469,10 +490,7 @@ export function Shell({
             info={info}
             nav={routines}
             onNav={setRoutines}
-            onClose={() => {
-              setRoutines(null);
-              if (onePane) backToList();
-            }}
+            onClose={closeRoutines}
             narrow={onePane || (mainWidth !== null && mainWidth < 520)}
             phone={onePane}
           />

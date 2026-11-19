@@ -1,13 +1,16 @@
 // The Routines view's behaviour in the fixture (docs/design/automation.md
-// sections 3 to 7, 15), at the widths and themes it is drawn at. The
+// sections 3 to 8, 15), at the widths and themes it is drawn at. The
 // fixture's routines are made up (apps/desktop/src/fixture/routines.ts); the
 // same rows are checked against a real gateway in e2e/routines.spec.ts.
 import { expect, test, type Page } from "@playwright/test";
+import type { ClawtrateState } from "../packages/core/src/index.ts";
 import { contextFor, openFixture, SIZES } from "./fixture.ts";
 
 const ROUTINES = "scene=main&routines=on";
 const size = (name: string) => SIZES.find((each) => each.name === name)!;
 const view = (page: Page) => page.getByTestId("routines-view");
+const rail = (page: Page, bot: string) =>
+  page.getByRole("list", { name: `${bot}'s routine runs` }).getByTestId("routine-task");
 
 async function open(page: Page, query = ROUTINES) {
   await openFixture(page, query, "light");
@@ -17,6 +20,28 @@ async function open(page: Page, query = ROUTINES) {
   await page.getByRole("button", { name: "Routines", exact: true }).click();
   await expect(view(page)).toBeVisible();
 }
+
+/** Change the fixture's routines as a `cron` event would: `source` is a function of them. */
+async function change(page: Page, source: string) {
+  await page.evaluate((source) => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+      }
+    ).clawtrateFixture;
+    const next = new Function(`return ${source}`)() as (
+      routines: ClawtrateState["routines"],
+    ) => ClawtrateState["routines"];
+    fixture.setState((state) => ({ ...state, routines: next(state.routines) }));
+  }, source);
+}
+
+const sent = (page: Page) =>
+  page.evaluate(() =>
+    (
+      window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } }
+    ).clawtrateFixture.sent.map((each) => each.type),
+  );
 
 const dayHeads = (page: Page) =>
   page.locator(".r-cal-dayhead").evaluateAll((heads) => heads.map((head) => head.textContent));
@@ -39,6 +64,36 @@ test.describe("1440", () => {
     await view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
     await expect(view(page).getByTestId("routine-row")).toHaveCount(3);
     await expect(view(page).getByTestId("routine-count")).toHaveText("3 routines");
+  });
+
+  test("F-191: the Routines button is there with no routines and after a failed read, with Try again", async ({
+    page,
+  }) => {
+    await open(page, "scene=main&routines=empty");
+    await expect(view(page).getByTestId("routines-empty")).toContainText("No routines yet");
+    await openFixture(page, "scene=main&routines=error", "light");
+    await page.getByRole("button", { name: "Routines", exact: true }).click();
+    const error = view(page).getByTestId("routines-error");
+    await expect(error).toContainText("Couldn't load routines.");
+    await expect(error).toContainText("The gateway didn't answer in time.");
+    await error.getByRole("button", { name: "Try again" }).click();
+    expect(await sent(page)).toContain("refreshRoutines");
+  });
+
+  test("F-191: more routines than kept are said, a bot the client does not hold still owns its routine, and one bot's are read in full", async ({
+    page,
+  }) => {
+    await open(page, "scene=main&routines=truncated");
+    await expect(view(page).getByTestId("routines-omitted")).toContainText(
+      "The gateway has 12 more routines than Clawtrate keeps.",
+    );
+    await expect(view(page).getByRole("heading", { name: "ledger" })).toBeVisible();
+    await view(page).getByTestId("routine-row").filter({ hasText: "Ledger export" }).click();
+    await expect(view(page).getByRole("heading", { name: "Ledger export" })).toBeVisible();
+    await view(page).getByRole("button", { name: "Back to routines" }).click();
+    await view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
+    await expect(view(page).getByTestId("routine-row")).toHaveCount(3);
+    expect(await sent(page)).toContain("readBotRoutines");
   });
 
   test("F-188 F-353: a routine's page says its instruction, schedule, zone, next run, where it runs and its triggers", async ({
@@ -65,6 +120,15 @@ test.describe("1440", () => {
     await view(page).getByRole("button", { name: "Back to routines" }).click();
     await view(page).getByTestId("routine-row").filter({ hasText: "Plan the week" }).click();
     await expect(view(page).getByTestId("routine-next")).toContainText("your time");
+    // A cron schedule with no zone runs in the gateway's; its next run is said in the viewer's.
+    await view(page).getByRole("button", { name: "Back to routines" }).click();
+    await view(page).getByTestId("routine-row").filter({ hasText: "Certificate renewal" }).click();
+    await expect(view(page).getByTestId("routine-facts")).toContainText(
+      "Time zoneThe gateway's own time zone",
+    );
+    await expect(view(page).getByTestId("routine-next")).toHaveText(
+      "Tue Dec 1, 3:00 AMYour time. The schedule itself runs in the gateway's time zone.",
+    );
   });
 
   test("F-190: runs say how each ended, with usage, and open their conversation or say why there is none", async ({
@@ -81,18 +145,21 @@ test.describe("1440", () => {
     );
     await expect(runs.nth(3)).toContainText("Skipped");
     await runs.nth(0).click();
-    await expect(view(page).getByTestId("scheduled-message")).toContainText(
-      "Summarise the notes I added yesterday",
-    );
+    // The recorded message whole: the gateway's own lines are not cut away.
+    const message = view(page).getByTestId("scheduled-message");
+    await expect(message).toContainText("Scheduled message, as the gateway recorded it");
+    await expect(message).toContainText("Summarise the notes I added yesterday");
+    await expect(message).toContainText("This is an unattended scheduled run.");
     await expect(view(page).getByTestId("run-view")).toContainText("Three notes from yesterday.");
     await expect(view(page).getByTestId("run-view")).toContainText("120 in, 80 out tokens");
-    await view(page).getByRole("button", { name: "Back to the routine" }).click();
+    await expect(view(page).getByRole("button", { name: "All runs", exact: true })).toHaveCount(0);
+    await view(page).getByRole("button", { name: "Back to Morning digest, all runs" }).click();
     await runs.nth(4).click();
     await expect(view(page).getByTestId("run-not-kept")).toContainText(
-      "The gateway doesn't have this run's conversation.",
+      "Clawtrate can't show this run's conversation. The gateway returned none for it. By default it keeps",
     );
     await expect(view(page).getByTestId("run-summary")).toContainText(
-      "Three notes from yesterday.",
+      "What the run returned: Three notes from yesterday.",
     );
   });
 
@@ -107,11 +174,22 @@ test.describe("1440", () => {
     );
     await view(page).getByTestId("run-row").first().click();
     await expect(view(page).getByTestId("run-not-kept")).toContainText(
-      "This run has no conversation of its own.",
+      "This run happened in Juniper's main conversation. Its turn is there among the others",
     );
   });
 
-  test("F-355: a routine's page shows its 20 most recent runs, newest first", async ({ page }) => {
+  test("F-190: a routine's runs that fail to load say so, with Try again", async ({ page }) => {
+    await open(page, `${ROUTINES}&routinefail=routine-digest`);
+    await view(page).getByTestId("routine-row").filter({ hasText: "Morning digest" }).click();
+    const error = view(page).getByTestId("read-error");
+    await expect(error).toContainText("Couldn't load runs. The gateway didn't answer in time.");
+    await expect(error.getByRole("button", { name: "Try again" })).toBeVisible();
+    await expect(view(page).getByTestId("no-runs")).toHaveCount(0);
+  });
+
+  test("F-355: a routine's page shows its 20 most recently finished runs, in the gateway's order", async ({
+    page,
+  }) => {
     await open(page, "scene=main&routines=many");
     await view(page).getByTestId("routine-row").filter({ hasText: "Morning digest" }).click();
     const rows = view(page).locator("[data-run-at]");
@@ -120,7 +198,10 @@ test.describe("1440", () => {
       each.map((row) => Number(row.getAttribute("data-run-at"))),
     )) as number[];
     expect(times).toEqual([...times].sort((a, b) => b - a));
-    await expect(view(page)).toContainText("Clawtrate shows the 20 most recent runs.");
+    await expect(view(page)).toContainText(
+      "Clawtrate shows the 20 runs that finished most recently.",
+    );
+    await expect(view(page)).toContainText("By default the gateway keeps 7 days of runs");
   });
 
   test("F-024: a bot whose routine is running shows the working mark and the routine's name", async ({
@@ -138,61 +219,159 @@ test.describe("1440", () => {
     ).not.toHaveAttribute("data-state", "working");
   });
 
-  test("F-193: a routine's latest run is a row under its bot that opens the run", async ({
+  test("F-193: a routine's latest run in the last day is a row under its bot that opens that run, and stays on it", async ({
     page,
   }) => {
     await openFixture(page, ROUTINES, "light");
-    const rows = page
-      .getByRole("list", { name: "Otto's routine runs" })
-      .getByTestId("routine-task");
-    await expect(rows).toHaveCount(3);
-    const backup = rows.filter({ hasText: "Nightly backup check" });
-    await expect(backup).toHaveAttribute("data-state", "failed");
-    await page
-      .getByRole("list", { name: "Marlow's routine runs" })
-      .getByTestId("routine-task")
-      .click();
+    // Isolated agent routines whose latest run finished in the last 24 hours.
+    await expect(rail(page, "Otto")).toHaveCount(2);
+    await expect(rail(page, "Otto").filter({ hasText: "Nightly backup check" })).toHaveAttribute(
+      "data-state",
+      "failed",
+    );
+    await expect(page.getByRole("list", { name: "Juniper's routine runs" })).toHaveCount(0);
+    await rail(page, "Marlow").click();
     await expect(view(page).getByRole("heading", { name: "Morning digest" })).toBeVisible();
     await expect(view(page).getByTestId("scheduled-message")).toBeVisible();
-    await expect(view(page).getByRole("button", { name: "All runs" })).toBeVisible();
+    const when = view(page).locator(".r-titles p");
+    await expect(when).toHaveText("Marlow · Today 8:00 AM");
+    // A later run finishes: the run on screen stays the one that was opened.
+    await change(
+      page,
+      `(store) => ({ ...store, routines: store.routines.map((each) =>
+        each.id === "routine-digest" ? { ...each, lastRunAt: Date.now() - 60000 } : each) })`,
+    );
+    await expect(rail(page, "Marlow")).toContainText("5:39 PM");
+    await expect(when).toHaveText("Marlow · Today 8:00 AM");
   });
 
-  test("F-197: the calendar moves by its arrows, Today and the Left and Right keys", async ({
+  test("F-193: a running row opens the routine with its run in progress", async ({ page }) => {
+    await openFixture(page, "scene=main&routines=running", "light");
+    await rail(page, "Marlow").click();
+    await expect(view(page).getByTestId("routine-state")).toContainText("Running since");
+    await expect(view(page).locator('[data-testid="run-row"][data-running="true"]')).toBeVisible();
+    await expect(view(page).getByTestId("run-view")).toHaveCount(0);
+  });
+
+  test("F-193: another routine's run never shows under this one's heading while it loads, or when it fails", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ROUTINES}&routinehold=routine-backup`, "light");
+    await rail(page, "Marlow").click();
+    await expect(view(page).getByTestId("scheduled-message")).toContainText("Summarise the notes");
+    await rail(page, "Otto").filter({ hasText: "Nightly backup check" }).click();
+    await expect(view(page).getByRole("heading", { name: "Nightly backup check" })).toBeVisible();
+    await expect(view(page)).toContainText("Loading this run…");
+    await expect(view(page).getByTestId("scheduled-message")).toHaveCount(0);
+    await expect(view(page)).not.toContainText("Three notes from yesterday.");
+    // Its runs, then its conversation, are answered.
+    await expect(async () => {
+      await page.evaluate(() =>
+        (window as unknown as { releaseRoutineReads(): void }).releaseRoutineReads(),
+      );
+      await expect(view(page).getByTestId("scheduled-message")).toContainText(
+        "Check last night's backup finished",
+        { timeout: 500 },
+      );
+    }).toPass();
+
+    await openFixture(page, `${ROUTINES}&routinefail=routine-backup`, "light");
+    await rail(page, "Marlow").click();
+    await expect(view(page).getByTestId("scheduled-message")).toBeVisible();
+    await rail(page, "Otto").filter({ hasText: "Nightly backup check" }).click();
+    const error = view(page).getByTestId("read-error");
+    await expect(error).toContainText("Couldn't load this run.");
+    await expect(view(page)).not.toContainText("No runs yet");
+    await expect(view(page).getByTestId("scheduled-message")).toHaveCount(0);
+  });
+
+  test("F-190: a one-shot is said to have removed itself only on the gateway's word", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page)
+      .getByTestId("routine-row")
+      .filter({ hasText: "Send the draft to Sam" })
+      .click();
+    const remove = (ranOnce: boolean) =>
+      change(
+        page,
+        `(store) => ({ ...store,
+          routines: store.routines.filter((each) => each.id !== "routine-draft"),
+          removed: { id: "routine-draft", ranOnce: ${ranOnce}, runAt: ${ranOnce} ? Date.now() - 60000 : null } })`,
+      );
+    await remove(false);
+    await expect(view(page).getByTestId("routine-deleted")).toContainText(
+      "This routine was deleted.",
+    );
+    await expect(view(page).getByTestId("routine-deleted")).not.toContainText("ran once");
+    await open(page);
+    await view(page)
+      .getByTestId("routine-row")
+      .filter({ hasText: "Send the draft to Sam" })
+      .click();
+    await remove(true);
+    await expect(view(page).getByTestId("routine-deleted")).toContainText(
+      "This routine ran once, and the gateway removed it. Its run succeeded today 5:39 PM.",
+    );
+  });
+
+  test("F-197: the calendar's dates move with Previous, Next and Today, and focus stays on the button pressed", async ({
     page,
   }) => {
     await open(page);
     await view(page).getByRole("radio", { name: "Week" }).click();
-    const first = await dayHeads(page);
-    expect(first[0]).toBe("TodayNov 16");
-    expect(first).toHaveLength(7);
-    await page.getByRole("button", { name: "Next 7 days" }).click();
-    expect((await dayHeads(page))[0]).toBe("MonNov 23");
-    await page.getByRole("button", { name: "Previous 7 days" }).click();
-    await page.getByRole("button", { name: "Previous 7 days" }).click();
-    expect((await dayHeads(page))[0]).toBe("MonNov 9");
-    await page.getByRole("button", { name: "Today" }).click();
+    const range = page.getByTestId("calendar-range");
+    expect(await dayHeads(page)).toHaveLength(7);
     expect((await dayHeads(page))[0]).toBe("TodayNov 16");
-    await page.getByRole("region", { name: /^Routines, / }).focus();
-    await page.keyboard.press("ArrowRight");
-    expect((await dayHeads(page))[0]).toBe("TueNov 17");
-    await page.keyboard.press("ArrowLeft");
-    await page.keyboard.press("ArrowLeft");
-    expect((await dayHeads(page))[0]).toBe("SunNov 15");
-    // Day and 3 days have as many columns.
+    await expect(range).toHaveText("Today Nov 16 to Sun Nov 22");
+    await expect(range).toHaveRole("status");
+    const next = page.getByRole("button", { name: "Next 7 days" });
+    await next.click();
+    expect((await dayHeads(page))[0]).toBe("MonNov 23");
+    await expect(next).toBeFocused();
+    const previous = page.getByRole("button", { name: "Previous 7 days" });
+    await previous.click();
+    await previous.click();
+    expect((await dayHeads(page))[0]).toBe("MonNov 9");
+    await expect(previous).toBeFocused();
+    const today = page.getByRole("button", { name: "Today" });
+    await today.click();
+    expect((await dayHeads(page))[0]).toBe("TodayNov 16");
+    await expect(today).toBeFocused();
     await view(page).getByRole("radio", { name: "3 days" }).click();
     expect(await dayHeads(page)).toHaveLength(3);
   });
 
-  test("F-197: the calendar is lists of chips by day, with past runs of paused and frequent routines kept", async ({
+  test("F-197: Left and Right move between chips on the nearest days that have one, and leave the dates alone", async ({
     page,
   }) => {
     await open(page);
     await view(page).getByRole("radio", { name: "Week" }).click();
-    const days = page.getByTestId("calendar").getByRole("list");
+    const digest = (day: string) =>
+      page.getByRole("button", { name: `Morning digest, Marlow, ${day} 8:00 AM` });
+    await digest("Tue Nov 17").focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(digest("Wed Nov 18")).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(digest("Tue Nov 17")).toBeFocused();
+    await expect(page.getByTestId("calendar-range")).toHaveText("Today Nov 16 to Sun Nov 22");
+  });
+
+  test("F-197: the calendar is a group of lists named by their dates, with past runs of paused and frequent routines kept", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByRole("radio", { name: "Week" }).click();
+    const group = page.getByRole("group", { name: "Routines by day" });
+    const days = group.getByRole("list");
     await expect(days).toHaveCount(7);
-    await expect(days.first()).toHaveAccessibleName("Monday, Nov 16");
-    // A frequent routine is a band each day, and its recorded runs stay chips.
+    await expect(days.first()).toHaveAccessibleName("Mon Nov 16");
+    // A frequent routine is a band each day, named with its date, and its recorded runs stay chips.
     await expect(page.locator(".r-cal-band", { hasText: "Disk space watch" })).toHaveCount(7);
+    await expect(
+      page.getByRole("button", { name: "Every 30 minutes · Disk space watch, Tue Nov 17" }),
+    ).toBeVisible();
     await expect(
       page.locator('.r-occ[data-past="true"]', { hasText: "Disk space watch" }),
     ).not.toHaveCount(0);
@@ -205,13 +384,39 @@ test.describe("1440", () => {
     // A failed run has its mark; future times follow the schedule.
     await page.getByRole("button", { name: "Today" }).click();
     await expect(
-      page.getByRole("button", {
-        name: "Nightly backup check, Otto, Monday, Nov 16 3:30 AM, failed",
-      }),
+      page.getByRole("button", { name: "Nightly backup check, Otto, Mon Nov 16 3:30 AM, failed" }),
     ).toBeVisible();
     await expect(
       page.locator(".r-occ:not([data-past])", { hasText: "Morning digest" }),
     ).toHaveCount(4);
+  });
+
+  test("F-197: a failed read of the days' runs says so with Try again, and a partial one says so", async ({
+    page,
+  }) => {
+    await open(page, `${ROUTINES}&calendar=fail`);
+    await view(page).getByRole("radio", { name: "Week" }).click();
+    const error = page.getByTestId("calendar-error");
+    await expect(error).toContainText("Couldn't load the runs on these days.");
+    await expect(error.getByRole("button", { name: "Try again" })).toBeVisible();
+    await open(page, `${ROUTINES}&calendar=partial`);
+    await view(page).getByRole("radio", { name: "Week" }).click();
+    await expect(page.getByTestId("calendar-partial")).toContainText(
+      "Some runs on these days aren't shown.",
+    );
+  });
+
+  test("the view has Back to the conversation, closes Work, and returns focus to the Routines button", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=main&panel=open", "light");
+    await expect(page.locator(".shell")).toHaveAttribute("data-panel", "open");
+    const button = page.getByRole("button", { name: "Routines", exact: true });
+    await button.click();
+    await expect(page.locator(".shell")).toHaveAttribute("data-panel", "closed");
+    await view(page).getByRole("button", { name: "Back to conversation" }).click();
+    await expect(view(page)).toHaveCount(0);
+    await expect(button).toBeFocused();
   });
 });
 
@@ -220,12 +425,35 @@ test.describe("1100", () => {
   test("F-197: the week keeps all seven days in view", async ({ page }) => {
     await open(page);
     await view(page).getByRole("radio", { name: "Week" }).click();
+    const columns = page.getByTestId("calendar-day");
+    await expect(columns).toHaveCount(7);
     const scroll = page.locator(".r-cal-scroll");
-    const fits = await scroll.evaluate((element) => element.scrollWidth <= element.clientWidth);
-    expect(fits).toBe(true);
+    expect(await scroll.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+      true,
+    );
     const box = (await scroll.boundingBox())!;
-    const last = (await page.locator(".r-cal-dayhead").last().boundingBox())!;
-    expect(last.x + last.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
+    for (const column of await columns.all()) {
+      const each = (await column.boundingBox())!;
+      expect(each.x).toBeGreaterThanOrEqual(box.x - 0.5);
+      expect(each.x + each.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
+    }
+  });
+});
+
+test.describe("resizing", () => {
+  test.use(contextFor(size("1440"), "light"));
+  test("Work docked at 1440 leaves no scrim and no inert rail behind Routines at 800", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=main&panel=open", "light");
+    await page.getByRole("button", { name: "Routines", exact: true }).click();
+    await page.setViewportSize({ width: 800, height: 700 });
+    await expect(view(page)).toBeVisible();
+    await expect(page.locator(".shell")).toHaveAttribute("data-panel", "closed");
+    await expect(page.locator(".rail")).not.toHaveAttribute("inert");
+    await expect(page.locator(".drawer-scrim")).toBeHidden();
+    await view(page).getByRole("radio", { name: "Week" }).click();
+    await expect(view(page).getByRole("radio", { name: "Week" })).toBeChecked();
   });
 });
 
@@ -233,15 +461,26 @@ test.describe("phone", () => {
   test.use(contextFor(size("phone"), "light"));
   test("F-193: a run's title and time are both readable at phone width", async ({ page }) => {
     await open(page);
-    // The phone offers List and Day.
+    // The phone offers List and Day, and Back goes to the bots.
     await expect(view(page).getByRole("radio")).toHaveCount(2);
+    await expect(view(page).getByRole("button", { name: "Back to bots" })).toBeVisible();
     await view(page).getByTestId("routine-row").filter({ hasText: "Nightly backup check" }).click();
     await view(page).getByTestId("run-row").first().click();
     const title = view(page).locator(".r-titles h1");
     const time = view(page).locator(".r-titles p");
-    await expect(time).toContainText("Otto · Today 3:30 AM");
+    await expect(title).toHaveText("Nightly backup check");
+    await expect(time).toHaveText("Otto · Today 3:30 AM");
     for (const element of [title, time]) {
       expect(await element.evaluate((each) => each.scrollWidth <= each.clientWidth)).toBe(true);
     }
+  });
+
+  test("Back to bots leaves the view for the rail, with focus on the Routines button", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByRole("button", { name: "Back to bots" }).click();
+    await expect(view(page)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Routines", exact: true })).toBeFocused();
   });
 });

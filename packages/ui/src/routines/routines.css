@@ -329,17 +329,7 @@
   margin: 6px 0 0;
   font-size: var(--text-base);
   line-height: 1.5;
-}
-
-.r-sched details {
-  margin-top: 8px;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-
-.r-sched summary {
-  min-height: 28px;
-  cursor: pointer;
+  white-space: pre-wrap;
 }
 
 .r-run-foot {

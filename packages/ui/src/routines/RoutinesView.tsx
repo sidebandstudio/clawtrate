@@ -42,11 +42,14 @@ import { BackIcon, ChevronIcon, ClockIcon, MoreIcon, PlusIcon } from "../icons.t
 import { Markdown } from "../Markdown.tsx";
 import { Note } from "../bots/parts.tsx";
 import { Calendar } from "./Calendar.tsx";
+import { useKeyedRead } from "./read.ts";
 import {
   fullWhen,
+  ownerOf,
   routineZone,
   runOutcome,
   scheduleWords,
+  triggerWords,
   viewerZone,
   when,
   zoneCity,
@@ -61,9 +64,14 @@ export type RoutinesNav = {
   mode: RoutinesMode;
   bot: string | null;
   routine: string | null;
-  /** A run of the open routine; "latest" opens its newest, as a run row in the rail does. */
-  run: RoutineRun | "latest" | null;
+  /**
+   * A run of the open routine: the one chosen on its page, or the one a row in
+   * the rail names by its start, until its read finds it and it is bound.
+   */
+  run: RoutineRun | { runAt: number } | null;
 };
+
+const isRun = (run: RoutinesNav["run"]): run is RoutineRun => run !== null && "jobId" in run;
 
 const capital = (text: string) => text[0]!.toUpperCase() + text.slice(1);
 
@@ -196,12 +204,12 @@ function List({
   /** "New routine", with admin: in the empty state and under one bot's routines. */
   create: ((botId: string | null) => void) | null;
 }) {
-  const groups = bots
+  const groups = owners(bots, routines)
     .filter((each) => bot === null || each.id === bot)
     .map((each) => ({ bot: each, rows: ordered(routines.filter((r) => r.botId === each.id)) }))
     .filter((group) => group.rows.length > 0 || bot !== null);
   if (groups.length === 0 || (bot !== null && groups[0]!.rows.length === 0)) {
-    const named = bot !== null ? bots.find((each) => each.id === bot) : null;
+    const named = bot !== null ? ownerOf(bots, bot) : null;
     return (
       <div className="work-empty r-empty" data-testid="routines-empty">
         <span className="work-empty-mark">
@@ -295,35 +303,36 @@ function List({
   );
 }
 
-type Runs =
-  | { status: "loading" }
-  | { status: "error"; error: string }
-  | { status: "ready"; runs: RoutineRun[] };
+/** Every bot with a routine, in the gateway's order, then any the client does not hold, named by id. */
+function owners(bots: Bot[], routines: Routine[]): Bot[] {
+  const known = new Set(bots.map((each) => each.id));
+  const absent = [...new Set(routines.map((each) => each.botId))].filter((id) => !known.has(id));
+  return [...bots, ...absent.map((id) => ownerOf(bots, id))];
+}
 
 /**
- * A routine's runs, read again whenever its last run or running state
- * changes: the `cron` event's `started` and `finished` move those.
+ * A routine's runs, for one gateway, read again whenever its last run or
+ * running state changes (the `cron` event's `started` and `finished` move
+ * those). An answer for another routine or revision is never shown.
  */
-function useRuns(routine: Routine | undefined): [Runs, () => void] {
+function useRuns(gateway: string, routine: Routine | undefined) {
   const bridge = useBridge();
-  const [runs, setRuns] = useState<Runs>({ status: "loading" });
-  const [again, setAgain] = useState(0);
   const id = routine?.id ?? null;
-  const revision = `${routine?.lastRunAt ?? ""}:${routine?.runningAt ?? ""}`;
-  useEffect(() => {
-    if (!id) return;
-    let live = true;
-    bridge.invoke({ type: "readRoutineRuns", id }).then(
-      (read) => live && setRuns({ status: "ready", runs: read }),
-      (error: unknown) =>
-        live &&
-        setRuns({ status: "error", error: error instanceof Error ? error.message : String(error) }),
-    );
-    return () => {
-      live = false;
-    };
-  }, [bridge, id, revision, again]);
-  return [runs, () => setAgain((n) => n + 1)];
+  return useKeyedRead(
+    id === null ? null : `${gateway}:${id}:${routine?.lastRunAt ?? ""}:${routine?.runningAt ?? ""}`,
+    () => bridge.invoke({ type: "readRoutineRuns", id: id! }),
+  );
+}
+
+function Retry({ text, error, onRetry }: { text: string; error: string; onRetry: () => void }) {
+  return (
+    <p className="r-hint" data-testid="read-error">
+      {text} {error}{" "}
+      <button type="button" className="button" data-size="sm" onClick={onRetry}>
+        Try again
+      </button>
+    </p>
+  );
 }
 
 function runsIn(routine: Routine, bot: string): string {
@@ -350,19 +359,21 @@ function Instruction({ routine, bot }: { routine: Routine; bot: string }) {
     );
   return (
     <>
-      <p className="r-hint">Runs on the gateway, not as a bot:</p>
+      <p className="r-hint">Runs a command on the gateway, not a bot:</p>
       <p className="r-instruction r-mono">{routine.text}</p>
     </>
   );
 }
 
 function Page({
+  gateway,
   routine,
   bot,
   now,
   onRun,
   hooks,
 }: {
+  gateway: string;
   routine: Routine;
   bot: Bot;
   now: number;
@@ -370,7 +381,7 @@ function Page({
   /** With admin: the gateway's hook address, under Triggers (F-349). */
   hooks: ReactNode;
 }) {
-  const [runs, retry] = useRuns(routine);
+  const [runs, retry] = useRuns(gateway, routine);
   const tz = routineZone(routine.schedule);
   const viewer = viewerZone();
   const schedule = scheduleLine(routine);
@@ -445,6 +456,13 @@ function Page({
                   {fullWhen(routine.nextRunAt, now, zoneOf(routine))}
                   {tz && !nextYours && <small>{zoneCity(tz)} time</small>}
                   {nextYours && <small>{nextYours}</small>}
+                  {!tz && (
+                    <small>
+                      {routine.schedule.kind === "cron"
+                        ? "Your time. The schedule itself runs in the gateway's time zone."
+                        : "Your time"}
+                    </small>
+                  )}
                 </>
               ) : !routine.enabled ? (
                 "None while paused"
@@ -472,7 +490,7 @@ function Page({
           <div>
             <dt>Triggers</dt>
             <dd>
-              Its schedule only.
+              {triggerWords(routine)}
               <small>This gateway&apos;s webhooks start a bot directly, not a routine.</small>
               {hooks}
             </dd>
@@ -484,13 +502,8 @@ function Page({
         {runs.status === "loading" ? (
           <p className="r-hint">Loading runs…</p>
         ) : runs.status === "error" ? (
-          <p className="r-hint">
-            Couldn&apos;t load runs. {runs.error}{" "}
-            <button type="button" className="button" data-size="sm" onClick={retry}>
-              Try again
-            </button>
-          </p>
-        ) : runs.runs.length === 0 && routine.runningAt === null ? (
+          <Retry text="Couldn't load runs." error={runs.error} onRetry={retry} />
+        ) : runs.value.length === 0 && routine.runningAt === null ? (
           <p className="r-hint" data-testid="no-runs">
             {routine.enabled && routine.nextRunAt !== null
               ? `No runs yet. The first is due ${when(routine.nextRunAt, now, zoneOf(routine))}.`
@@ -511,7 +524,7 @@ function Page({
                 </div>
               </li>
             )}
-            {runs.runs.map((run) => {
+            {runs.value.map((run) => {
               const outcome = runOutcome(run);
               const at = when(run.runAt, now, viewer);
               return (
@@ -549,41 +562,43 @@ function Page({
           </ul>
         )}
         <p className="r-foot-note">
-          Clawtrate shows the 20 most recent runs. The gateway keeps 7 days of runs, and each
-          run&apos;s conversation for 24 hours unless it is set to keep them longer.
+          Clawtrate shows the 20 runs that finished most recently. By default the gateway keeps 7
+          days of runs, and each run&apos;s conversation for 24 hours; it can be set to keep them
+          longer.
         </p>
       </section>
     </>
   );
 }
 
-type Conversation = { status: "loading" } | { status: "ready"; read: RunConversation };
+/** Where a run with no conversation of its own happened, in the design's words (section 7). */
+function sharedWords(routine: Routine, bot: Bot): string {
+  if (routine.payload === "other") return "A command runs on the gateway, not a bot,";
+  if (routine.target === "main") return `This run happened in ${bot.name}'s main conversation.`;
+  return "This run happened in the conversation the routine was made in.";
+}
 
-function RunView({ routine, run, bot }: { routine: Routine; run: RoutineRun; bot: Bot }) {
+function RunView({
+  gateway,
+  routine,
+  run,
+  bot,
+}: {
+  gateway: string;
+  routine: Routine;
+  run: RoutineRun;
+  bot: Bot;
+}) {
   const bridge = useBridge();
-  const [read, setRead] = useState<Conversation>({ status: "loading" });
-  useEffect(() => {
-    let live = true;
-    bridge
-      .invoke({
-        type: "readRunConversation",
-        id: routine.id,
-        runId: run.runId ?? "",
-        sessionKey: run.runId ? run.sessionKey : null,
-      })
-      .then(
-        (result) => live && setRead({ status: "ready", read: result }),
-        (error: unknown) =>
-          live &&
-          setRead({
-            status: "ready",
-            read: { status: "none", reason: "not-kept", error: String(error) },
-          }),
-      );
-    return () => {
-      live = false;
-    };
-  }, [bridge, routine.id, run.runId, run.sessionKey]);
+  const [read, retry] = useKeyedRead(`${gateway}:${routine.id}:${run.runId ?? run.runAt}`, () =>
+    bridge.invoke({
+      type: "readRunConversation",
+      id: routine.id,
+      runId: run.runId,
+      runAt: run.runAt,
+      sessionKey: run.sessionKey,
+    }),
+  );
   const outcome = runOutcome(run);
   const facts = [
     run.provider && run.model ? `${run.provider}/${run.model}` : run.model,
@@ -591,25 +606,24 @@ function RunView({ routine, run, bot }: { routine: Routine; run: RoutineRun; bot
       ? `${run.inputTokens} in, ${run.outputTokens} out tokens`
       : null,
   ].filter(Boolean);
+  const returned = (
+    <p data-testid="run-summary">What the run returned: {run.summary ?? outcome.text}</p>
+  );
   return (
     <div className="r-convo" data-testid="run-view">
       {read.status === "loading" ? (
         <p className="r-hint">Loading this run…</p>
-      ) : read.read.status === "kept" ? (
+      ) : read.status === "error" ? (
+        <Retry text="Couldn't load this run." error={read.error} onRetry={retry} />
+      ) : read.value.status === "kept" ? (
         <>
           <div className="r-sched" data-testid="scheduled-message">
             <div className="r-sched-head">
-              <ClockIcon /> Scheduled message
+              <ClockIcon /> Scheduled message, as the gateway recorded it
             </div>
-            <p>{read.read.message}</p>
-            {read.read.added && (
-              <details>
-                <summary>What the gateway added</summary>
-                <p>{read.read.added}</p>
-              </details>
-            )}
+            <p>{read.value.message}</p>
           </div>
-          {read.read.items.map((item) =>
+          {read.value.items.map((item) =>
             item.blocks.map((block, index) =>
               block.kind === "text" && item.role === "assistant" ? (
                 <div key={`${item.id}:${index}`} className="bubble r-bubble" data-role="assistant">
@@ -623,30 +637,39 @@ function RunView({ routine, run, bot }: { routine: Routine; run: RoutineRun; bot
               ) : null,
             ),
           )}
-          {read.read.omitted > 0 && (
-            <p className="r-hint">{read.read.omitted} later messages are not shown here.</p>
+          {read.value.omitted > 0 && (
+            <p className="r-hint">{read.value.omitted} later messages are not shown here.</p>
           )}
         </>
       ) : (
         <Note testId="run-not-kept">
           <p>
-            {read.read.reason === "no-session" ? (
+            {read.value.reason === "no-session" ? (
               <>
-                <strong>This run has no conversation of its own.</strong> It ran in {bot.name}
-                &apos;s main conversation. What the run returned:
+                <strong>{sharedWords(routine, bot)}</strong>{" "}
+                {routine.payload === "other"
+                  ? "so this run has no conversation."
+                  : "Its turn is there among the others; the gateway doesn't keep it apart."}
+              </>
+            ) : read.value.reason === "too-long" ? (
+              <>
+                <strong>This run&apos;s conversation is longer than Clawtrate reads.</strong> Its
+                start, the scheduled message, is further back than the pages read here.
               </>
             ) : (
               <>
-                <strong>The gateway doesn&apos;t have this run&apos;s conversation.</strong> It
-                keeps them 24 hours unless set to keep them longer. What the run returned:
+                <strong>Clawtrate can&apos;t show this run&apos;s conversation.</strong> The gateway
+                returned none for it. By default it keeps a run&apos;s conversation for 24 hours, so
+                an older one may have been removed.
               </>
             )}
           </p>
-          <p data-testid="run-summary">{run.summary ?? "Nothing."}</p>
+          {returned}
         </Note>
       )}
       <div className="r-run-foot">
-        This run has finished. A run can&apos;t be answered.{" "}
+        This run has finished. A run can&apos;t be answered; to change what it does, edit the
+        routine.{" "}
         <span data-tone={outcome.mark === "failed" ? "danger" : undefined}>{outcome.text}</span>
         {facts.length > 0 && <span className="r-run-facts">{facts.join(" · ")}</span>}
       </div>
@@ -716,21 +739,41 @@ export function RoutinesView({
   nav: RoutinesNav;
   onNav: (nav: RoutinesNav) => void;
   onClose: () => void;
-  /** Below 800 px: Back to the conversation is in the header. */
+  /** Below 800 px: the header has less room. */
   narrow: boolean;
-  /** One pane: the view switch offers List and Day. */
+  /** One pane: the view switch offers List and Day, and Back goes to the bots. */
   phone: boolean;
 }) {
   const now = useNow();
+  const bridge = useBridge();
   const { routines: store, bots } = state;
-  const routine = nav.routine ? store.routines.find((each) => each.id === nav.routine) : undefined;
-  const bot = routine ? bots.find((each) => each.id === routine.botId) : undefined;
-  const [latest] = useRuns(nav.run === "latest" ? routine : undefined);
-  const run =
-    nav.run === "latest" ? (latest.status === "ready" ? latest.runs[0] : undefined) : nav.run;
+  const gateway = state.connection.gatewayUrl ?? "";
+  // Kept fewer routines than the gateway has: one bot's are read from the gateway when chosen.
+  const [botRead, retryBot] = useKeyedRead(
+    store.omitted > 0 && nav.bot !== null
+      ? `${gateway}:${nav.bot}:${store.routines.length}:${store.omitted}`
+      : null,
+    () => bridge.invoke({ type: "readBotRoutines", botId: nav.bot! }),
+  );
+
+  const fromBot = store.omitted > 0 && botRead.status === "ready" ? botRead.value.routines : [];
+  const routine = nav.routine
+    ? [...store.routines, ...fromBot].find((each) => each.id === nav.routine)
+    : undefined;
+  const bot = routine ? ownerOf(bots, routine.botId) : undefined;
+  // A rail row names its run by when it started; once the routine's runs have it, it is bound.
+  const named = nav.run !== null && !isRun(nav.run) ? nav.run.runAt : null;
+  const [found, retryFound] = useRuns(gateway, named === null ? undefined : routine);
+  const match =
+    found.status === "ready" ? found.value.find((each) => each.runAt === named) : undefined;
+  useEffect(() => {
+    if (match) onNav({ ...nav, run: match });
+  }, [match, nav, onNav]);
+  const run = isRun(nav.run) ? nav.run : undefined;
   // A routine removed while its page is open keeps its last values on screen.
   const [kept, setKept] = useState<{ routine: Routine; bot: Bot } | null>(null);
-  if (routine && bot && (kept?.routine !== routine || kept.bot !== bot)) setKept({ routine, bot });
+  if (routine && bot && (kept?.routine !== routine || kept.bot.id !== bot.id))
+    setKept({ routine, bot });
   const shown =
     routine && bot
       ? { routine, bot }
@@ -738,6 +781,8 @@ export function RoutinesView({
         ? kept
         : null;
   const deleted = nav.routine !== null && !routine && shown !== null;
+  const ranOnce =
+    deleted && store.removed?.id === nav.routine && store.removed.ranOnce ? store.removed : null;
   const modes = phone ? MODES.slice(0, 2) : MODES;
   const mode = phone && nav.mode !== "list" ? "day" : nav.mode;
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -745,13 +790,24 @@ export function RoutinesView({
   useEffect(() => {
     headingRef.current?.focus();
   }, [place]);
-
   const back = shown
     ? () => onNav(nav.run ? { ...nav, run: null } : { ...nav, routine: null, run: null })
-    : narrow
-      ? onClose
-      : null;
-  const count = store.routines.filter((each) => nav.bot === null || each.botId === nav.bot).length;
+    : onClose;
+  const backLabel = shown
+    ? nav.run
+      ? `Back to ${shown.routine.name}, all runs`
+      : "Back to routines"
+    : phone
+      ? "Back to bots"
+      : "Back to conversation";
+  const listed =
+    store.omitted > 0 && nav.bot !== null
+      ? botRead.status === "ready"
+        ? botRead.value.routines
+        : []
+      : store.routines.filter((each) => nav.bot === null || each.botId === nav.bot);
+  const count = listed.length;
+  const refresh = () => void bridge.invoke({ type: "refreshRoutines" });
 
   // Every way into a write passes here: below admin nothing opens.
   const admin = canAdmin(state.connection, info);
@@ -785,34 +841,28 @@ export function RoutinesView({
       className="r-view"
       aria-label="Routines"
       data-r={!shown && mode !== "list" ? "calendar" : "list"}
+      data-narrow={narrow || undefined}
       data-testid="routines-view"
     >
       <header className="r-head">
-        {back && (
-          <button
-            type="button"
-            className="icon-button r-back"
-            aria-label={
-              shown
-                ? nav.run
-                  ? "Back to the routine"
-                  : "Back to routines"
-                : "Back to conversation"
-            }
-            onClick={back}
-          >
-            <BackIcon />
-          </button>
-        )}
+        <button
+          type="button"
+          className="icon-button r-back"
+          aria-label={backLabel}
+          title={backLabel}
+          onClick={back}
+        >
+          <BackIcon />
+        </button>
         {shown ? (
           <div className="r-titles">
-            <h1 ref={headingRef} tabIndex={-1}>
+            <h1 ref={headingRef} tabIndex={-1} title={shown.routine.name}>
               {shown.routine.name}
             </h1>
             <p>
               <Avatar bot={shown.bot} />
-              {nav.run && run
-                ? `${shown.bot.name} · ${capital(when(run.runAt, now, viewerZone()))}`
+              {nav.run
+                ? `${shown.bot.name} · ${capital(when(nav.run.runAt, now, viewerZone()))}`
                 : shown.bot.name}
             </p>
           </div>
@@ -824,16 +874,6 @@ export function RoutinesView({
         <span className="spacer" />
         {!shown && (
           <ModeSwitch mode={mode} modes={modes} onMode={(next) => onNav({ ...nav, mode: next })} />
-        )}
-        {shown && nav.run && (
-          <button
-            type="button"
-            className="button"
-            data-variant="quiet"
-            onClick={() => onNav({ ...nav, run: null })}
-          >
-            All runs
-          </button>
         )}
         {!shown && admin && store.status === "loaded" && (
           <button
@@ -868,10 +908,13 @@ export function RoutinesView({
         {deleted && (
           <Note tone="warn" testId="routine-deleted">
             <p role="status">
-              {shown.routine.deleteAfterRun && shown.routine.lastRunAt !== null ? (
+              {ranOnce ? (
                 <>
-                  <strong>This routine ran once and removed itself.</strong> What it showed is kept
-                  here until you leave.
+                  <strong>This routine ran once, and the gateway removed it.</strong>
+                  {ranOnce.runAt !== null &&
+                    ` Its run succeeded ${when(ranOnce.runAt, now, viewerZone())}.`}{" "}
+                  The gateway keeps nothing more of it, so once you leave this page it isn&apos;t
+                  shown again.
                 </>
               ) : (
                 <>
@@ -894,19 +937,25 @@ export function RoutinesView({
             run ? (
               <RunView
                 key={`${run.runId ?? ""}:${run.runAt}`}
+                gateway={gateway}
                 routine={shown.routine}
                 run={run}
                 bot={shown.bot}
               />
-            ) : latest.status === "loading" ? (
-              <p className="r-hint">Loading this run…</p>
+            ) : found.status === "error" ? (
+              <Retry text="Couldn't load this run." error={found.error} onRetry={retryFound} />
+            ) : found.status === "ready" && !match ? (
+              <p className="r-hint" data-testid="run-gone">
+                This run isn&apos;t among the 20 the gateway lists for this routine now.
+              </p>
             ) : (
-              <p className="r-hint">No runs yet.</p>
+              <p className="r-hint">Loading this run…</p>
             )
           ) : (
             <>
               {live && <RunNoteLine note={actions.runs[live.id]} paused={!live.enabled} />}
               <Page
+                gateway={gateway}
                 routine={shown.routine}
                 bot={shown.bot}
                 now={now}
@@ -927,7 +976,7 @@ export function RoutinesView({
                 onChange={(event) => onNav({ ...nav, bot: event.target.value || null })}
               >
                 <option value="">All bots</option>
-                {bots.map((each) => (
+                {owners(bots, store.routines).map((each) => (
                   <option key={each.id} value={each.id}>
                     {each.name}
                   </option>
@@ -947,20 +996,55 @@ export function RoutinesView({
                 </p>
               </Note>
             )}
-            {store.status === "error" ? (
+            {store.omitted > 0 && (
+              <Note testId="routines-omitted">
+                <p>
+                  <strong>
+                    The gateway has {store.omitted} more{" "}
+                    {store.omitted === 1 ? "routine" : "routines"} than Clawtrate keeps.
+                  </strong>{" "}
+                  {nav.bot === null
+                    ? "Choose a bot to see all of its routines."
+                    : "All of this bot's are shown."}
+                </p>
+              </Note>
+            )}
+            {store.status === "error" && store.routines.length > 0 && (
+              <Note tone="warn" testId="routines-stale">
+                <p>
+                  <strong>Couldn&apos;t refresh routines.</strong> {store.error} What is shown may
+                  be out of date.
+                </p>
+                <button type="button" className="button" data-size="sm" onClick={refresh}>
+                  Try again
+                </button>
+              </Note>
+            )}
+            {store.status === "error" && store.routines.length === 0 ? (
               <div className="work-empty r-empty" data-testid="routines-error">
                 <p className="work-empty-title">Couldn&apos;t load routines.</p>
                 <p className="work-empty-text">{store.error}</p>
+                <button type="button" className="button" onClick={refresh}>
+                  Try again
+                </button>
               </div>
-            ) : store.status !== "loaded" ? (
+            ) : store.status === "idle" ||
+              store.status === "loading" ||
+              (store.omitted > 0 && nav.bot !== null && botRead.status === "loading") ? (
               <div className="r-loading" aria-busy="true" aria-label="Loading routines">
                 <span className="skeleton r-skeleton" />
                 <span className="skeleton r-skeleton" />
                 <span className="skeleton r-skeleton" />
               </div>
+            ) : botRead.status === "error" && store.omitted > 0 && nav.bot !== null ? (
+              <Retry
+                text="Couldn't load this bot's routines."
+                error={botRead.error}
+                onRetry={retryBot}
+              />
             ) : mode === "list" ? (
               <List
-                routines={store.routines}
+                routines={listed}
                 bots={bots}
                 bot={nav.bot}
                 now={now}
@@ -972,9 +1056,8 @@ export function RoutinesView({
               />
             ) : (
               <Calendar
-                routines={store.routines.filter(
-                  (each) => nav.bot === null || each.botId === nav.bot,
-                )}
+                gateway={gateway}
+                routines={listed}
                 bots={bots}
                 days={mode === "day" ? 1 : mode === "3day" ? 3 : 7}
                 now={now}

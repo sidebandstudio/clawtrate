@@ -3,11 +3,14 @@
 // engine answers the routine commands. Every name, instruction and result is
 // made up. Times are from the fixture's clock; next runs follow each schedule.
 //
-// Address parameters (without one, the gateway has no routines, as every
-// other scene's baseline was taken):
-//   routines=on|empty|error|loading|running|scheduler-off|many
+// Address parameters (without one, the gateway has no routines):
+//   routines=on|empty|error|loading|running|scheduler-off|many|truncated
 //     no routines, a failed read, still loading, Morning digest running now,
-//     the gateway's scheduler off, or Morning digest with 27 recorded runs
+//     the gateway's scheduler off, Morning digest with 27 recorded runs, or
+//     more routines than the client keeps, one of them a bot's it does not hold
+//   routinehold=<id>   a routine's runs and conversations wait for releaseRoutineReads()
+//   routinefail=<id>   a routine's runs and conversations fail
+//   calendar=fail|partial   the calendar's read fails, or says it is partial
 // With `access=admin` (accounts.ts) the routines can be changed, and:
 //   save=refused|noanswer|conflict   how the next save ends; `noanswer` then
 //                                    finds it saved on "Check now"
@@ -28,7 +31,19 @@ import type {
 } from "@clawtrate/core";
 
 export type RoutineParams = {
-  state: "none" | "ready" | "empty" | "error" | "loading" | "running" | "scheduler-off" | "many";
+  state:
+    | "none"
+    | "ready"
+    | "empty"
+    | "error"
+    | "loading"
+    | "running"
+    | "scheduler-off"
+    | "many"
+    | "truncated";
+  hold?: string | null;
+  fail?: string | null;
+  calendar?: "fail" | "partial" | null;
   save?: "refused" | "noanswer" | "conflict" | null;
   pause?: "fail" | null;
   run?: "already" | "fail" | null;
@@ -41,6 +56,7 @@ const oneOf = <T extends string>(value: string | null, options: readonly T[]): T
 
 export function routineParams(params: URLSearchParams): RoutineParams {
   const state = params.get("routines");
+  const calendar = params.get("calendar");
   return {
     state:
       state === "empty" ||
@@ -48,17 +64,28 @@ export function routineParams(params: URLSearchParams): RoutineParams {
       state === "loading" ||
       state === "running" ||
       state === "scheduler-off" ||
-      state === "many"
+      state === "many" ||
+      state === "truncated"
         ? state
         : state === "on"
           ? "ready"
           : "none",
+    hold: params.get("routinehold"),
+    fail: params.get("routinefail"),
+    calendar: calendar === "fail" || calendar === "partial" ? calendar : null,
     save: oneOf(params.get("save"), ["refused", "noanswer", "conflict"] as const),
     pause: oneOf(params.get("pause"), ["fail"] as const),
     run: oneOf(params.get("run"), ["already", "fail"] as const),
     remove: oneOf(params.get("delete"), ["fail"] as const),
     hooks: params.get("hooks") === "on",
   };
+}
+
+const held: Array<() => void> = [];
+
+/** Answer every held read (`routinehold`). */
+export function releaseRoutineReads(): void {
+  for (const release of held.splice(0)) release();
 }
 
 const NY = "America/New_York";
@@ -152,7 +179,22 @@ export const DIGEST = "routine-digest";
 
 export function fixtureRoutineList(now: number, params: RoutineParams): Routine[] {
   const lastDigest = at(now, NY, now > at(now, NY, 0, 8) ? 0 : -1, 8);
+  // A bot past the 32 the client holds: its routine is listed under its id.
+  const absent =
+    params.state === "truncated"
+      ? [
+          base({
+            id: "routine-ledger",
+            botId: "ledger",
+            name: "Ledger export",
+            schedule: schedule({ expr: "0 6 * * *", tz: NY }),
+            text: "Export yesterday's ledger.",
+            nextRunAt: nextAt(now, NY, 6),
+          }),
+        ]
+      : [];
   return [
+    ...absent,
     base({
       id: DIGEST,
       botId: "marlow",
@@ -198,7 +240,8 @@ export function fixtureRoutineList(now: number, params: RoutineParams): Routine[
       id: "routine-cert",
       botId: "otto",
       name: "Certificate renewal",
-      schedule: schedule({ expr: "0 9 1 * *", tz: "Europe/Berlin" }),
+      // No zone: it runs in the gateway's own.
+      schedule: schedule({ expr: "0 9 1 * *" }),
       text: "Renew the home server's certificate if it expires within 30 days.",
       nextRunAt: nextDay(now, "Europe/Berlin", 9, (_, day) => day === 1),
       lastRunAt: now - 18 * DAY,
@@ -242,14 +285,22 @@ export function fixtureRoutineList(now: number, params: RoutineParams): Routine[
 
 export function fixtureRoutines(now: number, params: RoutineParams): RoutinesState {
   if (params.state === "loading")
-    return { status: "loading", error: null, schedulerOn: null, routines: [], omitted: 0 };
-  if (params.state === "error")
     return {
-      status: "error",
-      error: "missing scope: operator.read",
+      status: "loading",
+      error: null,
       schedulerOn: null,
       routines: [],
       omitted: 0,
+      removed: null,
+    };
+  if (params.state === "error")
+    return {
+      status: "error",
+      error: "The gateway didn't answer in time.",
+      schedulerOn: null,
+      routines: [],
+      omitted: 0,
+      removed: null,
     };
   return {
     status: "loaded",
@@ -257,7 +308,8 @@ export function fixtureRoutines(now: number, params: RoutineParams): RoutinesSta
     schedulerOn: params.state !== "scheduler-off",
     routines:
       params.state === "empty" || params.state === "none" ? [] : fixtureRoutineList(now, params),
-    omitted: 0,
+    omitted: params.state === "truncated" ? 12 : 0,
+    removed: null,
   };
 }
 
@@ -347,9 +399,7 @@ function conversation(routine: Routine, runs: RoutineRun[], runId: string): RunC
     };
   return {
     status: "kept",
-    message: routine.text,
-    added:
-      "Current time: Wednesday, November 18th, 2026 - 8:00 AM (America/New_York)\n\nThis is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have.",
+    message: `${routine.text}\nCurrent time: Monday, November 16th, 2026 - 8:00 AM (America/New_York)\n\nThis is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have.`,
     items: [
       {
         id: "convo-1",
@@ -398,7 +448,16 @@ export function routineCommand(
   params: RoutineParams,
   set: (state: ClawtrateState) => void,
 ): Promise<unknown> | undefined {
-  const find = (id: string) => get().routines.routines.find((each) => each.id === id);
+  const find = (id: string) =>
+    [...get().routines.routines, ...fixtureRoutineList(now, params)].find((each) => each.id === id);
+  // `routinehold` and `routinefail` stand in for a slow or failed gateway, for one routine's reads.
+  const answer = (id: string, value: () => unknown): Promise<unknown> => {
+    if (params.fail === id) return Promise.reject(new Error("The gateway didn't answer in time."));
+    if (params.hold === id) return new Promise((resolve) => held.push(() => resolve(value())));
+    return Promise.resolve(value());
+  };
+  // What the gateway keeps now: a deleted routine is not found.
+  const kept = (id: string) => get().routines.routines.find((each) => each.id === id);
   const put = (change: (routines: Routine[]) => Routine[]) =>
     set({ ...get(), routines: { ...get().routines, routines: change(get().routines.routines) } });
   const replace = (next: Routine) =>
@@ -447,10 +506,10 @@ export function routineCommand(
       return later(300, () => made);
     }
     case "readRoutine":
-      return later(300, () => find(command.id) ?? null);
+      return later(300, () => kept(command.id) ?? null);
     case "updateRoutine": {
       if (!admin()) return Promise.resolve({ status: "not-sent", reason: "admin" });
-      const routine = find(command.id);
+      const routine = kept(command.id);
       if (!routine) return Promise.resolve({ status: "deleted" });
       const end = outcome();
       if (end === "conflict") {
@@ -479,7 +538,7 @@ export function routineCommand(
       });
     }
     case "setRoutineEnabled": {
-      const routine = find(command.id);
+      const routine = kept(command.id);
       if (!admin() || !routine) return Promise.resolve({ status: "not-sent", reason: "admin" });
       if (params.pause === "fail")
         return later(500, () => ({ status: "refused", error: "missing scope: operator.admin" }));
@@ -494,7 +553,7 @@ export function routineCommand(
       });
     }
     case "runRoutineNow": {
-      const routine = find(command.id);
+      const routine = kept(command.id);
       if (!admin() || !routine) return Promise.resolve({ status: "not-sent", reason: "admin" });
       if (params.run === "already") return later(300, () => ({ status: "already-running" }));
       if (params.run === "fail")
@@ -505,7 +564,7 @@ export function routineCommand(
       return later(300, () => {
         replace({ ...routine, runningAt: Date.now() });
         setTimeout(() => {
-          const ran = find(routine.id);
+          const ran = kept(routine.id);
           if (ran) replace({ ...ran, runningAt: null, lastRunAt: Date.now(), lastStatus: "ok" });
         }, 2500);
         return { status: "started", runId: `manual:${routine.id}:${Date.now()}:1` };
@@ -524,24 +583,33 @@ export function routineCommand(
       return Promise.resolve(admin() ? { enabled: params.hooks === true, path: "/hooks" } : null);
     case "refreshRoutines":
       return Promise.resolve();
+    case "readBotRoutines":
+      return Promise.resolve({
+        routines: fixtureRoutineList(now, params).filter((each) => each.botId === command.botId),
+        omitted: 0,
+      });
     case "readRoutineRuns": {
       const routine = find(command.id);
-      return Promise.resolve(routine ? fixtureRuns(routine, now, params).slice(0, 20) : []);
+      return answer(command.id, () =>
+        routine ? fixtureRuns(routine, now, params).slice(0, 20) : [],
+      );
     }
     case "readCalendarRuns":
-      return Promise.resolve(
-        get()
+      if (params.calendar === "fail")
+        return Promise.reject(new Error("The gateway didn't answer in time."));
+      return Promise.resolve({
+        runs: get()
           .routines.routines.flatMap((routine) => fixtureRuns(routine, now, params))
-          .sort((a, b) => b.runAt - a.runAt)
-          .slice(0, 200),
-      );
+          .filter((run) => run.runAt >= command.from && run.runAt < command.to),
+        partial: params.calendar === "partial",
+      });
     case "readRunConversation": {
       const routine = find(command.id);
       if (!routine) return Promise.reject(new Error("unknown routine"));
       if (!command.sessionKey)
         return Promise.resolve({ status: "none", reason: "no-session", error: null });
-      return Promise.resolve(
-        conversation(routine, fixtureRuns(routine, now, params), command.runId),
+      return answer(command.id, () =>
+        conversation(routine, fixtureRuns(routine, now, params), command.runId ?? ""),
       );
     }
     default:
