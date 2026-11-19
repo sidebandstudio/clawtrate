@@ -523,7 +523,7 @@ test.describe("T3 Code thread cards", () => {
     await openFixture(page, "scene=t3-before-record", "light");
     const card = await openCard(page);
     await expect(card).toContainText(
-      "This thread was started before this conversation's record begins.",
+      "The thread's launch is absent from this conversation's record.",
     );
   });
 });

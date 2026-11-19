@@ -601,6 +601,6 @@ export const T3_WORDS = {
   workMayContinue: "The call was made. Work handed to T3 Code may continue there.",
   reportedAt: (status: string, at: string | null) =>
     at ? `T3 Code reported ${status} at ${at}.` : `T3 Code reported ${status}.`,
-  beforeRecord: "This thread was started before this conversation's record begins.",
+  beforeRecord: "The thread's launch is absent from this conversation's record.",
   calls: (n: number) => `${n} calls`,
 } as const;
