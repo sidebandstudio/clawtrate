@@ -88,16 +88,20 @@ function entriesOf(
   return entries;
 }
 
-/** The phrase for a task that runs now, and its tone; null when nothing runs. */
+/**
+ * The phrase for a task that runs now, and its tone; null when nothing runs.
+ * With no transcript loaded (a task opened while offline), the gateway's row
+ * alone says what was last seen.
+ */
 export function runningWords(
   task: Task,
-  transcript: Transcript,
+  transcript: Transcript | undefined,
   botName: string,
   link: Link,
 ): { text: string; tone: "live" | "lost" | "off" } | null {
   const tone = link.connected ? "live" : link.closed ? "off" : "lost";
-  const run = activeRun(transcript);
-  if (run) {
+  const run = transcript ? activeRun(transcript) : null;
+  if (run && transcript) {
     const view = statusLineFor(run, transcript, {
       connected: link.connected,
       interactive: false,

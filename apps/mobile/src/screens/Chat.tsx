@@ -23,7 +23,7 @@ import { BackButton, PROTECTED_BAND, Top } from "../components/Top.tsx";
 import { Button, Dot, Txt } from "../components/ui.tsx";
 import { useRuntime } from "../runtime.ts";
 import { S, TOUCH, useTheme } from "../theme/index.ts";
-import { chatRows, type ChatRow } from "../transcript.ts";
+import { chatRows, runningWords, type ChatRow } from "../transcript.ts";
 
 /** A row's words with any credential this host holds scrubbed out. */
 function redactRow(row: ChatRow, redact: (text: string) => string): ChatRow {
@@ -310,7 +310,14 @@ export function Chat({
   const running = rows.find((row) => row.kind === "running");
   let body: ReactNode;
   if (!online && (!transcript || items === 0)) {
-    body = <Empty title={W.waitingTitle} body={W.waitingBody} />;
+    // Nothing loaded to show; what the task was last seen doing is still said.
+    const last = runningWords(task, transcript, bot.name, link);
+    body = (
+      <View>
+        <Empty title={W.waitingTitle} body={W.waitingBody} />
+        {last && <RowView row={{ kind: "running", id: "running", ...last }} />}
+      </View>
+    );
   } else if (!transcript || (transcript.status === "loading" && items === 0)) {
     body = (
       <View

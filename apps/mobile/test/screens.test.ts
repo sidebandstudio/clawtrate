@@ -343,6 +343,11 @@ describe("the iPhone chat's rows", () => {
       text: "Disconnected. Last seen working",
       tone: "off",
     });
+    // A task opened while offline has no transcript: the gateway's row says what was last seen.
+    expect(runningWords(cached, undefined, "Otto", { connected: false, closed: true })).toEqual({
+      text: "Disconnected. Last seen working",
+      tone: "off",
+    });
     // With a run loaded, the status line's words, closed or dropped.
     const live = {
       ...transcript([]),
