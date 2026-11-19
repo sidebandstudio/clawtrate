@@ -73,6 +73,7 @@ import type {
   RunError,
   Step,
   StepFiles,
+  RunErrorRaw,
   StoppedWith,
   StepText,
 } from "./runs.ts";
@@ -290,7 +291,7 @@ const closedCard = object<ClosedCard>()({ id: ID, kind: ENUM, since: NUMBER, rea
 const runError = object<RunError>()({
   message: text(MAX_ERROR_JSON_CHARS),
   kind: NAME,
-  raw: json(MAX_ERROR_JSON_CHARS),
+  raw: object<RunErrorRaw>()({ holds: ENUM, chars: NUMBER }),
 });
 const runEnding = object<RunEnding>()({
   stopReason: NAME,

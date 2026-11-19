@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
+import { MAX_RAW_ENTRY_CHARS, RawTable, runsFromHistory } from "../src/runs.ts";
 
 const runIds = (runs: { id: string; state: string }[]) => runs.map((run) => [run.id, run.state]);
 
@@ -608,8 +609,8 @@ describe("a recipient's run settled from history while its sender's task is open
   });
 });
 
-describe("a failed turn's request (F-301)", () => {
-  it("F-301: keeps the id of the chat.send frame that started the run, and the error event as the gateway sent it", async () => {
+describe("a failed turn's request and Raw (F-301)", () => {
+  it("F-301: keeps the id of the chat.send frame that started the run; the error event is read only when Raw is opened, as the gateway sent it, and is in no snapshot", async () => {
     const { client, gateway, transcript } = await openTask();
     const frames = () =>
       gateway.requests.filter((each) => each.method === "chat.send").map((each) => each.id);
@@ -623,21 +624,29 @@ describe("a failed turn's request (F-301)", () => {
       state: "error",
       errorMessage: "The model provider is overloaded.",
       errorKind: "provider",
+      // Diagnostics the gateway may attach: never part of a snapshot.
+      errorDetail: { marker: "diagnostic-7f3a" },
     };
     gateway.emit("chat", event);
     await until(() => transcript().runs[0]?.state === "failed");
     const run = transcript().runs[0]!;
     expect(run.requestId).toBe(frames()[0]);
     expect(run.requestId).not.toBe(id);
-    expect(run.error).toMatchObject({
+    expect(run.error).toEqual({
       message: "The model provider is overloaded.",
       kind: "provider",
-      raw: { source: "chat", payload: event },
+      raw: { holds: "chat-event", chars: JSON.stringify(event).length },
+    });
+    expect(JSON.stringify(client.state)).not.toContain("diagnostic-7f3a");
+    expect(client.readRunRaw(KEY, run.id)).toEqual({
+      status: "available",
+      holds: "chat-event",
+      payload: event,
     });
     client.stop();
   });
 
-  it("F-301: a steer names no request of the run it joined, and an error event too large to keep whole is not kept", async () => {
+  it("F-301: a steer names no request of the run it joined; an error event too large to keep says so, and a failure nothing was kept for says only that", async () => {
     const { client, gateway, transcript } = await openTask();
     gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
     await until(() => transcript().runs[0]?.state === "running");
@@ -645,15 +654,39 @@ describe("a failed turn's request (F-301)", () => {
     await until(() => gateway.calls("chat.send").length === 1);
     await sleep(20);
     expect(transcript().runs[0]!.requestId).toBeUndefined();
+    const huge = "x".repeat(MAX_RAW_ENTRY_CHARS);
     gateway.emit("chat", {
       runId: "run-x",
       sessionKey: KEY,
       seq: 3,
       state: "error",
-      errorMessage: "x".repeat(3_000),
+      errorMessage: huge,
     });
     await until(() => transcript().runs[0]?.state === "failed");
-    expect(transcript().runs[0]!.error!.raw).toBeUndefined();
+    const read = client.readRunRaw(KEY, "run-x");
+    expect(read).toMatchObject({ status: "too-large", holds: "chat-event" });
+    expect(JSON.stringify(client.state)).not.toContain(huge);
+    // A run with no failing event kept: nothing is claimed about what the gateway sent.
+    expect(client.readRunRaw(KEY, "no-such-run")).toBeNull();
     client.stop();
+  });
+
+  it("F-301: a failure read from history takes the gateway's error row as its reason, with no Raw kept", () => {
+    const activity = runsFromHistory(
+      [
+        { role: "user", content: "Fail.", __openclaw: { id: "u", idempotencyKey: "r1" } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "LLM request rejected: no." }],
+          stopReason: "error",
+          __openclaw: { id: "a", runId: "r1" },
+        },
+      ],
+      null,
+      { sessionKey: KEY, now: 5_000, raw: new RawTable() },
+    );
+    const run = activity.find((each) => each.id === "r1")!;
+    expect(run.state).toBe("failed");
+    expect(run.error).toEqual({ message: "LLM request rejected: no.", kind: null });
   });
 });

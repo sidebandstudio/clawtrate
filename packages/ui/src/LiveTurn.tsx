@@ -9,6 +9,8 @@ import {
   type Bot,
   type OutgoingMessage,
   type Run,
+  type RunErrorRaw,
+  type RunRawRead,
   type Transcript,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -256,6 +258,7 @@ export function RunEnding({
   const [dismissed, setDismissed] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
+  const [rawRead, setRawRead] = useState<RunRawRead | null>(null);
   const requestRef = useRef<HTMLPreElement>(null);
   // Dismiss and the line swap places; focus follows to what replaced it.
   const moved = useRef(false);
@@ -344,7 +347,7 @@ export function RunEnding({
   }
   const text = messageTextOf(run, transcript);
   const requestId = run.requestId ?? null;
-  const raw = run.error?.raw as { source?: unknown; payload?: unknown } | undefined;
+  const raw = run.error?.raw;
   const copyRequest = async () => {
     if (!requestId) return;
     if ((await copyText(requestId)) === "copied") announce("Copied request ID");
@@ -428,7 +431,16 @@ export function RunEnding({
               data-size="sm"
               data-variant="quiet"
               aria-expanded={rawOpen}
-              onClick={() => setRawOpen((open) => !open)}
+              onClick={() => {
+                const open = !rawOpen;
+                setRawOpen(open);
+                // Read when it is opened, as a step's raw is; it is not in the state.
+                if (open && raw && !rawRead)
+                  void bridge.invoke({ type: "readRunRaw", key: taskKey, runId: run.id }).then(
+                    (read) => setRawRead(read ?? { status: "not-kept", holds: null }),
+                    () => setRawRead({ status: "not-kept", holds: raw.holds }),
+                  );
+              }}
             >
               Raw
             </button>
@@ -445,22 +457,44 @@ export function RunEnding({
               </pre>
             </>
           )}
-          {raw ? (
-            <>
-              <p className="code-label">
-                {typeof raw.source === "string" ? `The ${raw.source} event` : "The error event"}
-              </p>
-              <pre className="code-block" tabIndex={0}>
-                {JSON.stringify(raw.payload ?? raw, null, 2)}
-              </pre>
-            </>
-          ) : (
-            <p className="raw-state">
-              The gateway sent no event for this failure: Clawtrate ended the turn.
-            </p>
-          )}
+          <RunRawView read={raw ? rawRead : { status: "not-kept", holds: null }} />
         </div>
       )}
     </div>
+  );
+}
+
+/** What a failed run's Raw holds, in words: exactly that, and as received. */
+const RAW_HOLDS: Record<RunErrorRaw["holds"], string> = {
+  "chat-event": "The chat event that ended the turn, as received",
+  "lifecycle-data": "The data of the agent lifecycle event that ended the turn, as received",
+  "send-answer": "The gateway's answer to the send that started the turn, as received",
+};
+
+/** A failed run's Raw, once read (F-301): what it holds, or why it is not here. */
+function RunRawView({ read }: { read: RunRawRead | null }) {
+  if (!read) return <p className="raw-state">Reading…</p>;
+  if (read.status === "available")
+    return (
+      <>
+        <p className="code-label">{RAW_HOLDS[read.holds]}</p>
+        <pre className="code-block" tabIndex={0} data-testid="run-raw">
+          {JSON.stringify(read.payload, null, 2)}
+        </pre>
+      </>
+    );
+  if (read.status === "too-large")
+    return (
+      <p className="raw-state" data-testid="run-raw-state">
+        {RAW_HOLDS[read.holds]} was too large to keep here: {read.chars.toLocaleString("en-US")}{" "}
+        characters, past the {read.limit.toLocaleString("en-US")} Clawtrate keeps.
+      </p>
+    );
+  return (
+    <p className="raw-state" data-testid="run-raw-state">
+      {read.holds
+        ? `${RAW_HOLDS[read.holds]} is no longer kept here.`
+        : "Clawtrate kept nothing the gateway sent for this failure."}
+    </p>
   );
 }

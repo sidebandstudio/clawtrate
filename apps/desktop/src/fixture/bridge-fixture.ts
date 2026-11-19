@@ -12,6 +12,7 @@ import {
   endDecision,
   endReadback,
   initialState,
+  MAX_RAW_ENTRY_CHARS,
   noteSent,
   readbackPending,
   resolveRequest,
@@ -24,6 +25,7 @@ import {
   type ClawtrateState,
   type ConnectionState,
   type HostInfo,
+  type RunRawRead,
   type TaskActivity,
   type Transcript,
 } from "@clawtrate/core";
@@ -52,7 +54,7 @@ import {
   withAccess,
   type AccountParams,
 } from "./accounts.ts";
-import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
+import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
 
@@ -784,6 +786,23 @@ export function createFixtureBridge(
           .flatMap((run) => run.steps)
           .find((each) => each.id === command.stepId);
         return (step?.raw ? { status: "available", raw: step.raw } : null) as BridgeResultFor<C>;
+      }
+      case "readRunRaw": {
+        // As the engine answers: the event kept beside the state, or why there is none.
+        const run = state.transcripts[command.key]?.runs.find((each) => each.id === command.runId);
+        if (!run) return null as BridgeResultFor<C>;
+        const raw = run.error?.raw;
+        const read: RunRawRead = !raw
+          ? { status: "not-kept", holds: null }
+          : raw.chars > MAX_RAW_ENTRY_CHARS
+            ? {
+                status: "too-large",
+                holds: raw.holds,
+                chars: raw.chars,
+                limit: MAX_RAW_ENTRY_CHARS,
+              }
+            : { status: "available", holds: raw.holds, payload: FAILED_EVENT };
+        return read as BridgeResultFor<C>;
       }
       default:
         // The live scenes answer their own commands (takeBackMessage, sendAgain, sendMessage).

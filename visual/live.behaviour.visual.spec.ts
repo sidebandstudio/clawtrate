@@ -1364,6 +1364,23 @@ test.describe("errors and resync", () => {
     await expect(page.getByTestId("status-line")).toBeVisible();
   });
 
+  test("F-301: a failure's Raw is not in the state the window holds until it is opened", async ({
+    page,
+  }) => {
+    await open(page, "run-failed");
+    const held = () =>
+      page.evaluate(() =>
+        JSON.stringify(
+          (
+            window as unknown as { clawtrateFixture: { getState: () => unknown } }
+          ).clawtrateFixture.getState(),
+        ),
+      );
+    // The event's own fields, such as its sequence number, are not in the state.
+    expect(await held()).not.toContain('"seq":14');
+    expect(await held()).toContain('"holds":"chat-event"');
+  });
+
   test("F-301: Copy request ID puts exactly the request id that Raw shows on the clipboard, and says so", async ({
     page,
   }) => {
@@ -1376,9 +1393,11 @@ test.describe("errors and resync", () => {
     await expect(raw).toHaveAttribute("aria-expanded", "true");
     const shown = (await card.getByTestId("request-id").textContent())!;
     expect(shown).toBe("b3f0c2a1-4d5e-4f60-8a71-92c3d4e5f607");
-    // Raw is the error event as received.
-    await expect(card.getByTestId("turn-error-raw")).toContainText("The chat event");
-    await expect(card.getByTestId("turn-error-raw")).toContainText('"errorKind": "provider"');
+    // Raw is read when it is opened, and labelled as exactly what it holds.
+    await expect(card.getByTestId("turn-error-raw")).toContainText(
+      "The chat event that ended the turn, as received",
+    );
+    await expect(card.getByTestId("run-raw")).toContainText('"errorKind": "provider"');
     await page.evaluate(() => navigator.clipboard.writeText("something else"));
     await card.getByRole("button", { name: "Copy request ID" }).click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(shown);

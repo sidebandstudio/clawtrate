@@ -14,12 +14,11 @@ import {
   type SettlingRecord,
 } from "./approvals.ts";
 import { projectArgs, projectDetails } from "./actions.ts";
-import { asRecord, type RawRecord } from "./mapping.ts";
+import { asRecord, liveTextFromChatMessage, type RawRecord } from "./mapping.ts";
 import { filePathsOf } from "./file-paths.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
 import {
   MAX_CLOSED_CARDS_PER_RUN,
-  MAX_ERROR_JSON_CHARS,
   MAX_ID_CHARS,
   MAX_INLINE_RAW_CHARS,
   MAX_PENDING_QUESTIONS_PER_TASK,
@@ -384,12 +383,25 @@ export type RunError = {
   message: string;
   kind: string | null;
   /**
-   * The event that said the run failed, as the gateway sent it (a `chat` error, the
-   * lifecycle error, or the send's answer), for Raw; absent for a failure of this
-   * client's own, and dropped whole when its JSON is past `MAX_ERROR_JSON_CHARS`.
+   * What the gateway sent that said the run failed, named, and its JSON length: the content
+   * itself is never in the state. It is kept beside the step payloads (`RawTable`, under
+   * `runErrorRawId`) and read with `readRunRaw` when Raw is opened (F-301). Absent when nothing
+   * the gateway sent established the failure here (one of this client's own, or one read from
+   * history).
    */
-  raw?: unknown;
+  raw?: RunErrorRaw;
 };
+
+/** What a failed run's Raw holds (F-301). */
+export type RunErrorRaw = {
+  /** Exactly what it is: `chat-event`, `lifecycle-data` or `send-answer`. */
+  holds: "chat-event" | "lifecycle-data" | "send-answer";
+  /** Its JSON length. Past `MAX_RAW_ENTRY_CHARS` it was not kept. */
+  chars: number;
+};
+
+/** Where a failed run's Raw is kept in the raw table: not a step id, so no step's drop takes it. */
+export const runErrorRawId = (runId: string) => `run-error\u0000${runId}`;
 
 /**
  * What the run's terminal lifecycle event said, as sent: `stopReason`, and for
@@ -794,6 +806,16 @@ export { MAX_STEPS_PER_TASK };
  * is readable once the gateway's history holds it; until then it is
  * `not-available-yet`, never presented as recoverable.
  */
+/**
+ * A failed run's Raw, read when it is opened (`readRunRaw`, F-301): what the gateway sent that
+ * failed it, as received and named by what it is; or that it was too large to keep; or that it
+ * is not kept here, which never says whether the gateway sent anything.
+ */
+export type RunRawRead =
+  | { status: "available"; holds: RunErrorRaw["holds"]; payload: unknown }
+  | { status: "too-large"; holds: RunErrorRaw["holds"]; chars: number; limit: number }
+  | { status: "not-kept"; holds: RunErrorRaw["holds"] | null };
+
 export type StepRead =
   | { status: "available"; raw: StepRaw }
   | { status: "not-available-yet"; reason: string }
@@ -948,17 +970,26 @@ function capRunError(error: RunError | null): RunError | null {
   if (!error) return error;
   const capped =
     error.message.length > MAX_ERROR_CHARS ? { ...error, message: capError(error.message) } : error;
-  // Kept whole or not at all: a cut event would not be what the gateway sent.
-  if (capped.raw !== undefined && jsonLength(capped.raw) > MAX_ERROR_JSON_CHARS) {
-    const { raw: _dropped, ...rest } = capped;
-    return rest;
-  }
   return capped;
 }
 
-/** The failing event as received, named by where it came from, for Raw (F-301). */
-function rawEvent(source: string, payload: RawRecord): { source: string; payload: RawRecord } {
-  return { source, payload };
+/**
+ * Keep what the gateway sent that failed the run, whole, beside the step payloads, and name it
+ * for the state (F-301). One larger than a raw entry is not kept, and its Raw says so.
+ */
+function rawEvent(
+  ctx: EngineContext,
+  runId: string,
+  holds: RunErrorRaw["holds"],
+  payload: RawRecord,
+): RunErrorRaw {
+  ctx.raw.set(ctx.sessionKey, runErrorRawId(runId), {
+    source: "live",
+    runId,
+    call: payload,
+    result: null,
+  });
+  return { holds, chars: jsonLength(payload) };
 }
 
 export function capText(text: string): StepText {
@@ -1527,7 +1558,7 @@ export function settleRunFromSendAnswer(
     if (status === "ok") return finishRun(run, "completed", ctx, null, endedAt);
     if (status === "error") {
       const message = str(answer.summary) ?? "The gateway reported an error.";
-      const raw = rawEvent("chat.send answer", answer);
+      const raw = rawEvent(ctx, run.id, "send-answer", answer);
       return finishRun(run, "failed", ctx, { message, kind: "gateway", raw }, endedAt);
     }
     return run;
@@ -1993,7 +2024,7 @@ export function applyChatEvent(
         return finishRun({ ...run, ending: endingOf(payload, run.ending) }, "failed", ctx, {
           message: str(payload.errorMessage) ?? "The run failed.",
           kind: str(payload.errorKind),
-          raw: rawEvent("chat", payload),
+          raw: rawEvent(ctx, run.id, "chat-event", payload),
         });
       default:
         return run;
@@ -2244,7 +2275,7 @@ function terminalFromLifecycle(
         {
           message: message ?? "The run timed out.",
           kind: "timeout",
-          raw: rawEvent("agent lifecycle", data),
+          raw: rawEvent(ctx, run.id, "lifecycle-data", data),
         },
         at,
       );
@@ -2258,7 +2289,7 @@ function terminalFromLifecycle(
         {
           message: message ?? "The run failed.",
           kind: reason,
-          raw: rawEvent("agent lifecycle", data),
+          raw: rawEvent(ctx, run.id, "lifecycle-data", data),
         },
         at,
       );
@@ -2825,7 +2856,9 @@ export function runsFromHistory(
       return finishRun(run, "stopped", ctx, null, run.endedAt);
     }
     if (stopReason === "error") {
-      const message = str(last?.errorMessage) ?? "The run failed.";
+      // The gateway writes the failure as the run's last row; its text is the error itself.
+      const message =
+        str(last?.errorMessage) || liveTextFromChatMessage(last).trim() || "The run failed.";
       return finishRun(run, "failed", ctx, { message, kind: null }, run.endedAt);
     }
     // Only a final reply establishes completion. A last row that stops for a

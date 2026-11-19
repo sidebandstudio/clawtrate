@@ -71,6 +71,14 @@ function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?:
   );
 }
 
+/** A history item whose visible text is exactly a failed run's error: the gateway's own row of it. */
+export function echoesError(item: TranscriptItem, run: Run): boolean {
+  // The row's text may escape punctuation for markdown ("fail\\."); the event's does not.
+  const plain = (text: string) => text.replace(/\\([\\`*_{}[\]()#+\-.!|>~])/g, "$1").trim();
+  const error = plain(run.error?.message ?? "");
+  return error !== "" && plain(itemText(item)) === error;
+}
+
 /** Under the task's name: how much of the model's context the task uses. */
 function TaskContext({ task }: { task: Task }) {
   return (
@@ -344,7 +352,7 @@ function TranscriptView({
           <p className="event-line" data-side="center">
             {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
           </p>
-        ) : (
+        ) : live.echoes.has(item.id) ? null : (
           <Turn item={item} incomplete={live.incomplete.has(item.id)} />
         )}
       </CardSlot>,
@@ -482,6 +490,8 @@ type LiveParts = {
   endingsBefore: Map<string | null, ReactNode[]>;
   /** History items that end a reply cut off by a stop or a failure. */
   incomplete: Set<string>;
+  /** History items that only repeat a failed run's error, which its card already says. */
+  echoes: Set<string>;
   /** Runs whose cards the foot draws under their message, so the trailing cards leave them out. */
   drawsCards: Set<string>;
   /** Runs drawn from the engine's state rather than from history. */
@@ -519,6 +529,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
   const placed = new Set<string>();
   const endingsBefore = new Map<string | null, ReactNode[]>();
   const incomplete = new Set<string>();
+  const echoes = new Set<string>();
   const drawsCards = new Set<string>();
   const shown = new Set(transcript.items.map((item) => item.id));
   const signature: string[] = [];
@@ -561,8 +572,11 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
             item.role === "assistant" &&
             item.blocks.some((block) => block.kind === "text" && block.text.trim()),
         );
-      // Only a reply the gateway had not reported complete was cut off.
-      if (last && !run.textComplete) incomplete.add(last.id);
+      // The gateway writes a failure as the run's last row, its text the error itself: the
+      // card says it, once. Otherwise only a reply the gateway had not reported complete was cut.
+      if (last && run.state === "failed" && echoesError(last, run)) {
+        if (last.blocks.every((block) => block.kind === "text")) echoes.add(last.id);
+      } else if (last && !run.textComplete) incomplete.add(last.id);
     }
   }
 
@@ -671,6 +685,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
     foot,
     endingsBefore,
     incomplete,
+    echoes,
     drawsCards,
     engineRuns,
     signature: signature.join("|"),

@@ -61,6 +61,16 @@ export const LIVE_SCENES = [
 
 export type LiveScene = (typeof LIVE_SCENES)[number];
 
+/** The chat error event the failed scene's run ended with, as its Raw reads it (F-301). */
+export const FAILED_EVENT = {
+  runId: "run-live",
+  sessionKey: "agent:otto:disk-space",
+  seq: 14,
+  state: "error",
+  errorMessage: "The model provider is overloaded.",
+  errorKind: "provider",
+};
+
 const SECOND = 1000;
 const REQUEST_ID = "7c41d09e-52b3-4e8a-9f10-3d6b2a7e9c41";
 
@@ -618,17 +628,7 @@ export function liveScene(
             message:
               "The model provider is overloaded. Nothing ran after step 1, and steps already completed are not undone.",
             kind: "provider",
-            raw: {
-              source: "chat",
-              payload: {
-                runId: "run-live",
-                sessionKey: "agent:otto:disk-space",
-                seq: 14,
-                state: "error",
-                errorMessage: "The model provider is overloaded.",
-                errorKind: "provider",
-              },
-            },
+            raw: { holds: "chat-event", chars: JSON.stringify(FAILED_EVENT).length },
           },
         }),
         steps: [],

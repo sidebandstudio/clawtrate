@@ -122,6 +122,8 @@ import {
   timeoutsInARow,
   TIMEOUTS_IN_A_ROW,
   markStopAsked,
+  MAX_RAW_ENTRY_CHARS,
+  runErrorRawId,
   markTurnLimit,
   noteStoppedWith,
   cancelQueuedRun,
@@ -167,6 +169,7 @@ import {
   type QuestionOption,
   type Run,
   type StepRaw,
+  type RunRawRead,
   type StepRead,
   type TaskActivity,
 } from "./runs.ts";
@@ -3899,6 +3902,28 @@ export class ClawtrateClient {
   stepRaw(key: string, stepId: string): StepRaw | null {
     if (!this.state.transcripts[key]) return null;
     return this.raw.get(key, stepId);
+  }
+
+  /**
+   * A failed run's Raw (F-301), read only when it is opened and returned without being kept in
+   * the state. Null when the task has no such run.
+   */
+  readRunRaw(key: string, runId: string): RunRawRead | null {
+    const transcript = this.state.transcripts[key];
+    const run = transcript && findRun(transcript, runId);
+    if (!run) return null;
+    const described = run.error?.raw;
+    if (!described) return { status: "not-kept", holds: null };
+    const kept = this.raw.get(key, runErrorRawId(run.id));
+    if (kept) return { status: "available", holds: described.holds, payload: kept.call };
+    if (described.chars > MAX_RAW_ENTRY_CHARS)
+      return {
+        status: "too-large",
+        holds: described.holds,
+        chars: described.chars,
+        limit: MAX_RAW_ENTRY_CHARS,
+      };
+    return { status: "not-kept", holds: described.holds };
   }
 
   /**

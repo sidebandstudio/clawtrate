@@ -9,7 +9,7 @@ import {
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
-import type { QuestionAnswer, StepRead } from "./runs.ts";
+import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
 import {
   MAX_SIDEBAR_BOTS,
   parseSidebar,
@@ -98,6 +98,7 @@ export type BridgeCommand =
    * hold it yet.
    */
   | { type: "readStepRaw"; key: string; stepId: string }
+  | { type: "readRunRaw"; key: string; runId: string }
   /** Ask again, with its own key, for a task creation the gateway refused, or whose outcome is unknown (it may create a second task). */
   | { type: "retryCreation"; creationId: string }
   /** Forget a task creation that failed, settled or cannot be established. */
@@ -199,39 +200,41 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
         ? { key: string }
         : C extends { type: "readStepRaw" }
           ? StepRead | null
-          : C extends { type: "readApprovalText" }
-            ? { text: Record<string, string | string[] | null>; digest: string }
-            : C extends { type: "readHistoryItem" }
-              ? TranscriptItem | null
-              : C extends { type: "retryCreation" }
-                ? { key: string }
-                : C extends { type: "listTaskFiles" }
-                  ? TaskFileList
-                  : C extends { type: "readTaskFile" | "readWorkspaceFile" }
-                    ? FileRead
-                    : C extends { type: "listWorkspace" }
-                      ? WorkspacePage
-                      : C extends { type: "readCheckoutDiff" }
-                        ? CheckoutDiff
-                        : C extends { type: "readFileChunk" }
-                          ? { data: string }
-                          : C extends { type: "cancelSignIn" }
-                            ? { cancelled: boolean }
-                            : C extends { type: "dismissSignIn" }
-                              ? { dismissed: boolean }
-                              : C extends { type: "saveApiKey" }
-                                ? { profileId: string | null }
-                                : C extends { type: "createBot" | "finishBot" }
-                                  ? { botId: string; missing: MissingStep[] }
-                                  : C extends { type: "newTask" | "newMainTask" }
-                                    ? { key: string }
-                                    : C extends { type: "archiveTask" }
-                                      ? ArchiveResult
-                                      : C extends { type: "listArchived" }
-                                        ? ArchivedList
-                                        : C extends { type: "readComposerMenu" }
-                                          ? MenuRow[]
-                                          : void;
+          : C extends { type: "readRunRaw" }
+            ? RunRawRead | null
+            : C extends { type: "readApprovalText" }
+              ? { text: Record<string, string | string[] | null>; digest: string }
+              : C extends { type: "readHistoryItem" }
+                ? TranscriptItem | null
+                : C extends { type: "retryCreation" }
+                  ? { key: string }
+                  : C extends { type: "listTaskFiles" }
+                    ? TaskFileList
+                    : C extends { type: "readTaskFile" | "readWorkspaceFile" }
+                      ? FileRead
+                      : C extends { type: "listWorkspace" }
+                        ? WorkspacePage
+                        : C extends { type: "readCheckoutDiff" }
+                          ? CheckoutDiff
+                          : C extends { type: "readFileChunk" }
+                            ? { data: string }
+                            : C extends { type: "cancelSignIn" }
+                              ? { cancelled: boolean }
+                              : C extends { type: "dismissSignIn" }
+                                ? { dismissed: boolean }
+                                : C extends { type: "saveApiKey" }
+                                  ? { profileId: string | null }
+                                  : C extends { type: "createBot" | "finishBot" }
+                                    ? { botId: string; missing: MissingStep[] }
+                                    : C extends { type: "newTask" | "newMainTask" }
+                                      ? { key: string }
+                                      : C extends { type: "archiveTask" }
+                                        ? ArchiveResult
+                                        : C extends { type: "listArchived" }
+                                          ? ArchivedList
+                                          : C extends { type: "readComposerMenu" }
+                                            ? MenuRow[]
+                                            : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -732,6 +735,12 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         key: sessionKey(command.key),
         stepId: id(command.stepId, "step id"),
       };
+    case "readRunRaw":
+      return {
+        type: "readRunRaw",
+        key: sessionKey(command.key),
+        runId: id(command.runId, "run id"),
+      };
     case "openSession":
     case "closeSession":
       return { type: command.type, key: sessionKey(command.key) };
@@ -1083,6 +1092,8 @@ class ViewerSession implements BridgeSession {
         return client.dismissCreation(command.creationId);
       case "readStepRaw":
         return client.readStepRaw(this.mine(command.key), command.stepId);
+      case "readRunRaw":
+        return client.readRunRaw(this.mine(command.key), command.runId);
       case "listTaskFiles":
         return client.listTaskFiles(this.mine(command.key), this.fileOptions());
       case "readTaskFile":

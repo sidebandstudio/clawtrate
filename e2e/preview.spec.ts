@@ -1481,10 +1481,16 @@ test("F-301: a turn the gateway fails offers Copy request ID, which copies the i
   const shown = ((await card.getByTestId("request-id").textContent()) ?? "").trim();
   // The protocol client's own id for the frame, as it set it ("<n>:<uuid>").
   expect(shown).toMatch(/^\S{8,}$/);
-  // The event that ended the run, as the gateway sent it: its chat error or its lifecycle error.
+  // Read when opened: what the gateway sent that ended the run, labelled as exactly that.
   await expect(card.getByTestId("turn-error-raw")).toContainText(
-    /The (chat|agent lifecycle) event/,
+    /The (chat event|data of the agent lifecycle event) that ended the turn, as received/,
   );
+  await expect(card.getByTestId("run-raw")).toBeVisible();
+  // One failure is shown once: no bot bubble repeats it, and nothing is "Incomplete".
+  await expect(page.getByTestId("incomplete")).toHaveCount(0);
+  await expect(
+    page.getByTestId("transcript-turn").and(page.locator('[data-role="assistant"]')),
+  ).toHaveCount(0);
   await page.evaluate(() => navigator.clipboard.writeText(""));
   await card.getByRole("button", { name: "Copy request ID" }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(shown);
