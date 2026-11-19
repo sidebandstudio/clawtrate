@@ -633,3 +633,174 @@ a.b-choice:hover {
 .setup .b-choice-sub {
   white-space: normal;
 }
+
+/* Round 1: the host's confirmation, drawn here as a stand-in --------------------- */
+
+/* The app's own native dialog, pictured: not page UI. A plain system-like
+   sheet over everything, with a caption that says what it stands for. */
+.s-host-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: color-mix(in srgb, #000 28%, transparent);
+}
+
+.s-host {
+  width: min(420px, 100%);
+  padding: 14px 16px 16px;
+  border-radius: 12px;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-size: var(--text-md);
+  text-align: left;
+}
+
+.s-host-caption {
+  margin: 0 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border-strong);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.s-host-body {
+  display: flex;
+  gap: 12px;
+}
+
+.s-host-body img {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+
+.s-host-body h2 {
+  margin: 0 0 6px;
+  font-size: var(--text-base);
+  font-weight: var(--weight-strong);
+}
+
+.s-host-body h2:focus {
+  outline: none;
+}
+
+.s-host-detail p {
+  margin: 0 0 6px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.s-host-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.button[aria-disabled="true"] {
+  background: var(--bg-bubble);
+  color: var(--text-faint);
+  cursor: default;
+}
+
+/* A prototype control for an event from outside the app. Not product. */
+.s-simulate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: var(--space-5) 0 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.s-proto-hint {
+  margin: var(--space-4) 0 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.s-qr {
+  position: relative;
+}
+
+.s-sample {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-inverse);
+  font-size: var(--text-xs);
+  color: var(--text-inverse);
+}
+
+/* new: a device code, compared by eye between two screens. */
+.s-device {
+  margin: var(--space-2) 0 var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+
+.s-prints {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.s-prints .s-print {
+  margin-top: var(--space-3);
+}
+
+[data-width="phone"] .s-prints {
+  grid-template-columns: 1fr;
+}
+
+.s-check-first {
+  margin: 8px 2px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.s-remove-list {
+  margin: 0 0 var(--space-2);
+  padding-left: 20px;
+  font-size: var(--text-md);
+  line-height: 1.6;
+}
+
+.s-kept {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.s-composer {
+  padding: 14px 18px;
+  border-radius: 24px;
+  background: var(--bg-inset);
+  font-size: var(--text-base);
+  color: var(--text-faint);
+}
+
+.s-strip-link {
+  margin-right: 8px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
