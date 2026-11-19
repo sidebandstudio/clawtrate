@@ -36,6 +36,7 @@ import { clockTime, fullDate, rowTime } from "../format.ts";
 import { ChevronIcon, PlugIcon, ShieldIcon } from "../icons.tsx";
 import { Confirm } from "../bots/Dialog.tsx";
 import { AdminBar, Select } from "../bots/parts.tsx";
+import { useNow } from "../usage/parts.tsx";
 import "./permissions.css";
 
 type Part = "rules" | "saved" | "activity";
@@ -458,7 +459,8 @@ function SavedPart({
     hash: string;
     changed: boolean;
   } | null>(null);
-  const [now] = useState(() => Date.now());
+  // A grant's end is judged against the clock as it moves, not as it was when the page opened.
+  const now = useNow();
   const { canApprove, canAdmin, connectedAt } = connection;
   const connected = connection.status === "connected";
   const {
@@ -493,7 +495,7 @@ function SavedPart({
       } else {
         const why = result.error ? `Couldn't revoke. ${result.error}` : "Couldn't revoke.";
         note = listed
-          ? `${why} The gateway lists this grant as still active.`
+          ? `${why} The gateway still lists this grant, not revoked.`
           : result.readError
             ? `${why} Couldn't read the grants back: ${result.readError}`
             : why;
@@ -617,15 +619,15 @@ function SavedPart({
                 const revoked = grant.revokedAtMs !== null;
                 const ended = grant.expiresAtMs !== null && grant.expiresAtMs <= now;
                 const note = notes[grant.grantId];
-                const routine = grant.routineName
-                  ? `Routine ${grant.routineName}`
-                  : "A removed routine";
+                const gone = grant.routineName === null;
                 return (
                   <div key={grant.grantId} className="b-row" data-testid="routine-grant">
                     <span className="b-row-main">
                       <span className={revoked || ended ? "c-struck" : undefined}>
-                        {routine} ({botName(grant.agentId)}) may run exactly{" "}
-                        <code>{grant.command}</code>
+                        {gone
+                          ? "A routine the gateway no longer has"
+                          : `Routine ${grant.routineName}`}{" "}
+                        ({botName(grant.agentId)}) · Saved command <code>{grant.command}</code>
                         {grant.cwd ? (
                           <>
                             {" "}
@@ -639,7 +641,7 @@ function SavedPart({
                           Revoked {fullDate(grant.revokedAtMs)}. The routine's next matching command
                           no longer runs under this grant.
                         </small>
-                      ) : ended ? null : (
+                      ) : ended || gone ? null : (
                         <GatewayMark />
                       )}
                       {note && (
@@ -663,6 +665,12 @@ function SavedPart({
                 );
               })}
             </dl>
+          )}
+          {grantItems.length > 0 && (
+            <p className="b-hint">
+              Each saved command and folder is as the gateway shows it, with what looks like a
+              secret masked, invisible characters written as codes, and cut at 512 characters.
+            </p>
           )}
           {grants.status === "ready" && grants.more && (
             <p className="b-hint">

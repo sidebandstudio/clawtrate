@@ -286,7 +286,7 @@ test("F-178: approvals access alone shows a routine's grant with what it is boun
 
   await permissions("Saved approvals");
   const row = page.getByTestId("routine-grant").filter({ hasText: "Weekly cleanup" });
-  await expect(row).toContainText("Routine Weekly cleanup (otto) may run exactly ls in ");
+  await expect(row).toContainText("Routine Weekly cleanup (otto) · Saved command ls in ");
   await expect(row).toContainText(/granted .+ · until .+ · not used yet/);
   await expect(row).toContainText("The gateway enforces this");
 

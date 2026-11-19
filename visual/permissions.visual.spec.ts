@@ -4,7 +4,7 @@
 // the design names; then how they behave. The fixture's grants, entries and
 // records are made up (apps/desktop/src/fixture/permissions.ts).
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
+import { contextFor, NOW, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 type Scene = { name: string; query: string; ready: (page: Page) => Promise<void> };
 
@@ -208,7 +208,7 @@ test.describe("behaviour", () => {
     expect((await sent(page)).filter((each) => each.type === "revokeGrant")).toHaveLength(1);
   });
 
-  test("F-178: a refused revoke says the gateway still lists the grant as active, never Revoked", async ({
+  test("F-178: a refused revoke says the gateway still lists the grant, never Revoked", async ({
     page,
   }) => {
     await openFixture(page, `${ADMIN}&revoke=refused`, "light");
@@ -216,7 +216,7 @@ test.describe("behaviour", () => {
     const live = page.getByTestId("routine-grant").filter({ hasText: "Weekly cleanup" });
     await live.getByRole("button", { name: "Revoke" }).click();
     await expect(live).toContainText(
-      "Couldn't revoke. The gateway refused the request: approval store unavailable. The gateway lists this grant as still active.",
+      "Couldn't revoke. The gateway refused the request: approval store unavailable. The gateway still lists this grant, not revoked.",
     );
     await expect(live.getByTestId("grant-revoked")).toHaveCount(0);
     await expect(live.getByRole("button", { name: "Revoke" })).toBeVisible();
@@ -242,11 +242,41 @@ test.describe("behaviour", () => {
       page.getByTestId("routine-grant").filter({ hasText: "Weekly cleanup" }),
       page.getByTestId("routine-grant").filter({ hasText: "Nightly backup check" }),
     ];
-    await expect(live).toContainText("may run exactly du -sh /srv/media in /srv/media");
+    await expect(live).toContainText(
+      "Routine Weekly cleanup (Otto) · Saved command du -sh /srv/media in /srv/media",
+    );
+    await expect(page.getByTestId("saved-approvals")).not.toContainText("may run exactly");
     await expect(live).toContainText(/granted .+ · until .+ · used 4 times, last /);
     await expect(live.getByRole("button", { name: "Revoke" })).toBeVisible();
     await expect(ended).toContainText(/ · ended .+ · used 9 times/);
     await expect(ended.getByRole("button")).toHaveCount(0);
+  });
+
+  test("F-178: a grant whose routine is gone is said to be that, with no claim the gateway enforces it", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&saved=more`, "light");
+    await permissions("Saved approvals")(page);
+    const gone = page
+      .getByTestId("routine-grant")
+      .filter({ hasText: "A routine the gateway no longer has" });
+    await expect(gone).toHaveCount(1);
+    await expect(gone).toContainText("(Otto) · Saved command df -h /srv/disk3");
+    await expect(gone).not.toContainText("The gateway enforces this");
+  });
+
+  test("F-178: a grant's end is judged against a clock that moves while the page is open", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&saved=expiring`, "light");
+    await permissions("Saved approvals", grants)(page);
+    const live = page.getByTestId("routine-grant").filter({ hasText: "Weekly cleanup" });
+    await expect(live.getByRole("button", { name: "Revoke" })).toBeVisible();
+    await expect(live).toContainText(" · until ");
+    // Two minutes on, its end has passed: the page says so without being opened again.
+    await page.clock.setFixedTime(NOW.getTime() + 2 * 60_000);
+    await expect(live).toContainText(" · ended ", { timeout: 45_000 });
+    await expect(live.getByRole("button", { name: "Revoke" })).toHaveCount(0);
   });
 
   test("F-178: Remove asks first with focus on Cancel, and says Removed from the file read back", async ({

@@ -6,7 +6,9 @@
 //
 // Address parameters:
 //   rules=running|absent|stopped|old|unchecked   the rules plugin (default running)
-//   saved=empty|error|loading|more               saved approvals (default: two grants and two entries)
+//   saved=empty|error|loading|more|expiring      saved approvals (default: two grants and two entries;
+//                                                more: three more, one of a routine that is gone;
+//                                                expiring: the live grant ends a minute from now)
 //   revoke=refused|gone                          how Revoke goes: the gateway refuses, or lists no such grant
 //   remove=changed                               Remove finds the entry edited in place after the confirmation opened
 //   audit=empty|off|error|loading|end            activity (default: a page with older ones after it)
@@ -107,12 +109,14 @@ function grants(now: number, params: PermissionParams): RoutineGrant[] {
       useCount: 9,
     },
   ];
+  if (params.saved === "expiring") list[0] = { ...list[0]!, expiresAtMs: now + MINUTE };
   if (params.saved === "more")
     for (let i = 0; i < 3; i += 1)
       list.push({
         ...list[0]!,
         grantId: `5e0b${i}a3c-7d14-4c8e-92f6-3a1d8e4b0c7${i}`,
-        routineName: `Disk report ${i + 1}`,
+        // The last one's routine is gone: the gateway lists the grant with no routine name.
+        routineName: i === 2 ? null : `Disk report ${i + 1}`,
         command: `df -h /srv/disk${i + 1}`,
         cwd: null,
         createdAtMs: now - (5 + i) * DAY,
