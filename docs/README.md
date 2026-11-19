@@ -1,0 +1,44 @@
+# Documentation
+
+Every document in the repository, by what you want to do.
+
+## Run or change Clawtrate
+
+- [Developing Clawtrate](development/README.md): setup, the web preview and the desktop app.
+- [The development gateway](development/dev-gateway.md): the gateway with a scripted model that everything is built against, its instances, plugins, scripted accounts and scenarios.
+- [Testing](development/testing.md): each check, what CI runs, the fixture mode and the visual tests.
+- [Packaging](development/packaging.md): building the desktop app for macOS and Windows, signing, and the logo and icons.
+- [CONTRIBUTING.md](../CONTRIBUTING.md): how to pick up work and open a pull request.
+- [AGENTS.md](../AGENTS.md): the rules every change follows, written for coding agents and people alike.
+
+## Understand how it works
+
+- [Architecture](architecture.md): the pieces and how they talk to each other.
+- [Decisions](decisions.md): versions, protocol choices and the reasons behind them.
+- [The engine's guide](../packages/core/README.md): the bridge, the commands the interface sends and the state it reads, for building the interface on `@clawtrate/core`.
+- [The development gateway tool](../tools/dev-gateway/README.md): scripted provider accounts, sign-ins and the account checks.
+- [The computer plugin](../plugins/clawtrate-computer/README.md): a bot's own browser, watched live and taken over by a person.
+
+## The plan
+
+- [Roadmap](roadmap.md): what is left to build, by milestone, and how to take a part of it.
+- [Parity checklist](parity.md): the definition of done, one behavior and one automated check per row.
+
+## Design
+
+- [Visual language](design/visual-language.md): tokens, type, surfaces, the rail and the plain transcript.
+- [Conversation](design/conversation.md): how a running turn looks, moves and reads.
+- [Work pane](design/work-pane.md): what sits beside the conversation, a task's files, what a bot made and the bot's computer.
+- [Bots](design/bots.md): creating a bot on an account, connecting accounts, a bot's settings and the optional T3 Code integration.
+- [Prototype](design/prototype/README.md): static pages that show the design working.
+
+## Research
+
+- [Grok Bot flows](research/grok-bot-flows.md): how the reference app behaves on desktop and iOS, from public material.
+- [Gateway capabilities](research/gateway-capabilities.md): what a client can do against an OpenClaw gateway, method by method.
+- [Provider accounts and T3 Code](research/provider-accounts-and-t3-code.md): how OpenClaw handles provider accounts, and how a bot can work with T3 Code.
+- `research/dev-gateway/`: the probes and prototypes behind the capability map.
+
+## Writing docs
+
+[AGENTS.md](../AGENTS.md#documentation) has the rules: what goes where, and how to write it.

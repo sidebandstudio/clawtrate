@@ -1,6 +1,6 @@
 # Development gateway: provider accounts
 
-The root [README](../../README.md#1-start-the-development-gateway) explains the development gateway itself: instances, the scripted model, the scenarios and their directives, the closed config contract and its guard, and how a named instance loads a plugin from this checkout's `plugins/`. This file covers what was added for provider accounts per bot ([`docs/design/bots.md`](../../docs/design/bots.md)): scripted accounts on an instance, a record of which account each request came from, failures scripted per account, scripted sign-ins through the gateway's own sign-in methods, the lock subcommand, and the account checks in `pnpm scenarios`.
+The [development gateway guide](../../docs/development/dev-gateway.md) explains the development gateway itself: instances, the scripted model, the scenarios and their directives, the closed config contract and its guard, and how a named instance loads a plugin from this checkout's `plugins/`. This file covers what was added for provider accounts per bot ([`docs/design/bots.md`](../../docs/design/bots.md)): scripted accounts on an instance, a record of which account each request came from, failures scripted per account, scripted sign-ins through the gateway's own sign-in methods, the lock subcommand, and the account checks in `pnpm scenarios`.
 
 Nothing here is a real provider, a real account or a real key. Every provider below is the instance's own scripted model on `127.0.0.1`, and every credential is a made-up development string.
 
