@@ -124,6 +124,8 @@ describe("every bot's bars", () => {
       detailError: null,
     };
     const bars = botBars(report, (id) => id[0]!.toUpperCase() + id.slice(1));
+    // Each bar is told apart by its bot, even when two bots share a name.
+    expect(botBars(report, () => "Helper").map((bar) => bar.id)).toEqual(["marlow", "otto"]);
     expect(bars.map((bar) => `${bar.name}: ${barText(bar)}`)).toEqual([
       "Marlow: 1,800 tokens so far, still being counted",
       "Otto: Unavailable",
@@ -178,6 +180,7 @@ describe("sources and tasks", () => {
     ]);
     expect(sourcesNote(counting, true)).toMatch(/still counting.*rest of its total isn't shown/);
     expect(sourceBars({ ...counting, unattributed: 800, partial: false }).at(-1)).toEqual({
+      id: "unattributed",
       name: "Not attributed",
       tokens: 800,
     });
@@ -280,6 +283,6 @@ describe("counts on screen", () => {
     expect(warnedLine("Otto", weekly, { ...count({}), used: 2_050_000 }, 82)).toBe(
       "Otto has used 82% of its daily budget: 2,050,000 of 2,500,000 tokens.",
     );
-    expect(barText({ name: "Otto", tokens: 41_200 })).toBe("41,200 tokens");
+    expect(barText({ id: "otto", name: "Otto", tokens: 41_200 })).toBe("41,200 tokens");
   });
 });

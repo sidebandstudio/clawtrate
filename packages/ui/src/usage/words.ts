@@ -186,7 +186,13 @@ export function costHint(cost: UsageCost, at: number | null, counting = false): 
 }
 
 /** A bar: its name, its tokens (null when they couldn't be read), and what they are short of. */
-export type BarRow = { name: string; tokens: number | null; note?: string };
+export type BarRow = {
+  /** Unique among the bars: a bot's id, or a source's key. Two bots can share a name. */
+  id: string;
+  name: string;
+  tokens: number | null;
+  note?: string;
+};
 
 /** A bar's figure in words: "1,800 tokens", "1,800 tokens so far", or "Unavailable". */
 export function barText(row: BarRow): string {
@@ -196,6 +202,7 @@ export function barText(row: BarRow): string {
 /** Every bot's bar, each its own figure: "Unavailable" when its read failed, never a zero. */
 export function botBars(report: UsageReport, nameOf: (botId: string) => string): BarRow[] {
   return (report.bots ?? []).map((each) => ({
+    id: each.botId,
     name: nameOf(each.botId),
     tokens: each.figure ? each.figure.tokens.total : null,
     note: each.figure ? `${soFar(each.figure.counting)}, ${figureAge(each.figure)}` : "",
@@ -213,7 +220,7 @@ const SOURCE_NAMES: Array<[keyof Omit<UsageSources, "partial">, string]> = [
 export function sourceBars(sources: UsageSources): BarRow[] {
   return SOURCE_NAMES.flatMap(([key, name]) => {
     const tokens = sources[key];
-    return tokens === null ? [] : [{ name, tokens }];
+    return tokens === null ? [] : [{ id: key, name, tokens }];
   });
 }
 

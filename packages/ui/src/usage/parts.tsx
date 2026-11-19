@@ -62,7 +62,7 @@ export function Bars({ rows, testId }: { rows: BarRow[]; testId?: string }) {
   return (
     <ul className="c-bars" data-testid={testId}>
       {rows.map((row) => (
-        <li key={row.name} aria-label={`${row.name}: ${barText(row)}`}>
+        <li key={row.id} aria-label={`${row.name}: ${barText(row)}`}>
           <span>{row.name}</span>
           <span className="c-meter-bar" aria-hidden="true">
             {row.tokens !== null && <span style={{ width: `${(row.tokens / max) * 100}%` }} />}
