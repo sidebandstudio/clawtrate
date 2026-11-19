@@ -38,6 +38,8 @@
     override: p("override") === "1",
     // The hold (section 2): null, "writing", "done" (written and read back).
     hold: p("held") === "1" ? "done" : null,
+    holdBot: "otto",
+    holdLines: null, // the confirmed entries, by line, taken when the hold is read back
     form: p("form") === "fromcard" ? { pattern: FROM_TARGET, action: "allow", note: "", from: "5:41 PM" } : p("form") === "open" ? { pattern: p("pattern") === "long" ? "a".repeat(1001) : "", action: p("limit") === "never" ? "never" : p("limit") === "ask" ? "ask" : p("limit") === "allow" ? "allow" : "never" } : null,
     saveNote: null,
     revoked: new Set(p("saved") === "revoked" ? ["rg1"] : []),
@@ -114,8 +116,8 @@
     coder: { value: "allow", by: "default" },
     t3code: { value: "never", by: "bot" },
   });
-  const P = {};
-  app.bots.forEach((b) => (P[b.id] = base()));
+  // Lazily, so a bot created after the page loaded has its state too.
+  const P = new Proxy({}, { get: (o, k) => (typeof k === "string" && !(k in o) && app.bots.some((b) => b.id === k) ? (o[k] = base()) : o[k]) });
   Object.assign(P.otto, {
     exec: { value: "ask", mode: "auto", by: "bot" },
     message: { value: "ask", by: "rule", set: "Nov 14, 9:20 AM, from this device, version 3" },
@@ -168,7 +170,7 @@
   // What the next call does, by the order of section 3 (the rules plugin's part, with the gateway's around it).
   function decide(bot, lineId, target) {
     const s = P[bot][lineId];
-    if (s.by === "gateway" || s.value === "never") return { verdict: "never", by: "the gateway" };
+    if (s.by === "gateway" || s.value === "never") return { verdict: "never", by: "the gateway", words: `the gateway's deny in ${botName(bot)}'s settings` };
     const rs = rulesFor(bot, lineId).filter((r) => matches(r.pattern, target));
     const owner = (r) => (RULESET["*"].includes(r) ? "the rule for every bot" : `${botName(bot)}'s rule`);
     const never = rs.find((r) => r.action === "never");
@@ -198,7 +200,14 @@
   // rule for this bot or for every bot, messaging when an outgoing or incoming rule applies, and every
   // offered tool but ask_user when "Ask when nothing else decides" is on.
   const pluginLines = (bot) => (NEVER_READ ? [] : LINES.filter((l) => !l.fixed && (P[bot].fallback ? P[bot][l.id].value !== "never" : P[bot][l.id].by === "rule" || rulesFor(bot, l.id).length )).map((l) => l.id));
-  const heldLines = (bot) => (C.hold === "done" ? pluginLines(bot) : []);
+  const heldLines = (bot) => {
+    if (C.hold !== "done" || C.holdBot !== bot) return [];
+    if (!C.holdLines) C.holdLines = pluginLines(bot);
+    return C.holdLines;
+  };
+  const release = (bot, line) => {
+    if (C.holdBot === bot && C.holdLines) C.holdLines = C.holdLines.filter((x) => x !== line);
+  };
 
   // The machine's approvals file as its own fact; below admin it can't be read (section 5).
   const machineWords = (bot, short) => {
@@ -221,11 +230,13 @@
       const extra = asks.length ? `Always before ${asks[0].pattern}` : "";
       if (asks.length && !running()) return { value: "unknown", word: "Unknown", sub: `Not enforced now: asks before ${asks[0].pattern}. The gateway still ${s.mode === "auto" ? "reviews first" : "applies Otto's policy"}`.replace("Otto", botName(bot)), mark: "notnow", tone: "danger" };
       const sub = [`${botName(bot)}'s setting: ${execWord(s.mode)}`, machineWords(bot, true), asks.length ? `${botName(bot)}'s rule: Ask first · ${asks[0].pattern}` : ""].filter(Boolean).join("; ");
-      return { value: s.mode === "full" ? "allow" : "ask", word: s.mode === "full" ? "Allowed" : "Asks first", sub, mark: s.machineAlways ? "set" : "gateway" };
+      const free = s.mode === "full" && !asks.length && !s.machineAlways;
+      return { value: free ? "allow" : "ask", word: free ? "Allowed" : "Asks first", sub, mark: s.machineAlways ? "set" : "gateway" };
     }
     if (nevers.length || asks.length) {
       const words = [nevers.length ? `Never under ${nevers.map((r) => r.pattern).join(" or ")}` : "", asks.length ? `asks before ${asks.map((r) => r.pattern).join(" or ")}` : ""].filter(Boolean).join("; ");
       if (!running()) return { value: "unknown", word: "Unknown", sub: `Not enforced now: ${words.charAt(0).toLowerCase() + words.slice(1)}`, mark: "notnow" };
+      if (asks.length) return { value: "ask", word: "Asks first", sub: words.charAt(0).toUpperCase() + words.slice(1), mark: "plugin" };
       return { value: "allow", word: "Limited", sub: words.charAt(0).toUpperCase() + words.slice(1), mark: "plugin" };
     }
     return { value: "allow", word: "Allowed", sub: "", mark: "" };
@@ -294,7 +305,7 @@
       : [];
     const asks = by("ask").map((l) => {
       const st = lineState(bot, l.id);
-      return linkTo(l, l.id === "exec" || l.id === "message" ? st.sub : "");
+      return linkTo(l, st.sub);
     });
     const allows = by("allow").map((l) => {
       const st = lineState(bot, l.id);
@@ -341,17 +352,18 @@
   function notEnforcedNote(bot) {
     const name = esc(botName(bot));
     const ls = pluginLines(bot);
-    if (C.hold === "done") {
+    if (heldLines(bot).length) {
       if (running()) return note(`<p><b>Clawtrate's rules plugin is running again.</b> ${name}'s settings still deny ${lineList(ls)}, which Clawtrate added while it wasn't. Change them on each line.</p>`, "warn");
       return note(`<p><b>Denied in ${name}'s settings.</b> ${lineList(ls)} are denied in ${name}'s own settings (read back 5:47 PM), which the gateway enforces.</p>`, "warn");
     }
     if (running() || C.plugin === "unchecked") return "";
     if (NEVER_READ) return note(`<p><b>Not known right now.</b> Clawtrate's rules plugin isn't answering, and this device has never read its rules, so it can't tell which aren't being enforced.</p>` + perLine, "danger");
     if (!ls.length) return "";
-    const bulk = C.hold !== "writing" && isAdmin() && !P[bot].fallback;
+    const writing = C.hold === "writing" && C.holdBot === bot;
+    const bulk = !writing && isAdmin() && !P[bot].fallback;
     return note(
       `<p><b>Enforcement not confirmed.</b> Clawtrate cannot confirm these plugin rules are being enforced. The gateway's own restrictions still apply. <span class="b-faint">Rules as last read on this device, 5:41 PM.</span>${bulk ? ` Denying them adds ${toolList(ls)} to ${name}'s own deny list.` : ""}</p>` +
-        (C.hold === "writing"
+        (writing
           ? `<p class="b-hint" role="status" style="margin:6px 0 0">Writing the deny…</p>`
           : P[bot].fallback
             ? perLine
@@ -447,7 +459,7 @@
     const s = P[bot][l.id];
     const name = esc(botName(bot));
     const locked = s.by === "gateway";
-    const dis = !isAdmin() || locked || l.fixed;
+    const dis = !isAdmin() || locked || l.fixed || C.saving;
     if (l.id === "exec") {
       const other = { allowlist: "Only listed commands", legacy: "Legacy setting: security allowlist, ask on miss" }[s.mode];
       const extraOpt = other ? `<button type="button" role="radio" aria-checked="true" tabindex="0" data-c="exec" data-value="${s.mode}" aria-disabled="true">${other}</button>` : "";
@@ -458,7 +470,7 @@
         `<p class="c-sentence" role="status">${C.saving ? "Saving…" : other ? `${other}: set outside Clawtrate. It can be left by choosing another value, not chosen again here. ${markWords("gateway")}.` : `${esc(EXEC.find(([v]) => v === s.mode)[2].replace(/Otto/g, botName(bot)))} ${markWords("gateway")}.`}</p>`
       );
     }
-    const chosen = locked ? s.own || "allow" : s.by === "rule" ? "ask" : s.value;
+    const chosen = heldLines(bot).includes(l.id) ? "never" : locked ? s.own || "allow" : s.by === "rule" ? "ask" : s.value;
     const opts = [
       ["allow", "Allow"],
       ["ask", "Ask"],
@@ -505,7 +517,7 @@
     if (heldLines(bot).includes(l.id)) effective = `Never. Denied in ${botName(bot)}'s settings.`;
     else if (l.id === "exec") effective = "Not given as one verdict: the three facts above are shown separately";
     else if (st.value === "unknown") effective = `Not enforced now: the rule that ${st.sub.replace("Not enforced now: ", "")}`;
-    else if (st.word === "Limited") {
+    else if (st.word === "Limited" || (st.value === "ask" && rulesFor(bot, l.id).length && s.by !== "rule")) {
       const rs = rulesFor(bot, l.id);
       const nev = rs.filter((r) => r.action === "never").map((r) => `${r.pattern} (${owner(r)})`);
       const ask = rs.filter((r) => r.action === "ask").map((r) => `${r.pattern} (${owner(r)})`);
@@ -565,7 +577,7 @@
     }
     const order = { never: 0, ask: 1, allow: 2 };
     const own = pluginRules(bot, l.id).sort((a, b) => order[a.action] - order[b.action]);
-    const shown = own.slice(0, 4);
+    const shown = own;
     const lastOf = (r) => (r.last ? `<button type="button" class="link-button" data-c="to-record" data-value="${r.last.log}">Last decided a call: ${r.last.time}</button>` : "No recorded use");
     const rows = [
       ...shown.map(
@@ -577,7 +589,6 @@
       ...allRulesFor(l.id).map((r) => `<div class="b-row"><span class="b-row-main"><span>${ACTION_SHORT[r.action]} · ${r.action === "never" ? "under" : "matching"} <code>${esc(r.pattern)}</code></span><small>A rule for every bot, version ${r.version} · edited in Settings, Permissions</small><small>${lastOf(r)}</small></span></div>`),
     ];
     html += rows.length ? `<dl class="facts">${rows.join("")}</dl>` : `<p class="b-hint">No rules. ${name} may ${l.words.toLowerCase()} as chosen above.</p>`;
-    if (own.length > shown.length) html += `<p class="b-hint">And ${own.length - shown.length} more rules.</p>`;
     if (C.followup) html += C.followup;
     if (C.form && isAdmin()) html += ruleForm(bot, l);
     else if (isAdmin()) html += `<div class="b-actions" style="margin-top:8px">${button("Add a rule", 'data-c="form-open" data-size="sm"')}</div>`;
@@ -609,7 +620,7 @@
     return (
       `<div class="c-form" role="group" aria-label="Add a rule">` +
       `<p class="b-hint" style="margin:0">A rule is built from choices: nothing on the gateway can evaluate a sentence. Add a note in your own words if it helps.</p>` +
-      (f.from ? `<p class="b-hint" style="margin:0" data-testid="form-from">Filled in from ${name}'s expired request at ${f.from}. The expired call doesn't run.</p>` : "") +
+      (f.from ? `<p class="b-hint" style="margin:0" data-testid="form-from">${f.live ? `Filled in from ${name}'s request at ${f.from}. Adding it doesn't answer or run that request.` : `Filled in from ${name}'s expired request at ${f.from}. The expired call doesn't run.`}</p>` : "") +
       `<p style="margin:0">When ${name} wants to: <b>${l.words.toLowerCase()}</b></p>` +
       `<label>acting on:<input class="input" data-c-pattern value="${esc(f.pattern)}" placeholder="${KIND_EXAMPLE[l.kind]}" aria-describedby="c-pattern-help${error ? " c-pattern-error" : ""}"${error ? ' aria-invalid="true"' : ""} spellcheck="false" autocomplete="off" /></label>` +
       `<p class="b-hint" id="c-pattern-help" style="margin:0">${KIND_HELP[l.kind].replace("Otto", name)}</p>` +
@@ -630,11 +641,11 @@
 
   const MSG = p("msg") || "";
   const PAIRS = MSG === "gateway" ? [["marlow", "pip"]] : null; // null: bots may message each other
-  const M = {};
-  app.bots.forEach((b) => (M[b.id] = { out: "gateway", outOnly: [], outAsk: false }));
-  M.otto.outAsk = true;
-  M.marlow = { out: "some", outOnly: ["pip"], outAsk: false };
-  M.pip = { out: "some", outOnly: ["marlow"], outAsk: false };
+  // Outgoing lists only; whether a bot's sends ask first is its Message other bots line (P), one source.
+  const M = new Proxy({}, { get: (o, k) => (typeof k === "string" && !(k in o) && app.bots.some((b) => b.id === k) ? (o[k] = { out: "gateway", outOnly: [] }) : o[k]) });
+  M.marlow = { out: "some", outOnly: ["pip"] };
+  M.pip = { out: "some", outOnly: ["marlow"] };
+  const asksToSend = (bot) => P[bot].message.by === "rule";
   if (MSG === "none") M.otto.out = "none";
   if (MSG === "some") Object.assign(M.otto, { out: "some", outOnly: ["pip"] });
   const pairAllows = (a, b) => !PAIRS || PAIRS.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
@@ -649,7 +660,7 @@
   function messagingShort(id) {
     if (heldLines(id).includes("message")) return "Never. The gateway denies sessions_send";
     const t = effectiveTargets(id);
-    return `May message ${names(t)}${M[id].outAsk && t.length ? (running() ? ", asks first" : ", ask not enforced now") : ""}`;
+    return `May message ${names(t)}${asksToSend(id) && t.length ? (running() ? ", asks first" : ", ask not enforced now") : ""}`;
   }
   function messagingView(bot) {
     const name = esc(botName(bot));
@@ -660,7 +671,7 @@
     const t = effectiveTargets(bot);
     html += heldLines(bot).includes("message")
       ? `<p class="c-effective" role="status"><b>Effective:</b> Never. The gateway denies sessions_send.</p>`
-      : `<p class="c-effective" role="status"><b>Effective:</b> ${name} may message ${esc(names(t))}${t.length && m.outAsk && running() ? ", asking you first" : ""}. <span class="b-faint">From the gateway's settings and ${name}'s.</span></p>`;
+      : `<p class="c-effective" role="status"><b>Effective:</b> ${name} may message ${esc(names(t))}${t.length && asksToSend(bot) && running() ? ", asking you first" : ""}. <span class="b-faint">From the gateway's settings and ${name}'s.</span></p>`;
     html += `<dl class="facts">${fact("For every bot", PAIRS ? "Only these pairs may message each other: Marlow and Pip." : "Bots may message each other.")}</dl><p class="c-sentence">${mark("set")}</p>`;
     // Outgoing: the gateway's list.
     const outRadios = [
@@ -680,7 +691,7 @@
           })
           .join("")}</dl>` + (m.outOnly.length ? "" : `<p class="b-field-error" role="alert">Choose at least one bot, or choose No bot. Nothing is saved until then.</p>`);
     html += `<p class="c-sentence">${mark("gateway")} ${name}'s own list, agentToAgent.send.</p>`;
-    html += `<dl class="facts" style="margin-top:8px">${switchRow("Ask me first", running() ? `A card asks you before each message ${name} sends. ${markWords("plugin")}.` : "Asking needs Clawtrate's rules plugin running.", m.outAsk && running(), `data-c="msg-out-ask"${running() ? dis : " disabled"}`, "Ask me first, outgoing")}</dl>`;
+    html += `<dl class="facts" style="margin-top:8px">${switchRow("Ask me first", running() ? `A card asks you before each message ${name} sends. ${markWords("plugin")}.` : "Asking needs Clawtrate's rules plugin running.", asksToSend(bot) && running(), `data-c="msg-out-ask"${running() ? dis : " disabled"}`, "Ask me first, outgoing")}</dl>`;
     html += `<p class="b-hint">Messages from other bots: about 41,200 tokens of ${name}'s this week, counting only runs a send's result names. <button type="button" class="link-button" data-bs="usage">See Usage</button></p>`;
     return html;
   }
@@ -834,7 +845,7 @@
   const rerenderSettings = () => D.renderSettings();
 
   function save(bot, apply, words) {
-    if (!isAdmin()) return;
+    if (!isAdmin() || C.saving) return;
     const mode = C.write;
     C.write = null;
     if (mode === "refused") {
@@ -903,6 +914,8 @@
       case "hold":
         // One config.patch; the lines change only once the read-back has the entries.
         C.hold = "writing";
+        C.holdBot = bot;
+        C.holdLines = pluginLines(bot);
         rerenderTab();
         return setTimeout(() => {
           C.hold = "done";
@@ -923,6 +936,9 @@
       case "ask-once":
       case "ask-deny":
         return answerCard(t.closest(".request"), what === "ask-once");
+      case "card-make-rule":
+        C.form = { pattern: FROM_TARGET, action: "allow", note: "", from: "5:44 PM", live: true };
+      // falls through: the form is on the Change files page
       case "to-rules-list":
         C.line = "files";
         app.setPanel(true);
@@ -937,12 +953,13 @@
       case "choose": {
         const l = lineOf(C.line);
         const s = P[bot][l.id];
-        const cur = s.by === "rule" ? "ask" : s.value;
+        const cur = heldLines(bot).includes(l.id) ? "never" : s.by === "rule" ? "ask" : s.value;
         if (cur === value) return;
         return save(
           bot,
           () => {
             P[bot][l.id] = { value, by: value === "allow" ? "default" : value === "ask" ? "rule" : "bot", set: value === "ask" ? "Just now, from this device, version 1" : undefined };
+            if (value !== "never") release(bot, l.id);
           },
           `${l.words}: ${value === "allow" ? "allowed" : value === "ask" ? "asks first" : "never"}`,
         );
@@ -950,7 +967,10 @@
       case "exec": {
         const s = P[bot].exec;
         if (s.mode === value) return;
-        const apply = () => Object.assign(P[bot].exec, { mode: value, value: value === "full" ? "allow" : value === "deny" ? "never" : "ask", by: "bot" });
+        const apply = () => {
+          Object.assign(P[bot].exec, { mode: value, value: value === "full" ? "allow" : value === "deny" ? "never" : "ask", by: "bot" });
+          if (value !== "deny") release(bot, "exec");
+        };
         const words = `Run commands: ${EXEC.find(([v]) => v === value)[1].toLowerCase()}`;
         if (value === "full")
           return D.confirmBox({
@@ -1016,9 +1036,9 @@
         return announce(`Saved. ${botName(bot)} may message ${names(effectiveTargets(bot))}`);
       }
       case "msg-out-ask": {
-        M[bot].outAsk = !M[bot].outAsk;
+        P[bot].message = asksToSend(bot) ? { value: "allow", by: "default" } : { value: "ask", by: "rule", set: "Just now, from this device, version 1" };
         rerenderTab();
-        return announce(`Saved. Ask me first: ${M[bot].outAsk ? "on" : "off"}`);
+        return announce(`Saved. Ask me first: ${asksToSend(bot) ? "on" : "off"}`);
       }
       case "show-request":
         return announce("The request is in Otto's task 'Disk almost full on the media box'.");
@@ -1139,18 +1159,20 @@
       `<header class="request-head"><h3 class="request-title">Otto wants to change a file</h3><span class="tag" data-tone="warn">Needs approval</span></header>` +
       `<p class="request-summary">Write notes/disk-2026-11-18.md in Otto's workspace.</p>` +
       `<p class="request-asker">Asked by Clawtrate's rules plugin: Otto's rule 'Ask first · notes/**', version 1.</p>` +
-      `<div class="request-actions"><button type="button" class="button" data-variant="primary" data-c="ask-once">Allow once</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet" data-c="ask-deny">Deny</button></div>` +
+      (canApprove()
+        ? `<div class="request-actions"><button type="button" class="button" data-variant="primary" data-c="ask-once">Allow once</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet" data-c="ask-deny">Deny</button></div>`
+        : `<p class="request-ended">You can read this request but not answer it from this device.</p>`) +
       (full
         ? `<p class="c-sentence" data-testid="card-limit">Otto has 20 allow rules, the most a scope can hold. <button type="button" class="link-button" data-c="to-rules-list">Open the rules list</button></p>`
         : isAdmin()
-          ? `<p class="c-sentence"><button type="button" class="link-button" data-c="to-rules-list">Make a rule…</button></p>`
+          ? `<p class="c-sentence"><button type="button" class="link-button" data-c="card-make-rule">Make a rule…</button></p>`
           : "") +
       `<p class="request-foot">The rules plugin asks for a 10-minute wait.</p></section>`
     );
   };
   let asked = 0;
   function answerCard(card, once) {
-    if (!card || !diskTask) return;
+    if (!card || !diskTask || !canApprove()) return;
     const n = card.dataset.cCard;
     const resolved =
       `<section class="card request" data-kind="approval" data-state="resolved" data-c-card="${n}" role="region" aria-label="Otto wanted to change a file. ${once ? "Allowed once" : "Denied"}.">` +
