@@ -453,6 +453,13 @@ function botMessageCard(
   const reply = resultReply ? { text: resultReply } : null;
   const error = str(details?.error) ?? step.error;
   const hasResult = raw?.result !== null && raw?.result !== undefined;
+  // The gateway's own error for a call its approval denied before it ran (2026.10.6): nothing
+  // was sent, also when the approval is no longer listed.
+  const deniedBeforeCall =
+    step.status === "failed" &&
+    status === "error" &&
+    details?.tool === BOT_MESSAGE_TOOL &&
+    str(details.error)?.split("\n", 1)[0] === "Denied by user. The tool call did not run.";
 
   const fromRecipient = (): BotMessageState =>
     reply ? "replied" : (recipientState(linked) ?? "sent");
@@ -464,7 +471,7 @@ function botMessageCard(
       step.status === "waiting" && approval?.status === "pending"
         ? "waiting-for-approval"
         : "started";
-  } else if (approval?.status === "denied") {
+  } else if (approval?.status === "denied" || deniedBeforeCall) {
     state = "not-sent";
   } else if (!status) {
     // No delivery status. A closed call with no result, or a result that says

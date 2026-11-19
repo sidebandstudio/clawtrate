@@ -499,7 +499,7 @@ Under it: "Messages from other bots: about 41,200 tokens of Otto's this week, co
 | A pending plugin approval names the send                                   | Waiting for approval | The approval card, "Asked by Clawtrate's rules plugin: Otto's messaging settings."                         |
 | `status: "forbidden"` with the gateway's sentence naming the sender's list | Blocked by policy    | "Otto may not message Pip: Otto's messaging settings. The gateway enforces this. Nothing was sent."        |
 | `status: "forbidden"` naming the gateway's pairs or its switch             | Blocked by policy    | "Bots may not message each other on this gateway, or not these two. Set on the gateway. Nothing was sent." |
-| The card was denied, or expired                                            | Not sent             | "You denied the approval. Nothing was sent." / "The approval expired. Nothing was sent."                   |
+| The card was denied, or expired                                            | Not sent             | "The approval was denied. Nothing was sent." / "The approval expired. Nothing was sent."                   |
 | Approved                                                                   | As usual             | The answer and the send's outcome, apart (section 18)                                                      |
 
 A refused send carries a run id that is not a recipient run; it opens nothing.

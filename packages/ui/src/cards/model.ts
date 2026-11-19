@@ -593,11 +593,11 @@ function notSentLine(
   sender: string,
   run: Pick<Run, "state"> | undefined,
 ): string {
-  if (approval?.status === "denied") return "You denied the approval. Nothing was sent.";
+  if (approval?.status === "denied") return "The approval was denied. Nothing was sent.";
   if (approval?.status === "expired") return "The approval expired. Nothing was sent.";
   if (senderStopped(run))
     return `${sender} was stopped before the call was made. Nothing was sent.`;
-  return `${sender} moved on before making this call. Nothing was sent.`;
+  return "Nothing was sent.";
 }
 
 /** What the open card says came back from the recipient, for every state but Working and Replied. */
@@ -619,6 +619,8 @@ export function botMessageNote(
     case "recipient-waiting":
       return `${r} is waiting on its user in its own task: it asked a question, or it needs an approval.`;
     case "no-reply":
+      if (card.state === "recipient-outcome-unknown")
+        return "The recipient run's outcome is unknown. No reply is recorded for this message.";
       return `${card.resultStatus === "timeout" ? "The message was sent, and no reply came in time." : `${r}'s run finished without a reply.`} A reply that names this message appears here; any other arrives as a message from ${r}.`;
     case "recipient-stopped":
       return `${r}'s run for this message was stopped before it replied.`;

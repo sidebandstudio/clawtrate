@@ -373,7 +373,7 @@ describe("Messaged cards from the engine's state", () => {
     expect(say("messaged-recipient-stopped")).toBe(
       "Marlow's run for this message was stopped before it replied.",
     );
-    expect(say("messaged-not-sent")).toBe("You denied the approval. Nothing was sent.");
+    expect(say("messaged-not-sent")).toBe("The approval was denied. Nothing was sent.");
     expect(say("messaged-unknown")).toBe(
       "Otto was stopped before the call returned. The gateway cannot say whether Marlow received it.",
     );
@@ -831,5 +831,33 @@ describe("cards in the order the gateway's events establish", () => {
       { kind: "bot-message", id: "tool:m1" },
       { kind: "approval", id: "ap1" },
     ]);
+  });
+});
+
+describe("Messaged words follow the record", () => {
+  it("F-122: a recorded denial does not assign its decision to the current viewer", () => {
+    const { transcript, selected } = cards("messaged-not-sent");
+    const card = selected.botMessages[0]!;
+    const note = botMessageNote(
+      botMessageKey(card),
+      card,
+      { sender: "Otto", recipient: "Marlow" },
+      transcript.approvals,
+      transcript.runs.find((run) => run.id === card.runId),
+    );
+    expect(note).toBe("The approval was denied. Nothing was sent.");
+  });
+
+  it("F-122: an unknown recipient outcome does not say its run finished without a reply", () => {
+    const { transcript, selected } = cards("messaged-no-reply");
+    const card = { ...selected.botMessages[0]!, state: "recipient-outcome-unknown" as const };
+    const note = botMessageNote(
+      botMessageKey(card),
+      card,
+      { sender: "Otto", recipient: "Marlow" },
+      transcript.approvals,
+      transcript.runs.find((run) => run.id === card.runId),
+    );
+    expect(note).not.toContain("run finished without a reply");
   });
 });
