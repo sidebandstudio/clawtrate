@@ -118,7 +118,7 @@ export function runningWords(
   if (task.status !== "running") return null;
   // The gateway's row says it runs before this client has seen the run. That is
   // news only while connected; a row kept from before is what was last seen.
-  if (link.connected) return { text: `${botName}, ${STATE_WORDS.working}`, tone };
+  if (link.connected) return { text: `The gateway reports a run for ${botName}.`, tone };
   const phrase = link.closed ? actionWords.PHRASES.disconnected : actionWords.PHRASES.reconnecting;
   return { text: phrase(STATE_WORDS.working), tone };
 }

@@ -8,13 +8,21 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLEARTEXT_WORDS, CONNECT_WORDS, pairingLede, PRODUCT_NAME, SLOGAN } from "@clawtrate/ui/connect-words";
+import {
+  CLEARTEXT_WORDS,
+  CONNECT_WORDS,
+  pairingLede,
+  PRODUCT_NAME,
+  SLOGAN,
+} from "@clawtrate/ui/connect-words";
 import { ENSEMBLE } from "@clawtrate/ui/character";
+import { noTasksBody, TASK_WORDS } from "@clawtrate/ui/summary";
 import { CONVERSATION_WORDS } from "@clawtrate/ui/conversation-words";
 import { stampTime } from "@clawtrate/ui/format";
 import { addressWords } from "@clawtrate/ui/gateway-state";
 import { WebSocket, WebSocketServer } from "ws";
 import { REDACTED } from "../src/host/secrets.ts";
+import { TASKS_FAILED } from "../src/lists.ts";
 import { LINK_WORDS } from "../src/markdown.ts";
 import { LIGHT } from "../src/theme/tokens.ts";
 import {
@@ -38,6 +46,7 @@ import {
   near,
   notSee,
   openclaw,
+  relay,
   pasteboard,
   protocolFiveGateway,
   Proxy,
@@ -352,7 +361,11 @@ describe("the iOS app", () => {
     await shoot("pairing-ended");
     // A new request says only that approval is needed, not that the device is new.
     const lede = see(lit(pairingLede(gateway)));
-    await steps("after-expiry", [tap({ id: "try-again" }), waitFor({ id: "pairing" }, 90_000), lede]);
+    await steps("after-expiry", [
+      tap({ id: "try-again" }),
+      waitFor({ id: "pairing" }, 90_000),
+      lede,
+    ]);
     const second = await until("a new pairing request", async () =>
       (await devices()).pending.find(
         (r) => r.displayName === "Clawtrate iPhone" && r.requestId !== first.requestId,
@@ -1092,6 +1105,66 @@ describe("the iOS app", () => {
       for (const phone of server.clients) phone.terminate();
       for (const socket of upstream) socket.terminate();
       await closeWithin(new Promise<void>((resolve) => server.close(() => resolve())));
+    }
+  });
+  it("on iPhone, a bot whose tasks the gateway failed to send claims no count on Home and says so in its list; sent an empty list, the list says it has none", async () => {
+    let mode: "fail" | "empty" = "fail";
+    let failed = 0;
+    const proxy = await relay(env.gateway, {
+      // The first task list after pairing fails, as a gateway's error would.
+      fromPhone: (frame) => {
+        if (mode !== "fail" || frame.method !== "sessions.subscribe" || failed > 0 || !frame.id)
+          return null;
+        failed += 1;
+        return {
+          type: "res",
+          id: frame.id,
+          ok: false,
+          error: { code: "UNAVAILABLE", message: "The task list is not available" },
+        };
+      },
+      // Afterwards, every task list the gateway sends is empty.
+      fromGateway: (frame, method) => {
+        if (mode !== "empty" || !frame.ok || !frame.payload) return;
+        if (method === "sessions.subscribe")
+          frame.payload.list = { ...(frame.payload.list as object), sessions: [], hasMore: false };
+        if (method === "sessions.list")
+          Object.assign(frame.payload, { sessions: [], hasMore: false });
+      },
+    });
+    try {
+      launch({ fresh: true, devGateway: proxy.url });
+      await steps("tasks-fail-connect", [
+        waitFor({ id: "welcome" }),
+        tap({ id: "connect-a-gateway" }),
+        ...typeAddress(proxy.url, env.token),
+        waitFor({ id: "pairing" }, 90_000),
+      ]);
+      devGateway("approve");
+      await steps("tasks-failed-home", [
+        waitFor({ id: "bot-otto", text: "Otto" }, 120_000),
+        see({ id: "bot-preview-otto", text: lit(TASKS_FAILED) }),
+        notSee(".*, 0 tasks.*"),
+      ]);
+      expect(failed).toBe(1);
+      await steps("tasks-failed-list", [
+        tap({ id: "bot-otto" }),
+        waitFor({ id: "bot-tasks-otto" }),
+        see(lit(TASKS_FAILED)),
+        notSee(lit(TASK_WORDS.loading)),
+        notSee(lit(TASK_WORDS.none)),
+      ]);
+      // Connected again, the gateway sends the list, and it is empty.
+      mode = "empty";
+      proxy.drop();
+      await steps("tasks-empty-list", [
+        waitFor({ id: "bot-tasks-otto" }),
+        waitFor(lit(TASK_WORDS.none), 120_000),
+        see(lit(noTasksBody("Otto"))),
+        notSee(lit(TASKS_FAILED)),
+      ]);
+    } finally {
+      await proxy.close();
     }
   });
 });

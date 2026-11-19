@@ -15,7 +15,7 @@ import {
 import { createServer, Socket, type Server } from "node:net";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import { openInstance } from "../../../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
 import { decodePng } from "../../../tools/brand/src/png.ts";
@@ -625,6 +625,71 @@ export async function echoingGateway(): Promise<{ url: string; close: () => Prom
     url: `ws://127.0.0.1:${port}`,
     close: () => {
       for (const client of server.clients) client.terminate();
+      return closeWithin(new Promise<void>((resolve) => server.close(() => resolve())));
+    },
+  };
+}
+
+/** A gateway frame, as far as a relay reads and changes it. */
+export type RelayFrame = {
+  type?: string;
+  id?: string;
+  method?: string;
+  ok?: boolean;
+  payload?: Record<string, unknown>;
+  error?: unknown;
+};
+
+/**
+ * A loopback relay to a gateway. `fromPhone` sees each request the app sends and
+ * may answer it itself instead of passing it on; `fromGateway` may change a reply
+ * on its way back, knowing the method it answers. `drop` closes the app's
+ * sockets, so it connects again.
+ */
+export async function relay(
+  upstream: string,
+  hooks: {
+    fromPhone?: (frame: RelayFrame) => RelayFrame | null;
+    fromGateway?: (frame: RelayFrame, method: string | undefined) => void;
+  },
+): Promise<{ url: string; drop: () => void; close: () => Promise<void> }> {
+  const sockets = new Set<WebSocket>();
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((resolve) => server.once("listening", resolve));
+  server.on("connection", (phone) => {
+    const gateway = new WebSocket(upstream);
+    sockets.add(gateway);
+    const methods = new Map<string, string>();
+    gateway.on("close", () => {
+      sockets.delete(gateway);
+      phone.close();
+    });
+    gateway.on("error", () => phone.close());
+    phone.on("close", () => gateway.terminate());
+    phone.on("error", () => gateway.terminate());
+    phone.on("message", (data) => {
+      const frame = JSON.parse(String(data)) as RelayFrame;
+      const answer = hooks.fromPhone?.(frame) ?? null;
+      if (answer) return phone.send(JSON.stringify(answer));
+      if (frame.type === "req" && frame.id && frame.method) methods.set(frame.id, frame.method);
+      if (gateway.readyState === WebSocket.OPEN) gateway.send(String(data));
+      else gateway.once("open", () => gateway.send(String(data)));
+    });
+    gateway.on("message", (data) => {
+      const frame = JSON.parse(String(data)) as RelayFrame;
+      hooks.fromGateway?.(frame, frame.id === undefined ? undefined : methods.get(frame.id));
+      if (phone.readyState === WebSocket.OPEN) phone.send(JSON.stringify(frame));
+    });
+  });
+  const port = (server.address() as { port: number }).port;
+  return {
+    url: `ws://127.0.0.1:${port}`,
+    drop: () => {
+      for (const phone of server.clients) phone.terminate();
+    },
+    close: () => {
+      for (const phone of server.clients) phone.terminate();
+      for (const socket of sockets) socket.terminate();
       return closeWithin(new Promise<void>((resolve) => server.close(() => resolve())));
     },
   };

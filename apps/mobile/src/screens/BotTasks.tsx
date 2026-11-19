@@ -12,7 +12,7 @@ import { Avatar } from "../components/Avatar.tsx";
 import { StateMark } from "../components/StateMark.tsx";
 import { BackButton, Top } from "../components/Top.tsx";
 import { Txt, UnreadDot } from "../components/ui.tsx";
-import { taskRows } from "../lists.ts";
+import { TASKS_FAILED, taskRows } from "../lists.ts";
 import { useRuntime } from "../runtime.ts";
 import { S, stacked, TOUCH, useTheme } from "../theme/index.ts";
 
@@ -33,8 +33,8 @@ export function BotTasks({
 }) {
   const { c } = useTheme();
   const { redact } = useRuntime();
-  const tasks = state.tasksByBot[bot.id];
-  const rows = taskRows(tasks ?? [], seen, now);
+  const current = state.connection.status === "connected" && state.discovery.status === "ready";
+  const rows = taskRows(state.tasksByBot[bot.id] ?? [], seen, now, current);
   const stack = stacked(useWindowDimensions().fontScale);
   return (
     <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: c.bg }}>
@@ -112,19 +112,23 @@ export function BotTasks({
             </View>
           </Pressable>
         ))}
-        {tasks === undefined && (
-          <Txt size={S["text-sm"]} color="text-faint" style={{ padding: S["space-3"] }}>
-            {TASK_WORDS.loading}
-          </Txt>
-        )}
-        {tasks !== undefined && rows.length === 0 && (
-          <View style={{ padding: S["space-3"], gap: S["space-1"] }}>
-            <Txt weight="medium">{TASK_WORDS.none}</Txt>
-            <Txt size={S["text-sm"]} color="text-faint">
-              {redact(noTasksBody(bot.name))}
+        {rows.length === 0 &&
+          (state.discovery.status === "ready" ? (
+            <View style={{ padding: S["space-3"], gap: S["space-1"] }}>
+              <Txt weight="medium">{TASK_WORDS.none}</Txt>
+              <Txt size={S["text-sm"]} color="text-faint">
+                {redact(noTasksBody(bot.name))}
+              </Txt>
+            </View>
+          ) : state.discovery.status === "error" ? (
+            <View style={{ padding: S["space-3"], gap: S["space-1"] }}>
+              <Txt weight="medium">{TASKS_FAILED}</Txt>
+            </View>
+          ) : (
+            <Txt size={S["text-sm"]} color="text-faint" style={{ padding: S["space-3"] }}>
+              {TASK_WORDS.loading}
             </Txt>
-          </View>
-        )}
+          ))}
       </ScrollView>
     </SafeAreaView>
   );

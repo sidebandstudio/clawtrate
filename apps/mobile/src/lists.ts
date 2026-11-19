@@ -13,7 +13,7 @@ import {
   taskLabel,
   taskState,
   taskTime,
-  waitingWords,
+  TASK_WORDS,
   type RunState,
 } from "@clawtrate/ui/summary";
 import { isUnread, type SeenMap } from "@clawtrate/ui/unread";
@@ -49,20 +49,45 @@ const DEFAULT_PREFS: RosterPrefs = {
   sections: [],
 };
 
+/** A bot's task list that the gateway could not send. */
+export const TASKS_FAILED = "Couldn't load tasks";
+
+/**
+ * A task as a row on this phone may say it: a run counts as present only while
+ * connected with discovery ready, and this read-only connection cannot answer
+ * what a task waits for.
+ */
+function rowTask(task: Task, current: boolean): Task {
+  if (task.status === "waiting" || (!current && task.status === "running"))
+    return { ...task, status: "idle" };
+  return task;
+}
+
 export function botRow(state: ClawtrateState, bot: Bot, seen: SeenMap, now: number): BotRow {
-  const tasks = state.tasksByBot[bot.id] ?? [];
+  const known = state.tasksByBot[bot.id];
+  const current = state.connection.status === "connected" && state.discovery.status === "ready";
+  const tasks = (known ?? []).map((task) => rowTask(task, current));
   const summary = summarize(tasks, seen, null);
+  // No list yet, and none to come until discovery is ready: no count to claim.
+  const unknown = known === undefined && state.discovery.status !== "ready";
   return {
     bot,
     name: bot.name,
     label: bot.theme,
     primary: bot.isDefault,
     time: botTime(tasks, summary, now),
-    preview: botPreview(tasks, summary, state.discovery.status === "loading"),
-    waiting: waitingWords(tasks) !== null,
+    preview:
+      unknown && state.discovery.status === "error"
+        ? TASKS_FAILED
+        : unknown
+          ? TASK_WORDS.loading
+          : botPreview(tasks, summary, state.discovery.status === "loading"),
+    waiting: false,
     unread: summary.unread,
     state: summary.state,
-    spoken: botLabel(bot, tasks.length, summary, { primary: bot.isDefault, label: bot.theme }),
+    spoken: unknown
+      ? bot.name
+      : botLabel(bot, tasks.length, summary, { primary: bot.isDefault, label: bot.theme }),
   };
 }
 
@@ -96,14 +121,15 @@ export type TaskRow = {
 };
 
 /** A bot's task rows, newest activity first, as the engine orders them. */
-export function taskRows(tasks: Task[], seen: SeenMap, now: number): TaskRow[] {
+export function taskRows(tasks: Task[], seen: SeenMap, now: number, current = true): TaskRow[] {
   return tasks.map((task) => {
-    const state = taskState(task, seen, null);
+    const shown = rowTask(task, current);
+    const state = taskState(shown, seen, null);
     const unread = isUnread(task, seen);
     return {
       task,
       title: task.title,
-      time: task.updatedAt === null ? "" : taskTime(task, now),
+      time: task.updatedAt === null ? "" : taskTime(shown, now),
       state,
       unread,
       spoken: taskLabel(task, state, unread),

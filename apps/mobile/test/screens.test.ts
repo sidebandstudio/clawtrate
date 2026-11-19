@@ -207,6 +207,55 @@ describe("the iPhone app's screens", () => {
     expect(rows[0]!.spoken).toBe("disk, working");
     expect(rows[1]!.spoken).toBe("old, unread");
   });
+
+  it("does not use a live Home state or relative time for an offline cached run", () => {
+    const otto = bot("otto");
+    const offline = state({
+      connection: { ...initialState.connection, status: "disconnected" },
+      bots: [otto],
+      tasksByBot: { otto: [task(KEY, NOW - 60_000, { status: "running" })] },
+    });
+    const row = homeModel(offline, {}, NOW).rows[0]!;
+    expect(row.spoken).not.toMatch(/, working,/i);
+    expect(row.time).not.toBe("now");
+    const [cached] = taskRows(offline.tasksByBot.otto!, {}, NOW, false);
+    expect([cached!.state, cached!.time, cached!.spoken]).toEqual([null, "9:29 AM", "disk"]);
+  });
+
+  it("does not tell this read-only reader to approve work on Home or in a task row", () => {
+    const otto = bot("otto");
+    const waiting = task(KEY, NOW - 60_000, { status: "waiting", waitingFor: "approval" });
+    const row = homeModel(state({ bots: [otto], tasksByBot: { otto: [waiting] } }), {}, NOW)
+      .rows[0]!;
+    expect(`${row.preview} ${row.spoken}`).not.toMatch(/for you|approve a command|needs you/i);
+    expect(row.waiting).toBe(false);
+    expect(taskRows([waiting], {}, NOW)[0]!.spoken).not.toMatch(/needs you/i);
+  });
+
+  it("claims no task count before discovery gives one, and says when the tasks could not be loaded", () => {
+    const otto = bot("otto");
+    const loading = state({
+      discovery: { status: "loading", error: null, partial: false },
+      bots: [otto],
+    });
+    expect(homeModel(loading, {}, NOW).rows[0]).toMatchObject({
+      spoken: "Otto",
+      preview: "Loading tasks",
+    });
+    const failed = {
+      ...loading,
+      discovery: { status: "error" as const, error: "x", partial: false },
+    };
+    expect(homeModel(failed, {}, NOW).rows[0]).toMatchObject({
+      spoken: "Otto",
+      preview: "Couldn't load tasks",
+    });
+    // Ready with no key for the bot: the engine omits a bot with no task rows.
+    expect(homeModel(state({ bots: [otto] }), {}, NOW).rows[0]).toMatchObject({
+      spoken: "Otto, 0 tasks",
+      preview: "No tasks yet",
+    });
+  });
 });
 
 function transcript(items: TranscriptItem[]): Transcript {
@@ -316,7 +365,7 @@ describe("the iPhone chat's rows", () => {
     expect(running.at(-1)).toEqual({
       kind: "running",
       id: "running",
-      text: "Otto, working",
+      text: "The gateway reports a run for Otto.",
       tone: "live",
     });
     const done = chatRows(
