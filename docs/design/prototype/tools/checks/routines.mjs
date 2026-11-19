@@ -348,7 +348,7 @@ await p.close();
 // A run --------------------------------------------------------------------------------------
 p = await open("view=routine&routine=digest");
 await p.click('[data-testid="run-row"][data-i="0"]');
-check("F-193 a run opens its conversation: the scheduled message as the gateway recorded it, then the reply", (await text(p, "#view-title")) === "Morning digest · Today 8:00 AM" && (await text(p, '[data-testid="scheduled-message"] .r-sched-head')) === "Scheduled message, as the gateway recorded it" && (await text(p, '[data-testid="scheduled-message"] p')).startsWith("Summarise the notes I added yesterday, and list anything I need to answer today.\n\nThis is an unattended scheduled run.") && (await has(p, ".r-convo .bubble")));
+check("F-193 a run opens its conversation: the scheduled message as the gateway recorded it, then the reply", (await text(p, "#view-title")) === "Morning digest" && (await text(p, '[data-testid="run-when"]')) === "Marlow · Today 8:00 AM" && (await text(p, '[data-testid="scheduled-message"] .r-sched-head')) === "Scheduled message, as the gateway recorded it" && (await text(p, '[data-testid="scheduled-message"] p')).startsWith("Summarise the notes I added yesterday, and list anything I need to answer today.\n\nThis is an unattended scheduled run.") && (await has(p, ".r-convo .bubble")));
 check("F-190 the run's foot: no reply possible, its usage", (await text(p, '[data-testid="run-foot"]')).startsWith("This run has finished. A run can't be answered; to change what it does, edit the routine.") && (await text(p, ".r-run-facts")) === "scripted/dev-1 · 2.6 s · 120 in, 80 out tokens" && !(await has(p, ".composer-input")));
 await p.click('[data-r="back-to-routine"]');
 check("Back returns to the routine, focus on the run", (await text(p, "#view-title")) === "Morning digest" && (await p.evaluate(() => document.activeElement.matches('[data-r="open-run"][data-i="0"]'))));
@@ -375,7 +375,7 @@ check("run in progress: live steps and Running…", (await text(p, '[data-testid
 await p.close();
 p = await open();
 await p.click('[data-testid="run-task"][data-id="digest"]');
-check("F-193 the rail's run row opens the run; All runs goes to the routine", (await text(p, "#view-title")) === "Morning digest · Today 8:00 AM" && (await has(p, '.r-head [data-r="back-to-routine"]')));
+check("F-193 the rail's run row opens the run; one Back goes to the routine and its runs", (await text(p, '[data-testid="run-when"]')) === "Marlow · Today 8:00 AM" && (await count(p, '.r-head [data-r="back-to-routine"]')) === 1 && (await label(p, '.r-head [data-r="back-to-routine"]')) === "Back to Morning digest, all runs");
 await p.close();
 
 // The editor -----------------------------------------------------------------------------------
@@ -526,8 +526,13 @@ check("check-in seen live: Checked in over its reply", (await text(p, '[data-tes
 check("from history without a live record: an ordinary reply, no check-in label and no guess", !(await has(p, '[data-testid="from-history"] .event-line')) && (await text(p, '[data-testid="from-history"] .bubble')) === "The installer's quote you saved expires on Friday." && !(await p.evaluate(() => /on its own/.test(document.body.textContent))));
 check("rail: a check-in seen live leads the preview with Checked in", (await text(p, '[data-bot-row="juniper"] .bot-preview')).startsWith("Checked in: The rebate form"));
 check("F-108 the Created routine card's name opens the routine", (await text(p, '[data-testid="created-card"]')).trim() === "Created routine Morning digest");
-await p.click('[data-testid="created-card"] a');
+await p.click('[data-testid="created-card"] .r-link');
 check("F-108 opened", (await text(p, "#view-title")) === "Morning digest");
+await p.close();
+p = await open("transcript=checkin");
+await p.focus('[data-testid="created-card"] .r-link');
+await p.keyboard.press("Enter");
+check("F-108 the card's name opens the routine with Enter", (await text(p, "#view-title")) === "Morning digest");
 await p.close();
 
 // Away -------------------------------------------------------------------------------------------
@@ -548,9 +553,25 @@ check("F-194 without a durable identity the card says its answer stays on this d
 await p.close();
 
 // Widths, themes, motion ------------------------------------------------------------------------
+// Clipped inside a container: anything that hides overflow and has more than it shows, except
+// a shortened line whose full words are in a tooltip, and the calendar where it scrolls by design.
+const clipped = (pg, scrollOk) => pg.evaluate((scrollOk) => [...document.querySelectorAll("#view *")].filter((e) => {
+  const cs = getComputedStyle(e);
+  if (!["hidden", "auto", "scroll", "clip"].includes(cs.overflowX) || e.scrollWidth <= e.clientWidth + 1 || !e.getClientRects().length) return false;
+  if (cs.textOverflow === "ellipsis" && e.closest("[title]")) return false;
+  return !(scrollOk && e.matches(".r-cal-scroll"));
+}).map((e) => e.className || e.tagName), scrollOk);
+// A 44 px hit area: the points 21 px from the centre each way still land on the control.
+const smallTargets = (pg) => pg.evaluate(() => [...document.querySelectorAll('#view button, #view [role="switch"]')].filter((e) => e.getClientRects().length).filter((e) => {
+  e.scrollIntoView({ block: "center", inline: "center" });
+  const r = e.getBoundingClientRect();
+  const x = r.left + r.width / 2;
+  const y = r.top + r.height / 2;
+  return ![[x, y - 21], [x, y + 21], [x - 21, y], [x + 21, y]].every(([px, py]) => e.contains(document.elementFromPoint(px, py)));
+}).map((e) => `${e.className}:${e.dataset.r || ""}`));
 for (const [w, h] of [[1440, 900], [1100, 760], [800, 760], [390, 844]]) {
   for (const theme of ["light", "dark"]) {
-    for (const view of ["", "view=routine&routine=digest", "view=week", "view=run&routine=digest&run=0"]) {
+    for (const view of ["", "view=routine&routine=digest", "view=week", "view=day", "view=run&routine=digest&run=0", "view=checkins&bot=otto", "transcript=checkin"]) {
       const pg = await b.newPage({ viewport: { width: w, height: h } });
       pg.on("pageerror", (e) => out.push("PAGEERROR " + e));
       await pg.goto(pageUrl("routines.html") + `?chrome=0&theme=${theme}&${view}`);
@@ -561,6 +582,13 @@ for (const [w, h] of [[1440, 900], [1100, 760], [800, 760], [390, 844]]) {
         title: document.querySelector("#view-title")?.textContent || "",
       }));
       check(`${w} ${theme} ${view || "list"}: no page overflow, a title`, !r.overflow && !!r.title && r.body !== "rgba(0, 0, 0, 0)", JSON.stringify(r));
+      // The week scrolls inside itself below 1100 (section 15); at 1440 and 1100 all seven days fit.
+      const c = await clipped(pg, w < 1100);
+      check(`${w} ${theme} ${view || "list"}: nothing clipped inside its container`, c.length === 0, JSON.stringify(c));
+      if (w === 390 && view !== "view=week") {
+        const small = await smallTargets(pg);
+        check(`390 ${theme} ${view || "list"}: every control has a 44 px hit area`, small.length === 0, JSON.stringify(small));
+      }
       await pg.close();
     }
   }
@@ -572,7 +600,7 @@ await p.click('.r-head [data-r="to-bots"]');
 check("phone: Back shows the bots, focus on the Routines button", (await p.evaluate(() => document.querySelector(".shell").dataset.view)) === "list" && (await p.evaluate(() => document.activeElement.id)) === "routines-button");
 await p.click("#routines-button");
 check("phone: the Routines button opens the view", (await p.evaluate(() => document.querySelector(".shell").dataset.view)) === "detail" && (await text(p, "#view-title")) === "Routines");
-check("phone: switches have a 44 px hit area", (await p.evaluate(() => document.querySelector(".r-seg button").getBoundingClientRect().height >= 38)));
+check("phone: the view switch is 44 px tall", (await p.evaluate(() => document.querySelector(".r-seg button").getBoundingClientRect().height >= 44)));
 await p.close();
 p = await open("view=routine&routine=digest", { width: 800, height: 760 });
 check("800: the page header keeps Run now and More only", (await p.evaluate(() => getComputedStyle(document.querySelector(".r-head [data-wide]")).display)) === "none" && (await has(p, '[data-r="more"]')));

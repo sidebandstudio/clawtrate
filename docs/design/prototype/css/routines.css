@@ -415,8 +415,8 @@
 .r-cal {
   --hour: 28px;
   display: grid;
-  grid-template-columns: 52px repeat(var(--days), minmax(120px, 1fr));
-  min-width: calc(52px + var(--days) * 120px);
+  grid-template-columns: 52px repeat(var(--days), minmax(96px, 1fr));
+  min-width: calc(52px + var(--days) * 96px);
   background: var(--bg-list);
 }
 
@@ -711,8 +711,11 @@
   padding-top: var(--space-4);
 }
 
-.r-convo .event-line a,
 .r-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
   color: var(--text);
   font-weight: var(--weight-medium);
   text-decoration: underline;
@@ -788,4 +791,42 @@
 .r-zone-list {
   margin: 4px 0 var(--space-3);
   padding-left: 20px;
+}
+
+[data-input="touch"] .r-run-how {
+  white-space: normal;
+}
+
+[data-input="touch"] .r-cal {
+  --hour: 48px;
+}
+
+[data-input="touch"] .r-occ {
+  height: 28px;
+}
+
+/* On the phone every control in the view has a 44 px hit area, past its drawn edge where it is smaller. */
+[data-input="touch"] .r-view :is(button, [role="switch"]) {
+  position: relative;
+}
+
+[data-input="touch"] .r-view :is(button, [role="switch"])::before {
+  content: "";
+  position: absolute;
+  top: min(0px, calc((100% - 44px) / 2));
+  bottom: min(0px, calc((100% - 44px) / 2));
+  left: min(0px, calc((100% - 44px) / 2));
+  right: min(0px, calc((100% - 44px) / 2));
+}
+
+[data-input="touch"] .r-occ {
+  overflow: visible;
+}
+
+.r-occ span {
+  min-width: 0;
+}
+
+[data-input="touch"] .r-view .event-line:has(.r-link) {
+  min-height: 44px;
 }

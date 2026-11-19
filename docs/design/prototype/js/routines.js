@@ -445,7 +445,7 @@
       `<li data-routine="${r.id}"><div class="r-row" data-paused="${!r.enabled}" data-testid="routine-row">` +
       `<button type="button" class="r-row-main" data-r="open" data-id="${r.id}" aria-label="${esc(`${r.name}, ${botName(r.bot)}, ${spoken}`)}">` +
       `<span class="r-row-mark">${rowMark(r)}</span><span class="r-row-text"><span class="r-row-name" title="${esc(r.name)}">${esc(r.name)}</span>` +
-      `<span class="r-row-line">${line}</span></span></button>` +
+      `<span class="r-row-line" title="${esc(spoken[0].toUpperCase() + spoken.slice(1))}">${line}</span></span></button>` +
       (isAdmin() ? sw(r.enabled, `data-r="toggle" data-id="${r.id}"`, `${r.name} runs on schedule`) : "") +
       `</div>${S.rowError === r.id ? `<p class="r-row-error" role="alert">Couldn't pause: the gateway didn't answer.</p>` : ""}</li>`
     );
@@ -580,7 +580,7 @@
     return `<li><button type="button" class="r-run" data-r="open-run" data-id="${r.id}" data-i="${i}" data-at="${x.at}" aria-label="${esc(`${when(x.at, VIEWER, true)}${x.manual ? ", started by hand" : ""}, ${how}`)}" data-testid="run-row">` +
       `<span class="r-row-mark">${x.running ? glyph("working") : o.mark ? glyph(o.mark) : ""}</span>` +
       `<span class="r-run-text"><span class="r-run-when">${esc(when(x.at, VIEWER, true))}${x.manual ? `<span class="r-faint"> · started by hand</span>` : ""}</span>` +
-      `<span class="r-run-how">${o.tone && !x.running ? `<span data-tone="danger">${esc(how)}</span>` : esc(how)}</span></span>${icon("chevron")}</button></li>`;
+      `<span class="r-run-how" title="${esc(how)}">${o.tone && !x.running ? `<span data-tone="danger">${esc(how)}</span>` : esc(how)}</span></span>${icon("chevron")}</button></li>`;
   }
   function renderRoutine() {
     const r = r0();
@@ -648,8 +648,8 @@
     const i = S.run ?? 0;
     const x = i < 0 ? { at: r.running, running: true } : r.runs[i];
     const head =
-      `<header class="r-head">${backButton("Back to the routine", "back-to-routine")}<div class="r-titles"><h1 id="view-title">${esc(`${r.name} · ${when(x.at, VIEWER, true)}`)}</h1>` +
-      `<p><span class="avatar" data-bot="${r.bot}"></span>${botName(r.bot)}</p></div><span class="spacer"></span>${button("All runs", 'data-size="sm" data-r="back-to-routine"', "quiet")}</header>`;
+      `<header class="r-head">${backButton(`Back to ${esc(r.name)}, all runs`, "back-to-routine")}<div class="r-titles"><h1 id="view-title" title="${esc(r.name)}">${esc(r.name)}</h1>` +
+      `<p data-testid="run-when"><span class="avatar" data-bot="${r.bot}"></span>${botName(r.bot)} · ${esc(when(x.at, VIEWER, true))}</p></div></header>`;
     // A transcript is shown only when cron.history returned this run's messages. A run in a
     // shared conversation, or a job that is not an agent turn, has no conversation of its own.
     const where = r.payload.kind === "command" ? "command" : r.payload.kind !== "agentTurn" || r.sessionTarget !== "isolated" ? "main" : "";
@@ -693,8 +693,8 @@
       `<div class="turn" data-role="assistant" data-testid="from-history"><div class="msg" data-role="assistant"><div class="bubble">The installer's quote you saved expires on Friday.</div></div></div>` +
       // "Checked in" only for a run whose agent events carried isHeartbeat while Clawtrate watched.
       `<div class="turn" data-role="assistant" data-testid="checkin">${liveCheckin ? `<p class="event-line">${icon("clock")} Checked in · 9:30 AM</p>` : ""}<div class="msg" data-role="assistant"><div class="bubble">The rebate form is due in three days and still needs the model number.</div></div></div>` +
-      `<div class="turn" data-role="assistant" data-testid="created-card"><p class="event-line">${icon("clock")} Created routine <a class="r-link" data-r="open" data-id="digest" tabindex="0" role="link">Morning digest</a></p></div>` +
-      `<div class="turn" data-role="assistant" data-testid="changed-card"><p class="event-line">${icon("clock")} Changed routine <a class="r-link" data-r="open" data-id="backup" tabindex="0" role="link">Nightly backup check</a></p></div>` +
+      `<div class="turn" data-role="assistant" data-testid="created-card"><p class="event-line">${icon("clock")} Created routine <button type="button" class="r-link" data-r="open" data-id="digest">Morning digest</button></p></div>` +
+      `<div class="turn" data-role="assistant" data-testid="changed-card"><p class="event-line">${icon("clock")} Changed routine <button type="button" class="r-link" data-r="open" data-id="backup">Nightly backup check</button></p></div>` +
       `</div>`;
     return { head, body, r: "convo" };
   }
