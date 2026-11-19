@@ -144,7 +144,11 @@ async function gatewayAgrees(botId: string | null, period: UsagePeriod) {
     .toBe(true);
 }
 
-const n = (text: string | null) => Number((text ?? "").replace(/[^\d]/g, ""));
+/** A count as the page writes it ("1,080" or "1,080 tokens"); anything else, "Unavailable" too, is no number. */
+const n = (text: string | null) => {
+  const match = /^\s*([\d,]+)(?: tokens\b.*)?$/.exec(text ?? "");
+  return match ? Number(match[1]!.replace(/,/g, "")) : Number.NaN;
+};
 
 async function startOwnHost(readOnly = false): Promise<Host> {
   const data = mkdtempSync(join(tmpdir(), "clawtrate-usage-"));
