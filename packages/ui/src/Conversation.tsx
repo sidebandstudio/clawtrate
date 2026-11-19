@@ -194,12 +194,14 @@ function TranscriptView({
   transcript,
   note,
   liveOptions,
+  eventLines = [],
 }: {
   task: Task;
   bot: Bot;
   transcript: Transcript;
   note: ReactNode;
   liveOptions: LiveOptions;
+  eventLines?: readonly EventLine[];
 }) {
   const reading = useReading();
   const live = buildLive(bot, task, transcript, { ...liveOptions, reading });
@@ -292,8 +294,16 @@ function TranscriptView({
   const rows: ReactNode[] = [];
   let previous: number | null = null;
   const endingsBefore = live.endingsBefore;
+  // Lines Clawtrate draws from its own changes, each where its time falls among the messages.
+  const lines = [...eventLines].sort((a, b) => a.at - b.at);
+  const line = (each: EventLine) => (
+    <p className="event-line" data-side="center" key={each.key} data-testid="client-event-line">
+      {each.text}
+    </p>
+  );
   for (const item of transcript.items) {
     const at = item.timestamp;
+    while (at !== null && lines.length > 0 && lines[0]!.at < at) rows.push(line(lines.shift()!));
     if (
       at !== null &&
       (previous === null || at - previous > STAMP_GAP_MS || daysAgo(previous, at) !== 0)
@@ -324,6 +334,7 @@ function TranscriptView({
   }
   const trailing = endingsBefore.get(null);
   if (trailing) rows.push(...trailing);
+  rows.push(...lines.map(line));
 
   return (
     <div className="transcript-wrap">
@@ -430,6 +441,9 @@ function EmptyState({
     </div>
   );
 }
+
+/** A grey line Clawtrate draws in a task from its own change, with when it happened. */
+export type EventLine = { key: string; at: number; text: string };
 
 /** What the engine holds beyond history, laid out for the transcript. */
 type LiveParts = {
@@ -686,6 +700,7 @@ export function Conversation({
   caughtUp,
   inert = false,
   granted,
+  eventLines,
 }: {
   task: Task | null;
   bot: Bot | undefined;
@@ -715,6 +730,8 @@ export function Conversation({
   inert?: boolean;
   /** Access arrived a moment ago. */
   granted: boolean;
+  /** Lines Clawtrate draws in the open task from its own changes (a bot's account). */
+  eventLines?: readonly EventLine[];
 }) {
   const itemCount = transcript?.items.length ?? 0;
   const send = useCommand();
@@ -965,6 +982,7 @@ export function Conversation({
         task={task}
         bot={bot}
         transcript={transcript}
+        eventLines={eventLines ?? []}
         liveOptions={{
           connected: caughtUp,
           interactive,

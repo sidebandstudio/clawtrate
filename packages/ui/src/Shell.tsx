@@ -18,6 +18,7 @@ import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStri
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { NewBot } from "./bots/NewBot.tsx";
+import { accountLines } from "./bots/lines.ts";
 import "./bots/bots.css";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
 
@@ -454,6 +455,7 @@ export function Shell({
             <Conversation
               task={task}
               bot={bot}
+              eventLines={accountLines(state.accounts, task, state.bots)}
               taskCount={selection.tasks.length}
               discovery={state.discovery}
               transcript={transcript}

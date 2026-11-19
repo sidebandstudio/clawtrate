@@ -7,6 +7,7 @@ import {
   normalizeLabel,
   providerName,
   retainedOrder,
+  type AccountChange,
   type AccountsState,
   type Bot,
   type BotBinding,
@@ -313,3 +314,45 @@ export function levelWord(level: string | null): string {
 }
 
 export { retainedOrder };
+
+/** An account by its id: its name when the gateway still lists it, else its provider and id. */
+function nameOf(id: string, accounts: Pick<AccountsState, "labels" | "accounts">): string {
+  const listed = accounts.accounts.find((each) => each.id === id);
+  return listed ? accountName(listed, accounts) : `${providerName(id.split(":")[0] ?? id)} ${id}`;
+}
+
+/**
+ * The grey line Clawtrate draws in a task for a change of a bot's account it
+ * made (section 11): the gateway records none.
+ */
+export function changeLine(
+  change: AccountChange,
+  accounts: Pick<AccountsState, "labels" | "accounts">,
+  botName: string,
+): string {
+  const was = change.previous ? nameOf(change.previous, accounts) : null;
+  const inProgress = change.running && was ? ` The run in progress finishes on ${was}.` : null;
+  if (change.account === null)
+    return inProgress
+      ? `${botName} now has no fixed account.${inProgress}`
+      : `${botName} now has no fixed account, from the next run.`;
+  const next = nameOf(change.account, accounts);
+  return inProgress
+    ? `${botName} now runs on ${next}.${inProgress}`
+    : `${botName} now runs on ${next}, from the next run.`;
+}
+
+/**
+ * A sign-in that finishes on the gateway's machine: the gateway's own words,
+ * and the command it gives for forwarding its port, when it gives one
+ * ("… forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host").
+ */
+export function forwardCommand(message: string | null): { words: string; command: string | null } {
+  if (!message) return { words: "", command: null };
+  const match = /([^\n.]*forward the port with:\s*)(ssh\s[^\n]+?)\s*$/im.exec(message);
+  if (!match) return { words: message.trim(), command: null };
+  const words = (message.slice(0, match.index) + message.slice(match.index + match[0].length))
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { words, command: match[2]!.trim() };
+}

@@ -1110,6 +1110,12 @@ button.b-open > .icon {
   color: var(--text-faint);
 }
 
+/* The gateway's own words for a sign-in on its machine, as it gave them. */
+.b-step.b-said {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
 .b-note p.b-faint {
   font-size: var(--text-sm);
 }

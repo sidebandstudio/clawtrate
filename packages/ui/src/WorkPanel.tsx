@@ -215,6 +215,7 @@ export function WorkPanel({
           {bot ? (
             <BotSettings
               bot={bot}
+              taskKey={task?.key ?? null}
               accounts={accounts}
               bots={bots}
               tasks={tasks}

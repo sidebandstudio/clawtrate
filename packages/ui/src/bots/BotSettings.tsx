@@ -58,6 +58,7 @@ type View = "main" | "account" | "change" | "connect";
 
 export function BotSettings({
   bot,
+  taskKey = null,
   accounts,
   bots,
   tasks,
@@ -68,6 +69,8 @@ export function BotSettings({
   announce,
 }: {
   bot: Bot;
+  /** The task open for this bot, where the grey line for an account change is drawn. */
+  taskKey?: string | null;
   accounts: AccountsState;
   bots: readonly Bot[];
   tasks: readonly Task[];
@@ -430,6 +433,8 @@ export function BotSettings({
           provider: targetProvider,
           model,
           effort,
+          taskKey,
+          running,
         });
         announce(
           toGateway
