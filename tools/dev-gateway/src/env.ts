@@ -100,6 +100,9 @@ export function openclawEnv(
 ): NodeJS.ProcessEnv {
   return {
     ...passthrough(source),
+    ...(instance.name !== null && source.FS_SAFE_NATIVE_MODE === "require"
+      ? { FS_SAFE_NATIVE_MODE: "require" }
+      : {}),
     HOME: homedir(),
     OPENCLAW_PROFILE: profileFor(instance.name),
     OPENCLAW_STATE_DIR: instance.stateDir,
