@@ -5,13 +5,17 @@
 //   node packaging/build.ts win   # an NSIS installer for x64; run it on Windows
 //
 // Output goes to apps/desktop/dist, which git ignores. Nothing is published.
+// It prints which signing the build does, and after a macOS build what each
+// app's signature turned out to be.
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { build, Platform } from "electron-builder";
 import { LOGO_PATH, MANIFEST_PATH, sha256 } from "../../../tools/brand/src/make-icons.ts";
-import { builderConfig } from "./config.ts";
+import { builderConfig, PRODUCT_NAME } from "./config.ts";
+import { macSignatureKind, signingPlan, signingProblems, signingSummary } from "./signing.ts";
 
 const APP_DIR = join(import.meta.dirname, "..");
 
@@ -42,6 +46,16 @@ for (const file of ["out/main/index.js", "out/preload/index.cjs", "out/renderer/
   }
 }
 
+// Signing runs only with the owner's identities in the environment; a partial
+// set stops here, before anything is built, naming the variables only.
+const problems = signingProblems(process.env, target);
+if (problems.length > 0) {
+  for (const problem of problems) console.error(`Signing variables: ${problem}.`);
+  process.exit(1);
+}
+const plan = signingPlan(process.env);
+console.log(signingSummary(plan, target));
+
 // The exact Electron the app is developed and tested with.
 const require = createRequire(join(APP_DIR, "package.json"));
 const electronVersion = (require("electron/package.json") as { version: string }).version;
@@ -54,3 +68,19 @@ const artifacts = await build({
   publish: "never",
 });
 for (const artifact of artifacts) console.log(artifact);
+
+// What the macOS apps' signatures are, read back from the bundles. electron-builder
+// skips signing in a pull request's CI run even with an identity set.
+if (target === "mac") {
+  for (const folder of ["mac-arm64", "mac"]) {
+    const app = join(APP_DIR, "dist", folder, `${PRODUCT_NAME}.app`);
+    if (!existsSync(app)) continue;
+    const shown = spawnSync("codesign", ["--display", "--verbose=2", app], { encoding: "utf8" });
+    const kind = macSignatureKind(shown.stderr ?? "");
+    console.log(`Signature of dist/${folder}/${PRODUCT_NAME}.app: ${kind}.`);
+    if ((plan.mac === "developer-id") !== (kind === "certificate")) {
+      console.error("The signature is not the one the signing variables asked for.");
+      process.exitCode = 1;
+    }
+  }
+}
