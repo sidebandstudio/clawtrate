@@ -105,7 +105,7 @@ function grantWhen(grant: RoutineGrant, now: number): string {
 
 function GatewayMark() {
   return (
-    <small className="c-mark">
+    <small className="c-enforced">
       <ShieldIcon /> The gateway enforces this
     </small>
   );

@@ -70,13 +70,13 @@
   height: 56px;
 }
 
-.c-mark {
+.c-enforced {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
-.c-mark .icon {
+.c-enforced .icon {
   width: 13px;
   height: 13px;
 }
