@@ -53,6 +53,22 @@ async function requestsFor(session: string): Promise<Request[]> {
   return all.requests.filter((each) => each.session === session);
 }
 
+/**
+ * A change of the task from the second connection, sent again while the gateway answers it as
+ * retryable, as it does while it settles a turn ("Session patch failed unexpectedly. Retry the request.").
+ */
+async function patchTask(params: Json): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await admin.request("sessions.patch", { key: TASK, ...params });
+      return;
+    } catch (error) {
+      if ((error as { retryable?: unknown }).retryable !== true || attempt >= 9) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+}
+
 /** The task's row as a second connection reads it. */
 async function row(): Promise<Json> {
   const list = await reader.request<{ sessions: Json[] }>("sessions.list", {
@@ -97,8 +113,9 @@ async function openQuill(target: Page) {
   await expect(target.locator("h1.task-line")).toHaveText("Main", { timeout: 20_000 });
 }
 
-/** Send from the composer and wait for the gateway to report the turn running. */
+/** Send from the composer once the task is idle, and wait for the gateway to report the turn running. */
 async function startTurn(text: string) {
+  await expect.poll(async () => (await row()).status, { timeout: 90_000 }).not.toBe("running");
   const field = page.getByTestId("composer-input");
   await field.fill(text);
   await field.press("Enter");
@@ -275,7 +292,7 @@ test("F-043 F-045: a held change of effort that the gateway refuses says why, an
   await page.getByRole("menuitemradio", { name: "High" }).click();
   await expect(chip(page)).toHaveAccessibleName(/High effort\. Held until this turn ends/);
   // Meanwhile another connection moves the task to dev-lite, which offers Off and Ultra only.
-  await admin.request("sessions.patch", { key: TASK, model: "acme/dev-lite@acme:work" });
+  await patchTask({ model: "acme/dev-lite@acme:work" });
   await expect.poll(async () => (await row()).status, { timeout: 90_000 }).not.toBe("running");
   const refused = modelLines(page).last();
   await expect(refused).toHaveText(
@@ -297,7 +314,7 @@ test("F-043 F-045: a held change of effort that the gateway refuses says why, an
   await shots(page, "task-refused", DESKTOP_AND_PHONE);
   await page.getByRole("button", { name: "Hide work panel" }).click();
   // Put back for any later check: dev-1, as the bot has it.
-  await admin.request("sessions.patch", { key: TASK, model: "acme/dev-1@acme:work" });
+  await patchTask({ model: "acme/dev-1@acme:work" });
 });
 
 test("F-042 F-043: a bot's model and effort chosen in its settings are saved on its account and seen by a second connection", async () => {
