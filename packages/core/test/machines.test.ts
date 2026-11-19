@@ -826,6 +826,18 @@ describe("Settings, Machines: the engine", () => {
     await expect(engine(gw, { admin: true }).removeDevice("dev-phone")).rejects.toThrow(
       "The gateway did not return the pairing list. Removal could not be confirmed.",
     );
+    // A row without its id could be the record removed: the list proves nothing.
+    gw.handlers["node.list"] = () => ({ nodes: [{ displayName: "media-box", paired: true }] });
+    await expect(engine(gw, { admin: true }).removeMachine(NODE)).rejects.toThrow(
+      "Removal could not be confirmed.",
+    );
+    gw.handlers["device.pair.list"] = () => ({ paired: [{ displayName: "Clawtrate on iPhone" }] });
+    await expect(engine(gw, { admin: true }).removeDevice("dev-phone")).rejects.toThrow(
+      "Removal could not be confirmed.",
+    );
+    // An empty list is complete.
+    gw.handlers["node.list"] = () => ({ nodes: [] });
+    await engine(gw, { admin: true }).removeMachine(NODE);
   });
 
   it("F-157: a removal is done only when the whole listing read back lacks the id, not the first page", async () => {

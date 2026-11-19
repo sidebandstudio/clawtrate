@@ -503,6 +503,10 @@ export function readWorkspaces(value: unknown): Map<string, string> {
   return out;
 }
 
+/** A listing whose every row names its id: only then does an absent id prove a removal. */
+const wholeList = (rows: unknown, key: "nodeId" | "deviceId") =>
+  Array.isArray(rows) && rows.every((row) => typeof rec(row)[key] === "string");
+
 /** Whether a whole listing (`node.list` `nodes`, `device.pair.list` `paired`) holds an id, unbounded. */
 const listsId = (rows: unknown, key: "nodeId" | "deviceId", id: string) =>
   list(rows).some((row) => rec(row)[key] === id);
@@ -956,7 +960,7 @@ export class MachinesEngine {
       throw this.refused("the removal", error);
     }
     const again = rec(await this.ctx.request("node.list", {}));
-    if (!Array.isArray(again.nodes))
+    if (!wholeList(again.nodes, "nodeId"))
       throw new PlacementWriteError(
         "The gateway did not return the pairing list. Removal could not be confirmed.",
       );
@@ -1001,7 +1005,7 @@ export class MachinesEngine {
       throw this.refused("the removal", error);
     }
     const again = rec(await this.ctx.request("device.pair.list", {}));
-    if (!Array.isArray(again.paired))
+    if (!wholeList(again.paired, "deviceId"))
       throw new PlacementWriteError(
         "The gateway did not return the pairing list. Removal could not be confirmed.",
       );
