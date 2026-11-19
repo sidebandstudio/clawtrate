@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit reviews every pull request that is not a draft. Its comments are advice, and nothing
+# waits on them: AGENTS.md says how to handle them.
+language: en-US
+tone_instructions: >-
+  Plain English. Short sentences and concrete words. No emoji, praise or marketing language. Say
+  what is wrong, where, and what would fix it.
+
+reviews:
+  profile: chill
+  # The description is the author's. CodeRabbit's summary stays out of it.
+  high_level_summary: false
+  in_progress_fortune: false
+  poem: false
+  path_filters:
+    # Generated files.
+    - "!pnpm-lock.yaml"
+    - "!visual/baselines/**"
+  pre_merge_checks:
+    title:
+      mode: warning
+      requirements: >-
+        "type: what changes for the person using Clawtrate", under 72 characters. Types are feat,
+        fix, docs, test, ci, refactor and chore. It names what someone can now do or what stops
+        going wrong, not a function or file name.
+  auto_review:
+    drafts: false
+
+knowledge_base:
+  code_guidelines:
+    filePatterns:
+      - AGENTS.md
+      - CONTRIBUTING.md
