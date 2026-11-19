@@ -138,7 +138,7 @@ test.describe("1440", () => {
     await fillNew(page, "In doubt");
     await save(page).click();
     const note = editor(page).getByTestId("editor-unknown");
-    await expect(note).toContainText("Not saved yet.");
+    await expect(note).toContainText("The gateway didn't answer. This may or may not have saved");
     await expect(save(page)).toHaveCount(0);
     await expect(editor(page).getByLabel("Name")).toBeDisabled();
     await note.getByRole("button", { name: "Check now" }).click();
@@ -168,7 +168,7 @@ test.describe("1440", () => {
     await expect(view(page).getByRole("heading", { name: "Morning digest, short" })).toBeVisible();
   });
 
-  test("F-189: a schedule the form doesn't write is shown as written, and a reminder stays a reminder", async ({
+  test("F-189: a schedule the form doesn't write is shown as written, and a reminder's text is shown, not edited", async ({
     page,
   }) => {
     await openPage(page, "Certificate renewal");
@@ -180,10 +180,10 @@ test.describe("1440", () => {
     await view(page).getByRole("button", { name: "Back to routines" }).click();
     await row(page, "Stretch break").locator(".r-row-main").click();
     await view(page).getByRole("button", { name: "Edit", exact: true }).click();
-    await expect(editor(page).getByLabel("Reminder")).toHaveValue("Time to stand up and stretch.");
-    await expect(editor(page)).toContainText(
-      "Posted as a reminder in Juniper's main conversation.",
-    );
+    // A reminder's text is shown, not edited: a save never sends its payload.
+    await expect(editor(page).getByRole("textbox", { name: "Reminder" })).toHaveCount(0);
+    await expect(editor(page)).toContainText("Time to stand up and stretch.");
+    await expect(editor(page)).toContainText("This reminder's text was set on the gateway.");
   });
 
   test("F-189: losing admin while editing keeps what was typed, and the next save after it is granted works", async ({
@@ -306,7 +306,7 @@ test.describe("1440", () => {
     await open(page);
     await view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
     const line = view(page).getByTestId("routines-zone");
-    await expect(line).toContainText("Routines' time zone: Mixed: New York, Berlin");
+    await expect(line).toContainText("Routines' time zone: New York");
     await line.getByRole("button", { name: "Change…" }).click();
     const dialog = page.getByTestId("routines-zone-dialog");
     await expect(dialog).toContainText("Changes Nightly backup check.");

@@ -62,7 +62,9 @@ type Check =
   | { status: "idle" }
   | { status: "checking" }
   | { status: "missing" }
-  | { status: "same" }
+  /** The gateway's routine reads as this save sent it: maybe this save, maybe the same change made elsewhere. */
+  | { status: "matches"; routine: Routine }
+  | { status: "differs"; routine: Routine }
   | { status: "failed"; error: string };
 
 type Save =
@@ -195,7 +197,7 @@ export function Editor({
   const attempt = useRef(0);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [payload] = useState(live?.payload ?? "agentTurn");
-  const [textLocked] = useState(live ? live.payload === "other" || live.textCut : false);
+  const [textLocked] = useState(live ? live.payload !== "agentTurn" || live.textCut : false);
 
   // A save still out when the editor closes is no longer this editor's to report.
   useEffect(
@@ -305,12 +307,10 @@ export function Editor({
       }
       const fresh = await bridge.invoke({ type: "readRoutine", id: mode.id });
       if (!fresh) return setGone(true);
+      // Each field this save sent, as it was sent, against the job read back.
       const wanted = original ? changedFields(original, sent) : [];
-      const landed = changedFields(sent, fieldsOf(fresh)).filter((each) => wanted.includes(each));
-      if (landed.length === 0) return onSaved(fresh, false);
-      if (original && changedFields(original, fieldsOf(fresh)).length === 0)
-        return at({ status: "same" });
-      setSave({ status: "conflict", current: fresh });
+      const differ = changedFields(sent, fieldsOf(fresh)).filter((each) => wanted.includes(each));
+      at({ status: differ.length === 0 ? "matches" : "differs", routine: fresh });
     } catch (error) {
       at({ status: "failed", error: errorText(error) });
     }
@@ -346,27 +346,53 @@ export function Editor({
     notes.push(
       <Note tone="warn" key="unknown" testId="editor-unknown">
         <p role="alert">
-          <strong>Not saved yet.</strong> The gateway didn&apos;t answer ({save.error}). It may
-          still have saved it.{" "}
-          {c.status === "missing"
-            ? "The gateway doesn't list it. Saving again can't make a second one."
-            : c.status === "same"
-              ? "The gateway still has it as it was before you saved."
-              : c.status === "failed"
+          {c.status === "matches" ? (
+            <>
+              <strong>{c.routine.name} now reads as you typed it.</strong> That may be your save, or
+              the same change made elsewhere.
+            </>
+          ) : c.status === "differs" ? (
+            <>
+              <strong>{c.routine.name} doesn&apos;t read as you typed it.</strong> The gateway has:{" "}
+              {c.routine.name}, {whenWords(fieldsOf(c.routine))}.
+            </>
+          ) : c.status === "missing" ? (
+            <>
+              <strong>The gateway has no routine from this form yet.</strong> The save may still
+              arrive. Saving again can&apos;t make a second one.
+            </>
+          ) : (
+            <>
+              <strong>The gateway didn&apos;t answer.</strong> This may or may not have saved (
+              {save.error}).{" "}
+              {c.status === "failed"
                 ? `Couldn't check: ${c.error}`
-                : "Check before saving again."}
+                : "Check what the gateway has before saving again."}
+            </>
+          )}
         </p>
         <div className="b-actions">
-          <button
-            type="button"
-            className="button"
-            data-size="sm"
-            disabled={c.status === "checking"}
-            onClick={() => void check()}
-          >
-            {c.status === "checking" ? "Checking…" : "Check now"}
-          </button>
-          {(c.status === "missing" || c.status === "same") && admin && (
+          {c.status !== "matches" && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              disabled={c.status === "checking"}
+              onClick={() => void check()}
+            >
+              {c.status === "checking"
+                ? "Checking what the gateway has…"
+                : c.status === "idle"
+                  ? "Check now"
+                  : "Check again"}
+            </button>
+          )}
+          {c.status === "matches" && (
+            <button type="button" className="button" data-size="sm" onClick={onClose}>
+              Close
+            </button>
+          )}
+          {(c.status === "missing" || c.status === "differs") && admin && (
             <button
               type="button"
               className="button"
@@ -718,20 +744,19 @@ export function Editor({
   }, [noteKeys]);
 
   const textLabel = payload === "systemEvent" ? "Reminder" : "Instruction";
+  // While a save is in flight its dialog stays: Cancel, Close and Escape wait for the answer.
+  const close = () => {
+    if (save.status !== "saving") onClose();
+  };
   const saving = save.status === "saving";
   return (
-    <Dialog kind="create" labelledBy="r-edit-title" onClose={onClose} testId="routine-editor">
+    <Dialog kind="create" labelledBy="r-edit-title" onClose={close} testId="routine-editor">
       <div className="b-sheet r-dialog">
         <header className="b-head">
           <h2 id="r-edit-title" tabIndex={-1}>
             {mode.mode === "new" ? "New routine" : "Edit routine"}
           </h2>
-          <button
-            type="button"
-            className="icon-button b-close"
-            aria-label="Close"
-            onClick={onClose}
-          >
+          <button type="button" className="icon-button b-close" aria-label="Close" onClick={close}>
             <CloseIcon />
           </button>
         </header>
@@ -782,9 +807,14 @@ export function Editor({
               <div className="r-field">
                 <span className="r-label">{textLabel}</span>
                 <div className="r-locked">
-                  {payload === "other"
-                    ? "This routine runs a command on the gateway, not a bot. Change what it runs on the gateway."
-                    : "This instruction is too long to change here. Change it on the gateway."}
+                  {payload === "agentTurn" ? null : (
+                    <p className="r-instruction">{live?.text ?? draft.text}</p>
+                  )}
+                  {payload === "systemEvent"
+                    ? "This reminder's text was set on the gateway. You can rename the routine and change when it runs here; change its text on the gateway."
+                    : payload === "other"
+                      ? "This routine runs a command on the gateway, not a bot. You can rename the routine and change when it runs here; change what it runs on the gateway."
+                      : "This instruction is too long to change here. Change it on the gateway."}
                 </div>
               </div>
             ) : (
@@ -840,10 +870,16 @@ export function Editor({
         <footer className="b-foot">
           {admin ? (
             <div className="b-actions">
-              <button type="button" className="button" data-variant="quiet" onClick={onClose}>
+              <button
+                type="button"
+                className="button"
+                data-variant="quiet"
+                aria-disabled={saving || undefined}
+                onClick={close}
+              >
                 Cancel
               </button>
-              {save.status !== "unknown" && !deleted && (
+              {save.status !== "unknown" && !deleted && !changed && (
                 <button
                   type="button"
                   className="button"
@@ -856,7 +892,11 @@ export function Editor({
               )}
             </div>
           ) : (
-            <AdminBar connection={connection} info={info} need={ADMIN_NEED} />
+            <AdminBar
+              connection={connection}
+              info={info}
+              need="Admin access was lost: saving needs it again. What you typed is kept."
+            />
           )}
         </footer>
       </div>

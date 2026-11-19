@@ -287,7 +287,7 @@ test("F-189: another client's change while the editor is open is shown before sa
   });
 });
 
-test("F-189: a reminder in the main conversation is edited as a reminder", async () => {
+test("F-189: a reminder in the main conversation keeps its text: renaming it never sends its payload", async () => {
   const job = await add({
     ...scriptedRoutine(`Reminder ${STAMP}`, "main"),
     sessionTarget: "main",
@@ -295,12 +295,13 @@ test("F-189: a reminder in the main conversation is edited as a reminder", async
   } as unknown as ReturnType<typeof scriptedRoutine>);
   await openPage(job.name);
   await view().getByRole("button", { name: "Edit", exact: true }).click();
-  await editor().getByLabel("Reminder").fill("Drink some water.");
+  await expect(editor()).toContainText("This reminder's text was set on the gateway.");
+  await editor().getByLabel("Name").fill(`Reminder renamed ${STAMP}`);
   await save().click();
   await expect(editor()).toHaveCount(0, { timeout: 15_000 });
-  expect((await get(job.id)).payload).toMatchObject({
-    kind: "systemEvent",
-    text: "Drink some water.",
+  expect(await get(job.id)).toMatchObject({
+    name: `Reminder renamed ${STAMP}`,
+    payload: { kind: "systemEvent", text: "Stand up and stretch." },
   });
 });
 
