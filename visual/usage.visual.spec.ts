@@ -27,7 +27,8 @@ const SCENES: Scene[] = [
   {
     name: "usage-row",
     query: PANE,
-    ready: (page) => expect(page.getByTestId("usage-row")).toContainText("This week: 1.64M tokens"),
+    ready: (page) =>
+      expect(page.getByTestId("usage-row")).toContainText("This week: 1,640,000 tokens"),
   },
   { name: "usage-page", query: PAGE, ready: usagePage },
   { name: "usage-page-warned", query: `${PAGE}&budget=warn`, ready: usagePage },

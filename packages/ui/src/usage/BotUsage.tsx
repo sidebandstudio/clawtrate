@@ -11,16 +11,7 @@ import { BackIcon, ChevronIcon, WarnIcon } from "../icons.tsx";
 import { BudgetPart } from "./Budget.tsx";
 import { settleUsageRequest, useUsageRequest } from "./navigation.ts";
 import { Bars, PeriodChoice, useNow, useUsageReport } from "./parts.tsx";
-import {
-  asOf,
-  budgetLine,
-  budgetOf,
-  costHint,
-  costShort,
-  costValue,
-  full,
-  short,
-} from "./words.ts";
+import { asOf, budgetLine, budgetOf, costHint, costValue, figureLine, full } from "./words.ts";
 import "./usage.css";
 
 /** The Usage group's row: its budget first, then this week's figure (section 16). */
@@ -33,7 +24,7 @@ function UsageRow({ bot, onOpen, visible }: { bot: Bot; onOpen: () => void; visi
     report.status === "error" && !report.report
       ? "Couldn't load"
       : report.report
-        ? `This week: ${short(report.report.figure.tokens.total)} tokens · ${costShort(report.report.figure.cost)}`
+        ? `This week: ${figureLine(report.report.figure)}`
         : "Loading…";
   const value = own ? `Budget ${budgetLine(own.budget, own.count)} · ${week}` : week;
   return (
@@ -204,11 +195,11 @@ export function BotUsagePage({
         </div>
         <div>
           <dt>Cost</dt>
-          <dd data-testid="usage-cost">{costValue(figure.cost)}</dd>
+          <dd data-testid="usage-cost">{costValue(figure.cost, figure.counting)}</dd>
         </div>
       </dl>
       <p className="b-hint" data-testid="usage-cost-hint">
-        {costHint(figure.cost, figure.asOf)}
+        {costHint(figure.cost, figure.asOf, figure.counting)}
       </p>
       <h4 className="b-group">By source</h4>
       {sources ? (

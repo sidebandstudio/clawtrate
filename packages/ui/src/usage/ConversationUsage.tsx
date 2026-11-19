@@ -18,11 +18,12 @@ export function BudgetLine({ bot }: { bot: Bot }) {
   const state = useClawtrateState();
   const now = useNow();
   const own = budgetOf(state.usage, bot.id, now);
-  if (!own || own.percent === null || own.count?.used == null) return null;
+  const count = own?.count;
+  if (!own || own.percent === null || !count || count.used === null) return null;
   if (own.percent < BUDGET_WARN_PERCENT || own.percent >= 100) return null;
   return (
     <p className="event-line" data-side="center" data-testid="budget-line">
-      {warnedLine(bot.name, own.budget, own.count.used, own.percent)}
+      {warnedLine(bot.name, own.budget, { ...count, used: count.used }, own.percent)}
     </p>
   );
 }

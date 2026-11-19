@@ -233,9 +233,14 @@ export function stillCounting(cacheStatus: unknown): boolean {
   );
 }
 
-/** A `usage.cost` answer as one figure. */
+/**
+ * A `usage.cost` answer as one figure. An answer without totals is not a
+ * figure: it is refused, so it reads as a failed read, never as zero tokens
+ * and an estimate of $0.00.
+ */
 export function figureOf(result: unknown): UsageFigure {
   const record = asRecord(result) ?? {};
+  if (!asRecord(record.totals)) throw new Error("The gateway's answer had no totals.");
   return {
     tokens: tokensOf(record.totals),
     cost: costOf(record.totals),

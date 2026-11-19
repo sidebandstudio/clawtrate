@@ -24,7 +24,7 @@ import {
   useNow,
   useUsageReport,
 } from "./parts.tsx";
-import { asOf, budgetLine, costShort, full, kindWord, PARTIAL_COUNT } from "./words.ts";
+import { asOf, budgetLine, figureLine, kindWord, PARTIAL_COUNT } from "./words.ts";
 import "./usage.css";
 
 const SOURCES: Array<[keyof Omit<UsageSources, "partial">, string]> = [
@@ -285,7 +285,7 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
             ])}
           />
           <p className="b-hint" data-testid="usage-all-total">
-            Every bot: {full(r.figure.tokens.total)} tokens · {costShort(r.figure.cost)}.
+            Every bot: {figureLine(r.figure)}.
             {(r.bots ?? []).some((each) => each.error)
               ? " Some bots' figures couldn't be read."
               : ""}

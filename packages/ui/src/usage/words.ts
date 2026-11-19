@@ -8,6 +8,7 @@ import {
   type BudgetCount,
   type BudgetPeriod,
   type UsageCost,
+  type UsageFigure,
   type UsagePeriod,
   type UsageState,
 } from "@clawtrate/core";
@@ -58,25 +59,38 @@ export function resetWords(budget: Budget): string {
     : `Resets Monday at 00:00, ${where}.`;
 }
 
+/** " so far" after a figure the gateway is still counting. */
+const soFar = (counting: boolean) => (counting ? " so far" : "");
+
+/** A figure's total: "1,800 tokens", or "1,800 tokens so far" while the gateway is still counting. */
+export function tokensText(figure: UsageFigure): string {
+  return `${full(figure.tokens.total)} tokens${soFar(figure.counting)}`;
+}
+
+/** When a figure is from: the gateway's time for it, or that it is still counting. */
+export function figureAge(figure: UsageFigure): string {
+  return figure.counting ? "still being counted" : asOf(figure.asOf);
+}
+
 /** The cost as a fact's value: the gateway's estimate, or its absence. */
-export function costValue(cost: UsageCost): string {
+export function costValue(cost: UsageCost, counting = false): string {
   switch (cost.status) {
     case "estimate":
-      return `About $${cost.usd.toFixed(2)}`;
+      return `About $${cost.usd.toFixed(2)}${soFar(counting)}`;
     case "partial":
-      return `About $${cost.usd.toFixed(2)} · Partial`;
+      return `About $${cost.usd.toFixed(2)}${soFar(counting)} · Partial`;
     case "unavailable":
       return "Unavailable";
   }
 }
 
 /** The cost in a row's value, lower case. */
-export function costShort(cost: UsageCost): string {
+export function costShort(cost: UsageCost, counting = false): string {
   switch (cost.status) {
     case "estimate":
-      return `about $${cost.usd.toFixed(2)}`;
+      return `about $${cost.usd.toFixed(2)}${soFar(counting)}`;
     case "partial":
-      return `about $${cost.usd.toFixed(2)}, partial`;
+      return `about $${cost.usd.toFixed(2)}${soFar(counting)}, partial`;
     case "unavailable":
       return "cost unavailable";
   }
@@ -85,13 +99,19 @@ export function costShort(cost: UsageCost): string {
 const records = (n: number) => (n === 1 ? "1 usage record has" : `${full(n)} usage records have`);
 
 /** What the cost is, said under it. */
-export function costHint(cost: UsageCost, at: number | null): string {
+export function costHint(cost: UsageCost, at: number | null, counting = false): string {
+  const when = counting ? "while the gateway is still counting" : asOf(at);
   if (cost.status === "unavailable")
-    return `Cost unavailable: the gateway has no price configured for what was used, ${asOf(at)}.`;
-  const base = `The gateway's estimate from its configured prices, in US dollars, ${asOf(at)}.`;
+    return `Cost unavailable: the gateway has no price configured for what was used, ${when}.`;
+  const base = `The gateway's estimate${soFar(counting)} from its configured prices, in US dollars, ${when}.`;
   return cost.status === "partial"
     ? `${base} Partial: ${records(cost.unpriced)} no price configured.`
     : base;
+}
+
+/** A bot's or every bot's figure in a row's value: its total, its cost and when it is from. */
+export function figureLine(figure: UsageFigure): string {
+  return `${tokensText(figure)} · ${costShort(figure.cost, figure.counting)}, ${figureAge(figure)}`;
 }
 
 /** A bot's budget, and its count for the period it is in now. */
@@ -111,7 +131,7 @@ export function budgetLine(budget: Budget, count: BudgetCount | null): string {
   const used = count?.used ?? null;
   return used === null
     ? `${short(budget.tokens)} tokens ${periodWord(budget.period)}, not counted yet`
-    : `${short(used)} of ${short(budget.tokens)} tokens ${periodWord(budget.period)}${count?.partial ? ", partial" : ""}`;
+    : `${short(used)} of ${short(budget.tokens)} tokens ${periodWord(budget.period)}${count?.counting ? " so far" : ""}${count?.partial ? ", partial" : ""}`;
 }
 
 /** What a partial count is short of. */
@@ -119,8 +139,13 @@ export const PARTIAL_COUNT =
   "Partial: the gateway lists only its most recently updated tasks at once, and some of this routine's may not be among them.";
 
 /** The 80 percent line in the bot's task (F-396). */
-export function warnedLine(name: string, budget: Budget, used: number, percent: number): string {
-  return `${name} has used ${percent}% of its ${kindWord(budget.period)} budget: ${short(used)} of ${short(budget.tokens)} tokens.`;
+export function warnedLine(
+  name: string,
+  budget: Budget,
+  count: BudgetCount & { used: number },
+  percent: number,
+): string {
+  return `${name} has used ${percent}% of its ${kindWord(budget.period)} budget: ${short(count.used)} of ${short(budget.tokens)} tokens${count.counting ? " so far" : ""}.`;
 }
 
 /** The composer's note at 100 percent: a warning, said as one. */

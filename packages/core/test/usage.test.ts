@@ -191,6 +191,33 @@ describe("the gateway's figures", () => {
     expect(figureOf({ totals: totals(1, 1) }).asOf).toBeNull();
   });
 
+  it("F-232: an answer without totals is a failed read, never zero tokens and an estimate of $0.00", async () => {
+    expect(() => figureOf({ updatedAt: 1, cacheStatus: fresh })).toThrow("had no totals");
+    expect(() => figureOf(null)).toThrow("had no totals");
+    // In a report: the bot whose answer had none is unavailable, the others are read.
+    const gateway = fakeGateway();
+    const empty: typeof gateway.request = async (method, raw) =>
+      method === "usage.cost" && (raw as { agentId?: string }).agentId === "otto"
+        ? { updatedAt: 1, cacheStatus: fresh }
+        : gateway.request(method, raw);
+    const { engine } = engineOn({ ...gateway, request: empty });
+    const report = await engine.readReport({
+      botId: null,
+      period: "today",
+      timeZone: NY,
+      detail: false,
+      bots: ["marlow", "otto"],
+    });
+    expect(report.bots).toEqual([
+      expect.objectContaining({ botId: "marlow", error: null }),
+      { botId: "otto", figure: null, error: "The gateway's answer had no totals." },
+    ]);
+    await expect(
+      engine.readReport({ botId: "otto", period: "today", timeZone: NY, detail: false, bots: [] }),
+    ).rejects.toThrow("had no totals");
+    engine.onClose();
+  });
+
   it("lists each task's share, a routine's task by its routine, and still-counted tasks", () => {
     const tasks = tasksOf({
       sessions: [

@@ -53,6 +53,13 @@ test("F-232: a figure still being counted says so, with its total marked so far 
   );
   await expect(page.getByTestId("usage-total")).toHaveText("1,640,000 tokens so far");
   await expect(page.getByTestId("usage-tasks")).toContainText("Still being counted");
+  // The cost and the budget's count carry the same state, never a settled estimate.
+  await expect(page.getByTestId("usage-cost")).toHaveText("About $3.29 so far");
+  await expect(page.getByTestId("budget-meter")).toContainText("tokens this week so far");
+  const settings = await settingsUsage(page);
+  await expect(settings.getByTestId("usage-all-total")).toContainText(
+    "tokens so far · about $11.05 so far, still being counted",
+  );
 });
 
 test("F-233: the context of the open task is the gateway's figure, and what fills it reads as unavailable", async ({
@@ -283,7 +290,7 @@ test("the Usage row's value wraps rather than shortening at phone width", async 
   await settle(page);
   const value = page.getByTestId("usage-row").locator(".c-stack-value");
   await expect(value).toHaveText(
-    "Budget 1.64M of 2M tokens this week · This week: 1.64M tokens · about $3.29",
+    "Budget 1.64M of 2M tokens this week · This week: 1,640,000 tokens · about $3.29, as of 5:39 PM",
   );
   const cut = await value.evaluate((element) => element.scrollWidth > element.clientWidth);
   expect(cut).toBe(false);
