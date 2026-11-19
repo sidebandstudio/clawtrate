@@ -1880,6 +1880,9 @@ test("F-106: under Steer, a slow message and three quick ones each appear once, 
     await composer(page).fill(text);
     await expect(page.getByRole("button", { name: "How to send: Steer" })).toBeVisible();
     await page.keyboard.press("Enter");
+    // The composer took it: its field is empty again. An Enter while the last send is still
+    // being taken keeps the words in the field, and the next fill would replace them.
+    await expect(composer(page)).toHaveValue("");
   }
   await expect.poll(() => gatewayIdle(key), { timeout: 120_000 }).toBe(true);
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
@@ -1931,9 +1934,12 @@ test("F-106: under Queue, a slow message and three quick ones each start a turn 
   await expect(page.getByRole("button", { name: "How to send: Queue" })).toBeVisible();
   await composer(page).focus();
   await page.keyboard.press("Enter");
+  await expect(composer(page)).toHaveValue("");
   for (const text of QUICK.slice(1)) {
     await composer(page).fill(text);
     await page.keyboard.press("Enter");
+    // As above: the next message is typed only once the composer took this one.
+    await expect(composer(page)).toHaveValue("");
   }
   await expect(page.getByTestId("shelf-row")).toHaveCount(0, { timeout: 180_000 });
   await expect.poll(() => gatewayIdle(key), { timeout: 120_000 }).toBe(true);
