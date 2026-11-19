@@ -674,7 +674,8 @@
 
   function sectionView() {
     const s = B.settings;
-    if (s.section === "gateway") return gatewayPane();
+    // settings.html replaces the pane with the one settings.md describes; bots.html has no such hook.
+    if (s.section === "gateway") return (CT.botsGatewayPane || gatewayPane)();
     if (s.section === "accounts") {
       if (B.connect && B.connect.from === "settings") {
         const view = renderConnect();

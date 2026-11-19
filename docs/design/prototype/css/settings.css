@@ -1,0 +1,432 @@
+/* Settings, several gateways, Updates and the task tools: what
+   docs/design/settings.md adds. Every value is a token from tokens.css.
+   One new component, the removal list (.s-goes); everything else places an
+   existing component (the settings frame, choice rows, switches, the note
+   above the composer, the connection column) in a new screen. */
+
+/* Your gateways ---------------------------------------------------------------- */
+
+.s-gateways .b-choice {
+  gap: 12px;
+}
+
+.s-gateways .b-choice .button {
+  flex: none;
+}
+
+.s-gateways .b-choice-sub [data-tone="ok"] {
+  color: var(--text-muted);
+}
+
+.s-row-end {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.s-lead {
+  margin: 0 0 14px;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+}
+
+/* A gateway's row is a row of two controls: the row opens the page, Switch switches. */
+.s-gateway-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.s-gateway-row > .b-choice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.s-gateway-row .icon-button {
+  flex: none;
+}
+
+/* new: the removal list. Two short lists under a confirmation's sentence,
+   and the same list as the result, each item marked by what was read back. */
+.s-goes {
+  margin: 14px 0 0;
+}
+
+.s-goes h3 {
+  margin: 14px 0 6px;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.s-goes h3:first-child {
+  margin-top: 0;
+}
+
+.s-goes ul {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+  list-style: none;
+}
+
+.s-goes li {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: start;
+  gap: 8px;
+  font-size: var(--text-base);
+  line-height: 20px;
+}
+
+.s-goes li > .icon {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
+.s-goes li[data-kind="stays"] > .icon {
+  color: var(--text-faint);
+}
+
+.s-goes li[data-done="left"] > .icon,
+.s-goes li[data-done="left"] {
+  color: var(--danger);
+}
+
+.s-goes li[data-done="untried"] {
+  color: var(--text-faint);
+}
+
+.s-goes li small {
+  display: block;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
+
+.s-goes .command-line {
+  margin-top: 6px;
+}
+
+.s-check {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 12px;
+  gap: 10px;
+  font-size: var(--text-base);
+  line-height: 20px;
+}
+
+.s-check input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--text);
+}
+
+/* A confirmation that holds the lists scrolls inside the window. */
+.b-dialog[data-kind="confirm"] .s-confirm {
+  overflow-y: auto;
+  max-height: calc(100dvh - 72px);
+  padding: 22px 22px 18px;
+}
+
+.s-confirm h2 {
+  margin: 0 0 8px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.s-confirm p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+}
+
+.s-confirm .b-actions {
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+/* The prototype's stand-in for the setup flow. */
+.s-stand-mark {
+  display: inline-block;
+  margin-bottom: 10px;
+  padding: 2px 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.s-stand-choices {
+  display: grid;
+  margin-top: 14px;
+  gap: 8px;
+}
+
+/* Settings rows: a title, a line under it, and a switch or a choice. */
+.s-group {
+  margin-top: 22px;
+}
+
+.s-group:first-child {
+  margin-top: 4px;
+}
+
+.s-group > h4 {
+  margin: 0 0 8px;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.s-setting {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+}
+
+.s-setting + .s-setting {
+  margin-top: 8px;
+}
+
+.s-setting-main {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+
+.s-setting-main > strong {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.s-setting-main > span {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.s-setting-main > span[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.s-setting-main > em {
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  font-style: normal;
+}
+
+.s-setting .b-switch,
+.s-setting .seg {
+  flex: none;
+}
+
+.s-setting-actions {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  gap: 8px;
+}
+
+.s-sample {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 3px 10px;
+  border-radius: var(--radius-lg);
+  background: var(--bubble-user);
+  color: var(--bubble-user-text);
+  font-size: var(--text-xs);
+  vertical-align: middle;
+}
+
+.s-sample[data-fill="neutral"] {
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+}
+
+/* Your messages, neutral: the fill the built app sets with data-bubbles. */
+:root[data-bubbles="neutral"] .msg[data-role="user"] .bubble {
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+}
+
+.s-future {
+  margin: 18px 0 10px;
+  padding: 6px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
+
+/* Update required: the connection column, in place of the app. */
+.s-required[hidden],
+.shell[hidden] {
+  display: none;
+}
+
+.s-required .panel {
+  text-align: center;
+}
+
+.s-required h2 {
+  margin: 0 0 8px;
+  font-size: var(--text-title-sm, 20px);
+  font-weight: var(--weight-medium);
+}
+
+.s-required p {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+}
+
+.s-required .actions {
+  display: grid;
+  margin-top: 16px;
+  gap: 8px;
+}
+
+.s-required .s-gw-list {
+  margin-top: 14px;
+  text-align: left;
+}
+
+/* The Work pane's Details tab: Context and Compact. */
+.s-context p {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.s-context .b-wait {
+  margin: 0 0 10px;
+}
+
+/* The compacted line, and what it folds. */
+.s-compacted {
+  margin: 18px 0;
+}
+
+.s-compacted-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 10px;
+}
+
+.s-compacted-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.s-compacted-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.s-compacted-toggle .icon {
+  width: 14px;
+  height: 14px;
+  transition: transform var(--dur-quick) var(--ease-in-out);
+}
+
+.s-compacted-toggle[aria-expanded="true"] .icon {
+  transform: rotate(90deg);
+}
+
+.s-compacted-turns {
+  margin-top: 10px;
+  padding: 4px 0 4px 12px;
+  border-left: 2px solid var(--border);
+}
+
+.s-compacted-turns[hidden] {
+  display: none;
+}
+
+.s-compacted-foot,
+.s-warn-line {
+  margin: 8px 0 0;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.s-warn-line {
+  color: var(--warn);
+}
+
+.s-reply {
+  margin: 8px auto 0;
+  max-width: 520px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+
+.s-reply[hidden] {
+  display: none;
+}
+
+/* The low-disk note above the composer, in the look of the note controls.md adds. */
+.s-disk-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0 auto 8px;
+  max-width: var(--column, 720px);
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--warn-soft);
+  font-size: var(--text-sm);
+}
+
+.s-disk-note > div {
+  flex: 1 1 260px;
+}
+
+.s-disk-note p {
+  margin: 0;
+}
+
+.s-disk-note p + p {
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
+.s-disk-note .s-row-end {
+  flex-wrap: wrap;
+}
+
+[data-motion="reduce"] .s-compacted-toggle .icon {
+  transition: none;
+}
