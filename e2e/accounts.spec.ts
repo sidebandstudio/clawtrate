@@ -504,6 +504,8 @@ const lastSeq = async () =>
 test("F-473: changing a bot's account draws a grey line in its open task, and the next run uses the new account", async () => {
   test.setTimeout(180_000);
   const settings = await accountPage();
+  // The check before unlocked Second on the gateway: read its order again.
+  await settings.getByRole("button", { name: "Check now" }).click();
   await expect(settings.getByTestId("bound-note")).toContainText("Second runs on Acme · Work.", {
     timeout: 20_000,
   });
@@ -516,7 +518,8 @@ test("F-473: changing a bot's account draws a grey line in its open task, and th
     timeout: 20_000,
   });
   // The gateway records no line for it: Clawtrate draws one in the open task.
-  const line = page.getByTestId("client-event-line");
+  // The check before changed Second's account too, from the same task: this line is the last.
+  const line = page.getByTestId("client-event-line").last();
   await expect(line).toHaveText("Second now runs on Acme · Home, from the next run.");
   await shots("account-change-line");
   expect(entry(await config(), "second")!.model).toEqual({
