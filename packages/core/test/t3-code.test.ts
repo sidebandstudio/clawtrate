@@ -251,16 +251,12 @@ describe("which calls are T3 Code's (11.1)", () => {
     expect(t3(c, { toolServers: { [c.name]: { server: SERVER, tool: "notes_read" } } })).toBeNull();
   });
 
-  it("F-132 F-134: from history, which keeps no details, the map's word stands; live, never Call made on the map alone", () => {
+  it("F-132 F-134: from history, which keeps no tool server or tool, a call is not T3 Code's on the map; live, never Call made on the map alone", () => {
+    // A reload places a call in a thread only when the stored result identifies it (11.4).
     const read = fromHistory("t3_thread_launch", LAUNCH_ARGS, LAUNCHED);
-    expect(t3(read.alone)?.state).toBe("made");
-    expect(t3(read.alone)?.thread?.threadId).toBe(THREAD);
-    expect(t3(read.withStep)?.thread?.threadId).toBe(THREAD);
-    // A rendering that cannot be read: still T3 Code's by the map, a card of its own with no thread.
-    const plain = fromHistory("t3_thread_launch", LAUNCH_ARGS, null);
-    expect(t3(plain.alone)?.state).toBe("made");
-    expect(t3(plain.alone)?.thread).toBeNull();
-    expect(t3(plain.alone, {})).toBeNull();
+    expect(t3(read.alone)).toBeNull();
+    expect(t3(read.withStep)).toBeNull();
+    expect(t3(fromHistory("t3_thread_launch", LAUNCH_ARGS, null).alone)).toBeNull();
     // Live, a result that names no tool and carries nothing of T3 Code's is not T3 Code's by the map.
     const bare: ActionCall = {
       ...live("t3_thread_launch", LAUNCH_ARGS, null, { open: true }),
@@ -270,7 +266,7 @@ describe("which calls are T3 Code's (11.1)", () => {
     };
     expect(t3(bare)).toBeNull();
     const failed = fromHistory("t3_thread_send", { threadId: THREAD, message: "x" }, null, true);
-    expect(t3(failed.alone)?.state).toBe("failed");
+    expect(t3(failed.alone)).toBeNull();
   });
 });
 
@@ -642,26 +638,17 @@ describe("what a read read: its two dimensions (11.1, 11.3)", () => {
     expect(r.facts?.reply).toBe("New.");
   });
 
-  it("F-133: from history, the same read reads the same, from the gateway's rendering", () => {
+  it("F-133: from history, a read is an ordinary call: the stored rendering alone does not make it T3 Code's", () => {
     const structured = readResult([item("assistant_message", "Done, and then", "run-1", true)]);
     const h = fromHistory("t3_thread_read", { threadId: THREAD }, structured);
-    const l = read(structured);
-    expect(t3(h.alone)!.facts).toEqual(l.facts);
-    expect(t3(h.withStep)!.facts).toEqual(l.facts);
-    expect(t3(h.alone)!.thread).toEqual(l.thread);
+    expect(t3(h.alone)).toBeNull();
+    expect(t3(h.withStep)).toBeNull();
   });
 
-  it("F-133: a rendering history cut is not read: it says the stored result was cut only on the gateway's mark, and the call is a card of its own", () => {
+  it("F-133: a rendering history cut is not read: it says the stored result was cut only on the gateway's mark", () => {
     const whole = rendered(readResult([item("assistant_message", "x".repeat(9000))]));
     expect(structuredFromText(whole.slice(0, 8000))).toBeNull();
-    const cut = fromHistory("t3_thread_read", { threadId: THREAD }, null, false, {
-      text: whole.slice(0, 8000),
-      cut: true,
-    });
-    const read = t3(cut.alone)!;
-    expect(read.thread).toBeNull();
-    expect(read.asked?.threadId).toBe(THREAD);
-    expect(readLines(readDimensions(read.facts, read.call.cut === true))).toEqual([
+    expect(readLines(readDimensions(null, true))).toEqual([
       "The stored result was cut: how much was read is not known here.",
     ]);
   });
@@ -822,7 +809,7 @@ describe("one report shows its status; several show Call made (11.2)", () => {
   });
 
   it.each([2_400, undefined])(
-    "F-134: from history, two results at timestamp %s: Call made",
+    "F-134: from history, two results at timestamp %s: no thread status, the calls are not T3 Code's",
     (timestamp) => {
       const calls = [
         { id: "a", tool: "t3_thread_wait", result: wait },
@@ -851,8 +838,9 @@ describe("one report shows its status; several show Call made (11.2)", () => {
       ];
       const ctx = { sessionKey: "agent:otto:backup", now: 9_000, raw: new RawTable() };
       const run = runsFromHistory(rows, null, ctx)[0]!;
-      const history = run.steps.map((step) => t3(callFromStep(step, run))!);
-      expect(threadStateOf(history)).toMatchObject({ type: "call", state: "made" });
+      // History keeps no tool server or tool: neither call is T3 Code's after a reload (11.4).
+      const history = run.steps.map((step) => t3(callFromStep(step, run)));
+      expect(history).toEqual([null, null]);
     },
   );
 });
@@ -937,14 +925,8 @@ describe("a call joins a thread only by its own result naming it (11.1)", () => 
     expect(t3(reloaded.withStep)).toBeNull();
   });
 
-  it("F-132 F-313: history that no longer holds what named the thread leaves the call on its own, saying what is not known", () => {
-    const read = t3(
-      fromHistory("t3_thread_read", { threadId: THREAD }, null, false, {
-        text: 'structuredContent:\n{\n  "hasMore"',
-      }).alone,
-    )!;
-    expect([read.thread, read.unread, read.asked?.threadId]).toEqual([null, true, THREAD]);
-    expect(readLines(readDimensions(read.facts, read.call.cut === true))).toEqual([
+  it("F-132 F-313: a result that could not be read says what is not known", () => {
+    expect(readLines(readDimensions(null, false))).toEqual([
       "This result could not be read here: what it reported is not known.",
     ]);
   });
@@ -1066,5 +1048,16 @@ describe("Open thread goes to the one address the record supplies (11.3)", () =>
         { ...b, call: { ...b.call, resultAt: 3_000 } },
       ]),
     ).toBeNull();
+  });
+});
+
+describe("a reload keeps a call in a thread only on the stored result's own attribution (11.4)", () => {
+  it("F-132 F-313: a same-shaped result from another tool stays an ordinary call after reload", () => {
+    const args = { threadId: THREAD };
+    const read = readResult([], false, "running");
+    const other = live("t3_thread_read", args, read, { resultTool: "an_unrelated_tool" });
+    expect(t3(other)).toBeNull();
+    // History keeps no tool server or tool: the map and a matching shape do not make it T3 Code's.
+    expect(t3(fromHistory("t3_thread_read", args, read).alone)).toBeNull();
   });
 });

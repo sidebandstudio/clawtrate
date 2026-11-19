@@ -591,3 +591,4 @@ The host side of "Another computer" (`docs/design/setup.md` sections 5, 8 and 19
 - The macOS app is packaged but not signed or notarized, and there is no updater. The Windows installer is built and not signed; CI installs it, runs the launch check against the installed app without the four checks that need a development gateway, and uninstalls it.
 - The launch check's fuse reader (`apps/desktop/packaging/fuse-check.ts`) hands the executable's path to `@electron/fuses`, which takes any path containing `.app` for a macOS bundle. A Windows install folder whose path contains `.app` (`Clawtrate.apps`, say) makes it look for a macOS Electron Framework and fail with `ENOENT`. CI's install folder does not.
 - The Expo app has not been started; `apps/mobile` does not exist yet.
+- After a reload, a T3 Code call keeps its own card and Raw, and joins no thread, until the gateway stores which tool server made it: history keeps no tool server or tool for a call.

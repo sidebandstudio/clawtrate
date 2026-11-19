@@ -452,6 +452,15 @@ export function toolServerOf(
   const tool = str(call.details?.mcpTool);
   if (server && tool) return { server, tool, mapped: false };
   const known = mappedTool(call.name, ctx);
+  // History keeps no tool server or tool for a call: the map and a result's shape do not
+  // establish that a call was T3 Code's, so it stays an ordinary card with its own Raw.
+  if (
+    known &&
+    T3_CODE_TOOLS.includes(known.tool) &&
+    "fromHistory" in call &&
+    call.fromHistory === true
+  )
+    return null;
   return known && str(known.server) && str(known.tool)
     ? { server: known.server, tool: known.tool, mapped: true }
     : null;

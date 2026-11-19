@@ -1000,6 +1000,20 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     return c;
   };
   /** Each call's item on the card carries its own Raw, naming its own call. */
+  /**
+   * After a reload each call is a card of its own with its Raw: history keeps no tool server or
+   * tool, so nothing puts a call in a thread (11.4).
+   */
+  const ownRaw = async (on: Page, ids: string[]) => {
+    await expect(card(on, "t3-card")).toHaveCount(0);
+    for (const id of ids) {
+      const own = on.locator(`.card.action[data-call="${id}"]`);
+      await expect(own).toHaveCount(1);
+      if ((await own.getAttribute("open")) === null) await own.locator(":scope > summary").click();
+      await own.getByRole("tab", { name: "Raw" }).click();
+      await expect(own.getByRole("region", { name: "What the gateway sent" })).toContainText(id);
+    }
+  };
   const eachRaw = async (on: Page, ids: string[]) => {
     const c = await openCard(on);
     for (const id of ids) {
@@ -1031,7 +1045,7 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     await shot(thread(page), "t3-thread-live");
   });
 
-  test("F-132 F-133 F-313: after a reload from history, and on a read-only connection, the same card: the thread from the gateway's rendering, every call's Raw", async () => {
+  test("F-132 F-133 F-313: after a reload from history, and on a read-only connection, each call keeps its own card and Raw: history does not say which tool server made it", async () => {
     test.setTimeout(180_000);
     const t = await called("t3-history", "#t3");
     await clients.plain.terminal(t.runId);
@@ -1039,17 +1053,9 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     const [launch, wait] = callIds(t.runId);
     for (const on of [page, reader]) {
       await reload(on, "Juniper", t.title);
-      await expect(card(on, "t3-card")).toHaveCount(1);
-      await expect(word(on)).toHaveText("Call made");
-      await expect(on.locator(`.card.action[data-call="${wait}"]`)).toHaveCount(0);
-      await eachRaw(on, [launch!, wait!]);
-      const item = thread(on).locator(`[data-item-call="${launch}"]`);
-      await expect(item).toContainText("T3 Code made the thread mcp:");
-      await expect(
-        thread(on).getByRole("link", { name: "Open the T3 Code thread in your browser" }),
-      ).toHaveAttribute("href", /^https:\/\/t3-code\.example\/threads\/local\//);
+      await ownRaw(on, [launch!, wait!]);
     }
-    await shot(thread(reader), "t3-thread-history-readonly");
+    await shot(transcript(reader), "t3-history-readonly");
   });
 
   test("F-133 F-313: a read with its reply cut never says it read to the end; a follow-up after a bubble keeps its line, with Show the thread", async () => {
@@ -1084,12 +1090,14 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     await line.locator(":scope > summary").click();
     await line.getByRole("button", { name: "Show this thread's card" }).click();
     await expect(c.locator(`[data-item-call="${send}"] > summary`)).toBeFocused();
-    // From history the read's rendering is cut by the gateway: what it read is not known, and
-    // it still never says it read to the end.
+    // From history each call is a card of its own, and the read still never says it read to
+    // the end.
     await inHistory(t.key, 4);
     await reload(page, "Juniper", t.title);
-    const again = await openCard(page);
-    await expect(again).not.toContainText("Read to the end");
+    await ownRaw(page, [read!]);
+    await expect(page.locator(`.card.action[data-call="${read}"]`)).not.toContainText(
+      "Read to the end",
+    );
   });
 
   test("F-134 F-137 F-470: the bot stopped during a wait: the wait is Delivery unknown, the launch keeps Call made, and the card says work may continue", async () => {
@@ -1134,7 +1142,7 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     await shot(c, "t3-stopped");
   });
 
-  test("F-313: a held occurrence keeps the reader's focus on its Raw through the result and the run's end; reloaded, the record's own placement shows the call in its thread with its Raw", async () => {
+  test("F-313: a held occurrence keeps the reader's focus on its Raw through the result and the run's end; reloaded, the call is a card of its own with its Raw", async () => {
     test.setTimeout(240_000);
     // Started by the host, so its results reach the host live; the wait takes six seconds.
     const { title, key } = await hostTask("main", "T3 held", "#t3-start #t3-wait");
@@ -1163,16 +1171,11 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     await expect(line).toHaveCount(1);
     await expect(line).toHaveAttribute("open", "");
     await expect(raw).toBeFocused();
-    // A view rebuilt from the record shows the record's own placement: the wait joined its thread,
-    // its Raw on the thread's card.
+    // A view rebuilt from the record: history keeps no tool server or tool, so the wait is a card
+    // of its own with its Raw.
     await inHistory(key, 2);
     await reload(page, "Juniper", title);
-    await expect(word(page)).toHaveText("Call made");
-    await expect(line).toHaveCount(0);
-    const c = await openCard(page);
-    const item = c.locator(`[data-item-call="${wait}"]`);
-    await item.getByRole("button", { name: "Raw for this call" }).click();
-    await expect(item.getByRole("region", { name: "What the gateway sent" })).toContainText(wait!);
+    await ownRaw(page, [wait!]);
   });
 
   test("F-134: a slow run waited on briefly, then asked to stop: the stop's item reads Stop requested, and the wait says it ended first", async () => {
@@ -1212,8 +1215,11 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
       return own;
     };
     await shot(await check(), "t3-refused");
+    // Reloaded, it is an ordinary failed call of its own: history does not say it was T3 Code's.
     await reload(page, "Juniper", t.title);
-    await check();
+    const again = page.locator(`.card.action[data-call="${send}"]`);
+    await expect(again.locator(":scope > summary .action-state")).toHaveText("Failed");
+    await expect(card(page, "t3-card")).toHaveCount(0);
   });
 
   test("F-313: T3 Code's listings are lines of their own that fold, never a thread's card", async () => {
