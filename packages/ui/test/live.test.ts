@@ -255,9 +255,9 @@ describe("the composer during a run", () => {
   it("F-097 F-096: while a run is running, Stop is offered beside Send and plain Enter steers", () => {
     const active = run();
     const view = composerFor(transcript([active]), otto);
-    expect(view).toMatchObject({ placeholder: "Steer Otto", mode: "steer", modeWord: "Steer" });
+    expect(view).toMatchObject({ placeholder: "Message Otto", mode: "steer", modeWord: "Steer" });
     expect(view.stoppable?.id).toBe("run-1");
-    expect(sendName(view.mode)).toBe("Steer this turn");
+    expect(sendName(view.mode)).toBe("Request a steer");
   });
 
   it("F-061: Queue after this turn, once chosen, is what plain Enter does for the rest of the run", () => {

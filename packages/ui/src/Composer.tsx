@@ -727,7 +727,7 @@ export function Composer({
               }
             : {
                 kind: "radio",
-                label: "Steer this turn",
+                label: "Request a steer",
                 hint: "↵",
                 checked: view.mode === "steer",
                 onSelect: () => pick("steer"),

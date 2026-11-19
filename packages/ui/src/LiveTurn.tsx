@@ -41,7 +41,7 @@ export function OutgoingBubble({
   let caption: ReactNode = null;
   switch (message.status) {
     case "sent":
-      if (message.mode === "steer") caption = <span>Steer</span>;
+      if (message.mode === "steer") caption = <span>Steer requested</span>;
       break;
     case "awaiting-access":
     case "sending":
@@ -276,6 +276,11 @@ export function RunEnding({
               Completed actions are not undone.
             </p>
           )}
+          {ending.timeouts === null &&
+            transcript.outbox.some(
+              (message) =>
+                message.runId === run.id && message.mode === "steer" && message.leftAt !== null,
+            ) && <p>The gateway may still run messages it already accepted.</p>}
           {also.length > 0 && (
             <ul className="turn-note-list" data-testid="stopped-with">
               {also.map((line) => (
@@ -292,8 +297,7 @@ export function RunEnding({
       <div className="turn-note" data-testid="stop-note" data-run={run.id}>
         <span className="glyph" data-state="stopped" aria-hidden="true" />
         <p>
-          <b>Stop requested.</b> The gateway has not said how the turn ended. Messages left behind
-          it are not sent until you send them.
+          <b>Stop requested.</b> The gateway has not confirmed that the turn stopped.
         </p>
       </div>
     );

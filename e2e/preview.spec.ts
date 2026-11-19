@@ -1263,7 +1263,7 @@ async function watchRun(page: Page) {
         status: !!document.querySelector("[data-testid=status-line]"),
         phrase: document.querySelector("[data-testid=status-phrase]")?.textContent ?? null,
         steer: [...document.querySelectorAll("[data-testid=outgoing] .msg-caption")].some(
-          (caption) => caption.textContent === "Steer",
+          (caption) => caption.textContent === "Steer requested",
         ),
       });
     }).observe(document.body, { subtree: true, childList: true, characterData: true });
@@ -1370,7 +1370,7 @@ test("F-097: Stop during a real run is offered beside Send, and the gateway's co
   await composer(page).fill("Check the backup disk once more, slowly. #slow 15");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Steer this turn" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Request a steer" })).toBeVisible();
   // Pressed at once, before the gateway may have named the run: the engine aborts it once named.
   await page.getByRole("button", { name: "Stop Otto" }).click();
   const runId = await inFlightRunId(key).catch(() => "");
@@ -1978,6 +1978,49 @@ test("F-106: under Queue, a slow message and three quick ones each start a turn 
     })
     .toBe(4);
   check(await shownTurns(page));
+});
+
+test("F-106: a steer acknowledged into the gateway's queue is described as a request", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await openShell(page);
+  const { key } = await ownTask(page, "Steer requested");
+  await composer(page).fill("#approve");
+  await page.keyboard.press("Enter");
+  const runId = await inFlightRunId(key);
+  await expect(page.getByTestId("status-line")).toContainText("Waiting for you", {
+    timeout: 30_000,
+  });
+  await composer(page).fill("Only the notes folder.");
+  await page.keyboard.press("Enter");
+  await expect(composer(page)).toHaveValue("");
+  // The gateway holds the steer as a queued turn under an id of its own.
+  type Pending = { pendingInputs?: { items?: Array<{ runId?: string }> } };
+  await expect
+    .poll(
+      async () =>
+        (
+          (await gatewayCall<Pending>("chat.history", { sessionKey: key, limit: 5 })).pendingInputs
+            ?.items ?? []
+        ).some((item) => typeof item.runId === "string" && item.runId !== runId),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  // No caption promises that it joined the turn.
+  const steer = page.getByTestId("outgoing").filter({ hasText: "Only the notes folder." });
+  await expect(steer.locator(".msg-caption")).toHaveText("Steer requested", { timeout: 30_000 });
+  await page.getByRole("button", { name: "Stop Otto" }).click();
+  // The waiting approval's run is the one stopped, and the note is that run's.
+  const note = page.locator(`[data-testid="stop-note"][data-run="${runId}"]`);
+  await expect(note).toContainText("Completed actions are not undone.", { timeout: 30_000 });
+  await expect(note).toContainText("The gateway may still run messages it already accepted.");
+  const ended = await gatewayCall<{ stopReason?: string }>("agent.wait", {
+    runId,
+    timeoutMs: 10_000,
+  });
+  expect(ended.stopReason).toBe("rpc");
+  await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
 });
 
 test("F-096: a message sent while the run works is steered into it and captioned Steer once accepted", async ({

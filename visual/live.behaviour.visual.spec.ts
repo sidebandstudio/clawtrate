@@ -719,7 +719,7 @@ test.describe("Stop", () => {
   }) => {
     await open(page, "run-working");
     await expect(page.getByRole("button", { name: "Stop Otto" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Steer this turn" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Request a steer" })).toBeVisible();
     await page.getByTestId("transcript").focus();
     await answers(page, "hold");
     await page.keyboard.press("ControlOrMeta+.");
@@ -848,7 +848,7 @@ test.describe("steering, queueing and holding", () => {
     await expect(page.getByRole("button", { name: "How to send: Steer" })).toBeVisible();
     await page.keyboard.press("Enter");
     const steer = page.getByTestId("outgoing").filter({ hasText: "Skip the photos folder" });
-    await expect(steer.locator(".msg-caption")).toHaveText("Steer");
+    await expect(steer.locator(".msg-caption")).toHaveText("Steer requested");
   });
 
   test("F-101: a run stopped after three tool calls in a row timed out says so, in the stop note's form", async ({
@@ -907,8 +907,8 @@ test.describe("steering, queueing and holding", () => {
     await page.keyboard.press("Enter");
     const menu = page.getByRole("menu", { name: "How to send" });
     await expect(menu).toBeVisible();
-    await expect(menu.getByRole("menuitemradio", { name: /Steer this turn/ })).toBeFocused();
-    await expect(menu.getByRole("menuitemradio", { name: /Steer this turn/ })).toHaveAttribute(
+    await expect(menu.getByRole("menuitemradio", { name: /Request a steer/ })).toBeFocused();
+    await expect(menu.getByRole("menuitemradio", { name: /Request a steer/ })).toHaveAttribute(
       "aria-checked",
       "true",
     );
@@ -945,7 +945,7 @@ test.describe("steering, queueing and holding", () => {
     await row.getByRole("button", { name: "Send now" }).click();
     await expect(row).toHaveCount(0);
     const sent = page.getByTestId("outgoing").filter({ hasText: "Then send me a summary." });
-    await expect(sent.locator(".msg-caption")).toHaveText("Steer");
+    await expect(sent.locator(".msg-caption")).toHaveText("Steer requested");
 
     await open(page, "run-queued");
     await page.getByTestId("shelf-row").getByRole("button", { name: "Cancel" }).click();
@@ -1550,7 +1550,7 @@ test.describe("errors and resync", () => {
     await expect(page.getByTestId("status-strip")).toContainText("Synced");
     await expect(page.locator(".app")).not.toHaveAttribute("data-connection", "lost");
     await expect(page.getByTestId("status-phrase")).toHaveText("Reading backup-2026-11-15.log");
-    await expect(field(page)).toHaveAttribute("placeholder", "Steer Otto");
+    await expect(field(page)).toHaveAttribute("placeholder", "Message Otto");
   });
 
   test("F-107: after a reconnect the conversation catches up without showing a message twice", async ({

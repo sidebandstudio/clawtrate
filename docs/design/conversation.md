@@ -1191,7 +1191,7 @@ While any refusal shows, Send is disabled and its tooltip and description give t
 ## 16. Stop
 
 1. Pressing Stop, or ⌘., asks the gateway to stop the run and moves it to stopping. The phrase reads "Stopping…", Stop leaves the composer, and a message sent now is queued. (F-097, F-421)
-2. When the gateway confirms, pending approvals and questions close as "Cancelled", including those raised by the run's helpers and by bots it messaged, the status line leaves and a note takes its place. Nothing starts by itself after a stop: messages that were held or queued, or released and not yet sent, stay on the shelf, marked "Not sent", until the user sends or removes each one (section 15). A message already on its way to the gateway is not touched; it settles as the gateway answers it.
+2. When the gateway confirms, pending approvals and questions close as "Cancelled", including those raised by the run's helpers and by bots it messaged, the status line leaves and a note takes its place. Nothing Clawtrate still holds starts by itself after a stop: messages that were held or queued, or released and not yet sent, stay on the shelf, marked "Not sent", until the user sends or removes each one (section 15). A message already on its way to the gateway is not touched; it settles as the gateway answers it, and one the gateway already accepted settles as the gateway runs it, which can be after the stop.
 
 The note is 13 px `--text-muted`, led by the stopped mark:
 

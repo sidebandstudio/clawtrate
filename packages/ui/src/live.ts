@@ -262,7 +262,7 @@ export function composerFor(
       ? "Offline. Messages send when you reconnect."
       : waiting
         ? `Answer above, or message ${options.bot}`
-        : `Steer ${options.bot}`,
+        : `Message ${options.bot}`,
     mode,
     // Offline the composer is its offline form: Send alone.
     stoppable: isActive(run.state) && !offline ? run : null,
@@ -279,7 +279,7 @@ export function sendName(mode: SendMode): string {
     case "send":
       return "Send";
     case "steer":
-      return "Steer this turn";
+      return "Request a steer";
     case "queue":
       return "Queue after this turn";
     case "hold":
