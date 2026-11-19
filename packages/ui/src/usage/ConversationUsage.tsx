@@ -10,7 +10,7 @@ import { useClawtrateState } from "../bridge.tsx";
 import { CloseIcon } from "../icons.tsx";
 import { requestUsagePage } from "./navigation.ts";
 import { useNow } from "./parts.tsx";
-import { asOf, budgetOf, reachedLine, warnedLine } from "./words.ts";
+import { asOf, budgetOf, reachedLine, stillClosed, warnedLine } from "./words.ts";
 import "./usage.css";
 
 /** Between 80 and 100 percent of the bot's budget: one grey line at the end of its open task (F-396). */
@@ -38,7 +38,8 @@ const providerOf = (bot: Bot) => (bot.model?.includes("/") ? bot.model.split("/"
 export function UsageNotes({ bot, canSet }: { bot: Bot; canSet: boolean }) {
   const state = useClawtrateState();
   const now = useNow();
-  const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
+  // Each closed note's window and the figure it was closed at.
+  const [closed, setClosed] = useState<ReadonlyMap<string, number>>(new Map());
   const own = budgetOf(state.usage, bot.id, now);
   const provider =
     state.accounts.bindings.find((each) => each.botId === bot.id)?.provider ?? providerOf(bot);
@@ -53,19 +54,30 @@ export function UsageNotes({ bot, canSet }: { bot: Bot; canSet: boolean }) {
               .map((window) => ({ provider: each, window })),
           )
       : [];
+  const windowKey = (provider: string, label: string) => `${provider}:${label}`;
+  // Closed until the figure changes, and only for the windows reported now.
+  const kept = stillClosed(
+    closed,
+    new Map(
+      near.map(({ provider: each, window }) => [
+        windowKey(each.provider, window.label),
+        window.usedPercent,
+      ]),
+    ),
+  );
+  if (kept !== closed) setClosed(kept);
   const notes = near
     .map(({ provider: each, window }) => {
-      // Closed until the figure changes.
-      const key = `${each.provider}:${window.label}:${window.usedPercent}`;
+      const key = windowKey(each.provider, window.label);
       const kind = window.label.toLowerCase();
       const at = asOf(limits?.updatedAt ?? null);
       const words =
         window.usedPercent >= 100
           ? `${each.displayName} reports a ${kind} limit reached, ${at}.${window.resetAt ? ` It resets ${day(window.resetAt)}.` : ""}`
           : `${each.displayName} reports ${Math.round(window.usedPercent)}% of a ${kind} limit used, ${at}. It doesn't say which of your ${each.displayName} accounts.`;
-      return { key, words };
+      return { key, percent: window.usedPercent, words };
     })
-    .filter((note) => !closed.has(note.key));
+    .filter((note) => kept.get(note.key) !== note.percent);
   const reached = own && own.percent !== null && own.percent >= 100;
   if (!reached && notes.length === 0) return null;
   return (
@@ -84,7 +96,7 @@ export function UsageNotes({ bot, canSet }: { bot: Bot; canSet: boolean }) {
             className="icon-button"
             data-variant="quiet"
             aria-label="Close"
-            onClick={() => setClosed((was) => new Set(was).add(note.key))}
+            onClick={() => setClosed((was) => new Map(was).set(note.key, note.percent))}
           >
             <CloseIcon />
           </button>

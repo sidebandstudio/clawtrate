@@ -302,6 +302,20 @@ export function reachedLine(name: string, budget: Budget): string {
   return `${name} has reached its ${kindWord(budget.period)} warning budget. Runs continue when this warning appears: nothing stops ${name}, here or in other apps, channels or routines.`;
 }
 
+/**
+ * The provider notes still closed: each a window still near its limit, at the
+ * figure it was closed at. A note closed at one figure comes back when the
+ * figure changes, even back to that one, and nothing is kept for a window
+ * no longer reported.
+ */
+export function stillClosed(
+  closed: ReadonlyMap<string, number>,
+  current: ReadonlyMap<string, number>,
+): ReadonlyMap<string, number> {
+  const kept = new Map([...closed].filter(([key, percent]) => current.get(key) === percent));
+  return kept.size === closed.size ? closed : kept;
+}
+
 /** What a budget is, said under its meter. */
 export function warningWords(name: string): string {
   return `A warning: at 80% a line in ${name}'s task, at 100% a note above the composer. Runs continue when it appears: nothing stops ${name} at the limit, here or in other apps, channels or routines.`;

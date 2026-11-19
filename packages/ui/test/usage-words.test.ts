@@ -24,6 +24,7 @@ import {
   reportWindow,
   sourceBars,
   sourcesNote,
+  stillClosed,
   warnedLine,
   warningWords,
 } from "../src/usage/words.ts";
@@ -206,5 +207,21 @@ describe("a budget reached", () => {
     expect(meterTone(800, 1_000)).toBe("warn");
     expect(meterTone(1_000, 1_000)).toBe("warn");
     expect(meterTone(2_400, 1_000)).toBe("warn");
+  });
+});
+
+describe("a closed provider note", () => {
+  it("F-236: stays closed only while its window is reported at the figure it was closed at", () => {
+    const closedAt91 = new Map([["openai:Weekly", 91]]);
+    // Still 91: still closed, the same map.
+    const same = stillClosed(closedAt91, new Map([["openai:Weekly", 91]]));
+    expect(same).toBe(closedAt91);
+    // 92: it comes back, and is not kept closed for 91.
+    const at92 = stillClosed(closedAt91, new Map([["openai:Weekly", 92]]));
+    expect([...at92]).toEqual([]);
+    // Back to 91 afterwards: still shown, since nothing was kept.
+    expect([...stillClosed(at92, new Map([["openai:Weekly", 91]]))]).toEqual([]);
+    // A window no longer reported is forgotten.
+    expect([...stillClosed(closedAt91, new Map())]).toEqual([]);
   });
 });
