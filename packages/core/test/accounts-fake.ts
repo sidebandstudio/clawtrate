@@ -24,14 +24,14 @@ export type Ending =
   | { outcome: "approve"; account: string }
   | { outcome: "refuse" }
   | { outcome: "expire" }
-  | { outcome: "unconfirmed"; account: string }
+  | { outcome: "unconfirmed"; account: string; message?: string }
   | { outcome: "error"; message: string };
 
 type Session = {
   id: string;
   choice: string;
   agentId: string;
-  phase: "start" | "waiting" | "entering" | "note" | "done";
+  phase: "start" | "hostnote" | "waiting" | "entering" | "note" | "done";
   ending: Ending;
   /** Resolves a `wizard.next` that waits on the person (a device code). */
   release: (() => void) | null;
@@ -60,7 +60,15 @@ export const CHOICES = {
   device: "dev-signin/acme-device-code",
   browser: "dev-signin/acme-browser",
   key: "dev-signin/acme-api-key",
+  /** Finishes on the gateway's machine: its note with the page, then the callback there. */
+  host: "dev-signin/acme-host",
+  /** A browser sign-in whose callback the gateway takes itself: a page, no code, no field. */
+  callback: "dev-signin/acme-callback",
 } as const;
+
+/** The gateway's own note for a sign-in that finishes on its machine (OpenClaw 2026.10.6). */
+export const HOST_NOTE =
+  "Sign in on the scripted page.\n\nOpen the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process. For an SSH host, forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host";
 
 export class AccountsGateway {
   readonly gateway = new FakeGateway();
@@ -119,6 +127,11 @@ export class AccountsGateway {
   silentCreate = false;
   /** Refuse the next `wizard.cancel`: the gateway is saving. */
   refuseCancel = false;
+  /**
+   * Decline the next `wizard.cancel` as the gateway does once it has locked a
+   * sign-in to save it: a success answer that the sign-in is still running.
+   */
+  declineCancel = false;
   /** Fail `models.authStatus` for this bot. */
   failStatusFor: string | null = null;
   /** Echo what was typed back in a refusal, as a careless gateway might. */
@@ -241,6 +254,10 @@ export class AccountsGateway {
         this.refuseCancel = false;
         throw new GatewayError({ code: "INVALID_REQUEST", message: "cannot cancel while saving" });
       }
+      if (this.declineCancel) {
+        this.declineCancel = false;
+        return { status: "running" };
+      }
       session.phase = "done";
       session.result = { done: true, status: "cancelled", error: "cancelled" };
       session.release?.();
@@ -314,6 +331,8 @@ export class AccountsGateway {
               kind: "oauth",
             },
             { id: CHOICES.key, label: "Acme API key", hint: "billed per token", kind: "secret" },
+            { id: CHOICES.host, label: "Acme on the gateway's machine", kind: "oauth" },
+            { id: CHOICES.callback, label: "Acme, back to the gateway", kind: "oauth" },
           ],
         },
         { provider: "globex", apiKeySupported: true },
@@ -349,8 +368,43 @@ export class AccountsGateway {
         ? "device"
         : session.choice === CHOICES.browser
           ? "browser"
-          : "key";
+          : session.choice === CHOICES.host
+            ? "host"
+            : session.choice === CHOICES.callback
+              ? "callback"
+              : "key";
     if (session.phase === "start") {
+      if (kind === "host") {
+        // `openUrl`, then the note: the gateway's instruction, carrying the page.
+        session.phase = "hostnote";
+        return {
+          done: false,
+          status: "running",
+          step: {
+            id: "host-note",
+            type: "note",
+            executor: "client",
+            title: "Acme on the gateway's machine",
+            message: HOST_NOTE,
+            externalUrl: "http://127.0.0.1:1/scripted/signin/browser/authorize?state=h1",
+          },
+        };
+      }
+      if (kind === "callback") {
+        // `openUrl` alone: the gateway's own progress step with the page, and no code.
+        session.phase = "waiting";
+        return {
+          done: false,
+          status: "running",
+          step: {
+            id: "callback",
+            type: "progress",
+            executor: "gateway",
+            message: "Complete sign-in in your browser.",
+            externalUrl: "http://127.0.0.1:1/scripted/signin/browser/authorize?state=c1",
+          },
+        };
+      }
       if (kind === "device") {
         session.phase = "waiting";
         return {
@@ -379,6 +433,11 @@ export class AccountsGateway {
             : {}),
         },
       };
+    }
+    if (session.phase === "hostnote") {
+      // Acknowledged: the gateway waits for the browser to come back to it.
+      session.phase = "waiting";
+      return this.next({ sessionId: session.id });
     }
     if (session.phase === "waiting") {
       // The gateway polls the provider: this answer waits for the person.
@@ -423,7 +482,9 @@ export class AccountsGateway {
         session.result = {
           done: true,
           status: "error",
-          error: "Saved the sign-in, but could not confirm it is active. Run the sign-in again.",
+          error:
+            ending.message ??
+            "Saved the sign-in, but could not confirm it is active. Run the sign-in again.",
         };
         return session.result;
       }
@@ -431,7 +492,16 @@ export class AccountsGateway {
       return {
         done: false,
         status: "running",
-        step: { id: "note", type: "note", executor: "client", title: "Provider notes" },
+        step: {
+          id: "note",
+          type: "note",
+          executor: "client",
+          title: "Provider notes",
+          // The gateway keeps a page it was given for later notes: the device sign-in's comes back.
+          ...(session.choice === CHOICES.device
+            ? { externalUrl: "http://127.0.0.1:1/scripted/signin/device?code=QK4F-7PZD" }
+            : {}),
+        },
       };
     }
     session.phase = "done";

@@ -6,6 +6,7 @@
 // characters (`bounds.ts`).
 
 import {
+  MAX_ACCOUNT_CHANGES,
   MAX_ACCOUNTS,
   MAX_CATALOG_MODELS,
   MAX_EFFORT_LEVELS,
@@ -17,6 +18,7 @@ import {
   type AccountsState,
   type AccountWrite,
   type BotBinding,
+  type AccountChange,
   type BotCreationState,
   type CatalogModel,
   type GatewayAccount,
@@ -835,6 +837,15 @@ const botCreation = object<BotCreationState>()({
   missing: list(4, ENUM),
   uncertain: FLAG,
 });
+const accountChange = object<AccountChange>()({
+  botId: ID,
+  taskKey: ID,
+  at: NUMBER,
+  provider: ID,
+  account: ID,
+  previous: ID,
+  running: FLAG,
+});
 const accountWrite = object<AccountWrite>()({
   what: ENUM,
   target: ID,
@@ -857,6 +868,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   signIn,
   creation: botCreation,
   write: accountWrite,
+  changes: list(MAX_ACCOUNT_CHANGES, accountChange),
 });
 
 /** Every part of the state but the transcripts, and the transcripts as one map. */

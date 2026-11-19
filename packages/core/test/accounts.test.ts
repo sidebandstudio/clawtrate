@@ -8,8 +8,11 @@ import { describe, expect, it } from "vitest";
 import {
   ACCOUNTS,
   accountWord,
+  endingOf,
   enforceState,
   evaluateOrder,
+  isSignInActive,
+  MAX_ACCOUNT_CHANGES,
   initialState,
   labelProblem,
   lockCommand,
@@ -28,7 +31,7 @@ import { createBridgeSession } from "../src/bridge.ts";
 import { CLIENT_OWNERS } from "../src/owners.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
-import { AccountsGateway, accountsClient, CHOICES } from "./accounts-fake.ts";
+import { AccountsGateway, accountsClient, CHOICES, HOST_NOTE } from "./accounts-fake.ts";
 import { FAST, URL_A } from "./client-harness.ts";
 import {
   deferred,
@@ -68,6 +71,9 @@ describe("the accounts as each bot sees them", () => {
       [CHOICES.device, "code", "subscription"],
       [CHOICES.browser, "paste", "subscription"],
       [CHOICES.key, "key", "subscription"],
+      // The kind predicts the flow; the steps decide it (a note with a page: the gateway's machine).
+      [CHOICES.host, "paste", "subscription"],
+      [CHOICES.callback, "paste", "subscription"],
     ]);
     expect(accounts().keyProviders).toEqual([
       { provider: "acme", hasKey: true, method: CHOICES.key },
@@ -1625,6 +1631,165 @@ describe("the bounds", () => {
     const { client } = await accountsClient({ gateway: fake });
     const engine = (client as unknown as { accounts: { kinds: Map<string, unknown> } }).accounts;
     expect(engine.kinds.size).toBeLessThanOrEqual(MAX_ACCOUNTS);
+    client.stop();
+  });
+});
+
+describe("every kind of sign-in, and every stage (F-474)", () => {
+  it("F-474: a sign-in that finishes on the gateway's machine waits showing the gateway's own note and page, then connects", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.host, null);
+    // The note is the wait: shown, not acknowledged unseen.
+    expect(accounts().signIn).toMatchObject({
+      stage: "waiting",
+      step: {
+        type: "note",
+        message: HOST_NOTE,
+        url: "http://127.0.0.1:1/scripted/signin/browser/authorize?state=h1",
+        code: null,
+      },
+    });
+    // Acknowledged, so the gateway goes on to wait for the browser to come back to it.
+    await until(() => fake.sessions.values().next().value?.phase === "waiting");
+    expect(isSignInActive(accounts().signIn!)).toBe(true);
+    fake.answerDevice();
+    await until(() => accounts().signIn?.stage === "connected");
+    expect(accounts().signIn?.result?.added).toEqual(["acme:travel"]);
+    client.stop();
+  });
+
+  it("F-474: a browser sign-in whose callback the gateway takes itself waits with the page, no code and no field", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.callback, null);
+    expect(accounts().signIn).toMatchObject({
+      stage: "waiting",
+      flow: "paste",
+      step: { type: "progress", code: null, sensitive: false },
+    });
+    expect(accounts().signIn?.step?.url).toMatch(/state=c1$/);
+    fake.answerDevice();
+    await until(() => accounts().signIn?.stage === "connected");
+    client.stop();
+  });
+
+  it("F-474: the closing note of a link-and-code sign-in, which carries its page again, is not shown as a new wait", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.device, null);
+    const shown: string[] = [];
+    const stop = client.store.subscribe(
+      (state) => void shown.push(state.accounts.signIn?.step?.type ?? ""),
+    );
+    fake.answerDevice();
+    await until(() => accounts().signIn?.stage === "connected");
+    stop();
+    // The code's progress step stays the wait; the note that ends the sign-in is never shown.
+    expect(shown).not.toContain("note");
+    client.stop();
+  });
+
+  it("F-474: a cancel the gateway declines while the sign-in runs is too late to cancel: it is saving", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.device, null);
+    fake.declineCancel = true;
+    expect(await client.cancelSignIn()).toEqual({ cancelled: false });
+    expect(accounts().signIn).toMatchObject({
+      stage: "waiting",
+      saving: true,
+      cancelUnknown: false,
+    });
+    fake.answerDevice();
+    await until(() => accounts().signIn?.stage === "connected");
+    expect(accounts().signIn?.saving).toBe(false);
+    client.stop();
+  });
+
+  it("F-474: each of the gateway's 'saved, but' answers is saved, not confirmed, with the account it now lists", async () => {
+    for (const message of [
+      "Your sign-in was saved, but the connection update could not be confirmed. Send /login refresh in chat to try again.",
+      "Credentials saved, but provider settings could not be applied: Config validation failed: models.providers.acme.api: Invalid option.",
+      "Provider credentials were saved, but sign-in did not finish: the step timed out.",
+    ]) {
+      expect(endingOf("error", message)).toBe("unconfirmed");
+      const fake = new AccountsGateway();
+      fake.nextEnding = { outcome: "unconfirmed", account: "spare", message };
+      const { client, accounts } = await accountsClient({ gateway: fake });
+      await client.startSignIn(CHOICES.device, null);
+      fake.answerDevice();
+      await until(() => accounts().signIn?.result != null);
+      expect(accounts().signIn).toMatchObject({
+        stage: "unconfirmed",
+        error: message,
+        result: { added: ["acme:spare"] },
+      });
+      client.stop();
+    }
+    // Words that only mention an expiry, or a refusal, are not a saved sign-in.
+    expect(endingOf("error", "Acme sign-in expired: The code expired.")).toBe("expired");
+    expect(endingOf("error", "Acme refused the sign-in: access_denied")).toBe("failed");
+  });
+});
+
+describe("changing a bot's account (F-473)", () => {
+  it("F-473: a change keeps a line for the task open for the bot, naming the account it was on and a run in progress", async () => {
+    const { client, accounts } = await accountsClient();
+    await client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, {
+      taskKey: "agent:otto:main",
+      running: true,
+    });
+    expect(accounts().changes).toEqual([
+      {
+        botId: "otto",
+        taskKey: "agent:otto:main",
+        at: expect.any(Number),
+        provider: "acme",
+        account: "acme:home",
+        previous: "acme:work",
+        running: true,
+      },
+    ]);
+    // To no fixed account, with no run in progress.
+    await client.changeBotAccount("otto", null, "acme", "dev-1", null, {
+      taskKey: "agent:otto:main",
+      running: false,
+    });
+    expect(accounts().changes.at(-1)).toMatchObject({
+      account: null,
+      previous: "acme:home",
+      running: false,
+    });
+    client.stop();
+  });
+
+  it("F-473: a change the gateway refuses draws no line", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.failPatch = "config.patch refused";
+    await expect(
+      client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null, {
+        taskKey: "agent:otto:main",
+        running: false,
+      }),
+    ).rejects.toThrow();
+    expect(accounts().changes).toEqual([]);
+    client.stop();
+  });
+
+  it("F-473: at most MAX_ACCOUNT_CHANGES are kept, the newest", async () => {
+    const { client, accounts } = await accountsClient();
+    for (let i = 0; i <= MAX_ACCOUNT_CHANGES; i += 1)
+      await client.changeBotAccount(
+        "otto",
+        i % 2 ? "acme:work" : "acme:home",
+        "acme",
+        "dev-1",
+        null,
+        {
+          taskKey: `agent:otto:t${i}`,
+          running: false,
+        },
+      );
+    expect(accounts().changes).toHaveLength(MAX_ACCOUNT_CHANGES);
+    expect(accounts().changes.at(-1)?.taskKey).toBe(`agent:otto:t${MAX_ACCOUNT_CHANGES}`);
+    expect(accounts().changes[0]?.taskKey).toBe("agent:otto:t1");
     client.stop();
   });
 });

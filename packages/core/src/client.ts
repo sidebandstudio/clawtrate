@@ -3497,8 +3497,9 @@ export class ClawtrateClient {
     provider: string,
     model: string,
     effort: string | null,
+    place: { taskKey: string | null; running: boolean } = { taskKey: null, running: false },
   ): Promise<void> {
-    return this.accounts.changeAccount(botId, account, provider, model, effort);
+    return this.accounts.changeAccount(botId, account, provider, model, effort, place);
   }
 
   setBotModel(botId: string, model: string, effort: string | null): Promise<void> {

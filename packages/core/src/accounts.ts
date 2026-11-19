@@ -29,6 +29,8 @@ export const MAX_ORDER_IDS = 16;
 export const MAX_FALLBACKS = 16;
 /** Bots whose lock a sign-in re-checks. */
 export const MAX_LOCK_CHECKS = 32;
+/** Account changes Clawtrate made and keeps, for the grey line it draws in a task (row 15). */
+export const MAX_ACCOUNT_CHANGES = 32;
 /** Bots whose `models.authStatus` is read at once. */
 export const ACCOUNT_READ_CONCURRENCY = 4;
 /** A label: trimmed, 1 to 32 characters (bots.md section 22). */
@@ -349,6 +351,24 @@ export type AccountWrite = {
   at: number;
 };
 
+/**
+ * A change of a bot's account that Clawtrate made, kept to draw the grey
+ * event line in the task that was open for that bot: the gateway records no
+ * such line (row 15). `account` null is "Let the gateway choose".
+ */
+export type AccountChange = {
+  botId: string;
+  /** The task that was open for the bot when it changed; the line is drawn there. */
+  taskKey: string | null;
+  at: number;
+  provider: string;
+  account: string | null;
+  /** The account the bot was on before, when it had one. */
+  previous: string | null;
+  /** A run was in progress: it finishes on `previous`. */
+  running: boolean;
+};
+
 export type AccountsState = {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
@@ -367,6 +387,8 @@ export type AccountsState = {
   signIn: SignInState | null;
   creation: BotCreationState | null;
   write: AccountWrite | null;
+  /** The account changes Clawtrate made, newest last, at most `MAX_ACCOUNT_CHANGES`. */
+  changes: AccountChange[];
 };
 
 export const initialAccountsState: AccountsState = {
@@ -384,6 +406,7 @@ export const initialAccountsState: AccountsState = {
   signIn: null,
   creation: null,
   write: null,
+  changes: [],
 };
 
 export const unreadEvidence: LockEvidence = {
@@ -801,9 +824,11 @@ export function endingOf(status: string | null, error: string | null): SignInSta
   if (status === "cancelled") return "cancelled";
   if (status === "done") return "connected";
   const words = (error ?? "").toLowerCase();
+  // The gateway saved the credential and then could not finish or confirm it (row 6). Its own
+  // words: "Your sign-in was saved, but …", "Credentials saved, but provider settings could not
+  // be applied: …", "Provider credentials were saved, but sign-in did not finish: …".
+  if (/\bsaved\b[^.]*\bbut\b/.test(words)) return "unconfirmed";
   if (/\bexpired?\b|timed out|time limit/.test(words)) return "expired";
-  // The gateway saved the credential and could not confirm it is active (row 6).
-  if (/saved/.test(words) && /(confirm|activat|verify)/.test(words)) return "unconfirmed";
   return "failed";
 }
 

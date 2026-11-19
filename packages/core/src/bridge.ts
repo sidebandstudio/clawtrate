@@ -154,6 +154,10 @@ export type BridgeCommand =
       provider: string;
       model: string;
       effort: string | null;
+      /** The task open for the bot, where Clawtrate draws its line for the change. */
+      taskKey?: string | null;
+      /** A run of the bot is in progress: it finishes on the account it started with. */
+      running?: boolean;
     }
   | { type: "setBotModel"; botId: string; model: string; effort: string | null }
   | { type: "removeBotFallbacks"; botId: string }
@@ -557,6 +561,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           command.effort === null || command.effort === undefined
             ? null
             : id(command.effort, "effort"),
+        taskKey:
+          command.taskKey === null || command.taskKey === undefined
+            ? null
+            : sessionKey(command.taskKey),
+        running: command.running === undefined ? false : flag(command.running),
       };
     case "setBotModel":
       return {
@@ -944,6 +953,7 @@ class ViewerSession implements BridgeSession {
           command.provider,
           command.model,
           command.effort,
+          { taskKey: command.taskKey ?? null, running: command.running ?? false },
         );
       case "setBotModel":
         return client.setBotModel(command.botId, command.model, command.effort);

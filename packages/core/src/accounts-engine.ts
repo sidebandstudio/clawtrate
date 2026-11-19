@@ -18,6 +18,7 @@ import {
   KIND_RECORDS,
   type KindRecord,
   labelProblem,
+  MAX_ACCOUNT_CHANGES,
   MAX_ACCOUNTS,
   MAX_LOCK_CHECKS,
   MAX_SECRET_CHARS,
@@ -42,6 +43,7 @@ import {
   SLOW_CREATE_MS,
   unreadEvidence,
   withoutSecret,
+  type AccountChange,
   type AccountsState,
   type MissingStep,
   type AccountWrite,
@@ -599,7 +601,16 @@ export class AccountsEngine {
         });
         return await this.afterSignIn(id, before);
       }
-      // A note for the client is acknowledged; the gateway goes on.
+      // A note that brings the sign-in's page, before anything has been shown with it, is the
+      // gateway's own instruction for a sign-in that finishes on its machine (`openUrl`, then a
+      // note): the person needs it, so it is shown as the wait, then acknowledged, and the gateway
+      // waits for the callback. Any other note is acknowledged unseen; the gateway goes on.
+      if (step.type === "note" && step.url && ctx.get().signIn?.step?.url !== step.url) {
+        this.setSignIn(id, { stage: "waiting", step });
+        pause();
+        pending = { stepId: step.id, value: true };
+        continue;
+      }
       if (step.type === "note" || step.type === "action") {
         pending = { stepId: step.id, value: true };
         continue;
@@ -685,9 +696,11 @@ export class AccountsEngine {
       return { cancelled: true };
     }
     const words = failure ? errorText(failure) : String(answer?.error ?? answer?.status ?? "");
-    // Saving only when the gateway's own refusal says it is saving (row 6). Anything else, a
-    // refusal for another reason or the sign-in still running past the cancel, is not known.
-    if (isRefusal(failure) && /\bsav(e|ing)\b/i.test(words)) {
+    // Saving when the gateway says so: a refusal in those words, or its answer to a cancel it
+    // declined, the sign-in still `running`. The gateway declines a cancel on a live sign-in only
+    // once it has locked it to save (docs/decisions.md). Anything else is not known.
+    const declined = !failure && answer?.status === "running" && answer.error === undefined;
+    if (declined || (isRefusal(failure) && /\bsav(e|ing)\b/i.test(words))) {
       this.setSignIn(signIn.id, { cancelling: false, saving: true });
     } else {
       this.setSignIn(signIn.id, {
@@ -1398,10 +1411,12 @@ export class AccountsEngine {
     provider: string,
     model: string,
     effort: string | null,
+    place: { taskKey: string | null; running: boolean } = { taskKey: null, running: false },
   ): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
     if (account && accountProvider(account) !== provider)
       throw new Error("That account belongs to another provider.");
+    const previous = this.ctx.get().bindings.find((b) => b.botId === botId)?.account ?? null;
     this.setWrite({
       what: "account",
       target: botId,
@@ -1419,6 +1434,16 @@ export class AccountsEngine {
         error: null,
         at: this.ctx.now(),
       });
+      // The gateway records no line for it: Clawtrate draws one from its own write (row 15).
+      this.recordChange({
+        botId,
+        taskKey: place.taskKey,
+        at: this.ctx.now(),
+        provider,
+        account,
+        previous,
+        running: place.running && previous !== account,
+      });
     } catch (error) {
       this.setWrite({
         what: "account",
@@ -1430,6 +1455,14 @@ export class AccountsEngine {
       throw error;
     }
     await this.checkLock(botId);
+  }
+
+  /** Keep a change Clawtrate made, newest last, at most `MAX_ACCOUNT_CHANGES`. */
+  private recordChange(change: AccountChange): void {
+    this.ctx.update((a) => ({
+      ...a,
+      changes: [...a.changes, change].slice(-MAX_ACCOUNT_CHANGES),
+    }));
   }
 
   /** The bot's model and effort, keeping its account. */
