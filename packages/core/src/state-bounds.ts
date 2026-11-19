@@ -58,6 +58,22 @@ import {
   type Bound,
 } from "./bounds.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
+import {
+  MAX_BUDGET_ID_CHARS,
+  MAX_BUDGETS,
+  MAX_LIMIT_PROVIDERS,
+  MAX_LIMIT_TEXT_CHARS,
+  MAX_LIMIT_WINDOWS,
+  MAX_ROUTINE_NAME_CHARS,
+  MAX_TIME_ZONE_CHARS,
+  type Budget,
+  type BudgetCount,
+  type DateRange,
+  type LimitWindow,
+  type ProviderLimit,
+  type ProviderLimits,
+  type UsageState,
+} from "./usage.ts";
 import type {
   CaughtUp,
   ClosedCard,
@@ -626,6 +642,56 @@ const sidebar = object<SidebarState>()({
     rev: NUMBER,
   }),
 });
+/** Warning budgets, their counts and the providers' limits (`usage.ts`). */
+const usageId = id(MAX_BUDGET_ID_CHARS);
+const budgetKey = id(MAX_BUDGET_ID_CHARS + 8);
+const zone = text(MAX_TIME_ZONE_CHARS + 2);
+// A date, YYYY-MM-DD, quoted.
+const date = text(12);
+const dateRange = object<DateRange>()({ startDate: date, endDate: date, timeZone: zone });
+const budget = object<Budget>()({
+  id: budgetKey,
+  botId: usageId,
+  routineId: usageId,
+  // A name of `MAX_ROUTINE_NAME_CHARS` characters, each escaped at its longest (`\u0000`).
+  routineName: text(MAX_ROUTINE_NAME_CHARS * 6 + 2),
+  period: ENUM,
+  tokens: NUMBER,
+  timeZone: zone,
+  setAt: NUMBER,
+});
+const budgetCount = object<BudgetCount>()({
+  budgetId: budgetKey,
+  range: dateRange,
+  used: NUMBER,
+  asOf: NUMBER,
+  counting: FLAG,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+});
+const limitText = text(MAX_LIMIT_TEXT_CHARS * 6 + 2);
+const limitWindow = object<LimitWindow>()({
+  label: limitText,
+  usedPercent: NUMBER,
+  resetAt: NUMBER,
+});
+const providerLimit = object<ProviderLimit>()({
+  provider: usageId,
+  displayName: limitText,
+  windows: list(MAX_LIMIT_WINDOWS, limitWindow),
+  error: limitText,
+});
+export const USAGE: Bound = object<UsageState>()({
+  budgetsStatus: ENUM,
+  budgets: list(MAX_BUDGETS, budget),
+  rev: NUMBER,
+  counts: list(MAX_BUDGETS, budgetCount),
+  limits: object<ProviderLimits>()({
+    status: ENUM,
+    updatedAt: NUMBER,
+    providers: list(MAX_LIMIT_PROVIDERS, providerLimit),
+    refreshing: FLAG,
+  }),
+});
 /** A task creation as kept (`MAX_CREATIONS` of them). */
 export const CREATION: Bound = object<TaskCreation>()({
   id: ID,
@@ -872,6 +938,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   accounts: ACCOUNTS,
   retention: retentionAlarm,
   sidebar,
+  usage: USAGE,
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };
