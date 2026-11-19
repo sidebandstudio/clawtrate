@@ -30,6 +30,18 @@ export const INTERACTIVE_SCOPES: readonly string[] = [
  */
 export const ADMIN_SCOPES: readonly string[] = [...INTERACTIVE_SCOPES, ADMIN_SCOPE];
 
+/**
+ * Approvals alone, asked for only where a page needs exactly that scope and the
+ * person asks (Settings, Permissions: "Seeing saved approvals needs approvals
+ * access."), with read. Nothing else asks for it on its own.
+ */
+export const APPROVALS_TIER_SCOPES: readonly string[] = [READ_SCOPE, APPROVALS_SCOPE];
+
+/** What one access request asks for. */
+export type AccessTier = "approvals" | "interactive" | "admin";
+/** Each tier includes the ones below it, so a request is never narrowed by a later one. */
+export const ACCESS_RANK: Record<AccessTier, number> = { approvals: 1, interactive: 2, admin: 3 };
+
 const IMPLIED_BY_WRITE = new Set([
   READ_SCOPE,
   "operator.talk",

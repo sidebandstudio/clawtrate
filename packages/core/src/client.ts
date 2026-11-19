@@ -165,6 +165,9 @@ import {
   ADMIN_SCOPES,
   heldFromGrant,
   INTERACTIVE_SCOPES,
+  ACCESS_RANK,
+  APPROVALS_TIER_SCOPES,
+  type AccessTier,
   normalizeHeldScopes,
   QUESTIONS_SCOPE,
   READ_SCOPES,
@@ -195,6 +198,22 @@ import {
   WORST_STATE_CHARS,
 } from "./state-bounds.ts";
 import { createStore, type Store } from "./store.ts";
+import {
+  auditCallId,
+  readActivity,
+  readRulesPlugin,
+  readSavedApprovals,
+  removeAllowlistEntry,
+  revokeGrant,
+  RULES_STATUS_METHOD,
+  type ActivityPage,
+  type ActivityQuery,
+  type AllowlistRemoveResult,
+  type GrantRevokeResult,
+  type PermissionsContext,
+  type RulesPluginState,
+  type SavedApprovals,
+} from "./permissions.ts";
 import {
   changeSidebar,
   initialSidebar,
@@ -675,6 +694,8 @@ export class ClawtrateClient {
    * the hello does not carry one.
    */
   private gatewayBootId: string | null = null;
+  /** Whether the latest hello listed the rules plugin's status method (`hello-ok.features.methods`). */
+  private rulesListed = false;
   private rows = new Map<string, RawRecord>();
   /** Which tasks wait for the person, across every bot (`waiting.ts`), for the rail. */
   private readonly waiting = new WaitingIndex();
@@ -728,8 +749,8 @@ export class ClawtrateClient {
   private quietReconnect = false;
   /** The user asked for write access and it is not settled yet. */
   private upgradeWanted = false;
-  /** What the request under way asks for: the interactive tier, or admin with it. */
-  private upgradeTier: "interactive" | "admin" = "interactive";
+  /** What the request under way asks for: approvals alone, the interactive tier, or admin with it. */
+  private upgradeTier: AccessTier = "interactive";
   private scopeUpgrade: GatewayScopeUpgrade | null = null;
   private accessWaiters: Waiter[] = [];
   /** The frame and image ceilings from `hello-ok.policy`; nothing else of it is kept. */
@@ -1058,18 +1079,19 @@ export class ClawtrateClient {
    * When it is approved the client stores the rotated device token and
    * reconnects asking for exactly what was granted of that set.
    */
-  async requestAccess(tier: "interactive" | "admin" = "interactive"): Promise<void> {
+  async requestAccess(tier: AccessTier = "interactive"): Promise<void> {
     if (this.options.readOnly)
       throw new Error("This host only reads; it does not ask for more access.");
-    // A request for admin is never narrowed by a later one for less.
+    // A request is never narrowed by a later one for less: admin includes the
+    // interactive tier, which includes approvals.
     const wanted =
-      tier === "admin" || (this.upgradeWanted && this.upgradeTier === "admin")
-        ? "admin"
-        : "interactive";
+      this.upgradeWanted && ACCESS_RANK[this.upgradeTier] > ACCESS_RANK[tier]
+        ? this.upgradeTier
+        : tier;
     if (this.tierScopes(wanted).every((scope) => this.holds(scope))) return;
     if (!this.settings) throw new Error("Connect to a gateway first.");
-    if (this.scopeUpgrade && wanted === "admin" && this.upgradeTier !== "admin") {
-      // An interactive request is waiting; ask again, for admin with it.
+    if (this.scopeUpgrade && this.upgradeTier !== wanted) {
+      // A request for less is waiting; ask again, for this with it.
       this.scopeUpgrade.cancelScopeUpgrade();
       this.scopeUpgrade = null;
     }
@@ -1078,8 +1100,12 @@ export class ClawtrateClient {
     if (this.state.connection.status === "connected") this.startUpgrade();
   }
 
-  private tierScopes(tier: "interactive" | "admin"): readonly string[] {
-    return tier === "admin" ? ADMIN_SCOPES : INTERACTIVE_SCOPES;
+  private tierScopes(tier: AccessTier): readonly string[] {
+    return tier === "admin"
+      ? ADMIN_SCOPES
+      : tier === "approvals"
+        ? APPROVALS_TIER_SCOPES
+        : INTERACTIVE_SCOPES;
   }
 
   private holds(scope: string): boolean {
@@ -1156,7 +1182,9 @@ export class ClawtrateClient {
         (outcome) => {
           if (this.scopeUpgrade === upgrade) this.scopeUpgrade = null;
           if (outcome.status === "approved") {
-            if (!scopeSatisfied(outcome.scopes, tier === "admin" ? ADMIN_SCOPE : WRITE_SCOPE)) {
+            const needed =
+              tier === "admin" ? ADMIN_SCOPE : tier === "approvals" ? APPROVALS_SCOPE : WRITE_SCOPE;
+            if (!scopeSatisfied(outcome.scopes, needed)) {
               this.failAccess(
                 new AccessRequestError(
                   "error",
@@ -4312,6 +4340,8 @@ export class ClawtrateClient {
       typeof bootId === "string" && bootId.length > 0 && bootId.length <= 96 ? bootId : null;
     const scopes = [...(hello.auth.scopes ?? [])];
     const canWrite = scopeSatisfied(scopes, WRITE_SCOPE);
+    const methods = asRecord(asRecord(hello)?.features)?.methods;
+    this.rulesListed = Array.isArray(methods) && methods.includes(RULES_STATUS_METHOD);
     const policy = asRecord(hello.policy);
     const number = (value: unknown) =>
       typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -5140,6 +5170,78 @@ export class ClawtrateClient {
 
   async deleteTask(key: string, options: { owner?: object } = {}): Promise<void> {
     await deleteTask(this.actionContext(options.owner ?? null), key);
+  }
+
+  // Settings, Permissions (`permissions.ts`): read now and not kept ------------------------
+
+  private permissionsContext(): PermissionsContext {
+    if (this.state.connection.status !== "connected")
+      throw new Error("Not connected to the gateway.");
+    const generation = this.generation;
+    return {
+      request: async (method, params) => {
+        if (generation !== this.generation) throw new Error("Switched to another gateway.");
+        try {
+          return await this.request(method, params);
+        } catch (error) {
+          this.noteMissingScope(error);
+          throw error;
+        }
+      },
+      now: () => this.now(),
+    };
+  }
+
+  /** The rules plugin's state, from its status method when the hello listed it (`operator.read`). */
+  async readRulesPlugin(): Promise<RulesPluginState> {
+    return readRulesPlugin(this.permissionsContext(), this.rulesListed);
+  }
+
+  /** The routines' grants (`operator.approvals`) and the gateway machine's allowlist (`operator.admin`). */
+  async readSavedApprovals(): Promise<SavedApprovals> {
+    const ctx = this.permissionsContext();
+    return readSavedApprovals(ctx, {
+      canApprove: this.holds(APPROVALS_SCOPE),
+      canAdmin: this.state.connection.canAdmin,
+    });
+  }
+
+  /** Revoke a routine's grant and read the list back. Never asks for access by itself. */
+  async revokeGrant(grantId: string): Promise<GrantRevokeResult> {
+    if (this.options.readOnly) throw new Error("This host only reads; it does not revoke.");
+    if (!this.holds(APPROVALS_SCOPE)) throw new Error("Revoking a grant needs approvals access.");
+    return revokeGrant(this.permissionsContext(), grantId);
+  }
+
+  /** Remove one entry of the gateway machine's allowlist, then read the file back (`operator.admin`). */
+  async removeAllowlistEntry(agentId: string, entryId: string): Promise<AllowlistRemoveResult> {
+    if (this.options.readOnly)
+      throw new Error("This host only reads; it does not change settings.");
+    if (!this.state.connection.canAdmin)
+      throw new Error("Removing an allowlist entry needs admin access.");
+    return removeAllowlistEntry(this.permissionsContext(), agentId, entryId);
+  }
+
+  /** One page of the audit log's tool actions with their recorded causes (`operator.read`). */
+  async readActivity(query: ActivityQuery): Promise<ActivityPage> {
+    const ctx = this.permissionsContext();
+    // The calls of every task this host follows, by the audit log's hash of their id.
+    const loaded = new Map<string, { key: string; callId: string }>();
+    for (const [key, transcript] of Object.entries(this.state.transcripts)) {
+      for (const item of transcript.items) {
+        for (const block of item.blocks) {
+          if (block.kind === "tool-call" && block.callId)
+            loaded.set(auditCallId(block.callId), { key, callId: block.callId });
+        }
+      }
+      for (const run of transcript.runs) {
+        for (const step of run.steps) {
+          if (step.toolCallId)
+            loaded.set(auditCallId(step.toolCallId), { key, callId: step.toolCallId });
+        }
+      }
+    }
+    return readActivity(ctx, query, { rulesListed: this.rulesListed, loaded });
   }
 
   /** A bot's archived tasks, read now and not kept (`operator.read`). */
