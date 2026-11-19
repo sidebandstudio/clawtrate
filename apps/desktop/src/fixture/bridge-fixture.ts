@@ -549,6 +549,7 @@ export function createFixtureBridge(
       options.permissions ?? NO_PERMISSION_PARAMS,
       revokedGrants,
       removedEntries,
+      (run) => deferred(run, 0),
     );
     if (permission) {
       sent.push(command);

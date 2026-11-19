@@ -412,6 +412,34 @@ test.describe("behaviour", () => {
     await expect(page.getByRole("button", { name: "Show older" })).toHaveCount(0);
   });
 
+  test("F-324: an older page answered after the filter changed never replaces the newer answer", async ({
+    page,
+  }) => {
+    const fixture = (method: "hold" | "release") =>
+      page.evaluate(
+        (name) =>
+          (window as unknown as { clawtrateFixture: Record<string, () => void> }).clawtrateFixture[
+            name
+          ]!(),
+        method,
+      );
+    await openFixture(page, ADMIN, "light");
+    await permissions("Activity", rows)(page);
+    await expect(page.getByTestId("activity-row")).toHaveCount(6);
+    // The older page's answer is held back while the filter changes and is answered.
+    await fixture("hold");
+    await page.getByRole("button", { name: "Show older" }).click();
+    await page.getByTestId("activity-outcome").click();
+    await page.getByRole("menuitemradio", { name: "Blocked" }).click();
+    await expect(page.getByTestId("activity-row")).toHaveCount(1);
+    await fixture("release");
+    // The older answer was for the earlier filter: it is dropped, and the newer answer stays.
+    await expect(page.getByRole("status", { name: "Loading activity" })).toHaveCount(0);
+    await expect(page.getByTestId("activity-row")).toHaveCount(1);
+    await expect(page.getByTestId("activity-row")).toContainText("Blocked");
+    await expect(page.getByRole("button", { name: "Loading…" })).toHaveCount(0);
+  });
+
   test("permissions: its parts are one radio group with one tab stop, moved by the arrows", async ({
     page,
   }) => {

@@ -358,16 +358,19 @@ export function PermissionsSection({
 
 /**
  * One read, made again whenever `key` changes (null: not now) or `retry` is
- * called. Its answer counts only for the key it was asked for, so an older
- * answer never stands for a newer question.
+ * called. An answer counts only for the question it was asked for: the read's
+ * own, and a continuation's (`setFor`) only while its question is still the one
+ * on screen, so an older answer never replaces a newer one.
  */
 function useRead<T>(key: string | null, run: () => Promise<T>) {
   const [nonce, setNonce] = useState(0);
   const asked = key === null ? null : `${key}\u0000${nonce}`;
   const [answer, setAnswer] = useState<{ key: string; load: Load<T> } | null>(null);
   const runRef = useRef(run);
+  const askedRef = useRef(asked);
   useEffect(() => {
     runRef.current = run;
+    askedRef.current = asked;
   });
   useEffect(() => {
     if (asked === null) return;
@@ -383,10 +386,19 @@ function useRead<T>(key: string | null, run: () => Promise<T>) {
   }, [asked]);
   const load: Load<T> =
     answer !== null && answer.key === asked ? answer.load : { status: "loading" };
-  const set = (value: T) => {
-    if (asked !== null) setAnswer({ key: asked, load: { status: "ready", value } });
+  /** Whether `forKey` is still the question on screen. */
+  const current = (forKey: string | null) => forKey !== null && askedRef.current === forKey;
+  const setFor = (forKey: string | null, value: T) => {
+    if (current(forKey)) setAnswer({ key: forKey!, load: { status: "ready", value } });
   };
-  return { load, set, retry: () => setNonce((n) => n + 1) };
+  return {
+    load,
+    asked,
+    current,
+    set: (value: T) => setFor(asked, value),
+    setFor,
+    retry: () => setNonce((n) => n + 1),
+  };
 }
 
 function Skeleton({ label, rows }: { label: string; rows: number }) {
@@ -818,18 +830,23 @@ function ActivityPart({
   const more = () => {
     const current = read.load;
     if (current.status !== "ready" || !current.value.page.nextCursor) return;
+    // The question this page continues: a newer filter, connection or retry drops its answer.
+    const forKey = read.asked;
     setOlder("loading");
     ask(current.value.page.nextCursor).then(
       (page) => {
+        if (!read.current(forKey)) return;
         const shown = current.value.rows;
         // A call whose start is on the next page is one row: the first one listed keeps it.
-        read.set({
+        read.setFor(forKey, {
           page,
           rows: [...shown, ...page.rows.filter((row) => !shown.some((each) => each.id === row.id))],
         });
         setOlder("idle");
       },
-      (error: unknown) => setOlder(`Couldn't load older activity. ${errorText(error)}`),
+      (error: unknown) => {
+        if (read.current(forKey)) setOlder(`Couldn't load older activity. ${errorText(error)}`);
+      },
     );
   };
 

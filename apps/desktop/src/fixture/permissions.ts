@@ -310,6 +310,8 @@ export function permissionCommand(
   params: PermissionParams,
   revoked: Map<string, number>,
   removed: Set<string>,
+  /** Runs an answer later, or once a test that holds answers releases them. */
+  later: (run: () => void) => void = (run) => run(),
 ): Promise<unknown> | undefined {
   const connection = () => get().connection;
   const grantList = (): SavedApprovals["grants"] => ({
@@ -431,7 +433,8 @@ export function permissionCommand(
         recording: params.audit === "off" ? "off" : "on",
         decisionsUnread: null,
       };
-      return Promise.resolve(page);
+      // An older page is a delayed answer a test can hold, to answer after a newer question.
+      return first ? Promise.resolve(page) : new Promise((resolve) => later(() => resolve(page)));
     }
     default:
       return undefined;
