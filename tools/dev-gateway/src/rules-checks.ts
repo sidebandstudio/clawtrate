@@ -318,6 +318,24 @@ async function patchConfig(
   throw new RulesCheckFailure("the gateway did not apply the patched config within 30 seconds");
 }
 
+/**
+ * Run `body` with a temporary setting: `apply` inside the try, so a change the
+ * gateway took but did not confirm in time is undone too, and `restore` in
+ * the finally, whether the body passed or not.
+ */
+export async function withConfig<T>(
+  apply: () => Promise<void>,
+  restore: () => Promise<void>,
+  body: () => Promise<T>,
+): Promise<T> {
+  try {
+    await apply();
+    return await body();
+  } finally {
+    await restore();
+  }
+}
+
 const botEntry = async (ctx: RulesContext, bot: string) =>
   rec(rec(rec(rec(await ctx.clients.admin.request("config.get", {})).config).agents).entries)[bot];
 
@@ -867,32 +885,7 @@ export const RULES_CHECKS: RulesCheck[] = [
         await finish(ctx, runId);
         return `${String(card.request.title)}\n${String(card.request.description)}`;
       };
-      await patchConfig(ctx, FORWARD_NOWHERE);
-      try {
-        same(
-          (await statusOf(ctx)).cardDetails,
-          { mode: "redacted", because: "forwarding-configured" },
-          "card details with forwarding",
-        );
-        const redacted = await cardText();
-        expect(
-          !redacted.includes(WRITE_PATH) &&
-            !redacted.includes(BOT) &&
-            redacted.endsWith("The details are in Clawtrate."),
-          `the forwarded card carries the target or the bot: ${redacted}`,
-        );
-        await patchConfig(ctx, {
-          plugins: { entries: { [PLUGIN]: { config: { cardDetails: "full" } } } },
-        });
-        await pluginRunning(ctx);
-        same(
-          (await statusOf(ctx)).cardDetails,
-          { mode: "full", because: "setting" },
-          "card details forced by the setting",
-        );
-        const full = await cardText();
-        expect(full.includes(WRITE_PATH), `the forced card left out the target: ${full}`);
-      } finally {
+      const restore = async () => {
         await patchConfig(
           ctx,
           {
@@ -902,7 +895,36 @@ export const RULES_CHECKS: RulesCheck[] = [
           ["approvals.plugin.targets"],
         );
         await pluginRunning(ctx);
-      }
+      };
+      await withConfig(
+        () => patchConfig(ctx, FORWARD_NOWHERE),
+        restore,
+        async () => {
+          same(
+            (await statusOf(ctx)).cardDetails,
+            { mode: "redacted", because: "forwarding-configured" },
+            "card details with forwarding",
+          );
+          const redacted = await cardText();
+          expect(
+            !redacted.includes(WRITE_PATH) &&
+              !redacted.includes(BOT) &&
+              redacted.endsWith("The details are in Clawtrate."),
+            `the forwarded card carries the target or the bot: ${redacted}`,
+          );
+          await patchConfig(ctx, {
+            plugins: { entries: { [PLUGIN]: { config: { cardDetails: "full" } } } },
+          });
+          await pluginRunning(ctx);
+          same(
+            (await statusOf(ctx)).cardDetails,
+            { mode: "full", because: "setting" },
+            "card details forced by the setting",
+          );
+          const full = await cardText();
+          expect(full.includes(WRITE_PATH), `the forced card left out the target: ${full}`);
+        },
+      );
       same(
         (await statusOf(ctx)).cardDetails,
         { mode: "full", because: "no-forwarding" },
@@ -970,30 +992,38 @@ export const RULES_CHECKS: RulesCheck[] = [
         const since = marks(ctx);
         const runId = await start(ctx, key, "#write");
         const card = await cardFor(ctx, runId, since.interactive);
-        if (change === "rules") await save(ctx, BOT, [{ action: "allow", tools: ["write"] }]);
-        else
-          await patchConfig(ctx, {
-            agents: { entries: { [BOT]: { tools: { deny: ["web_search"] } } } },
-          });
-        expect(
-          (await waitingCards(ctx.clients.interactive)).includes(card.id),
-          `the card was no longer listed after the ${change} change`,
-        );
-        await resolve(ctx, card.id, "allow-once");
-        const run = await finish(ctx, runId);
-        const write = run.calls[0];
-        if (change === "rules") {
-          expect(ranOk(write), `after a rules change: ${show(run.calls)}`);
-        } else {
+        const answer = async () => {
           expect(
-            write?.isError && write.text.includes(GATEWAY_UNAVAILABLE),
-            `after a config change: ${show(run.calls)}`,
+            (await waitingCards(ctx.clients.interactive)).includes(card.id),
+            `the card was no longer listed after the ${change} change`,
           );
+          await resolve(ctx, card.id, "allow-once");
+          return finish(ctx, runId);
+        };
+        if (change === "rules") {
+          await save(ctx, BOT, [{ action: "allow", tools: ["write"] }]);
+          const run = await answer();
+          expect(ranOk(run.calls[0]), `after a rules change: ${show(run.calls)}`);
+          continue;
         }
+        // The deny is undone however the check ends.
+        const run = await withConfig(
+          () =>
+            patchConfig(ctx, {
+              agents: { entries: { [BOT]: { tools: { deny: ["web_search"] } } } },
+            }),
+          () =>
+            patchConfig(ctx, { agents: { entries: { [BOT]: { tools: { deny: null } } } } }, [
+              `agents.entries.${BOT}.tools.deny`,
+            ]),
+          answer,
+        );
+        const write = run.calls[0];
+        expect(
+          write?.isError && write.text.includes(GATEWAY_UNAVAILABLE),
+          `after a config change: ${show(run.calls)}`,
+        );
       }
-      await patchConfig(ctx, { agents: { entries: { [BOT]: { tools: { deny: null } } } } }, [
-        `agents.entries.${BOT}.tools.deny`,
-      ]);
       same(await botEntry(ctx, BOT), original, "Juniper's settings once the deny is removed again");
       await pluginRunning(ctx);
     },
@@ -1016,8 +1046,9 @@ export const RULES_CHECKS: RulesCheck[] = [
         60_000,
         since.interactive,
       );
-      await patchConfig(ctx, { plugins: { entries: { [PLUGIN]: { enabled: false } } } });
-      try {
+      const plugin = (enabled: boolean) => () =>
+        patchConfig(ctx, { plugins: { entries: { [PLUGIN]: { enabled } } } });
+      await withConfig(plugin(false), plugin(true), async () => {
         const off = await rules(ctx.clients.reader, "status");
         expect(!off.ok, `status still answered with the plugin off: ${show(off)}`);
         // The run that started with the plugin keeps its hook: its write is asked.
@@ -1042,9 +1073,7 @@ export const RULES_CHECKS: RulesCheck[] = [
           `the write with the plugin off: ${show(run.calls)}`,
         );
         same(cardsSeen(ctx, after), [], "who received a card with the plugin off");
-      } finally {
-        await patchConfig(ctx, { plugins: { entries: { [PLUGIN]: { enabled: true } } } });
-      }
+      });
       const status = await pluginRunning(ctx);
       same(
         [rec(status.rules).state, status.enforcing],

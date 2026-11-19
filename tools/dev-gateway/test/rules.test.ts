@@ -10,7 +10,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { devConfig, DENIED_TOOLS, loadPlugins, PLUGIN_RULE, sandboxProblems } from "../src/cli.ts";
 import { loadDevPlugin, pluginCopy } from "../src/dev-plugins.ts";
 import { CHECKOUT_DIR } from "../src/env.ts";
-import { RULES_CHECKS, eventually, logSaysAfter, ranOk, toolCallsOf } from "../src/rules-checks.ts";
+import {
+  RULES_CHECKS,
+  eventually,
+  logSaysAfter,
+  ranOk,
+  toolCallsOf,
+  withConfig,
+} from "../src/rules-checks.ts";
 import { SCENARIOS } from "../src/scenarios.ts";
 
 const PORTS = { gatewayPort: 19400, providerPort: 19410 };
@@ -135,5 +142,35 @@ describe("the rules checks' tool calls", () => {
     const [failed] = toolCallsOf([tool("start"), tool("result", { isError: true, result: {} })]);
     expect(ranOk(failed)).toBe(false);
     expect(ranOk(undefined)).toBe(false);
+  });
+});
+
+describe("the rules checks' temporary settings", () => {
+  it("are restored when the check's assertion fails, and when the change itself fails", async () => {
+    const steps: string[] = [];
+    await expect(
+      withConfig(
+        async () => void steps.push("apply"),
+        async () => void steps.push("restore"),
+        async () => {
+          steps.push("body");
+          throw new Error("assertion");
+        },
+      ),
+    ).rejects.toThrow("assertion");
+    expect(steps).toEqual(["apply", "body", "restore"]);
+    steps.length = 0;
+    // The gateway took the change but the wait for it timed out.
+    await expect(
+      withConfig(
+        async () => {
+          steps.push("apply");
+          throw new Error("not applied within 30 seconds");
+        },
+        async () => void steps.push("restore"),
+        async () => void steps.push("body"),
+      ),
+    ).rejects.toThrow("not applied");
+    expect(steps).toEqual(["apply", "restore"]);
   });
 });
